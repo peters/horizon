@@ -284,7 +284,7 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
    ```bash
    docker exec <c> horizon-worker-tailnet agent /usr/bin/git --git-dir=/workspace/repository.git config remote.origin.url
-   docker exec <c> horizon-worker-tailnet agent /usr/bin/git config --global --get-regexp '^(http|url)\.'
+   docker exec <c> horizon-worker-tailnet agent /usr/bin/git config --global --includes --get-regexp '^(http|url)\.'
    ```
 
    Result: The first command shows `https://github.com/example/project.git`. The
@@ -510,7 +510,7 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
    ```bash
    docker exec <c> horizon-worker-tailnet agent git ls-remote https://github.com/example/secret.git; echo "exit=$?"
-   docker exec <c> horizon-worker-tailnet agent /usr/bin/git config --global --get http.https://github.com/.proxy
+   docker exec <c> horizon-worker-tailnet agent /usr/bin/git config --global --includes --get http.https://github.com/.proxy
    ```
 
    Result: The first command shows `exit=0`. The second command shows

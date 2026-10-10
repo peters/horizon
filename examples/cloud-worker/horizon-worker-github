@@ -1,7 +1,9 @@
 #!/usr/bin/python3
 """Root service that keeps a GitHub App user token chain fresh while the host is offline. Git
 reaches GitHub through its loopback proxy, which adds the access token only to requests for
-granted repositories, so agents never hold the token or the chain. Never prints a token. Root
+granted repositories, so Git never holds the token. Agents never hold the refresh token; gh
+still gets an access token for a granted repository until the API broker replaces that. Never
+prints a token. Root
 operations: install (JSON on stdin), serve (started by horizon-worker-supervise), status,
 clear, requests and decide. Agents run `mcp` for the github_access tool."""
 import contextlib

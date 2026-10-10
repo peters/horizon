@@ -2,8 +2,8 @@
 https://github.com/ request through this proxy on 127.0.0.1:47281 (`http.<url>.proxy`) and
 trusts a certificate authority that the root service makes at each start
 (`http.<url>.sslCAInfo`). The proxy ends the tunnel itself, reads each Git request, and adds
-the cloud's access token only to a request for a repository the caller is granted, so no agent
-process holds the token. A read of another repository goes to GitHub without the token, which
+the cloud's access token only to a request for a repository the caller is granted, so Git never
+holds the token (gh still gets one from the service until the API broker replaces that). A read of another repository goes to GitHub without the token, which
 serves only public repositories; a push to one is refused. Remote URLs stay as they are, so
 gh still recognizes them. A module that horizon-worker-github loads, not a command."""
 import base64

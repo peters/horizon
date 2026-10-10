@@ -109,7 +109,8 @@ GitHub and chooses its repositories; agents cannot set it up.
   answers for the cloud's repositories and its same-worker siblings. Agents never
   see the refresh token.
 - Git reaches github.com through the worker's Git proxy (`http.https://github.com/.proxy`
-  and `.sslCAInfo` in the global Git configuration; leave them in place). Remote
+  and `.sslCAInfo` in `~/.config/git/horizon-route`, which the global Git configuration
+  includes; leave them in place). Remote
   URLs stay `https://github.com/...`, so `gh` still finds the repository of a
   checkout. The proxy adds the cloud's access only for the cloud's repositories,
   so Git never holds a token. Public repositories stay readable. A refusal shows

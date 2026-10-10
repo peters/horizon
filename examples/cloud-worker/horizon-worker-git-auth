@@ -27,6 +27,9 @@ ROUTE = (('http.' + GITHUB + '.proxy', 'http://127.0.0.1:%d' % PROXY_PORT),
 # The worker has no SSH key for github.com.
 REWRITTEN = ('git@github.com:', 'ssh://git@github.com/', 'http://github.com/', 'https://www.github.com/',
              'http://www.github.com/')
+# The route lives in its own file that the global configuration includes, so removing it never
+# removes an entry that the agent wrote itself. Relative to HOME.
+ROUTE_FILE = '.config/git/horizon-route'
 # Set by the gh wrapper when it injects a service token, so a nested gh can drop it.
 INJECTED = 'HORIZON_GH_TOKEN_INJECTED'
 GIT_DIR = Path('/workspace/repository.git')
@@ -240,16 +243,30 @@ def configure(version, entries, previous):
 
 
 def route(env, proxy):
-    """Sends Git's github.com requests through the service's proxy, or stops doing so. Only
-    the values this helper writes are removed, and writing them again changes nothing. The
-    remote URLs stay github.com URLs, so gh still finds the repository of a checkout."""
-    values = ROUTE + tuple(('url.' + GITHUB + '.insteadOf', form) for form in REWRITTEN)
-    for key, value in values:
-        if git_output(env, 'config', '--global', '--fixed-value', '--get-all', key, value) is not None:
-            git(env, 'config', '--global', '--fixed-value', '--unset-all', key, value)
-    if proxy:
-        for key, value in values:
-            git(env, 'config', '--global', '--add', key, value)
+    """Sends Git's github.com requests through the service's proxy, or stops doing so. The
+    values are in ROUTE_FILE, which the global configuration includes once; removing the route
+    removes only that include and the file. The remote URLs stay github.com URLs, so gh still
+    finds the repository of a checkout."""
+    path = Path(env['HOME']) / ROUTE_FILE
+    included = git_output(env, 'config', '--global', '--fixed-value', '--get-all', 'include.path', str(path))
+    if not proxy:
+        if included is not None:
+            git(env, 'config', '--global', '--fixed-value', '--unset-all', 'include.path', str(path))
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix='.horizon-route-', dir=path.parent)
+    os.close(fd)
+    try:
+        for key, value in ROUTE + tuple(('url.' + GITHUB + '.insteadOf', form) for form in REWRITTEN):
+            git(env, 'config', '--file', temporary, '--add', key, value)
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+    if included is None:
+        git(env, 'config', '--global', '--add', 'include.path', str(path))
 
 
 IDENTITY_FIELDS = FIELDS - {'token'}

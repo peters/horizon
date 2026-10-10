@@ -873,7 +873,9 @@ authority, writes its certificate to `/run/horizon-worker/github-ca.pem` and
 deletes its key at once. It keeps a `github.com` certificate from that authority
 in its private runtime directory. It holds `127.0.0.1:47281` from its first
 start attempt. Then, before it opens its socket, the Git helper routes Git as the
-agent user (`horizon-worker-git-auth route`):
+agent user (`horizon-worker-git-auth route`). It writes the route to
+`/workspace/home/.config/git/horizon-route` and adds that file once as an
+`include.path` of the agent's global Git configuration:
 
 ```ini
 [http "https://github.com/"]
@@ -893,7 +895,8 @@ for `github.com`. Each start of the worker removes these entries before the
 service starts (`horizon-worker-git-auth unroute` in `horizon-worker-configure`;
 the start fails if this fails), and the supervisor removes them when the service
 stops, so Git never points at a
-port that no service holds. The helper removes only the values that it wrote.
+port that no service holds. The helper removes only its `include.path` entry and
+the route file, so an entry that the agent wrote itself stays.
 The proxy does these steps for each connection:
 
 - It reads the user ID of the connecting process from the kernel

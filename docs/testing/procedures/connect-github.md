@@ -166,7 +166,7 @@ after one approval.
 
    Result: `gh` shows that it closed the pull request and deleted the branch.
 
-10. In the same panel, run `git config --global --get-regexp '^http\.'`.
+10. In the same panel, run `git config --global --includes --get-regexp '^http\.'`.
 
     Result: The command shows the proxy `http://127.0.0.1:47281` and the
     authority `/run/horizon-worker/github-ca.pem` for `https://github.com/`.
