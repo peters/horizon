@@ -59,7 +59,8 @@ falls back to a narrow
 `navigator.webdriver` value shim installed with WebDriver BiDi
 `script.addPreloadScript` before the initial navigation. That session
 reports `AutomationDisclosureStatus::PreloadFallback`. A completed native
-clear reports `CommonSignalsMinimized`. Startup fails when
+clear reports `CommonSignalsMinimized`. A remote Firefox session uses classic
+WebDriver and reports `UnsupportedByBackend` for minimization. Startup fails when
 that fallback command is rejected, and also when the session cannot return
 from the chrome context. Chromium panels minimizing common signals also use a
 reserved nonzero loopback DevTools port so Chromium does not enable its port-zero

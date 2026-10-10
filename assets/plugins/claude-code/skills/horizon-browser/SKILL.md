@@ -37,7 +37,9 @@ system access for any local client that can reach the driver port. Leave it
 false unless that privilege is acceptable. `preload_fallback` means Firefox
 installed a script getter that returns false. Sign-in pages can reject that
 getter. The default minimized Firefox session uses that fallback. Chromium
-does not install it. To run at a configured remote target instead of a
+does not install it. A remote Firefox session reports
+`unsupported_by_backend` for minimization. It does not clear the native flag
+or install the preload. To run at a configured remote target instead of a
 local browser, pass `target` with its name and omit `backend`; Horizon
 resolves the provider and credentials from its configuration, and a
 refusal carries a typed code and at most the target, provider or credential

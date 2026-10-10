@@ -46,7 +46,8 @@ impl AutomationDisclosureStatus {
 }
 
 /// Status a session can publish after startup. Minimized local Firefox reports
-/// the native clear and the preload getter as different outcomes.
+/// the native clear and the preload getter as different outcomes. Remote
+/// Firefox is classic `WebDriver`, so minimization is unsupported there.
 #[must_use]
 pub(crate) fn established_disclosure_status(
     policy: AutomationDisclosurePolicy,
@@ -54,6 +55,12 @@ pub(crate) fn established_disclosure_status(
     firefox_bidi: bool,
     native_cleared: bool,
 ) -> AutomationDisclosureStatus {
+    if backend == crate::BackendKind::FirefoxBidi
+        && !firefox_bidi
+        && policy == AutomationDisclosurePolicy::MinimizeCommonSignals
+    {
+        return AutomationDisclosureStatus::UnsupportedByBackend;
+    }
     if firefox_bidi && policy == AutomationDisclosurePolicy::MinimizeCommonSignals {
         if native_cleared {
             AutomationDisclosureStatus::CommonSignalsMinimized
@@ -225,7 +232,9 @@ mod tests {
     #[test]
     fn minimized_firefox_reports_preload_fallback_until_the_native_flag_clears() {
         use AutomationDisclosurePolicy::{BrowserDefault, MinimizeCommonSignals};
-        use AutomationDisclosureStatus::{BrowserDefault as DefaultStatus, CommonSignalsMinimized, PreloadFallback};
+        use AutomationDisclosureStatus::{
+            BrowserDefault as DefaultStatus, CommonSignalsMinimized, PreloadFallback, UnsupportedByBackend,
+        };
 
         let firefox = crate::BackendKind::FirefoxBidi;
         assert_eq!(
@@ -242,6 +251,14 @@ mod tests {
         );
         assert_eq!(
             established_disclosure_status(MinimizeCommonSignals, firefox, false, false),
+            UnsupportedByBackend
+        );
+        assert_eq!(
+            established_disclosure_status(BrowserDefault, firefox, false, false),
+            DefaultStatus
+        );
+        assert_eq!(
+            established_disclosure_status(MinimizeCommonSignals, crate::BackendKind::ChromiumCdp, false, false),
             CommonSignalsMinimized
         );
         assert_eq!(PreloadFallback.as_str(), "preload_fallback");

@@ -123,7 +123,8 @@ pub struct BrowserManifest {
     pub backend: horizon_browser::BackendKind,
     /// Disclosure this session established. `preload_fallback` means Firefox
     /// installed a script getter. `common_signals_minimized` means the native
-    /// Firefox flag clear or Chromium's suppressed automation flag.
+    /// Firefox flag clear or Chromium's suppressed automation flag. Remote
+    /// minimized Firefox is `unsupported_by_backend`.
     #[serde(default)]
     pub automation_disclosure: horizon_browser::AutomationDisclosureStatus,
     /// Configured remote target name when the session runs at a remote grid.
