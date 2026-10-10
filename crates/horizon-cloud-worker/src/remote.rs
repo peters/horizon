@@ -335,6 +335,14 @@ pub fn poll(
     }
     if let Ok(requests) = manifest::provider_usage::claim_provider_usage_requests(manifest::host_instance()) {
         for request in requests {
+            // The cloud list belongs to a Horizon host; a worker has none to show.
+            if request.cloud_list.is_some() {
+                let _ = manifest::provider_usage::complete_provider_usage(&request.result(
+                    Vec::new(),
+                    Some("cloud_list_unavailable: requires a Horizon agent panel".into()),
+                ));
+                continue;
+            }
             // Catalog and cloud offer requests are answered, and retried, with the catalog.
             if request.catalog.is_some() || request.cloud_offers.is_some() {
                 catalog.pending.push(request);
