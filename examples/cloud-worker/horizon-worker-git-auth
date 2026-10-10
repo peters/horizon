@@ -20,6 +20,11 @@ SERVICE_TIMEOUT = 10
 # authority that the service makes for it, and only for github.com.
 PROXY_PORT = 47281
 PROXY_AUTHORITY = '/run/horizon-worker/github-ca.pem'
+# The service's API broker. While the service runs, gh sends every request to this socket
+# (`http_unix_socket`) and holds only a placeholder token; the broker adds the token to the
+# requests that a grant covers.
+API_SOCKET = '/run/horizon-worker/github-api.sock'
+GH = '/usr/bin/gh'
 GITHUB = 'https://github.com/'
 ROUTE = (('http.' + GITHUB + '.proxy', 'http://127.0.0.1:%d' % PROXY_PORT),
          ('http.' + GITHUB + '.sslCAInfo', PROXY_AUTHORITY))
@@ -32,6 +37,8 @@ REWRITTEN = ('git@github.com:', 'ssh://git@github.com/', 'http://github.com/', '
 ROUTE_FILE = '.config/git/horizon-route'
 # Set by the gh wrapper when it injects a service token, so a nested gh can drop it.
 INJECTED = 'HORIZON_GH_TOKEN_INJECTED'
+# What gh holds while the GitHub service's API broker adds the token.
+PLACEHOLDER = 'horizon-api-broker'
 GIT_DIR = Path('/workspace/repository.git')
 SIBLINGS = Path('/workspace/siblings')
 HOME = '/workspace/home'
@@ -269,6 +276,23 @@ def route(env, proxy):
         git(env, 'config', '--global', '--add', 'include.path', str(path))
 
 
+def gh_config(env, *args):
+    """gh's own configuration command, for the configuration under HOME that agents' gh reads."""
+    env = {key: value for key, value in env.items() if key not in ('GH_CONFIG_DIR', 'XDG_CONFIG_HOME')}
+    return subprocess.run([GH, 'config', *args], env=env, check=True, stdin=subprocess.DEVNULL,
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=30).stdout.strip()
+
+
+def route_gh(env, broker):
+    """Sends gh's requests to the service's API broker, or stops doing so. Only the value this
+    helper writes is removed."""
+    current = gh_config(env, 'get', 'http_unix_socket')
+    if broker and current != API_SOCKET:
+        gh_config(env, 'set', 'http_unix_socket', API_SOCKET)
+    elif not broker and current == API_SOCKET:
+        gh_config(env, 'set', 'http_unix_socket', '')
+
+
 IDENTITY_FIELDS = FIELDS - {'token'}
 
 
@@ -488,20 +512,27 @@ def service_credential(request, ask=call_service):
     return None if reply is None else ''
 
 
-def service_environment(env, argv, ask=ask_service):
+def service_environment(env, argv, ask=call_service):
     """gh's environment with the chain service's token for the targeted repository, or None
-    without a chain. A refusal drops a token that an outer wrapped gh injected."""
+    when no service answers. Without a chain the service still routes gh to its API broker,
+    which serves the static binding, so gh never gets the static token there. A refusal drops a token that an outer wrapped gh injected, and gives gh the
+    placeholder unless the caller set a token, so the API broker answers with its reason."""
     reply = ask({'request': 'gh-token', 'repository': gh_repository(env, list(argv)) or ''})
     if reply is None:
         return None
-    env = dict(env)
+    # gh reads the configuration that routes it to the API broker, whatever HOME,
+    # XDG_CONFIG_HOME or GH_CONFIG_DIR the caller set.
+    env = dict(env, GH_CONFIG_DIR=str(Path(HOME) / '.config/gh'))
     if (reply.get('ok') is True and valid_token(reply.get('token'))
             and valid_repository(reply.get('repository'))):
         env.update({'GH_TOKEN': reply['token'], 'GH_REPO': reply['repository'], 'GH_HOST': 'github.com',
                     INJECTED: '1'})
         return env
-    print('horizon: no Git grant for this repository; gh runs without Horizon credentials', file=sys.stderr)
-    return without_injected(env)
+    # The broker refuses the request with its reason, which gh prints; gh needs a token to send it.
+    env = without_injected(env)
+    if not any(env.get(variable) for variable in TOKEN_VARIABLES):
+        env.update({'GH_TOKEN': PLACEHOLDER, INJECTED: '1'})
+    return env
 
 
 def without_injected(env):
@@ -540,9 +571,10 @@ def main():
     elif operation == 'clear':
         CREDENTIAL.unlink(missing_ok=True)
     elif operation in ('route', 'unroute'):
-        # The service routes Git through its proxy once it listens; the worker's start and the
-        # end of the service route Git to github.com directly again.
+        # The service routes Git through its proxy and gh through its broker once they listen;
+        # the worker's start and the end of the service route both to GitHub directly again.
         route(dict(os.environ, HOME=HOME), proxy=operation == 'route')
+        route_gh(dict(os.environ, HOME=HOME), broker=operation == 'route')
     elif operation == 'get':
         request = sys.stdin.read(8192)
         reply = service_credential(request)
