@@ -19,16 +19,17 @@ pub struct Choices(BTreeMap<String, WorkspacePlacement>);
 #[must_use]
 pub fn key(repository: &str) -> Option<String> {
     let trimmed = repository.trim().trim_end_matches('/');
-    let trimmed = trimmed.strip_suffix(".git").unwrap_or(trimmed);
     if trimmed.is_empty() {
         return None;
     }
     let path = crate::dir_search::expand_tilde(trimmed);
     if path.is_absolute() {
+        // A folder keeps its whole name, also one that ends in `.git`.
         let full = path.canonicalize().unwrap_or(path);
         return Some(full.to_string_lossy().into_owned());
     }
-    Some(trimmed.to_owned())
+    let link = trimmed.strip_suffix(".git").unwrap_or(trimmed);
+    (!link.is_empty()).then(|| link.to_owned())
 }
 
 impl Choices {
@@ -108,6 +109,7 @@ mod tests {
         choices.set(root.path(), &path, None).unwrap();
         assert_eq!(Choices::load(root.path()).get(&path), None);
         assert!(choices.set(root.path(), "  ", Some(WorkspacePlacement::Local)).is_err());
+        assert_ne!(key("/work/project.git"), key("/work/project"), "a folder keeps .git");
         let home = crate::dir_search::expand_tilde("~/code/app");
         assert_eq!(key("~/code/app"), key(&home.to_string_lossy()));
     }

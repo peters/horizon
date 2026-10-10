@@ -89,6 +89,9 @@ impl HorizonApp {
     /// Opens the dialog's repository on This PC: a terminal in it, in the dialog's workspace,
     /// and the dialog closes.
     pub(super) fn open_repository_on_this_pc(&mut self, ctx: &Context) {
+        if !self.keep_new_workspace_choice(WorkspacePlacement::Local) {
+            return;
+        }
         let form = &self.cloud_prototype.production;
         let repository = PathBuf::from(form.repository.trim());
         let workspace = form
@@ -99,9 +102,6 @@ impl HorizonApp {
         // Held out of the close, which would take the still empty workspace away, until the
         // terminal is there.
         let made = self.cloud_prototype.production.new_workspace.take();
-        if let Some(mut intent) = made.clone() {
-            keep(&mut intent, form_repository(&repository), WorkspacePlacement::Local);
-        }
         self.close_cloud_creation();
         let Some(workspace) = workspace else {
             return;
@@ -211,19 +211,34 @@ pub(super) mod machine;
 #[cfg(test)]
 mod tests;
 
-/// The repository of the New cloud field, as its choice is kept.
-fn form_repository(repository: &std::path::Path) -> &str {
-    repository.to_str().unwrap_or_default()
+impl HorizonApp {
+    /// Keeps `placement` for the dialog's repository when the person asked for it, before
+    /// the dialog acts on it. False when it could not be kept: the dialog then stays open
+    /// and says why.
+    pub(super) fn keep_new_workspace_choice(&mut self, placement: WorkspacePlacement) -> bool {
+        let form = &mut self.cloud_prototype.production;
+        let repository = form.repository.clone();
+        form.new_workspace
+            .as_mut()
+            .is_none_or(|intent| keep(intent, &repository, placement))
+    }
 }
 
-/// Keeps `placement` for `repository` when the person asked to keep the choice.
-pub(super) fn keep(intent: &mut Intent, repository: &str, placement: WorkspacePlacement) {
+/// Keeps `placement` for `repository` when the person asked to keep the choice. False
+/// when it could not be saved; `intent` then holds why.
+pub(super) fn keep(intent: &mut Intent, repository: &str, placement: WorkspacePlacement) -> bool {
     if !intent.keep {
-        return;
+        return true;
     }
-    if let Some(root) = intent.root.clone()
-        && let Err(error) = intent.choices.set(&root, repository, Some(placement))
-    {
-        tracing::warn!(%error, "could not keep the choice for the repository");
-    }
+    let saved = match intent.root.clone() {
+        Some(root) => intent
+            .choices
+            .set(&root, repository, Some(placement))
+            .map_err(|error| error.to_string()),
+        None => Err("Horizon has no cloud settings".to_owned()),
+    };
+    intent.error = saved
+        .err()
+        .map(|error| format!("The choice for this repository was not kept: {error}"));
+    intent.error.is_none()
 }

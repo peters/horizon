@@ -259,3 +259,25 @@ fn a_kept_choice_wins_over_what_the_repository_asks_for() {
     let (_, shown) = texts(form);
     assert!(shown.iter().any(|text| text == "Open on This PC"), "{shown:?}");
 }
+
+#[test]
+fn a_choice_that_cannot_be_saved_says_why_and_stops_the_action() {
+    let (_temp, mut app) = test_app();
+    let workspace = app.board.create_workspace("cloud");
+    let blocked = tempfile::NamedTempFile::new().unwrap();
+    let mut intent = plain_intent(workspace, false);
+    intent.keep = true;
+    // A file where the settings folder should be: nothing can be saved under it.
+    intent.root = Some(blocked.path().into());
+    assert!(!keep(&mut intent, "/synthetic/project", WorkspacePlacement::Local));
+    assert!(
+        intent
+            .error
+            .as_deref()
+            .is_some_and(|error| error.starts_with("The choice for this repository was not kept")),
+        "{:?}",
+        intent.error
+    );
+    app.cloud_prototype.production.new_workspace = Some(intent);
+    assert!(!app.keep_new_workspace_choice(WorkspacePlacement::Cloud));
+}

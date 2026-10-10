@@ -29,9 +29,31 @@ impl HorizonApp {
     }
 }
 
-/// The cheapest offer of a ranked answer, as the menu shows it.
+/// The cheapest offer of a ranked answer, as the menu shows it. Without a complete
+/// comparison (no exchange rate), offers in different currencies cannot be ranked, so
+/// the menu shows none of them.
 pub(super) fn line(answer: &Value) -> Option<String> {
-    let offer = answer.get("comparison")?.get("offers")?.as_array()?.first()?;
+    let comparison = answer.get("comparison")?;
+    let offers = comparison.get("offers")?.as_array()?;
+    let complete = comparison.get("complete").and_then(Value::as_bool) == Some(true);
+    let one_currency = offers
+        .windows(2)
+        .all(|pair| pair[0].get("currency") == pair[1].get("currency"));
+    let offer = if complete {
+        offers.first()?
+    } else if one_currency {
+        offers.iter().min_by(|a, b| {
+            let total = |offer: &Value| {
+                offer
+                    .get("estimated_total")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(f64::INFINITY)
+            };
+            total(a).total_cmp(&total(b))
+        })?
+    } else {
+        return None;
+    };
     let vcpu = offer.get("vcpu")?.as_u64()?;
     let memory = offer.get("memory_gb")?.as_u64()?;
     let hourly = offer.get("hourly")?.as_f64().filter(|hourly| hourly.is_finite())?;
@@ -53,15 +75,29 @@ mod tests {
 
     #[test]
     fn the_cheapest_compared_offer_gives_the_line() {
-        let answer = json!({"comparison": {"offers": [
-            {"provider": "Hetzner", "currency": "EUR", "vcpu": 2, "memory_gb": 4, "hourly": 0.0088},
-            {"provider": "RunPod", "currency": "USD", "vcpu": 2, "memory_gb": 4, "hourly": 0.06},
-        ]}});
+        let offers = json!([
+            {"provider": "Hetzner", "currency": "EUR", "vcpu": 2, "memory_gb": 4, "hourly": 0.0088, "estimated_total": 0.0112},
+            {"provider": "RunPod", "currency": "USD", "vcpu": 2, "memory_gb": 4, "hourly": 0.06, "estimated_total": 0.07},
+        ]);
+        let answer = json!({"comparison": {"complete": true, "offers": offers}});
         assert_eq!(
             line(&answer).as_deref(),
             Some("from €0.0088/h · 2 vCPU · 4 GB · Hetzner")
         );
         assert_eq!(line(&json!({"comparison": {"offers": []}})), None);
+        // Without exchange rates, two currencies cannot be ranked; one currency can.
+        assert_eq!(
+            line(&json!({"comparison": {"complete": false, "offers": offers}})),
+            None
+        );
+        let euros = json!([
+            {"provider": "Hetzner", "currency": "EUR", "vcpu": 4, "memory_gb": 8, "hourly": 0.02, "estimated_total": 0.03},
+            {"provider": "Hetzner", "currency": "EUR", "vcpu": 2, "memory_gb": 4, "hourly": 0.0088, "estimated_total": 0.0112},
+        ]);
+        assert_eq!(
+            line(&json!({"comparison": {"complete": false, "offers": euros}})).as_deref(),
+            Some("from €0.0088/h · 2 vCPU · 4 GB · Hetzner")
+        );
         assert_eq!(line(&json!({"offers": []})), None);
     }
 }
