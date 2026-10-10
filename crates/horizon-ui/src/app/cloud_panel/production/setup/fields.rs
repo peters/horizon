@@ -191,6 +191,11 @@ pub(super) fn agents(
                         draft.settings.default_agents.push(agent);
                     }
                 }
+                if agent == Agent::Codex {
+                    // The ChatGPT card ticks in every mode and while unselected, so a
+                    // flow under way always lands and its busy state always ends.
+                    super::chatgpt::Card::tick(chatgpt, ui, &mut draft.chatgpt);
+                }
                 if !selected {
                     return;
                 }

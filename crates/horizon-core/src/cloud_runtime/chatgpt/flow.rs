@@ -326,20 +326,29 @@ fn finish(root: &Path, attempt: &Attempt, callback: Callback) -> Result<super::C
     };
 
     let token = exchange(&code, &client_id, &attempt.code_verifier, &attempt.redirect_uri)?;
+    // A connection that cannot renew is a dead end once the access token lapses, so
+    // the sign-in fails instead of storing a pair without a refresh token.
+    let refresh_token = token
+        .refresh_token
+        .ok_or_else(|| Error::Provider("ChatGPT finished sign-in without a refresh token. Try again.".into()))?;
     let (subject, email) = id_token::validate(&token.id_token, &client_id, &attempt.nonce)?;
+    let previous = store::default_registration(root)?.filter(|record| record.client_id == client_id);
+    // A registration still signed in must not be replaced by another account; a
+    // signed-out one may be re-signed in by any account.
     if !attempt.registering
-        && let Some(record) = store::default_registration(root)?
-        && record.client_id == client_id
+        && let Some(record) = &previous
         && record.subject != subject
+        && record.access_token.is_some()
+        && record.refresh_token.is_some()
     {
         return Err(Error::Provider(
             "A different ChatGPT account signed in than the saved one. Sign out first.".into(),
         ));
     }
-
-    let record = store::default_registration(root)?.filter(|record| record.client_id == client_id);
     // A re-sign-in of the same account keeps the confirmed plan-usage notice.
-    let usage_confirmed = record.as_ref().is_some_and(|record| record.usage_confirmed);
+    let usage_confirmed = previous
+        .as_ref()
+        .is_some_and(|record| record.subject == subject && record.usage_confirmed);
 
     let stored = Record {
         email,
@@ -349,7 +358,7 @@ fn finish(root: &Path, attempt: &Attempt, callback: Callback) -> Result<super::C
         ext_agent_host_id: attempt.host_id.clone(),
         id_token: zeroize::Zeroizing::new(token.id_token),
         access_token: Some(zeroize::Zeroizing::new(token.access_token)),
-        refresh_token: token.refresh_token.map(zeroize::Zeroizing::new),
+        refresh_token: Some(zeroize::Zeroizing::new(refresh_token)),
         token_type: Some(token.token_type),
         expires_in: token.expires_in,
         earliest_refresh_at: token.earliest_refresh_at,
@@ -482,11 +491,14 @@ pub(super) fn refresh(root: &Path, client_id: &str) -> Result<()> {
         )));
     }
     let token: TokenResponse = body.read_json().map_err(|_| Error::Malformed)?;
+    let rotated = token.refresh_token.as_deref().ok_or_else(|| {
+        Error::Provider("ChatGPT rotated the session without a new refresh token. Sign in again.".into())
+    })?;
     store::replace_tokens(
         root,
         client_id,
         &token.access_token,
-        token.refresh_token.as_deref(),
+        rotated,
         token.expires_in.unwrap_or(3600),
         token.earliest_refresh_at,
         token

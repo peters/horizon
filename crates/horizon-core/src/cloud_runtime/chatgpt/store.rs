@@ -86,7 +86,7 @@ impl From<Record> for Connection {
             scopes: record.scopes,
             plan_usage,
             usage_confirmed: record.usage_confirmed,
-            signed_in: record.access_token.is_some(),
+            signed_in: record.access_token.is_some() && record.refresh_token.is_some(),
             saved_at_unix: record.saved_at_unix,
         }
     }
@@ -296,16 +296,14 @@ pub(super) fn replace_tokens(
     root: &Path,
     client_id: &str,
     access_token: &str,
-    refresh_token: Option<&str>,
+    refresh_token: &str,
     expires_in: u64,
     earliest_refresh_at: Option<i64>,
     scopes: Vec<String>,
 ) -> Result<()> {
     let mut record = read_record(&file(root, client_id))?.ok_or(Error::Missing)?;
     record.access_token = Some(Zeroizing::new(access_token.to_owned()));
-    if let Some(token) = refresh_token {
-        record.refresh_token = Some(Zeroizing::new(token.to_owned()));
-    }
+    record.refresh_token = Some(Zeroizing::new(refresh_token.to_owned()));
     record.token_type = Some("Bearer".into());
     record.expires_in = Some(expires_in);
     record.earliest_refresh_at = earliest_refresh_at;
@@ -364,6 +362,19 @@ mod tests {
         assert_eq!(loaded.email.as_deref(), Some("peters@example.com"));
         assert!(loaded.plan_usage());
         assert!(loaded.access_token.is_some());
+    }
+
+    #[test]
+    fn signed_in_requires_a_renewable_token_pair() {
+        let root = tempfile::tempdir().unwrap();
+        let mut record = test_record("oaiapp_one", "user-1");
+        record.refresh_token = None;
+        save(root.path(), &record).unwrap();
+        let loaded = default_registration(root.path()).unwrap().unwrap();
+        assert!(
+            !Connection::from(loaded).signed_in,
+            "an access token alone is not a usable connection"
+        );
     }
 
     #[test]
