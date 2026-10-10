@@ -175,12 +175,17 @@ impl Draft {
                         "ChatGPT plan authentication is supported only for Codex",
                     ));
                 }
-                // Only Codex offers the mode; a selected Codex needs a usable saved sign-in.
+                // Only Codex offers the mode; a selected Codex needs a renewable sign-in with plan access.
                 if require_chatgpt_sign_in
                     && self.selected_agents().contains(&agent)
-                    && !self.chatgpt.as_ref().is_some_and(|connection| connection.signed_in)
+                    && !self
+                        .chatgpt
+                        .as_ref()
+                        .is_some_and(super::chatgpt::Connection::can_use_plan)
                 {
-                    return Err(Error::Invalid("Sign in with ChatGPT before saving these settings"));
+                    return Err(Error::Invalid(
+                        "Sign in with ChatGPT and grant plan access before saving these settings",
+                    ));
                 }
                 continue;
             }

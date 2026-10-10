@@ -125,7 +125,8 @@ an API key still signs in through its own terminal.
 
 This is account setup on this machine, as with Connect GitHub. The flow opens
 the system browser. It does not add a Horizon browser-panel operation. Only
-the person authorizes the account.
+the person authorizes the account. Settings save requires a renewable sign-in
+and the plan access grant. An account with no grant shows **Needs plan access**.
 
 - Git and `gh` work without a token in the environment. The worker's root service
   answers for the cloud's repositories and its same-worker siblings. Agents never

@@ -233,7 +233,7 @@ fn answer(mut stream: TcpStream, attempt: &Attempt) -> Option<Callback> {
                 Some(param(&params, "client_id").unwrap_or(&attempt.client_id).to_owned())
             };
             (
-                "You are signed in. You can close this page and return to Horizon.".to_owned(),
+                "Authorization received. Horizon is finishing sign-in. Return to Horizon to see the result.".to_owned(),
                 Some(Callback::Code {
                     code: zeroize::Zeroizing::new(code.to_owned()),
                     client_id,
@@ -645,6 +645,11 @@ mod tests {
             }
             _ => panic!("expected a code callback"),
         }
+        let mut response = String::new();
+        client.read_to_string(&mut response).unwrap();
+        assert!(response.contains("Authorization received"));
+        assert!(response.contains("Return to Horizon to see the result"));
+        assert!(!response.contains("You are signed in"));
     }
     #[test]
     fn a_signed_out_registration_uses_a_new_client_for_account_switching() {

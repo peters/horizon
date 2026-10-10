@@ -84,6 +84,45 @@ fn unsupported_plan_authentication_preserves_saved_agent_credentials() {
 }
 
 #[test]
+fn plan_save_requires_a_renewable_sign_in_and_plan_grant_without_clearing_keys() {
+    let root = tempfile::tempdir().unwrap();
+    let mut base = prepared(root.path());
+    with_agent_credentials(&mut base);
+    let saved = base.save().unwrap();
+    let settings = std::fs::read(root.path().join("settings.json")).unwrap();
+    let key_path = saved.openai_api_key_file.unwrap();
+    let key = std::fs::read(&key_path).unwrap();
+    for (signed_in, plan_usage) in [(true, false), (false, true)] {
+        let mut draft = Draft::load(root.path()).unwrap();
+        draft.settings.default_agents = vec![Agent::Codex];
+        draft.openai_auth = Authentication::ChatGpt;
+        draft.chatgpt = Some(super::super::chatgpt::Connection {
+            client_id: "oaiapp_synthetic".into(),
+            email: None,
+            subject: "synthetic-user".into(),
+            scopes: if plan_usage {
+                vec!["chatgpt.tokens.use.direct".into()]
+            } else {
+                vec![]
+            },
+            plan_usage,
+            usage_confirmed: true,
+            signed_in,
+            saved_at_unix: 1,
+        });
+        assert!(draft.validate().unwrap_err().to_string().contains("grant plan access"));
+        let mut eligible = draft.clone();
+        let connection = eligible.chatgpt.as_mut().unwrap();
+        connection.signed_in = true;
+        connection.plan_usage = true;
+        assert!(eligible.validate().is_ok());
+        assert!(draft.save().is_err());
+        assert_eq!(std::fs::read(root.path().join("settings.json")).unwrap(), settings);
+        assert_eq!(std::fs::read(&key_path).unwrap(), key);
+    }
+}
+
+#[test]
 fn first_use_keeps_secrets_out_of_settings_and_preserves_saved_bindings() {
     let root = tempfile::tempdir().unwrap();
     let mut draft = prepared(root.path());

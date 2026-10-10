@@ -5,6 +5,7 @@ use super::{State, fields, registry};
 use crate::{app::util::chrome_button, theme};
 use egui::{Align, Color32, Frame, Layout, Margin, RichText, Sense, Stroke, Ui, vec2};
 use horizon_core::cloud_runtime::{
+    chatgpt::Connection,
     registry::{Action, Validation},
     setup::{Agent, Authentication, Draft},
 };
@@ -86,8 +87,8 @@ pub(super) fn agent_key(draft: &Draft, agent: Agent) -> Option<Key> {
         Agent::Grok => return None,
     };
     if mode == Authentication::ChatGpt {
-        let signed_in = draft.chatgpt.as_ref().is_some_and(|connection| connection.signed_in);
-        return Some(if signed_in { Key::Saved } else { Key::Missing });
+        let plan_ready = draft.chatgpt.as_ref().is_some_and(Connection::can_use_plan);
+        return Some(if plan_ready { Key::Saved } else { Key::Missing });
     }
     (mode == Authentication::ApiKey).then(|| {
         if typed {
@@ -113,6 +114,13 @@ fn codex_chatgpt(draft: &Draft) -> bool {
     draft.selected_agents().contains(&Agent::Codex) && draft.openai_auth == Authentication::ChatGpt
 }
 
+fn plan_grant_missing(draft: &Draft) -> bool {
+    draft
+        .chatgpt
+        .as_ref()
+        .is_some_and(|connection| connection.signed_in && !connection.plan_usage)
+}
+
 /// The selected agents' keys, in order, for the agents that use one.
 fn agent_keys(draft: &Draft) -> Vec<(Agent, Key)> {
     draft
@@ -133,7 +141,14 @@ pub(super) fn agents_status(draft: &Draft, fixed_agents: bool) -> (Tone, &'stati
             (Tone::Attention, "Choose one")
         }
     } else if codex_chatgpt(draft) && agent_key(draft, Agent::Codex) == Some(Key::Missing) {
-        (Tone::Attention, "Needs sign-in")
+        (
+            Tone::Attention,
+            if plan_grant_missing(draft) {
+                "Needs plan access"
+            } else {
+                "Needs sign-in"
+            },
+        )
     } else if keys.iter().any(|(_, key)| *key == Key::Missing) {
         (Tone::Attention, "Needs a key")
     } else if keys.iter().any(|(_, key)| *key == Key::Unsaved) {
@@ -172,7 +187,11 @@ impl Readiness {
         let agents = agent_keys(draft);
         if let Some((agent, _)) = agents.iter().find(|(_, key)| *key == Key::Missing) {
             return attention(if codex_chatgpt(draft) && *agent == Agent::Codex {
-                "Sign in with ChatGPT for Codex, or choose another Codex option.".into()
+                if plan_grant_missing(draft) {
+                    "This account lacks plan access. Sign out and use an eligible account, or choose an API key.".into()
+                } else {
+                    "Sign in with ChatGPT for Codex, or choose another Codex option.".into()
+                }
             } else {
                 format!(
                     "Paste the {} API key, or choose subscription login.",

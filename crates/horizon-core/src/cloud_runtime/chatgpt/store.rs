@@ -31,6 +31,14 @@ pub struct Connection {
     pub saved_at_unix: i64,
 }
 
+impl Connection {
+    /// Whether a renewable sign-in also grants access to the account's plan.
+    #[must_use]
+    pub const fn can_use_plan(&self) -> bool {
+        self.signed_in && self.plan_usage
+    }
+}
+
 /// What the flow stores for one issued client ID and its verified account.
 pub struct Record {
     pub email: Option<String>,

@@ -71,6 +71,9 @@ subscription choice changes to **ChatGPT plan** when the form opens.
    Result: The browser opens the ChatGPT sign-in page. The card shows the
    waiting text and **Cancel**.
 
+> **CAUTION:** USE A TEST ACCOUNT. These steps give Horizon account access.
+> Grant only the requested scopes.
+
 2. Sign in with the ChatGPT account in the browser. Grant the requested
    scopes.
 
@@ -107,10 +110,15 @@ Settings save requires a provider. Do not create or deploy a cloud.
    ChatGPT mode for Codex. Reopening Cloud settings keeps **ChatGPT plan**
    selected.
 
-2. Sign out with C05 first, then select **ChatGPT plan** and click
+2. With an account that has no plan access, click **Save settings**.
+
+   Result: The card shows **Needs plan access**. The save fails. The saved
+   settings and API key files do not change.
+
+3. Sign out with C05 first, then select **ChatGPT plan** and click
    **Save settings** with no saved sign-in.
 
-   Result: The save fails with the message to sign in with ChatGPT first.
+   Result: The save fails with the message to sign in and grant plan access.
    Nothing saves.
 
 ### 6.5 C05 — Sign out

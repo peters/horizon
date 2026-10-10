@@ -558,6 +558,43 @@ fn an_agent_api_key_holds_the_banner_until_it_is_saved() {
 }
 
 #[test]
+fn a_signed_in_account_without_plan_access_is_not_ready() {
+    use super::dashboard::{Key, Readiness, Tone, Verified, agent_key, agents_status};
+    use horizon_core::cloud_runtime::{
+        chatgpt::Connection,
+        setup::{Agent, Authentication},
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let mut first = Draft::load(temp.path()).unwrap();
+    *first.runpod_key = "synthetic-compute".into();
+    with_codex_api_key(&mut first);
+    first.save().unwrap();
+    let mut draft = Draft::load(temp.path()).unwrap();
+    draft.openai_auth = Authentication::ChatGpt;
+    draft.chatgpt = Some(Connection {
+        client_id: "oaiapp_synthetic".into(),
+        email: None,
+        subject: "synthetic-user".into(),
+        scopes: vec![],
+        plan_usage: false,
+        usage_confirmed: false,
+        signed_in: true,
+        saved_at_unix: 1,
+    });
+    let verified = Verified::new();
+    assert_eq!(agent_key(&draft, Agent::Codex), Some(Key::Missing));
+    assert_eq!(agents_status(&draft, false), (Tone::Attention, "Needs plan access"));
+    let readiness = Readiness::of(&draft, Some(true), &verified, false);
+    assert_eq!(readiness.tone, Tone::Attention);
+    assert!(readiness.cause.contains("lacks plan access"));
+    draft.chatgpt.as_mut().unwrap().plan_usage = true;
+    assert_eq!(agents_status(&draft, false), (Tone::Ready, "Ready"));
+    assert_eq!(Readiness::of(&draft, Some(true), &verified, false).tone, Tone::Ready);
+    draft.chatgpt.as_mut().unwrap().signed_in = false;
+    assert_eq!(agents_status(&draft, false), (Tone::Attention, "Needs sign-in"));
+}
+
+#[test]
 fn an_agentless_profile_needs_no_agent_to_be_ready() {
     use super::dashboard::{Readiness, Tone, Verified, agents_status};
     let temp = tempfile::tempdir().unwrap();
