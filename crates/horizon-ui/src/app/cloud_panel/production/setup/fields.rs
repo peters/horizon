@@ -110,6 +110,10 @@ fn hetzner(ui: &mut Ui, draft: &mut Draft, edits: &mut Edits) {
                 );
                 caption(
                     ui,
+                    "New cloud compares all x86 server types in these locations. The preferred types apply only when no worker is chosen.",
+                );
+                caption(
+                    ui,
                     "Prices are in euros, net of VAT. A stopped Hetzner cloud keeps only its workspace volume.",
                 );
             },

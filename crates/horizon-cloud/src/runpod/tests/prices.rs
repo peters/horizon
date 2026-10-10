@@ -84,35 +84,37 @@ fn secure_prices_and_the_best_gpu_availability_in_allowed_data_centers() {
 }
 
 #[test]
-fn an_unknown_gpu_availability_fails_the_price_list_instead_of_reading_as_sold_out() {
+fn an_unknown_gpu_availability_reads_as_none_for_that_gpu_only() {
     let gpus = json!({"gpus": [
-        {"id": "NVIDIA L4", "name": "L4", "memory": 24, "secure": true, "price": {"secure": 0.49}}
+        {"id": "NVIDIA L4", "name": "L4", "memory": 24, "secure": true, "price": {"secure": 0.49}},
+        {"id": "NVIDIA A40", "name": "A40", "memory": 48, "secure": true, "price": {"secure": 0.79}}
     ]});
-    let catalog = |availability: &str| {
-        vec![
-            (200, json!({"cpus": []}).to_string()),
-            (200, gpus.to_string()),
-            (
-                200,
-                json!({"dataCenters": [
-                    {"id": "EU-RO-1", "gpuAvailability": [{"id": "NVIDIA L4", "availability": availability}]}
-                ]})
-                .to_string(),
-            ),
-        ]
-    };
-    let (provider, _, task) = catalog_server(catalog("NONE"));
+    let centers = json!({"dataCenters": [
+        {"id": "EU-RO-1", "gpuAvailability": [
+            {"id": "NVIDIA L4", "availability": "SOMETIMES"},
+            {"id": "NVIDIA A40", "availability": "HIGH"}
+        ]},
+        {"id": "EU-SE-1", "gpuAvailability": [{"id": "NVIDIA L4", "availability": "LOW"}]}
+    ]});
+    let (provider, _, task) = catalog_server(vec![
+        (200, json!({"cpus": []}).to_string()),
+        (200, gpus.to_string()),
+        (200, centers.to_string()),
+    ]);
     let list = provider.price_list(&[], &Cancellation::default()).unwrap();
     task.join().unwrap();
     assert_eq!(
-        list.gpu_availability("NVIDIA L4", &[]),
+        list.gpu_availability("NVIDIA L4", &["EU-RO-1".into()]),
         crate::prices::Availability::None
     );
-
-    let (provider, _, task) = catalog_server(catalog("SOMETIMES"));
-    let result = provider.price_list(&[], &Cancellation::default());
-    task.join().unwrap();
-    assert!(matches!(result, Err(CloudError::InvalidResponse)));
+    assert_eq!(
+        list.gpu_availability("NVIDIA L4", &[]),
+        crate::prices::Availability::Low
+    );
+    assert_eq!(
+        list.gpu_availability("NVIDIA A40", &[]),
+        crate::prices::Availability::High
+    );
 }
 
 #[test]

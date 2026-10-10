@@ -58,18 +58,36 @@ impl Card {
         self.connecting.is_some() || self.saving.is_some()
     }
 
-    /// Saves the app with a changed mode, or forgets it on Disconnect, off the UI thread.
-    fn save(&mut self, ctx: &egui::Context, root: std::path::PathBuf, github: Option<github::Settings>) {
+    /// Saves `shown`, the app this card shows, with a changed mode, or forgets it on
+    /// Disconnect (`github` is `None`), off the UI thread. Either applies only while the
+    /// settings still name `shown`; a Disconnect also ends this computer's sign-in for it.
+    fn save(
+        &mut self,
+        ctx: &egui::Context,
+        root: std::path::PathBuf,
+        github: Option<github::Settings>,
+        shown: github::Settings,
+    ) {
         let (tx, rx) = channel();
         self.saving = Some(rx);
         self.message = None;
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let result = setup::save_github(
-                &root,
-                github.clone(),
-                &horizon_core::cloud_runtime::Cancellation::default(),
-            )
+            let save = || {
+                setup::save_github(
+                    &root,
+                    Some(shown.app_id),
+                    github.clone(),
+                    &horizon_core::cloud_runtime::Cancellation::default(),
+                )
+            };
+            // A Disconnect forgets this computer's sign-in and saves under one lock, so no
+            // other Horizon window stores a chain for the app in between.
+            let result = if github.is_none() {
+                github::host::disconnect(&root, &shown, save)
+            } else {
+                save()
+            }
             .map(|committed| (committed, github))
             .map_err(|error| error.to_string());
             let _ = tx.send(result);
@@ -89,10 +107,10 @@ impl Card {
             let name = connect::app_name();
             let result = connect::start(&root, &name, horizon_core::open_url, cancel.clone())
                 .and_then(|created| created.recv().map_err(|_| horizon_core::cloud_runtime::Error::Busy)?)
-                // Settings closed meanwhile: the save, which checks under the settings lock,
-                // saves nothing, and the app's secret goes.
+                // Settings closed meanwhile, or another window connected an app: the save,
+                // which checks under the settings lock, saves nothing, and the app's secret goes.
                 .and_then(
-                    |settings| match setup::save_github(&root, Some(settings.clone()), &cancel) {
+                    |settings| match setup::save_github(&root, None, Some(settings.clone()), &cancel) {
                         Ok(committed) => Ok((committed, settings)),
                         Err(error) => {
                             // Unless the settings file already names this app, its secret goes too.
@@ -286,7 +304,11 @@ fn connected(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card, settings: &g
         card.save(
             ui.ctx(),
             draft.root().to_owned(),
-            Some(github::Settings { mode: chosen, ..github }),
+            Some(github::Settings {
+                mode: chosen,
+                ..github.clone()
+            }),
+            github,
         );
     }
     caption(
@@ -297,7 +319,7 @@ fn connected(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card, settings: &g
         .add_enabled(card.saving.is_none(), chrome_button("Disconnect"))
         .clicked()
     {
-        card.save(ui.ctx(), draft.root().to_owned(), None);
+        card.save(ui.ctx(), draft.root().to_owned(), None, settings.clone());
     }
 }
 

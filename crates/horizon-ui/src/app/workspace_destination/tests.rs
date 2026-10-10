@@ -7,6 +7,7 @@ struct Harness {
     workspaces: Vec<Workspace>,
     chosen: Option<WorkspaceId>,
     blocked: Option<WorkspaceId>,
+    launcher_id: egui::Id,
 }
 
 impl Harness {
@@ -20,7 +21,14 @@ impl Harness {
                 .collect(),
             chosen: None,
             blocked: None,
+            launcher_id: egui::Id::NULL,
         }
+    }
+
+    fn query_id(&self) -> egui::Id {
+        self.launcher_id
+            .with(("workspace_destination", self.ctx.viewport_id()))
+            .with("query")
     }
 
     fn frame(&mut self, events: Vec<Event>, render: bool, blocked: Option<WorkspaceId>) -> egui::FullOutput {
@@ -34,6 +42,7 @@ impl Harness {
                 },
                 |ui| {
                     let launcher = ui.button("Panel");
+                    self.launcher_id = launcher.id;
                     if render {
                         self.chosen =
                             render_destination_search(ui, &launcher, &self.workspaces, WorkspaceId(0), |workspace| {
@@ -335,4 +344,93 @@ fn sidebar_search_field_is_above_the_sidebar_and_accepts_pointer_input() {
         app.board.panel(panel).expect("panel survives").workspace_id,
         destination
     );
+}
+
+fn each_rect(shape: &egui::epaint::Shape, visit: &mut impl FnMut(&egui::epaint::RectShape)) {
+    match shape {
+        egui::epaint::Shape::Rect(rect) => visit(rect),
+        egui::epaint::Shape::Vec(children) => {
+            for child in children {
+                each_rect(child, visit);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn menu_search_field_uses_an_inset_well_instead_of_the_selection_stroke() {
+    use crate::theme;
+
+    let mut harness = Harness::new();
+    theme::apply(&harness.ctx, horizon_core::AppearanceTheme::Dark);
+    // The opening frame requests focus after the editor is painted.
+    harness.frame(Vec::new(), true, None);
+    let output = harness.frame(Vec::new(), true, None);
+    assert!(
+        harness.ctx.memory(|memory| memory.has_focus(harness.query_id())),
+        "the focused frame is the frame under test"
+    );
+    let hint = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::epaint::Shape::Text(text) if text.galley.text().contains("Search workspaces") => {
+                Some(text.pos + text.galley.size() * 0.5)
+            }
+            _ => None,
+        })
+        .expect("search field hint");
+    let mut rects = Vec::new();
+    for shape in &output.shapes {
+        each_rect(&shape.shape, &mut |rect| {
+            if rect.rect.contains(hint) {
+                rects.push(rect.clone());
+            }
+        });
+    }
+    let well = rects
+        .iter()
+        .find(|rect| rect.fill == theme::BG() && (rect.rect.height() - 32.0).abs() < 1.0)
+        .expect("menu search well")
+        .clone();
+    let focus = egui::Stroke::new(1.0, theme::alpha(theme::ACCENT(), 200));
+    assert_eq!(well.corner_radius, egui::CornerRadius::same(8));
+    assert_eq!(well.stroke, focus);
+    assert_eq!(well.stroke_kind, egui::StrokeKind::Inside);
+    assert!(
+        rects.iter().all(|rect| rect.stroke.color != theme::ACCENT()),
+        "a focused menu search field must not paint the full-opacity selection ring"
+    );
+}
+
+#[test]
+fn tab_moves_focus_into_the_menu_search_text() {
+    let ctx = Context::default();
+    let mut query = String::new();
+    let id = egui::Id::new("menu-search");
+    let mut frame = |events| {
+        let _ = ctx
+            .run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(800.0, 600.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let _ = render_menu_search_field(ui, &mut query, id, false);
+                },
+            )
+            .discard_textures();
+    };
+    frame(vec![Event::Key {
+        key: Key::Tab,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    }]);
+    assert!(ctx.memory(|memory| memory.has_focus(id)), "tab lands on the text edit");
+    frame(vec![Event::Text("z".into())]);
+    assert_eq!(query, "z");
 }

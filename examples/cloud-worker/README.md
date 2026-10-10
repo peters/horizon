@@ -888,22 +888,98 @@ for agents, limit the GitHub App's permissions or your own access to it. A
 process that keeps `GH_TOKEN` in its environment for more than 8 hours uses an
 expired token; start `gh` again to get the current one.
 
+**Asking for more access.** An agent that needs a repository without a grant
+asks you for it with the `github_access` MCP tool. You decide in Horizon:
+
+- **Allow for this cloud**: the worker stores a cloud grant with the chain, so it
+  survives a restart and a new chain of the same GitHub App and account. A chain
+  of another account, or one whose account is unknown, drops it.
+- **Deny**: the agent is told not to ask again.
+
+Access is per cloud. Every agent session of the cloud gets the same token, so a
+repository you allow reaches all of them; the grants route credentials and are
+not a boundary between sessions. Enforcement per repository and per task is
+tracked in issue #1393.
+
+`horizon-worker-configure` gives agents the tool whenever the image contains
+`horizon-worker-github`, also before you connect GitHub; until then the tool
+answers that GitHub is not connected. The tool runs
+`horizon-worker-github mcp` as the agent and uses the same socket:
+
+- `{"request": "request", "repository": "owner/name", "access": "push",
+  "reason": "..."}` records a request and answers `{"status": "pending",
+  "id": "..."}`. The reason has at most 300 bytes of UTF-8 and no control,
+  formatting, surrogate or line separator characters, such as the ones that
+  reorder text.
+  Asking for push while a read request of the same session waits turns it into
+  a push request with the new reason. A repository that the session already reaches answers
+  `"status": "allowed"` without a request. A second request of the same session
+  for the same repository answers with the first request. At most 32 requests
+  wait at the same time, and a request without a decision expires after 24
+  hours.
+- `{"request": "request-status", "id": "..."}` answers `pending`, `allowed`
+  (with `scope` `cloud`), `denied` or `expired`. Only the session that
+  asked can read its request.
+
+The service finds the asking session the same way the stop watcher does: it walks
+from the caller's process, which the kernel names, up to an agent pane of
+`horizon-worker-session`. That mapping only keeps requests apart per session; it
+is not an identity. The session's agent marker is writable by every process of the
+cloud, so Horizon shows the session that asks, never a verified agent, and the
+host's list carries no agent name. Access is per cloud anyway: every session of
+the cloud gets the same token for an allowed repository. The tool
+waits up to 10 minutes for your decision and then tells the agent to ask again
+later; that call returns the same request. Requests are kept in
+`/run/horizon-github/access-requests.json` (root only), so a container restart
+ends them. Each request belongs to the GitHub App and account of the chain it was
+made under; after an install for another app or account it counts as expired and
+is never decided for the new one.
+
+Horizon lists and decides requests as root over SSH:
+
+```bash
+horizon-worker-github requests
+# {"requests":[{"id":"9bf221fe23173feb","repository":"owner/extra","access":"push",
+#   "reason":"Push the fix","session":"<session>","created_at":1800000000}]}
+horizon-worker-github decide 9bf221fe23173feb allow-cloud   # or deny
+# {"ok":true,"id":"9bf221fe23173feb","decision":"allow-cloud","repository":"owner/extra",
+#   "access":"push","status":"allowed"}
+# {"ok":false,"id":"9bf221fe23173feb","error":"not_installed","message":"..."}
+```
+
+Before it allows, the worker asks GitHub for the repository with the current
+access token (`GET /repos/{owner}/{name}`), and for push it requires
+`permissions.push`. If that fails, the decision fails with one of these codes
+and the request stays pending: `not_installed` (GitHub answered 404),
+`no_push`, `token_invalid`, `forbidden`, `unreachable`, `token_expired` or
+`no_chain`. `too_many_grants` (a cloud takes at most 32 cloud grants, so the
+stored chain stays readable) and `chain_changed` (another chain was stored while
+GitHub was asked) also leave it pending. `unknown_request` and `not_pending` end
+the decision too. Both
+outcomes print JSON and exit with status 0. `read` and `push` keep the meaning
+described above: `permissions.push` reports your account's access, and the
+GitHub App's own permissions still limit what the token can do.
+
 **Status and removal.** Horizon runs these as root:
 
 ```bash
 horizon-worker-github status
 # {"version":1,"state":"ok","persistent":true,"pending_write":false,"login":"octocat",
 #  "access_expires_at":...,"refresh_expires_at":...,"last_refresh_at":...,"last_error":null,
-#  "repositories":[{"repository":"owner/name","target":"primary","access":"push"}],"serving":true}
+#  "repositories":[{"repository":"owner/name","target":"primary","access":"push"},
+#                  {"repository":"owner/extra","target":null,"access":"push"}],
+#  "pending_requests":0,"serving":true}
 horizon-worker-github clear
 ```
 
-`state` is `ok`, `revoked` or `absent`. `status` asks the running service over
+`state` is `ok`, `revoked` or `absent`. A repository with `"target": null` is a
+cloud grant. `pending_requests` counts the requests that wait for you. `status` asks the running service over
 the socket, as root, so it also sees a chain that only the service's memory
 holds. Without an answer it reads the stored copies and reports
 `"serving": false`. `clear` first removes the static Git binding, and keeps the
 chain when it cannot, so agents never keep access while status reports no chain.
-Then it removes every copy of the chain, durably, and writes a root-only
+Then it removes every copy of the chain with its cloud grants, durably, and every
+access request, and writes a root-only
 clear mark that the running service reads, so the service also drops a chain
 that only its memory holds. The service keeps running and answers that no chain
 exists. It does not revoke the sign-in on GitHub. Images with this service report

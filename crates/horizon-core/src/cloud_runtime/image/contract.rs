@@ -265,6 +265,7 @@ mod tests {
             docker_host: Some(&host),
             docker_config: config.path(),
             runner: &runner,
+            publisher: None,
         };
         assert!(
             images

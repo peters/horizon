@@ -2,7 +2,7 @@
 //! in steps that a failure or a cancel does not throw away, so a later try picks up from what was
 //! already received. Git cannot resume inside one pack, so each step is one pack: the latest
 //! commit first, then the rest of the history, then the checkout.
-use super::{Cancellation, Failure, Remote, Token, candidates, classify, git_output};
+use super::{Cancellation, Failure, Remote, Token, candidates, classify, earlier, git_output};
 use std::{
     fs::{File, OpenOptions, TryLockError},
     io::Read,
@@ -12,8 +12,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Where a running clone stands, for showing it: the step, Git's phase, how far, and when that
-/// phase should end.
+/// Where a running clone stands, for showing it: the step, Git's phase, how far, when the phase
+/// should end, and what the whole clone has received and since when.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Snapshot {
     /// The step under way, from 1, and how many there are; 0 before the first starts.
@@ -26,8 +26,16 @@ pub struct Snapshot {
     pub percent: Option<u8>,
     /// Git's size and speed for the phase, such as `12.30 MiB | 4.50 MiB/s`.
     pub detail: String,
-    /// How long the phase has left at the pace it has kept, once there is a pace to go by.
-    pub eta: Option<Duration>,
+    /// When the phase should end at the pace it has kept, once there is a pace to go by. A
+    /// viewer counts down to it.
+    pub ends: Option<Instant>,
+    /// When the clone started, for the time it has run.
+    pub started: Option<Instant>,
+    /// About what the whole clone receives, as the host counts the repository, once it answered.
+    pub expected: Option<u64>,
+    /// What the steps before this one received, and what this one has so far.
+    pub received: u64,
+    pub receiving: u64,
 }
 
 /// Shared between the clone and whoever shows it.
@@ -189,7 +197,8 @@ fn keep_tail(tail: &mut String, text: &str) {
 /// beyond progress.
 struct Watched {
     phase: String,
-    phase_started: Instant,
+    /// The phase's progress so far, when each step of it was seen.
+    seen: estimate::Seen,
     said: String,
 }
 
@@ -202,16 +211,17 @@ impl Watched {
         }
         if let Some((name, percent, detail)) = parse_progress(line) {
             // Progress is not a reason for anything: only what Git says otherwise is kept.
+            let now = Instant::now();
             if name != self.phase {
                 self.phase.clone_from(&name);
-                self.phase_started = Instant::now();
+                self.seen = estimate::Seen::new(now);
             }
-            let left = eta(self.phase_started.elapsed(), percent);
+            let left = self.seen.left(&name, percent, now);
             update(progress, |snapshot| {
+                estimate::take(snapshot, &name, &detail, left, now);
                 snapshot.phase = name;
                 snapshot.percent = Some(percent);
                 snapshot.detail = detail;
-                snapshot.eta = left;
             });
         } else if !is_chatter(line) {
             keep_tail(&mut self.said, line);
@@ -225,7 +235,7 @@ fn watch(mut stderr: Option<std::process::ChildStderr>, progress: &Progress, don
     let (mut line, mut buffer) = (String::new(), [0_u8; 512]);
     let mut watched = Watched {
         phase: String::new(),
-        phase_started: Instant::now(),
+        seen: estimate::Seen::new(Instant::now()),
         said: String::new(),
     };
     while let Some(read) = stderr
@@ -434,6 +444,7 @@ pub fn resumable(parent: &Path, remote: &Remote) -> Option<PathBuf> {
     // A link is not a candidate: two parents could reach one checkout by different names, and the
     // claim on it is kept by name.
     candidates(parent, remote)
+        .chain(earlier(parent, remote))
         .filter(|path| std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir()))
         .find(|path| marker(path).is_some_and(|marker| marker.url == remote.url && !marker.complete()))
 }
@@ -552,11 +563,15 @@ fn quietly(mut command: Command, folder: &Path, remote: &Remote, cancel: &Cancel
 
 fn announce(progress: &Progress, step: u8, resumed: bool) {
     update(progress, |snapshot| {
+        // What the whole clone received, and since when it runs, carry on.
         *snapshot = Snapshot {
             step,
             steps: STEPS,
             resumed,
             phase: "Connecting".into(),
+            started: Some(snapshot.started.unwrap_or_else(Instant::now)),
+            expected: snapshot.expected,
+            received: snapshot.received.saturating_add(snapshot.receiving),
             ..Snapshot::default()
         };
     });
@@ -610,9 +625,13 @@ fn claimed_steps(
         return Ok(());
     }
     announce(progress, 1, earlier.is_some());
+    estimate::look_up(remote, token, progress);
     let marker = if let Some(marker) = earlier {
         // The try before may have been ended by a crash or a kill, mid-write.
         clear_leftovers(destination);
+        // Counted once what it left is cleared, so a fetch it broke off is counted once.
+        let before = estimate::received_before(destination);
+        update(progress, |snapshot| snapshot.received = before);
         marker
     } else {
         let branch = default_branch(remote, token, cancel)?;
@@ -783,6 +802,8 @@ fn interrupted(failure: Failure) -> Failure {
         other => Failure::Interrupted(format!("{other} {RESUME}")),
     }
 }
+
+mod estimate;
 
 #[cfg(test)]
 mod tests;

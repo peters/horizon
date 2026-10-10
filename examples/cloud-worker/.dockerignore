@@ -18,6 +18,7 @@
 !horizon-worker-git-auth
 !horizon-worker-github
 !horizon-worker-github-common
+!horizon-worker-github-agents
 !horizon-worker-browserstack
 !bin/
 bin/**

@@ -20,6 +20,14 @@ A price limit applies in each offer's native currency. An incomplete comparison
 is not a complete cross-provider ranking. Worker prices refresh from the owner;
 the worker refuses prices older than 20 minutes. Offers reserve no capacity.
 
+Hetzner CPU offers include all current x86 server types in permitted locations.
+The configured `server_types` list supplies fallback preferences when no worker is
+selected. It does not restrict the catalog or an explicit worker choice. Repository
+resource minimums still apply. New cloud hides workers below these minimums by default.
+An explicit choice fixes its server type and location through stop and resume.
+Changes to fallback preferences do not substitute a different worker. The location
+must remain permitted, and the chosen type must meet the profile requirements.
+
 ## Repository development profiles
 
 Read the repository's `.horizon/cloud.yml` before comparing task workers. Use its
@@ -110,6 +118,11 @@ GitHub and chooses its repositories; agents cannot set it up.
   repository where the person's GitHub App is not installed cannot be allowed.
 - When the cloud has no GitHub access, do not ask the person for a token. Say that
   GitHub is not connected for this cloud.
+- On this computer, **New cloud** lists the repositories the person's GitHub App is
+  installed on and clones a private one with the connected account, after this computer
+  signs in once. No MCP tool lists or clones them: to start a cloud from a private
+  repository, ask the person to pick it in **New cloud**. A repository missing from the
+  list needs **Add repositories on GitHub** there.
 
 ## Development-only registry
 

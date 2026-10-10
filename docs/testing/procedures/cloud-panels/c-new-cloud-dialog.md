@@ -3,7 +3,7 @@ procedure: cloud-panels-c-new-cloud-dialog
 feature: Cloud panels smoke test, area C (New cloud dialog and worker picker)
 platforms: [linux]
 cost: rents compute   # C08 if the watch starts, C31 through D01 and D02
-destructive: no
+destructive: yes   # C32 deletes the clone and owner folder it made in the private home
 secrets: [RunPod API key in Cloud settings, Hetzner Cloud API token in Cloud settings]
 owner: peters
 ---
@@ -574,28 +574,36 @@ changes:
    Result: The row names the family with the least memory for each vCPU that
    holds the size. It does not name another family.
 
-### 6.15 C15 — Show only the configured Hetzner types and locations
+### 6.15 C15 — Show the complete Hetzner catalog in permitted locations
 
-1. Do task [C15](../new-cloud-picker.md#64-c15--hetzner-allowlist) of the New cloud picker procedure.
+1. Do task [C15](../new-cloud-picker.md#64-c15--complete-hetzner-catalog) of the New cloud picker procedure.
 
    Result: The list shows only Hetzner rows. Each row names a server type and a location.
 
 2. Read `server_types` and `locations` from the `hetzner` section of the settings file.
 
-   Result: You have the allowed types and locations.
+   Result: You have the fallback type preferences and the permitted locations.
 
 3. Calculate the expected rows from the Hetzner catalog of the setup.
 
-   Result: For each allowed type and location, the catalog has a price there and
-   the type meets the profile minimums. Each such pair is one expected row.
+   Result: Each expected pair has a current x86 type, a permitted location and a price there.
+   The type fits the worker image and meets the profile requirements.
+   Each pair is one expected row. `server_types` does not limit the pairs.
 
 4. Compare the rows of the dialog with the expected rows.
 
-   Result: Each expected pair shows one row. No other type or location shows.
+   Result: Each expected pair shows one row. No location outside `locations` shows.
 
-5. Record that the dialog does not say which catalog types the settings exclude.
+5. If the catalog has a compatible type outside `server_types`, find its row.
 
-   Result: The report links [issue #1305](https://github.com/peters/horizon/issues/1305).
+   Result: The row shows the type and a permitted location. The fallback preferences do not hide the row.
+
+6. Read the note under the search field.
+
+   Result: When the settings exclude locations, the note gives their count.
+   The list does not show those locations. When the settings permit every
+   catalog location, the dialog shows no exclusion note.
+   The fallback type preferences do not add to the exclusion count.
 
 ### 6.16 C16 — Keep the unlisted Hetzner rows under In stock only
 
@@ -670,8 +678,14 @@ changes:
 
 3. Compare the number of rows for the location with the number of rows of C15 in that location.
 
-   Result: The numbers are the same. The search finds only text in the row
-   title ([issue #1305](https://github.com/peters/horizon/issues/1305)).
+   Result: The numbers are the same.
+
+4. Search for a RunPod flavor id, a data center id, a region name, `shared` and `dedicated`.
+
+   Result: The flavor id shows the RunPod rows that use that flavor. The
+   data center id shows the rows that can run there. The region name shows the
+   rows in that region. `shared` and `dedicated` show the Hetzner rows of that
+   CPU kind.
 
 ### 6.20 C20 — Show EUR totals for Hetzner and USD totals for RunPod
 
@@ -851,8 +865,8 @@ changes:
 
 2. Examine the data center choices.
 
-   Result: No chip and no summary line shows `stock unknown`. If one does, link
-   [issue #1305](https://github.com/peters/horizon/issues/1305) in the report.
+   Result: No chip and no summary line shows `stock unknown`. If one does, record
+   a defect.
 
 ### 6.30 C30 — Show only RunPod GPU types for a GPU profile
 
@@ -919,6 +933,50 @@ This task uses the clouds of D01 and D02. Do not start other clouds.
 
    Result: Each card names the data center or location and its region.
 
+### 6.32 C32 — Clone a pasted link into its owner's folder and reuse an earlier checkout
+
+This task clones a small public repository on this computer. It starts no cloud.
+`<folder>` is the first of `github`, `code`, `src`, `projects` and `dev` in
+`<data-home>` that exists, else `Horizon`.
+
+1. Close the New cloud dialog if it is open. Open New cloud again and type
+   `https://github.com/octocat/Hello-World` in the repository field.
+
+   Result: The dialog shows **CLONE INTO** `<home>/<folder>/octocat/Hello-World`.
+
+2. Click **Continue**.
+
+   Result: The clone finishes. `git -C <data-home>/<folder>/octocat/Hello-World
+   remote get-url origin` shows `https://github.com/octocat/Hello-World.git`.
+   While it runs, the line under the step says what the clone received out of
+   about the repository's size and how long it has run, and counts up each second.
+
+3. Close the dialog with **Cancel**. Move the clone to the place where an earlier
+   Horizon cloned it:
+
+   ```sh
+   mv <data-home>/<folder>/octocat/Hello-World <data-home>/<folder>/Hello-World
+   ```
+
+   Result: `<data-home>/<folder>/octocat` holds only the hidden
+   `.horizon-clone-claims` folder, where a clone keeps the lock of its folder.
+
+4. Open New cloud and type `https://github.com/octocat/Hello-World` again.
+
+   Result: The dialog shows **ALREADY CLONED, CONTINUE USES IT**
+   `<home>/<folder>/Hello-World`. No second clone starts.
+
+> **CAUTION:** THE NEXT STEP DELETES FOLDERS. Delete only the two folders that this
+> task made, in the private home of the fixture.
+
+5. Close the dialog with **Cancel** and remove the clone and its owner folder:
+
+   ```sh
+   rm -rf <data-home>/<folder>/Hello-World <data-home>/<folder>/octocat
+   ```
+
+   Result: Neither folder exists.
+
 ## 7. Pass criteria
 
 - C01 opens the dialog from the panel picker, the toolbar and **More**.
@@ -928,6 +986,8 @@ This task uses the clouds of D01 and D02. Do not start other clouds.
 - C12 to C30 show the expected counts and values that you calculated from the
   settings and the provider catalogs. A known defect has its issue link.
 - C31 shows that each worker runs in the place that the summary named.
+- C32 clones a pasted link into `<folder>/<owner>/<repository>` and uses an
+  earlier checkout at `<folder>/<repository>` without a second clone.
 - No cloud starts in this area except through D01 and D02, or a watch that the
   operator permitted.
 

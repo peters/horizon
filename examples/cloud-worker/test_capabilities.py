@@ -93,15 +93,17 @@ class CapabilitiesTests(unittest.TestCase):
         # Helpers elsewhere on PATH do not count: the service loads them beside itself.
         elsewhere = self.root / 'elsewhere'
         elsewhere.mkdir()
-        helpers = ('horizon-worker-github-common', 'horizon-worker-git-auth')
+        helpers = ('horizon-worker-github-common', 'horizon-worker-github-agents', 'horizon-worker-git-auth')
         for helper in helpers:
             (elsewhere / helper).touch()
         for reported, missing, args, beside, expected in [
                 (declared, (), ('--git-auth',), helpers, True),
                 ({'horizon-worker-supervise': b''}, (), ('--git-auth',), helpers, False),
                 (declared, ('horizon-worker-github',), ('--git-auth',), helpers, False),
-                (declared, (), ('--git-auth',), ('horizon-worker-git-auth',), False),
-                (declared, (), ('--git-auth',), ('horizon-worker-github-common',), False),
+                (declared, (), ('--git-auth',), ('horizon-worker-git-auth', 'horizon-worker-github-agents'), False),
+                (declared, (), ('--git-auth',), ('horizon-worker-github-common', 'horizon-worker-git-auth'), False),
+                (declared, (), ('--git-auth',), ('horizon-worker-github-common', 'horizon-worker-github-agents'),
+                 False),
                 # Without the agent isolation launcher the service would refuse to run.
                 (declared, ('horizon-worker-tailnet',), ('--git-auth',), helpers, False),
                 (declared, (), (), helpers, False)]:
@@ -424,6 +426,17 @@ class CapabilitiesTests(unittest.TestCase):
             self.configure()
         self.assertEqual(json.loads(self.path('/workspace/agent-mcp.json').read_text())['mcpServers']['horizon-worker'],
                          {'command': '/usr/local/bin/horizon-worker-stop', 'args': ['mcp']})
+
+    def test_agents_get_the_github_access_tool_where_the_image_has_the_service(self):
+        for agents, service, expected in [(['claude'], '/usr/local/bin/horizon-worker-github', True),
+                                          (['claude'], None, False), ([], '/usr/local/bin/horizon-worker-github', False)]:
+            self.write('/workspace/capabilities.json', {'agents': agents})
+            with mock.patch.dict(os.environ, {}, clear=True), \
+                    mock.patch('shutil.which', side_effect=lambda name: service if name == 'horizon-worker-github' else None):
+                self.configure()
+            servers = json.loads(self.path('/workspace/agent-mcp.json').read_text())['mcpServers']
+            self.assertEqual(servers.get('horizon-github'), {'command': '/usr/local/bin/horizon-worker-github',
+                                                             'args': ['mcp']} if expected else None, (agents, service))
 
     @unittest.skipUnless(WORKER, "set HORIZON_TEST_CLOUD_WORKER to the matching built helper")
     def test_codex_and_grok_accept_the_stop_tool_and_drop_it_when_opted_out(self):

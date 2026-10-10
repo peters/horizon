@@ -1,8 +1,9 @@
 #!/usr/bin/python3
 """Root service that keeps a GitHub App user token chain fresh while the host is offline and
 gives agents the short-lived access token of their granted repositories over a Unix socket.
-Agents never read the chain. Never prints a token. Operations: install (JSON on stdin),
-serve (started by horizon-worker-supervise), status (JSON without secrets) and clear."""
+Agents never read the chain. Never prints a token. Root operations: install (JSON on stdin),
+serve (started by horizon-worker-supervise), status, clear, requests and decide. Agents run
+`mcp` for the github_access tool."""
 import contextlib
 import http.client
 import importlib.machinery
@@ -12,8 +13,7 @@ import os
 from pathlib import Path
 import random
 import re
-import socket
-import struct
+import secrets
 import subprocess
 import sys
 import threading
@@ -35,32 +35,24 @@ def load_common():
 
 
 common = load_common()
+agents = common.load_sibling('horizon-worker-github-agents', 'horizon_worker_github_agents')
 auth = common.auth
 GIT_AUTH = common.GIT_AUTH
 Store = common.Store
 STATE = common.STATE
 TEST_URL = common.TEST_URL
-SOCKET = Path('/run/horizon-worker/github.sock')
-LOG = 'requests.log'
 # The grants an install is configuring, kept while it runs. A live install holds the store
 # lock, so whoever gets the lock and still finds this file knows the install was cut off.
 INTENT = 'install.intent'
-LOG_LIMIT = 1 << 20
-# Root, and the agent identity that horizon-worker-tailnet isolate gives every session.
-ALLOWED_UIDS = (0, 10001)
-ROOT_UID = 0
 MAX_INSTALL = 65536
-MAX_REQUEST = 8192
+MAX_REPLY = 65536
 REFRESH_MARGIN = 30 * 60
-# A token this close to its expiry is refused: Git or gh would fail with it mid-operation.
-SERVE_MARGIN = 60
 POLL_SECONDS = 60
 RETRY_BASE_SECONDS = 15
 RETRY_MAX_SECONDS = 15 * 60
 # Start attempts and the first wait between them, before serve exits for the supervisor.
 START_ATTEMPTS = 5
 START_WAIT_SECONDS = 2
-CONNECTIONS = 16
 CLIENT_ID = re.compile(r'[A-Za-z0-9._-]{1,128}')
 ERROR_CODE = re.compile(r'[a-z0-9_]{1,64}')
 INSTALL_FIELDS = {'version', 'client_id', 'client_secret', 'login', 'author_name', 'author_email', 'grants', 'chain'}
@@ -68,7 +60,6 @@ INSTALL_FIELDS = {'version', 'client_id', 'client_secret', 'login', 'author_name
 OPTIONAL_FIELDS = {'client_secret', 'login'}
 LOGIN = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?')
 GRANT_FIELDS = {'repository', 'target', 'access'}
-ACCESS = ('push', 'read')
 
 
 class Transient(Exception):
@@ -94,7 +85,7 @@ def validate_install(value, now):
         raise ValueError('Invalid GitHub grant list')
     repositories, targets = set(), set()
     for grant in grants:
-        if not isinstance(grant, dict) or set(grant) != GRANT_FIELDS or grant['access'] not in ACCESS:
+        if not isinstance(grant, dict) or set(grant) != GRANT_FIELDS or grant['access'] not in common.ACCESS:
             raise ValueError('Invalid GitHub grant')
         # The Git helper's own checks: repository, token characters and identity.
         auth.validate({'repository': grant['repository'], 'token': chain['access_token'],
@@ -120,13 +111,13 @@ def post_refresh(form, environ=os.environ, timeout=30):
         'User-Agent': 'horizon-worker-github/1'})
     try:
         with common.opener(loopback).open(request, timeout=timeout) as response:
-            body = response.read(MAX_REQUEST * 8 + 1)
+            body = response.read(MAX_REPLY + 1)
     except (OSError, http.client.HTTPException) as error:
         if isinstance(error, urllib.error.HTTPError):
             error.close()
         raise Transient('transport') from None
     try:
-        reply = json.loads(body) if len(body) <= MAX_REQUEST * 8 else None
+        reply = json.loads(body) if len(body) <= MAX_REPLY else None
     except ValueError:
         reply = None
     if not isinstance(reply, dict):
@@ -237,151 +228,6 @@ def refresh_loop(store, sleep=time.sleep):
         sleep(delay)
 
 
-def refusal(state, message):
-    return {'ok': False, 'state': state, 'message': message}
-
-
-def request_path(path):
-    """(repository path, whether it names a push) for a credential request path."""
-    path = path.strip('/')
-    push = False
-    for suffix in ('/info/refs', '/git-receive-pack', '/git-upload-pack'):
-        if path.endswith(suffix):
-            push = push or suffix == '/git-receive-pack'
-            path = path[:-len(suffix)]
-    if '?' in path:
-        path, query = path.split('?', 1)
-        push = push or 'git-receive-pack' in query
-    return path.removesuffix('.git'), push
-
-
-def granted(state, repository):
-    if not isinstance(repository, str):
-        return None
-    return next((grant for grant in state['grants'] if auth.same_repository(repository, grant['repository'])), None)
-
-
-def answer(request, state, now):
-    """The reply to one agent request, and the repository it named for the log."""
-    if not isinstance(request, dict) or request.get('request') not in ('credential', 'gh-token'):
-        return refusal('refused', 'Malformed GitHub credential request.'), None
-    if state is None:
-        return refusal('absent', 'No GitHub token chain is installed on this worker.'), None
-    if state['state'] != 'ok':
-        return refusal('revoked', 'GitHub access on this worker was revoked; connect GitHub again in Horizon.'), None
-    chain = state['chain']
-    if chain['access_expires_at'] - now <= SERVE_MARGIN:
-        return refusal('ok', 'The GitHub access token has expired or expires within a minute, and this worker '
-                             'could not refresh it yet.'), None
-    if request['request'] == 'credential':
-        if request.get('protocol') != 'https' or request.get('host') != 'github.com':
-            return refusal('ok', 'Only HTTPS access to github.com is granted.'), None
-        repository, push = request_path(str(request.get('path', '')))
-        grant = granted(state, repository)
-        if grant is None:
-            return refusal('ok', 'This repository has no GitHub grant on this worker.'), repository
-        if push and grant['access'] != 'push':
-            return refusal('ok', 'This repository is granted for reading only.'), repository
-        return {'ok': True, 'state': 'ok', 'username': 'x-access-token', 'password': chain['access_token'],
-                'expires_at': chain['access_expires_at']}, grant['repository']
-    grant = granted(state, request.get('repository'))
-    if grant is None:
-        return refusal('ok', 'This repository has no GitHub grant on this worker.'), request.get('repository')
-    return {'ok': True, 'state': 'ok', 'token': chain['access_token'], 'repository': grant['repository'],
-            'access': grant['access'], 'expires_at': chain['access_expires_at']}, grant['repository']
-
-
-def serve_request(request, store, now):
-    """`answer` for the chain that may be served. A chain that exists but is not stored yet is
-    refused as `unstored`, never as `absent`, which would send Git to the static file."""
-    served = store.load(serving=True)[0]
-    if served is None and store.load()[0] is not None:
-        return refusal('unstored', 'The GitHub token chain is not stored yet; try again in a minute.'), None
-    return answer(request, served, now)
-
-
-def peer(connection):
-    """(pid, uid) of the connecting process, as the kernel reports them."""
-    pid, uid, _ = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
-                                                            struct.calcsize('3i')))
-    return pid, uid
-
-
-def log_request(directory, record):
-    """One line per request without any token, in a root-only log that keeps two files."""
-    path = directory / LOG
-    with contextlib.suppress(FileNotFoundError):
-        if path.lstat().st_size > LOG_LIMIT:
-            os.replace(path, directory / (LOG + '.1'))
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
-    with os.fdopen(fd, 'a') as output:
-        output.write(json.dumps(record, separators=(',', ':')) + '\n')
-
-
-def handle(connection, store):
-    pid, uid = peer(connection)
-    connection.settimeout(5)
-    with connection.makefile('rb') as stream:
-        line = stream.readline(MAX_REQUEST + 1)
-    try:
-        request = json.loads(line) if len(line) <= MAX_REQUEST else None
-    except ValueError:
-        request = None
-    now = time.time()
-    if uid not in ALLOWED_UIDS:
-        reply, repository = refusal('refused', 'This account may not use GitHub access on this worker.'), None
-    elif isinstance(request, dict) and request.get('request') == 'status':
-        # Only root (the host's status command) reads the status of the serving process.
-        reply = dict(status(store), ok=True) if uid == ROOT_UID else refusal('refused', 'Only root reads the status.')
-        repository = None
-    else:
-        reply, repository = serve_request(request, store, now)
-    kind = request.get('request') if isinstance(request, dict) else None
-    with contextlib.suppress(OSError):
-        log_request(store.runtime, {'at': int(now), 'uid': uid, 'pid': pid,
-                                    'request': kind if kind in ('credential', 'gh-token', 'status') else 'invalid',
-                                    'repository': repository if auth.valid_repository(repository) else None,
-                                    'granted': reply['ok']})
-    connection.sendall((json.dumps(reply) + '\n').encode())
-
-
-def listen(path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.unlink(missing_ok=True)
-    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server.bind(str(path))
-    # Any account may connect; the kernel's peer credentials decide who gets an answer.
-    path.chmod(0o666)
-    server.listen(CONNECTIONS)
-    return server
-
-
-def accept_forever(server, store):
-    slots = threading.BoundedSemaphore(CONNECTIONS)
-
-    def run(connection):
-        try:
-            with connection:
-                handle(connection, store)
-        # One bad client must not end the service.
-        except Exception as error:
-            print('GitHub request failed: ' + type(error).__name__, flush=True)
-        finally:
-            slots.release()
-
-    while True:
-        try:
-            connection, _ = server.accept()
-        except OSError as error:
-            if server.fileno() < 0:
-                return
-            print('GitHub socket accept failed: ' + type(error).__name__, flush=True)
-            time.sleep(1)
-            continue
-        slots.acquire()
-        threading.Thread(target=run, args=(connection,), daemon=True).start()
-
-
 def start(store, path, sleep=None, prepare=None):
     """The listening socket, after up to START_ATTEMPTS tries with doubled waits, or None.
     `prepare` runs after the checks and before the socket exists, until it succeeds once."""
@@ -396,7 +242,7 @@ def start(store, path, sleep=None, prepare=None):
             if prepare is not None:
                 prepare()
                 prepare = None
-            return listen(path)
+            return agents.listen(path)
         except (OSError, ValueError) as error:
             print('GitHub access cannot start: ' + type(error).__name__, flush=True)
             if attempt + 1 < attempts:
@@ -404,17 +250,18 @@ def start(store, path, sleep=None, prepare=None):
     return None
 
 
-def serve(store=None, path=SOCKET):
+def serve(store=None, path=agents.SOCKET):
     """Runs for the worker's life. Returns 1 when it cannot start; the supervisor then drops
     the service and the Git helper falls back to its private file."""
     store = store or Store()
     # The socket opens only after the repositories match the stored chain, so the supervisor
     # never publishes a service that does not answer yet.
+    book = agents.Book(store.runtime)
     server = start(store, path, prepare=lambda: reconcile(store))
     if server is None:
         return 1
     threading.Thread(target=refresh_loop, args=(store,), daemon=True).start()
-    accept_forever(server, store)
+    agents.accept_forever(server, store, book, status)
     return 0
 
 
@@ -473,6 +320,13 @@ def identity_grants(state):
             for grant in (state or {}).get('grants', [])]
 
 
+def same_account(previous, value):
+    """Whether a new chain belongs to the app and account of the previous one. Without a
+    login on both, the account is unknown, and no grant carries over."""
+    return (previous is not None and previous['client_id'] == value['client_id']
+            and bool(previous.get('login')) and previous.get('login') == value.get('login'))
+
+
 def install(value, store, now=time.time, configure=run_configure, retire=run_retire, static=run_restore):
     """Configures each target repository, stores the chain, then retires the static binding.
 
@@ -481,7 +335,8 @@ def install(value, store, now=time.time, configure=run_configure, retire=run_ret
     previous chain. A failed configuration or save configures the previous chain's
     repositories again, as far as that works, and keeps the previous chain. The static
     binding goes last; one that cannot be removed stays as a fallback, which the service
-    overrides whenever it answers. Returns status."""
+    overrides whenever it answers. Repositories allowed for the whole cloud carry over to a
+    new chain of the same app and account only. Returns status."""
     validate_install(value, int(now()))
     with store.lock():
         try:
@@ -489,10 +344,14 @@ def install(value, store, now=time.time, configure=run_configure, retire=run_ret
         except (OSError, ValueError):
             previous = None
         state = {key: value[key] for key in ('client_id', 'author_name', 'author_email', 'grants', 'chain')}
-        if value.get('client_secret'):
-            state['client_secret'] = value['client_secret']
-        if value.get('login'):
-            state['login'] = value['login']
+        # Names this install for requests made under a chain without a login.
+        state['install_id'] = secrets.token_hex(8)
+        for optional in OPTIONAL_FIELDS:
+            if value.get(optional):
+                state[optional] = value[optional]
+        kept = same_account(previous, value)
+        if kept and previous.get('cloud_grants'):
+            state['cloud_grants'] = previous['cloud_grants']
         # Written before any repository changes; if this process dies before its end, the
         # service's next check finds it and reconciles. Without it nothing changes.
         try:
@@ -519,6 +378,7 @@ def install(value, store, now=time.time, configure=run_configure, retire=run_ret
         except (OSError, subprocess.SubprocessError):
             print('horizon-worker-github: the static Git binding could not be removed; the service '
                   'still answers first.', file=sys.stderr)
+    # Requests of another app or account expire by themselves: each names its account.
     return status(store)
 
 
@@ -549,21 +409,25 @@ def keep(store, previous):
                 store.save(previous, retain=False)
 
 
-def status(store):
+def status(store, now=time.time):
     state, persistent = store.load()
+    pending = len(agents.requests_report(agents.Book(store.runtime), state, now)['requests'])
     if state is None:
         return {'version': 1, 'state': 'absent', 'persistent': False, 'pending_write': False, 'login': None,
                 'access_expires_at': None, 'refresh_expires_at': None, 'last_refresh_at': None, 'last_error': None,
-                'repositories': []}
+                'repositories': [], 'pending_requests': pending}
+    # A cloud grant routes credentials only; it has no target repository on the worker.
+    repositories = [{key: grant[key] for key in ('repository', 'target', 'access')} for grant in state['grants']]
+    repositories += [{'repository': grant['repository'], 'target': None, 'access': grant['access']}
+                     for grant in state.get('cloud_grants', [])]
     return {'version': 1, 'state': state['state'], 'persistent': persistent, 'pending_write': store.pending_write(),
             'login': state.get('login'), 'access_expires_at': state['chain']['access_expires_at'],
             'refresh_expires_at': state['chain']['refresh_expires_at'],
             'last_refresh_at': state.get('last_refresh_at'), 'last_error': state.get('last_error'),
-            'repositories': [{key: grant[key] for key in ('repository', 'target', 'access')}
-                             for grant in state['grants']]}
+            'repositories': repositories, 'pending_requests': pending}
 
 
-def host_status(store, path=SOCKET):
+def host_status(store, path=agents.SOCKET):
     """The serving process's status, which also sees a chain that only its memory holds, with
     `serving`. Without an answer, the status of the stored copies."""
     reply = auth.call_service({'request': 'status'}, path)
@@ -578,29 +442,45 @@ def clear(store, retire=None):
     (retire or run_retire)()
     with store.lock():
         store.clear()
+    agents.Book(store.runtime).clear()
+
+
+def print_json(value):
+    print(json.dumps(value, separators=(',', ':')))
 
 
 def main(argv):
-    if len(argv) != 1 or argv[0] not in ('install', 'serve', 'status', 'clear'):
-        print('Usage: horizon-worker-github install|serve|status|clear', file=sys.stderr)
+    operation = argv[0] if argv else ''
+    if argv == ['mcp']:
+        # The agent's own process: it asks the root service over the socket.
+        agents.serve_mcp()
+        return 0
+    if not (len(argv) == 1 and operation in ('install', 'serve', 'status', 'clear', 'requests')
+            or len(argv) == 3 and operation == 'decide' and argv[2] in agents.DECISIONS):
+        print('Usage: horizon-worker-github install|serve|status|clear|requests|mcp\n'
+              '       horizon-worker-github decide ID allow-cloud|deny', file=sys.stderr)
         return 2
     if os.geteuid() != 0:
         print('horizon-worker-github runs as root only.', file=sys.stderr)
         return 1
     os.umask(0o077)
     store = Store()
-    if argv[0] == 'serve':
+    if operation == 'serve':
         return serve(store)
-    elif argv[0] == 'install':
+    elif operation == 'install':
         # Without agent isolation agents run as root, so no chain may come to this worker.
         if not common.AGENT_ISOLATION.exists():
             raise ValueError('GitHub access requires agent isolation')
         source = sys.stdin.buffer.read(MAX_INSTALL + 1)
         if len(source) > MAX_INSTALL:
             raise ValueError('GitHub chain installation is too large')
-        print(json.dumps(install(auth.parse(source.decode()), store), separators=(',', ':')))
-    elif argv[0] == 'status':
-        print(json.dumps(host_status(store), separators=(',', ':')))
+        print_json(install(auth.parse(source.decode()), store))
+    elif operation == 'status':
+        print_json(host_status(store))
+    elif operation == 'requests':
+        print_json(agents.requests_report(agents.Book(store.runtime), store.load()[0]))
+    elif operation == 'decide':
+        print_json(agents.decide(store, agents.Book(store.runtime), argv[1], argv[2]))
     else:
         clear(store)
     return 0

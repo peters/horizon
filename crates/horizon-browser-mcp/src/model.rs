@@ -19,8 +19,30 @@ use horizon_browser::{
     BackendKind, BrowserAttachedFile, BrowserBounds, BrowserFileInput, BrowserNode, BrowserSnapshot, BrowserTarget,
 };
 use horizon_browser_control::manifest::{self, BrowserManifest};
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::borrow::Cow;
+
+/// A JSON object returned by the running Horizon host, passed to the caller verbatim.
+///
+/// A bare `serde_json::Value` serializes identically, but its JSON schema has no `type`
+/// member, which strict MCP clients reject in `tools/list` (output schemas must describe
+/// a JSON object). The transparent wrapper keeps the wire payload unchanged while
+/// advertising `type: "object"`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub(crate) struct HostJson(pub Value);
+
+impl JsonSchema for HostJson {
+    fn schema_name() -> Cow<'static, str> {
+        "HostJson".into()
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        schemars::json_schema!({ "type": "object" })
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -1207,6 +1229,14 @@ mod tests {
             fill.build_action(),
             Err("files is only accepted for set_files or drop_files".to_string())
         );
+    }
+
+    #[test]
+    fn host_json_keeps_the_wire_payload_and_advertises_an_object_schema() {
+        let value = serde_json::json!({"providers": []});
+        assert_eq!(serde_json::to_value(HostJson(value.clone())).unwrap(), value);
+        let schema = serde_json::to_value(schemars::schema_for!(HostJson)).unwrap();
+        assert_eq!(schema["type"], "object");
     }
 
     #[test]

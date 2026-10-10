@@ -47,12 +47,17 @@ impl RunPod {
             let Some(flavor) = flavors.iter().find(|flavor| flavor.id == entry.id) else {
                 continue;
             };
-            // Do not certify a profile against a catalog whose sizing differs
-            // from the policy used to construct that profile.
+            // A memory ratio that disagrees with the flavor table would mis-size the
+            // pod. That catalog is malformed. A vCPU count outside the live minimum
+            // and maximum means this flavor does not offer the size: skip it. Failing
+            // the whole check makes every data center read as stock unknown.
             if (entry.ram_gb_per_vcpu - f64::from(flavor.memory_per_vcpu)).abs() > f64::EPSILON
-                || !(entry.vcpu.min..=entry.vcpu.max).contains(&cpu)
+                || entry.vcpu.min > entry.vcpu.max
             {
                 return Err(CloudError::InvalidResponse);
+            }
+            if !(entry.vcpu.min..=entry.vcpu.max).contains(&cpu) {
+                continue;
             }
             let mut seen_centers = HashSet::new();
             for center in entry.data_centers {

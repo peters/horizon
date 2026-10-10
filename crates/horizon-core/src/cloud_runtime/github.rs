@@ -11,13 +11,18 @@ use super::{
     Error, Event, Result, command::Runner, git_auth::Target, settings::validate_private_key_file, ssh::Connection,
     state::Deployment,
 };
-use horizon_cloud::github::{Client, Secret};
+use horizon_cloud::github::Client;
+/// A token or secret, wiped on drop and never printed.
+pub use horizon_cloud::github::Secret;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 pub mod connect;
+pub mod host;
+pub mod publish;
 pub mod requests;
 mod signin;
+mod stored;
 #[cfg(test)]
 mod tests;
 mod worker;
@@ -413,6 +418,9 @@ fn sign_in(
         Ok(chain) => chain,
         Err(signin::Ended::Error(error)) => return Err(error),
         Err(signin::Ended::Reason(reason)) => return Ok(Signed::Refused(reason)),
+        Err(signin::Ended::Skipped) => {
+            return Ok(Signed::Refused("Skipped: this cloud has no GitHub access.".into()));
+        }
     };
     let (user, installed) = match client
         .user(&chain.access_token)

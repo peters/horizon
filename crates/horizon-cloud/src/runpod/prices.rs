@@ -4,7 +4,7 @@ use super::{
     RunPod,
     flavors::{self, Flavor},
     stock::Level,
-    volumes::{Capacity, Catalog, Tier, candidates},
+    volumes::{Catalog, Tier, candidates},
 };
 use crate::{
     Cancellation, CloudError, Profile,
@@ -45,22 +45,28 @@ impl RunPod {
             .into_iter()
             .filter(|center| valid_id(&center.id) && (data_centers.is_empty() || data_centers.contains(&center.id)))
             .map(|center| {
-                let levels = |entries: Vec<Capacity>| {
-                    entries
-                        .into_iter()
-                        .map(|entry| Ok((entry.id, availability(&entry.availability)?)))
-                        .collect::<Result<Vec<_>, CloudError>>()
-                };
                 let holds = |tier: Tier| {
                     center
                         .network_volume_types
                         .iter()
                         .any(|value| value == tier.api_value())
                 };
+                // One unknown level must not fail the whole price list. It reads as
+                // none for that GPU only; the other GPUs in the data center stay.
+                let gpus = center
+                    .gpu_availability
+                    .into_iter()
+                    .map(|entry| {
+                        (
+                            entry.id,
+                            availability(&entry.availability).unwrap_or(Availability::None),
+                        )
+                    })
+                    .collect();
                 Ok(DataCenter {
                     workspace_storage: holds(Tier::Standard),
                     high_performance_storage: holds(Tier::HighPerformance),
-                    gpus: levels(center.gpu_availability)?,
+                    gpus,
                     // Family stock only narrows the offers, so a value RunPod adds later
                     // reads as none there instead of failing every price.
                     cpus: center

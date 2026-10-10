@@ -2,6 +2,7 @@
 use super::{Deployment, Request, Result, Runner, Store, repository};
 use crate::cloud_runtime::{
     WorkerContract, git_auth,
+    github::publish::Publisher,
     image::{Images, Layer, default_tag},
     siblings,
 };
@@ -24,6 +25,7 @@ pub(super) fn validate_allocation_image(
                 registry.docker_config(false)
             }),
             runner,
+            publisher: None,
         };
         return match &state.siblings {
             None => images.validate_contract(&spec.image_digest, &state.cloud_id, &state.profile, git_auth),
@@ -143,6 +145,11 @@ pub(super) fn prepare_image(
             registry.docker_config(state.profile.build.is_some())
         }),
         runner,
+        // A bound image repository publishes with its own credential.
+        publisher: registry.is_none().then_some(Publisher {
+            docker_config: &request.settings.docker_config,
+            cloud_id: &state.cloud_id,
+        }),
     };
     let digest = if let Some(set) = &state.siblings {
         let root = build_root.path().join("siblings");

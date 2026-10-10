@@ -667,6 +667,20 @@ mod tests {
         assert_eq!(std::fs::read(&staged[0]).expect("read"), b"inside");
     }
 
+    /// Pin an action's staged stamp to an exact time. Ages are judged
+    /// against the prune-time clock, so a sleep only bounds how old an entry
+    /// may be; only pinned timestamps keep both sides of the comparison
+    /// deterministic on a loaded runner. Future stamps pin freshness no
+    /// matter how long staging and settling took.
+    fn pin_staged(attachments: &Path, panel: &str, action: &str, time: std::time::SystemTime) {
+        let stamp = action_directory(attachments, panel, action).join(STAGED_STAMP);
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&stamp)
+            .expect("open the staged stamp");
+        file.set_modified(time).expect("pin the staged stamp");
+    }
+
     #[test]
     fn pruning_ages_out_every_panel_and_bounds_the_current_one() {
         let root = tempfile::tempdir().expect("root");
@@ -678,7 +692,6 @@ mod tests {
             .expect("authorized");
         stage_attachments(&attachments, "other", "old", &authorized).expect("old on another panel");
         stage_attachments(&attachments, "panel", "first", &authorized).expect("first");
-        std::thread::sleep(Duration::from_millis(600));
         stage_attachments(&attachments, "panel", "second", &authorized).expect("second");
         stage_attachments(&attachments, "panel", "third", &authorized).expect("third");
         for (panel, action) in [
@@ -689,6 +702,11 @@ mod tests {
         ] {
             settle_attachments(&attachments, panel, action);
         }
+        let now = std::time::SystemTime::now();
+        pin_staged(&attachments, "other", "old", now - Duration::from_secs(3600));
+        pin_staged(&attachments, "panel", "first", now - Duration::from_secs(3600));
+        pin_staged(&attachments, "panel", "second", now + Duration::from_secs(3600));
+        pin_staged(&attachments, "panel", "third", now + Duration::from_secs(7200));
         // Age: the other panel's old action and this panel's first go.
         prune_attachments(
             &attachments,
@@ -802,9 +820,11 @@ mod tests {
             .authorize(std::slice::from_ref(&source))
             .expect("authorized");
         stage_attachments(&attachments, "panel", "older", &authorized).expect("older");
-        std::thread::sleep(Duration::from_millis(600));
         stage_attachments(&attachments, "panel", "pending", &authorized).expect("pending");
         settle_attachments(&attachments, "panel", "older");
+        let now = std::time::SystemTime::now();
+        pin_staged(&attachments, "panel", "older", now - Duration::from_secs(3600));
+        pin_staged(&attachments, "panel", "pending", now + Duration::from_secs(3600));
         // Age only removes settled history; the fresh pending action stays.
         prune_attachments(
             &attachments,
@@ -939,8 +959,10 @@ mod tests {
         stage_attachments(&attachments, "closed", "old", &authorized).expect("old");
         stage_attachments(&attachments, "gone", "fresh-but-dead", &authorized).expect("dead panel");
         std::fs::write(attachments.join("%6c697665.json.lock"), b"").expect("a staging lock beside the panels");
-        std::thread::sleep(Duration::from_millis(600));
         stage_attachments(&attachments, "live", "fresh", &authorized).expect("fresh");
+        let now = std::time::SystemTime::now();
+        pin_staged(&attachments, "closed", "old", now - Duration::from_secs(3600));
+        pin_staged(&attachments, "live", "fresh", now + Duration::from_secs(3600));
         let live = crate::paths::safe_local_id("live");
         let closed = crate::paths::safe_local_id("closed");
         sweep_stale_attachments(&attachments, Duration::from_millis(300), |panel| {
@@ -971,7 +993,12 @@ mod tests {
             .authorize(std::slice::from_ref(&source))
             .expect("authorized");
         stage_attachments(&attachments, "panel", "abandoned", &authorized).expect("abandoned");
-        std::thread::sleep(Duration::from_millis(600));
+        pin_staged(
+            &attachments,
+            "panel",
+            "abandoned",
+            std::time::SystemTime::now() - Duration::from_secs(3600),
+        );
         prune_attachments(
             &attachments,
             "panel",

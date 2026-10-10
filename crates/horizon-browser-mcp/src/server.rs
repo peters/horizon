@@ -107,8 +107,11 @@ impl HorizonBrowserMcp {
     async fn browser_remote_allocations(
         &self,
         Parameters(input): Parameters<crate::model::RemoteAllocationsInput>,
-    ) -> Result<Json<serde_json::Value>, String> {
-        self.controller.remote_allocations(input.reference()?).await.map(Json)
+    ) -> Result<Json<crate::model::HostJson>, String> {
+        self.controller
+            .remote_allocations(input.reference()?)
+            .await
+            .map(|value| Json(crate::model::HostJson(value)))
     }
 
     #[tool(
@@ -118,8 +121,11 @@ impl HorizonBrowserMcp {
     async fn browser_provider_usage(
         &self,
         Parameters(input): Parameters<crate::controller::provider_usage::ProviderUsageInput>,
-    ) -> Result<Json<serde_json::Value>, String> {
-        self.controller.provider_usage(input.provider).await.map(Json)
+    ) -> Result<Json<crate::model::HostJson>, String> {
+        self.controller
+            .provider_usage(input.provider)
+            .await
+            .map(|value| Json(crate::model::HostJson(value)))
     }
 
     #[tool(
@@ -129,16 +135,22 @@ impl HorizonBrowserMcp {
     async fn cloud_offers(
         &self,
         Parameters(input): Parameters<crate::controller::provider_usage::CloudOffersInput>,
-    ) -> Result<Json<serde_json::Value>, String> {
-        self.controller.cloud_offers(input).await.map(Json)
+    ) -> Result<Json<crate::model::HostJson>, String> {
+        self.controller
+            .cloud_offers(input)
+            .await
+            .map(|value| Json(crate::model::HostJson(value)))
     }
 
     #[tool(
         name = "cloud_companions",
         description = "List the clouds in your Horizon workspace with the companion clouds their repositories declare: alias, repository, profile, whether the owner checked it on the source cloud's card, its status and target cloud ID. Use a cloud ID and alias from here with cloud_companion_ensure_ready and cloud_companion_stop. Reading starts nothing."
     )]
-    async fn cloud_companions(&self) -> Result<Json<serde_json::Value>, String> {
-        self.controller.cloud_companions().await.map(Json)
+    async fn cloud_companions(&self) -> Result<Json<crate::model::HostJson>, String> {
+        self.controller
+            .cloud_companions()
+            .await
+            .map(|value| Json(crate::model::HostJson(value)))
     }
 
     #[tool(
@@ -148,14 +160,14 @@ impl HorizonBrowserMcp {
     async fn cloud_companion_ensure_ready(
         &self,
         Parameters(input): Parameters<crate::controller::companion::CompanionInput>,
-    ) -> Result<Json<serde_json::Value>, String> {
+    ) -> Result<Json<crate::model::HostJson>, String> {
         self.controller
             .cloud_companion(
                 horizon_browser_control::manifest::provider_usage::CompanionAction::EnsureReady,
                 input,
             )
             .await
-            .map(Json)
+            .map(|value| Json(crate::model::HostJson(value)))
     }
 
     #[tool(
@@ -165,14 +177,14 @@ impl HorizonBrowserMcp {
     async fn cloud_companion_stop(
         &self,
         Parameters(input): Parameters<crate::controller::companion::CompanionInput>,
-    ) -> Result<Json<serde_json::Value>, String> {
+    ) -> Result<Json<crate::model::HostJson>, String> {
         self.controller
             .cloud_companion(
                 horizon_browser_control::manifest::provider_usage::CompanionAction::Stop,
                 input,
             )
             .await
-            .map(Json)
+            .map(|value| Json(crate::model::HostJson(value)))
     }
 
     #[tool(
@@ -182,8 +194,11 @@ impl HorizonBrowserMcp {
     async fn cloud_companion_operation(
         &self,
         Parameters(input): Parameters<crate::controller::companion::CompanionOperationInput>,
-    ) -> Result<Json<serde_json::Value>, String> {
-        self.controller.cloud_companion_operation(input).await.map(Json)
+    ) -> Result<Json<crate::model::HostJson>, String> {
+        self.controller
+            .cloud_companion_operation(input)
+            .await
+            .map(|value| Json(crate::model::HostJson(value)))
     }
 
     #[tool(
@@ -193,8 +208,11 @@ impl HorizonBrowserMcp {
     async fn browser_provider_devices(
         &self,
         Parameters(input): Parameters<crate::controller::provider_usage::ProviderDevicesInput>,
-    ) -> Result<Json<serde_json::Value>, String> {
-        self.controller.provider_devices(input).await.map(Json)
+    ) -> Result<Json<crate::model::HostJson>, String> {
+        self.controller
+            .provider_devices(input)
+            .await
+            .map(|value| Json(crate::model::HostJson(value)))
     }
 
     #[tool(

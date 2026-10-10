@@ -85,9 +85,9 @@ impl Journal {
     }
 }
 
-/// Where and on what a cloud may run under the current settings and its own
-/// placement. Every attempt, retry and reconnect is checked against the policy
-/// in force then, never the one recorded when the cloud was first provisioned.
+/// Allowed locations and fallback server types under the current settings.
+/// An exact persisted placement replaces fallback types and keeps its location
+/// only while that location remains allowed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
     pub locations: Vec<String>,
@@ -95,12 +95,24 @@ pub struct Policy {
 }
 
 impl Policy {
-    /// Intersect current machine policy with the worker's persisted allocation choice.
+    /// Keep a saved exact server type and intersect its location with machine policy.
     /// # Errors
-    /// Refuses a saved worker choice no longer allowed by current settings.
+    /// Refuses malformed exact choices and locations no longer allowed by current settings.
     pub fn for_spec(&self, spec: &WorkerSpec) -> Result<Self, CloudError> {
         if !spec.exact_placement {
             return Ok(self.clone());
+        }
+        if spec.cpu_flavors.len() != 1
+            || spec.data_centers.len() != 1
+            || !spec
+                .cpu_flavors
+                .iter()
+                .chain(&spec.data_centers)
+                .all(|name| valid_placement_name(name))
+        {
+            return Err(CloudError::Invalid(
+                "An exact Hetzner placement needs one valid server type and location",
+            ));
         }
         let selected = |allowed: &[String], saved: &[String]| -> Vec<String> {
             if saved.is_empty() {
@@ -111,15 +123,23 @@ impl Policy {
         };
         let policy = Self {
             locations: selected(&self.locations, &spec.data_centers),
-            server_types: selected(&self.server_types, &spec.cpu_flavors),
+            server_types: spec.cpu_flavors.clone(),
         };
-        if policy.locations.is_empty() || policy.server_types.is_empty() {
-            return Err(CloudError::Invalid(
-                "The saved worker type or location is no longer allowed",
-            ));
+        if policy.locations.is_empty() {
+            return Err(CloudError::Invalid("The saved worker location is no longer allowed"));
         }
         Ok(policy)
     }
+}
+
+/// Whether a server type or location has Hetzner's machine-readable name format.
+#[must_use]
+pub fn valid_placement_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 /// The location of an existing workspace volume. The policy can change while a
@@ -138,11 +158,11 @@ pub fn location(recorded: Option<&str>, policy: &Policy) -> Result<String, Cloud
     }
 }
 
-/// For a cloud without a volume: the first allowed location, in order, where an
-/// allowed server type fits, with those types. Nothing is recorded until a
-/// volume is requested there.
+/// For a cloud without a volume: the first allowed location, in order, where a
+/// requested server type fits. An exact choice keeps its type and location.
+/// Nothing is recorded until a volume is requested there.
 /// # Errors
-/// Refuses when no allowed location has a fitting type.
+/// Refuses when no requested type fits in an allowed location.
 pub fn first_fit(offers: &[Offer], spec: &WorkerSpec, policy: &Policy) -> Result<(String, Vec<Placement>), CloudError> {
     let policy = policy.for_spec(spec)?;
     if policy.locations.is_empty() {
@@ -156,12 +176,12 @@ pub fn first_fit(offers: &[Offer], spec: &WorkerSpec, policy: &Policy) -> Result
                 .ok()
                 .map(|placements| (location.clone(), placements))
         })
-        .ok_or(CloudError::Invalid(
+        .ok_or(no_fitting_type(spec,
             "No configured Hetzner server type has the profile's CPU, memory and container disk in any allowed location",
         ))
 }
 
-/// Every allowed server type in the location, in order, for reconciling a
+/// Every requested server type in the location, in order, for reconciling a
 /// server that was already requested.
 #[must_use]
 pub fn allowed(server_types: &[String], location: &str) -> Vec<Placement> {
@@ -174,11 +194,11 @@ pub fn allowed(server_types: &[String], location: &str) -> Vec<Placement> {
         .collect()
 }
 
-/// The configured server types, in order, whose CPU, memory and local disk fit
-/// the profile in the location. Hetzner's availability flag is advisory, so it
-/// is not used to skip a type.
+/// The requested server types, in order, whose CPU, memory and local disk fit
+/// the profile in the location. An exact choice keeps only its chosen type.
+/// Hetzner's availability flag is advisory, so it is not used to skip a type.
 /// # Errors
-/// Refuses when no configured type fits.
+/// Refuses when no requested type fits.
 pub fn fit(
     offers: &[Offer],
     spec: &WorkerSpec,
@@ -203,11 +223,20 @@ pub fn fit(
         })
         .collect();
     if placements.is_empty() {
-        return Err(CloudError::Invalid(
+        return Err(no_fitting_type(
+            spec,
             "No configured Hetzner server type has the profile's CPU, memory and container disk in the workspace's location",
         ));
     }
     Ok(placements)
+}
+
+fn no_fitting_type(spec: &WorkerSpec, fallback_message: &'static str) -> CloudError {
+    CloudError::Invalid(if spec.exact_placement {
+        "The chosen Hetzner server type is missing from the catalog or does not fit the profile at the chosen location"
+    } else {
+        fallback_message
+    })
 }
 
 /// A shared worker's startup data has no Hetzner path yet.

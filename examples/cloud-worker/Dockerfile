@@ -81,6 +81,7 @@ COPY horizon-worker-tailnet \
     horizon-worker-git-auth \
     horizon-worker-github \
     horizon-worker-github-common \
+    horizon-worker-github-agents \
     horizon-worker-browserstack /usr/local/bin/
 RUN chmod 755 /usr/local/bin/horizon-worker-* \
     && ln -s /usr/local/bin/horizon-worker-git-auth /usr/local/bin/gh \

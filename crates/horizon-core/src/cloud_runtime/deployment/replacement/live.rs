@@ -181,6 +181,11 @@ impl<'a> Live<'a> {
                 registry.docker_config(building)
             }),
             runner: &self.runner,
+            // A bound image repository publishes with its own credential.
+            publisher: (building && registry.is_none()).then_some(crate::cloud_runtime::github::publish::Publisher {
+                docker_config: &self.request.settings.docker_config,
+                cloud_id: &self.request.cloud_id,
+            }),
         }
     }
 

@@ -1,5 +1,6 @@
 //! Where a new cloud's code comes from: a pasted link is cloned, a folder is used as it is.
 //! Git's own credentials do the signing in; a token is asked for only when Git has none.
+mod github;
 mod progress;
 mod view;
 
@@ -73,6 +74,16 @@ pub(in crate::app::cloud_panel::production) struct State {
     probe_cancel: Cancellation,
     probed: Option<String>,
     changed: Option<Instant>,
+    /// The connected GitHub App, read once when the dialog opens, or `None` without one.
+    account: Option<github::Account>,
+    account_read: bool,
+    /// The person chose to paste a token although GitHub is connected.
+    token_instead: bool,
+    /// The clone under way or last tried used the connected account's token.
+    connected: bool,
+    /// The repository the connected account's token was asked for; a token that arrives
+    /// once the field names another is dropped.
+    account_for: Option<Remote>,
 }
 
 impl State {
@@ -126,8 +137,10 @@ impl State {
             let before = self.remote.as_ref().map(|remote| origin(&remote.url).to_owned());
             let before_url = self.remote.as_ref().map(|remote| remote.url.clone());
             // Only a repository that is really there shadows a link: `owner/repo` may also be a plain
-            // folder that happens to have that name.
-            self.remote = source::parse(&self.input).filter(|_| !holds_repository(&path));
+            // folder that happens to have that name. Text that narrows the connected account's
+            // list is not looked up until it names a listed repository in full.
+            let filtering = self.filters_the_list();
+            self.remote = source::parse(&self.input).filter(|_| !filtering && !holds_repository(&path));
             // A token was pasted for one origin (scheme, host and port) and goes to no other.
             if before.as_deref() != self.remote.as_ref().map(|remote| origin(&remote.url)) {
                 self.token.zeroize();
@@ -148,6 +161,8 @@ impl State {
             self.folder = (!self.input.trim().is_empty() && holds_repository(&path)).then_some(path);
             self.failure = None;
             self.public = false;
+            self.token_instead = false;
+            self.connected = false;
             self.probe_cancel.cancel();
             self.probe = None;
             self.probed = None;
@@ -286,6 +301,7 @@ impl State {
         if let Some(path) = self.ready.take() {
             return Some(path);
         }
+        self.take_account_token(ctx);
         let job = self.job.as_ref()?;
         match job.receiver.try_recv() {
             Err(TryRecvError::Empty) => {
@@ -380,7 +396,11 @@ impl State {
             return Err("Checking access…");
         }
         if matches!(self.failure, Some(Failure::SignIn(_))) && self.token.trim().is_empty() {
-            return Err("Paste a token with read access to continue.");
+            return Err(if self.offers_account(&remote) {
+                "Clone it with your connected GitHub account, or paste a token."
+            } else {
+                "Paste a token with read access to continue."
+            });
         }
         if self.plan(&remote).resumable.is_some() {
             return Ok("Continue resumes the clone, then you choose where it runs.");
@@ -517,8 +537,8 @@ mod tests {
         assert_eq!(plan.existing.as_deref(), Some(checkout.as_path()));
         assert_eq!(
             plan.destination,
-            temp.path().join("demo-atlas-2"),
-            "a fresh clone would go beside it"
+            temp.path().join("demo-org/demo-atlas"),
+            "a fresh clone would go in its owner's folder"
         );
     }
 

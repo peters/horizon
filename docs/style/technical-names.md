@@ -35,6 +35,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 |---|---|---|
 | board | The Horizon canvas that holds workspaces and panels. | canvas (in procedures) |
 | workspace | A named group of panels on the board. | — |
+| menu search field | The search control at the top of a menu. The **Move to Workspace** menu uses one. | search bar, default text frame |
 | panel | One terminal, agent, browser, device or cloud area on the board. | window, pane, tile |
 | session | The saved state of a board. An ephemeral session is not saved. | profile |
 | cloud | A Horizon cloud panel and its remote worker, storage and sessions. | cloud workspace, cloud panel instance |
@@ -69,6 +70,8 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | chain service | The worker service `horizon-worker-github serve`. It runs as root, refreshes the token chain and gives access tokens to agents. | GitHub daemon |
 | GitHub socket | The file `/run/horizon-worker/github.sock` on a worker. Agents ask the chain service through it. | agent socket |
 | fake GitHub | A small HTTP server on `127.0.0.1` that answers refresh requests with synthetic tokens. | mock GitHub |
+| access request | A request of an agent session for GitHub access to one repository, made with the `github_access` MCP tool. The person allows it or denies it in Horizon. | permission request |
+| cloud grant | Access that **Allow for this cloud** gives to every session of a cloud. The worker stores it with the token chain. | permanent grant |
 
 ## Install and build
 

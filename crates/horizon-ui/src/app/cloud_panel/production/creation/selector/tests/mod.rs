@@ -1,6 +1,8 @@
 use super::super::{Actions, can_submit, submit_reason, watch};
 use super::*;
 use crate::test_egui::DiscardTextures;
+
+mod search;
 use horizon_core::{
     cloud_panel::{CloudConfig, Placement},
     cloud_runtime::prices::{

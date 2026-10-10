@@ -11,6 +11,9 @@ Read [the cloud reference](references/cloud.md) for the server and operation you
 Use tools from the connected server and their current schemas. Do not substitute
 private Horizon state for MCP results.
 
+Hetzner offers include all current x86 types in permitted locations. The configured
+server types are fallback preferences; they do not restrict explicit worker choices.
+
 Discovery and price results do not authorize spending or lifecycle changes.
 Get explicit authorization for the exact resource before starting or stopping a worker.
 Keep credentials in Horizon. Do not send keys, tokens, endpoints, or raw provider

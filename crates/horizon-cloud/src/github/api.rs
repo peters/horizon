@@ -1,5 +1,6 @@
 //! REST calls made with a user access token: who the token acts as, and which
-//! repositories the app may reach for that user.
+//! repositories the app may reach for that user. A repository's size can also be read
+//! without one.
 use super::{Client, Error, Result, Secret, read};
 use serde::Deserialize;
 use std::fmt::Write as _;
@@ -107,15 +108,41 @@ impl Client {
         Ok(names)
     }
 
+    /// The size of `repository` (`owner/name`) as GitHub counts it, in bytes: about what a
+    /// full clone receives. Read with `token` when given, anonymously otherwise; GitHub
+    /// recounts it about once an hour.
+    /// # Errors
+    /// An invalid name, transport failures, a refused token, a repository GitHub does not
+    /// show, or a malformed answer.
+    pub fn repository_size(&self, repository: &str, token: Option<&Secret>) -> Result<u64> {
+        #[derive(Deserialize)]
+        struct Fields {
+            /// In KiB.
+            size: u64,
+        }
+        if !valid_repository(repository) {
+            return Err(Error::InvalidResponse);
+        }
+        let fields: Fields = self.request(token, &format!("/repos/{repository}"))?;
+        fields.size.checked_mul(1024).ok_or(Error::InvalidResponse)
+    }
+
     fn get<T: serde::de::DeserializeOwned>(&self, token: &Secret, path: &str) -> Result<T> {
-        let mut auth = Zeroizing::new(String::with_capacity(token.expose().len() + 7));
-        let _ = write!(auth, "Bearer {}", token.expose());
-        let response = self
+        self.request(Some(token), path)
+    }
+
+    fn request<T: serde::de::DeserializeOwned>(&self, token: Option<&Secret>, path: &str) -> Result<T> {
+        let mut request = self
             .agent
             .get(format!("{}{path}", self.api))
-            .header("Accept", "application/vnd.github+json")
-            .header("Authorization", auth.as_str())
-            .call();
+            .header("Accept", "application/vnd.github+json");
+        let mut auth = Zeroizing::new(String::new());
+        if let Some(token) = token {
+            auth.reserve(token.expose().len() + 7);
+            let _ = write!(auth, "Bearer {}", token.expose());
+            request = request.header("Authorization", auth.as_str());
+        }
+        let response = request.call();
         let answer = read(response)?;
         match answer.status {
             200 => answer.parse(),

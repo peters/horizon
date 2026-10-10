@@ -131,7 +131,8 @@ pub struct Placement {
     /// GPU types to request, in this order; empty for the machine's `gpu_types` setting.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gpu_types: Vec<String>,
-    /// Explicit CPU server types, narrowed to the machine's allowed types.
+    /// Explicit CPU server types. An exact Hetzner choice can be outside the
+    /// machine's fallback `server_types` preferences.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cpu_types: Vec<String>,
 }

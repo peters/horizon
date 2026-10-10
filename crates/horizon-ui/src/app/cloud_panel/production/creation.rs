@@ -228,6 +228,10 @@ impl HorizonApp {
             self.cloud_prototype.root.as_deref(),
             ctx,
         );
+        self.cloud_prototype
+            .production
+            .source
+            .connect_github(self.cloud_prototype.root.as_deref());
         if let Some(path) = self.cloud_prototype.production.source.poll(ctx) {
             self.adopt_cloud_source(ctx, &path);
         }
