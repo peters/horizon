@@ -4,7 +4,7 @@ feature: Sign in with ChatGPT for Codex (Cloud settings)
 platforms: [linux, macos, windows]
 cost: none
 destructive: no
-secrets: [a ChatGPT account for the sign-in, stored under the cloud root in owner-only files]
+secrets: [a test ChatGPT account for sign-in]
 owner: peters
 ---
 
@@ -12,11 +12,10 @@ owner: peters
 
 ## 1. Purpose
 
-This procedure proves that a person signs Codex in with a ChatGPT account from
-Cloud settings, that the saved sign-in shows the account and the plan state,
-that the first plan-usage notice appears once, that a new cloud setting saves
-with the ChatGPT mode, and that sign-out revokes the session and clears the
-stored tokens.
+This procedure tests the local ChatGPT sign-in for Codex in Cloud settings.
+It checks the saved account, the plan notice, settings save, cancellation and
+sign-out. Codex offers **API key** and **ChatGPT plan** only. A saved Codex
+subscription choice changes to **ChatGPT plan** when the form opens.
 
 ## 2. Applicability
 
@@ -42,8 +41,14 @@ stored tokens.
 1. Open **Cloud settings**.
 
    Result: The **Coding agents** card lists **Codex** and **Claude**. Codex
-   offers **API key**, **Subscription login** and **ChatGPT plan**. Claude
-   offers **API key** and **Subscription login** only.
+   offers **API key** and **ChatGPT plan**. Claude offers **API key** and
+   **Subscription login**.
+
+2. If a saved setting chose the old Codex subscription login, examine the
+   Codex row after step 1.
+
+   Result: **ChatGPT plan** is selected for Codex, and the card asks for the
+   sign-in.
 
 ## 6. Tasks
 
@@ -54,10 +59,10 @@ stored tokens.
    Result: The card shows **Continue with ChatGPT** and the text that sign-in
    happens once, in the browser. The card status shows **Needs sign-in**.
 
-2. Select **Subscription login**.
+2. Select **API key** for Codex.
 
-   Result: The card shows the subscription text again. **Claude** never shows
-   a **ChatGPT plan** option.
+   Result: The card shows the API key field. **Claude** keeps **Subscription
+   login** and never shows a **ChatGPT plan** option.
 
 ### 6.2 C02 — Sign in
 
@@ -93,6 +98,9 @@ stored tokens.
 
 ### 6.4 C04 — Save the settings
 
+For this task, use a private test configuration with one compute provider set.
+Settings save requires a provider. Do not create or deploy a cloud.
+
 1. With **ChatGPT plan** selected for Codex, click **Save settings**.
 
    Result: The settings save without an error. The settings file records the
@@ -116,6 +124,13 @@ stored tokens.
 
    Result: The sign-in file keeps the account and the issued client id, but
    its token fields are empty. The `active` file no longer names the account.
+   If remote revocation fails, the card reports that local sign-out is complete
+   and that remote revocation is not confirmed.
+
+3. Click **Continue with ChatGPT** after sign-out.
+
+   Result: A new registration permits a different account. The old registration
+   keeps its original account identity.
 
 ### 6.6 C06 — Cancel a sign-in
 
@@ -134,7 +149,11 @@ stored tokens.
 - Every task above shows its Result.
 - No token value appears in any settings file, deployment state, log or UI
   text.
-- The stored files keep owner-only permissions on every platform.
+- On Unix, the stored directory mode is `0700` and the file mode is `0600`.
+- On Windows, examine access permissions under the private user profile.
+  The automated file-mode test does not prove Windows access permissions.
+- Record real-account sign-in separately from tests with synthetic credentials.
+  A synthetic fixture proves local card states, not provider authentication.
 
 ## 8. Cleanup
 

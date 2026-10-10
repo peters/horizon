@@ -19,6 +19,11 @@ pub(super) enum Action {
     CancelRebuild,
     ShareLocalNetwork,
     StopSharingLocalNetwork,
+    /// Opens Cloud settings on the image repository of the cloud's profile. `pull` tells
+    /// that the registry refused the worker's pull, not a push.
+    ContainerRegistry {
+        pull: bool,
+    },
 }
 
 #[cfg(test)]
@@ -443,7 +448,8 @@ impl HorizonApp {
                 | Action::ContinueRebuild
                 | Action::CancelRebuild
                 | Action::ShareLocalNetwork
-                | Action::StopSharingLocalNetwork => return,
+                | Action::StopSharingLocalNetwork
+                | Action::ContainerRegistry { .. } => return,
             };
             if let Ok(store) = Store::lock(&root)
                 && let Ok(Some(state)) = store.load()

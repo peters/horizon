@@ -99,6 +99,15 @@ slot swaps them, and the order is kept across restarts. A collapsed card and a
 workspace without a preset (Default) leave the card where it is. No MCP tool
 moves or resizes a card; use the person's canvas for that.
 
+If the registry refuses the push or the pull of the cloud's image, a retry gets the
+same refusal. The failed step on the card then offers **Open Container registry**
+instead of a retry. It opens **Cloud settings** on the image repository
+from the cloud's `.horizon/cloud.yml`. Only the person can add or replace its
+credentials there; no MCP tool does it. Do not ask for a token. Tell the person
+to click **Open Container registry**, add the credential, and then click the
+retry in the card header: **Retry deploy**, **Reconnect** or **Resume worker**,
+for the operation that failed.
+
 ## GitHub access
 
 With Connect GitHub (Horizon **Cloud settings › GitHub**), each cloud's worker holds
@@ -107,13 +116,12 @@ GitHub and chooses its repositories; agents cannot set it up.
 
 ## Codex authentication
 
-In **Cloud settings › Coding agents**, Codex takes **API key**, **Subscription
-login** or **ChatGPT plan**. The ChatGPT plan mode signs in with a ChatGPT
-account through the person's browser (Sign in with ChatGPT); the stored tokens
-stay under the cloud root on the person's machine. Agents cannot run the
-sign-in, and worker handoff of the saved sign-in is not implemented yet: a
-worker's Codex still signs in through its own terminal, like Subscription
-login.
+In **Cloud settings › Coding agents**, Codex takes **API key** or **ChatGPT
+plan**; the ChatGPT plan mode signs in with a ChatGPT account through the
+person's browser (Sign in with ChatGPT), and the stored tokens stay under the
+cloud root on the person's machine. Agents cannot run the sign-in, and worker
+handoff of the saved sign-in is not implemented yet: a worker's Codex without
+an API key still signs in through its own terminal.
 
 - Git and `gh` work without a token in the environment. The worker's root service
   answers for the cloud's repositories and its same-worker siblings. Agents never

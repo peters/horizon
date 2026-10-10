@@ -1,5 +1,6 @@
 mod agent_status;
 mod arrangement;
+mod empty_workspace;
 mod geometry;
 mod shutdown;
 mod workspaces;
@@ -561,12 +562,6 @@ impl Board {
     #[must_use]
     pub fn panel_workspace_id(&self, id: PanelId) -> Option<WorkspaceId> {
         self.panel(id).map(|panel| panel.workspace_id)
-    }
-
-    #[must_use]
-    pub fn workspace_for_panel(&self, id: PanelId) -> Option<&Workspace> {
-        self.panel_workspace_id(id)
-            .and_then(|workspace_id| self.workspace(workspace_id))
     }
 
     #[must_use]

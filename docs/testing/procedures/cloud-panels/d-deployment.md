@@ -491,6 +491,80 @@ for the time of the task and no Docker login of this computer.
    Result: `~/.horizon/cloud/settings.json.d06-backup` does not exist. Cloud settings
    show the registry bindings of area A again.
 
+### 6.7 D07 — Make sure that a refused push offers Container registry
+
+This task rents no compute. It deploys a scratch commit of `runpod-build` whose
+image goes to a Docker Hub repository that this computer has no login for. Docker
+Hub refuses the push before an image layer goes out, and the deployment stops
+before Horizon requests a worker. It uses the changed settings of D06.
+
+1. Do steps 1 to 4 of D06.
+
+   Result: The settings have the empty Docker configuration and no registry
+   bindings.
+
+   > **CAUTION:** IF THIS TASK STOPS BEFORE STEP 12, DO STEP 12 BEFORE YOU STOP.
+
+2. Make a scratch branch of `<repo>`. In the `runpod-build` profile, set `image` to
+   `docker.io/<unowned>/d07-worker`, where `<unowned>` is a Docker Hub namespace
+   that the run does not own. Commit the change.
+
+   Result: `git -C <repo> log -1` shows the scratch commit on the scratch branch.
+
+3. Deploy a new cloud `smoke-refused` from the scratch commit with the
+   `runpod-build` profile.
+
+   Result: The card shows **Build locally**, then **Push image**.
+
+4. Wait until the push fails.
+
+   Result: The card shows the failure on **Push image**. The cause starts with
+   `push access denied`. The failure says that the registry refused to publish the
+   image.
+
+5. Examine the buttons under the failure on the card.
+
+   Result: The failure shows **Open Container registry** and **Copy error**. It does
+   not show **Retry deploy**. The header of the card shows **Retry deploy**.
+
+6. Click **Open Container registry**.
+
+   Result: **Cloud settings** opens. The banner says
+   `Add credentials for docker.io/<unowned>/d07-worker, which this cloud's
+   .horizon/cloud.yml names.` The **Container registry** card is in view.
+
+7. Examine the **Container registry** card.
+
+   Result: The card shows `docker.io/<unowned>/d07-worker` with **Not set up**,
+   `Publishing: needs a publishing credential for this repository.`, the worker
+   pull line, **Add credentials** and **Add another**. It shows no
+   **New image repository** form.
+
+8. Click **Add credentials**.
+
+   Result: The card shows an entry for `docker.io/<unowned>/d07-worker` with the
+   name filled in. **Expiry and publishing** is open and shows
+   **Publishing credential**. The **Not set up** block is gone.
+
+9. Click **Cancel**.
+
+   Result: **Cloud settings** closes. Nothing is saved.
+
+10. Open **Cloud › Cloud settings…**.
+
+    Result: The **Container registry** card shows **Add image repository** and no
+    repository. Then click **Cancel**.
+
+11. Close the card of `smoke-refused`.
+
+    Result: The board does not show `smoke-refused`. The provider shows no pod for
+    it.
+
+12. Do step 8 of D06. Then check out the earlier branch of `<repo>` and delete the
+    scratch branch.
+
+    Result: The cloud settings are as before D06. `<repo>` has no scratch branch.
+
 ## 7. Pass criteria
 
 - `smoke-a`, `smoke-r` and `smoke-g` each show **Ready**.
@@ -500,6 +574,9 @@ for the time of the task and no Docker login of this computer.
 - LFS files and submodules agree with the committed selection.
 - **Where the time went** agrees with the stages in the output.
 - A failed image push shows on **Push image**, not on **Validate**.
+- A refused push offers **Open Container registry** as its one next action. Cloud
+  settings then show the repository of the profile filled in, and the empty form
+  of another repository stays behind **Add another**.
 
 ## 8. Cleanup
 

@@ -3,6 +3,11 @@ use crate::app::test_support::test_app_with_startup;
 use horizon_core::{RuntimeState, StartupDecision};
 use std::time::{Duration, Instant};
 
+fn with_codex_api_key(draft: &mut Draft) {
+    draft.openai_auth = horizon_core::cloud_runtime::setup::Authentication::ApiKey;
+    *draft.openai_key = "synthetic-agent-key".into();
+}
+
 fn wait(app: &mut HorizonApp, ctx: &Context) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while app.cloud_prototype.production.setup.receiver.is_some() {
@@ -46,7 +51,9 @@ fn successful_first_use_continues_to_creation_and_reopening_preserves_bindings()
     app.cloud_prototype.root = Some(root.clone());
     app.open_cloud_accounts(&ctx, true);
     wait(&mut app, &ctx);
-    *app.cloud_prototype.production.setup.draft.as_mut().unwrap().runpod_key = "synthetic-key".into();
+    let draft = app.cloud_prototype.production.setup.draft.as_mut().unwrap();
+    *draft.runpod_key = "synthetic-key".into();
+    with_codex_api_key(draft);
     app.save_cloud_accounts(&ctx);
     wait(&mut app, &ctx);
     assert!(app.cloud_prototype.production.creating);
@@ -65,7 +72,9 @@ fn successful_first_use_continues_to_creation_and_reopening_preserves_bindings()
     app.save_cloud_accounts(&ctx);
     wait(&mut app, &ctx);
     assert!(app.cloud_prototype.production.setup.error.is_some());
-    *app.cloud_prototype.production.setup.draft.as_mut().unwrap().runpod_key = "synthetic-key".into();
+    let draft = app.cloud_prototype.production.setup.draft.as_mut().unwrap();
+    *draft.runpod_key = "synthetic-key".into();
+    with_codex_api_key(draft);
     app.save_cloud_accounts(&ctx);
     wait(&mut app, &ctx);
     assert!(app.cloud_prototype.production.creating);
@@ -102,6 +111,7 @@ fn missing_custom_identity_save_retains_input_and_can_retry() {
     let draft = app.cloud_prototype.production.setup.draft.as_mut().unwrap();
     *draft.runpod_key = "synthetic-key".into();
     draft.settings.ssh_identity_file = identity.clone();
+    with_codex_api_key(draft);
     app.save_cloud_accounts(&ctx);
     wait(&mut app, &ctx);
     let state = &app.cloud_prototype.production.setup;
@@ -351,6 +361,7 @@ fn registry_setup_rotation_and_status_share_the_machine_policy() {
     wait(&mut app, &ctx);
     let draft = app.cloud_prototype.production.setup.draft.as_mut().unwrap();
     *draft.runpod_key = "synthetic-compute".into();
+    with_codex_api_key(draft);
     draft.registries.push(registry::draft::Draft {
         repository: "registry.example/team/worker".into(),
         pull_username: "reader".into(),
@@ -428,6 +439,7 @@ fn registry_setup_rotation_and_status_share_the_machine_policy() {
 fn bound_registry_draft(root: &std::path::Path) -> Draft {
     let mut draft = Draft::load(root).unwrap();
     *draft.runpod_key = "synthetic-compute".into();
+    with_codex_api_key(&mut draft);
     draft
         .registries
         .push(horizon_core::cloud_runtime::registry::draft::Draft {
@@ -460,6 +472,12 @@ fn readiness_names_the_first_thing_left_to_do() {
     assert_eq!(first.tone, Tone::Attention);
     assert!(first.cause.contains("RunPod or Hetzner"));
     *draft.runpod_key = "synthetic-key".into();
+    assert!(
+        Readiness::of(&draft, None, &verified, false)
+            .cause
+            .contains("Sign in with ChatGPT")
+    );
+    with_codex_api_key(&mut draft);
     assert!(
         Readiness::of(&draft, None, &verified, false)
             .cause
@@ -511,12 +529,14 @@ fn an_agent_api_key_holds_the_banner_until_it_is_saved() {
     let temp = tempfile::tempdir().unwrap();
     let mut first = Draft::load(temp.path()).unwrap();
     *first.runpod_key = "synthetic-compute".into();
+    with_codex_api_key(&mut first);
     first.save().unwrap();
     let mut draft = Draft::load(temp.path()).unwrap();
     let verified = Verified::new();
     assert_eq!(Readiness::of(&draft, Some(true), &verified, false).tone, Tone::Ready);
     assert_eq!(agents_status(&draft, false), (Tone::Ready, "Ready"));
     draft.openai_auth = Authentication::ApiKey;
+    draft.settings.openai_api_key_file = None;
     let missing = Readiness::of(&draft, Some(true), &verified, false);
     assert_eq!(missing.tone, Tone::Attention);
     assert!(missing.cause.contains("Codex API key"));
@@ -543,6 +563,7 @@ fn an_agentless_profile_needs_no_agent_to_be_ready() {
     let temp = tempfile::tempdir().unwrap();
     let mut first = Draft::load(temp.path()).unwrap();
     *first.runpod_key = "synthetic-compute".into();
+    with_codex_api_key(&mut first);
     first.save().unwrap();
     let mut draft = Draft::load(temp.path()).unwrap();
     draft.settings.default_agents.clear();
@@ -582,6 +603,7 @@ fn keep_saved_key_sits_directly_below_the_replacement_field_on_a_tall_screen() {
     let temp = tempfile::tempdir().unwrap();
     let mut first = Draft::load(temp.path()).unwrap();
     *first.runpod_key = "synthetic-compute".into();
+    with_codex_api_key(&mut first);
     first.save().unwrap();
     let mut draft = Draft::load(temp.path()).unwrap();
     *draft.runpod_key = "synthetic-replacement".into();
@@ -630,6 +652,7 @@ fn settings_open_at_their_final_size_and_position() {
     let root = temp.path().join("cloud");
     let mut draft = Draft::load(&root).unwrap();
     *draft.runpod_key = "synthetic-compute".into();
+    with_codex_api_key(&mut draft);
     draft.hetzner.enabled = true;
     *draft.hetzner.token = "synthetic-token".into();
     draft.save().unwrap();

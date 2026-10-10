@@ -80,7 +80,10 @@ impl Session {
             thread::spawn(move || hold::run(&paths, &nonce, "192.168.1.0/24", input, ready_writer))
         };
         let mut output = BufReader::new(output);
-        let line = read_line(&mut output).unwrap().unwrap();
+        let Some(line) = read_line(&mut output).unwrap() else {
+            let error = helper.join().unwrap().unwrap_err();
+            panic!("the helper ended before it was ready: {error}");
+        };
         Self {
             heartbeat: Some(heartbeat),
             output,
@@ -187,6 +190,22 @@ fn discovery_asks_the_owner_and_bad_owner_lines_never_end_the_session() {
     session.stop();
 }
 
+/// Leaves a socket file at `path` that nothing listens on, as a helper killed outright does.
+///
+/// On macOS a new socket becomes close-on-exec only after it exists, so a process that another
+/// test starts at that moment can inherit the listener and keep it accepting until it exits.
+/// Such a socket is replaced until a connection to it is refused.
+fn leave_dead_socket(path: &Path) {
+    for _ in 0..100 {
+        drop(UnixListener::bind(path).unwrap());
+        match UnixStream::connect(path) {
+            Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => return,
+            _ => std::fs::remove_file(path).unwrap(),
+        }
+    }
+    panic!("every socket left at {} kept accepting connections", path.display());
+}
+
 fn paths() -> (tempfile::TempDir, Paths) {
     // Unix socket paths are limited to about 100 bytes.
     let root = tempfile::Builder::new().prefix("lnw").tempdir_in("/tmp").unwrap();
@@ -271,8 +290,8 @@ fn a_live_session_keeps_the_bridge_and_a_dead_one_makes_way() {
     hang_up.join().unwrap();
     // A helper killed outright leaves its socket files behind; the next session takes them.
     std::fs::remove_file(paths.control()).unwrap();
-    drop(UnixListener::bind(paths.control()).unwrap());
-    drop(UnixListener::bind(&paths.agent).unwrap());
+    leave_dead_socket(&paths.control());
+    leave_dead_socket(&paths.agent);
     assert!(!status(&paths).unwrap().active);
     let mut next = Session::start(&paths, newer);
     assert_eq!(status(&paths).unwrap().proxy, Some(next.ready.proxy.to_string()));

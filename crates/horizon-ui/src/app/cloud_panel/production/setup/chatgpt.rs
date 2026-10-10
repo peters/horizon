@@ -7,6 +7,13 @@ use egui::{RichText, vec2};
 use horizon_core::cloud_runtime::chatgpt;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
+/// Whether a card message reports an error or a success.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MessageTone {
+    Error,
+    Success,
+}
+
 /// What the card waits for and what it last learned.
 #[derive(Default)]
 pub(in crate::app::cloud_panel) struct Card {
@@ -17,7 +24,7 @@ pub(in crate::app::cloud_panel) struct Card {
     loaded: bool,
     /// The saved connection, loaded once and refreshed when a flow finishes.
     connection: Option<chatgpt::Connection>,
-    message: Option<String>,
+    message: Option<(MessageTone, String)>,
     /// Ends the sign-in under way when the card goes, such as on Cancel.
     abort: Option<Abort>,
 }
@@ -53,7 +60,7 @@ impl Card {
                     self.signing_in = None;
                 }
                 Ok(Err(message)) => {
-                    self.message = Some(message);
+                    self.message = Some((MessageTone::Error, message));
                     self.signing_in = None;
                 }
                 Err(TryRecvError::Empty) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(250)),
@@ -62,14 +69,21 @@ impl Card {
         }
         if let Some(rx) = &self.signing_out {
             match rx.try_recv() {
-                Ok(Ok(_revoked)) => {
+                Ok(Ok(revoked)) => {
                     *connection_slot = None;
                     self.connection = None;
-                    self.message = Some("Signed out. Codex no longer uses your ChatGPT plan.".into());
+                    self.message = Some((
+                        MessageTone::Success,
+                        if revoked == Some(true) {
+                            "Signed out. Codex no longer uses your ChatGPT plan.".into()
+                        } else {
+                            "Signed out locally. Remote revocation was not confirmed; disconnect this app in ChatGPT Settings.".into()
+                        },
+                    ));
                     self.signing_out = None;
                 }
                 Ok(Err(message)) => {
-                    self.message = Some(message);
+                    self.message = Some((MessageTone::Error, message));
                     self.signing_out = None;
                 }
                 Err(TryRecvError::Empty) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(250)),
@@ -95,7 +109,7 @@ impl Card {
                     }
                 }
                 Ok(Err(message)) => {
-                    self.message = Some(message);
+                    self.message = Some((MessageTone::Error, message));
                     self.confirming = None;
                 }
                 Err(TryRecvError::Empty) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(250)),
@@ -194,11 +208,19 @@ impl Card {
             caption(ui, "You can review your plan's usage any time on ChatGPT.");
         }
         ui.horizontal_wrapped(|ui| {
-            if connection.plan_usage
-                && ui.hyperlink("Manage usage").clicked()
-                && let Err(error) = horizon_core::open_url("https://chatgpt.com/settings/usage")
-            {
-                tracing::warn!(%error, "could not open the `ChatGPT` usage page");
+            if connection.plan_usage {
+                // Link-styled button: an explicit hyperlink would treat its label as a URL.
+                if ui
+                    .add_enabled(
+                        !self.busy(),
+                        egui::Button::new(RichText::new("Manage usage").color(theme::ACCENT()).underline())
+                            .fill(egui::Color32::TRANSPARENT),
+                    )
+                    .clicked()
+                    && let Err(error) = horizon_core::open_url("https://chatgpt.com/settings/usage")
+                {
+                    tracing::warn!(%error, "could not open the `ChatGPT` usage page");
+                }
             }
             if self.confirming.is_none()
                 && ui
@@ -235,7 +257,7 @@ pub(super) fn row(
     } else {
         caption(
             ui,
-            "Use your `ChatGPT` plan for eligible Codex work. Sign-in happens once, in your browser.",
+            "Use your ChatGPT plan for eligible Codex work. Sign-in happens once, in your browser.",
         );
         if ui
             .add_enabled(
@@ -256,8 +278,13 @@ pub(super) fn row(
             }
         });
     }
-    if let Some(message) = &card.message {
-        ui.label(RichText::new(message).size(12.0).color(theme::PALETTE_RED()));
+    if let Some((tone, message)) = &card.message {
+        let color = if *tone == MessageTone::Success {
+            theme::PALETTE_GREEN()
+        } else {
+            theme::PALETTE_RED()
+        };
+        ui.label(RichText::new(message).size(12.0).color(color));
     }
 }
 

@@ -18,6 +18,8 @@ image and uses no Docker on this computer. The procedure also makes sure of thes
 items:
 
 - **New cloud** shows a missing configuration as guidance, not as an error.
+- **New cloud** tells why quick start does not apply to a commit with its own
+  `.horizon/cloud.yml`.
 - The first **Add panel** after **Ready** works.
 - Each segment of the stage track shows its hover text.
 - **Rebuild image & restart** moves a quick start cloud to the pinned image and
@@ -148,7 +150,22 @@ items:
 
 This task allocates nothing.
 
-1. Type this command in a terminal outside the fixture:
+1. In the New cloud dialog, type `<configured>` as the repository.
+
+   Result: **Profile** shows the RunPod CPU profile of `<configured>`. The dialog
+   does not show **Quick start on the public base image**.
+
+2. Read the line under the profile.
+
+   Result: The line is `Quick start does not apply: this commit has its own
+   .horizon/cloud.yml, so its profiles are used.`
+
+3. Type `<plain>` as the repository again.
+
+   Result: The dialog shows **This commit has no .horizon/cloud.yml** and does not
+   show the line of step 2.
+
+4. Type this command in a terminal outside the fixture:
 
    ```bash
    target/debug/examples/cloud_deploy prepare-image <settings> <configured> quick-start /tmp/q03-state q03 --quick-start
@@ -157,7 +174,7 @@ This task allocates nothing.
    Result: The command stops with
    `This commit has its own .horizon/cloud.yml. Quick start is only for a repository without one.`
 
-2. Type this command:
+5. Type this command:
 
    ```bash
    target/debug/examples/cloud_deploy prepare-image <settings> <plain> quick-start /tmp/q03-state q03 --quick-start
@@ -168,12 +185,12 @@ This task allocates nothing.
    locally` or `Push image` and no image download. The command ends with
    `Prepared:` and the pinned reference.
 
-3. Do step 2 again with `PATH=<no-docker-path>` and
+6. Do step 5 again with `PATH=<no-docker-path>` and
    `DOCKER_HOST=unix:///nonexistent/docker.sock`.
 
-   Result: The output is the same as in step 2.
+   Result: The output is the same as in step 5.
 
-4. Remove `/tmp/q03-state`.
+7. Remove `/tmp/q03-state`.
 
    Result: The directory does not exist.
 
@@ -370,7 +387,8 @@ This task allocates nothing.
 
 - Q01 shows the guidance section and no red error.
 - Q02 loads the profile `quick-start` with the pinned image.
-- Q03 refuses `<configured>` and prepares `<plain>` with no build and no push.
+- Q03 shows in New cloud why quick start does not apply to `<configured>`. It
+  refuses `<configured>` and prepares `<plain>` with no build and no push.
 - Q03 and Q04 run with no `docker` program and no Docker daemon for the
   candidate.
 - Q04 reaches **Ready** on the pinned digest with no registry login. **Build

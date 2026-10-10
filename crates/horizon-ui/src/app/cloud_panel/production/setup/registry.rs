@@ -1,6 +1,7 @@
 //! The container registry card: one block per image repository, each bound to a read-only pull
 //! credential. "Verified" means a saved validation exists for the repository's current pull grant.
 use super::dashboard::{Tone, Verified, caption, chip, field, header, label, secret, surface};
+use super::needed::{self, Needed};
 use crate::{
     app::util::{chrome_button, danger_button, primary_button},
     theme,
@@ -11,10 +12,20 @@ use horizon_core::cloud_runtime::{
     setup,
 };
 
-pub(super) fn card(ui: &mut Ui, accounts: &mut setup::Draft, verified: &Verified) -> Option<Action> {
+pub(super) fn card(
+    ui: &mut Ui,
+    accounts: &mut setup::Draft,
+    verified: &Verified,
+    needed: &mut Needed,
+) -> Option<Action> {
     let mut action = None;
     let compute_saved = accounts.runpod_key.is_empty();
-    let status = aggregate(&accounts.registries, verified);
+    let pending = needed.pending(&accounts.registries).is_some();
+    let status = if pending {
+        (Tone::Attention, "Not set up")
+    } else {
+        aggregate(&accounts.registries, verified)
+    };
     surface(ui, |ui| {
         header(
             ui,
@@ -22,7 +33,7 @@ pub(super) fn card(ui: &mut Ui, accounts: &mut setup::Draft, verified: &Verified
             "Private images workers pull with a read-only credential",
             Some(status),
         );
-        if accounts.registries.is_empty() {
+        if accounts.registries.is_empty() && !pending {
             caption(
                 ui,
                 "Bind an image repository to give workers read-only pull access. Horizon never publishes \
@@ -35,9 +46,10 @@ pub(super) fn card(ui: &mut Ui, accounts: &mut setup::Draft, verified: &Verified
                 "Clear the unsaved compute key to manage existing provider access, or save it to switch accounts.",
             );
         }
+        needed::block(ui, needed, &mut accounts.registries);
         let credentials = &accounts.saved_credentials;
         for (index, draft) in accounts.registries.iter_mut().enumerate() {
-            ui.push_id(index, |ui| {
+            let entry = ui.push_id(index, |ui| {
                 ui.separator();
                 let saved_publish = draft
                     .original
@@ -48,20 +60,27 @@ pub(super) fn card(ui: &mut Ui, accounts: &mut setup::Draft, verified: &Verified
                     .original
                     .as_ref()
                     .is_some_and(|binding| credentials.contains(&binding.pull.secret_file));
+                let publishing_open = needed.added(draft);
                 binding(
                     ui,
                     draft,
                     verified,
                     compute_saved,
-                    (saved_pull, saved_publish),
+                    (saved_pull, saved_publish, publishing_open),
                     &mut action,
                 );
             });
+            if needed.reveal(draft) {
+                entry.response.scroll_to_me(Some(Align::Center));
+            }
         }
-        if ui
-            .add(chrome_button("Add image repository").min_size(vec2(160.0, 32.0)))
-            .clicked()
-        {
+        // A shown repository keeps the empty form of another one behind this button.
+        let add = if accounts.registries.is_empty() && needed.pending(&accounts.registries).is_none() {
+            "Add image repository"
+        } else {
+            "Add another"
+        };
+        if ui.add(chrome_button(add).min_size(vec2(160.0, 32.0))).clicked() {
             accounts.registries.push(Draft::default());
         }
     });
@@ -95,7 +114,7 @@ fn binding(
     draft: &mut Draft,
     verified: &Verified,
     compute_saved: bool,
-    (saved_pull, saved_publish): (bool, bool),
+    (saved_pull, saved_publish, publishing_open): (bool, bool, bool),
     action: &mut Option<Action>,
 ) {
     let (tone, word) = state(draft, verified);
@@ -143,46 +162,49 @@ fn binding(
         "For ghcr.io, only read:packages is accepted. Other registries require you to confirm the issuer's \
          grant. Unknown expiry is shown as unknown.",
     );
-    expiry_and_publishing(ui, draft, saved_publish);
+    expiry_and_publishing(ui, draft, saved_publish, publishing_open);
     if let Some(saved) = draft.original.clone() {
         management(ui, draft, &saved, verified, compute_saved, action);
     }
 }
 
-fn expiry_and_publishing(ui: &mut Ui, draft: &mut Draft, saved_publish: bool) {
-    ui.collapsing(
+/// `open`: the entry was just added for a cloud's repository, whose push needs these
+/// fields. It opens them even when an earlier entry at this place was closed.
+fn expiry_and_publishing(ui: &mut Ui, draft: &mut Draft, saved_publish: bool, open: bool) {
+    egui::CollapsingHeader::new(
         RichText::new("Expiry and publishing")
             .size(12.0)
             .color(theme::FG_SOFT()),
-        |ui| {
-            field(
-                ui,
-                "Pull expiry",
-                &mut draft.pull_expiry,
-                "Unknown, or 2027-01-01T00:00:00Z",
-            );
-            field(
-                ui,
-                "Publishing username (optional for existing images)",
-                &mut draft.publish_username,
-                "Username",
-            );
-            label(ui, "Publishing credential");
-            secret(
-                ui,
-                "publish-secret",
-                &mut draft.publish_secret,
-                saved_publish,
-                "Paste dedicated credential",
-            );
-            field(
-                ui,
-                "Publishing expiry",
-                &mut draft.publish_expiry,
-                "Unknown, or 2027-01-01T00:00:00Z",
-            );
-        },
-    );
+    )
+    .open(open.then_some(true))
+    .show(ui, |ui| {
+        field(
+            ui,
+            "Pull expiry",
+            &mut draft.pull_expiry,
+            "Unknown, or 2027-01-01T00:00:00Z",
+        );
+        field(
+            ui,
+            "Publishing username (optional for existing images)",
+            &mut draft.publish_username,
+            "Username",
+        );
+        label(ui, "Publishing credential");
+        secret(
+            ui,
+            "publish-secret",
+            &mut draft.publish_secret,
+            saved_publish,
+            "Paste dedicated credential",
+        );
+        field(
+            ui,
+            "Publishing expiry",
+            &mut draft.publish_expiry,
+            "Unknown, or 2027-01-01T00:00:00Z",
+        );
+    });
 }
 
 fn management(

@@ -3,6 +3,7 @@ mod chatgpt;
 mod dashboard;
 mod fields;
 mod github;
+mod needed;
 mod registry;
 #[cfg(all(test, unix))]
 mod tests;
@@ -56,6 +57,9 @@ struct Loaded {
     ssh_ready: bool,
     /// Saved validation results, read from each binding's journal without asking a provider.
     verified: dashboard::Verified,
+    /// The image repository of the cloud these settings were opened for, and its state
+    /// when no binding covers it.
+    needed: Option<(String, Option<horizon_core::cloud_runtime::registry::Needed>)>,
 }
 
 /// What a registry action found, reduced to what the form shows.
@@ -92,6 +96,7 @@ pub(in crate::app::cloud_panel) struct State {
     measured: bool,
     github: github::Card,
     chatgpt: chatgpt::Card,
+    needed: needed::Needed,
 }
 
 impl State {
@@ -230,6 +235,13 @@ impl HorizonApp {
     }
 
     pub(in crate::app) fn open_cloud_accounts(&mut self, ctx: &Context, continue_creation: bool) {
+        self.open_cloud_settings(ctx, continue_creation, None);
+    }
+
+    /// Opens the settings; with a cloud's image, Container registry shows its repository
+    /// when no binding covers it yet. When the registry refused that cloud's pull, the
+    /// repository's saved pull validation is not shown as verified.
+    fn open_cloud_settings(&mut self, ctx: &Context, continue_creation: bool, cloud: Option<(String, bool)>) {
         let root = self
             .cloud_prototype
             .root
@@ -264,12 +276,15 @@ impl HorizonApp {
                     }
                     let ssh_ready = cloud_runtime_ssh_valid(&draft.settings.ssh_identity_file);
                     let configured = draft.validate().is_ok() && ssh_ready;
-                    let verified = saved_validations(&draft);
+                    let mut verified = saved_validations(&draft);
+                    let needed =
+                        cloud.and_then(|(image, pull)| needed::of_cloud(&draft.settings, &image, pull, &mut verified));
                     Completion::Loaded(Box::new(Loaded {
                         draft,
                         configured,
                         ssh_ready,
                         verified,
+                        needed,
                     }))
                 }
                 Err(error) => Completion::Failed(error.to_string()),
@@ -310,11 +325,13 @@ impl HorizonApp {
                     configured,
                     ssh_ready,
                     verified,
+                    needed,
                 } = *loaded;
                 state.draft = Some(Box::new(draft));
                 state.chatgpt = chatgpt::Card::default();
                 state.ssh_ready = Some(ssh_ready);
                 state.verified = verified;
+                state.needed = needed::Needed::new(needed);
                 configured && state.continue_creation
             }
             Completion::Saved(_) => {

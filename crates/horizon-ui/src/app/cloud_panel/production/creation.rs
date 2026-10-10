@@ -52,6 +52,8 @@ struct Actions {
     repository: RepositoryAction,
     create: bool,
     cancel: bool,
+    /// The repository's `cloud.yml` asks for This PC, and the person chose it.
+    this_pc: bool,
 }
 
 #[derive(Default)]
@@ -121,6 +123,10 @@ impl HorizonApp {
         let dismissed = self.cloud_creation_dismissed(ctx, &response, picking, escape);
         if dismissed || actions.cancel {
             self.close_cloud_creation();
+            return;
+        }
+        if actions.this_pc {
+            self.open_repository_on_this_pc(ctx);
             return;
         }
         match actions.repository {
@@ -198,6 +204,8 @@ impl HorizonApp {
     /// Closes the dialog. A clone still running stops, and a token or key that was typed but not
     /// used is forgotten.
     pub(in crate::app::cloud_panel::production) fn close_cloud_creation(&mut self) {
+        // A workspace New workspace made for a cloud that never came goes with the dialog.
+        self.discard_new_cloud_workspace();
         let form = &mut self.cloud_prototype.production;
         form.creating = false;
         form.pending_creation = None;
@@ -244,6 +252,7 @@ impl HorizonApp {
         ui.add_enabled_ui(
             form.pending_creation.is_none() && !form.launch.submitted && form.launch.watch.is_none(),
             |ui| {
+                actions.this_pc = super::new_workspace::notes(ui, form);
                 actions.repository = fields(ui, form, &mut actions.create, refocus_repository);
                 if !form.launch.loading() && form.profiles.is_none() && !checks::source_step(form) {
                     match super::repository_setup::render(ui, form) {

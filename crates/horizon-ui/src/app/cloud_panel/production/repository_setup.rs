@@ -99,22 +99,34 @@ fn setup_agent(ui: &mut egui::Ui, form: &mut Production) -> Choice {
     if open { Choice::SetupAgent } else { Choice::None }
 }
 
-/// Under the profile of a quick start: which image runs and how to leave it.
+/// Under the profiles: which image a quick start runs and how to leave it, or why
+/// quick start does not apply to a commit with its own settings.
 pub(super) fn quick_start_note(ui: &mut egui::Ui, form: &Production) {
-    if form.launch.configuration != Configuration::QuickStart || form.profiles.is_none() {
-        return;
+    if let Some(note) = quick_start_text(form) {
+        ui.label(RichText::new(note).size(12.0).color(theme::FG_SOFT()));
     }
-    let (image, digest) = quick_start::IMAGE
-        .split_once("@sha256:")
-        .unwrap_or((quick_start::IMAGE, ""));
-    ui.label(
-        RichText::new(format!(
-            "Quick start on the public base image {image}, digest {}. No registry login, no image build and no Docker on this computer. To use the repository's own settings, choose Read .horizon/cloud.yml in More options.",
-            digest.get(..12).unwrap_or(digest)
-        ))
-        .size(12.0)
-        .color(theme::FG_SOFT()),
-    );
+}
+
+/// Profiles read from the commit mean it has its own `.horizon/cloud.yml`; a missing
+/// one leaves no profiles.
+const COMMITTED_NOTE: &str =
+    "Quick start does not apply: this commit has its own .horizon/cloud.yml, so its profiles are used.";
+
+fn quick_start_text(form: &Production) -> Option<String> {
+    form.profiles.as_ref()?;
+    match form.launch.configuration {
+        Configuration::QuickStart => {
+            let (image, digest) = quick_start::IMAGE
+                .split_once("@sha256:")
+                .unwrap_or((quick_start::IMAGE, ""));
+            Some(format!(
+                "Quick start on the public base image {image}, digest {}. No registry login, no image build and no Docker on this computer. To use the repository's own settings, choose Read .horizon/cloud.yml in More options.",
+                digest.get(..12).unwrap_or(digest)
+            ))
+        }
+        Configuration::Committed => Some(COMMITTED_NOTE.to_owned()),
+        Configuration::LocalImageOnly => None,
+    }
 }
 
 /// Switches where the profiles come from. A profile, size, place or sibling chosen
@@ -156,6 +168,8 @@ impl HorizonApp {
         match result {
             Ok(panel) => {
                 self.cloud_prototype.production.creating = false;
+                // The workspace now holds the setup agent.
+                self.cloud_prototype.production.new_workspace = None;
                 self.cloud_prototype.error = None;
                 self.reveal_new_panel(ctx, workspace, panel);
             }
@@ -184,6 +198,19 @@ mod tests {
             assert!(detail.contains(browser.as_str()), "{browser:?}");
         }
         assert_eq!(detail.contains("desktop"), profile.capabilities.desktop);
+    }
+
+    #[test]
+    fn a_commit_with_its_own_settings_says_why_quick_start_does_not_apply() {
+        let mut form = Production::default();
+        assert_eq!(quick_start_text(&form), None, "nothing is read yet");
+        form.profiles = Some(quick_start::builtin().unwrap());
+        assert_eq!(quick_start_text(&form).as_deref(), Some(COMMITTED_NOTE));
+        form.launch.configuration = Configuration::QuickStart;
+        let note = quick_start_text(&form).unwrap();
+        assert!(note.starts_with("Quick start on the public base image"), "{note}");
+        form.launch.configuration = Configuration::LocalImageOnly;
+        assert_eq!(quick_start_text(&form), None, "the working copy is not the commit");
     }
 
     #[test]

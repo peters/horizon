@@ -7,6 +7,7 @@
 //! the settings file or deployment state.
 mod flow;
 mod id_token;
+mod response;
 mod store;
 
 use super::Cancellation;

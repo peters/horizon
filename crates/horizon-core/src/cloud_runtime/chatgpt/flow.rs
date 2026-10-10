@@ -39,7 +39,7 @@ struct Attempt {
     redirect_uri: String,
     /// Whether this is a first-time registration; the callback then issues the client ID.
     registering: bool,
-    id_token_hint: Option<String>,
+    id_token_hint: Option<zeroize::Zeroizing<String>>,
     login_hint: Option<String>,
     host_id: String,
 }
@@ -83,13 +83,13 @@ impl Attempt {
     fn prepare(root: &Path, port: u16) -> Result<Self> {
         let host_id = store::host_id(root)?;
         let (client_id, registering, id_token_hint, login_hint) = match store::default_registration(root)? {
-            Some(record) => (
+            Some(record) if record.access_token.is_some() && record.refresh_token.is_some() => (
                 record.client_id,
                 false,
-                (!record.id_token.is_empty()).then(|| record.id_token.to_string()),
+                (!record.id_token.is_empty()).then_some(record.id_token),
                 record.email,
             ),
-            None => (String::new(), true, None, None),
+            _ => (String::new(), true, None, None),
         };
         Ok(Self {
             state: random_token()?,
@@ -119,10 +119,14 @@ pub(super) fn start(
     let url = attempt.authorize_url();
     let root: PathBuf = root.to_owned();
     let (tx, rx) = channel();
+    let opening_cancel = cancel.clone();
     std::thread::spawn(move || {
         let _ = tx.send(serve(&listener, &attempt, &root, &cancel));
     });
-    open(&url)?;
+    if let Err(error) = open(&url) {
+        opening_cancel.cancel();
+        return Err(error.into());
+    }
     Ok(rx)
 }
 
@@ -171,7 +175,7 @@ fn serve(listener: &TcpListener, attempt: &Attempt, root: &Path, cancel: &Cancel
             Ok((stream, _)) => {
                 if let Some(callback) = answer(stream, attempt) {
                     cancel.check().map_err(|_| Error::Declined)?;
-                    return finish(root, attempt, callback);
+                    return finish(root, attempt, callback, cancel);
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -226,12 +230,12 @@ fn answer(mut stream: TcpStream, attempt: &Attempt) -> Option<Callback> {
             let client_id = if attempt.registering {
                 param(&params, "client_id").map(str::to_owned)
             } else {
-                Some(attempt.client_id.clone())
+                Some(param(&params, "client_id").unwrap_or(&attempt.client_id).to_owned())
             };
             (
                 "You are signed in. You can close this page and return to Horizon.".to_owned(),
                 Some(Callback::Code {
-                    code: code.to_owned(),
+                    code: zeroize::Zeroizing::new(code.to_owned()),
                     client_id,
                 }),
             )
@@ -252,9 +256,11 @@ fn answer(mut stream: TcpStream, attempt: &Attempt) -> Option<Callback> {
 }
 
 /// What the callback delivered after state validation.
-#[derive(Debug)]
 enum Callback {
-    Code { code: String, client_id: Option<String> },
+    Code {
+        code: zeroize::Zeroizing<String>,
+        client_id: Option<String>,
+    },
     Denied(Option<String>),
 }
 
@@ -304,7 +310,8 @@ fn percent_decode(value: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn finish(root: &Path, attempt: &Attempt, callback: Callback) -> Result<super::Connection> {
+fn finish(root: &Path, attempt: &Attempt, callback: Callback, cancel: &Cancellation) -> Result<super::Connection> {
+    let _lock = store::session_lock(root)?;
     let (code, client_id) = match callback {
         Callback::Denied(description) => {
             let detail = description.unwrap_or_else(|| "sign-in was declined".into());
@@ -321,6 +328,11 @@ fn finish(root: &Path, attempt: &Attempt, callback: Callback) -> Result<super::C
                     "ChatGPT returned a different client ID than the saved registration.".into(),
                 ));
             }
+            if !store::valid_client_id(&client_id) {
+                return Err(Error::Provider(
+                    "ChatGPT returned an unusable client ID. Try again.".into(),
+                ));
+            }
             (code, client_id)
         }
     };
@@ -331,15 +343,13 @@ fn finish(root: &Path, attempt: &Attempt, callback: Callback) -> Result<super::C
     let refresh_token = token
         .refresh_token
         .ok_or_else(|| Error::Provider("ChatGPT finished sign-in without a refresh token. Try again.".into()))?;
-    let (subject, email) = id_token::validate(&token.id_token, &client_id, &attempt.nonce)?;
-    let previous = store::default_registration(root)?.filter(|record| record.client_id == client_id);
-    // A registration still signed in must not be replaced by another account; a
-    // signed-out one may be re-signed in by any account.
-    if !attempt.registering
-        && let Some(record) = &previous
+    let id_token = token.id_token.ok_or(Error::IdToken)?;
+    let (subject, email) = id_token::validate(&id_token, &client_id, &attempt.nonce)?;
+    let previous = store::registration(root, &client_id)?;
+    // The issued client ID remains bound to its original account and workspace.
+    // A new account uses a new dynamic registration, including after sign-out.
+    if let Some(record) = &previous
         && record.subject != subject
-        && record.access_token.is_some()
-        && record.refresh_token.is_some()
     {
         return Err(Error::Provider(
             "A different ChatGPT account signed in than the saved one. Sign out first.".into(),
@@ -356,32 +366,40 @@ fn finish(root: &Path, attempt: &Attempt, callback: Callback) -> Result<super::C
         subject,
         client_id: client_id.clone(),
         ext_agent_host_id: attempt.host_id.clone(),
-        id_token: zeroize::Zeroizing::new(token.id_token),
-        access_token: Some(zeroize::Zeroizing::new(token.access_token)),
-        refresh_token: Some(zeroize::Zeroizing::new(refresh_token)),
+        id_token,
+        access_token: Some(token.access_token),
+        refresh_token: Some(refresh_token),
         token_type: Some(token.token_type),
         expires_in: token.expires_in,
         earliest_refresh_at: token.earliest_refresh_at,
-        scopes: token
-            .scope
-            .as_deref()
-            .map_or_else(Vec::new, |scope| scope.split_whitespace().map(str::to_owned).collect()),
+        scopes: token.scope.as_deref().map_or_else(requested_scopes, |scope| {
+            scope.split_whitespace().map(str::to_owned).collect()
+        }),
         usage_confirmed,
         saved_at_unix: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |age| i64::try_from(age.as_secs()).unwrap_or(0)),
     };
+    cancel.check().map_err(|_| Error::Declined)?;
     store::save(root, &stored)?;
     store::set_active(root, &client_id)?;
     Ok(super::Connection::from(stored))
 }
 
+/// The scopes this flow requested; the token endpoint may omit `scope` when the grant
+/// matches the request exactly, and then the requested set is the granted set.
+fn requested_scopes() -> Vec<String> {
+    SCOPE.split_whitespace().map(str::to_owned).collect()
+}
+
 #[derive(serde::Deserialize)]
 struct TokenResponse {
-    access_token: String,
-    #[serde(default)]
-    refresh_token: Option<String>,
-    id_token: String,
+    #[serde(deserialize_with = "store::protected_string")]
+    access_token: zeroize::Zeroizing<String>,
+    #[serde(default, deserialize_with = "store::protected_token")]
+    refresh_token: Option<zeroize::Zeroizing<String>>,
+    #[serde(default, deserialize_with = "store::protected_token")]
+    id_token: Option<zeroize::Zeroizing<String>>,
     #[serde(default)]
     token_type: String,
     #[serde(default)]
@@ -405,19 +423,16 @@ fn exchange(code: &str, client_id: &str, code_verifier: &str, redirect_uri: &str
     ];
     let response = ureq::post(TOKEN_URL)
         .config()
+        .timeout_global(Some(Duration::from_secs(30)))
         .http_status_as_error(false)
         .build()
         .send_form(form)
         .map_err(|error| Error::Provider(error.to_string()))?;
     let status = response.status();
-    let mut body = response.into_body();
     if !(200..300).contains(&status.as_u16()) {
-        return Err(Error::Provider(format!(
-            "the sign-in service answered {status}. {}",
-            body.read_to_string().unwrap_or_default()
-        )));
+        return Err(Error::Provider(format!("the sign-in service answered {status}")));
     }
-    body.read_json::<TokenResponse>().map_err(|_| Error::Malformed)
+    super::response::read(response.into_body(), "token exchange")
 }
 
 /// Revokes the renewable session, then clears the stored tokens. Returns whether the
@@ -425,9 +440,8 @@ fn exchange(code: &str, client_id: &str, code_verifier: &str, redirect_uri: &str
 /// # Errors
 /// The registration could not be read or written.
 pub(super) fn sign_out(root: &Path, client_id: &str) -> Result<Option<bool>> {
-    let record = store::default_registration(root)?
-        .filter(|record| record.client_id == client_id)
-        .ok_or(Error::Missing)?;
+    let _lock = store::session_lock(root)?;
+    let record = store::registration(root, client_id)?.ok_or(Error::Missing)?;
     let confirmed = record.refresh_token.as_ref().and_then(|token| revoke(token, client_id));
     store::clear_tokens(root, client_id)?;
     Ok(confirmed)
@@ -437,6 +451,7 @@ pub(super) fn sign_out(root: &Path, client_id: &str) -> Result<Option<bool>> {
 fn revoke(refresh_token: &str, client_id: &str) -> Option<bool> {
     let discovery_response = ureq::get(CONFIG_URL)
         .config()
+        .timeout_global(Some(Duration::from_secs(30)))
         .http_status_as_error(false)
         .build()
         .call()
@@ -447,6 +462,7 @@ fn revoke(refresh_token: &str, client_id: &str) -> Option<bool> {
     let discovery: Discovery = discovery_response.into_body().read_json().ok()?;
     let response = ureq::post(&discovery.revocation_endpoint)
         .config()
+        .timeout_global(Some(Duration::from_secs(30)))
         .http_status_as_error(false)
         .build()
         .send_form([
@@ -463,9 +479,15 @@ fn revoke(refresh_token: &str, client_id: &str) -> Option<bool> {
 /// # Errors
 /// The registration has no refresh token, or the token endpoint refused the refresh.
 pub(super) fn refresh(root: &Path, client_id: &str) -> Result<()> {
-    let record = store::default_registration(root)?
-        .filter(|record| record.client_id == client_id)
-        .ok_or(Error::Missing)?;
+    let _lock = store::session_lock(root)?;
+    let record = store::registration(root, client_id)?.ok_or(Error::Missing)?;
+    // Rotating before the provider allows it can invalidate the grant, so the stored
+    // earliest time holds the request.
+    if let Some(not_before) = record.earliest_refresh_at
+        && not_before > store::now_unix()
+    {
+        return Err(Error::Invalid("the session is not refreshable yet"));
+    }
     let refresh_token = record
         .refresh_token
         .as_ref()
@@ -478,20 +500,17 @@ pub(super) fn refresh(root: &Path, client_id: &str) -> Result<()> {
     ];
     let response = ureq::post(TOKEN_URL)
         .config()
+        .timeout_global(Some(Duration::from_secs(30)))
         .http_status_as_error(false)
         .build()
         .send_form(form)
         .map_err(|error| Error::Provider(error.to_string()))?;
     let status = response.status();
-    let mut body = response.into_body();
     if !(200..300).contains(&status.as_u16()) {
-        return Err(Error::Provider(format!(
-            "the sign-in service answered {status}. {}",
-            body.read_to_string().unwrap_or_default()
-        )));
+        return Err(Error::Provider(format!("the sign-in service answered {status}")));
     }
-    let token: TokenResponse = body.read_json().map_err(|_| Error::Malformed)?;
-    let rotated = token.refresh_token.as_deref().ok_or_else(|| {
+    let token: TokenResponse = super::response::read(response.into_body(), "token refresh")?;
+    let rotated = token.refresh_token.as_ref().ok_or_else(|| {
         Error::Provider("ChatGPT rotated the session without a new refresh token. Sign in again.".into())
     })?;
     store::replace_tokens(
@@ -501,10 +520,10 @@ pub(super) fn refresh(root: &Path, client_id: &str) -> Result<()> {
         rotated,
         token.expires_in.unwrap_or(3600),
         token.earliest_refresh_at,
-        token
-            .scope
-            .as_deref()
-            .map_or_else(Vec::new, |scope| scope.split_whitespace().map(str::to_owned).collect()),
+        token.scope.as_deref().map_or_else(
+            || record.scopes.clone(),
+            |scope| scope.split_whitespace().map(str::to_owned).collect(),
+        ),
     )
 }
 
@@ -621,10 +640,75 @@ mod tests {
         client.write_all(request.as_bytes()).unwrap();
         match answer(stream, &attempt) {
             Some(Callback::Code { code, client_id }) => {
-                assert_eq!(code, "the-code");
+                assert_eq!(code.as_str(), "the-code");
                 assert_eq!(client_id.as_deref(), Some("oaiapp_issued"));
             }
-            other => panic!("expected a code callback, got {other:?}"),
+            _ => panic!("expected a code callback"),
         }
+    }
+    #[test]
+    fn a_signed_out_registration_uses_a_new_client_for_account_switching() {
+        let root = tempfile::tempdir().unwrap();
+        let issued = "oaiapp_saved";
+        store::save(
+            root.path(),
+            &store::Record {
+                email: Some("user@example.com".into()),
+                issuer: "https://auth.openai.com".into(),
+                subject: "original-user".into(),
+                client_id: issued.into(),
+                ext_agent_host_id: store::host_id(root.path()).unwrap(),
+                id_token: zeroize::Zeroizing::new(String::new()),
+                access_token: None,
+                refresh_token: None,
+                token_type: None,
+                expires_in: None,
+                earliest_refresh_at: None,
+                scopes: vec![],
+                usage_confirmed: true,
+                saved_at_unix: 1,
+            },
+        )
+        .unwrap();
+        let attempt = attempt(root.path());
+        assert!(attempt.registering);
+        assert!(attempt.authorize_url().contains("client_id=dynamic_agent_client"));
+        assert!(!attempt.authorize_url().contains("id_token_hint"));
+        assert_eq!(
+            store::default_registration(root.path()).unwrap().unwrap().subject,
+            "original-user"
+        );
+    }
+
+    #[test]
+    fn a_refresh_response_does_not_require_an_id_token() {
+        let token: TokenResponse = serde_json::from_str(
+            r#"{"access_token":"synthetic-access","refresh_token":"synthetic-refresh","expires_in":3600}"#,
+        )
+        .unwrap();
+        assert!(token.id_token.is_none());
+        assert_eq!(token.refresh_token.unwrap().as_str(), "synthetic-refresh");
+    }
+
+    #[test]
+    fn a_returning_callback_cannot_replace_the_selected_client_id() {
+        let root = tempfile::tempdir().unwrap();
+        let mut attempt = attempt(root.path());
+        attempt.registering = false;
+        attempt.client_id = "oaiapp_selected".into();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let request = format!(
+            "GET {CALLBACK_PATH}?code=synthetic-code&state={}&client_id=oaiapp_different HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+            attempt.state
+        );
+        client.write_all(request.as_bytes()).unwrap();
+        let callback = answer(stream, &attempt).unwrap();
+        assert!(matches!(
+            finish(root.path(), &attempt, callback, &Cancellation::default()),
+            Err(Error::Provider(_))
+        ));
+        assert!(store::connections(root.path()).unwrap().is_empty());
     }
 }

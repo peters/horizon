@@ -47,12 +47,31 @@ struct Header {
 #[derive(Deserialize)]
 struct Claims {
     iss: String,
-    aud: String,
+    aud: Audience,
+    #[serde(default)]
+    azp: Option<String>,
     exp: i64,
     sub: String,
     nonce: String,
     #[serde(default)]
     email: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Audience {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl Audience {
+    fn matches(&self, client_id: &str) -> bool {
+        match self {
+            Self::One(audience) => audience == client_id,
+            // No additional audiences are configured as trusted for this client.
+            Self::Many(audiences) => audiences.len() == 1 && audiences[0] == client_id,
+        }
+    }
 }
 
 /// Validates `token` against the published JWKS and returns its verified identity.
@@ -81,14 +100,14 @@ pub(super) fn validate_with_jwks(
     };
     let header: Header = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(header_b64).map_err(|_| Error::Malformed)?)
         .map_err(|_| Error::Malformed)?;
-    let claims: Claims = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload_b64).map_err(|_| Error::Malformed)?)
-        .map_err(|_| Error::Malformed)?;
+    let payload = zeroize::Zeroizing::new(URL_SAFE_NO_PAD.decode(payload_b64).map_err(|_| Error::Malformed)?);
+    let claims: Claims = super::response::parse(&payload, "identity claims")?;
     let signature = URL_SAFE_NO_PAD.decode(signature_b64).map_err(|_| Error::Malformed)?;
 
     if claims.iss != ISSUER {
         return Err(Error::IdToken);
     }
-    if claims.aud != client_id {
+    if !claims.aud.matches(client_id) || claims.azp.as_deref().is_some_and(|party| party != client_id) {
         return Err(Error::IdToken);
     }
     if claims.nonce != nonce {
@@ -115,16 +134,16 @@ pub(super) fn validate_with_jwks(
 fn fetch_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T> {
     let response = ureq::get(url)
         .config()
+        .timeout_global(Some(std::time::Duration::from_secs(30)))
         .http_status_as_error(false)
         .build()
         .call()
         .map_err(|error| Error::Provider(error.to_string()))?;
     let status = response.status();
-    let mut body = response.into_body();
     if !(200..300).contains(&status.as_u16()) {
         return Err(Error::Provider(format!("the sign-in service answered {status}")));
     }
-    body.read_json::<T>().map_err(|_| Error::Malformed)
+    super::response::read(response.into_body(), "identity discovery or signing keys")
 }
 
 fn verify(alg: &str, key: &Key, signing_input: &[u8], signature: &[u8]) -> Result<()> {
@@ -167,6 +186,9 @@ mod tests {
     /// Test vectors signed by fixed keys; the tokens stay valid for ten years.
     const EC_JWK: &str = r#"{"kty":"EC","crv":"P-256","kid":"test-es256","alg":"ES256","x":"L0o9jqv-iyqNtruTacH6Loz5oR1h2sqeJ_kEegbc1fc","y":"vR5bMZmnGfbGCmPmmDpjCzJWY2g70RUPJbCz-k5b7hs"}"#;
     const EC_TOKEN: &str = "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InRlc3QtZXMyNTYifQ.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6Im9haWFwcF90ZXN0X2NsaWVudCIsImV4cCI6MjEwNjkxNDAyMywiaWF0IjoxNzkxNTU0MDIzLCJzdWIiOiJ1c2VyLTEyMyIsIm5vbmNlIjoibm9uY2UtYWJjIiwiZW1haWwiOiJwZXRlcnNAZXhhbXBsZS5jb20ifQ.JAfaoH4Iu0Q-4gZ6MuABb8t9SzTDwO5nDK8ejkJsEU5RWo0yNKG2iGAyqe51zq8M_0E8QGOUE_Dyh2bK3sqNZg";
+    /// A valid signature from a different key; its issuer is not `OpenAI`'s.
+    const EC_BADISSUER_JWK: &str = r#"{"kty":"EC","crv":"P-256","kid":"test-es256-badissuer","alg":"ES256","x":"8l1rbO9oiJ_EF72BodoQ5GjB2nCMoVEl6oK9t0nel9w","y":"IVDm3FBFY6AhJRQixOIUA5G7yaNxp0GkL4kCxckknsc"}"#;
+    const EC_BADISSUER_TOKEN: &str = "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InRlc3QtZXMyNTYtYmFkaXNzdWVyIn0.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5pbnZhbGlkIiwiYXVkIjoib2FpYXBwX3Rlc3RfY2xpZW50IiwiZXhwIjoyMTA2OTE0MDIzLCJzdWIiOiJ1c2VyLTc4OSIsIm5vbmNlIjoibm9uY2UtYmFkaXNzIiwiZW1haWwiOiJ1c2VyQGV4YW1wbGUuY29tIn0.RP3HlLhkdnU4TVkYmz5bXtPvDjDO2N-_E-JrFcU1tDnXldktolLXD3DRnOUIYECeQc-dkaoCMr51yvMtCLrpaQ";
     const RSA_JWK: &str = r#"{"kty":"RSA","kid":"test-rs256","alg":"RS256","n":"ow5LDzKGK8M2q1xSbpIAAobQxxw0FTGakK1UZUtGDr0hnxgvXfa_OUEe6dBH2D_aFOfultXyW367tOvBPgWUc5XHGOI8C00QqWuStr45UJwaHP46BSoU6koYvybsSP7F82H5Iiaw53bhLJ5J8H-cxzoRMAlvPVvQLtaHyMyYc1LS_HqSvUbHrZkeG7TRgcTJvv7-6NQP3m07OuziKeX2D7y_6Pppybr2MPVPpdXr5pJ6RTuutldC8IN2SpaLlZeMqOPj-ZFIuG_E3UVdaR5gq_ghyJvucK4CMIT0KRb6xhriKCyudIxeTFPDqBg9T22uPBnv7a3xAhFZolxbIbeYUQ","e":"AQAB"}"#;
     const RSA_TOKEN: &str = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InRlc3QtcnMyNTYifQ.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6Im9haWFwcF90ZXN0X2NsaWVudCIsImV4cCI6MjEwNjkxNDAyMywiaWF0IjoxNzkxNTU0MDIzLCJzdWIiOiJ1c2VyLTQ1NiIsIm5vbmNlIjoibm9uY2UtcnMiLCJlbWFpbCI6InJzYUBleGFtcGxlLmNvbSJ9.WcVaTbCECprsOvtTmt6AdsDFbz-ISg-23gVWTVIoQcI9ozY5xinBeM0Ta13CfxosEbszkQBM71SPb-bomRsWkJ4-sbDV3tL1TrjacaihqQvahLYNJF7wCPOiLMKB_S_Y5VMzC8I5zTLOCtBFqbxA8xzw8I4DgfarOI1pBZABSzoNgBFI-7jNuE3giAtGv41EMetwET7JTr-F3qYK_xl0CCHxMbc7Neqkn2pU7QCEDkFFTJ1xeptn-3dWvrsGRZb1CK540iwdnsqZ25h5HC5iPginQXI6vPj-_UrHFFFbj_FHYZ1u-88NRee4K7w_i3tJp6DOGiQvWq_5J0RDVFoYlw";
 
@@ -201,6 +223,62 @@ mod tests {
             validate_with_jwks(EC_TOKEN, "oaiapp_test_client", "nonce-other", &keys),
             Err(Error::IdToken)
         ));
+        let bad_issuer_keys = jwks(EC_BADISSUER_JWK).keys;
+        let (input, signature) = EC_BADISSUER_TOKEN.rsplit_once('.').unwrap();
+        verify(
+            "ES256",
+            &bad_issuer_keys[0],
+            input.as_bytes(),
+            &URL_SAFE_NO_PAD.decode(signature).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            validate_with_jwks(
+                EC_BADISSUER_TOKEN,
+                "oaiapp_test_client",
+                "nonce-badiss",
+                &bad_issuer_keys
+            ),
+            Err(Error::IdToken)
+        ));
+    }
+
+    #[test]
+    fn signed_audience_arrays_allow_only_the_issued_client() {
+        let keys = jwks(r#"{"kty":"EC","kid":"audience-fixture","x":"ygYA7utTHj-p2ziVf60S2yJOk2fZ2lBmNoBWxZltRN8","y":"DZobeasPkiRlChyabgjmlvRg4foe--4uVVbhjX2v7ps"}"#).keys;
+        for (token, accepted) in [
+            (
+                "eyJhbGciOiJFUzI1NiIsImtpZCI6ImF1ZGllbmNlLWZpeHR1cmUifQ.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6WyJvYWlhcHBfdGVzdF9jbGllbnQiXSwiZXhwIjo0MTAyNDQ0ODAwLCJzdWIiOiJzeW50aGV0aWMtYXVkaWVuY2UtdXNlciIsIm5vbmNlIjoiYXVkaWVuY2Utbm9uY2UifQ.h-DK7ernIxHpgoF8B6kMBt5LfE9SQabhorJnkUuotAsnWL-e7Klj15HyVI7yFtJF25ZHS4rzlOK3Zha9oAAXYQ",
+                true,
+            ),
+            (
+                "eyJhbGciOiJFUzI1NiIsImtpZCI6ImF1ZGllbmNlLWZpeHR1cmUifQ.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6WyJvYWlhcHBfb3RoZXJfY2xpZW50Il0sImV4cCI6NDEwMjQ0NDgwMCwic3ViIjoic3ludGhldGljLWF1ZGllbmNlLXVzZXIiLCJub25jZSI6ImF1ZGllbmNlLW5vbmNlIn0.8F6IAB9MwHY0iyXAd7si3zkO1UojS_aned9Nt-yht_dDkcrHyr1yVbhbXD45kXkze-lECkPcw1adWQKzUJNnvw",
+                false,
+            ),
+            (
+                "eyJhbGciOiJFUzI1NiIsImtpZCI6ImF1ZGllbmNlLWZpeHR1cmUifQ.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6W10sImV4cCI6NDEwMjQ0NDgwMCwic3ViIjoic3ludGhldGljLWF1ZGllbmNlLXVzZXIiLCJub25jZSI6ImF1ZGllbmNlLW5vbmNlIn0.FpEyuYv98CEtkkgSwiqpOPuYpDVcCnuit08_SFnf25Jt4KLdzjPpyo3NokZR7kLtZ06G6phrmHiWPXlCh6RGbw",
+                false,
+            ),
+            (
+                "eyJhbGciOiJFUzI1NiIsImtpZCI6ImF1ZGllbmNlLWZpeHR1cmUifQ.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6WyJvYWlhcHBfdGVzdF9jbGllbnQiLCJ1bnRydXN0ZWQtY2xpZW50Il0sImV4cCI6NDEwMjQ0NDgwMCwic3ViIjoic3ludGhldGljLWF1ZGllbmNlLXVzZXIiLCJub25jZSI6ImF1ZGllbmNlLW5vbmNlIiwiYXpwIjoib2FpYXBwX3Rlc3RfY2xpZW50In0.woLdjSNPssHGEcryfRNdsbRFIuXyg9ovPSSmeVpa4gYiuFJYO4KNqGtEltqk-qPQXwhdWq53rkyLGsJun0cOPA",
+                false,
+            ),
+            (
+                "eyJhbGciOiJFUzI1NiIsImtpZCI6ImF1ZGllbmNlLWZpeHR1cmUifQ.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6WyJvYWlhcHBfdGVzdF9jbGllbnQiXSwiZXhwIjo0MTAyNDQ0ODAwLCJzdWIiOiJzeW50aGV0aWMtYXVkaWVuY2UtdXNlciIsIm5vbmNlIjoiYXVkaWVuY2Utbm9uY2UiLCJhenAiOiJvYWlhcHBfb3RoZXJfY2xpZW50In0.4JEL8cR-kGTJIG9Aq8ReUbkWEvxnZi79fmz-T4QCZDxxdPj2qYMkt71_kuqNkBNn6UZm36bKoQNeaCeCqaiCQw",
+                false,
+            ),
+        ] {
+            let (input, signature) = token.rsplit_once('.').unwrap();
+            verify(
+                "ES256",
+                &keys[0],
+                input.as_bytes(),
+                &URL_SAFE_NO_PAD.decode(signature).unwrap(),
+            )
+            .unwrap();
+            let result = validate_with_jwks(token, "oaiapp_test_client", "audience-nonce", &keys);
+            assert_eq!(result.is_ok(), accepted);
+        }
     }
 
     #[test]

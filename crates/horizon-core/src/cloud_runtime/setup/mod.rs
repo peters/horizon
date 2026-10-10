@@ -74,9 +74,18 @@ impl Draft {
             root: root.into(),
             original,
             profile_agents: None,
-            openai_auth: settings
-                .openai_auth
-                .unwrap_or_else(|| authentication(settings.openai_api_key_file.as_ref())),
+            openai_auth: settings.openai_auth.map_or_else(
+                || openai_authentication(settings.openai_api_key_file.as_ref()),
+                |mode| {
+                    // Codex no longer offers the worker-terminal login; a saved
+                    // choice of it becomes the ChatGPT sign-in.
+                    if mode == Authentication::Subscription {
+                        Authentication::ChatGpt
+                    } else {
+                        mode
+                    }
+                },
+            ),
             anthropic_auth: authentication(settings.anthropic_api_key_file.as_ref()),
             chatgpt: match super::chatgpt::status(root) {
                 Ok(connection) => connection,
@@ -112,9 +121,17 @@ impl Draft {
     }
 
     /// # Errors
-    /// Requires one compute provider, `RunPod` or Hetzner, and credentials only for
-    /// selected API-authenticated agents.
+    /// A provider, selected agent credential, or saved plan sign-in is missing or invalid.
     pub fn validate(&self) -> Result<()> {
+        self.validate_with_chatgpt_gate(true)
+    }
+
+    /// # Errors
+    /// Requires one compute provider, `RunPod` or Hetzner, and credentials only for
+    /// selected API-authenticated agents. With the gate off, a selected Codex on the
+    /// `ChatGPT` plan may lack its sign-in: partial saves such as a provider key must
+    /// not be blocked by the agent credentials.
+    fn validate_with_chatgpt_gate(&self, require_chatgpt_sign_in: bool) -> Result<()> {
         self.settings.validate()?;
         for registry in &self.registries {
             registry.validate()?;
@@ -154,7 +171,8 @@ impl Draft {
         ] {
             if mode == Authentication::ChatGpt {
                 // Only Codex offers the mode; a selected Codex needs a usable saved sign-in.
-                if self.selected_agents().contains(&agent)
+                if require_chatgpt_sign_in
+                    && self.selected_agents().contains(&agent)
                     && !self.chatgpt.as_ref().is_some_and(|connection| connection.signed_in)
                 {
                     return Err(Error::Invalid("Sign in with ChatGPT before saving these settings"));
@@ -171,8 +189,12 @@ impl Draft {
     /// # Errors
     /// Saves private bindings atomically and creates a dedicated SSH key on first use.
     /// Caller must run this off the UI thread; it may invoke local ssh-keygen.
-    pub fn save(mut self) -> Result<Settings> {
-        self.validate()?;
+    pub fn save(self) -> Result<Settings> {
+        self.save_with_chatgpt_gate(true)
+    }
+
+    fn save_with_chatgpt_gate(mut self, require_chatgpt_sign_in: bool) -> Result<Settings> {
+        self.validate_with_chatgpt_gate(require_chatgpt_sign_in)?;
         let mut write = storage::Transaction::new(&self.root)?;
         write.verify_current(self.original.as_deref())?;
         if !self.runpod_key.trim().is_empty() {
@@ -246,7 +268,8 @@ pub fn save_provider_key(root: &Path, provider: Provider, key: &str) -> Result<S
             draft.hetzner.token = Zeroizing::new(key.trim().to_owned());
         }
     }
-    draft.save()
+    // A provider key is its own concern; it saves without the agent-credential gate.
+    draft.save_with_chatgpt_gate(false)
 }
 
 /// A settings file this machine wrote: its bytes before and after the write.
@@ -316,6 +339,17 @@ impl Draft {
     }
 }
 
+/// The Codex authentication: the API key when bound, else the `ChatGPT` sign-in.
+fn openai_authentication(binding: Option<&PathBuf>) -> Authentication {
+    if binding.is_some() {
+        Authentication::ApiKey
+    } else {
+        Authentication::ChatGpt
+    }
+}
+
+/// The agent authentication implied by a saved key binding; `Subscription` stays the
+/// login choice for the agents that offer it.
 fn authentication(binding: Option<&PathBuf>) -> Authentication {
     if binding.is_some() {
         Authentication::ApiKey

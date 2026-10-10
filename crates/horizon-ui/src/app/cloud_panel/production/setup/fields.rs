@@ -201,10 +201,12 @@ pub(super) fn agents(
                 }
                 ui.horizontal_wrapped(|ui| {
                     ui.selectable_value(mode, Authentication::ApiKey, "API key");
-                    ui.selectable_value(mode, Authentication::Subscription, "Subscription login");
-                    // Only Codex signs in through a ChatGPT account.
+                    // Codex signs in through a ChatGPT account; the other agents
+                    // keep the worker-terminal login.
                     if agent == Agent::Codex {
                         ui.selectable_value(mode, Authentication::ChatGpt, "ChatGPT plan");
+                    } else {
+                        ui.selectable_value(mode, Authentication::Subscription, "Subscription login");
                     }
                 });
                 if *mode == Authentication::ChatGpt {

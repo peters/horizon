@@ -18,6 +18,8 @@ fn reopening_keeps_cloud_controls_below_the_modal() {
     app.cloud_prototype.root = Some(root.clone());
     let mut settings = horizon_core::cloud_runtime::setup::Draft::load(&root).unwrap();
     *settings.runpod_key = "synthetic-compute-key".into();
+    settings.openai_auth = horizon_core::cloud_runtime::setup::Authentication::ApiKey;
+    *settings.openai_key = "synthetic-agent-key".into();
     settings.save().unwrap();
     app.cloud_prototype.groups.0.push(CloudGroup::new(
         1,

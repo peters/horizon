@@ -174,6 +174,27 @@ including for launching the declaring repository's own cloud.
 
 ## One-time machine setup
 
+A new workspace runs in the cloud by default. **New** in the sidebar and the
+**New Workspace** menu of the empty canvas show **Cloud** first, then
+**Cloud GPU** and **This PC**:
+
+- **Cloud** makes the workspace and opens **New cloud** for it.
+- **Cloud GPU** does the same and selects the first profile with `gpu: true`. When
+  the repository has no GPU profile, the dialog says so and keeps the default
+  profile on a CPU worker.
+- **This PC** makes a workspace on this computer, as before clouds. In the canvas
+  menu, the presets under **This PC** do this with a panel.
+
+When you cancel **New cloud** for a workspace that **Cloud** made, the empty
+workspace goes too, unless it is the only workspace on the board. When cloud workspaces are not ready on this computer, only
+**This PC** can be chosen.
+
+A repository can ask for This PC with `placement: local` at the top level of
+`.horizon/cloud.yml` (the default is `placement: cloud`). **New cloud** then shows
+**This repository runs on This PC** with **Open on This PC**, which opens a
+terminal in the repository in that workspace and closes the dialog. You can still
+start a cloud for it.
+
 In an existing workspace, choose **Cloud** from the panel-creation menu (or
 **Cloud > New cloud**), enter a title, and press Enter. Horizon discovers the Git
 root from the workspace directory, loads `.horizon/cloud.yml`, and uses its named
@@ -352,6 +373,32 @@ the next push asks again. **Skip: do not publish** stops the deployment at
 **Push image**. An image repository bound in **Cloud settings › Container
 registry** publishes with its own credential instead.
 
+### A refused image push
+
+If the registry refuses the push or the pull of the image of the cloud, a retry
+gets the same refusal. Thus the failure on the card offers **Open Container
+registry** instead of a retry. The header of the card keeps the retry of the
+operation that failed for later: **Retry deploy** after a deployment,
+**Reconnect** after a reconnect, or **Resume worker** after a resume. A refusal
+during **Build locally** is about a base image that the recipe pulls, so that
+failure keeps its retry. An image without a registry host, such as
+`owner/worker`, uses the login in the private Docker configuration directory,
+because **Container registry** cannot bind it. That failure also keeps its retry.
+
+**Open Container registry** opens **Cloud settings** for the image repository that
+the profile of the cloud names. If a binding covers that repository, the card
+scrolls to it: replace the credential that the registry refused. After a refused
+pull, that binding shows **Needs validation**, also if an earlier validation
+passed. If **Container registry** has no binding for that repository, the card
+shows the repository with
+**Not set up**, who publishes to it, and that workers have no pull credential yet.
+Click **Add credentials**: the entry for the repository opens with its name filled
+in and **Expiry and publishing** open. Add a publishing credential and a read-only
+pull credential, save the settings, then click the retry in the header of the
+cloud card.
+To add a different repository, click **Add another**. **Cloud settings…** in the
+Cloud menu does not fill in a repository.
+
 ## Provider API and storage requirements
 
 Direct root SSH endpoints accept numeric IPs and validated ASCII DNS hostnames.
@@ -477,9 +524,10 @@ start. The log of the worker container in the RunPod console shows the cause:
 Quick start has these limits:
 
 - Quick start is only for a commit without `.horizon/cloud.yml`. If the commit has
-  this file, **New cloud** reads the committed settings instead, and
-  `cloud_deploy --quick-start` stops with an error. An uncommitted file does not
-  count.
+  this file, **New cloud** reads the committed settings instead and says so under
+  **Profile**: `Quick start does not apply: this commit has its own
+  .horizon/cloud.yml, so its profiles are used.` `cloud_deploy --quick-start` stops
+  with an error. An uncommitted file does not count.
 - **Rebuild image & restart** builds nothing for a quick start cloud. It restarts the
   worker on the base image that this Horizon version pins. See
   [Rebuilding a cloud's image](#rebuilding-a-clouds-image).

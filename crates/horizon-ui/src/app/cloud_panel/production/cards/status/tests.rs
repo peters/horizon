@@ -583,7 +583,6 @@ fn a_failure_is_retried_as_the_operation_that_failed() {
         (Primary::Stop, None),
     ] {
         assert_eq!(primary.retries(), retry, "{primary:?}");
-        assert_eq!(primary.retry_label().is_some(), retry.is_some(), "{primary:?}");
     }
 }
 

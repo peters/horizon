@@ -51,11 +51,6 @@ impl Primary {
         }
     }
 
-    /// The label of a retry offered beside a failure, when this action retries it.
-    pub(super) fn retry_label(self) -> Option<&'static str> {
-        self.retries().map(|_| self.label())
-    }
-
     /// The operation that retries a failure, as the header's own button does: a resume or
     /// stop is retried as itself, never as a new deployment.
     pub(super) fn retries(self) -> Option<super::Action> {
@@ -128,6 +123,11 @@ impl Failure {
         };
         *runtime.diagnosis.borrow_mut() = Some((key, failure.clone()));
         failure
+    }
+
+    /// What fixes this failure where a retry alone fails again.
+    pub(super) fn remedy(&self) -> Option<diagnosis::Remedy> {
+        self.meaning.and_then(diagnosis::remedy)
     }
 
     /// The line the header leads with: the cause when found, else the summary.
@@ -225,6 +225,9 @@ pub(in crate::app::cloud_panel::production) struct Status {
     pub(super) failure: Option<Failure>,
     pub(super) track: Track,
     pub(super) primary: Option<Primary>,
+    /// Whether Container registry can bind the cloud's image: an image without an
+    /// explicit registry host, such as an implicit Docker Hub one, has no binding.
+    pub(super) binds_image: bool,
 }
 
 impl Status {
@@ -251,6 +254,7 @@ fn blank() -> Status {
         failure: None,
         track: Track::empty(),
         primary: None,
+        binds_image: false,
     }
 }
 
@@ -356,6 +360,9 @@ pub(super) fn keep(runtime: &mut Runtime, status: Status, frame: u64) {
 pub(super) fn of(runtime: &Runtime, occupancy: Occupancy, now: SystemTime) -> Status {
     let mut status = unmarked(runtime, occupancy, now);
     status.track.skipped = skipped(runtime, status.track.stages);
+    status.binds_image = runtime.state.as_ref().map_or(runtime.launched_binds, |state| {
+        horizon_core::cloud_runtime::registry::repository_of(&state.profile.image).is_some()
+    });
     status
 }
 
@@ -780,6 +787,7 @@ fn failed(runtime: &Runtime, error: &str) -> Status {
         failure: Some(failure),
         track,
         primary,
+        binds_image: false,
     }
 }
 

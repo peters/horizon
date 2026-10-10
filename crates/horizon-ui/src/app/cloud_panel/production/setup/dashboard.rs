@@ -348,7 +348,8 @@ pub(super) fn readiness_banner(ui: &mut Ui, state: &State) {
     if let Some(draft) = &state.draft {
         banner(
             ui,
-            &Readiness::of(draft, state.ssh_ready, &state.verified, state.required_agents.is_some()),
+            &Readiness::of(draft, state.ssh_ready, &state.verified, state.required_agents.is_some())
+                .needing(state.needed.pending(&draft.registries)),
         );
     }
 }
@@ -363,18 +364,19 @@ pub(super) fn page(ui: &mut Ui, state: &mut State) -> Option<Action> {
         required_agents,
         github,
         chatgpt,
+        needed,
         ..
     } = state;
     let draft = draft.as_deref_mut()?;
     let fixed_agents = required_agents.is_some();
-    let readiness = Readiness::of(draft, *ssh_ready, verified, fixed_agents);
+    let readiness = Readiness::of(draft, *ssh_ready, verified, fixed_agents).needing(needed.pending(&draft.registries));
     let mut action = None;
     ui.spacing_mut().item_spacing = vec2(GAP, GAP);
     if ui.available_width() < STACKED_BELOW {
         fields::providers(ui, draft, edits);
         fields::agents(ui, draft, edits, fixed_agents, chatgpt);
         super::github::card(ui, draft, github);
-        action = registry::card(ui, draft, verified);
+        action = registry::card(ui, draft, verified, needed);
         fields::workspace(ui, draft, *ssh_ready, &readiness);
     } else {
         ui.columns(2, |columns| {
@@ -383,7 +385,7 @@ pub(super) fn page(ui: &mut Ui, state: &mut State) -> Option<Action> {
             fields::providers(&mut columns[0], draft, edits);
             fields::agents(&mut columns[0], draft, edits, fixed_agents, chatgpt);
             super::github::card(&mut columns[1], draft, github);
-            action = registry::card(&mut columns[1], draft, verified);
+            action = registry::card(&mut columns[1], draft, verified, needed);
             fields::workspace(&mut columns[1], draft, *ssh_ready, &readiness);
         });
     }

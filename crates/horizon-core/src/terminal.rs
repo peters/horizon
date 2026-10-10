@@ -21,7 +21,7 @@ use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::{self, RenderableContent, Term, TermDamage, TermMode, viewport_to_point};
+use alacritty_terminal::term::{self, RenderableContent, Term, TermMode, viewport_to_point};
 use alacritty_terminal::tty::{self, Options as PtyOptions, Shell};
 use alacritty_terminal::vte::ansi::Rgb;
 
@@ -123,6 +123,9 @@ impl RuntimeTitle {
 #[derive(Clone)]
 struct TerminalEventProxy {
     event_tx: mpsc::Sender<Event>,
+    /// Forwards only `Event::Exit`, for a scratch grid whose other events describe
+    /// output nobody sees.
+    exit_only: bool,
     // Both the grid and event loop retain trust through detached/asynchronous teardown.
     _ssh_trust: TerminalSshTrust,
 }
@@ -137,13 +140,25 @@ impl TerminalEventProxy {
     fn new(event_tx: mpsc::Sender<Event>, ssh_trust: TerminalSshTrust) -> Self {
         Self {
             event_tx,
+            exit_only: false,
             _ssh_trust: ssh_trust,
+        }
+    }
+
+    fn exit_only(event_tx: mpsc::Sender<Event>) -> Self {
+        Self {
+            event_tx,
+            exit_only: true,
+            _ssh_trust: TerminalSshTrust::default(),
         }
     }
 }
 
 impl EventListener for TerminalEventProxy {
     fn send_event(&self, event: Event) {
+        if self.exit_only && !matches!(event, Event::Exit) {
+            return;
+        }
         let _ = self.event_tx.send(event);
     }
 }

@@ -12,6 +12,41 @@ fn prepared(root: &Path) -> Draft {
     draft
 }
 
+/// Gives Codex and Claude synthetic API keys, so a save reaches the concern the test
+/// actually exercises instead of stopping at the agent credentials.
+fn with_agent_credentials(draft: &mut Draft) {
+    draft.openai_auth = Authentication::ApiKey;
+    *draft.openai_key = "synthetic-codex-key".into();
+    draft.anthropic_auth = Authentication::ApiKey;
+    *draft.anthropic_key = "synthetic-claude-key".into();
+}
+
+#[test]
+fn a_saved_codex_subscription_login_becomes_the_chatgpt_sign_in() {
+    let root = tempfile::tempdir().unwrap();
+    let mut draft = prepared(root.path());
+    draft.settings.default_agents = vec![Agent::Codex];
+    draft.openai_auth = Authentication::Subscription;
+    draft.save().unwrap();
+    let reopened = Draft::load(root.path()).unwrap();
+    assert_eq!(
+        reopened.openai_auth,
+        Authentication::ChatGpt,
+        "the old Codex login migrates to the ChatGPT sign-in"
+    );
+}
+
+#[test]
+fn a_codex_setting_without_a_key_derives_the_chatgpt_sign_in() {
+    let root = tempfile::tempdir().unwrap();
+    let draft = prepared(root.path());
+    assert_eq!(
+        draft.openai_auth,
+        Authentication::ChatGpt,
+        "without an API key the ChatGPT sign-in is the Codex login"
+    );
+}
+
 #[test]
 fn first_use_keeps_secrets_out_of_settings_and_preserves_saved_bindings() {
     let root = tempfile::tempdir().unwrap();
@@ -66,7 +101,9 @@ fn credentials_are_required_only_for_selected_api_agents() {
 #[test]
 fn failed_or_stale_save_preserves_previous_settings_and_new_secrets_are_removed() {
     let root = tempfile::tempdir().unwrap();
-    let saved = prepared(root.path()).save().unwrap();
+    let mut base = prepared(root.path());
+    with_agent_credentials(&mut base);
+    let saved = base.save().unwrap();
     let mut first = Draft::load(root.path()).unwrap();
     let mut stale = Draft::load(root.path()).unwrap();
     *first.runpod_key = "replacement-compute-key".into();
@@ -137,6 +174,7 @@ fn first_use_generates_a_dedicated_usable_private_identity() {
     let root = tempfile::tempdir().unwrap();
     let mut draft = Draft::load(root.path()).unwrap();
     *draft.runpod_key = "synthetic-compute-key".into();
+    with_agent_credentials(&mut draft);
     let saved = draft.save().unwrap();
     assert!(saved.ssh_identity_file.starts_with(root.path()));
     let output = std::process::Command::new("ssh-keygen")
@@ -152,7 +190,8 @@ fn first_use_generates_a_dedicated_usable_private_identity() {
 #[test]
 fn hetzner_is_optional_and_its_token_stays_a_private_secret() {
     let root = tempfile::tempdir().unwrap();
-    let draft = prepared(root.path());
+    let mut draft = prepared(root.path());
+    with_agent_credentials(&mut draft);
     assert!(!draft.hetzner.enabled, "new settings start without Hetzner");
     assert_eq!(draft.hetzner.locations, "hel1, nbg1, fsn1");
     let saved = draft.save().unwrap();
@@ -216,6 +255,7 @@ fn hetzner_is_optional_and_its_token_stays_a_private_secret() {
 fn editing_hetzner_keeps_its_registry_pull_binding() {
     let root = tempfile::tempdir().unwrap();
     let mut draft = prepared(root.path());
+    with_agent_credentials(&mut draft);
     draft.hetzner.enabled = true;
     *draft.hetzner.token = "synthetic-hetzner-token".into();
     let mut saved = draft.save().unwrap();
@@ -251,6 +291,7 @@ fn editing_hetzner_keeps_its_registry_pull_binding() {
 fn a_machine_can_be_set_up_for_hetzner_alone() {
     let root = tempfile::tempdir().unwrap();
     let mut draft = prepared(root.path());
+    with_agent_credentials(&mut draft);
     draft.runpod_key.clear();
     // Neither provider: one is required.
     let refused = draft.validate().unwrap_err().to_string();
@@ -338,7 +379,9 @@ fn a_hetzner_token_saved_alone_turns_hetzner_on_without_a_runpod_key() {
 #[test]
 fn an_open_form_keeps_saving_after_connect_github_saved_the_app() {
     let root = tempfile::tempdir().unwrap();
-    prepared(root.path()).save().unwrap();
+    let mut base = prepared(root.path());
+    with_agent_credentials(&mut base);
+    base.save().unwrap();
     let mut form = Draft::load(root.path()).unwrap();
     let app = crate::cloud_runtime::github::Settings {
         app_id: 42,

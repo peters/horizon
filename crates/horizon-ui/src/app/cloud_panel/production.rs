@@ -16,6 +16,7 @@ mod local_network;
 #[cfg(debug_assertions)]
 mod log_preview;
 mod machine_size;
+mod new_workspace;
 mod offer_publication;
 mod offers;
 mod park;
@@ -95,6 +96,8 @@ pub(super) struct Production {
     companions: companions::State,
     /// Prices sent to ready workers for their agents' cloud offers.
     offer_publication: offer_publication::State,
+    /// The workspace New workspace made for this dialog's cloud, and what it asked for.
+    new_workspace: Option<new_workspace::Intent>,
 }
 #[derive(Default, PartialEq, Eq)]
 pub(super) enum Confirmation {
@@ -213,6 +216,8 @@ pub(super) struct Runtime {
     progress: progress::Timeline,
     /// The stages the deployment started here never runs; its record says so once saved.
     launched_skips: &'static [Stage],
+    /// Whether Container registry can bind the image of the deployment started here.
+    launched_binds: bool,
     logs: std::collections::VecDeque<LogLine>,
     /// Lines that arrived after the reader scrolled up. They join `logs` when
     /// follow mode resumes, so the visible history does not shift.
@@ -436,6 +441,7 @@ impl Runtime {
         self.publish = None;
         self.progress.reset();
         self.launched_skips = cloud_runtime::image::skipped_stages(&request.profile);
+        self.launched_binds = cloud_runtime::registry::repository_of(&request.profile.image).is_some();
         // A deployment or reconnect is its own operation; an earlier stop or resume that
         // failed no longer names this attempt's failure.
         self.operation = None;

@@ -53,6 +53,16 @@ pub fn publishes_to_ghcr(image: &str) -> bool {
         .is_some_and(|(host, _)| host.eq_ignore_ascii_case(REGISTRY))
 }
 
+/// The GitHub account Horizon publishes `ghcr.io` images as, read from the chain kept
+/// in `docker_config` without asking GitHub, or `None` when the card asks first. A
+/// chain revoked on GitHub still names its account until the next push finds out.
+#[must_use]
+pub fn publisher(docker_config: &Path) -> Option<String> {
+    stored::load(&docker_config.join(STORE))
+        .filter(|chain| chain.refresh_expires_at > std::time::SystemTime::now())
+        .map(|chain| chain.login)
+}
+
 /// Logs `docker_config` in to `ghcr.io` as the person before `image` is pushed there,
 /// signing in on `cloud_id`'s card when no stored chain still works. Other registries
 /// are left alone.
