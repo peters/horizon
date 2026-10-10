@@ -29,7 +29,8 @@ another independent browser session may you call `browser_create` with
 `allow_additional: true`. Omit `backend` to use Horizon's
 configured browser, or select `chromium`, `firefox`, or `safari` when the
 platform supports it. Read `automation_disclosure` on `browser_list` and
-`browser_panel`. `common_signals_minimized` means the native
+`browser_panel`. In the UI, hover the local backend picker or the remote identity
+header to read the same status. `common_signals_minimized` means the native
 `navigator.webdriver` getter is still native. On Firefox that result needs
 `firefox_system_access: true` and geckodriver 0.37 or newer. The option passes
 geckodriver `--allow-system-access`. Mozilla documents that flag as full

@@ -186,13 +186,14 @@ fn backend_picker(
                         }
                     }
                 }
-            });
+            })
     });
     if let Some(status) = browser
         .active_backend_capabilities()
         .map(|active| active.automation_disclosure.as_str())
     {
-        picker.response.on_hover_text(status);
+        // The button owns hover input; the enclosing enabled scope does not.
+        picker.inner.response.on_hover_text(status);
     }
     if selected == previous {
         return false;
@@ -593,13 +594,13 @@ mod tests {
 
     fn hover_shows_status(mut browser: BrowserPanelState, status: &str, width: f32) -> bool {
         let height = 220.0;
-        for y in [12.0, 46.0, 78.0] {
-            let mut x = 8.0;
+        for y in [4.0, 14.0, 24.0, 34.0, 44.0, 54.0] {
+            let mut x = 4.0;
             while x < width {
                 if status_inside(&mut browser, status, width, height, egui::pos2(x, y)) {
                     return true;
                 }
-                x += 20.0;
+                x += 12.0;
             }
         }
         false
@@ -613,16 +614,17 @@ mod tests {
         pointer: egui::Pos2,
     ) -> bool {
         let ctx = egui::Context::default();
-        ctx.memory_mut(|memory| memory.set_everything_is_visible(true));
-        let mut pass = |time: f64| {
-            ctx.run_ui(hover_input_size(pointer, time, width, height), |ui| {
+        let mut pass = |time: f64, moved: bool| {
+            ctx.run_ui(hover_input_size(pointer, time, width, height, moved), |ui| {
                 let mut state = crate::browser_widget::BrowserUiState::default();
                 super::show(ui, horizon_core::PanelId(2), browser, &mut state, true);
             })
             .discard_textures()
         };
-        let _ = pass(0.0);
-        shape_has_status(&pass(1.0), status, width, height)
+        let _ = pass(0.0, true);
+        let _ = pass(0.1, false);
+        let _ = pass(1.0, false);
+        shape_has_status(&pass(1.1, false), status, width, height)
     }
 
     fn shape_has_status(output: &egui::FullOutput, status: &str, width: f32, height: f32) -> bool {
@@ -648,7 +650,7 @@ mod tests {
 
     #[test]
     fn remote_identity_hover_shows_the_disclosure_status() {
-        let mut remote = BrowserPanelState::inert_remote("ios_phone", "browserstack");
+        let remote = BrowserPanelState::inert_remote("ios_phone", "browserstack");
         remote
             .frame_slot
             .publish_backend_capabilities_for_tests(horizon_browser::ActiveBackendCapabilities {
@@ -657,34 +659,21 @@ mod tests {
                 bidi: false,
                 automation_disclosure: horizon_browser::AutomationDisclosureStatus::UnsupportedByBackend,
             });
-        let ctx = egui::Context::default();
-        ctx.memory_mut(|memory| memory.set_everything_is_visible(true));
-        let pointer = egui::pos2(24.0, 12.0);
-        let mut pass = |time: f64| {
-            ctx.run_ui(hover_input(pointer, time), |ui| {
-                let mut state = crate::browser_widget::BrowserUiState::default();
-                super::show(ui, horizon_core::PanelId(2), &mut remote, &mut state, true);
-            })
-            .discard_textures()
-        };
-        let _ = pass(0.0);
-        let output = pass(1.0);
-        let shown = output.shapes.iter().any(|shape| match &shape.shape {
-            egui::Shape::Text(text) => text.galley.job.text.contains("unsupported_by_backend"),
-            _ => false,
-        });
-        assert!(shown, "remote identity hover must show the disclosure status");
+        assert!(
+            hover_shows_status(remote, "unsupported_by_backend", 720.0),
+            "remote identity hover must show the disclosure status"
+        );
     }
 
-    fn hover_input(pointer: egui::Pos2, time: f64) -> egui::RawInput {
-        hover_input_size(pointer, time, 720.0, 200.0)
-    }
-
-    fn hover_input_size(pointer: egui::Pos2, time: f64, width: f32, height: f32) -> egui::RawInput {
+    fn hover_input_size(pointer: egui::Pos2, time: f64, width: f32, height: f32, moved: bool) -> egui::RawInput {
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height))),
             time: Some(time),
-            events: vec![egui::Event::PointerMoved(pointer)],
+            events: if moved {
+                vec![egui::Event::PointerMoved(pointer)]
+            } else {
+                Vec::new()
+            },
             ..egui::RawInput::default()
         }
     }
