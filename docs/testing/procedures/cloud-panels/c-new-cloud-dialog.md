@@ -943,6 +943,8 @@ This task clones a small public repository on this computer. It starts no cloud.
 
    Result: The clone finishes. `git -C <data-home>/<folder>/octocat/Hello-World
    remote get-url origin` shows `https://github.com/octocat/Hello-World.git`.
+   While it runs, the line under the step says what the clone received out of
+   about the repository's size and how long it has run, and counts up each second.
 
 3. Close the dialog with **Cancel**. Move the clone to the place where an earlier
    Horizon cloned it:

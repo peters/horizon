@@ -12,8 +12,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Where a running clone stands, for showing it: the step, Git's phase, how far, and when the
-/// clone, or else the step, should end.
+/// Where a running clone stands, for showing it: the step, Git's phase, how far, when the phase
+/// should end, and what the whole clone has received and since when.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Snapshot {
     /// The step under way, from 1, and how many there are; 0 before the first starts.
@@ -26,12 +26,12 @@ pub struct Snapshot {
     pub percent: Option<u8>,
     /// Git's size and speed for the phase, such as `12.30 MiB | 4.50 MiB/s`.
     pub detail: String,
-    /// When the whole clone should end at the pace kept so far, or only the step when `whole`
-    /// is false, once there is a pace to go by. A viewer counts down to it.
+    /// When the phase should end at the pace it has kept, once there is a pace to go by. A
+    /// viewer counts down to it.
     pub ends: Option<Instant>,
-    /// `ends` is for the whole clone: the host told the repository's size.
-    pub whole: bool,
-    /// What the whole clone receives, as the host counts it, once it answered.
+    /// When the clone started, for the time it has run.
+    pub started: Option<Instant>,
+    /// About what the whole clone receives, as the host counts the repository, once it answered.
     pub expected: Option<u64>,
     /// What the steps before this one received, and what this one has so far.
     pub received: u64,
@@ -197,7 +197,8 @@ fn keep_tail(tail: &mut String, text: &str) {
 /// beyond progress.
 struct Watched {
     phase: String,
-    phase_started: Instant,
+    /// The phase's progress so far, when each step of it was seen.
+    seen: estimate::Seen,
     said: String,
 }
 
@@ -210,13 +211,14 @@ impl Watched {
         }
         if let Some((name, percent, detail)) = parse_progress(line) {
             // Progress is not a reason for anything: only what Git says otherwise is kept.
+            let now = Instant::now();
             if name != self.phase {
                 self.phase.clone_from(&name);
-                self.phase_started = Instant::now();
+                self.seen = estimate::Seen::new(now);
             }
-            let left = eta(self.phase_started.elapsed(), percent);
+            let left = self.seen.left(&name, percent, now);
             update(progress, |snapshot| {
-                estimate::take(snapshot, &name, &detail, left, Instant::now());
+                estimate::take(snapshot, &name, &detail, left, now);
                 snapshot.phase = name;
                 snapshot.percent = Some(percent);
                 snapshot.detail = detail;
@@ -233,7 +235,7 @@ fn watch(mut stderr: Option<std::process::ChildStderr>, progress: &Progress, don
     let (mut line, mut buffer) = (String::new(), [0_u8; 512]);
     let mut watched = Watched {
         phase: String::new(),
-        phase_started: Instant::now(),
+        seen: estimate::Seen::new(Instant::now()),
         said: String::new(),
     };
     while let Some(read) = stderr
@@ -561,15 +563,13 @@ fn quietly(mut command: Command, folder: &Path, remote: &Remote, cancel: &Cancel
 
 fn announce(progress: &Progress, step: u8, resumed: bool) {
     update(progress, |snapshot| {
-        // What earlier steps received, and the whole clone's estimate, carry on.
-        let whole = snapshot.ends.filter(|_| snapshot.whole);
+        // What the whole clone received, and since when it runs, carry on.
         *snapshot = Snapshot {
             step,
             steps: STEPS,
             resumed,
             phase: "Connecting".into(),
-            ends: whole,
-            whole: whole.is_some(),
+            started: Some(snapshot.started.unwrap_or_else(Instant::now)),
             expected: snapshot.expected,
             received: snapshot.received.saturating_add(snapshot.receiving),
             ..Snapshot::default()

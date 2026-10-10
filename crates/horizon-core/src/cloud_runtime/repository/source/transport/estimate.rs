@@ -1,49 +1,82 @@
-//! How long a clone has left. When GitHub tells the repository's size, the whole clone is
-//! judged from what has arrived and the speed Git reports; otherwise only the step under way
-//! is, from how long its first part took.
-use super::{Progress, Remote, Snapshot, Token, update};
+//! How far a clone has come. The phase under way is judged from how long its first part took,
+//! which holds well within one phase. The whole clone is told by what it received out of the
+//! repository's size, when GitHub says it, and by how long it has run: measured on `git/git`,
+//! receiving took 13 of 64 seconds, and the rest (GitHub counting and compressing objects,
+//! Git resolving deltas, and the pauses between the clone's fetches) follows object counts
+//! that nobody knows before the end, so a time left for the whole clone would be a guess.
+use super::{Progress, Remote, Snapshot, Token, eta, update};
 use std::{
+    collections::VecDeque,
     path::Path,
     time::{Duration, Instant},
 };
 
 /// The phase in which Git receives the repository's data.
 const RECEIVING: &str = "Receiving objects";
+/// Phases that run on the host, whose progress jumps (compressing `git/git` took 5 s to reach
+/// 30% and then under 1 s for the rest): no time left is told for them.
+const ON_THE_HOST: [&str; 3] = ["Enumerating objects", "Counting objects", "Compressing objects"];
+/// A phase that races through its start and then slows (resolving `git/git`'s deltas reached
+/// 60% in 1 s and took 9 s more), judged by its pace over this last stretch.
+const RESOLVING: &str = "Resolving deltas";
+const WINDOW: Duration = Duration::from_secs(3);
 
-/// Takes one progress line of Git into `snapshot`: what this fetch has received, and when the
-/// clone, or else the step, should end. `step_left` is the step's own estimate.
-pub(super) fn take(snapshot: &mut Snapshot, phase: &str, detail: &str, step_left: Option<Duration>, now: Instant) {
-    if phase == RECEIVING
-        && let Some((received, speed)) = transfer(detail)
-    {
-        snapshot.receiving = received;
-        let arrived = snapshot.received.saturating_add(received);
-        if let Some(expected) = snapshot.expected.filter(|expected| *expected > arrived)
-            && speed > 0
-        {
-            let left = Duration::from_millis((expected - arrived).saturating_mul(1000) / speed);
-            let ends = now.checked_add(left);
-            if ends.is_some() {
-                snapshot.ends = ends;
-                snapshot.whole = true;
-                return;
-            }
-        }
-    }
-    // The whole clone's estimate goes on counting down through phases that receive nothing,
-    // until it runs out; then the step's own is all there is.
-    if snapshot.whole && snapshot.ends.is_some_and(|ends| ends > now) {
-        return;
-    }
-    snapshot.whole = false;
-    snapshot.ends = step_left.and_then(|left| now.checked_add(left));
+/// What one phase's progress has been, for judging its time left.
+pub(super) struct Seen {
+    started: Instant,
+    /// Each percent and when it was seen, the oldest at most one beyond [`WINDOW`].
+    recent: VecDeque<(Instant, u8)>,
 }
 
-/// What Git says it received and how fast, from `12.30 MiB | 4.50 MiB/s`: bytes and bytes
-/// per second.
-fn transfer(detail: &str) -> Option<(u64, u64)> {
-    let (amount, speed) = detail.split_once('|')?;
-    Some((size(amount.trim())?, size(speed.trim().strip_suffix("/s")?)?))
+impl Seen {
+    pub(super) fn new(started: Instant) -> Self {
+        Self {
+            started,
+            recent: VecDeque::new(),
+        }
+    }
+
+    /// Notes that `phase` reached `percent` at `now`, and tells how long it has left: from
+    /// the pace since it began, from its pace over the last [`WINDOW`] for deltas, and not at
+    /// all for a phase on the host.
+    pub(super) fn left(&mut self, phase: &str, percent: u8, now: Instant) -> Option<Duration> {
+        self.recent.push_back((now, percent));
+        while self
+            .recent
+            .get(1)
+            .is_some_and(|(at, _)| now.saturating_duration_since(*at) >= WINDOW)
+        {
+            self.recent.pop_front();
+        }
+        if ON_THE_HOST.contains(&phase) {
+            return None;
+        }
+        if phase != RESOLVING {
+            return eta(now.saturating_duration_since(self.started), percent);
+        }
+        let &(then, before) = self.recent.front()?;
+        let span = now.saturating_duration_since(then);
+        if !(1..100).contains(&percent) || percent <= before || span < Duration::from_secs(1) {
+            return None;
+        }
+        Some(span.mul_f64(f64::from(100 - percent) / f64::from(percent - before)))
+    }
+}
+
+/// Takes one progress line of Git into `snapshot`: what this fetch has received so far, and
+/// when the phase should end, `phase_left` from `now`.
+pub(super) fn take(snapshot: &mut Snapshot, phase: &str, detail: &str, phase_left: Option<Duration>, now: Instant) {
+    if phase == RECEIVING
+        && let Some(received) = received(detail)
+    {
+        snapshot.receiving = received;
+    }
+    snapshot.ends = phase_left.and_then(|left| now.checked_add(left));
+}
+
+/// What Git says it received, in bytes, from `12.30 MiB | 4.50 MiB/s` or `12.30 MiB`.
+fn received(detail: &str) -> Option<u64> {
+    size(detail.split('|').next()?.trim())
 }
 
 /// A size as Git writes it, with at most two decimals: `123 bytes`, `512.00 KiB`,
