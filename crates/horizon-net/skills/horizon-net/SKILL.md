@@ -10,7 +10,12 @@ Use this skill with the standalone `horizon-net` library and agent. Read the
 [data plane procedure](../../../../docs/testing/procedures/horizon-net-data-plane.md)
 for local, provider and cleanup evidence.
 
-1. Confirm the installed candidate version and supported platform.
+1. Confirm the installed candidate version and supported platform. Persistent
+   state requires Unix directory durability. Windows and other non-Unix
+   platforms return I/O `Unsupported` before state ownership or mutation. Use
+   `Agent::bind` and `Controller::new` for trusted in-memory operation there.
+   These APIs deny remote topology updates. Caller-managed Windows
+   configuration must have user-only ACLs. The crate does not validate them.
 2. Use an explicit self-hosted HTTPS relay on TCP port 443. Do not substitute a
    public relay. Set `relay_only: true` for a TCP-only host.
 3. Keep endpoint secret keys in user-owned private files. On Unix, use mode
@@ -26,6 +31,9 @@ for local, provider and cleanup evidence.
    relay fails before a connection or forwarding listener starts.
 8. Keep all persistent controller owners until their work ends. Drop the agent
    and its controller clones before reopening the same state directory.
+   `Controller::new` has no durable storage. An embedded host must save its
+   policy before it calls `apply` or `revoke`. Use a persistent agent's
+   controller for remote policy changes and restart storage.
 9. Treat reachability and remote acknowledgement as separate evidence. A saved
    topology does not prove that a remote endpoint accepted it.
 

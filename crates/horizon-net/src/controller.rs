@@ -38,6 +38,11 @@ struct Session {
 }
 
 impl Controller {
+    /// Create a non-durable controller for trusted embedded host policy.
+    /// The host must persist policy before calling `apply` or `revoke`.
+    /// For remote agents, use `Agent::bind_persistent` or `Agent::bind_with_store`;
+    /// their controllers commit each policy mutation before changing live state.
+    ///
     /// # Errors
     /// Returns an error if the initial topology is invalid.
     pub fn new(topology: Topology) -> Result<Self> {

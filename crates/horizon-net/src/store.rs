@@ -33,6 +33,7 @@ impl Store {
         parse_key(&self.node_key)
     }
     pub(crate) fn open(directory: PathBuf, config: &mut AgentConfig) -> Result<Self> {
+        require_directory_durability()?;
         if let Ok(metadata) = fs::symlink_metadata(&directory) {
             if metadata.file_type().is_symlink() || !metadata.is_dir() {
                 return Err(Error::InvalidConfiguration(
@@ -118,6 +119,7 @@ impl Store {
     }
 
     pub(crate) fn persist(&self, topology: &Topology) -> Result<()> {
+        topology.validate()?;
         let snapshot = Snapshot {
             authority_key: self.authority_key.clone(),
             node_key: self.node_key.clone(),
@@ -134,7 +136,7 @@ impl Store {
                 && previous.authority_key == self.authority_key
                 && previous.node_key == self.node_key
             {
-                return Ok(());
+                return self.sync_directory();
             }
             return Err(Error::StalePlan);
         }
@@ -148,9 +150,25 @@ impl Store {
         // already exists; unlike rename it cannot overwrite another writer.
         fs::hard_link(&temporary, &final_path)?;
         fs::remove_file(&temporary)?;
+        self.sync_directory()
+    }
+
+    fn sync_directory(&self) -> Result<()> {
+        require_directory_durability()?;
         #[cfg(unix)]
         fs::File::open(&self.directory)?.sync_all()?;
         Ok(())
+    }
+}
+
+fn require_directory_durability() -> Result<()> {
+    if cfg!(unix) {
+        Ok(())
+    } else {
+        Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "persistent agent state requires Unix directory durability",
+        )))
     }
 }
 
@@ -231,6 +249,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "Persistent agent state requires Unix directory durability")]
     fn concurrent_agent_cannot_own_or_overwrite_state() -> Result<()> {
         let temporary = tempfile::tempdir()?;
         let directory = temporary.path().join("state");
@@ -249,6 +268,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "Persistent agent state requires Unix directory durability")]
     fn oversized_snapshot_cannot_publish_or_advance_the_controller() -> Result<()> {
         let temporary = tempfile::tempdir()?;
         let directory = temporary.path().join("state");
@@ -285,6 +305,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "Persistent agent state requires Unix directory durability")]
     fn higher_edited_enrollment_cannot_override_committed_withdrawal() -> Result<()> {
         let temporary = tempfile::tempdir()?;
         let directory = temporary.path().join("state");
@@ -297,6 +318,14 @@ mod tests {
         drop(store);
         let mut edited = config();
         edited.topology.revision = 999;
+        edited.topology.services.insert(
+            "ignored-orphan".into(),
+            crate::Service {
+                node: "missing".into(),
+                port: 22,
+            },
+        );
+        assert!(edited.topology.validate().is_err());
         let restored = Store::open(directory.clone(), &mut edited)?;
         assert_eq!(edited.topology, withdrawn);
         assert!(!directory.join("00000000000000000999.json").exists());
@@ -309,6 +338,69 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "Persistent agent state requires Unix directory durability")]
+    fn invalid_initial_enrollment_cannot_publish_a_snapshot() -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let directory = temporary.path().join("state");
+        let mut invalid = config();
+        invalid.topology.services.insert(
+            "orphan".into(),
+            crate::Service {
+                node: "missing".into(),
+                port: 22,
+            },
+        );
+        assert!(matches!(
+            Store::open(directory.clone(), &mut invalid),
+            Err(Error::InvalidTopology(_))
+        ));
+        assert_eq!(fs::read_dir(&directory)?.count(), 1, "only the ownership lock");
+        let mut valid = config();
+        let _store = Store::open(directory.clone(), &mut valid)?;
+        assert!(directory.join("00000000000000000000.json").exists());
+        assert_eq!(valid.topology, config().topology);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "Persistent agent state requires Unix directory durability")]
+    fn invalid_direct_write_preserves_the_last_snapshot_and_policy() -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let directory = temporary.path().join("state");
+        let mut initial = config();
+        let store = Store::open(directory.clone(), &mut initial)?;
+        let controller = crate::Controller::new(initial.topology.clone())?;
+        controller.bind_store(store.clone())?;
+        let original = fs::read(directory.join("00000000000000000000.json"))?;
+        let mut invalid = initial.topology.clone();
+        invalid.revision = 1;
+        invalid.nodes.clear();
+        invalid.services.insert(
+            "orphan".into(),
+            crate::Service {
+                node: "node".into(),
+                port: 22,
+            },
+        );
+        assert!(matches!(store.persist(&invalid), Err(Error::InvalidTopology(_))));
+        assert!(matches!(controller.plan(invalid), Err(Error::InvalidTopology(_))));
+        assert_eq!(controller.topology(), initial.topology);
+        assert_eq!(fs::read(directory.join("00000000000000000000.json"))?, original);
+        assert_eq!(
+            fs::read_dir(&directory)?.count(),
+            2,
+            "no invalid snapshot or temporary file"
+        );
+        drop(controller);
+        drop(store);
+        let mut enrollment = config();
+        let _restored = Store::open(directory, &mut enrollment)?;
+        assert_eq!(enrollment.topology, initial.topology);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "Persistent agent state requires Unix directory durability")]
     fn committed_corrupt_state_fails_closed() -> Result<()> {
         let temporary = tempfile::tempdir()?;
         let directory = temporary.path().join("state");
@@ -316,6 +408,125 @@ mod tests {
         write_private(&directory.join("00000000000000000001.json"), b"invalid json")?;
         drop(store);
         assert!(Store::open(directory, &mut config()).is_err());
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unsupported_persistent_state_preserves_existing_files_and_never_takes_ownership() -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        for existing in [false, true] {
+            let directory = temporary
+                .path()
+                .join(if existing { "existing" } else { "absent/child" });
+            if existing {
+                fs::create_dir(&directory)?;
+                fs::write(directory.join("agent.lock"), b"owned fixture")?;
+                fs::write(
+                    directory.join("00000000000000000001.json"),
+                    b"malformed retained snapshot",
+                )?;
+            }
+            let mut initial = config();
+            let original = serde_json::to_value(&initial)?;
+            assert!(matches!(
+                Store::open(directory.clone(), &mut initial),
+                Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::Unsupported
+            ));
+            assert_eq!(serde_json::to_value(&initial)?, original);
+            if existing {
+                assert_eq!(fs::read_dir(&directory)?.count(), 2);
+                assert_eq!(fs::read(directory.join("agent.lock"))?, b"owned fixture");
+                assert_eq!(
+                    fs::read(directory.join("00000000000000000001.json"))?,
+                    b"malformed retained snapshot"
+                );
+                let ownership = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(directory.join("agent.lock"))?;
+                assert!(ownership.try_lock().is_ok());
+                ownership.unlock()?;
+            } else {
+                assert!(!directory.exists());
+                assert!(!directory.parent().unwrap().exists());
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn published_withdrawal_retry_requires_directory_durability_before_live_commit() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        struct RestorePermissions(PathBuf);
+
+        impl Drop for RestorePermissions {
+            fn drop(&mut self) {
+                let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o700));
+            }
+        }
+
+        if rustix::process::geteuid().is_root() {
+            return Ok(()); // Root bypasses the real directory permission boundary.
+        }
+
+        for revoke in [false, true] {
+            let temporary = tempfile::tempdir()?;
+            let directory = temporary.path().join("state");
+            let mut initial = config();
+            initial.topology.services.insert(
+                "self-service".into(),
+                crate::Service {
+                    node: "node".into(),
+                    port: 22,
+                },
+            );
+            initial.topology.grants.insert(
+                "lease".into(),
+                crate::Grant {
+                    from: vec!["node".into()],
+                    to: "self-service".into(),
+                    expires_at: u64::MAX,
+                },
+            );
+            let store = Store::open(directory.clone(), &mut initial)?;
+            let controller = crate::Controller::new(initial.topology.clone())?;
+            controller.bind_store(store)?;
+            let mut withdrawn = initial.topology.clone();
+            withdrawn.revision = 1;
+            withdrawn.grants.clear();
+            let plan = controller.plan(withdrawn.clone())?;
+            let withdraw = || -> Result<()> {
+                if revoke {
+                    assert!(controller.revoke("lease")?);
+                } else {
+                    assert!(controller.apply(&plan)?.changed);
+                }
+                Ok(())
+            };
+
+            let restore = RestorePermissions(directory.clone());
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o300))?;
+            for _ in 0..2 {
+                assert!(
+                    matches!(withdraw(), Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::PermissionDenied)
+                );
+                assert_eq!(controller.topology(), initial.topology);
+                assert!(directory.join("00000000000000000001.json").is_file());
+                assert!(fs::File::open(&directory).is_err());
+            }
+
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
+            drop(restore);
+            withdraw()?;
+            assert_eq!(controller.topology(), withdrawn);
+            drop(controller);
+            let mut enrollment = config();
+            let _restored = Store::open(directory, &mut enrollment)?;
+            assert_eq!(enrollment.topology, withdrawn);
+        }
         Ok(())
     }
 

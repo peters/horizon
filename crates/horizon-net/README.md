@@ -73,6 +73,12 @@ its public key after it connects to the configured relay. It never prints its
 secret key. Generate identities with upstream `SecretKey::generate()`; use
 `SecretKey::to_bytes()` to write the hexadecimal secret to the private file.
 
+Persistent agents require Unix directory durability. On Windows and other
+non-Unix platforms, `agent`, `Agent::bind_persistent` and
+`Agent::bind_with_store` return an I/O `Unsupported` error before creating or
+locking state. `Agent::bind` and `Controller::new` remain available for trusted
+in-memory transport and policy; this form denies remote topology updates.
+
 The binary stores committed topology revisions in the sibling `config.state`
 directory. Keep that directory when an agent restarts. The newest committed
 revision overrides the original configuration topology. Corrupt or conflicting
@@ -84,6 +90,10 @@ For an embedded host, use `Agent::bind(config, controller.clone())`. This form
 shares its trusted local controller and denies remote topology updates. For a
 remote agent, use `Agent::bind_persistent(config_path)` or
 `Agent::bind_with_store(config, state_directory)`.
+
+`Controller::new` creates an in-memory controller. The embedded host must save
+its policy before it calls `apply` or `revoke`. Use a persistent agent's
+controller for restart storage.
 
 The controller returned by a persistent agent writes every successful `apply`
 and `revoke` before changing live policy. Its clones share the state writer;
@@ -140,11 +150,13 @@ dependency target. Test-only `iroh-relay` starts the upstream relay;
 `tempfile` owns disposable state. There are no Horizon UI, core or provider
 dependencies, and no custom cryptography.
 
-Linux validates private owner and mode checks. On Windows, place configuration
-and state under the user's private application directory with user-only ACLs;
-the crate checks regular files, size, corruption and exclusive ownership, but
-does not currently validate Windows ACLs. Cross-platform CI and real provider
-smoke evidence remain separate gates.
+Unix validates private owner and mode checks and requires a successful directory
+flush before a persistent update changes live policy. Windows persistent state
+is unsupported because the crate has no Windows publication durability barrier.
+Windows in-memory APIs remain usable; caller-managed configuration must use
+user-only ACLs. The crate checks regular files, size and corruption when reading
+configuration, but does not validate Windows ACLs. Cross-platform CI and real
+provider smoke evidence remain separate gates.
 
 Run `cargo test -p horizon-net` for the deterministic policy and transport
 tests. The upstream relay test removes UDP transports on every endpoint and

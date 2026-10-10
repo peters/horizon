@@ -26,6 +26,8 @@ rustix.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# Parse operator-facing relay TOML with the parser already used by the workspace.
+toml_edit.workspace = true
 # The upstream relay is used in isolated TCP-only data-plane tests, not shipped.
 iroh-relay = { version = "1.3.0", default-features = false, features = ["server", "tls-ring"] }
 

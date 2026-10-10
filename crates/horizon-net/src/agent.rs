@@ -70,6 +70,8 @@ impl Agent {
 
     /// # Errors
     /// Returns an error for invalid configuration, corrupt state or unavailable transport.
+    /// Persistent state requires Unix directory durability; other platforms return
+    /// an I/O error with kind `Unsupported` before state ownership or mutation.
     pub async fn bind_persistent(path: &Path) -> Result<Self> {
         let mut config: AgentConfig = serde_json::from_slice(&crate::store::read_private(path)?)?;
         let directory = path.with_extension("state");
@@ -80,6 +82,8 @@ impl Agent {
 
     /// # Errors
     /// Returns an error for invalid identity, corrupt state or unavailable transport.
+    /// Persistent state requires Unix directory durability; other platforms return
+    /// an I/O error with kind `Unsupported` before state ownership or mutation.
     pub async fn bind_with_store(mut config: AgentConfig, directory: PathBuf) -> Result<Self> {
         let store = Store::open(directory, &mut config)?;
         let controller = Controller::new(config.topology.clone())?;

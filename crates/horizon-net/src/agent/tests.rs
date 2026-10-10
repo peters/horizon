@@ -5,6 +5,8 @@ use iroh::{RelayMode, endpoint::presets::Minimal};
 use super::*;
 use crate::{Grant, Node, SecretKey, Service, controller::unix_now};
 
+#[cfg(windows)]
+mod platform;
 mod relay_policy;
 
 #[tokio::test]
@@ -137,6 +139,7 @@ async fn response_completion_cannot_hold_connection_slots_forever() {
 }
 
 #[tokio::test]
+#[cfg_attr(windows, ignore = "Persistent agent state requires Unix directory durability")]
 async fn withdrawn_persistent_identity_starts_denied_and_reenrolls_only_by_new_authority_update() -> Result<()> {
     tokio::time::timeout(Duration::from_secs(20), withdrawn_restart())
         .await

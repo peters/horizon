@@ -40,6 +40,7 @@ fn config(with_grant: bool) -> AgentConfig {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "Persistent agent state requires Unix directory durability")]
 fn public_apply_and_revoke_survive_restart_and_clones_retain_writer_ownership() -> Result<()> {
     let temporary = tempfile::tempdir()?;
     let directory = temporary.path().join("state");
@@ -73,6 +74,7 @@ fn public_apply_and_revoke_survive_restart_and_clones_retain_writer_ownership() 
 }
 
 #[tokio::test]
+#[cfg_attr(windows, ignore = "Persistent agent state requires Unix directory durability")]
 async fn failed_public_apply_and_revoke_preserve_policy_and_live_session() -> Result<()> {
     let temporary = tempfile::tempdir()?;
     let directory = temporary.path().join("state");

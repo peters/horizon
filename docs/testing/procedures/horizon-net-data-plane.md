@@ -18,7 +18,12 @@ It separates local tests from real provider and TLS evidence.
 ## 2. Applicability
 
 - Candidate: the exact `horizon-net` library and agent from the pull request.
-- Local lanes: policy, TCP relay, denied access, revocation, expiry and restart.
+- Local portable lanes: in-memory policy, TCP relay and denied access.
+- Persistent revocation, expiry and restart lanes: Unix directory durability.
+- Windows and other non-Unix platforms: persistent startup returns I/O
+  `Unsupported` before state ownership or mutation. In-memory APIs stay usable.
+- Windows configuration: user-only ACLs are the caller's responsibility. The
+  crate does not validate these ACLs.
 - Remote lanes: RunPod, Hetzner, Linux and macOS where an approved test host exists.
 - UI confirmation and deployment require their separate procedures.
 
@@ -74,6 +79,14 @@ Record each test resource in a private resource ledger.
 
 ### 6.2 NET-STATE — Persistent revocation
 
+Run this lane on Unix. Persistent Windows operation is unsupported.
+On Windows, examine `unsupported_persistent_state_preserves_existing_files_and_never_takes_ownership`
+and `unsupported_persistence_preserves_live_in_memory_transport_and_policy`.
+Result: Startup returns I/O `Unsupported`. Existing files and live in-memory
+policy stay unchanged. No state directory or writer ownership is created.
+Actual in-memory TCP bytes pass, and a local revocation closes the socket.
+The persistent restart tests have explicit Windows durability ignores.
+
 1. Examine the revocation, expiry and key rotation test results.
 
    Result: Existing sockets close and subsequent connections fail.
@@ -102,6 +115,16 @@ Record each test resource in a private resource ledger.
 7. Examine the edited enrollment test.
 
    Result: A higher enrollment revision cannot replace a committed withdrawal. The committed snapshot remains authoritative.
+
+8. Examine the invalid snapshot tests.
+
+   Result: Invalid initial enrollment and direct writes cannot publish a snapshot.
+   The last valid snapshot and current policy stay unchanged.
+
+9. Examine the generated relay configuration tests.
+
+   Result: Parsed TOML contains only the explicit endpoint allowlist and required
+   TLS settings. Escaped operator text cannot add configuration fields.
 
 ### 6.3 NET-TLS — Operator relay on TCP port 443
 

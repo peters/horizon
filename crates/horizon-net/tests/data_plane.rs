@@ -20,21 +20,26 @@ async fn bind_agent(
     relay: &str,
     state: &std::path::Path,
 ) -> Result<(Agent, Controller), Error> {
-    let config = AgentConfig {
-        node: name.into(),
-        secret_key: secret_hex(secret),
-        authority_key: topology.nodes["authority"].key.clone(),
-        topology: topology.clone(),
-        relay_urls: vec![relay.into()],
-        relay_only: true,
-    };
+    let config = configuration(secret, name, topology, relay);
     let agent = Agent::bind_with_store(config, state.join(name)).await?;
     let controller = agent.controller();
     agent.online().await?;
     Ok((agent, controller))
 }
 
+fn configuration(secret: &SecretKey, name: &str, topology: &Topology, relay: &str) -> AgentConfig {
+    AgentConfig {
+        node: name.into(),
+        secret_key: secret_hex(secret),
+        authority_key: topology.nodes["authority"].key.clone(),
+        topology: topology.clone(),
+        relay_urls: vec![relay.into()],
+        relay_only: true,
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[cfg_attr(windows, ignore = "Persistent agent state requires Unix directory durability")]
 async fn tcp_only_relay_forwards_and_revocation_closes_live_socket() -> Result<(), Error> {
     tokio::time::timeout(Duration::from_secs(45), scenario(Termination::Revoke))
         .await
@@ -49,6 +54,7 @@ enum Termination {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[cfg_attr(windows, ignore = "Persistent agent state requires Unix directory durability")]
 async fn lease_expiry_closes_live_socket_without_authority() -> Result<(), Error> {
     tokio::time::timeout(Duration::from_secs(45), scenario(Termination::Expire))
         .await
@@ -56,6 +62,7 @@ async fn lease_expiry_closes_live_socket_without_authority() -> Result<(), Error
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[cfg_attr(windows, ignore = "Persistent agent state requires Unix directory durability")]
 async fn key_rotation_closes_live_socket_and_rejects_old_identity() -> Result<(), Error> {
     tokio::time::timeout(Duration::from_secs(45), scenario(Termination::Rotate))
         .await
@@ -224,7 +231,6 @@ fn apply_termination(termination: Termination, topology: &Topology, unauthorized
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn relay_status_clears_when_live_transport_is_lost() -> Result<(), Error> {
-    let state = tempfile::tempdir()?;
     let (relay, url) = start_relay().await?;
     let key = SecretKey::from_bytes(&[1; 32]);
     let mut topology = Topology::empty("relay-status-island");
@@ -234,7 +240,12 @@ async fn relay_status_clears_when_live_transport_is_lost() -> Result<(), Error> 
             key: key.public().to_string(),
         },
     );
-    let (agent, _) = bind_agent(&key, "authority", &topology, &url, state.path()).await?;
+    let agent = Agent::bind(
+        configuration(&key, "authority", &topology, &url),
+        Controller::new(topology)?,
+    )
+    .await?;
+    agent.online().await?;
     assert!(agent.relay_connected());
     relay.shutdown().await.map_err(transport)?;
     tokio::time::timeout(Duration::from_secs(5), async {
