@@ -391,7 +391,10 @@ mod tests {
             assert_eq!(cloud(condition, false, None).idle(), idle, "{condition:?}");
         }
         assert!(!cloud(Condition::Ready, true, None).idle(), "an agent works on it");
-        assert!(!cloud(Condition::Parked, true, None).idle(), "an agent works on the worker");
+        assert!(
+            !cloud(Condition::Parked, true, None).idle(),
+            "an agent works on the worker"
+        );
         let mut blocked = cloud(Condition::Ready, false, None);
         blocked.stoppable = false;
         assert!(!blocked.idle(), "its card does not offer Stop");

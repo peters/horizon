@@ -35,7 +35,7 @@ pub(in crate::app) struct IdleCloud {
 
 impl HorizonApp {
     /// Reads the rows again when they are a second old or the workspaces changed.
-    pub(super) fn refresh_sidebar_rows(&mut self, now: Instant) {
+    pub(in crate::app) fn refresh_sidebar_rows(&mut self, now: Instant) {
         let cache = &self.sidebar_list;
         let unchanged = cache.workspaces.iter().map(|(id, local)| (*id, local.as_str())).eq(self
             .board
@@ -60,6 +60,7 @@ impl HorizonApp {
     }
 
     /// The row of each workspace now.
+    #[cfg(test)]
     pub(in crate::app) fn read_sidebar_rows(&self) -> HashMap<WorkspaceId, Row> {
         self.read_sidebar_list().0
     }
@@ -151,7 +152,13 @@ const HEADER_RIGHT_MARGIN: f32 = 14.0;
 /// The header of a group: its name, how many workspaces it has, a bulk stop when
 /// `idle` clouds of the group can stop and, at the right, its summary on the same
 /// line. Returns whether the bulk stop was clicked.
-pub(super) fn render_group_header(ui: &mut egui::Ui, group: Group, count: usize, summary: &[String], idle: usize) -> bool {
+pub(super) fn render_group_header(
+    ui: &mut egui::Ui,
+    group: Group,
+    count: usize,
+    summary: &[String],
+    idle: usize,
+) -> bool {
     let mut stop = false;
     ui.add_space(6.0);
     ui.horizontal(|ui| {
@@ -168,11 +175,16 @@ pub(super) fn render_group_header(ui: &mut egui::Ui, group: Group, count: usize,
                 .size(HEADER_TEXT_SIZE),
         );
         if idle > 0 {
-            let text = egui::RichText::new("Stop idle…").color(theme::ACCENT()).size(HEADER_TEXT_SIZE);
+            let text = egui::RichText::new("Stop idle…")
+                .color(theme::ACCENT())
+                .size(HEADER_TEXT_SIZE);
             let clouds = if idle == 1 { "1 idle cloud" } else { "idle clouds" };
             stop = ui
                 .add(egui::Button::new(text).frame(false))
-                .on_hover_text(format!("Choose which workers of the {clouds} in {} to stop", group.label()))
+                .on_hover_text(format!(
+                    "Choose which workers of the {clouds} in {} to stop",
+                    group.label()
+                ))
                 .clicked();
         }
         let width = ui.available_width() - HEADER_RIGHT_MARGIN - ui.spacing().item_spacing.x;

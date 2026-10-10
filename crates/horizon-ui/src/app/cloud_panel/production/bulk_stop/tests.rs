@@ -20,7 +20,7 @@ fn connected(rate: Option<f64>) -> (tempfile::TempDir, HorizonApp) {
 
 /// What a screen reader reads in the bulk stop dialog of `app`.
 fn dialog(app: &mut HorizonApp) -> Vec<(String, bool)> {
-    crate::test_egui::accesskit_texts(|ui| app.render_idle_stop_confirmation(&ui.ctx().clone()))
+    crate::test_egui::accesskit_texts_after_sizing(|ui| app.render_idle_stop_confirmation(&ui.ctx().clone()))
 }
 
 #[test]
@@ -42,7 +42,10 @@ fn an_idle_ready_cloud_is_offered_with_what_its_stop_saves() {
     // Taking the only cloud out leaves nothing to stop.
     app.cloud_prototype.production.bulk_stop.unchecked.insert(1);
     let texts = dialog(&mut app);
-    assert!(texts.iter().any(|entry| entry == &("Stop 0 workers".to_owned(), true)), "{texts:?}");
+    assert!(
+        texts.iter().any(|entry| entry == &("Stop 0 workers".to_owned(), true)),
+        "{texts:?}"
+    );
     assert!(!texts.iter().any(|(text, _)| text.starts_with("Saves")), "{texts:?}");
 }
 
@@ -55,12 +58,23 @@ fn a_parked_cloud_is_offered_unless_an_agent_works_or_it_cannot_stop() {
         quiet_for: None,
         lines: vec!["synthetic output 12".to_owned()],
     };
-    runtime(&mut app).parking.park_with(vec![session(SessionActivity::Idle)]);
+    runtime(&mut app)
+        .parking
+        .park_with(vec![session(SessionActivity::Idle)]);
     app.refresh_sidebar_rows(std::time::Instant::now() + std::time::Duration::from_secs(2));
-    assert_eq!(app.sidebar_idle_clouds(Group::Parked).len(), 1, "a parked idle worker still bills");
-    runtime(&mut app).parking.park_with(vec![session(SessionActivity::Working)]);
+    assert_eq!(
+        app.sidebar_idle_clouds(Group::Parked).len(),
+        1,
+        "a parked idle worker still bills"
+    );
+    runtime(&mut app)
+        .parking
+        .park_with(vec![session(SessionActivity::Working)]);
     app.refresh_sidebar_rows(std::time::Instant::now() + std::time::Duration::from_secs(4));
-    assert!(app.sidebar_idle_clouds(Group::Parked).is_empty(), "an agent works on the worker");
+    assert!(
+        app.sidebar_idle_clouds(Group::Parked).is_empty(),
+        "an agent works on the worker"
+    );
     app.request_idle_stop(Group::Parked);
     assert!(!app.idle_stop_open(), "nothing to choose from");
 
@@ -72,10 +86,25 @@ fn a_parked_cloud_is_offered_unless_an_agent_works_or_it_cannot_stop() {
 }
 
 #[test]
-fn a_confirmed_stop_skips_a_cloud_that_is_no_longer_idle() {
+fn a_confirmed_stop_stops_the_chosen_clouds_that_are_still_idle() {
+    let ctx = egui::Context::default();
     let (_temp, mut app) = connected(Some(0.5));
     app.request_idle_stop(Group::Cloud);
-    assert!(app.cloud_can_stop_now(1));
-    runtime(&mut app).stage = Some(Stage::Stopping);
-    assert!(!app.cloud_can_stop_now(1));
+    let mut state = std::mem::take(&mut app.cloud_prototype.production.bulk_stop);
+    state.unchecked.insert(1);
+    app.stop_chosen(&state, &ctx);
+    assert_eq!(runtime(&mut app).operation, None, "a cloud taken out keeps running");
+
+    state.unchecked.clear();
+    app.stop_chosen(&state, &ctx);
+    assert_eq!(runtime(&mut app).operation, Some(Action::Stop));
+    assert_eq!(runtime(&mut app).stage, Some(Stage::Stopping));
+
+    // A cloud that is busy by the time of the confirmation keeps what it does.
+    let (_temp, mut app) = connected(Some(0.5));
+    app.request_idle_stop(Group::Cloud);
+    let state = std::mem::take(&mut app.cloud_prototype.production.bulk_stop);
+    runtime(&mut app).stage = Some(Stage::Provision);
+    app.stop_chosen(&state, &ctx);
+    assert_eq!(runtime(&mut app).operation, None);
 }

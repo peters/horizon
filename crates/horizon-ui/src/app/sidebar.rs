@@ -13,7 +13,7 @@ use egui::{
     Align, Button, Color32, Context, CornerRadius, CursorIcon, Id, Layout, Order, Pos2, Rect, Sense, Stroke, UiBuilder,
     Vec2,
 };
-use horizon_core::cloud_list::{self, Group, Row};
+use horizon_core::cloud_list::{Group, Row};
 use horizon_core::{PanelId, PanelKind, WorkspaceDockSide, WorkspaceId, WorkspaceLayout};
 
 use crate::theme;

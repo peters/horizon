@@ -116,11 +116,16 @@ impl HorizonApp {
         }
         let state = std::mem::take(&mut self.cloud_prototype.production.bulk_stop);
         if confirmed {
-            for id in state.chosen().map(|idle| idle.cloud.id) {
-                // The list is up to a second old: a cloud that got busy since keeps running.
-                if self.cloud_can_stop_now(id) {
-                    self.change_production_worker(id, Action::Stop, ctx);
-                }
+            self.stop_chosen(&state, ctx);
+        }
+    }
+
+    /// Stops the workers of the clouds chosen in `state`.
+    fn stop_chosen(&mut self, state: &State, ctx: &egui::Context) {
+        for id in state.chosen().map(|idle| idle.cloud.id) {
+            // The list is up to a second old: a cloud that got busy since keeps running.
+            if self.cloud_can_stop_now(id) {
+                self.change_production_worker(id, Action::Stop, ctx);
             }
         }
     }
