@@ -207,7 +207,7 @@ pub(super) fn notes(ui: &mut Ui, form: &mut Production) -> bool {
 }
 
 mod choice;
-mod machine;
+pub(super) mod machine;
 #[cfg(test)]
 mod tests;
 

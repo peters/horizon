@@ -17,36 +17,35 @@ pub(super) fn row(
     chosen: &mut bool,
 ) -> Option<WorkspacePlacement> {
     let mut kept = intent.choices.get(repository);
-    ui.horizontal_wrapped(|ui| match kept {
-        Some(placement) => {
-            let place = if placement == WorkspacePlacement::Local {
-                "This PC"
-            } else {
-                "Cloud"
-            };
-            ui.label(
-                RichText::new(format!("You keep {place} for this repository."))
-                    .size(12.5)
-                    .color(theme::FG_DIM()),
-            );
-            if ui.link("Forget").clicked() {
-                intent.error = match intent.root.clone() {
-                    Some(root) => intent
-                        .choices
-                        .set(&root, repository, None)
-                        .err()
-                        .map(|error| error.to_string()),
-                    None => Some("Horizon has no cloud settings".to_owned()),
-                };
-                if intent.error.is_none() {
-                    kept = None;
-                }
-            }
-        }
-        None => {
+    ui.horizontal_wrapped(|ui| {
+        let Some(placement) = kept else {
             ui.checkbox(&mut intent.keep, "Keep my choice for this repository");
             if !asked && ui.link("Open on This PC instead").clicked() {
                 *chosen = true;
+            }
+            return;
+        };
+        let place = if placement == WorkspacePlacement::Local {
+            "This PC"
+        } else {
+            "Cloud"
+        };
+        ui.label(
+            RichText::new(format!("You keep {place} for this repository."))
+                .size(12.5)
+                .color(theme::FG_DIM()),
+        );
+        if ui.link("Forget").clicked() {
+            intent.error = match intent.root.clone() {
+                Some(root) => intent
+                    .choices
+                    .set(&root, repository, None)
+                    .err()
+                    .map(|error| error.to_string()),
+                None => Some("Horizon has no cloud settings".to_owned()),
+            };
+            if intent.error.is_none() {
+                kept = None;
             }
         }
     });

@@ -977,7 +977,7 @@ This task clones a small public repository on this computer. It starts no cloud.
 
    Result: Neither folder exists.
 
-### 6.33 C33 — Make a new workspace in the cloud, with a GPU or on This PC
+### 6.33 C33 — Make a new workspace in the cloud, on This PC or with a GPU, and keep the choice
 
 This task starts no cloud. `<local>` is a new repository whose committed
 `.horizon/cloud.yml` sets `placement: local`.
@@ -994,7 +994,11 @@ This task starts no cloud. `<local>` is a new repository whose committed
 
 2. Click **New** in the sidebar.
 
-   Result: A menu shows **Cloud**, **Cloud GPU** and **This PC**, in that order.
+   Result: A menu shows **Cloud**, **This PC** and **Cloud GPU**, in that order.
+   Under **Cloud**, the text `Checking machine prices…` changes in some seconds to
+   the machine of a quick start and its hourly price, for example
+   `2 vCPU · 4 GB · from €0.0088/h on Hetzner`. The price is the cheapest offer that
+   **New cloud** shows for a quick start.
 
 3. Click **This PC**.
 
@@ -1026,15 +1030,32 @@ This task starts no cloud. `<local>` is a new repository whose committed
    Result: The dialog closes. The workspace has a terminal whose directory is
    `<home>/smoke/local`.
 
+9. Click **New**, then **Cloud**. Type `<home>/smoke/local` in the repository field.
+   Select **Keep my choice for this repository**, then click **Open on This PC**.
+
+   Result: The dialog closes, and a terminal opens in the repository.
+   `<data-home>/.horizon/cloud/repository-choices.json` holds the path of `<local>`
+   with `"local"`.
+
+10. Click **New**, then **Cloud**, and type `<home>/smoke/local` again.
+
+    Result: The dialog shows **You keep This PC for this repository.** with
+    **Forget**, and **This repository runs on This PC** with **Open on This PC**.
+
+11. Click **Forget**, then **Cancel**.
+
+    Result: The dialog shows **Keep my choice for this repository** again before
+    it closes. `repository-choices.json` no longer holds the path.
+
 > **CAUTION:** THE NEXT STEP DELETES A FOLDER. Delete only `<data-home>/smoke/local`.
 
-9. Close the workspaces that this task made, then remove `<local>`:
+12. Close the workspaces that this task made, then remove `<local>`:
 
-   ```sh
-   rm -rf <data-home>/smoke/local
-   ```
+    ```sh
+    rm -rf <data-home>/smoke/local
+    ```
 
-   Result: The folder does not exist.
+    Result: The folder does not exist.
 
 ## 7. Pass criteria
 
@@ -1047,9 +1068,10 @@ This task starts no cloud. `<local>` is a new repository whose committed
 - C31 shows that each worker runs in the place that the summary named.
 - C32 clones a pasted link into `<folder>/<owner>/<repository>` and uses an
   earlier checkout at `<folder>/<repository>` without a second clone.
-- C33 offers Cloud, Cloud GPU and This PC for a new workspace, takes away the
-  empty workspace of a cancelled Cloud, selects a GPU profile for Cloud GPU and
-  opens a `placement: local` repository on This PC.
+- C33 offers Cloud with its machine and hourly price, This PC and Cloud GPU for a
+  new workspace, takes away the empty workspace of a cancelled Cloud, selects a GPU
+  profile for Cloud GPU, opens a `placement: local` repository on This PC, and keeps
+  and forgets the choice for that repository.
 - No cloud starts in this area except through D01 and D02, or a watch that the
   operator permitted.
 
