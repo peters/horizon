@@ -132,6 +132,7 @@ class GitAuthenticationTests(unittest.TestCase):
                 mock.patch.object(auth, 'root_holds_token', return_value=True):
             auth.install_as_root(self.value, lambda operation, value: seen.append(auth.CREDENTIAL.is_symlink()))
         self.assertEqual(seen, [False])
+        self.assertFalse((self.path / 'elsewhere.json').exists(), 'root never writes through the link')
 
     def test_the_gh_fallback_under_isolation_reads_the_routed_configuration(self):
         isolated = self.path / 'isolated'
@@ -156,6 +157,13 @@ class GitAuthenticationTests(unittest.TestCase):
             auth.install_as_root(dict(self.value, token='synthetic-new-token'), agent)
         self.assertFalse(auth.CREDENTIAL.exists())
         self.assertEqual(json.loads(root_file.read_text())['token'], self.value['token'])
+        # A root-only binding in place is never replaced by the earlier one.
+        auth.write_private(self.value, auth.CREDENTIAL)
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True), \
+                mock.patch.object(auth, 'AGENT_UID', os.getuid()), \
+                self.assertRaises(subprocess.CalledProcessError):
+            auth.install_as_root(dict(self.value, token='synthetic-newer-token'), agent)
 
     def test_a_token_file_of_another_account_is_refused(self):
         with mock.patch.object(auth.subprocess, 'run'):

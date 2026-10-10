@@ -293,13 +293,11 @@ def install_as_root(value, agent=None):
     with contextlib.suppress(ValueError, OSError, RecursionError, UnicodeDecodeError):
         found = read_private(CREDENTIAL, owner=AGENT_UID)
         earlier, previous = found, stripped(found)
-    with contextlib.suppress(OSError):
-        fd = os.open(CREDENTIAL, os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
-        try:
-            if stat.S_ISREG(os.fstat(fd).st_mode):
-                os.ftruncate(fd, 0)
-        finally:
-            os.close(fd)
+    with contextlib.suppress(OSError), open(os.open(CREDENTIAL, os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                                                    | os.O_CLOEXEC), 'wb', closefd=True) as legacy:
+        found = os.fstat(legacy.fileno())
+        if stat.S_ISREG(found.st_mode) and found.st_uid == AGENT_UID:
+            legacy.truncate(0)
     with contextlib.suppress(IsADirectoryError, PermissionError):
         CREDENTIAL.unlink(missing_ok=True)
     try:
@@ -309,9 +307,11 @@ def install_as_root(value, agent=None):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)))('install-identity', payload)
         write_private(value, ROOT_CREDENTIAL)
     except BaseException:
-        if earlier is not None:
-            with contextlib.suppress(ValueError, OSError):
+        if earlier is not None and not ROOT_CREDENTIAL.exists():
+            try:
                 write_private(earlier, ROOT_CREDENTIAL)
+            except (ValueError, OSError):
+                print('horizon: the earlier static binding was lost', file=sys.stderr)
         raise
 
 
