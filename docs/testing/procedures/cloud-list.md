@@ -123,7 +123,8 @@ shows the hourly saving, and that a parked cloud whose session ends goes to
 
    Result: A dialog shows the cloud with a selected check box, its workspace and
    its hourly rate, the line `Saves $<rate>/h`, and the buttons **Stop 1 worker**
-   and **Keep running**.
+   and **Keep running**. When the provider reports no rate, the row shows
+   `no reported rate` and the line is `Saving unknown`.
 
 3. Clear the check box of the cloud.
 

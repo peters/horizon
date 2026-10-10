@@ -143,8 +143,10 @@ impl HorizonApp {
     /// can be older: its stop waits for a new read.
     fn stop_chosen(&mut self, dialog: &Dialog, ctx: &egui::Context, now: Instant) {
         for id in dialog.chosen().map(|idle| idle.cloud.id) {
+            // A parked cloud without a parked terminal has no session status to wait for.
+            let reads = self.cloud_has_parked_terminal(id);
             let runtime = self.cloud_prototype.production.runtimes.get_mut(&id);
-            if let Some(runtime) = runtime.filter(|runtime| runtime.parking.is_parked()) {
+            if let Some(runtime) = runtime.filter(|runtime| reads && runtime.parking.is_parked()) {
                 runtime.parking.read_now(now);
                 self.cloud_prototype.production.bulk_stop.waiting.push((id, now));
                 ctx.request_repaint();
@@ -174,6 +176,23 @@ impl HorizonApp {
                 ctx.request_repaint_after(Duration::from_secs(1));
             }
         }
+    }
+
+    /// Whether a terminal of cloud `id` is parked now, so a status read answers for it.
+    fn cloud_has_parked_terminal(&self, id: u32) -> bool {
+        self.cloud_prototype
+            .groups
+            .0
+            .iter()
+            .find(|group| group.issue == id)
+            .is_some_and(|group| {
+                group.panels.iter().any(|local| {
+                    self.board
+                        .panel_id_by_local_id(local)
+                        .and_then(|panel| self.board.panel(panel))
+                        .is_some_and(|panel| panel.cloud_wait() == Some(horizon_core::CloudWait::Parked))
+                })
+            })
     }
 
     /// Cloud `id` is still idle and its card offers Stop.

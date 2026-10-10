@@ -130,6 +130,8 @@ fn session(activity: SessionActivity) -> Vec<SessionStatus> {
 /// A parked idle cloud whose stop the user confirmed at `confirmed`.
 fn confirmed_parked_stop(ctx: &egui::Context, confirmed: Instant) -> (tempfile::TempDir, HorizonApp) {
     let (temp, mut app) = connected(Some(0.5));
+    let one = app.board.panel_id_by_local_id("one").unwrap();
+    app.board.panel_mut(one).unwrap().park_cloud().unwrap();
     runtime(&mut app).parking.park_with(session(SessionActivity::Idle));
     app.refresh_sidebar_rows(Instant::now() + Duration::from_secs(2));
     app.request_idle_stop(Group::Parked);
@@ -232,4 +234,18 @@ fn a_cloud_whose_sessions_still_attach_is_not_offered() {
     runtime(&mut app).pending_member_attachments.clear();
     app.refresh_sidebar_rows(Instant::now() + Duration::from_secs(6));
     assert_eq!(app.sidebar_idle_clouds(Group::Cloud).len(), 1);
+}
+
+#[test]
+fn a_parked_cloud_without_a_parked_terminal_stops_at_once() {
+    let ctx = egui::Context::default();
+    let (_temp, mut app) = connected(Some(0.5));
+    // Parked, but none of its terminals waits as parked: no read can answer for them.
+    runtime(&mut app).parking.park_with(Vec::new());
+    app.refresh_sidebar_rows(Instant::now() + Duration::from_secs(2));
+    app.request_idle_stop(Group::Parked);
+    let dialog = app.cloud_prototype.production.bulk_stop.dialog.take().unwrap();
+    app.stop_chosen(&dialog, &ctx, Instant::now());
+    assert!(app.cloud_prototype.production.bulk_stop.waiting.is_empty());
+    assert_eq!(runtime(&mut app).operation, Some(super::super::lifecycle::Action::Stop));
 }
