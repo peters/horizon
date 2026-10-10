@@ -11,10 +11,17 @@ use horizon_core::{
 use std::{collections::HashMap, time::SystemTime};
 
 impl HorizonApp {
-    /// The facts of each cloud on the board, by the local id of its workspace.
+    /// The facts of each cloud on the board, by the local id of its workspace. A
+    /// group without a remote launch runs on this PC, so it gives no facts.
     pub(in crate::app) fn cloud_list_facts(&self, now: SystemTime) -> HashMap<String, Vec<CloudFacts>> {
         let mut facts: HashMap<String, Vec<CloudFacts>> = HashMap::new();
-        for group in &self.cloud_prototype.groups.0 {
+        for group in self
+            .cloud_prototype
+            .groups
+            .0
+            .iter()
+            .filter(|group| group.remote.is_some())
+        {
             let cloud = self.cloud_facts(group, now);
             facts.entry(group.workspace.clone()).or_default().push(cloud);
         }

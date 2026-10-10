@@ -121,10 +121,16 @@ fn an_agent_waiting_for_github_access_needs_the_user() {
 fn a_cloud_without_a_runtime_is_not_deployed_and_a_plain_workspace_is_on_this_pc() {
     let (_temp, mut app) = ready_cloud();
     app.cloud_prototype.production.runtimes.clear();
-    let row = row(&app);
-    assert_eq!((row.group, row.line.as_str()), (Group::Cloud, "Not deployed"));
+    let undeployed = row(&app);
+    assert_eq!(
+        (undeployed.group, undeployed.line.as_str()),
+        (Group::Cloud, "Not deployed")
+    );
     let local = app.board.create_workspace("local");
     assert_eq!(app.read_sidebar_rows()[&local].group, Group::ThisPc);
+    // A cloud group without a remote launch runs here, so its workspace stays on this PC.
+    app.cloud_prototype.groups.0[0].remote = None;
+    assert_eq!(row(&app).group, Group::ThisPc);
 }
 
 /// Where each text of `output` is drawn.
