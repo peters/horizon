@@ -28,7 +28,7 @@ impl HorizonApp {
         facts
     }
 
-    fn cloud_facts(&self, group: &CloudGroup, now: SystemTime) -> CloudFacts {
+    pub(super) fn cloud_facts(&self, group: &CloudGroup, now: SystemTime) -> CloudFacts {
         let members: Vec<&Panel> = group
             .panels
             .iter()

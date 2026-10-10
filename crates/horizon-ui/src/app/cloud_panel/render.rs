@@ -242,6 +242,7 @@ impl HorizonApp {
         self.release_workspaces_after_creation(ctx);
         self.render_cloud_error(ctx);
         self.render_cloud_close_confirmation(ctx);
+        self.render_idle_stop_confirmation(ctx);
     }
 
     fn render_cloud_error(&mut self, ctx: &egui::Context) {

@@ -942,6 +942,22 @@ worker), or a stopped worker.
 Click a row to go to its workspace. A parked cloud then attaches, as described in
 [Parked terminals](#parked-terminals).
 
+#### Stop idle workers
+
+When a group has idle clouds, its header shows **Stop idle…**. An idle cloud is
+ready, its card offers **Stop**, no agent works on it, and it does not wait for
+you. Click **Stop idle…** to open a list of the idle clouds of the group. Each
+cloud has a check box, its workspace and its hourly rate. All clouds are selected
+at first. Clear the clouds that must continue to run. Before you confirm, the
+dialog shows what the stop saves each hour, for example `Saves $0.024/h`. When a
+worker does not report a rate, the saving is a lower bound. Click
+**Stop N workers** to stop the selected workers, or **Keep running** to close the
+dialog. A cloud that became busy or started to work after the list was read
+continues to run.
+
+Stop ends the running processes. The workspace storage is kept and stays
+billable, and **Resume** on the card starts a worker again.
+
 A ready RunPod CPU cloud can **Resize compute** or **Grow workspace** from its
 runtime card. Compute replacement retains the same network workspace but stops
 processes, discards temporary container files and reconnects recorded sessions on
