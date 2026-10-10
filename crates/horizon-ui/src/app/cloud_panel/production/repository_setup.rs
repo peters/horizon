@@ -156,6 +156,8 @@ impl HorizonApp {
         match result {
             Ok(panel) => {
                 self.cloud_prototype.production.creating = false;
+                // The workspace now holds the setup agent.
+                self.cloud_prototype.production.new_workspace = None;
                 self.cloud_prototype.error = None;
                 self.reveal_new_panel(ctx, workspace, panel);
             }

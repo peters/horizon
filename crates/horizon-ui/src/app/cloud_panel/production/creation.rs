@@ -122,7 +122,6 @@ impl HorizonApp {
         ctx.move_to_top(response.response.layer_id);
         let dismissed = self.cloud_creation_dismissed(ctx, &response, picking, escape);
         if dismissed || actions.cancel {
-            self.discard_new_cloud_workspace();
             self.close_cloud_creation();
             return;
         }
@@ -205,13 +204,14 @@ impl HorizonApp {
     /// Closes the dialog. A clone still running stops, and a token or key that was typed but not
     /// used is forgotten.
     pub(in crate::app::cloud_panel::production) fn close_cloud_creation(&mut self) {
+        // A workspace New workspace made for a cloud that never came goes with the dialog.
+        self.discard_new_cloud_workspace();
         let form = &mut self.cloud_prototype.production;
         form.creating = false;
         form.pending_creation = None;
         form.launch = super::launch::State::default();
         form.source = source::State::default();
         form.checks = checks::State::default();
-        form.new_workspace = None;
     }
 
     /// What the dialog settles before it draws: the pickers that closed, the prices and the

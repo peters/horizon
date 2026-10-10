@@ -14,7 +14,8 @@ use std::path::PathBuf;
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Intent {
     workspace: WorkspaceId,
-    /// Cloud GPU: the first GPU profile, once, when the repository's profiles arrive.
+    /// Cloud GPU: the first GPU profile whenever a repository's profiles arrive without the
+    /// person's pick among them.
     gpu: bool,
     /// Cloud GPU found no GPU profile, so the dialog says the cloud runs on a CPU worker.
     no_gpu: bool,
@@ -34,9 +35,9 @@ impl HorizonApp {
         }
     }
 
-    /// Removes the workspace that New workspace made for the cloud when the dialog is
-    /// cancelled before a cloud is in it and nothing else went in. The board keeps its last
-    /// workspace, so the only one stays.
+    /// Removes the workspace that New workspace made for the cloud when the dialog closes
+    /// before a cloud is in it and nothing else went in: Cancel, a session switch, or any
+    /// other way. The board keeps its last workspace, so the only one stays.
     pub(super) fn discard_new_cloud_workspace(&mut self) {
         let Some(intent) = self.cloud_prototype.production.new_workspace.take() else {
             return;
@@ -45,16 +46,21 @@ impl HorizonApp {
             return;
         };
         let local = workspace.local_id.clone();
-        let empty = workspace.panels.is_empty()
-            && !self
-                .cloud_prototype
-                .groups
-                .0
-                .iter()
-                .any(|group| group.workspace == local);
-        if empty {
-            self.board.remove_workspace(intent.workspace);
+        let cloud = self
+            .cloud_prototype
+            .groups
+            .0
+            .iter()
+            .any(|group| group.workspace == local);
+        if !cloud && self.board.remove_empty_workspace(intent.workspace) {
             self.mark_runtime_dirty();
+        }
+    }
+
+    /// Ends an open New cloud dialog before a session switch saves the board.
+    pub(in crate::app) fn close_cloud_creation_for_session_switch(&mut self) {
+        if self.cloud_prototype.production.creating {
+            self.close_cloud_creation();
         }
     }
 
@@ -88,11 +94,10 @@ impl HorizonApp {
     }
 }
 
-/// The profile Cloud GPU asked for when `config` arrives: its first GPU profile, once. With
-/// none, the dialog keeps the default and says so.
+/// The profile Cloud GPU asked for in `config`: its first GPU profile. With none, the dialog
+/// keeps the default and says so.
 pub(super) fn gpu_profile(form: &mut Production, config: &CloudConfig) -> Option<String> {
     let intent = form.new_workspace.as_mut().filter(|intent| intent.gpu)?;
-    intent.gpu = false;
     let found = config
         .profiles
         .iter()

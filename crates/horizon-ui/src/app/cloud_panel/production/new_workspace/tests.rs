@@ -53,7 +53,7 @@ fn texts(form: &Production) -> (bool, Vec<String>) {
 }
 
 #[test]
-fn cloud_gpu_takes_the_first_gpu_profile_once_and_says_when_there_is_none() {
+fn cloud_gpu_takes_the_first_gpu_profile_and_says_when_there_is_none() {
     let (_temp, mut app) = test_app();
     let workspace = app.board.create_workspace("cloud");
     let form = &mut app.cloud_prototype.production;
@@ -64,9 +64,9 @@ fn cloud_gpu_takes_the_first_gpu_profile_once_and_says_when_there_is_none() {
     });
     assert_eq!(gpu_profile(form, &config(GPU_TOO)).as_deref(), Some("gpu"));
     assert_eq!(
-        gpu_profile(form, &config(GPU_TOO)),
-        None,
-        "a later reread keeps the person's choice"
+        gpu_profile(form, &config(GPU_TOO)).as_deref(),
+        Some("gpu"),
+        "also for another repository typed later"
     );
     form.new_workspace = Some(Intent {
         workspace,
@@ -117,7 +117,6 @@ fn a_cancelled_cloud_takes_away_only_the_empty_workspace_new_workspace_made() {
     app.create_new_workspace(&ctx, NewWorkspace::Cloud, None);
     assert!(app.cloud_prototype.production.creating);
     assert_eq!(app.board.workspaces.len(), before + 2);
-    app.discard_new_cloud_workspace();
     app.close_cloud_creation();
     assert_eq!(app.board.workspaces.len(), before + 1, "the empty cloud workspace goes");
     // A workspace with something in it stays.
@@ -131,4 +130,27 @@ fn a_cancelled_cloud_takes_away_only_the_empty_workspace_new_workspace_made() {
     app.create_panel_with_options(note, intent.workspace).unwrap();
     app.discard_new_cloud_workspace();
     assert!(app.board.workspace(intent.workspace).is_some());
+}
+
+#[test]
+fn a_session_switch_ends_the_dialog_and_its_empty_workspace_before_saving() {
+    let (_temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    app.cloud_prototype.ready = true;
+    let _existing = app.board.create_workspace("existing workspace");
+    let before = app.board.workspaces.len();
+    app.create_new_workspace(&ctx, NewWorkspace::Cloud, None);
+    assert_eq!(app.board.workspaces.len(), before + 1);
+    app.close_cloud_creation_for_session_switch();
+    assert!(!app.cloud_prototype.production.creating);
+    assert_eq!(
+        app.board.workspaces.len(),
+        before,
+        "nothing empty is saved with the board"
+    );
+    // A dialog that another way opened has no workspace to take away.
+    let workspace = app.board.create_workspace("plain");
+    app.open_cloud_for_workspace(&ctx, workspace);
+    app.close_cloud_creation_for_session_switch();
+    assert!(app.board.workspace(workspace).is_some());
 }
