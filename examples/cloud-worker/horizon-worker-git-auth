@@ -288,6 +288,8 @@ def install_as_root(value, agent=None):
     grants(value)
     (agent or as_agent)('install-identity', stripped(value))
     write_private(value, ROOT_CREDENTIAL)
+    # An earlier image kept the token in the agents' directory.
+    CREDENTIAL.unlink(missing_ok=True)
 
 
 def as_agent(operation, value):

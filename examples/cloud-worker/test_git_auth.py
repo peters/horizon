@@ -67,9 +67,14 @@ class GitAuthenticationTests(unittest.TestCase):
             with mock.patch.object(auth, 'root_holds_token', return_value=False), \
                     mock.patch.object(auth.subprocess, 'run'):
                 auth.install_identities(value)
+        # A token file that an earlier image left in the agents' directory.
+        auth.write_private(self.value, auth.CREDENTIAL)
         with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
                 mock.patch.object(auth, 'root_holds_token', return_value=True):
             auth.install_as_root(self.value, agent)
+        self.assertFalse(auth.CREDENTIAL.exists())
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True):
             self.assertEqual(auth.read_grants()[1][0]['token'], self.value['token'], 'root reads the token')
         self.assertEqual([operation for operation, _ in steps], ['install-identity'])
         self.assertNotIn(self.value['token'], json.dumps(steps))
