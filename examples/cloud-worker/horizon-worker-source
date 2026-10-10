@@ -85,6 +85,7 @@ def manifest(root):
     if not isinstance(value, dict) or any(not isinstance(value.get(key), list) for key in ('modules', 'assets')):
         raise SourceError('Invalid source manifest')
     _, skipped = lfs_selection(value)
+    paths = set()
     for item in value['modules'] + value['assets'] + skipped:
         if not isinstance(item, dict) or not isinstance(item.get('path'), str):
             raise SourceError('Invalid committed source path')
@@ -93,6 +94,9 @@ def manifest(root):
                 or any(p in ('.', '..', '.git') for p in path.parts) \
                 or any(c == '\0' or unicodedata.category(c) == 'Cs' for c in item['path']):
             raise SourceError('Invalid committed source path')
+        if item['path'] in paths:
+            raise SourceError('Invalid duplicate committed source path')
+        paths.add(item['path'])
     for module in value['modules']:
         revision = module.get('revision')
         if not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', revision):

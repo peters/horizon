@@ -126,6 +126,16 @@ class SourceErrorTests(unittest.TestCase):
         cases.extend([{'modules': [{'path': 'module'}], 'assets': []},
                       {'modules': [], 'assets': [{'path': 'asset', 'size': 1}]},
                       {'modules': [], 'assets': [{'path': 'asset', 'oid': 'a' * 64}]}])
+        module = {'path': 'duplicate', 'revision': 'a' * 40}
+        asset = {'path': 'duplicate', 'oid': 'a' * 64, 'size': 1}
+        cases.extend([
+            {'modules': [module, module], 'assets': []},
+            {'modules': [], 'assets': [asset, asset]},
+            {'modules': [], 'assets': [], 'lfs': {'skipped': [asset, asset]}},
+            {'modules': [module], 'assets': [asset]},
+            {'modules': [module], 'assets': [], 'lfs': {'skipped': [asset]}},
+            {'modules': [], 'assets': [asset], 'lfs': {'skipped': [asset]}},
+        ])
         for value in cases:
             with self.subTest(manifest=value), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
@@ -139,6 +149,7 @@ class SourceErrorTests(unittest.TestCase):
                 self.assertNotIn(b'CRASH_HOOK_CALLED', result.stderr)
                 self.assertNotIn(b'Traceback', result.stderr)
                 self.assertFalse((workspace / 'source').exists())
+                self.assertTrue((workspace / 'horizon-source.tar').exists())
 
     def test_git_source_decoding_failure_does_not_call_the_crash_hook(self):
         with tempfile.TemporaryDirectory() as directory:

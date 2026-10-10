@@ -41,7 +41,8 @@ measured validation and memory results separately from the configured minimums.
 ## Source transfer errors
 
 Use relative source paths without redundant separators or `.` components in a
-transfer manifest. Nested submodules and assets inside modules remain supported.
+transfer manifest. Each module, transferred asset, and skipped asset must have a
+unique path. Nested submodules and assets inside modules remain supported.
 
 `horizon-worker-source` returns exit status 1 for an invalid request or source path, a failed
 Git command, or an expected source transfer error. The error appears on stderr with the
