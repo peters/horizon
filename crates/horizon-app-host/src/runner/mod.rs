@@ -477,8 +477,8 @@ impl Plan<'_> {
         let run = observation.run;
         let progress = observation.progress;
         let platform = report.target.platform;
-        report.blocked |= report.session.is_none();
         let mut progress_available = !report.blocked;
+        report.blocked |= report.session.is_none();
         for recipe in self.recipes.iter().filter(|recipe| {
             recipe
                 .platforms

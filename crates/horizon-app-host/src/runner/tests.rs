@@ -1044,6 +1044,54 @@ fn exhausted_evidence_blocks_every_later_step_without_losing_the_live_driver() {
 }
 
 #[test]
+fn allocation_failure_publishes_every_blocked_recipe_when_progress_is_healthy() {
+    let fake = Fake {
+        fail_create: Some(Box::new(|_| Error::Unavailable)),
+        create_cleanup_confirmed: true,
+        ..Fake::default()
+    };
+    let mut next = recipe();
+    next.id = "next".into();
+    let recipes = [recipe(), next];
+    let plan = Plan {
+        targets: targets().into_iter().skip(1).take(1).collect(),
+        recipes: &recipes,
+        parallel: 1,
+        screenshots: true,
+        video: false,
+        logs_on_failure: false,
+    };
+    let events = Mutex::new(Vec::new());
+    let report = plan
+        .execute(
+            &fake,
+            &Control::new(Duration::from_secs(10)).unwrap(),
+            capture,
+            |event| {
+                events.lock().unwrap().push(event);
+                Ok(())
+            },
+        )
+        .unwrap();
+    let device = &report.devices[0];
+    assert!(device.blocked && device.cleanup_confirmed && device.session.is_none());
+    assert_eq!(device.error.as_deref(), Some(Error::Unavailable.to_string().as_str()));
+    assert_eq!(device.steps.len(), 2);
+    assert!(device.steps.iter().all(|step| step.blocked));
+    assert_eq!(fake.failed_creates.load(Ordering::SeqCst), 1);
+    assert_eq!(fake.actions.load(Ordering::SeqCst), 0);
+    assert_eq!(fake.screenshots.load(Ordering::SeqCst), 0);
+    let events = events.into_inner().unwrap();
+    let blocked: Vec<_> = events
+        .iter()
+        .filter(|event| event.phase == "recipe_blocked")
+        .map(|event| event.recipe.as_deref())
+        .collect();
+    assert_eq!(blocked, [Some("smoke"), Some("next")]);
+    assert_eq!(events.last().unwrap().phase, "lane_complete");
+}
+
+#[test]
 fn invalid_screenshot_stops_actions_but_keeps_provider_diagnostics() {
     let fake = Fake::default();
     let mut first = recipe();
