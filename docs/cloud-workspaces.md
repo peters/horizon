@@ -900,7 +900,7 @@ The sidebar groups the workspaces by what they need from you:
 | Group | Workspaces |
 |---|---|
 | **Needs you** | A cloud that failed, waits for a decision, asks for GitHub access, or has a parked session that ended or is not found. |
-| **Cloud** | A cloud that is attached, not deployed yet, or busy with an operation. |
+| **Cloud** | A cloud that is attached, disconnected, not deployed yet, or busy with an operation. A disconnected cloud shows **Disconnected**: its sessions continue on the worker. |
 | **Parked** | A cloud with parked terminals, or with a stopped worker. |
 | **This PC** | A workspace without a cloud. |
 

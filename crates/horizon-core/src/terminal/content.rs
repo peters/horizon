@@ -339,23 +339,20 @@ fn bottom_row_texts(term: &Term<TerminalEventProxy>, rows: usize, max_rows: usiz
         .collect()
 }
 
-/// The bottom `max_rows` rows of the screen, top to bottom with blank rows kept:
-/// the text of each row and the number of columns that its text occupies.
+/// As [`Terminal::screen_rows`], for the bottom `max_rows` rows. The rows come from
+/// the live screen, also while the view is scrolled into the history.
 fn screen_row_texts(term: &Term<TerminalEventProxy>, rows: usize, max_rows: usize) -> Vec<(String, usize)> {
-    let content = term.renderable_content();
-    let start_row = rows.saturating_sub(max_rows);
-    let mut texts = vec![(String::new(), 0); rows - start_row];
-    for indexed in content.display_iter {
-        let Some((text, columns)) = usize::try_from(indexed.point.line.0)
-            .ok()
-            .and_then(|row| row.checked_sub(start_row))
-            .and_then(|row| texts.get_mut(row))
-        else {
-            continue;
-        };
-        append_cell_text(text, columns, indexed.point.column.0, indexed.cell);
-    }
-    texts
+    let grid = term.grid();
+    (rows.saturating_sub(max_rows)..rows.min(grid.screen_lines()))
+        .map(|row| {
+            let line = &grid[alacritty_terminal::index::Line(i32::try_from(row).unwrap_or(i32::MAX))];
+            let (mut text, mut columns) = (String::new(), 0);
+            for column in 0..grid.columns() {
+                append_cell_text(&mut text, &mut columns, column, &line[Column(column)]);
+            }
+            (text, columns)
+        })
+        .collect()
 }
 
 fn append_cell_text(line: &mut String, occupied_columns: &mut usize, target_column: usize, cell: &Cell) {
@@ -531,6 +528,21 @@ mod tests {
 
         let expected = [("ab", 2), ("", 0), ("\u{4e2d}\u{6587}x", 5), ("", 0)];
         assert_eq!(rows, expected.map(|(text, columns)| (text.to_owned(), columns)));
+    }
+
+    #[test]
+    fn screen_row_texts_read_the_live_screen_while_the_view_is_scrolled() {
+        let mut term = test_term(3, 10);
+        let mut parser = ansi::Processor::<ansi::StdSyncHandler>::default();
+        parser.advance(&mut term, b"l1\r\nl2\r\nl3\r\nl4\r\nl5\r\nl6");
+        term.scroll_display(alacritty_terminal::grid::Scroll::Delta(2));
+
+        let rows: Vec<String> = screen_row_texts(&term, 3, 3)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+
+        assert_eq!(rows, ["l4", "l5", "l6"]);
     }
 
     #[test]
