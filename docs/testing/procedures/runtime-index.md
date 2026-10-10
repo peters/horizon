@@ -222,7 +222,8 @@ python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(*(c.execut
    rm -f <session>/runtime.sqlite <session>/runtime.sqlite-wal <session>/runtime.sqlite-shm
    ```
 
-   Result: Only `runtime.yaml`, `meta.yaml` and the damaged copy stay.
+   Result: Only `runtime.yaml`, `meta.yaml`, the `transcripts` directory and the
+   damaged copy stay.
 
 3. Record the SHA-256 of `runtime.yaml`. Remove the restart hold.
 

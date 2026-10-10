@@ -391,11 +391,17 @@ fn seq(value: usize) -> std::result::Result<i64, IndexError> {
     i64::try_from(value).map_err(|_| IndexError::State(Error::State("too many rows for the runtime index".into())))
 }
 
-fn stored(format: &str, data: String) -> Result<Encoded> {
-    Ok(Encoded {
-        format: Format::parse(format)?,
-        data,
-    })
+/// A stored row. A format that this Horizon does not know makes the index damaged.
+fn stored(format: &str, data: String) -> std::result::Result<Encoded, IndexError> {
+    let format = Format::parse(format).map_err(|error| IndexError::Damaged(error.to_string()))?;
+    Ok(Encoded { format, data })
+}
+
+/// The value of a stored row. A row that does not decode makes the index damaged.
+fn decoded<T: DeserializeOwned>(format: &str, data: String) -> std::result::Result<T, IndexError> {
+    stored(format, data)?
+        .decode()
+        .map_err(|error| IndexError::Damaged(error.to_string()))
 }
 
 /// The row for `value` when it differs from `stored`.
@@ -535,7 +541,7 @@ fn read_board(path: &Path) -> std::result::Result<Option<StoredBoard>, IndexErro
     else {
         return Ok(None);
     };
-    let board: RuntimeState = stored(&format, data)?.decode()?;
+    let board: RuntimeState = decoded(&format, data)?;
 
     let mut workspaces: Vec<WorkspaceState> = Vec::new();
     let mut select = transaction.prepare("SELECT seq, format, data FROM workspaces ORDER BY seq")?;
@@ -544,7 +550,7 @@ fn read_board(path: &Path) -> std::result::Result<Option<StoredBoard>, IndexErro
         if row.get::<_, i64>(0)? != seq(workspaces.len())? {
             return Err(IndexError::Damaged("the workspaces of the board have a gap".into()));
         }
-        workspaces.push(stored(&row.get::<_, String>(1)?, row.get(2)?)?.decode()?);
+        workspaces.push(decoded(&row.get::<_, String>(1)?, row.get(2)?)?);
     }
 
     let mut panels: Vec<(usize, PanelState)> = Vec::new();
@@ -565,9 +571,12 @@ fn read_board(path: &Path) -> std::result::Result<Option<StoredBoard>, IndexErro
             return Err(IndexError::Damaged("the panels of a workspace have a gap".into()));
         }
         counts[workspace] += 1;
-        panels.push((workspace, stored(&row.get::<_, String>(2)?, row.get(3)?)?.decode()?));
+        panels.push((workspace, decoded(&row.get::<_, String>(2)?, row.get(3)?)?));
     }
 
-    let state = rows::assemble(board, workspaces, panels)?.into_current()?;
+    // Rows that do not make a valid board are damage too.
+    let state = rows::assemble(board, workspaces, panels)
+        .and_then(RuntimeState::into_current)
+        .map_err(|error| IndexError::Damaged(error.to_string()))?;
     Ok(Some(StoredBoard { state, yaml_digest }))
 }

@@ -318,20 +318,31 @@ fn a_damaged_index_falls_back_to_runtime_yaml_and_a_save_sets_it_aside() {
 
 #[test]
 fn an_index_without_the_tables_of_its_version_is_set_aside_and_rebuilt() {
+    damage_is_set_aside_and_rebuilt("DROP TABLE panels");
+}
+
+#[test]
+fn an_index_with_a_row_that_does_not_decode_is_set_aside_and_rebuilt() {
+    damage_is_set_aside_and_rebuilt("UPDATE panels SET format = 'synthetic' WHERE seq = 0");
+}
+
+/// Damages the index of a saved board with `sql`. A load then falls back to
+/// runtime.yaml, and a save sets the index aside and builds a new one.
+fn damage_is_set_aside_and_rebuilt(sql: &str) {
     let fixture = Fixture::new();
     let state = board();
     let session = fixture.create(state.clone());
     fixture.store.index.forget(&session);
     Connection::open(fixture.index(&session))
         .expect("open index")
-        .execute_batch("DROP TABLE panels")
-        .expect("drop a table");
+        .execute_batch(sql)
+        .expect("damage the index");
 
     assert_eq!(value(&fixture.loaded(&session)), value(&state));
     fixture
         .store
         .save_runtime_state(&session, &state)
-        .expect("save over an index without its tables");
+        .expect("save over a damaged index");
 
     assert_eq!(value(&indexed(&fixture.index(&session))), value(&state));
     let aside = index_files(&fixture.home.session_dir(&session))

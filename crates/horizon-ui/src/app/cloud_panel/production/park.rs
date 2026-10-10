@@ -271,7 +271,7 @@ impl HorizonApp {
     /// Records in the runtime index of a saved session whether the terminals of cloud
     /// `index` are parked, and the status that the last read returned for each. A
     /// failure is logged: the board itself does not depend on this record.
-    fn record_cloud_parking(&self, index: usize) {
+    pub(super) fn record_cloud_parking(&self, index: usize) {
         let Some(session) = self.active_session.as_ref().filter(|session| session.persistent) else {
             return;
         };
