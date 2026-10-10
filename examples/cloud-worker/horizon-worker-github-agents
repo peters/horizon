@@ -426,6 +426,8 @@ def decide(store, book, identifier, decision, now=time.time, check=reachable, pr
     with book.edit() as data:
         current = now()
         tidy(data, current)
+        # Every decision drops the task grants whose session ended.
+        data['task_grants'] = tasks.prune(data['task_grants'], proc)
         record = next((item for item in data['requests'] if item['id'] == identifier), None)
         if record is None:
             return failure(identifier, 'unknown_request')
@@ -465,7 +467,7 @@ def decide(store, book, identifier, decision, now=time.time, check=reachable, pr
             if not task_possible(record, proc):
                 record.update(status='expired', decided_at=int(current))
                 return failure(identifier, 'session_ended')
-            return allow_task(data, record, result, int(current), proc)
+            return allow_task(data, record, result, int(current))
         with store.lock():
             state = store.load()[0]
             if state is None or state['state'] != 'ok':
@@ -483,10 +485,10 @@ def decide(store, book, identifier, decision, now=time.time, check=reachable, pr
         return dict(result, status='allowed')
 
 
-def allow_task(data, record, result, current, proc):
+def allow_task(data, record, result, current):
     """Adds a task grant for the session that asked, under the book's lock."""
     grants, access = [], record['access']
-    for grant in tasks.prune(data['task_grants'], proc):
+    for grant in data['task_grants']:
         if grant['root'] == record['root'] and grant['account'] == record['account'] \
                 and auth.same_repository(grant['repository'], record['repository']):
             access = common.stronger(access, grant['access'])

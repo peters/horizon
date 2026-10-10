@@ -199,6 +199,13 @@ class DecisionTests(ServiceTestCase):
                                        check=another_account)['error'], 'chain_changed')
         self.assertEqual(self.book.read()['task_grants'], [])
 
+    def test_every_decision_drops_ended_task_grants(self):
+        with self.book.edit() as data:
+            data['task_grants'] = [grant('example/gone', 'push', (os.getpid(), self.me[3][1] + 1),
+                                         agents.account(self.store.load()[0]))]
+        self.decide(self.ask(self.me)['id'], 'deny')
+        self.assertEqual(self.book.read()['task_grants'], [])
+
     def test_task_grants_are_bounded_and_ended_ones_are_dropped(self):
         with self.book.edit() as data:
             data['task_grants'] = [grant('example/gone', 'push', (os.getpid(), self.me[3][1] + 1),
