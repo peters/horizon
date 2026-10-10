@@ -955,7 +955,7 @@ mod tests {
         BrowserManifest {
             panel_local_id: id.to_string(),
             backend: horizon_browser::BackendKind::ChromiumCdp,
-            automation_disclosure: Default::default(),
+            automation_disclosure: horizon_browser::AutomationDisclosureStatus::default(),
             remote_target: None,
             remote_device: None,
             remote_file_upload: false,
