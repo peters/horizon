@@ -29,6 +29,14 @@ impl Options {
                     .ok_or("cloud attach, park and stop require a cloud ID from cloud list")?,
             )
         };
+        // The same shape that the request queue accepts, so a malformed ID makes no plan.
+        let request = horizon_browser_control::manifest::provider_usage::CloudListRequest {
+            operation: serde_json::from_value(json!(operation)).map_err(|_| "cloud operation is not valid")?,
+            cloud: cloud.clone(),
+        };
+        if !request.valid() {
+            return Err("cloud IDs are 1 to 128 letters, digits, '.', '_' or '-'".into());
+        }
         let mut output = None;
         while let Some(arg) = args.next() {
             match arg.to_str() {
@@ -88,6 +96,7 @@ mod tests {
     }
     #[test]
     fn malformed_commands_do_not_create_a_plan() {
+        let long = "c".repeat(129);
         for args in [
             vec![],
             vec!["delete", "c"],
@@ -96,6 +105,8 @@ mod tests {
             vec!["list", "c"],
             vec!["stop", "c", "--output"],
             vec!["list", "-o", "-", "-o", "-"],
+            vec!["stop", "a/b"],
+            vec!["park", &long],
         ] {
             assert!(parse(&args).is_err());
         }
