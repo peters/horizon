@@ -217,6 +217,15 @@ fn moving_then_bulk_closing_refreshes_the_remote_allocation_scope() {
         .expect("workspace")
         .panels
         .push(panel_id);
+    app.browser_create_host
+        .remote_allocations
+        .insert(horizon_core::browser::remote_recovery::HeldRemoteAllocation {
+            allocation: allocation.clone(),
+            provider: "fixture".into(),
+            workspace: original_local.clone(),
+            owner: "owner".into(),
+            lease: None,
+        });
     app.refresh_remote_recovery_scope();
     app.settle_browser_host_io();
     assert_eq!(
@@ -256,16 +265,21 @@ fn moving_then_bulk_closing_refreshes_the_remote_allocation_scope() {
     let stale = manifest::read_at(&path).expect("a retirement snapshot before the stamp lands");
     assert_eq!(stale.workspace.as_ref().expect("scope").local_id, original_local);
     retain(stale);
+    // The driver removes the manifest once it kept that scope.
+    std::fs::remove_file(&path).expect("retired manifest");
     assert!(
         !recoverable_through(&original_local) && !recoverable_through(&destination_local),
-        "a snapshot taken before the stamp landed authorizes no workspace"
+        "a snapshot taken before the stamp landed authorizes no workspace until it lands"
     );
 
     release.send(()).expect("the worker waits");
     app.settle_browser_host_io();
-    let retired = manifest::read_at(&path).expect("driver retirement snapshot");
-    assert_eq!(retired.workspace.as_ref().expect("scope").local_id, destination_local);
-    retain(retired);
-    assert!(!recoverable_through(&original_local));
-    assert!(recoverable_through(&destination_local));
+    assert!(
+        !recoverable_through(&original_local),
+        "the workspace the panel left cannot recover it"
+    );
+    assert!(
+        recoverable_through(&destination_local),
+        "the workspace it moved to can, as when the stamp lands before the close"
+    );
 }

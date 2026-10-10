@@ -76,6 +76,11 @@ impl HorizonApp {
         if !shutdown_ready_to_exit(complete, timed_out, browser_outcome) {
             return;
         }
+        // Requests claimed and results queued are answered before the exit,
+        // within a bound, so no agent waits for a request Horizon took.
+        if self.browser_host_io_holds_exit() {
+            return;
+        }
         // Browser sessions publish their committed URL before resolving the
         // teardown signal. Persist that final state only after every driver
         // is known to be finished.
@@ -173,6 +178,7 @@ impl HorizonApp {
         let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();
         self.git_watchers.clear();
+        self.flush_browser_host_io();
         self.release_active_session_lease();
     }
 }

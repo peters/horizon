@@ -8,7 +8,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::HorizonApp;
 
@@ -30,6 +30,8 @@ pub(super) struct HostIo {
     /// Jobs asked for whose outcome is not yet queued for the UI.
     outstanding: Arc<AtomicUsize>,
     wake: Arc<OnceLock<egui::Context>>,
+    /// Until when an exit waits for the jobs asked for.
+    exit_deadline: Option<Instant>,
 }
 
 impl Default for HostIo {
@@ -42,6 +44,7 @@ impl Default for HostIo {
             finished,
             outstanding: Arc::default(),
             wake: Arc::default(),
+            exit_deadline: None,
         }
     }
 }
@@ -84,7 +87,6 @@ impl HostIo {
     }
 
     /// Whether a job asked for has not reached the UI yet.
-    #[cfg(test)]
     pub(super) fn busy(&self) -> bool {
         self.outstanding.load(Ordering::Acquire) > 0
     }
@@ -169,6 +171,29 @@ impl HorizonApp {
         applied
     }
 
+    /// Whether an exit still waits for coordination work, which it does for
+    /// at most [`EXIT_FLUSH`] from the first call. Each outcome that landed
+    /// is applied first, so a claimed request is answered, and a refusal or
+    /// result it queues is written, before Horizon exits.
+    pub(super) fn browser_host_io_holds_exit(&mut self) -> bool {
+        self.apply_browser_host_io();
+        let io = &mut self.browser_create_host.io;
+        if !io.busy() {
+            return false;
+        }
+        let deadline = *io.exit_deadline.get_or_insert_with(|| Instant::now() + EXIT_FLUSH);
+        Instant::now() < deadline
+    }
+
+    /// Waits on this thread, for at most [`EXIT_FLUSH`], until every
+    /// coordination job ran and its outcome applied. The exit that runs
+    /// without further frames uses it.
+    pub(super) fn flush_browser_host_io(&mut self) {
+        while self.browser_host_io_holds_exit() {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
     /// Applies outcomes until no coordination job is left. Tests use it where
     /// the UI would apply them on later frames.
     #[cfg(test)]
@@ -243,6 +268,36 @@ mod tests {
         io.then(|| 7_u8, |_, _| {});
         wait_idle(&io);
         assert_eq!(io.take_finished().len(), 2, "both outcomes reach the UI");
+    }
+
+    #[test]
+    fn an_exit_waits_for_queued_work_and_what_its_outcomes_queue_within_a_bound() {
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        let (release, released) = channel::<()>();
+        let (seen, refused) = channel();
+        app.browser_create_host.io.then(
+            move || {
+                let _ = released.recv();
+            },
+            move |app: &mut HorizonApp, _| {
+                // An outcome that answers a claimed request queues a write.
+                app.browser_create_host.io.write(move || seen.send(()).unwrap());
+            },
+        );
+        assert!(app.browser_host_io_holds_exit(), "the claim still runs");
+        release.send(()).unwrap();
+        app.flush_browser_host_io();
+        assert!(refused.try_recv().is_ok(), "the refusal was written before the exit");
+
+        let (_hold, held) = channel::<()>();
+        app.browser_create_host.io.write(move || {
+            let _ = held.recv();
+        });
+        app.browser_create_host.io.exit_deadline = Some(Instant::now());
+        assert!(
+            !app.browser_host_io_holds_exit(),
+            "a job that never ends holds the exit only until the bound"
+        );
     }
 
     #[test]

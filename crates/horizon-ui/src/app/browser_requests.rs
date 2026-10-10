@@ -55,11 +55,15 @@ pub(super) struct BrowserCreateHostState {
     /// Counts the ticks that asked for a new stamp, so a stamp that was
     /// running then does not count as the one they asked for.
     stamp_requests: u64,
+    /// A placement whose stamp did not complete. Frames do not stamp it again
+    /// until the next tick asks, so a manifest that cannot be written is not
+    /// retried at the frame rate.
+    stamp_failed: Option<u64>,
     /// A claim of the agents' requests runs on the coordination worker.
     pub(super) claiming: bool,
-    /// Panels whose visibility request runs on the coordination worker; no
-    /// stamp writes their manifests until it ends.
-    pub(super) visibility_in_flight: Vec<String>,
+    /// Panels whose visibility request runs on the coordination worker, with
+    /// the visibility it sets; no stamp writes their manifests until it ends.
+    pub(super) visibility_in_flight: Vec<(String, bool)>,
     /// Does the coordination file work in order, off the UI thread.
     pub(super) io: HostIo,
 }
@@ -193,9 +197,36 @@ struct BrowserPlacement {
     workspace: ManifestWorkspace,
 }
 
+/// A remote allocation a stamp covers, and the placement the stamp writes.
+struct StampedAllocation {
+    local_id: String,
+    allocation: horizon_core::browser::RemoteAllocation,
+    workspace: String,
+    owner: Option<String>,
+}
+
+impl StampedAllocation {
+    /// A panel moved and then closed before its stamp landed: its driver
+    /// kept the scope of the manifest as it was, which names the workspace
+    /// the panel left, while the allocation expects the one it moved to, so
+    /// no workspace could recover it. It keeps the scope this stamp would
+    /// have written, as when the stamp lands first. A scope a failed stamp
+    /// invalidated stays invalid, and without a known owner the driver's
+    /// scope stays, which refuses recovery.
+    fn keep_stamped_scope(&self) {
+        let Some(owner) = &self.owner else { return };
+        self.allocation.retain_scope(horizon_browser::RemoteAllocationScope {
+            admission_fallback: false,
+            host: manifest::host_instance().to_string(),
+            workspace: Some(self.workspace.clone()),
+            owner: Some(owner.clone()),
+        });
+    }
+}
+
 /// Outcome of stamping every browser manifest: whether any file changed and
 /// whether every manifest this host owns is now current. An incomplete sync
-/// keeps the placement fingerprint uncommitted so the next frame retries.
+/// keeps the placement fingerprint uncommitted so the next tick retries.
 #[derive(Clone, Copy)]
 struct HostStateSync {
     changed: bool,
@@ -207,6 +238,7 @@ impl BrowserCreateHostState {
     /// not count as that one.
     pub(super) fn forget_stamped_placement(&mut self) {
         self.stamped_placement = None;
+        self.stamp_failed = None;
         self.stamp_requests += 1;
     }
 }
@@ -238,7 +270,9 @@ impl HorizonApp {
     /// panel starts revoking the old workspace's access on that frame rather
     /// than on a later tick.
     pub(super) fn restamp_browser_manifests_for_placement(&mut self) -> bool {
-        if self.browser_create_host.stamped_placement == Some(placement_fingerprint(&self.board)) {
+        let placement = Some(placement_fingerprint(&self.board));
+        let host = &self.browser_create_host;
+        if host.stamped_placement == placement || host.stamp_failed == placement {
             return false;
         }
         self.stamp_current_placement()
@@ -246,8 +280,8 @@ impl HorizonApp {
 
     /// Stamp every owned manifest for the current placement on the
     /// coordination worker, and remember the placement only if all of them
-    /// are current, so a failed write is retried on the next frame instead of
-    /// waiting for the next tick. A placement is queued once: a slow disk
+    /// are current. A failed write is retried on the next tick, or at once
+    /// when the placement changes again. A placement is queued once: a slow disk
     /// never queues a stamp per frame or per tick, while a panel moved and
     /// then closed still has the stamp of its move queued before it closes.
     /// A manifest whose visibility request runs is left to that request, and
@@ -265,7 +299,16 @@ impl HorizonApp {
             .filter_map(|placement| {
                 let allocation = self.panel_remote_allocation(&placement.local_id)?;
                 allocation.expect_workspace(&placement.workspace.local_id);
-                Some((placement.local_id.clone(), allocation.clone()))
+                Some(StampedAllocation {
+                    local_id: placement.local_id.clone(),
+                    allocation: allocation.clone(),
+                    workspace: placement.workspace.local_id.clone(),
+                    owner: self
+                        .browser_create_host
+                        .remote_allocations
+                        .owner(allocation)
+                        .map(str::to_string),
+                })
             })
             .collect();
         let host = &self.browser_create_host;
@@ -273,7 +316,12 @@ impl HorizonApp {
             return false;
         }
         let before = placements.len();
-        placements.retain(|placement| !host.visibility_in_flight.contains(&placement.local_id));
+        placements.retain(|placement| {
+            !host
+                .visibility_in_flight
+                .iter()
+                .any(|(local_id, _)| *local_id == placement.local_id)
+        });
         let skipped = placements.len() < before;
         let root = self.host_manifest_root().to_path_buf();
         let requested = host.stamp_requests;
@@ -282,23 +330,36 @@ impl HorizonApp {
         self.browser_create_host.io.then(
             move || {
                 let sync = sync_manifest_host_state(&root, &placements, |panel, confirmed| {
-                    for (_, allocation) in allocations.iter().filter(|(local_id, _)| local_id == panel) {
-                        allocation.confirm_scope(confirmed);
+                    for stamped in allocations.iter().filter(|stamped| stamped.local_id == panel) {
+                        stamped.allocation.confirm_scope(confirmed);
                     }
                 });
                 if sync.changed {
                     tracing::debug!("stamped browser manifests for a new board placement");
                 }
-                sync
+                // The driver removes a manifest only after it kept its scope.
+                let retired: Vec<_> = allocations
+                    .into_iter()
+                    .filter(|stamped| !manifest::manifest_path_for_root(&root, &stamped.local_id).exists())
+                    .collect();
+                (sync, retired)
             },
-            move |app, sync| {
+            move |app, outcome| {
+                let (sync, retired) = outcome.map_or((None, Vec::new()), |(sync, retired)| (Some(sync), retired));
+                for stamped in &retired {
+                    if app.board.panel_id_by_local_id(&stamped.local_id).is_none() {
+                        stamped.keep_stamped_scope();
+                    }
+                }
                 let host = &mut app.browser_create_host;
                 host.stamps_in_flight -= 1;
                 if host.stamps_in_flight == 0 {
                     host.queued_placement = None;
                 }
-                let current = sync.is_some_and(|sync| sync.complete) && !skipped && host.stamp_requests == requested;
-                host.stamped_placement = current.then_some(placement);
+                let asked_again = host.stamp_requests != requested;
+                let current = sync.is_some_and(|sync| sync.complete) && !skipped;
+                host.stamped_placement = (current && !asked_again).then_some(placement);
+                host.stamp_failed = (!current && !asked_again).then_some(placement);
                 // A placement that changed while this stamp ran is stamped now,
                 // also when no later frame comes, as during an exit.
                 if placement_fingerprint(&app.board) != placement {
@@ -1357,7 +1418,10 @@ mod tests {
         let agent_id = app.board.create_panel(agent_options(), alpha).expect("agent panel");
 
         app.poll_browser_create_requests();
-        let first_poll = app.browser_create_host.last_request_poll.expect("first tick polls");
+        assert!(
+            app.browser_create_host.last_request_poll.is_some(),
+            "the first tick polls"
+        );
         assert!(
             app.browser_create_host.stamped_placement.is_none(),
             "the tick only requests a stamp; the end-of-frame check performs it"
@@ -1372,6 +1436,10 @@ mod tests {
         app.settle_browser_host_io();
         let stamped = app.browser_create_host.stamped_placement.expect("the stamp lands");
 
+        // The last tick is now, however long the stamps took, so the next one
+        // is not due during the checks below.
+        let first_poll = Instant::now();
+        app.browser_create_host.last_request_poll = Some(first_poll);
         app.poll_browser_create_requests();
         assert_eq!(
             app.browser_create_host.last_request_poll,
@@ -1394,6 +1462,8 @@ mod tests {
         let after_move = app.browser_create_host.stamped_placement;
         assert_ne!(after_move, Some(stamped), "the moved placement is the one stamped");
 
+        let first_poll = Instant::now();
+        app.browser_create_host.last_request_poll = Some(first_poll);
         app.poll_browser_create_requests();
         assert_eq!(
             app.browser_create_host.stamped_placement, after_move,
@@ -1439,8 +1509,9 @@ mod tests {
 
         let started = Instant::now();
         assert!(app.restamp_browser_manifests_for_placement());
+        // The worker waits up to the lock's two-second bound; the frame only queues.
         assert!(
-            started.elapsed() < Duration::from_millis(500),
+            started.elapsed() < Duration::from_millis(1500),
             "the frame waited {:?} for the lock",
             started.elapsed()
         );
@@ -1457,10 +1528,51 @@ mod tests {
         );
         drop(lock);
         app.settle_browser_host_io();
+        // A stamp that gave up waiting for the lock is queued again by the
+        // next tick; one that landed stays as it is.
+        app.browser_create_host.forget_stamped_placement();
+        app.restamp_browser_manifests_for_placement();
+        app.settle_browser_host_io();
         assert!(
             manifest::read_at(&path).expect("manifest").workspace.is_some(),
             "the stamp lands once the lock is free"
         );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
+    fn a_stamp_that_cannot_be_written_waits_for_the_next_tick() {
+        use horizon_core::browser::BrowserPanelState;
+        use horizon_core::{Panel, PanelContent};
+
+        let (_temp, mut app) = test_app();
+        let alpha = app.board.create_workspace("alpha");
+        app.board.create_panel(agent_options(), alpha).expect("agent panel");
+        let browser = Panel::from_content(
+            PanelId(900),
+            alpha,
+            PanelKind::Browser,
+            PanelContent::Browser(Box::new(BrowserPanelState::inert())),
+        );
+        let path = manifest::manifest_path_for_root(app.host_manifest_root(), &browser.local_id);
+        app.board.panels.push(browser);
+        app.board.assign_panel_to_workspace(PanelId(900), alpha);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("directory");
+        std::fs::write(&path, "invalid manifest").expect("unreadable manifest fixture");
+
+        assert!(app.restamp_browser_manifests_for_placement());
+        app.settle_browser_host_io();
+        assert!(app.browser_create_host.stamped_placement.is_none());
+        assert!(
+            !app.restamp_browser_manifests_for_placement(),
+            "a frame does not stamp the placement that failed again"
+        );
+        app.browser_create_host.forget_stamped_placement();
+        assert!(
+            app.restamp_browser_manifests_for_placement(),
+            "the next tick tries again"
+        );
+        app.settle_browser_host_io();
     }
 
     #[test]

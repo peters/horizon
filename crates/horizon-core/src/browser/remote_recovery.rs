@@ -35,6 +35,16 @@ impl RemoteAllocations {
         }
     }
 
+    /// The owner recorded for this exact allocation, when this host holds it
+    /// and knows one.
+    #[must_use]
+    pub fn owner(&self, allocation: &RemoteAllocation) -> Option<&str> {
+        self.records
+            .get(allocation.reference())
+            .map(|record| record.owner.as_str())
+            .filter(|owner| !owner.is_empty())
+    }
+
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
         for (reference, record) in &mut self.records {
