@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Board, PanelId, WorkspaceId, WorkspaceLayout};
 pub use fixture::{PrototypeSnapshot, load, prepare_repository, save};
-pub use horizon_cloud::{BrowserEngine, Capabilities, CloudConfig, Environment};
+pub use horizon_cloud::{BrowserEngine, Capabilities, CloudConfig, Environment, WorkspacePlacement};
 
 pub const HEADER: f32 = 84.0;
 pub const PAD: f32 = 14.0;

@@ -24,6 +24,7 @@ fn config(profile: &Profile) -> CloudConfig {
         profiles: [("dev".into(), profile.clone())].into(),
         companions: std::collections::BTreeMap::new(),
         source: horizon_cloud::Source::default(),
+        placement: horizon_cloud::WorkspacePlacement::default(),
     }
 }
 

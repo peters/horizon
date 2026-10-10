@@ -1,4 +1,7 @@
 //! Portable repository launch intent. Secrets and account bindings are not accepted.
+mod placement;
+
+pub use placement::WorkspacePlacement;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -17,6 +20,9 @@ pub struct CloudConfig {
     /// How the committed source is packaged for a worker.
     #[serde(default, skip_serializing_if = "Source::is_default")]
     pub source: Source,
+    /// Where a new workspace for the repository runs.
+    #[serde(default, skip_serializing_if = "WorkspacePlacement::is_cloud")]
+    pub placement: WorkspacePlacement,
 }
 
 /// The optional `source` block of `.horizon/cloud.yml`.

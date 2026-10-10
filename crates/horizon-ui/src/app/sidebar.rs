@@ -1,4 +1,7 @@
+mod new_workspace;
 mod toolbar;
+
+pub(in crate::app) use new_workspace::NewWorkspace;
 
 use std::collections::HashMap;
 
@@ -42,7 +45,7 @@ struct SidebarWorkspaceRowInteraction {
 
 #[derive(Clone, Copy, Default)]
 struct SidebarActions {
-    create_workspace: bool,
+    create_workspace: Option<NewWorkspace>,
     fit_active_workspace: bool,
     workspace_drop: Option<SidebarWorkspaceDropAction>,
     focus_panel: Option<PanelId>,
@@ -227,9 +230,9 @@ impl HorizonApp {
 
                 let new_workspace = ui
                     .add(util::chrome_button("New").min_size(Vec2::new(46.0, 24.0)))
-                    .on_hover_text("Create a new workspace.");
-                if new_workspace.clicked() {
-                    actions.create_workspace = true;
+                    .on_hover_text("Create a new workspace: in the cloud, or on This PC.");
+                if let Some(choice) = new_workspace::menu(&new_workspace, self.new_cloud_workspace_ready()) {
+                    actions.create_workspace = Some(choice);
                 }
             });
         });
@@ -582,9 +585,8 @@ impl HorizonApp {
     }
 
     fn apply_sidebar_actions(&mut self, ctx: &Context, actions: &SidebarActions) {
-        if actions.create_workspace {
-            let name = format!("Workspace {}", self.board.workspaces.len() + 1);
-            self.create_workspace_visible(ctx, &name);
+        if let Some(choice) = actions.create_workspace {
+            self.create_new_workspace(ctx, choice, None);
         }
         if actions.fit_active_workspace {
             let _ = self.fit_active_workspace(ctx);

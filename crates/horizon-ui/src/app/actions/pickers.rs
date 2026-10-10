@@ -192,6 +192,34 @@ impl HorizonApp {
                         ui.set_max_width(320.0);
                         ui.label(egui::RichText::new(heading).size(11.0).color(theme::FG_DIM()).strong());
                         ui.add_space(4.0);
+                        // A new workspace runs in the cloud unless the person picks a preset
+                        // for This PC.
+                        #[cfg(feature = "cloud-workspaces")]
+                        if target_workspace.is_none() {
+                            for choice in super::super::sidebar::NewWorkspace::ALL {
+                                if !choice.is_cloud() {
+                                    continue;
+                                }
+                                if ui
+                                    .add_enabled(
+                                        self.cloud_launch_ready(),
+                                        egui::Button::new(choice.label()).frame(false),
+                                    )
+                                    .on_hover_text(choice.detail())
+                                    .clicked()
+                                {
+                                    selected_action =
+                                        Some(PresetPickerAction::NewCloudWorkspace { canvas_pos, choice });
+                                }
+                            }
+                            ui.separator();
+                            ui.label(
+                                egui::RichText::new("This PC")
+                                    .size(11.0)
+                                    .color(theme::FG_DIM())
+                                    .strong(),
+                            );
+                        }
                         #[cfg(feature = "cloud-workspaces")]
                         if let Some(workspace_id) = target_workspace
                             && cloud.is_none()
@@ -230,6 +258,10 @@ impl HorizonApp {
         match action {
             #[cfg(feature = "cloud-workspaces")]
             PresetPickerAction::CreateCloud { workspace_id } => self.open_cloud_for_workspace(ctx, workspace_id),
+            #[cfg(feature = "cloud-workspaces")]
+            PresetPickerAction::NewCloudWorkspace { canvas_pos, choice } => {
+                self.create_new_workspace(ctx, choice, Some(canvas_pos));
+            }
             PresetPickerAction::CreatePanel {
                 workspace_id,
                 preset,
@@ -342,7 +374,7 @@ mod tests {
         for (target, position, heading, offers_cloud) in [
             (Some(workspace), [100.0, 100.0], "Add panel", false),
             (Some(workspace), [4000.0, 100.0], "New Terminal", true),
-            (None, [4000.0, 100.0], "New Workspace", false),
+            (None, [4000.0, 100.0], "New Workspace", true),
         ] {
             let ctx = Context::default();
             let mut labels = Vec::new();
@@ -371,6 +403,10 @@ mod tests {
             assert!(labels.iter().any(|label| label == heading), "{labels:?}");
             assert_eq!(labels.iter().any(|label| label == "Cloud"), offers_cloud);
             assert!(labels.iter().any(|label| label == "Shell"));
+            // A new workspace offers the cloud first, then This PC with its presets.
+            let new_workspace = target.is_none();
+            assert_eq!(labels.iter().any(|label| label == "Cloud GPU"), new_workspace);
+            assert_eq!(labels.iter().any(|label| label == "This PC"), new_workspace);
         }
     }
 }

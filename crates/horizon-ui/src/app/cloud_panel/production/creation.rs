@@ -52,6 +52,8 @@ struct Actions {
     repository: RepositoryAction,
     create: bool,
     cancel: bool,
+    /// The repository's `cloud.yml` asks for This PC, and the person chose it.
+    this_pc: bool,
 }
 
 #[derive(Default)]
@@ -120,7 +122,12 @@ impl HorizonApp {
         ctx.move_to_top(response.response.layer_id);
         let dismissed = self.cloud_creation_dismissed(ctx, &response, picking, escape);
         if dismissed || actions.cancel {
+            self.discard_new_cloud_workspace();
             self.close_cloud_creation();
+            return;
+        }
+        if actions.this_pc {
+            self.open_repository_on_this_pc(ctx);
             return;
         }
         match actions.repository {
@@ -204,6 +211,7 @@ impl HorizonApp {
         form.launch = super::launch::State::default();
         form.source = source::State::default();
         form.checks = checks::State::default();
+        form.new_workspace = None;
     }
 
     /// What the dialog settles before it draws: the pickers that closed, the prices and the
@@ -244,6 +252,7 @@ impl HorizonApp {
         ui.add_enabled_ui(
             form.pending_creation.is_none() && !form.launch.submitted && form.launch.watch.is_none(),
             |ui| {
+                actions.this_pc = super::new_workspace::notes(ui, form);
                 actions.repository = fields(ui, form, &mut actions.create, refocus_repository);
                 if !form.launch.loading() && form.profiles.is_none() && !checks::source_step(form) {
                     match super::repository_setup::render(ui, form) {
