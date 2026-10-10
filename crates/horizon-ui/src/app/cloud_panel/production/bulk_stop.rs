@@ -1,22 +1,38 @@
 //! The bulk stop of the sidebar: the user chooses which idle clouds of a group stop
 //! their workers, and sees what that saves each hour before confirming.
-use std::collections::BTreeSet;
+use std::{
+    collections::BTreeSet,
+    time::{Duration, Instant},
+};
 
 use horizon_core::cloud_list::{self, Group};
 
 use super::{HorizonApp, lifecycle::Action};
 use crate::app::sidebar::IdleCloud;
 
+/// How long a confirmed stop of a parked cloud waits for a new status read of its
+/// sessions. When no read arrives in this time, the cloud keeps running.
+const STATUS_WAIT: Duration = Duration::from_secs(30);
+
 #[derive(Default)]
 pub(super) struct State {
-    /// The group whose idle clouds the dialog offers; `None` while it is closed.
-    group: Option<Group>,
+    /// The open dialog; `None` while it is closed.
+    dialog: Option<Dialog>,
+    /// Confirmed stops of parked clouds, with the time of the confirmation. Each
+    /// waits for a status read that started after it: an agent that started to work
+    /// since the last read keeps its worker.
+    waiting: Vec<(u32, Instant)>,
+}
+
+struct Dialog {
+    /// The group whose idle clouds the dialog offers.
+    group: Group,
     clouds: Vec<IdleCloud>,
     /// The clouds the user took out of the stop. All are chosen at first.
     unchecked: BTreeSet<u32>,
 }
 
-impl State {
+impl Dialog {
     fn chosen(&self) -> impl Iterator<Item = &IdleCloud> {
         self.clouds
             .iter()
@@ -26,7 +42,7 @@ impl State {
 
 impl HorizonApp {
     pub(in crate::app) fn idle_stop_open(&self) -> bool {
-        self.cloud_prototype.production.bulk_stop.group.is_some()
+        self.cloud_prototype.production.bulk_stop.dialog.is_some()
     }
 
     /// Opens the bulk stop for the idle clouds of `group` that the sidebar read last.
@@ -35,16 +51,18 @@ impl HorizonApp {
         if clouds.is_empty() {
             return;
         }
-        self.cloud_prototype.production.bulk_stop = State {
-            group: Some(group),
+        self.cloud_prototype.production.bulk_stop.dialog = Some(Dialog {
+            group,
             clouds,
             unchecked: BTreeSet::new(),
-        };
+        });
     }
 
     pub(in crate::app::cloud_panel) fn render_idle_stop_confirmation(&mut self, ctx: &egui::Context) {
-        let state = &mut self.cloud_prototype.production.bulk_stop;
-        let Some(group) = state.group else { return };
+        let Some(state) = self.cloud_prototype.production.bulk_stop.dialog.as_mut() else {
+            return;
+        };
+        let group = state.group;
         let mut confirmed = false;
         let mut cancelled = false;
         let escape = ctx.input(|input| input.key_pressed(egui::Key::Escape));
@@ -56,7 +74,7 @@ impl HorizonApp {
                 ui.heading("Stop idle workers?");
                 ui.add_space(6.0);
                 ui.label(format!(
-                    "These clouds in {} are ready and no agent works on them.",
+                    "These clouds in {} can stop now, and no agent works on them.",
                     group.label()
                 ));
                 ui.add_space(8.0);
@@ -114,18 +132,46 @@ impl HorizonApp {
         if !(cancelled || dismissed || confirmed) {
             return;
         }
-        let state = std::mem::take(&mut self.cloud_prototype.production.bulk_stop);
-        if confirmed {
-            self.stop_chosen(&state, ctx);
+        let dialog = self.cloud_prototype.production.bulk_stop.dialog.take();
+        if confirmed && let Some(dialog) = dialog {
+            self.stop_chosen(&dialog, ctx, Instant::now());
         }
     }
 
-    /// Stops the workers of the clouds chosen in `state`.
-    fn stop_chosen(&mut self, state: &State, ctx: &egui::Context) {
-        for id in state.chosen().map(|idle| idle.cloud.id) {
-            // The list is up to a second old: a cloud that got busy since keeps running.
-            if self.cloud_can_stop_now(id) {
+    /// Stops the workers of the clouds chosen in `dialog`. The list is up to a second
+    /// old, so a cloud that got busy since keeps running. The status of a parked cloud
+    /// can be older: its stop waits for a new read.
+    fn stop_chosen(&mut self, dialog: &Dialog, ctx: &egui::Context, now: Instant) {
+        for id in dialog.chosen().map(|idle| idle.cloud.id) {
+            let runtime = self.cloud_prototype.production.runtimes.get_mut(&id);
+            if let Some(runtime) = runtime.filter(|runtime| runtime.parking.is_parked()) {
+                runtime.parking.read_now(now);
+                self.cloud_prototype.production.bulk_stop.waiting.push((id, now));
+                ctx.request_repaint();
+            } else if self.cloud_can_stop_now(id) {
                 self.change_production_worker(id, Action::Stop, ctx);
+            }
+        }
+    }
+
+    /// Stops each waiting parked cloud that a status read after its confirmation shows
+    /// idle. A cloud that attached since is judged by its live terminals.
+    pub(in crate::app::cloud_panel) fn finish_waiting_stops(&mut self, ctx: &egui::Context) {
+        let now = Instant::now();
+        let waiting = std::mem::take(&mut self.cloud_prototype.production.bulk_stop.waiting);
+        for (id, confirmed) in waiting {
+            let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) else {
+                continue;
+            };
+            if !runtime.parking.is_parked() || runtime.parking.read_since(confirmed) {
+                if self.cloud_can_stop_now(id) {
+                    self.change_production_worker(id, Action::Stop, ctx);
+                }
+            } else if now.duration_since(confirmed) < STATUS_WAIT {
+                // A read in flight that started before the confirmation does not count.
+                runtime.parking.read_now(now);
+                self.cloud_prototype.production.bulk_stop.waiting.push((id, confirmed));
+                ctx.request_repaint_after(Duration::from_secs(1));
             }
         }
     }

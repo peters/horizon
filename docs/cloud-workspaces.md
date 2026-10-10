@@ -953,7 +953,9 @@ dialog shows what the stop saves each hour, for example `Saves $0.024/h`. When a
 worker does not report a rate, the saving is a lower bound. Click
 **Stop N workers** to stop the selected workers, or **Keep running** to close the
 dialog. A cloud that became busy or started to work after the list was read
-continues to run.
+continues to run. The status of a parked cloud can be some seconds old, so
+Horizon reads the status of its sessions again before it stops the worker. When an
+agent works, or when no status arrives in 30 seconds, the cloud continues to run.
 
 Stop ends the running processes. The workspace storage is kept and stays
 billable, and **Resume** on the card starts a worker again.

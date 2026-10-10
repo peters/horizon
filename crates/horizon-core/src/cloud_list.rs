@@ -142,7 +142,8 @@ pub fn rate_text(rate: f64) -> String {
 }
 
 /// What stopping the workers of `clouds` saves each hour, said before the stop is
-/// confirmed. A worker without a reported rate makes the sum a lower bound.
+/// confirmed. A worker without a reported rate makes the sum a lower bound, which is
+/// rounded down so that it never says more than the sum.
 #[must_use]
 pub fn saving_text<'a>(clouds: impl IntoIterator<Item = &'a CloudFacts>) -> String {
     let (mut sum, mut known, mut unknown) = (0.0, 0_usize, 0_usize);
@@ -164,9 +165,13 @@ pub fn saving_text<'a>(clouds: impl IntoIterator<Item = &'a CloudFacts>) -> Stri
     };
     match (known, unknown) {
         (0, 0) => String::new(),
-        (0, _) => format!("Saving unknown: {}", without(unknown)),
+        (0, _) => "Saving unknown".to_owned(),
         (_, 0) => format!("Saves {}", rate_text(sum)),
-        _ => format!("Saves at least {}; {}", rate_text(sum), without(unknown)),
+        _ => format!(
+            "Saves at least {}; {}",
+            rate_text((sum * 1000.0).floor() / 1000.0),
+            without(unknown)
+        ),
     }
 }
 
@@ -412,10 +417,13 @@ mod tests {
             saving_text([&rated[0], &unknown]),
             "Saves at least $0.012/h; 1 worker reports no rate"
         );
+        // A lower bound is rounded down: $0.0129/h is at least $0.012/h, not $0.013/h.
+        let below = cloud(Condition::Ready, false, Some(0.0129));
         assert_eq!(
-            saving_text([&unknown, &unknown]),
-            "Saving unknown: 2 workers report no rate"
+            saving_text([&below, &unknown, &unknown]),
+            "Saves at least $0.012/h; 2 workers report no rate"
         );
+        assert_eq!(saving_text([&unknown, &unknown]), "Saving unknown");
         assert_eq!(saving_text(&[]), "");
     }
 

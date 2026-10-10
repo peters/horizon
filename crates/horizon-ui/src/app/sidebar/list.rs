@@ -60,7 +60,7 @@ impl HorizonApp {
     }
 
     /// The row of each workspace now.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(in crate::app) fn read_sidebar_rows(&self) -> HashMap<WorkspaceId, Row> {
         self.read_sidebar_list().0
     }

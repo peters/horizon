@@ -31,7 +31,7 @@ pub(crate) fn accesskit_texts(draw: impl FnMut(&mut egui::Ui)) -> Vec<(String, b
 
 /// As [`accesskit_texts`], from the second pass: a window or modal draws its first
 /// pass invisible to size itself, and its widgets are disabled in it.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn accesskit_texts_after_sizing(draw: impl FnMut(&mut egui::Ui)) -> Vec<(String, bool)> {
     accesskit_nodes(2, draw, |node| node.label().or_else(|| node.value()))
 }

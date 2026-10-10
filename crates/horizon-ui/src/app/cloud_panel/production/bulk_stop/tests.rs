@@ -2,6 +2,7 @@ use super::super::park::tests::ready_cloud;
 use super::super::{Runtime, Stage};
 use super::*;
 use horizon_core::cloud_runtime::session_status::{SessionActivity, SessionStatus};
+use std::time::{Duration, Instant};
 
 fn runtime(app: &mut HorizonApp) -> &mut Runtime {
     app.cloud_prototype.production.runtimes.get_mut(&1).unwrap()
@@ -40,7 +41,14 @@ fn an_idle_ready_cloud_is_offered_with_what_its_stop_saves() {
     assert!(has("Stop 1 worker", false), "{texts:?}");
 
     // Taking the only cloud out leaves nothing to stop.
-    app.cloud_prototype.production.bulk_stop.unchecked.insert(1);
+    app.cloud_prototype
+        .production
+        .bulk_stop
+        .dialog
+        .as_mut()
+        .unwrap()
+        .unchecked
+        .insert(1);
     let texts = dialog(&mut app);
     assert!(
         texts.iter().any(|entry| entry == &("Stop 0 workers".to_owned(), true)),
@@ -90,21 +98,80 @@ fn a_confirmed_stop_stops_the_chosen_clouds_that_are_still_idle() {
     let ctx = egui::Context::default();
     let (_temp, mut app) = connected(Some(0.5));
     app.request_idle_stop(Group::Cloud);
-    let mut state = std::mem::take(&mut app.cloud_prototype.production.bulk_stop);
-    state.unchecked.insert(1);
-    app.stop_chosen(&state, &ctx);
+    let mut dialog = app.cloud_prototype.production.bulk_stop.dialog.take().unwrap();
+    dialog.unchecked.insert(1);
+    app.stop_chosen(&dialog, &ctx, Instant::now());
     assert_eq!(runtime(&mut app).operation, None, "a cloud taken out keeps running");
 
-    state.unchecked.clear();
-    app.stop_chosen(&state, &ctx);
+    dialog.unchecked.clear();
+    app.stop_chosen(&dialog, &ctx, Instant::now());
     assert_eq!(runtime(&mut app).operation, Some(Action::Stop));
     assert_eq!(runtime(&mut app).stage, Some(Stage::Stopping));
 
     // A cloud that is busy by the time of the confirmation keeps what it does.
     let (_temp, mut app) = connected(Some(0.5));
     app.request_idle_stop(Group::Cloud);
-    let state = std::mem::take(&mut app.cloud_prototype.production.bulk_stop);
+    let dialog = app.cloud_prototype.production.bulk_stop.dialog.take().unwrap();
     runtime(&mut app).stage = Some(Stage::Provision);
-    app.stop_chosen(&state, &ctx);
+    app.stop_chosen(&dialog, &ctx, Instant::now());
     assert_eq!(runtime(&mut app).operation, None);
+}
+
+/// The session `one` of a parked cloud, doing `activity`.
+fn session(activity: SessionActivity) -> Vec<SessionStatus> {
+    vec![SessionStatus {
+        id: "one".to_owned(),
+        activity,
+        quiet_for: None,
+        lines: Vec::new(),
+    }]
+}
+
+/// A parked idle cloud whose stop the user confirmed at `confirmed`.
+fn confirmed_parked_stop(ctx: &egui::Context, confirmed: Instant) -> (tempfile::TempDir, HorizonApp) {
+    let (temp, mut app) = connected(Some(0.5));
+    runtime(&mut app).parking.park_with(session(SessionActivity::Idle));
+    app.refresh_sidebar_rows(Instant::now() + Duration::from_secs(2));
+    app.request_idle_stop(Group::Parked);
+    let dialog = app.cloud_prototype.production.bulk_stop.dialog.take().unwrap();
+    app.stop_chosen(&dialog, ctx, confirmed);
+    (temp, app)
+}
+
+#[test]
+fn a_parked_cloud_stops_only_when_a_read_after_the_confirmation_shows_it_idle() {
+    let ctx = egui::Context::default();
+    let confirmed = Instant::now();
+    let (_temp, mut app) = confirmed_parked_stop(&ctx, confirmed);
+    app.finish_waiting_stops(&ctx);
+    assert_eq!(
+        runtime(&mut app).operation,
+        None,
+        "the last read is older than the confirmation"
+    );
+    assert_eq!(app.cloud_prototype.production.bulk_stop.waiting.len(), 1);
+    runtime(&mut app)
+        .parking
+        .read_with(session(SessionActivity::Idle), confirmed);
+    app.finish_waiting_stops(&ctx);
+    assert_eq!(runtime(&mut app).operation, Some(Action::Stop));
+    assert!(app.cloud_prototype.production.bulk_stop.waiting.is_empty());
+
+    // An agent that started to work since the last read keeps its worker.
+    let (_temp, mut app) = confirmed_parked_stop(&ctx, confirmed);
+    runtime(&mut app)
+        .parking
+        .read_with(session(SessionActivity::Working), confirmed);
+    app.finish_waiting_stops(&ctx);
+    assert_eq!(runtime(&mut app).operation, None);
+    assert!(app.cloud_prototype.production.bulk_stop.waiting.is_empty());
+
+    // Without a new read in time, the cloud keeps running.
+    let long_ago = Instant::now()
+        .checked_sub(STATUS_WAIT + Duration::from_secs(1))
+        .unwrap();
+    let (_temp, mut app) = confirmed_parked_stop(&ctx, long_ago);
+    app.finish_waiting_stops(&ctx);
+    assert_eq!(runtime(&mut app).operation, None);
+    assert!(app.cloud_prototype.production.bulk_stop.waiting.is_empty());
 }
