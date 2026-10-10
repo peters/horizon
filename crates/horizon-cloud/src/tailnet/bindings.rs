@@ -98,10 +98,51 @@ impl Credentials for Native {
 pub struct Store {
     root: PathBuf,
 }
+/// Catalog ownership follows held cloud lifecycle locks, before metadata or credential mutation.
+pub struct CatalogOwnership {
+    store: Store,
+    lock: File,
+}
+
+impl CatalogOwnership {
+    /// # Errors
+    /// Refuses corrupt metadata and unresolved credential generations.
+    pub fn load(&self) -> Result<Catalog> {
+        if let Some(pending) = self.store.read::<Pending>("tailnets.pending.json", 192 * 1024)? {
+            pending.validate()?;
+            return Err(Error::Storage);
+        }
+        self.store.load()
+    }
+
+    /// Caller retains every checked cloud lock through this operation.
+    /// # Errors
+    /// Missing binding or failed durable catalog and credential deletion.
+    pub fn delete(&self, id: &str) -> Result<Catalog> {
+        self.load()?;
+        self.store.delete_locked_with(id, &Native)
+    }
+}
+
+impl Drop for CatalogOwnership {
+    fn drop(&mut self) {
+        let _ = self.lock.unlock();
+    }
+}
+
 impl Store {
     #[must_use]
     pub fn new(root: PathBuf) -> Self {
         Self { root }
+    }
+    /// Acquire the existing root catalog mutation lock after cloud lifecycle ownership.
+    /// # Errors
+    /// Unavailable catalog storage or lock.
+    pub fn own_catalog(&self) -> Result<CatalogOwnership> {
+        Ok(CatalogOwnership {
+            store: self.clone(),
+            lock: self.lock()?,
+        })
     }
     /// # Errors
     /// Refuses corrupt metadata; never contacts the credential store.
@@ -203,6 +244,9 @@ impl Store {
     }
     fn delete_with(&self, id: &str, keys: &impl Credentials) -> Result<Catalog> {
         let _lock = self.lock()?;
+        self.delete_locked_with(id, keys)
+    }
+    fn delete_locked_with(&self, id: &str, keys: &impl Credentials) -> Result<Catalog> {
         self.recover_with(keys)?;
         let before = self.records()?;
         let retired = Some(before.slot(id)?);

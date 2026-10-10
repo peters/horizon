@@ -1,7 +1,7 @@
 //! Auth-key-only cloud networking. Persistent metadata never contains a secret.
 mod bindings;
 mod keychain;
-pub use bindings::Store;
+pub use bindings::{CatalogOwnership, Store};
 /// OS-store namespace; credentials have no public read API.
 pub const KEYCHAIN_SERVICE: &str = "horizon-cloud-tailnets";
 use serde::{Deserialize, Serialize};

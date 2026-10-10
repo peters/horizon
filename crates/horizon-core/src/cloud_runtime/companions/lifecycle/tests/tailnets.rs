@@ -90,6 +90,37 @@ fn pending_tailnet_requests_fence_edits_and_fail_before_execution_on_drift() {
     }
 }
 
+struct CountedFake<'a> {
+    inner: Fake<'a>,
+    calls: std::cell::Cell<usize>,
+}
+impl execution::Backend for CountedFake<'_> {
+    fn preflight(&mut self, store: &Store, decision: Decision) -> Result<()> {
+        self.calls.set(self.calls.get() + 1);
+        execution::Backend::preflight(&mut self.inner, store, decision)
+    }
+    fn inspecting(&mut self, inspecting: bool) {
+        self.calls.set(self.calls.get() + 1);
+        execution::Backend::inspecting(&mut self.inner, inspecting);
+    }
+    fn run(&mut self, store: &Store, decision: Decision, action: Action) -> Result<Phase> {
+        self.calls.set(self.calls.get() + 1);
+        execution::Backend::run(&mut self.inner, store, decision, action)
+    }
+    fn mutation_uncertain(&self) -> bool {
+        self.calls.set(self.calls.get() + 1);
+        execution::Backend::mutation_uncertain(&self.inner)
+    }
+    fn uncertainty_settled(&self) -> bool {
+        self.calls.set(self.calls.get() + 1);
+        execution::Backend::uncertainty_settled(&self.inner)
+    }
+    fn verify_access(&mut self, request: &Request<'_>) -> Result<Phase> {
+        self.calls.set(self.calls.get() + 1);
+        execution::Backend::verify_access(&mut self.inner, request)
+    }
+}
+
 #[test]
 fn uncommitted_tailnet_requests_never_change_the_default_selection() {
     for interrupt_before_source_write in [true, false] {
@@ -125,7 +156,12 @@ fn uncommitted_tailnet_requests_never_change_the_default_selection() {
             state.grants.get_mut("consumer").unwrap().revision = None;
             store.save(&state).unwrap();
         }
-        assert!(target.join(format!("tailnet-request-{id}.json")).is_file());
+        let original_request = target.join(format!("tailnet-request-{id}.json"));
+        let original_marker = target.join(format!("tailnet-commit-{id}.pending"));
+        assert!(original_request.is_file());
+        assert!(original_marker.is_file());
+        let request_bytes = std::fs::read(&original_request).unwrap();
+        let marker_bytes = std::fs::read(&original_marker).unwrap();
         assert!(receipt::load(&target).unwrap().is_none());
         assert!(
             horizon_cloud::tailnet::Selection::load(&target)
@@ -133,14 +169,36 @@ fn uncommitted_tailnet_requests_never_change_the_default_selection() {
                 .tailnet
                 .is_none()
         );
-        submit(&f.request(), Action::EnsureReady, OperationId::generate()).unwrap();
+        let new_operation = submit(&f.request(), Action::EnsureReady, OperationId::generate()).unwrap();
         assert!(
             horizon_cloud::tailnet::Selection::load(&target)
                 .unwrap()
                 .tailnet
                 .is_none()
         );
-        assert!(crate::cloud_runtime::tailnet::validate_pending(&target).is_ok());
+        assert!(matches!(
+            crate::cloud_runtime::tailnet::validate_pending(&target),
+            Err(Error::Invalid("Conflicting pending tailnet reservations"))
+        ));
+        let mut backend = CountedFake {
+            inner: Fake::new(&f),
+            calls: std::cell::Cell::new(0),
+        };
+        assert!(matches!(
+            execute_with(&f.request(), new_operation.intent.operation_id, &mut backend),
+            Err(Error::Invalid("Conflicting pending tailnet reservations"))
+        ));
+        assert_eq!(backend.calls.get(), 0, "admission refuses before every backend method");
+        assert!(backend.inner.decisions.is_empty());
+        assert!(backend.inner.inspected.is_empty());
+        assert_eq!(std::fs::read(&original_request).unwrap(), request_bytes);
+        assert_eq!(std::fs::read(&original_marker).unwrap(), marker_bytes);
+        assert!(
+            horizon_cloud::tailnet::Selection::load(&target)
+                .unwrap()
+                .tailnet
+                .is_none()
+        );
     }
 }
 
@@ -198,7 +256,7 @@ fn durable_tailnet_retries_survive_catalog_deletion_or_corruption() {
 }
 
 #[test]
-fn interrupted_selection_commit_recovers_from_the_durable_request_without_catalog() {
+fn interrupted_selection_commit_refuses_removed_tailnet_and_recovers_explicit_none() {
     for requested in [Some("work"), Some("none")] {
         for execute_directly in [false, true] {
             let f = Fixture::new();
@@ -242,6 +300,29 @@ fn interrupted_selection_commit_recovers_from_the_durable_request_without_catalo
             f.save(&prepared);
             std::fs::remove_file(catalog_path).unwrap();
             let saved = std::fs::read(target.join(format!("tailnet-request-{id}.json"))).unwrap();
+            if requested == Some("work") {
+                if execute_directly {
+                    let mut backend = Fake::new(&f);
+                    assert!(execute_with(&f.request(), id, &mut backend).is_err());
+                    assert!(backend.decisions.is_empty());
+                } else {
+                    assert!(submit_with_tailnet(&f.request(), Action::EnsureReady, id, requested).is_err());
+                }
+                assert_eq!(
+                    horizon_cloud::tailnet::Selection::load(&target)
+                        .unwrap()
+                        .tailnet
+                        .as_deref(),
+                    prior
+                );
+                assert_eq!(
+                    std::fs::read(target.join(format!("tailnet-request-{id}.json"))).unwrap(),
+                    saved
+                );
+                assert!(target.join(format!("tailnet-commit-{id}.pending")).exists());
+                assert!(crate::cloud_runtime::tailnet::validate_pending(&target).is_err());
+                continue;
+            }
             if execute_directly {
                 let mut backend = Fake::new(&f);
                 assert_eq!(

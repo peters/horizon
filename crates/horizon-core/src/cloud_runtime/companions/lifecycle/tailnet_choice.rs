@@ -23,20 +23,19 @@ impl Choice {
 }
 
 pub(super) fn prepare(root: &Path, target: &Store, id: OperationId, tailnet: Option<&str>) -> Result<Choice> {
+    let ownership = tailnet::store(root)
+        .own_catalog()
+        .map_err(|_| Error::Invalid("Tailnet settings are unavailable"))?;
+    let catalog = ownership
+        .load()
+        .map_err(|_| Error::Invalid("Tailnet settings are unavailable"))?;
     let prior = horizon_cloud::tailnet::Selection::load(target.root()).map_err(|_| Error::Json)?;
     let selected = match tailnet {
         Some("none") => None,
         Some(id) => Some(id),
         None => prior.tailnet.as_deref(),
     };
-    let catalog = tailnet
-        .map(|_| tailnet::store(root).load())
-        .transpose()
-        .map_err(|_| Error::Invalid("Tailnet settings are unavailable"))?;
-    if catalog
-        .as_ref()
-        .is_some_and(|catalog| selected.is_some_and(|id| !catalog.tailnets.iter().any(|t| t.id == id)))
-    {
+    if selected.is_some_and(|id| !catalog.tailnets.iter().any(|t| t.id == id)) {
         return Err(Error::Invalid("Choose a saved tailnet ID from cloud_companions"));
     }
     if target
@@ -91,6 +90,16 @@ pub(super) fn recover(target: &Store, id: OperationId) -> Result<()> {
     {
         return Ok(());
     }
+    let root = target
+        .root()
+        .parent()
+        .ok_or(Error::Invalid("Missing cloud catalog root"))?;
+    let ownership = tailnet::store(root)
+        .own_catalog()
+        .map_err(|_| Error::Invalid("Tailnet settings are unavailable"))?;
+    let catalog = ownership
+        .load()
+        .map_err(|_| Error::Invalid("Tailnet settings are unavailable"))?;
     let mut bytes = Vec::new();
     std::fs::File::open(target.root().join(format!("tailnet-request-{id}.json")))?
         .take(1025)
@@ -99,6 +108,13 @@ pub(super) fn recover(target: &Store, id: OperationId) -> Result<()> {
         return Err(Error::Invalid("Pending tailnet request is too large"));
     }
     let selection: Selection = serde_json::from_slice(&bytes).map_err(|_| Error::Json)?;
+    if selection
+        .tailnet
+        .as_deref()
+        .is_some_and(|id| !catalog.tailnets.iter().any(|t| t.id == id))
+    {
+        return Err(Error::Invalid("Pending tailnet is no longer saved"));
+    }
     if target
         .load()?
         .is_some_and(|s| s.spec.is_some() || s.worker.is_some() || s.operation != CreateState::Prepared)

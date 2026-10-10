@@ -182,3 +182,60 @@ fn conflicting_catalog_or_corrupt_journal_never_deletes_credentials() {
     assert!(store.records().unwrap() == before);
     assert_eq!(keys.values.borrow().len(), 1);
 }
+
+#[test]
+fn catalog_ownership_keeps_the_existing_mutation_lock_through_deletion() {
+    let (root, store, keys) = fixture();
+    store.save_with(Some("work"), "Work", KEY, &keys).unwrap();
+    let ownership = store.own_catalog().unwrap();
+    let competing = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(root.path().join("tailnets.lock"))
+        .unwrap();
+    assert!(competing.try_lock().is_err());
+    assert_eq!(ownership.load().unwrap().tailnets[0].id, "work");
+    // Exercise the same transaction as the public owner with isolated credentials.
+    ownership.store.delete_locked_with("work", &keys).unwrap();
+    assert!(keys.values.borrow().is_empty());
+    assert!(ownership.load().unwrap().tailnets.is_empty());
+    assert!(competing.try_lock().is_err());
+    drop(ownership);
+    competing.try_lock().unwrap();
+    competing.unlock().unwrap();
+}
+
+#[test]
+fn ownership_reads_refuse_unsettled_or_corrupt_metadata_without_credential_cleanup() {
+    for corrupt in [false, true] {
+        let (root, store, keys) = fixture();
+        store.save_with(Some("work"), "Work", KEY, &keys).unwrap();
+        let before = store.records().unwrap();
+        if corrupt {
+            std::fs::write(root.path().join("tailnets.json"), b"corrupt catalog").unwrap();
+        } else {
+            write(
+                &root.path().join("tailnets.pending.json"),
+                &Pending {
+                    before,
+                    after: Records::default(),
+                    created: None,
+                    retired: Some(store.credential_slot("work").unwrap()),
+                },
+            )
+            .unwrap();
+        }
+        let ownership = store.own_catalog().unwrap();
+        assert!(ownership.load().is_err());
+        assert_eq!(keys.values.borrow().len(), 1);
+        let protected = if corrupt {
+            "tailnets.json"
+        } else {
+            "tailnets.pending.json"
+        };
+        let bytes = std::fs::read(root.path().join(protected)).unwrap();
+        assert!(ownership.delete("work").is_err());
+        assert_eq!(std::fs::read(root.path().join(protected)).unwrap(), bytes);
+        assert_eq!(keys.values.borrow().len(), 1);
+    }
+}

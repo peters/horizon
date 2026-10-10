@@ -1,6 +1,8 @@
 //! Thin deployment adapter for cloud-only tailnet enrollment.
+mod catalog;
 mod keychain;
 use super::{Error, Result, command::Runner, ssh::Connection, state};
+pub use catalog::remove_saved;
 pub use horizon_cloud::tailnet::{Catalog, Selection, Store, Tailnet, valid_key};
 use sha2::{Digest, Sha256};
 use std::{path::Path, time::Duration};
@@ -82,6 +84,8 @@ pub fn select(root: &Path, cloud_id: &str, id: Option<&str>) -> Result<()> {
 pub fn change(root: &Path, cloud_id: &str, id: Option<&str>) -> Result<()> {
     let cloud = state::cloud_directory(root, cloud_id)?;
     let lock = state::Store::lock(&cloud)?;
+    let catalog_owner = store(root).own_catalog().map_err(mapped)?;
+    let catalog = catalog_owner.load().map_err(mapped)?;
     let prior = Selection::load(&cloud).map_err(mapped)?;
     if prior.tailnet.as_deref() != id && super::companions::lifecycle::requested_tailnet(&cloud)?.is_some() {
         return Err(Error::Invalid(
@@ -99,12 +103,12 @@ pub fn change(root: &Path, cloud_id: &str, id: Option<&str>) -> Result<()> {
             "Tailnet is chosen only when provisioning a cloud; create a new cloud to choose another network",
         ));
     }
-    let catalog = store(root).load().map_err(mapped)?;
     Selection::save(&cloud, id, &catalog).map_err(mapped)
 }
 
 /// Refuse selection drift before any deployment or companion provider work.
 pub(in crate::cloud_runtime) fn validate_pending(cloud: &Path) -> Result<()> {
+    catalog::validate_selection(cloud)?;
     if let Some(requested) = super::companions::lifecycle::requested_tailnet(cloud)?
         && Selection::load(cloud).map_err(mapped)? != requested
     {

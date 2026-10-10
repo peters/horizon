@@ -19,6 +19,10 @@ Copy includes the MagicDNS domain when the worker reports it. A stable-name
 fallback requires `horizon-tailnet-contract=2`; it does not supply an unknown
 domain. Connect again to refresh names after an administrator rename.
 
+Settings > Tailnets refuses Remove while a cloud retains resources or a pending
+request reserves that network. Busy or corrupt cloud state preserves the saved
+credentials. A missing saved selection blocks allocation before provider work.
+
 Discovery and price results do not authorize spending or lifecycle changes.
 Get explicit authorization for the exact resource before starting or stopping a worker.
 Keep credentials in Horizon. Do not send keys, tokens, endpoints, or raw provider

@@ -152,7 +152,7 @@ impl State {
                                     let root = self.root.clone();
                                     let id = network.id.clone();
                                     self.start(ui.ctx(), move || {
-                                        tailnet::store(&root).delete(&id).map_err(|e| e.to_string())
+                                        tailnet::remove_saved(&root, &id).map_err(|e| e.to_string())
                                     });
                                 }
                                 if ui.button("Replace key").clicked() {

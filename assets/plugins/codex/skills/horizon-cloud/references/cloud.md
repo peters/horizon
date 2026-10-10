@@ -78,6 +78,29 @@ cannot claim readiness. Use returned SSH aliases and isolated worktrees for
 ordinary SSH, Git, or rsync work within the authorized task. A stopped or
 unavailable target needs owner action; inspection grants no new access.
 
+## Saved tailnet removal
+
+Cloud lifecycle ownership currently requires a Unix host with durable directory
+updates. If cloud directories exist, Windows refuses Remove before credential
+mutation. Windows also refuses cloud selection before state mutation. The cloud ownership tests declare this runtime requirement; Windows tests
+check the refusal and preserve the original catalog and selection.
+
+Settings > Tailnets uses cloud ownership before the catalog lock for Remove.
+Remove reads each cloud's current selection, deployment, provider records, and
+pending reservation under that ownership. It keeps ownership through credential
+deletion. An active cloud operation or a changed cloud list returns Busy.
+Retry Remove after the operation stops. Corrupt or uncertain state preserves
+credentials. A pending request keeps its network even before the target claim exists.
+An unresolved catalog journal also blocks Remove, selection, and reservation.
+Preserve that journal until Settings recovery settles its credential generation.
+
+A new selection or reservation waits for the same catalog lock. If Remove deletes
+its saved ID first, the request fails before provider work. Allocation also checks
+catalog membership under cloud ownership. Keep a missing selection and its original
+request for recovery; do not replace their identity. An explicit `none` request can
+recover without a saved network. The test procedure is
+`docs/testing/procedures/tailnet-catalog-fence.md` in the Horizon repository.
+
 ## Tailnet device identity
 
 In a cloud card, open **Connections** and read **Tailnet** > **Device name**.

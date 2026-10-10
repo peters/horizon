@@ -117,30 +117,75 @@ pub(super) fn released(
 pub(in crate::cloud_runtime) fn requested_tailnet(
     root: &std::path::Path,
 ) -> Result<Option<horizon_cloud::tailnet::Selection>> {
-    let Some(claim) = load(root)? else {
-        return Ok(None);
+    let claim = load(root)?;
+    let terminal = claim.as_ref().is_some_and(|claim| {
+        matches!(
+            claim.phase,
+            Phase::Ready | Phase::Stopped | Phase::Refused | Phase::RetryRequired
+        )
+    });
+    let mut requested = if let Some(claim) = claim.as_ref().filter(|_| !terminal) {
+        Some(read_tailnet_request(root, claim.id, true)?)
+    } else {
+        None
     };
-    if matches!(
-        claim.phase,
-        Phase::Ready | Phase::Stopped | Phase::Refused | Phase::RetryRequired
-    ) {
-        return Ok(None);
+    for entry in std::fs::read_dir(root)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(id) = name
+            .strip_prefix("tailnet-commit-")
+            .and_then(|name| name.strip_suffix(".pending"))
+        else {
+            continue;
+        };
+        let operation = uuid::Uuid::parse_str(id).map_err(|_| Error::Json)?;
+        let operation = OperationId::try_from(operation).map_err(|_| Error::Json)?;
+        if !entry.file_type()?.is_file() {
+            return Err(Error::Invalid("Pending tailnet marker is not a regular file"));
+        }
+        let mut marker = Vec::new();
+        std::fs::File::open(entry.path())?.take(2).read_to_end(&mut marker)?;
+        if marker != b"1" {
+            return Err(Error::Invalid("Invalid pending tailnet marker"));
+        }
+        if terminal && claim.as_ref().is_some_and(|claim| claim.id == operation) {
+            continue;
+        }
+        let selection = read_tailnet_request(root, operation, false)?;
+        if requested.as_ref().is_some_and(|prior| prior != &selection) {
+            return Err(Error::Invalid("Conflicting pending tailnet reservations"));
+        }
+        requested = Some(selection);
     }
-    let path = root.join(format!("tailnet-request-{}.json", claim.id));
+    Ok(requested)
+}
+
+fn read_tailnet_request(
+    root: &Path,
+    operation: OperationId,
+    legacy: bool,
+) -> Result<horizon_cloud::tailnet::Selection> {
+    let path = root.join(format!("tailnet-request-{operation}.json"));
     let file = match std::fs::File::open(path) {
         Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            // Legacy claims reserve their current selection too.
-            return horizon_cloud::tailnet::Selection::load(root)
-                .map(Some)
-                .map_err(|_| Error::Json);
+        Err(error) if legacy && error.kind() == std::io::ErrorKind::NotFound => {
+            return horizon_cloud::tailnet::Selection::load(root).map_err(|_| Error::Json);
         }
-        Err(e) => return Err(e.into()),
+        Err(error) => return Err(error.into()),
     };
     let mut bytes = Vec::new();
     file.take(1025).read_to_end(&mut bytes)?;
     if bytes.len() > 1024 {
         return Err(Error::Invalid("Pending tailnet request is too large"));
     }
-    serde_json::from_slice(&bytes).map(Some).map_err(|_| Error::Json)
+    let selection: horizon_cloud::tailnet::Selection = serde_json::from_slice(&bytes).map_err(|_| Error::Json)?;
+    if selection
+        .tailnet
+        .as_deref()
+        .is_some_and(|id| !horizon_cloud::tailnet::valid_id(id))
+    {
+        return Err(Error::Invalid("Invalid pending tailnet selection"));
+    }
+    Ok(selection)
 }
