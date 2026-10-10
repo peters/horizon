@@ -76,16 +76,15 @@ impl HorizonApp {
                 Ok(json!({ "cloud": wanted, "attach": "in_view" }))
             }
             CloudListOperation::Park => {
-                let parking = self
-                    .cloud_prototype
-                    .production
-                    .runtimes
-                    .get(&issue)
-                    .map(|runtime| &runtime.parking);
+                let runtime = self.cloud_prototype.production.runtimes.get(&issue);
+                let parking = runtime.map(|runtime| &runtime.parking);
                 if parking.is_some_and(super::super::park::Parking::is_parked) {
                     return Ok(json!({ "cloud": wanted, "park": "parked" }));
                 }
-                if !parking.is_some_and(super::super::park::Parking::attached) {
+                // A cloud whose terminals still attach after Ready is not tracked yet.
+                if runtime.is_none_or(|runtime| runtime.needs_attach)
+                    || !parking.is_some_and(super::super::park::Parking::attached)
+                {
                     return Err("cloud_list_not_ready: only a ready cloud parks".into());
                 }
                 if self.cloud_sight(index) != Sight::Hidden {

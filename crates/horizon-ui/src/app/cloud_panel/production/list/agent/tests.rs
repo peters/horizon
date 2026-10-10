@@ -100,6 +100,13 @@ fn park_parks_an_attached_cloud_only_while_it_is_out_of_view() {
     assert!(error.starts_with("cloud_list_not_ready"), "{error}");
 
     runtime(&mut app).parking.attach_for_test();
+    let error = app.answer_cloud_list(&park, &ctx).unwrap_err();
+    assert!(
+        error.starts_with("cloud_list_not_ready"),
+        "terminals still attach: {error}"
+    );
+
+    runtime(&mut app).needs_attach = false;
     app.board.focus(member(&app, "one"));
     let error = app.answer_cloud_list(&park, &ctx).unwrap_err();
     assert!(error.starts_with("cloud_list_in_view"), "{error}");
