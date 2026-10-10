@@ -193,6 +193,25 @@ class DecisionTests(ServiceTestCase):
 
 
 
+class LateEndTests(BrokerTestCase):
+    def test_a_task_that_ends_while_its_request_is_read_sends_no_token(self):
+        account = agents.account(self.store.load()[0])
+        with self.book.edit() as data:
+            data['task_grants'] = [grant('example/secret', 'read', tasks.root(os.getpid()), account)]
+        choose = service.broker.choose
+
+        def then_the_session_ends(*args):
+            chosen = choose(*args)
+            with self.book.edit() as data:
+                data['task_grants'] = []
+            return chosen
+        with mock.patch.object(service.broker, 'choose', then_the_session_ends):
+            status, _, payload = self.send('GET', '/repos/example/secret/issues')
+        self.assertEqual(status, 403)
+        self.assertIn(b'any more', payload)
+        self.assertEqual(self.api.seen, [])
+
+
 class GitTests(ProxyTestCase):
     def test_git_reaches_a_repository_allowed_for_its_task_and_other_sessions_do_not(self):
         env = self.routed()

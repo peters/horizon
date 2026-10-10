@@ -264,9 +264,10 @@ class Exchange:
             return self.graphql(request)
         candidate, repository = choose(self.broker, route, self.pid, lambda: self.record.update(granted=True))
         self.record['repository'] = repository
-        self.forward(request, route, candidate)
+        names = list(route.repositories) if route.kind == 'search' else [repository] if repository else []
+        self.forward(request, route, candidate, names)
 
-    def forward(self, request, route, candidate):
+    def forward(self, request, route, candidate, names=()):
         fields = [(name, value) for name, value in request.fields if name in REQUEST_FIELDS]
         secrets = ()
         if candidate is not None:
@@ -277,6 +278,11 @@ class Exchange:
         destination = Destination(route.host, self.broker.environ)
         connection = destination.connect(TIMEOUT)
         try:
+            # Checked again just before the token goes out: a task's session can end while the
+            # request is read.
+            if candidate is not None and not all(candidate.allowed(name, route.access) for name in names):
+                raise refusal(403, '%s has no GitHub grant on this worker any more. Ask for access with the '
+                                   'github_access tool.' % ', '.join(names))
             try:
                 response = relay.send(connection, destination, request.method, request.target, fields,
                                       pieces, request.length,
