@@ -164,7 +164,12 @@ fn clone_folder(parent: &Path, remote: &Remote) -> PathBuf {
     for segment in remote.owner.split('/') {
         folder.push(portable(segment));
         let usable = match std::fs::symlink_metadata(&folder) {
-            Ok(meta) => meta.is_dir() && std::fs::symlink_metadata(folder.join(".git")).is_err(),
+            // A `.git` there, or one that cannot be looked at, is a checkout to stay out of.
+            Ok(meta) => {
+                meta.is_dir()
+                    && std::fs::symlink_metadata(folder.join(".git"))
+                        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+            }
             Err(error) => error.kind() == std::io::ErrorKind::NotFound,
         };
         if !usable {
