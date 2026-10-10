@@ -288,16 +288,18 @@ def install_identities(value, previous=None):
 def install_as_root(value, agent=None):
     """Under agent isolation: the agent configures Git and keeps the identities, and root
     keeps the token where no agent reaches it. An earlier image kept the token in the agents'
-    directory; root reads its identities, removes it, and hands the agent only those."""
+    directory; root hands the agent only its identities, and removes it once the root-only
+    file holds the new binding."""
     grants(value)
     try:
         legacy = read_private(CREDENTIAL, owner=AGENT_UID)
         legacy = stripped(legacy) if legacy is not None else None
     except (ValueError, OSError, RecursionError, UnicodeDecodeError):
         legacy = None
-    CREDENTIAL.unlink(missing_ok=True)
     (agent or as_agent)('install-identity', {'binding': stripped(value), 'previous': legacy})
     write_private(value, ROOT_CREDENTIAL)
+    with contextlib.suppress(IsADirectoryError, PermissionError):
+        CREDENTIAL.unlink(missing_ok=True)
 
 
 def as_agent(operation, value):
@@ -307,9 +309,9 @@ def as_agent(operation, value):
 
 def clear():
     """Removes the static binding: its token wherever it is, and its identities."""
-    # The root-only token first: an agent's path, such as a directory in place of a file,
-    # cannot keep it from going.
-    if root_holds_token():
+    # The root-only token first, in every mode: an agent's path, such as a directory in place
+    # of a file, cannot keep it from going. An agent cannot reach it at all.
+    with contextlib.suppress(PermissionError):
         ROOT_CREDENTIAL.unlink(missing_ok=True)
     for path in (CREDENTIAL, identity_path()):
         with contextlib.suppress(IsADirectoryError, PermissionError):
