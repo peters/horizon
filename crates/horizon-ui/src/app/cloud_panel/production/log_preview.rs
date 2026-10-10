@@ -1,6 +1,7 @@
 //! Synthetic cloud cards for a debug build. Deploy logs live only in memory, so an
 //! isolated viewer has nothing to scroll unless this is asked for, and an idle stop
-//! needs a real worker and half an hour. It never runs in a release build, only on
+//! needs a real worker and half an hour, and a stuck Docker would stop every other
+//! container of the computer. It never runs in a release build, only on
 //! an ephemeral session, and it leaves a session alone when that session already
 //! has a cloud.
 use super::{Deployment, Stage, idle::Report};
@@ -9,6 +10,7 @@ use horizon_core::cloud_panel::{CloudConfig, CloudGroup, CloudLaunch};
 use std::time::{Duration, Instant};
 
 const PREVIEW_ISSUE: u32 = 8_800_001;
+const DOCKER_STUCK_ISSUES: [u32; 2] = [8_800_005, 8_800_006];
 
 pub(super) fn seed(app: &mut HorizonApp, ctx: &egui::Context) {
     if let Some(count) = std::env::var("HORIZON_CLOUD_LOG_PREVIEW")
@@ -23,6 +25,9 @@ pub(super) fn seed(app: &mut HorizonApp, ctx: &egui::Context) {
         .and_then(|raw| raw.parse::<u64>().ok())
     {
         seed_idle_stop(app, Duration::from_secs(seconds), ctx);
+    }
+    if std::env::var_os("HORIZON_CLOUD_DOCKER_STUCK_PREVIEW").is_some() {
+        seed_docker_stuck(app);
     }
 }
 
@@ -126,6 +131,42 @@ fn seed_idle_stop(app: &mut HorizonApp, delay: Duration, ctx: &egui::Context) ->
     true
 }
 
+/// Two clouds whose image build failed because Docker stopped answering, as a stuck
+/// daemon fails a real one, so both cards offer the same Restart Docker. No record
+/// binds a worker, so nothing reaches a provider.
+fn seed_docker_stuck(app: &mut HorizonApp) -> bool {
+    if !accepts_preview(app) {
+        return false;
+    }
+    let Some(launch) = preview_launch() else {
+        return false;
+    };
+    // Side by side below the terminals of the isolated fixture's workspace.
+    for (issue, origin) in DOCKER_STUCK_ISSUES.into_iter().zip([[40.0, 520.0], [700.0, 520.0]]) {
+        let mut group = CloudGroup::new(
+            issue,
+            "Synthetic stuck Docker".into(),
+            "synthetic".into(),
+            "/synthetic".into(),
+            origin,
+        );
+        group.size = [620.0, 760.0];
+        group.remote = Some(launch.clone());
+        app.cloud_prototype.groups.0.push(group);
+        let runtime = app.cloud_prototype.production.runtimes.entry(issue).or_default();
+        let now = Instant::now();
+        runtime.progress.stage(Stage::Validate, now);
+        runtime.progress.stage(Stage::Build, now);
+        runtime.stage = Some(Stage::Build);
+        runtime.push_log("starting the synthetic contract container".into());
+        runtime.push_log("Docker did not answer docker version within 5 s".into());
+        runtime.progress.finish(now);
+        let stuck = horizon_core::cloud_runtime::Error::DockerNotResponding("worker image contract creation");
+        runtime.error = Some(stuck.to_string());
+    }
+    true
+}
+
 fn idle_launch() -> Option<(CloudLaunch, Deployment)> {
     let config = CloudConfig::parse(
         "version: 1\ndefault: idle\nprofiles:\n  idle:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 2\n    memory_gb: 4\n    gpu: false\n    idle_stop_minutes: 30\n",
@@ -204,6 +245,29 @@ mod tests {
     }
 
     #[test]
+    fn the_stuck_docker_preview_fails_two_clouds_that_offer_a_restart() {
+        use horizon_core::cloud_runtime::diagnosis;
+        let (_temp, mut app) = test_app();
+        assert!(seed_docker_stuck(&mut app));
+        assert!(!seed_docker_stuck(&mut app), "one preview only");
+        assert_eq!(app.cloud_prototype.groups.0.len(), 2);
+        for issue in DOCKER_STUCK_ISSUES {
+            let runtime = &app.cloud_prototype.production.runtimes[&issue];
+            assert!(
+                runtime.receiver.is_none() && runtime.state.is_none(),
+                "nothing reaches a provider"
+            );
+            let lines = runtime.logs.iter().map(|line| line.text.as_str());
+            let found = diagnosis::diagnose(lines, runtime.error.as_deref().unwrap_or_default());
+            assert!(
+                found
+                    .and_then(|found| found.meaning)
+                    .is_some_and(diagnosis::restarts_docker)
+            );
+        }
+    }
+
+    #[test]
     fn a_restored_cloud_is_left_alone() {
         let (_temp, mut app) = test_app();
         let mut group = CloudGroup::new(7, "Kept".into(), "workspace".into(), "/kept".into(), [0.0, 0.0]);
@@ -244,6 +308,7 @@ mod tests {
         app.activate_persistent_session(&session);
         assert!(!seed_lines(&mut app, 400));
         assert!(!seed_idle_stop(&mut app, Duration::ZERO, &egui::Context::default()));
+        assert!(!seed_docker_stuck(&mut app));
         assert!(app.cloud_prototype.groups.0.is_empty());
         assert!(app.board.cloud_groups.0.is_empty());
     }

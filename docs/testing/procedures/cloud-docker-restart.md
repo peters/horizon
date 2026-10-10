@@ -69,14 +69,16 @@ Restart Docker, asks before it restarts, and then offers Retry.
    Result: `root/usr/bin` contains `docker`, `systemctl`, `pkexec` and
    `x11vnc`.
 
-3. Start the fixture with the tools root and a failed cloud:
-   `HORIZON_CLOUD_FAILURE_PREVIEW=1 python3 scripts/device-smoke/serve.py --horizon <binary> --tools /tmp/horizon-<task>-tools/root --native-view --state <state>`.
-   The candidate needs the synthetic failed clouds of the cloud failure
-   preview, with `Docker did not answer docker version within 5 s` as the
-   last output line. That preview is not part of this change.
+3. Start the fixture with the tools root and the stuck-Docker preview of a
+   debug build, with `DOCKER_HOST` unset, as Horizon honors it as the Docker CLI
+   does:
+   `env -u DOCKER_HOST HORIZON_CLOUD_DOCKER_STUCK_PREVIEW=1 python3 scripts/device-smoke/serve.py --horizon <binary> --tools /tmp/horizon-<task>-tools/root --native-view --state <state>`.
+   The preview adds two synthetic clouds whose image build failed, each with
+   `Docker did not answer docker version within 5 s` as its last output line.
+   No record binds a worker, so no provider is asked.
 
    Result: The manifest gives `vnc_address`. The fixture shows two synthetic
-   failed clouds.
+   failed clouds named Synthetic stuck Docker.
 
 4. Write synthetic cloud settings to
    `<state>/data/home/.horizon/cloud/settings.json` with mode `0600`, as in
@@ -94,7 +96,7 @@ Restart Docker, asks before it restarts, and then offers Retry.
 
 ### 6.1 DR-1 — The failure names a stuck Docker
 
-1. Open the failed cloud without panels.
+1. Open one of the failed clouds.
 
    Result: The failure box shows the line that Docker did not answer. Its
    meaning says that Docker stopped answering and to restart Docker. The row
