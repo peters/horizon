@@ -24,7 +24,8 @@ Restart Docker, asks before it restarts, and then offers Retry.
 - This procedure does not test: a restart of a real Docker daemon, the macOS
   and Windows restart commands, and `pkexec` password prompts. Unit tests in
   `docker_daemon/plan.rs` cover the platform decision for each setup.
-  Unit tests in `cards/docker.rs` cover Close while a restart runs.
+  Unit tests in `cards/docker.rs` cover Close while a restart runs, and that a
+  container name already in use offers no restart.
 
 ## 3. Safety
 
@@ -49,29 +50,42 @@ Restart Docker, asks before it restarts, and then offers Retry.
 
 2. Make a tools root at `/tmp/horizon-<task>-tools/root`. Unpack x11vnc into it
    if the computer has no x11vnc. Put three stand-in programs in
-   `root/usr/bin`:
+   `root/usr/bin`. They keep their files in `<state>/fake-docker`, because the
+   fixture gives Horizon a private `/tmp` but shows the state directory at its
+   own path:
 
-   - `docker` answers `--version` and `context inspect` with a rootless socket
-     at `$XDG_RUNTIME_DIR/docker.sock`. It waits without end for each other
-     command until the file `/tmp/fake-docker/restarted` exists. After that, it
+   - `docker` skips a leading `--config <dir>`. It answers `--version` and
+     `context inspect` with a rootless socket at `$XDG_RUNTIME_DIR/docker.sock`
+     and fails `desktop version`. It waits without end for each other command
+     until the file `<state>/fake-docker/restarted` exists. After that, it
      answers `version` with `29.8.1`.
    - `systemctl` answers `active` for `--user show ... docker.service`. For
      `--user restart docker.service`, it waits 4 seconds and makes the file
-     `/tmp/fake-docker/restarted`.
+     `<state>/fake-docker/restarted`.
    - `pkexec` writes its arguments to a log and refuses.
 
-   Each program writes its arguments to `/tmp/fake-docker/calls.log`.
+   Each program writes its arguments to `<state>/fake-docker/calls.log`.
 
    Result: `root/usr/bin` contains `docker`, `systemctl`, `pkexec` and
    `x11vnc`.
 
 3. Start the fixture with the tools root and a failed cloud:
-   `HORIZON_CLOUD_FAILURE_PREVIEW=1 python3 scripts/device-smoke/serve.py --horizon <binary> --tools /tmp/horizon-<task>-tools/root --native-view --state /tmp/horizon-<task>-state`.
+   `HORIZON_CLOUD_FAILURE_PREVIEW=1 python3 scripts/device-smoke/serve.py --horizon <binary> --tools /tmp/horizon-<task>-tools/root --native-view --state <state>`.
+   The candidate needs the synthetic failed clouds of the cloud failure
+   preview, with `Docker did not answer docker version within 5 s` as the
+   last output line. That preview is not part of this change.
 
    Result: The manifest gives `vnc_address`. The fixture shows two synthetic
    failed clouds.
 
-4. Create a Device panel on `vnc_address` with the public `device_panel` tool.
+4. Write synthetic cloud settings to
+   `<state>/data/home/.horizon/cloud/settings.json` with mode `0600`, as in
+   [the cloud settings procedure](cloud-settings-replace-key.md). The file
+   paths in it need not exist.
+
+   Result: Restart Docker… can read which Docker the cloud uses.
+
+5. Create a Device panel on `vnc_address` with the public `device_panel` tool.
    Examine `connection`, `image_displayed` and an advancing `frame_sequence`.
 
    Result: The panel shows the fixture desktop live.
@@ -82,9 +96,9 @@ Restart Docker, asks before it restarts, and then offers Retry.
 
 1. Open the failed cloud without panels.
 
-   Result: The failure box shows the Docker conflict line. Its meaning says
-   that Docker itself may be stuck and to restart Docker. The row of actions
-   shows Retry, Copy error and Restart Docker….
+   Result: The failure box shows the line that Docker did not answer. Its
+   meaning says that Docker stopped answering and to restart Docker. The row
+   of actions shows Retry and Copy error, and Restart Docker… on its own row.
 
 ### 6.2 DR-2 — The question comes before a restart
 
