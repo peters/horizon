@@ -16,12 +16,13 @@ fn unrequested_cloud(app: &mut HorizonApp, root: &std::path::Path) -> std::path:
     path
 }
 
+#[cfg(unix)]
 fn current_offer(app: &HorizonApp) -> offer::Offer {
     let close = &app.cloud_prototype.production.close;
     offer::offer(
         &app.cloud_prototype.production.runtimes[&101],
         true,
-        close.held.contains(&101),
+        close.records.get(&101).unwrap_or(&offer::Record::Holds),
         close.failed.get(&101),
     )
 }
@@ -149,4 +150,24 @@ fn a_cloud_without_a_launch_ends_its_close_dialog() {
         })
         .discard_textures();
     assert!(!app.cloud_close_confirmation_open(), "no dialog is left open unseen");
+}
+
+#[test]
+#[cfg(unix)] // Durable cloud records require Unix directory durability.
+fn an_unreadable_record_offers_only_remove_anyway() {
+    let (temp, mut app) = test_app();
+    let path = temp.path().join("fixture");
+    Store::lock(&path).unwrap().save(&deployment()).unwrap();
+    add_cloud(&mut app, temp.path(), Some(deployment()));
+    std::fs::write(path.join("deployment.json"), "not a record").unwrap();
+    app.request_cloud_close(101);
+    let offer = current_offer(&app);
+    assert_eq!((offer.primary, offer.remove_anyway), (None, true), "{offer:?}");
+    assert!(
+        offer
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with(offer::STATE_UNKNOWN)),
+        "{offer:?}"
+    );
 }

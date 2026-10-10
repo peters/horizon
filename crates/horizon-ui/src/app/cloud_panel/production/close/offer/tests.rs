@@ -48,7 +48,7 @@ fn offered(primary: Option<Primary>, remove_anyway: bool, reason: Option<&str>) 
 #[test]
 fn a_cloud_with_resources_offers_their_deletion_first() {
     assert_eq!(
-        offer(&bound("runpod"), true, true, None),
+        offer(&bound("runpod"), true, &Record::Holds, None),
         offered(Some(Primary::Delete), false, None)
     );
 }
@@ -59,7 +59,7 @@ fn a_failed_deletion_offers_to_try_again_or_remove_anyway() {
         offer(
             &bound("runpod"),
             true,
-            true,
+            &Record::Holds,
             Some(&deletion_failed("Could not delete the cloud resources: timeout"))
         ),
         offered(
@@ -73,7 +73,7 @@ fn a_failed_deletion_offers_to_try_again_or_remove_anyway() {
 #[test]
 fn a_cloud_without_resources_is_removed_directly() {
     assert_eq!(
-        offer(&Runtime::default(), false, false, None),
+        offer(&Runtime::default(), false, &Record::Empty, None),
         offered(Some(Primary::Remove), false, None),
         "never deployed"
     );
@@ -87,7 +87,7 @@ fn a_cloud_without_resources_is_removed_directly() {
         ..Runtime::default()
     };
     assert_eq!(
-        offer(&deleted, true, false, None),
+        offer(&deleted, true, &Record::Empty, None),
         offered(Some(Primary::Remove), false, None),
         "already deleted"
     );
@@ -101,7 +101,7 @@ fn a_cloud_without_resources_is_removed_directly() {
         ..Runtime::default()
     };
     assert_eq!(
-        offer(&unrequested, true, false, None),
+        offer(&unrequested, true, &Record::Empty, None),
         offered(Some(Primary::Remove), false, None),
         "no worker was requested"
     );
@@ -119,7 +119,7 @@ fn storage_on_disk_offers_its_deletion_even_without_a_worker_request() {
         ..Runtime::default()
     };
     assert_eq!(
-        offer(&unrequested, true, true, None),
+        offer(&unrequested, true, &Record::Holds, None),
         offered(Some(Primary::Delete), false, None),
         "a storage marker on disk is not nothing at the provider"
     );
@@ -138,7 +138,7 @@ fn a_refused_removal_offers_the_deletion_before_removing_anyway() {
     };
     let refused = Failure::new("Could not remove the cloud", false, Some("storage remains"));
     assert_eq!(
-        offer(&unrequested, true, false, Some(&refused)),
+        offer(&unrequested, true, &Record::Empty, Some(&refused)),
         offered(
             Some(Primary::Delete),
             false,
@@ -152,7 +152,7 @@ fn a_refused_removal_offers_the_deletion_before_removing_anyway() {
         Some("No worker was requested"),
     );
     assert_eq!(
-        offer(&unrequested, true, true, Some(&undeletable)),
+        offer(&unrequested, true, &Record::Holds, Some(&undeletable)),
         offered(
             None,
             true,
@@ -169,11 +169,11 @@ fn an_unknown_resource_state_offers_only_remove_anyway() {
         ..bound("runpod")
     };
     assert_eq!(
-        offer(&unavailable, true, true, None),
+        offer(&unavailable, true, &Record::Holds, None),
         offered(None, true, Some(STATE_UNKNOWN))
     );
     assert_eq!(
-        offer(&Runtime::default(), true, true, None),
+        offer(&Runtime::default(), true, &Record::Holds, None),
         offered(None, true, Some(STATE_UNKNOWN)),
         "deployed, but no record was read"
     );
@@ -181,11 +181,21 @@ fn an_unknown_resource_state_offers_only_remove_anyway() {
         offer(
             &unavailable,
             true,
-            true,
+            &Record::Holds,
             Some(&deletion_failed("Could not delete the cloud resources: no settings"))
         ),
         offered(None, true, Some("Could not delete the cloud resources: no settings")),
         "the failure says more than the unknown state"
+    );
+}
+
+#[test]
+fn an_unreadable_record_offers_only_remove_anyway() {
+    let unreadable = Record::Unreadable("Invalid JSON".into());
+    assert_eq!(
+        offer(&bound("runpod"), true, &unreadable, None),
+        offered(None, true, Some(&format!("{STATE_UNKNOWN} Invalid JSON"))),
+        "a cached snapshot does not stand in for a record that cannot be read"
     );
 }
 
@@ -197,11 +207,14 @@ fn a_busy_cloud_offers_only_cancel() {
     runtime.stage = Some(Stage::Provision);
     let failed = deletion_failed("Could not delete the cloud resources");
     for failure in [None, Some(&failed)] {
-        assert_eq!(offer(&runtime, true, true, failure), offered(None, false, Some(BUSY)));
+        assert_eq!(
+            offer(&runtime, true, &Record::Holds, failure),
+            offered(None, false, Some(BUSY))
+        );
     }
     runtime.stage = Some(Stage::Ready);
     assert_eq!(
-        offer(&runtime, true, true, None).primary,
+        offer(&runtime, true, &Record::Holds, None).primary,
         Some(Primary::Delete),
         "a ready connection does not block closing"
     );

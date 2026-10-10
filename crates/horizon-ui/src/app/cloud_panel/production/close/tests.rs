@@ -59,7 +59,10 @@ fn failed_image_push_closes_without_worker_deletion_and_rechecks_storage() {
     add_cloud(&mut app, temp.path(), Some(state));
     let runtime = app.cloud_prototype.production.runtimes.get_mut(&101).unwrap();
     runtime.error = Some("error from registry: denied".into());
-    assert_eq!(offer::offer(runtime, true, false, None).primary, Some(Primary::Remove));
+    assert_eq!(
+        offer::offer(runtime, true, &offer::Record::Empty, None).primary,
+        Some(Primary::Remove)
+    );
 
     std::fs::write(path.join("workspace-volume.required"), "").unwrap();
     app.remove_deleted_cloud(101, &egui::Context::default());
@@ -397,7 +400,7 @@ fn a_deletion_that_cannot_start_asks_again_and_can_remove_anyway() {
         "{failure:?}"
     );
     let runtime = &app.cloud_prototype.production.runtimes[&101];
-    let offer = offer::offer(runtime, true, true, Some(&failure));
+    let offer = offer::offer(runtime, true, &offer::Record::Holds, Some(&failure));
     assert!(offer.remove_anyway, "only now may the cloud leave without its deletion");
 
     app.remove_cloud_anyway(101, &ctx);

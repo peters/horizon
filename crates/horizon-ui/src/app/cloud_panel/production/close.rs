@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 mod offer;
 
 use super::{HorizonApp, Runtime, Stage, cards::wording, lifecycle::Action};
-use offer::{Failure, Primary};
+use offer::{Failure, Primary, Record};
 
 #[derive(Default)]
 pub(super) struct State {
@@ -11,9 +11,8 @@ pub(super) struct State {
     deleting: BTreeSet<u32>,
     /// Per cloud, what stopped its close: the dialog then asks again with the reason.
     failed: BTreeMap<u32, Failure>,
-    /// The clouds whose saved record, read when their close was asked, may hold
-    /// provider resources.
-    held: BTreeSet<u32>,
+    /// Per cloud, what its saved record held when its close was asked.
+    records: BTreeMap<u32, Record>,
     /// Per closing cloud, the panels that were showing when its disposal took over.
     hidden: BTreeMap<u32, Vec<String>>,
 }
@@ -48,14 +47,15 @@ impl HorizonApp {
     /// The × of a cloud: its close always offers to delete its resources first, so a
     /// failure from an earlier close, possibly since retried from the card, is forgotten.
     pub(in crate::app::cloud_panel) fn request_cloud_close(&mut self, id: u32) {
-        let held = self.cloud_holds_resources(id);
+        let record = match self.cloud_holds_resources(id) {
+            Ok(false) => Record::Empty,
+            // An operation holds the record, so it may hold resources.
+            Ok(true) | Err(super::cloud_runtime::Error::Busy) => Record::Holds,
+            Err(error) => Record::Unreadable(error.to_string()),
+        };
         let close = &mut self.cloud_prototype.production.close;
         close.failed.remove(&id);
-        if held {
-            close.held.insert(id);
-        } else {
-            close.held.remove(&id);
-        }
+        close.records.insert(id, record);
         close.confirming = Some(id);
     }
 
@@ -86,7 +86,7 @@ impl HorizonApp {
         let offer = offer::offer(
             runtime,
             launch.deployment_started,
-            close.held.contains(&id),
+            close.records.get(&id).unwrap_or(&Record::Holds),
             close.failed.get(&id),
         );
         let remains = offer
@@ -274,7 +274,7 @@ impl HorizonApp {
         self.cloud_prototype.production.runtimes.remove(&id);
         let close = &mut self.cloud_prototype.production.close;
         close.failed.remove(&id);
-        close.held.remove(&id);
+        close.records.remove(&id);
         close.deleting.remove(&id);
         close.hidden.remove(&id);
         super::cards::forget_log_heights(ctx, id);

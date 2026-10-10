@@ -28,6 +28,17 @@ pub(super) struct Offer {
     pub(super) reason: Option<String>,
 }
 
+/// What the saved record of a cloud, read when its close was asked, says it holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Record {
+    /// Nothing at the provider.
+    Empty,
+    /// Provider resources, or possibly so.
+    Holds,
+    /// The record cannot be read, so its resources cannot be deleted.
+    Unreadable(String),
+}
+
 /// What stopped the last attempt of a close.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Failure {
@@ -47,9 +58,9 @@ impl Failure {
     }
 }
 
-/// `held` is whether the saved record may hold provider resources, and `failure` what
-/// stopped this close's last deletion or removal.
-pub(super) fn offer(runtime: &Runtime, deployment_started: bool, held: bool, failure: Option<&Failure>) -> Offer {
+/// `record` is what the saved record holds, and `failure` what stopped this close's last
+/// deletion or removal.
+pub(super) fn offer(runtime: &Runtime, deployment_started: bool, record: &Record, failure: Option<&Failure>) -> Offer {
     if runtime.busy() {
         return Offer {
             primary: None,
@@ -59,11 +70,15 @@ pub(super) fn offer(runtime: &Runtime, deployment_started: bool, held: bool, fai
     }
     let state = runtime.state.as_ref();
     let reason = failure.map(|failure| failure.reason.clone());
-    if runtime.state_unavailable || (state.is_none() && deployment_started) {
+    let unreadable = match record {
+        Record::Unreadable(error) => Some(format!("{STATE_UNKNOWN} {error}")),
+        Record::Empty | Record::Holds => None,
+    };
+    if unreadable.is_some() || runtime.state_unavailable || (state.is_none() && deployment_started) {
         return Offer {
             primary: None,
             remove_anyway: true,
-            reason: Some(reason.unwrap_or_else(|| STATE_UNKNOWN.into())),
+            reason: Some(reason.or(unreadable).unwrap_or_else(|| STATE_UNKNOWN.into())),
         };
     }
     match failure.map(|failure| failure.deletion_tried) {
@@ -81,7 +96,7 @@ pub(super) fn offer(runtime: &Runtime, deployment_started: bool, held: bool, fai
             reason,
         },
         None => {
-            let empty = !held
+            let empty = *record == Record::Empty
                 && state.is_none_or(|state| {
                     state.stage == Stage::Deleted || (state.operation == CreateState::Prepared && state.spec.is_none())
                 });

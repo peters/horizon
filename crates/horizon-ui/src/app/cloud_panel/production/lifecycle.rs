@@ -502,8 +502,10 @@ impl HorizonApp {
     }
 
     /// Whether the saved record of cloud `id` may hold provider resources, so removing
-    /// it needs their deletion first. A record that cannot be read may hold them.
-    pub(super) fn cloud_holds_resources(&self, id: u32) -> bool {
+    /// it needs their deletion first.
+    /// # Errors
+    /// The record cannot be read, or a running operation holds it.
+    pub(super) fn cloud_holds_resources(&self, id: u32) -> cloud_runtime::Result<bool> {
         let Some(launch) = self
             .cloud_prototype
             .groups
@@ -512,18 +514,18 @@ impl HorizonApp {
             .find(|group| group.issue == id)
             .and_then(|group| group.remote.as_ref())
         else {
-            return false;
+            return Ok(false);
         };
         let Some(root) = &self.cloud_prototype.root else {
-            return true;
+            return Ok(true);
         };
         // Only asking must not leave a state directory behind for a cloud that never had one.
         let recorded = cloud_runtime::state::cloud_directory(root, &launch.id)
             .map_or(true, |path| path.try_exists().unwrap_or(true));
         if !recorded {
-            return launch.deployment_started;
+            return Ok(launch.deployment_started);
         }
-        !matches!(removable(root, launch), Ok((_, true)))
+        removable(root, launch).map(|(_, allowed)| !allowed)
     }
 
     fn cloud_removal_error(&mut self, id: u32, message: String) {
