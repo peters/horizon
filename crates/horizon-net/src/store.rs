@@ -49,6 +49,7 @@ impl Store {
             }
         }
         validate_private(&directory, true)?;
+        let directory = fs::canonicalize(directory)?;
         let lock_path = directory.join("agent.lock");
         if lock_path.exists() {
             validate_private(&lock_path, false)?;
@@ -156,7 +157,9 @@ impl Store {
     fn sync_directory(&self) -> Result<()> {
         require_directory_durability()?;
         #[cfg(unix)]
-        fs::File::open(&self.directory)?.sync_all()?;
+        for directory in self.directory.ancestors() {
+            fs::File::open(directory)?.sync_all()?;
+        }
         Ok(())
     }
 }
@@ -543,6 +546,176 @@ mod tests {
         assert_eq!(read_private(&path)?, b"{}");
         fs::write(&path, vec![0; 1_048_577])?;
         assert!(matches!(read_private(&path), Err(Error::MessageTooLarge)));
+        Ok(())
+    }
+
+    // These tests require Unix permission modes, directory fsync, and symbolic links.
+    #[cfg(unix)]
+    struct RestoreAncestorPermissions(PathBuf);
+
+    #[cfg(unix)]
+    impl Drop for RestoreAncestorPermissions {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o700));
+        }
+    }
+
+    #[cfg(unix)]
+    fn relative_from_current_directory(absolute: &Path) -> Result<PathBuf> {
+        let mut relative = PathBuf::new();
+        for component in std::env::current_dir()?.components() {
+            if matches!(component, std::path::Component::Normal(_)) {
+                relative.push("..");
+            }
+        }
+        for component in absolute.components() {
+            if let std::path::Component::Normal(part) = component {
+                relative.push(part);
+            }
+        }
+        Ok(relative)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn initial_nested_directory_publication_and_visible_retry_require_ancestor_durability() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        if rustix::process::geteuid().is_root() {
+            return Ok(()); // Root bypasses the real directory permission boundary.
+        }
+        let working_directory = std::env::current_dir()?;
+        for relative in [false, true] {
+            let temporary = tempfile::tempdir()?;
+            let ancestor = temporary.path().join("owned-ancestor");
+            fs::create_dir(&ancestor)?;
+            let directory = ancestor.join("new-parent/new-child/state");
+            let requested = if relative {
+                relative_from_current_directory(&directory)?
+            } else {
+                directory.clone()
+            };
+            let restore = RestoreAncestorPermissions(ancestor.clone());
+            fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o300))?;
+            let mut initial = config();
+            assert!(matches!(
+                Store::open(requested.clone(), &mut initial),
+                Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::PermissionDenied
+            ));
+            let published = directory.join("00000000000000000000.json");
+            let original = fs::read(&published)?;
+            assert!(matches!(
+                Store::open(requested.clone(), &mut initial),
+                Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::PermissionDenied
+            ));
+            assert_eq!(fs::read(&published)?, original);
+            assert_eq!(std::env::current_dir()?, working_directory);
+            fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o700))?;
+            drop(restore);
+            let store = Store::open(requested, &mut initial)?;
+            assert_eq!(store.directory, directory.canonicalize()?);
+            assert!(store.directory.is_absolute());
+            assert_eq!(initial.topology, config().topology);
+            drop(store);
+        }
+        assert_eq!(std::env::current_dir()?, working_directory);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn published_withdrawal_requires_ancestor_barrier_on_every_identical_retry() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        if rustix::process::geteuid().is_root() {
+            return Ok(()); // Root bypasses the real directory permission boundary.
+        }
+        for revoke in [false, true] {
+            let temporary = tempfile::tempdir()?;
+            let ancestor = temporary.path().join("owned-ancestor");
+            let directory = ancestor.join("nested/state");
+            let mut initial = config();
+            initial.topology.services.insert(
+                "self-service".into(),
+                crate::Service {
+                    node: "node".into(),
+                    port: 22,
+                },
+            );
+            initial.topology.grants.insert(
+                "lease".into(),
+                crate::Grant {
+                    from: vec!["node".into()],
+                    to: "self-service".into(),
+                    expires_at: u64::MAX,
+                },
+            );
+            let source_key = initial.topology.nodes["node"].key.clone();
+            let store = Store::open(directory.clone(), &mut initial)?;
+            let controller = crate::Controller::new(initial.topology.clone())?;
+            controller.bind_store(store)?;
+            let mut withdrawn = initial.topology.clone();
+            withdrawn.revision = 1;
+            withdrawn.grants.clear();
+            let plan = controller.plan(withdrawn.clone())?;
+            let withdraw = || -> Result<()> {
+                if revoke {
+                    assert!(controller.revoke("lease")?);
+                } else {
+                    assert!(controller.apply(&plan)?.changed);
+                }
+                Ok(())
+            };
+            let restore = RestoreAncestorPermissions(ancestor.clone());
+            fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o300))?;
+            for _ in 0..2 {
+                assert!(matches!(
+                    withdraw(),
+                    Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::PermissionDenied
+                ));
+                assert_eq!(controller.topology(), initial.topology);
+                assert!(controller.authorize(&source_key, "self-service").is_ok());
+                assert!(directory.join("00000000000000000001.json").is_file());
+                assert!(fs::File::open(&directory)?.sync_all().is_ok());
+                assert!(fs::File::open(&ancestor).is_err());
+            }
+            fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o700))?;
+            drop(restore);
+            withdraw()?;
+            assert_eq!(controller.topology(), withdrawn);
+            assert!(matches!(
+                controller.authorize(&source_key, "self-service"),
+                Err(Error::Denied)
+            ));
+            drop(controller);
+            let mut enrollment = config();
+            let _restored = Store::open(directory, &mut enrollment)?;
+            assert_eq!(enrollment.topology, withdrawn);
+            assert!(matches!(
+                crate::Controller::new(enrollment.topology)?.authorize(&source_key, "self-service"),
+                Err(Error::Denied)
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn state_directory_uses_physical_ancestry_through_a_parent_symlink() -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let actual = temporary.path().join("actual");
+        fs::create_dir(&actual)?;
+        let alias = temporary.path().join("alias");
+        std::os::unix::fs::symlink(&actual, &alias)?;
+        let working_directory = std::env::current_dir()?;
+        let requested = relative_from_current_directory(&alias.join("nested/state"))?;
+        let mut initial = config();
+        let store = Store::open(requested, &mut initial)?;
+        assert_eq!(store.directory, actual.join("nested/state").canonicalize()?);
+        assert!(store.directory.is_absolute());
+        assert!(!store.directory.starts_with(&alias));
+        assert_eq!(std::env::current_dir()?, working_directory);
+        assert!(store.directory.join("00000000000000000000.json").is_file());
+        drop(store);
         Ok(())
     }
 }
