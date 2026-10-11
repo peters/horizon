@@ -22,6 +22,11 @@ const CREATE_REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// `navigation: pending`. Bounded so creation never waits for a slow first
 /// page; the overall create deadline still caps it.
 const STARTUP_NAVIGATION_BUDGET: Duration = Duration::from_secs(10);
+/// A create that did not become controllable before its deadline.
+const CREATE_TIMEOUT: (&str, &str) = (
+    "create_timeout",
+    "the browser panel did not become controllable before the create deadline",
+);
 /// Headroom kept before the create deadline for the host's own completion
 /// work (ownership update, audit, result write). Delivery of that result to
 /// the caller is covered separately by the MCP controller, which waits
@@ -315,7 +320,8 @@ impl HorizonApp {
                 if host.stamps_in_flight == 0 {
                     host.queued_placement = None;
                 }
-                let asked_again = host.stamp_requests != requested;
+                // A stamp of a replaced board says nothing about the board that stands.
+                let asked_again = host.stamp_requests != requested || host.io.applying_stale();
                 let current = sync.is_some_and(|sync| sync.complete) && !skipped;
                 host.stamped_placement = (current && !asked_again).then_some(placement);
                 host.stamp_failed = (!current && !asked_again).then_some(placement);
@@ -847,6 +853,9 @@ fn publish_requested_create(
     if !live.holds() {
         return fail(HOST_RETIRING.0, HOST_RETIRING.1);
     }
+    if request.deadline_at_millis < manifest::now_millis() {
+        return fail(CREATE_TIMEOUT.0, CREATE_TIMEOUT.1);
+    }
     if let Err(error) = manifest::publish_requested_panel(
         panel_local_id,
         request.visible,
@@ -909,12 +918,7 @@ fn browser_create_is_terminal(board: &Board, io: &mut HostIo, pending: &PendingB
         return true;
     }
     if pending.request.deadline_at_millis < manifest::now_millis() {
-        record_and_complete_failure(
-            io,
-            pending,
-            "create_timeout",
-            "the browser panel did not become controllable before the create deadline",
-        );
+        record_and_complete_failure(io, pending, CREATE_TIMEOUT.0, CREATE_TIMEOUT.1);
         return true;
     }
     false
