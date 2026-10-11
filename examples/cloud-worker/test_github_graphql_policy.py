@@ -220,8 +220,9 @@ class QueryTests(unittest.TestCase):
         plan('{ search(query: "is:open repo:example/library", type: ISSUE) { issueCount } }')
         # Current gh releases group the keywords of a search, also for `gh pr list --search`.
         for text in ['( fix bug ) repo:example/library state:open type:pr', '( -label:bug ) repo:example/library',
-                     '( "\\"exact phrase\\"" ) repo:example/library', '( ( x ) y ) repo:example/library',
-                     'label:"good first issue" repo:"example/library"']:
+                     '( "exact phrase" ) repo:example/library', '( ( x ) y ) repo:example/library',
+                     'label:"good first issue" repo:"example/library"',
+                     '-review-requested:"a b" repo:example/library']:
             self.assertEqual(policy.search_repositories(text), ['example/library'], text)
         for text, reason in [('is:open', 'needs a repo: qualifier'), ('repo:example/secret', 'example/secret'),
                              ('repo:example/library OR repo:example/secret', 'cannot use OR'),
@@ -229,14 +230,24 @@ class QueryTests(unittest.TestCase):
                              ('repo:example/library (x)', 'parenthesis in a word'),
                              ('repo:example/library(x)', 'parenthesis in a word'),
                              ('-( x ) repo:example/library', 'parenthesis in a word'),
+                             ('- ( x ) repo:example/library', 'a - only directly before a word'),
                              ('( x repo:example/library', 'closes each parenthesis'),
                              (') x ( repo:example/library', 'closes each parenthesis'),
                              ('( repo:example/secret ) repo:example/library', 'example/secret'),
-                             # A word that GitHub could read outside the quotation marks.
-                             ('a"b "OR repo:example/secret" c"d repo:example/library', 'also not in quotation'),
-                             ('a"b "org:example" c"d repo:example/library', 'also not in quotation'),
-                             ('a"b "repo:example/secret" c"d repo:example/library', 'example/secret'),
-                             ('a"b "repo:"example/secret" repo:example/library', 'example/secret'),
+                             # Quoted text is no repo: qualifier, so the search is not limited.
+                             ('"repo:example/library"', 'needs a repo: qualifier'),
+                             ('( "repo:example/library" ) is:open', 'needs a repo: qualifier'),
+                             # Quoted text cannot name a repository, operator or owner without a grant.
+                             ('"repo:example/secret" repo:example/library', 'example/secret'),
+                             ('label:"x OR repo:example/secret" repo:example/library', 'also not in quotation'),
+                             ('"org:example" repo:example/library', 'also not in quotation'),
+                             # GitHub could read these quotation marks otherwise than the broker.
+                             ('a"b "OR repo:example/secret" c"d repo:example/library', 'quotation marks only'),
+                             ('a"b repo:example/library c"d', 'quotation marks only'),
+                             ('x"repo:example/library"', 'quotation marks only'),
+                             ('repo:"example/library"x', 'quotation marks only'),
+                             ('( "\\"exact phrase\\"" ) repo:example/library', 'no backslash'),
+                             ('"a\\" repo:example/library \\"b"', 'no backslash'),
                              ('repo:example/library "open', 'quotation mark'),
                              ('repo:example/library org:example', 'org:, user: or owner:'),
                              ('repo:example/library -user:x', 'org:, user: or owner:')]:

@@ -74,6 +74,10 @@ REQUEST_KEYS = {'query', 'variables', 'operationName'}
 REPOSITORY = re.compile(r'[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}')
 # Search qualifiers that GitHub joins to repo: with OR.
 WIDENING = ('org:', 'user:', 'owner:')
+# A word of a search: a phrase in quotation marks, a qualifier with its value in quotation
+# marks, or a word without quotation marks and backslashes.
+SEARCH_WORD = r'(?:-?[A-Za-z_][A-Za-z_-]*:)?"[^"\\]*"|[^\s"\\]+'
+SEARCH_QUERY = re.compile(r'\s*(?:(?:%s)(?:\s+|\Z))*' % SEARCH_WORD)
 NO_GRANT = '%s has no GitHub grant on this worker. Ask for access with the github_access tool.'
 
 
@@ -113,23 +117,27 @@ def alias(document, prefix):
 
 def search_repositories(text):
     """The repositories that a search query is limited to. A query without a `repo:`
-    qualifier, or with a boolean operator or a parenthesis in a word, is refused. A parenthesis
-    that is a word of its own only groups words: current gh releases put the keywords of a
-    search in a group, such as `( fix bug ) repo:owner/name type:pr`. Without OR, AND and NOT,
-    a group only narrows the search."""
+    qualifier outside quotation marks, or with a boolean operator or a parenthesis in a word, is
+    refused. A parenthesis that is a word of its own only groups words: current gh releases put
+    the keywords of a search in a group, such as `( fix bug ) repo:owner/name type:pr`. Without
+    OR, AND and NOT, a group only narrows the search."""
     if not isinstance(text, str) or len(text) > 1024:
         raise Refused('a search needs a query of at most 1024 characters.')
-    if text.count('"') % 2:
-        raise Refused('a search on this worker closes each quotation mark.')
-    words = re.findall(r'-?[A-Za-z_]+:"[^"]*"|"[^"]*"|\S+', text)
-    found = []
+    # GitHub could read a quotation mark inside a word, or one after a backslash, otherwise
+    # than the broker, and so read a live qualifier as quoted text or quoted text as a live one.
+    if not SEARCH_QUERY.fullmatch(text):
+        raise Refused('a search on this worker puts quotation marks only around a whole word or the '
+                      'value of a qualifier, closes each one, and has no backslash.')
+    live = []
     depth = 0
-    for word in words:
+    for word in re.findall(SEARCH_WORD, text):
         if word in ('(', ')'):
             depth += 1 if word == '(' else -1
             if depth < 0:
                 break
             continue
+        if not word.strip('-'):
+            raise Refused('a search on this worker puts a - only directly before a word.')
         if word in ('OR', 'AND', 'NOT') or ('(' in word or ')' in word) and not word.startswith('"'):
             raise Refused('a search on this worker cannot use OR, AND, NOT or a parenthesis in a word.')
         if word.lower().lstrip('-').startswith(WIDENING):
@@ -139,14 +147,17 @@ def search_repositories(text):
             value = word[5:].strip('"')
             if not REPOSITORY.fullmatch(value):
                 raise Refused('a search names a repository that is not owner/name.')
-            found.append(value)
+            live.append(value)
     if depth:
         raise Refused('a search on this worker closes each parenthesis.')
-    # GitHub can read a quotation mark in a word, or one after a backslash, otherwise than
-    # the words above do, and so read a quoted word as a live one. Each piece of each word
-    # between quotation marks, backslashes and parentheses is therefore checked as well.
-    # A `repo:` piece without its value, as in `repo:"owner/name"`, takes the next piece.
-    pieces = re.split(r'["\\()\s]+', text)
+    if not live:
+        raise Refused('a search on this worker needs a repo: qualifier for a granted repository.')
+    # Each piece between quotation marks and parentheses is checked as well, so that a
+    # repository, operator or owner in quoted text is never sent for a repository without a
+    # grant. A `repo:` piece without its value, as in `repo:"owner/name"`, takes the next piece.
+    # A quoted repository must be granted, but it does not limit the search.
+    quoted = []
+    pieces = re.split(r'["()\s]+', text)
     for index, piece in enumerate(pieces):
         if piece in ('OR', 'AND', 'NOT'):
             raise Refused('a search on this worker cannot use OR, AND or NOT, also not in quotation marks.')
@@ -156,10 +167,8 @@ def search_repositories(text):
             value = piece[5:] or (pieces[index + 1] if index + 1 < len(pieces) else '')
             if not REPOSITORY.fullmatch(value):
                 raise Refused('a search names a repository that is not owner/name.')
-            found.append(value)
-    if not found:
-        raise Refused('a search on this worker needs a repo: qualifier for a granted repository.')
-    return list(dict.fromkeys(found))
+            quoted.append(value)
+    return list(dict.fromkeys(live + quoted))
 
 
 class Walk:

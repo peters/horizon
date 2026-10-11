@@ -484,8 +484,8 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
     steps 11 and 13 only. No line names `example/secret` or `/user/repos`.
 
 14. Search the granted repository as `gh` does. `gh` puts the keywords of a
-    search in a group of their own. Then use a parenthesis in a word, and then
-    a `repo:` qualifier in quotation marks for a repository that has no grant:
+    search in a group of their own. Then use a parenthesis in a word. Then put
+    a repository that has no grant in quotation marks:
 
     ```bash
     docker exec <c> horizon-worker-tailnet agent sh -c 'cd /workspace/home/project \
@@ -493,7 +493,7 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
     docker exec <c> horizon-worker-tailnet agent sh -c 'cd /workspace/home/project \
         && gh api -X GET search/issues -f q="repo:example/project(x)"'
     docker exec <c> horizon-worker-tailnet agent sh -c 'cd /workspace/home/project \
-        && gh api -X GET search/issues -f q="a\"b \"repo:\"example/secret\" repo:example/project"'
+        && gh api -X GET search/issues -f q="\"repo:example/secret\" repo:example/project"'
     docker exec <c> grep '^api /search' /root/github/seen.log
     ```
 
