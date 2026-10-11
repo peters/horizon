@@ -20,6 +20,14 @@ pub(super) fn gone() -> (u16, String) {
     )
 }
 
+/// A server with no running actions, so its delete is sent at once.
+pub(super) fn no_actions() -> (u16, String) {
+    (
+        200,
+        json!({"actions": [], "meta": {"pagination": {"next_page": null}}}).to_string(),
+    )
+}
+
 /// Runs `act` on a cloud whose record is `operation` and `journal`, stopping,
 /// against `responses`; returns the saved deployment, whether anything is
 /// retained and the requests served.
@@ -99,6 +107,7 @@ fn an_interrupted_stop_is_neither_reported_stopped_nor_resumed_until_its_server_
     let deleted = vec![
         still_there.clone(),
         still_there,
+        no_actions(),
         (200, json!({"action": {"id": 3, "status": "success"}}).to_string()),
         gone(),
     ];
@@ -170,7 +179,7 @@ fn stop_boundary_refusal_prevents_mutation_and_settlement_follows_saved_stop() {
     let (state, _, requests) = act_on(
         &bound,
         &released,
-        vec![off.clone(), off.clone()],
+        vec![off.clone(), off.clone(), no_actions()],
         |compute, store, state| {
             let observe = |phase| {
                 assert_eq!(phase, Mutation::Pending);
@@ -180,11 +189,12 @@ fn stop_boundary_refusal_prevents_mutation_and_settlement_follows_saved_stop() {
         },
     );
     assert_eq!(state.stage, Stage::Stopping);
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 3);
     assert!(requests.iter().all(|request| request.starts_with("GET ")));
     let responses = vec![
         off.clone(),
         off,
+        no_actions(),
         (200, json!({"action":{"id":3,"status":"success"}}).to_string()),
         gone(),
     ];
