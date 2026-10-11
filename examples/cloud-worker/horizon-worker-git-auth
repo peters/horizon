@@ -31,6 +31,7 @@ def load_sibling(name, module):
 # Which repository a gh invocation or a Git credential request targets.
 targets = load_sibling('horizon-worker-gh-repository', 'horizon_worker_gh_repository')
 gh_repository = targets.gh_repository
+gh_config, route_gh, API_SOCKET, GH = targets.gh_config, targets.route_gh, targets.API_SOCKET, targets.GH
 same_repository = targets.same_repository
 credential_reply = targets.credential_reply
 
@@ -49,10 +50,6 @@ SERVICE_TIMEOUT = 10
 # never holds one. Git trusts the service's authority only for github.com.
 PROXY_PORT = 47281
 PROXY_AUTHORITY = '/run/horizon-worker/github-ca.pem'
-# The service's API broker. While the service runs, gh sends every request to this socket
-# (`http_unix_socket`) with a placeholder token; the broker adds the token that a grant covers.
-API_SOCKET = '/run/horizon-worker/github-api.sock'
-GH = '/usr/bin/gh'
 GITHUB = 'https://github.com/'
 ROUTE = (('http.' + GITHUB + '.proxy', 'http://127.0.0.1:%d' % PROXY_PORT),
          ('http.' + GITHUB + '.sslCAInfo', PROXY_AUTHORITY))
@@ -155,9 +152,19 @@ def parse(source):
     return json.loads(source, object_pairs_hook=unique_keys)
 
 
+def isolated():
+    """Whether agents run isolated."""
+    try:
+        os.stat(AGENT_ISOLATION)
+        return True
+    except PermissionError:  # The agent account cannot look into the marker's directory.
+        return True
+    except FileNotFoundError:  # Only a missing marker proves that agents are not isolated.
+        return False
+
+
 def root_holds_token():
-    """Whether this process is root under agent isolation, which keeps the token from agents."""
-    return os.geteuid() == 0 and AGENT_ISOLATION.exists()
+    return os.geteuid() == 0 and isolated()
 
 
 def token_path():
@@ -235,7 +242,7 @@ def previous_grants():
         value = read_private(identity_path())
         if value is not None:
             return identity_grants(value)
-        return None if AGENT_ISOLATION.exists() else read_grants()
+        return None if isolated() else read_grants()
     except ValueError:
         return None
 
@@ -386,23 +393,6 @@ def route(env, proxy):
         git(env, 'config', '--global', '--add', 'include.path', str(path))
 
 
-def gh_config(env, *args):
-    """gh's own configuration command, for the configuration under HOME that agents' gh reads."""
-    env = {key: value for key, value in env.items() if key not in ('GH_CONFIG_DIR', 'XDG_CONFIG_HOME')}
-    return subprocess.run([GH, 'config', *args], env=env, check=True, stdin=subprocess.DEVNULL,
-                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=30).stdout.strip()
-
-
-def route_gh(env, broker):
-    """Sends gh's requests to the service's API broker, or stops doing so. Only the value this
-    helper writes is removed."""
-    current = gh_config(env, 'get', 'http_unix_socket')
-    if broker and current != API_SOCKET:
-        gh_config(env, 'set', 'http_unix_socket', API_SOCKET)
-    elif not broker and current == API_SOCKET:
-        gh_config(env, 'set', 'http_unix_socket', '')
-
-
 def configure_chain(value):
     """Git configuration for a horizon-worker-github chain; no token reaches this helper. The
     service sends its grants with their identity and the grants of the chain it replaces."""
@@ -547,7 +537,7 @@ def main():
         if env is None:
             # The service does not answer: a token an outer gh took from it must not outlive it.
             env = gh_environment(read_grants(), without_injected(os.environ), sys.argv[1:])
-            if AGENT_ISOLATION.exists():
+            if isolated():
                 # The broker's route, once a service sets it again, is in this configuration.
                 env['GH_CONFIG_DIR'] = str(Path(HOME) / '.config/gh')
         os.execve('/usr/bin/gh', ['/usr/bin/gh', *sys.argv[1:]], env)
@@ -567,8 +557,7 @@ def main():
     elif operation == 'clear':
         clear()
     elif operation in ('route', 'unroute'):
-        # The service routes Git through its proxy and gh through its broker once they listen;
-        # the worker's start and the end of the service route both to GitHub directly again.
+        # The service routes Git and gh through itself once it listens; its end routes them back.
         route(dict(os.environ, HOME=HOME), proxy=operation == 'route')
         route_gh(dict(os.environ, HOME=HOME), broker=operation == 'route')
     elif operation == 'get':
@@ -587,8 +576,7 @@ def main():
 
 
 if __name__ == '__main__':
-    # The agents own their Git files, so root runs this helper as the agent, except for the
-    # token that root keeps (ROOT_OPERATIONS). horizon-worker-github imports it as root.
+    # Root runs this helper as the agent, who owns the Git files, except for ROOT_OPERATIONS.
     if root_holds_token() and not (Path(sys.argv[0]).name != 'gh' and sys.argv[1:2]
                                    and sys.argv[1] in ROOT_OPERATIONS):
         os.chdir('/workspace')
