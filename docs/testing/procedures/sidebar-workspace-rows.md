@@ -113,6 +113,14 @@ the hovered or focused row.
    Result: The row becomes the focused row, with a tint of the workspace color
    and a close button. The canvas shows the panel.
 
+4. If the computer has a touch screen, tap the right end of a panel row that is
+   not focused and that you did not touch before. If not, use a script that
+   moves the pointer and clicks in one step, for example
+   `xdotool mousemove <x> <y> click 1` on the fixture display.
+
+   Result: The row becomes the focused row. The panel stays open. The close
+   button closes a panel only when it showed before the press.
+
 ### 6.4 SCROLL: A long list
 
 1. Make the Horizon window less high than the list. Turn the mouse wheel on the
@@ -155,15 +163,40 @@ the hovered or focused row.
 
    Result: The workspace is back in the main window. The row shows no badge.
 
+### 6.7 SCREEN READER: Spoken names
+
+1. Start a screen reader on the fixture desktop, for example Orca. Move the
+   keyboard focus through the sidebar.
+
+   Result: A workspace row says its name and its panel count, for example
+   `Horizon, 4 panels`. A row in a new window also says `in a new window`.
+
+2. Move the focus to the panel rows of `Horizon`.
+
+   Result: Each row says the kind and the label, for example
+   `Claude: Fix recurring sync timeout, working`. The close button says
+   `Close panel`.
+
+3. Move the focus to the group header.
+
+   Result: The header says the group name and its count, for example
+   `This PC 13`. The summary `live` is read too. On a narrow sidebar where a
+   summary does not show next to **Stop idle…**, the header says the summary
+   after the count. The [cloud list procedure](cloud-list.md) has a group with
+   **Stop idle…**.
+
 ## 7. Pass criteria
 
 - 6.1 shows a tile with initials on each row and a badge only on a working row.
 - 6.2 shows the active card, the tree line and the agent tasks.
-- 6.3 shows the close button only on the hovered or focused row.
+- 6.3 shows the close button only on the hovered or focused row, and a tap on
+  a hidden close button focuses the row and does not close the panel.
 - 6.4 scrolls the list.
 - 6.5 keeps the rows readable in the light theme.
 - 6.6 shows the full text of a cut name, line or title on hover, and moves the
   `NEW WINDOW` badge to the tile tooltip on a narrow sidebar.
+- 6.7 gives each row, panel row and header a spoken name with the facts that
+  the row shows.
 
 ## 8. Cleanup
 
