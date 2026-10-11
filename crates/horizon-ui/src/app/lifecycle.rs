@@ -78,6 +78,7 @@ impl HorizonApp {
         }
         let had_panel_output = self.drain_panel_output();
         self.forward_terminal_clipboard_writes(ctx);
+        self.browser_create_host.io.wake_with(ctx);
         let browser_create_activity = self.poll_browser_create_requests() | self.poll_cloud_offers(ctx);
         let device_activity = self.poll_device_panel_requests(ctx);
 

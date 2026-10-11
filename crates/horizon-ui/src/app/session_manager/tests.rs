@@ -57,6 +57,8 @@ fn persistent_session_switch_waits_for_viewport_before_finalizing_target() {
         .expect("target persistent session");
     let target_before = std::fs::read(&target.runtime_state_path).expect("target runtime before switch");
 
+    // A switch waits for coordination work of the old board; let it end first.
+    app.settle_browser_host_io();
     app.activate_runtime_session(&ctx, &target);
     let _ = run_app_frame_with_input(&ctx, &mut app, raw_input([900.0, 700.0], None));
 
@@ -131,6 +133,8 @@ fn persisted_target_view_and_window_are_protected_during_session_switch() {
         .expect("target persistent session");
     let target_before = std::fs::read(&target.runtime_state_path).expect("target runtime before switch");
 
+    // A switch waits for coordination work of the old board; let it end first.
+    app.settle_browser_host_io();
     app.activate_runtime_session(&ctx, &target);
     let _ = run_app_frame_with_input(&ctx, &mut app, raw_input([900.0, 700.0], None));
 

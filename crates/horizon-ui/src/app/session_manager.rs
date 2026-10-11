@@ -275,7 +275,7 @@ impl HorizonApp {
         // terminal filter, so a key-up after the switch cannot leak into a
         // new-board terminal; only stop-attribution is reset.
         self.speech_engaged_profile = None;
-        self.retire_pending_browser_closes_for_shutdown();
+        self.retire_browser_requests();
         // The switch overlay hides every viewer until the old board is gone.
         self.abandon_device_reveals("Device panel closed by a session switch");
         self.pending_session_switch = Some(PendingSessionSwitch {
@@ -340,6 +340,13 @@ impl HorizonApp {
             }
         }
 
+        // Coordination work asked for on the old board ends before the new
+        // board replaces it, within the same bound as an exit.
+        if self.browser_host_io_holds_teardown() {
+            ctx.request_repaint_after(Duration::from_millis(32));
+            return true;
+        }
+        self.browser_create_host.io.end_teardown_wait();
         let Some(pending) = self.pending_session_switch.take() else {
             return false;
         };
@@ -380,6 +387,7 @@ impl HorizonApp {
         let _ = self.auto_save_runtime_state();
         self.finish_session_switch();
         self.reset_native_file_input();
+        self.browser_create_host.io.replace_board();
         self.board = Board::new();
         self.arranged_panel_drag = None;
     }
