@@ -150,6 +150,13 @@ class StartTests(ServiceTestCase):
         self.addCleanup(service.broker.close, api_server, Path(api_server.getsockname()))
         self.assertEqual(len(answers), 1)
         self.assertTrue(answers[0].startswith(b'HTTP/1.1 403'), answers)
+        # The proxy logs the refusal after its client reads it. Wait for the line, else it can be
+        # written while the cleanup removes the test's directory.
+        log = self.store.runtime / agents.LOG
+        deadline = time.monotonic() + 30
+        while not (log.exists() and log.read_text().endswith('\n')) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertIn('"outcome":"refused"', log.read_text())
 
     def test_install_needs_agent_isolation(self):
         source = io.TextIOWrapper(io.BytesIO(json.dumps(installation()).encode()))

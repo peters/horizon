@@ -192,7 +192,8 @@ class RemoteTests(unittest.TestCase):
             (root / 'browserstack-local.yml').write_text('{}')
             process = subprocess.Popen(['python3', str(script), 'supervise'], env=dict(os.environ, PATH=str(root)+':'+os.environ['PATH']), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             try:
-                deadline = time.monotonic() + 5
+                # Two Python starts before the file exists, which takes seconds on a loaded host.
+                deadline = time.monotonic() + 30
                 while not (root / 'browserstack-ready').exists() and time.monotonic() < deadline: time.sleep(.02)
                 self.assertTrue((root / 'browserstack-ready').exists())
                 self.assertEqual(json.loads((root/'browserstack-started').read_text())['container_incarnation'], worker.container_incarnation())
