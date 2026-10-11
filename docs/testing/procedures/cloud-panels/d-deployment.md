@@ -255,8 +255,8 @@ fixture terminal.
 11. Click **Start cloud**.
 
     Result: The card of `smoke-r` shows the active stage and its elapsed time.
-    The view fits the workspace of `smoke-r`. The overview controls and the minimap
-    do not cover the card. The view does not zoom out to show the clouds of other
+    The view fits the workspace of `smoke-r` at the left edge of the canvas. The
+    overview controls and the minimap do not cover the card. The view does not zoom out to show the clouds of other
     workspaces: the card of `smoke-a` is not in view.
 
 12. Wait until the card shows **Ready**.

@@ -5,6 +5,13 @@ use horizon_core::{PanelKind, PanelOptions, WorkspaceId, WorkspaceLayout};
 
 fn pending(app: &mut HorizonApp) -> std::sync::mpsc::Sender<cloud_runtime::Result<Resolved>> {
     let workspace = app.board.ensure_workspace();
+    pending_in(app, workspace)
+}
+
+fn pending_in(
+    app: &mut HorizonApp,
+    workspace: WorkspaceId,
+) -> std::sync::mpsc::Sender<cloud_runtime::Result<Resolved>> {
     let config = CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n").unwrap();
     let (sender, receiver) = channel();
     app.cloud_prototype.production.creating = true;
@@ -435,26 +442,30 @@ fn completed_creation_keeps_the_workspace_for_its_new_cloud() {
 fn a_new_cloud_frames_its_own_workspace_and_leaves_other_clouds_out_of_view() {
     use crate::test_egui::DiscardTextures;
 
-    for screen in [egui::vec2(1600.0, 1000.0), egui::vec2(1280.0, 720.0)] {
+    for screen in [
+        egui::vec2(1280.0, 720.0),
+        egui::vec2(1600.0, 1000.0),
+        egui::vec2(3840.0, 1600.0),
+    ] {
         let (temp, mut app) = test_app();
-        let sender = pending(&mut app);
-        let local = app
-            .cloud_prototype
-            .production
-            .pending_creation
-            .as_ref()
-            .unwrap()
-            .workspace
-            .clone();
-        let destination = app.board.workspace_id_by_local_id(&local).unwrap();
-        // Clouds in two other workspaces, far from the new cloud; the person looks at one.
-        for (issue, title, position) in [(201, "Left", [-9000.0, 0.0]), (202, "Below", [0.0, 9000.0])] {
-            let workspace = app.board.create_workspace_at(title, position);
+        // Clouds in the two workspaces before it, one slot apart; the person looks at one.
+        for (issue, title) in [(201, "First"), (202, "Second")] {
+            let workspace = app.board.create_workspace(title);
             let local = app.board.workspace(workspace).unwrap().local_id.clone();
-            let group = CloudGroup::new(issue, title.into(), local, temp.path().into(), position);
+            let position = app.cloud_prototype.groups.next_position(&local, &app.board);
+            let mut group = CloudGroup::new(issue, title.into(), local, temp.path().into(), position);
+            group.reconcile(&mut app.board);
             app.cloud_prototype.groups.0.push(group);
-            app.board.focus_workspace(workspace);
         }
+        app.cloud_prototype.groups.reconcile(&mut app.board);
+        let first = app
+            .board
+            .workspace_id_by_local_id(&app.cloud_prototype.groups.0[0].workspace)
+            .unwrap();
+        app.board.focus_workspace(first);
+        // New › Cloud makes the new cloud's workspace, in the next slot.
+        let destination = app.board.create_workspace("New");
+        let sender = pending_in(&mut app, destination);
         let ctx = egui::Context::default();
         ctx.begin_pass(egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, screen)),
