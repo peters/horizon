@@ -19,18 +19,26 @@ pub(super) fn close_rect(row: Rect) -> Rect {
     Rect::from_center_size(pos2(card.max.x - 13.0, row.center().y), Vec2::splat(CLOSE_SIDE))
 }
 
-/// Paints a panel row. `close` is `Some(hovered)` while the close button shows.
-/// Returns whether the title was cut to fit.
+/// The pointer and list state of a panel row.
+#[derive(Clone, Copy)]
+pub(super) struct PanelRowState {
+    pub hovered: bool,
+    /// `Some(hovered)` while the close button shows.
+    pub close: Option<bool>,
+    /// The last row ends the tree guide.
+    pub last: bool,
+}
+
+/// Paints a panel row. Returns whether the title was cut to fit.
 pub(super) fn paint_panel_row(
     ui: &egui::Ui,
     row: Rect,
     workspace: &WorkspaceSidebarEntry,
     panel: &SidebarPanelEntry,
     label: &str,
-    hovered: bool,
-    close: Option<bool>,
-    last: bool,
+    state: PanelRowState,
 ) -> bool {
+    let PanelRowState { hovered, close, last } = state;
     let painter = ui.painter();
     let card = rows::card(row);
     let center_y = row.center().y;

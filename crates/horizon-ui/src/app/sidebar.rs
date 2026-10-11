@@ -389,7 +389,7 @@ impl HorizonApp {
         let hovered = ui.rect_contains_pointer(row_rect);
         let close_rect = panel_rows::close_rect(row_rect);
         // The close button always takes clicks and tells a screen reader its name,
-        // but shows only on the hovered or focused row.
+        // but shows only on the hovered or focused row, or with keyboard focus.
         let close = ui
             .interact(
                 close_rect,
@@ -398,16 +398,18 @@ impl HorizonApp {
             )
             .on_hover_text("Close panel");
         close.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close panel"));
-        let close_shows = hovered || panel.is_focused || close.hovered();
+        let close_shows = hovered || panel.is_focused || close.hovered() || close.has_focus();
         let title_elided = panel_rows::paint_panel_row(
             ui,
             row_rect,
             workspace,
             panel,
             &label,
-            hovered,
-            close_shows.then(|| close.hovered()),
-            last,
+            panel_rows::PanelRowState {
+                hovered,
+                close: close_shows.then(|| close.hovered()),
+                last,
+            },
         );
 
         let row_click_rect = Rect::from_min_max(row_rect.min, Pos2::new(close_rect.min.x, row_rect.max.y));
