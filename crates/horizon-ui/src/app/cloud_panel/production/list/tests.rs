@@ -184,9 +184,9 @@ fn the_sidebar_groups_workspaces_and_a_click_attaches_a_parked_cloud() {
     sidebar(&ctx, &mut app, Vec::new());
     let texts = texts(&sidebar(&ctx, &mut app, Vec::new()));
     let (parked, cloud, this_pc, local_row) = (
-        position(&texts, "PARKED"),
+        position(&texts, "Parked"),
         position(&texts, "Fixture"),
-        position(&texts, "THIS PC"),
+        position(&texts, "This PC"),
         position(&texts, "Local"),
     );
     assert!(parked.y < cloud.y && cloud.y < this_pc.y && this_pc.y < local_row.y);
@@ -216,4 +216,73 @@ fn the_sidebar_groups_workspaces_and_a_click_attaches_a_parked_cloud() {
         !runtime(&mut app).parking.is_parked(),
         "the cloud attaches when it is in use"
     );
+}
+
+#[test]
+fn the_tile_of_a_row_tells_its_status_on_hover() {
+    let (_temp, mut app) = test_app();
+    let quiet = app.board.create_workspace("Quiet zone");
+    app.board.active_workspace = Some(quiet);
+    let ctx = egui::Context::default();
+    ctx.all_styles_mut(|style| style.interaction.tooltip_delay = 0.0);
+    // An area shows from its second frame on.
+    sidebar(&ctx, &mut app, Vec::new());
+    let tile = position(&texts(&sidebar(&ctx, &mut app, Vec::new())), "QZ");
+    sidebar(&ctx, &mut app, vec![Event::PointerMoved(tile)]);
+    let texts = texts(&sidebar(&ctx, &mut app, Vec::new()));
+    assert!(texts.iter().any(|(text, _)| text == "Idle"), "{texts:?}");
+}
+
+#[test]
+fn a_tap_on_a_hidden_close_button_focuses_the_row_and_a_seen_one_closes_it() {
+    let (_temp, mut app) = test_app();
+    app.template_config.features.sidebar_accordion = true;
+    let workspace = app.board.create_workspace("Quiet zone");
+    let options = |name: &str| horizon_core::PanelOptions {
+        name: Some(name.to_owned()),
+        kind: horizon_core::PanelKind::Editor,
+        command: Some("seed".to_owned()),
+        ..horizon_core::PanelOptions::default()
+    };
+    let first = app.board.create_panel(options("first"), workspace).unwrap();
+    let second = app.board.create_panel(options("second"), workspace).unwrap();
+    app.board.active_workspace = Some(workspace);
+    app.board.focus(first);
+    let ctx = egui::Context::default();
+    // An area shows from its second frame on.
+    sidebar(&ctx, &mut app, Vec::new());
+    let row = position(&texts(&sidebar(&ctx, &mut app, Vec::new())), "second");
+    // The close button sits at the right of the 210 wide sidebar.
+    let close = Pos2::new(189.0, row.y);
+    let press = |position, pressed| Event::PointerButton {
+        pos: position,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+
+    // A touch tap: the press and the release arrive in separate frames.
+    sidebar(&ctx, &mut app, vec![Event::PointerMoved(close), press(close, true)]);
+    sidebar(&ctx, &mut app, vec![press(close, false)]);
+    assert!(app.board.panel(second).is_some(), "a blind tap does not close");
+    assert_eq!(app.board.focused, Some(second), "it focuses the row");
+    // The same in one frame.
+    app.board.focus(first);
+    sidebar(&ctx, &mut app, vec![Event::PointerMoved(Pos2::new(600.0, 600.0))]);
+    sidebar(&ctx, &mut app, vec![Event::PointerMoved(Pos2::new(600.0, 600.0))]);
+    sidebar(
+        &ctx,
+        &mut app,
+        vec![Event::PointerMoved(close), press(close, true), press(close, false)],
+    );
+    assert!(
+        app.board.panel(second).is_some(),
+        "a blind tap in one frame does not close"
+    );
+
+    // Seen first, the close button closes the panel on a press in a later frame.
+    sidebar(&ctx, &mut app, vec![Event::PointerMoved(close)]);
+    sidebar(&ctx, &mut app, vec![press(close, true)]);
+    sidebar(&ctx, &mut app, vec![press(close, false)]);
+    assert!(app.board.panel(second).is_none(), "a seen close button closes");
 }

@@ -1,32 +1,44 @@
-//! The rows of the sidebar's cloud list: a status dot, the workspace name and one
-//! status line, or only the dot and the name for a compact parked row.
-use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, Sense, Stroke, Vec2};
+//! The workspace rows of the sidebar's cloud list: a tile in the workspace color
+//! with its initials and a status badge, the name and one status line, or only
+//! the tile and the name for a compact parked row.
+use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use horizon_core::cloud_list::{Dot, Group};
 
 use crate::theme;
 
-use super::{SidebarWorkspaceInsert, SidebarWorkspaceRowInteraction, WorkspaceSidebarEntry};
+use super::text::{self, BOLD, SEMIBOLD};
+use super::{SidebarWorkspaceInsert, WorkspaceSidebarEntry};
 
 /// The height of a row with a status line.
-pub(super) const ROW_HEIGHT: f32 = 40.0;
+pub(super) const ROW_HEIGHT: f32 = 50.0;
 /// The height of a compact parked row.
-pub(super) const COMPACT_ROW_HEIGHT: f32 = 26.0;
+pub(super) const COMPACT_ROW_HEIGHT: f32 = 38.0;
+/// The horizontal inset of a row's card inside the sidebar.
+pub(super) const ROW_INSET: f32 = 8.0;
+/// The left edge of the tile inside a row's card.
+pub(super) const TILE_INSET: f32 = 8.0;
+/// The side of the tile of a row with a status line.
+pub(super) const TILE_SIDE: f32 = 30.0;
+const COMPACT_TILE_SIDE: f32 = 26.0;
 const DOT_RADIUS: f32 = 4.0;
+const CARD_RADIUS: u8 = 12;
 
 /// Whether the row of `workspace` is compact: a parked row shows no status line.
 pub(super) fn is_compact(workspace: &WorkspaceSidebarEntry) -> bool {
     workspace.row.group == Group::Parked
 }
 
-/// Width left for the workspace name after the badges that follow it: the
-/// panel count (accordion rows only) and the `NEW WINDOW` badge (detached
-/// rows). Sizing the label to this width lets it truncate instead of running
-/// past the sidebar edge.
-pub(super) fn sidebar_workspace_name_width(available_width: f32, detached: bool, accordion: bool) -> f32 {
-    let count_reserve = if accordion { 28.0 } else { 0.0 };
-    // Badge text plus the explicit 4px gap and egui's item spacing before it.
-    let detached_reserve = if detached { 76.0 } else { 0.0 };
-    (available_width - count_reserve - detached_reserve - 10.0).max(0.0)
+pub(super) fn row_height(workspace: &WorkspaceSidebarEntry) -> f32 {
+    if is_compact(workspace) {
+        COMPACT_ROW_HEIGHT
+    } else {
+        ROW_HEIGHT
+    }
+}
+
+/// The card of a row: the row without the sidebar inset.
+pub(super) fn card(row: Rect) -> Rect {
+    row.shrink2(vec2(ROW_INSET, 0.0))
 }
 
 /// What the status dot says, for its hover text.
@@ -41,6 +53,11 @@ pub(super) fn dot_meaning(dot: Dot) -> &'static str {
         Dot::Parked { working: false } => "Parked · no local terminal",
         Dot::Stopped => "Worker stopped",
     }
+}
+
+/// Whether the tile shows a badge: an idle row shows none, so activity stands out.
+const fn has_badge(dot: Dot) -> bool {
+    !matches!(dot, Dot::Idle)
 }
 
 pub(super) fn paint_dot(painter: &egui::Painter, center: Pos2, dot: Dot) {
@@ -62,124 +79,222 @@ pub(super) fn paint_dot(painter: &egui::Painter, center: Pos2, dot: Dot) {
     }
 }
 
-/// Draws the dot, the name with its badges and, unless the row is compact, the
-/// status line.
-pub(super) fn render_sidebar_workspace_row_contents(
-    ui: &mut egui::Ui,
-    workspace: &WorkspaceSidebarEntry,
-    accordion: bool,
-) -> SidebarWorkspaceRowInteraction {
-    let mut hovered = false;
-    let mut clicked = false;
-    let mut track = |response: &egui::Response| {
-        hovered |= response.hovered();
-        clicked |= response.clicked();
-    };
-
-    let compact = is_compact(workspace);
-    ui.add_space(16.0);
-    let (dot_rect, dot_response) = ui.allocate_exact_size(Vec2::splat(DOT_RADIUS * 2.0 + 2.0), Sense::click());
-    paint_dot(ui.painter(), dot_rect.center(), workspace.row.dot);
-    // A compact row has no status line, so its dot tells it.
-    let meaning = dot_meaning(workspace.row.dot);
-    let spoken = if compact && !workspace.row.line.is_empty() {
-        format!("{meaning}\n{}", workspace.row.line)
+/// The fill of a row's card: the accent blend while dragged, `PANEL_BG_ALT` for the
+/// active workspace, a translucent `PANEL_BG_ALT` while hovered, or none at rest.
+pub(super) fn card_fill(workspace_color: Color32, is_active: bool, hovered: bool, dragging: bool) -> Option<Color32> {
+    if dragging {
+        Some(theme::blend(theme::PANEL_BG_ALT(), workspace_color, 0.22))
+    } else if is_active {
+        Some(theme::PANEL_BG_ALT())
+    } else if hovered {
+        Some(theme::alpha(theme::PANEL_BG_ALT(), 170))
     } else {
-        meaning.to_owned()
-    };
-    dot_response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &spoken));
-    let dot_response = dot_response.on_hover_text(spoken);
-    track(&dot_response);
-    ui.add_space(8.0);
-
-    let name = egui::RichText::new(&workspace.name)
-        .color(if workspace.is_active {
-            theme::FG()
-        } else {
-            theme::FG_SOFT()
-        })
-        .size(if compact { 12.5 } else { 13.0 })
-        .strong();
-    let name_width = sidebar_workspace_name_width(ui.available_width(), workspace.detached, accordion);
-    let text_height = if compact { 18.0 } else { 32.0 };
-    let line = (!compact && !workspace.row.line.is_empty()).then_some(workspace.row.line.as_str());
-    // A sized, top-down scope keeps the name and its line flush left while
-    // letting both truncate.
-    ui.allocate_ui_with_layout(Vec2::new(name_width, text_height), Layout::top_down(Align::Min), |ui| {
-        ui.spacing_mut().item_spacing.y = 1.0;
-        let response = ui.add(egui::Label::new(name).truncate().sense(Sense::click()));
-        track(&response);
-        if let Some(line) = line {
-            let response = ui
-                .add(
-                    egui::Label::new(egui::RichText::new(line).color(theme::FG_DIM()).size(11.0))
-                        .truncate()
-                        .sense(Sense::click()),
-                )
-                .on_hover_text(line);
-            track(&response);
-        }
-    });
-    if workspace.detached {
-        ui.add_space(4.0);
-        let detached_response = ui.add(
-            egui::Label::new(
-                egui::RichText::new("NEW WINDOW")
-                    .color(theme::FG_DIM())
-                    .size(8.5)
-                    .strong(),
-            )
-            .sense(Sense::click()),
-        );
-        track(&detached_response);
+        None
     }
-
-    if accordion {
-        let count_response = ui.add(
-            egui::Label::new(
-                egui::RichText::new(workspace.panels.len().to_string())
-                    .color(theme::FG_DIM())
-                    .size(11.0),
-            )
-            .sense(Sense::click()),
-        );
-        track(&count_response);
-    }
-
-    SidebarWorkspaceRowInteraction { hovered, clicked }
 }
 
+/// The color that a row shows behind its tile, for the ring that cuts the badge out.
+pub(super) fn row_surface(card_fill: Option<Color32>) -> Color32 {
+    card_fill.map_or_else(theme::BG_ELEVATED, |fill| {
+        theme::composite_over(theme::BG_ELEVATED(), fill)
+    })
+}
+
+/// Paints the card of a row: a filled, outlined card for the active workspace,
+/// a lighter one while dragged or hovered. Returns the color behind the tile.
 pub(super) fn paint_workspace_row_bg(
-    ui: &mut egui::Ui,
-    workspace_rect: Rect,
+    ui: &egui::Ui,
+    row: Rect,
     workspace_color: Color32,
     is_active: bool,
     hovered: bool,
     dragging: bool,
-) {
-    let workspace_bg = Rect::from_min_max(
-        Pos2::new(workspace_rect.min.x + 6.0, workspace_rect.min.y),
-        Pos2::new(workspace_rect.max.x - 6.0, workspace_rect.max.y),
-    );
-    if dragging {
-        ui.painter_at(workspace_bg).rect_filled(
-            workspace_bg,
-            CornerRadius::same(10),
-            theme::alpha(theme::blend(theme::PANEL_BG_ALT(), workspace_color, 0.18), 180),
-        );
-    } else if is_active {
-        ui.painter_at(workspace_bg).rect_filled(
-            workspace_bg,
-            CornerRadius::same(10),
-            theme::alpha(theme::blend(theme::PANEL_BG_ALT(), workspace_color, 0.12), 140),
-        );
-    } else if hovered {
-        ui.painter_at(workspace_bg).rect_filled(
-            workspace_bg,
-            CornerRadius::same(10),
-            theme::alpha(theme::PANEL_BG_ALT(), 160),
+) -> Color32 {
+    let card = card(row);
+    let painter = ui.painter();
+    let fill = card_fill(workspace_color, is_active, hovered, dragging);
+    if let Some(fill) = fill {
+        painter.rect_filled(card, CARD_RADIUS, fill);
+    }
+    if is_active && !dragging {
+        painter.rect_stroke(
+            card,
+            CARD_RADIUS,
+            Stroke::new(1.0_f32, theme::alpha(workspace_color, 120)),
+            StrokeKind::Inside,
         );
     }
+    row_surface(fill)
+}
+
+/// Paints the tile, the name with its badges and, unless the row is compact, the
+/// status line. The tile tells its status to a pointer and a screen reader.
+pub(super) fn paint_workspace_row_contents(
+    ui: &egui::Ui,
+    row: Rect,
+    workspace: &WorkspaceSidebarEntry,
+    accordion: bool,
+    surface: Color32,
+) -> egui::Response {
+    let card = card(row);
+    let compact = is_compact(workspace);
+    let line = (!compact && !workspace.row.line.is_empty()).then(|| text::fold_whitespace(&workspace.row.line));
+    let first_line_y = if line.is_some() {
+        card.min.y + 17.0
+    } else {
+        card.center().y
+    };
+
+    let tile = paint_tile(ui, card, workspace, compact, surface);
+    let text_left = tile.max.x + 10.0;
+    let (name_right, badge_shows) = paint_badges(ui, card, workspace, accordion, text_left, first_line_y);
+    let meaning = dot_meaning(workspace.row.dot);
+    let mut spoken = if compact && !workspace.row.line.is_empty() {
+        format!("{meaning}\n{}", workspace.row.line)
+    } else {
+        meaning.to_owned()
+    };
+    // A narrow sidebar leaves out the badge, so the tile tells it.
+    if workspace.detached && !badge_shows {
+        spoken.push_str("\nIn a new window");
+    }
+    let tile_response = ui.interact(
+        tile.expand(2.0),
+        ui.make_persistent_id(("sidebar_ws_tile", workspace.id.0)),
+        Sense::hover(),
+    );
+    tile_response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &spoken));
+    let tile_response = tile_response.on_hover_text(spoken);
+
+    let name_color = if workspace.is_active || has_badge(workspace.row.dot) {
+        theme::FG()
+    } else {
+        theme::blend(theme::FG(), theme::FG_SOFT(), 0.45)
+    };
+    let name = text::line(ui, &workspace.name, 13.5, SEMIBOLD, name_color, name_right - text_left);
+    let name_height = name.size().y;
+    let name_rect = Rect::from_min_size(pos2(text_left, first_line_y - name_height / 2.0), name.size());
+    let name_elided = name.elided;
+    ui.painter().galley(name_rect.min, name, name_color);
+    if name_elided {
+        hover_text(ui, name_rect, ("sidebar_ws_name", workspace.id.0), &workspace.name);
+    }
+    if let Some(line) = line {
+        let galley = text::line(
+            ui,
+            &line,
+            12.0,
+            text::REGULAR,
+            text::secondary(),
+            card.max.x - 10.0 - text_left,
+        );
+        let line_rect = Rect::from_min_size(pos2(text_left, name_rect.max.y + 2.0), galley.size());
+        ui.painter().galley(line_rect.min, galley, text::secondary());
+        hover_text(ui, line_rect, ("sidebar_ws_line", workspace.id.0), &line);
+    }
+    tile_response
+}
+
+/// Shows `text` while the pointer is on `rect`, and tells it to a screen reader.
+fn hover_text(ui: &egui::Ui, rect: Rect, id: (&str, u64), text: &str) {
+    let response = ui.interact(rect, ui.make_persistent_id(id), Sense::hover());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text));
+    response.on_hover_text(text);
+}
+
+/// Paints the tile with its initials and status badge; `surface` is the color
+/// around the tile, which the badge's ring uses to cut the badge out.
+fn paint_tile(ui: &egui::Ui, card: Rect, workspace: &WorkspaceSidebarEntry, compact: bool, surface: Color32) -> Rect {
+    let painter = ui.painter();
+    let accent = workspace.color;
+    let side = if compact { COMPACT_TILE_SIDE } else { TILE_SIDE };
+    let tile = Rect::from_min_size(
+        pos2(card.min.x + TILE_INSET, card.center().y - side / 2.0),
+        Vec2::splat(side),
+    );
+    let fill = theme::blend(
+        theme::PANEL_BG_ALT(),
+        accent,
+        if workspace.is_active { 0.42 } else { 0.26 },
+    );
+    painter.rect_filled(tile, 9, fill);
+    let letters_color = theme::ensure_terminal_text_contrast(theme::blend(accent, theme::FG(), 0.35), fill);
+    let letters = text::line(
+        ui,
+        &text::initials(&workspace.name),
+        if compact { 11.0 } else { 12.0 },
+        BOLD,
+        letters_color,
+        side,
+    );
+    painter.galley(tile.center() - letters.size() / 2.0, letters, letters_color);
+
+    if has_badge(workspace.row.dot) {
+        let center = tile.right_bottom() - vec2(2.0, 2.0);
+        painter.circle_filled(center, DOT_RADIUS + 2.0, surface);
+        paint_dot(painter, center, workspace.row.dot);
+    }
+    tile
+}
+
+/// The least room that the name keeps before the `NEW WINDOW` badge gives way.
+const MIN_NAME_WIDTH: f32 = 48.0;
+const COUNT_GAP: f32 = 8.0;
+const BADGE_GAP: f32 = 6.0;
+
+/// Where the name must end, from the right edge of the first line: after the
+/// panel count of `count_width` and the `NEW WINDOW` badge of `badge_width`.
+/// The badge shows only when the name keeps `MIN_NAME_WIDTH`; the second value
+/// tells whether it shows.
+pub(super) fn name_right(
+    text_left: f32,
+    right: f32,
+    count_width: Option<f32>,
+    badge_width: Option<f32>,
+) -> (f32, bool) {
+    let right = count_width.map_or(right, |width| right - width - COUNT_GAP);
+    match badge_width {
+        Some(width) if right - width - BADGE_GAP - text_left >= MIN_NAME_WIDTH => (right - width - BADGE_GAP, true),
+        _ => (right, false),
+    }
+}
+
+/// Paints the panel count (accordion only) and, when it fits, the `NEW WINDOW`
+/// badge at the right of the first line. Returns where the name must end and
+/// whether the badge shows.
+fn paint_badges(
+    ui: &egui::Ui,
+    card: Rect,
+    workspace: &WorkspaceSidebarEntry,
+    accordion: bool,
+    text_left: f32,
+    y: f32,
+) -> (f32, bool) {
+    let right = card.max.x - 10.0;
+    let count_color = if workspace.is_active {
+        theme::FG_SOFT()
+    } else {
+        theme::FG_DIM()
+    };
+    let count = accordion.then(|| text::mono(ui, &workspace.panels.len().to_string(), 11.0, count_color));
+    let badge = workspace
+        .detached
+        .then(|| text::line(ui, "NEW WINDOW", 8.5, SEMIBOLD, theme::FG_DIM(), 80.0));
+    let (name_right, badge_shows) = name_right(
+        text_left,
+        right,
+        count.as_ref().map(|count| count.size().x),
+        badge.as_ref().map(|badge| badge.size().x),
+    );
+    if let Some(count) = count {
+        let pos = pos2(right - count.size().x, y - count.size().y / 2.0);
+        ui.painter().galley(pos, count, count_color);
+    }
+    if let Some(badge) = badge.filter(|_| badge_shows) {
+        let pos = pos2(name_right + BADGE_GAP, y - badge.size().y / 2.0);
+        ui.painter().galley(pos, badge, theme::FG_DIM());
+    }
+    (name_right, badge_shows)
 }
 
 pub(super) fn paint_workspace_drop_indicator(
@@ -198,35 +313,4 @@ pub(super) fn paint_workspace_drop_indicator(
         [Pos2::new(left, y), Pos2::new(right, y)],
         Stroke::new(2.0_f32, theme::alpha(workspace_color, 220)),
     );
-}
-
-pub(super) fn paint_panel_row_bg(
-    ui: &mut egui::Ui,
-    item_rect: Rect,
-    workspace_color: Color32,
-    is_focused: bool,
-    hovered: bool,
-) {
-    let bg_rect = Rect::from_min_max(
-        Pos2::new(item_rect.min.x + 6.0, item_rect.min.y),
-        Pos2::new(item_rect.max.x - 6.0, item_rect.max.y),
-    );
-    if is_focused {
-        ui.painter_at(bg_rect).rect_filled(
-            bg_rect,
-            CornerRadius::same(10),
-            theme::alpha(theme::blend(theme::PANEL_BG_ALT(), workspace_color, 0.22), 200),
-        );
-        let edge = Rect::from_min_size(
-            Pos2::new(bg_rect.min.x, bg_rect.min.y + 4.0),
-            Vec2::new(2.0, bg_rect.height() - 8.0),
-        );
-        ui.painter().rect_filled(edge, CornerRadius::same(1), workspace_color);
-    } else if hovered {
-        ui.painter_at(bg_rect).rect_filled(
-            bg_rect,
-            CornerRadius::same(10),
-            theme::alpha(theme::PANEL_BG_ALT(), 180),
-        );
-    }
 }
