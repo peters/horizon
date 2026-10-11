@@ -226,7 +226,19 @@ fn deletion_waits_for_the_operation_that_runs() {
         !texts.iter().any(|text| text == "Delete cloud resources…"),
         "a reconnect that runs offers no deletion: {texts:?}"
     );
+    // A resize that reported Ready before its result arrived still holds the cloud.
+    let (_sender, receiver) = std::sync::mpsc::channel();
+    runtime.receiver = Some(receiver);
+    runtime.stage = Some(Stage::Ready);
+    runtime.resize = super::super::resize::State::running_for_test();
+    let texts = shown(&mut runtime);
+    assert!(
+        !texts.iter().any(|text| text == "Delete cloud resources…"),
+        "a resize that runs offers no deletion: {texts:?}"
+    );
+    runtime.resize = super::super::resize::State::default();
     runtime.receiver = None;
+    runtime.stage = Some(Stage::Provision);
     let texts = shown(&mut runtime);
     assert!(texts.iter().any(|text| text == "Delete cloud resources…"), "{texts:?}");
 }
