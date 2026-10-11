@@ -408,3 +408,70 @@ fn an_assigned_host_instance_is_adopted_once_and_never_replaced() {
         "an identity already in use is never replaced"
     );
 }
+
+#[test]
+fn an_owned_host_state_sync_writes_nothing_once_the_lease_has_moved() {
+    let root = tempfile::tempdir().expect("isolated root");
+    let path = manifest_path_for_root(root.path(), "panel");
+    write_at(&path, &driver_manifest(Some(HOST_A))).expect("write manifest");
+    let workspace = stamp(HOST_A, &["horizon:agent-a", "horizon:agent-b"]);
+    let lease = |name: &str, updated_at: i64| {
+        update_at(&path, "panel", |manifest| {
+            manifest.owner = Some(crate::manifest::ManifestOwner {
+                name: name.to_string(),
+                tty: None,
+                updated_at,
+            });
+        })
+        .expect("lease");
+    };
+
+    lease("horizon:agent-a", now_millis());
+    assert_eq!(
+        sync_owned_host_state_at(&path, "panel", false, &workspace, "horizon:agent-a").expect("hide"),
+        OwnedStampOutcome::Stamped {
+            stamp: HostStampOutcome::Written,
+            was_visible: true
+        }
+    );
+    assert!(read_at(&path).expect("hidden").hidden);
+
+    // The lease moves to another agent after the request was accepted.
+    lease("horizon:agent-b", now_millis());
+    let before = std::fs::read(&path).expect("manifest bytes");
+    assert_eq!(
+        sync_owned_host_state_at(&path, "panel", true, &workspace, "horizon:agent-a").expect("show"),
+        OwnedStampOutcome::OwnerChanged
+    );
+    assert_eq!(
+        std::fs::read(&path).expect("manifest bytes"),
+        before,
+        "the new owner's manifest is untouched"
+    );
+
+    lease("horizon:agent-a", now_millis() - crate::manifest::OWNER_TTL_MILLIS - 1);
+    assert_eq!(
+        sync_owned_host_state_at(&path, "panel", true, &workspace, "horizon:agent-a").expect("expired"),
+        OwnedStampOutcome::OwnerChanged,
+        "an expired lease is not held"
+    );
+    assert!(read_at(&path).expect("still hidden").hidden);
+
+    lease("horizon:agent-a", now_millis());
+    assert_eq!(
+        sync_owned_host_state_at(&path, "panel", false, &workspace, "horizon:agent-a").expect("steady"),
+        OwnedStampOutcome::Stamped {
+            stamp: HostStampOutcome::Unchanged,
+            was_visible: false
+        }
+    );
+    let other_host = stamp(HOST_B, &["horizon:agent-a"]);
+    assert_eq!(
+        sync_owned_host_state_at(&path, "panel", true, &other_host, "horizon:agent-a").expect("other host"),
+        OwnedStampOutcome::Stamped {
+            stamp: HostStampOutcome::NotOwned,
+            was_visible: false
+        }
+    );
+    assert!(read_at(&path).expect("unchanged").hidden);
+}

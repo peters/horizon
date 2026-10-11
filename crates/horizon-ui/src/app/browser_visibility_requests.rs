@@ -6,13 +6,14 @@
 
 use horizon_core::PanelKind;
 use horizon_core::browser::manifest::{
-    self, BrowserVisibilityAuditStatus, BrowserVisibilityRequest, BrowserVisibilityResult, ManifestWorkspace,
+    self, BrowserVisibilityAuditStatus, BrowserVisibilityRequest, BrowserVisibilityResult, HostStampOutcome,
+    ManifestWorkspace, OwnedStampOutcome,
 };
 
 use super::HorizonApp;
 use super::browser_host_io::BoardFence;
 use super::browser_request_claims::HOST_RETIRING;
-use super::browser_requests::{ActorPanel, actor_panel, browser_workspace, publish_manifest_host_state};
+use super::browser_requests::{ActorPanel, actor_panel, browser_workspace};
 
 type Refusal = (&'static str, &'static str);
 
@@ -54,7 +55,7 @@ impl HorizonApp {
             self.browser_create_host.io.live_fence(),
         );
         self.browser_create_host.io.then(
-            move || publish_visibility(&live, &published, original_visible, &workspace),
+            move || publish_visibility(&HomeFiles, &live, &published, &workspace),
             move |app, published| app.finish_visibility_request(&applied, published),
         );
     }
@@ -192,23 +193,62 @@ impl HorizonApp {
         let result = BrowserVisibilityResult::failed(&request, code, message);
         self.browser_create_host
             .io
-            .write(move || complete_visibility_failure(&request, &result));
+            .write(move || complete_visibility_failure(&HomeFiles, &request, &result));
+    }
+}
+
+/// The file work of one visibility request: its audits, the locked manifest
+/// write and its result. The worker uses those of this Horizon home.
+trait VisibilityFiles {
+    fn audit(&self, request: &BrowserVisibilityRequest, status: BrowserVisibilityAuditStatus) -> std::io::Result<()>;
+    /// Writes `visible` only while the requesting agent holds the panel's lease.
+    fn publish(
+        &self,
+        request: &BrowserVisibilityRequest,
+        visible: bool,
+        workspace: &ManifestWorkspace,
+    ) -> std::io::Result<OwnedStampOutcome>;
+    fn complete(&self, result: &BrowserVisibilityResult) -> std::io::Result<()>;
+}
+
+/// The manifests, audits and results of this Horizon home.
+struct HomeFiles;
+
+impl VisibilityFiles for HomeFiles {
+    fn audit(&self, request: &BrowserVisibilityRequest, status: BrowserVisibilityAuditStatus) -> std::io::Result<()> {
+        manifest::record_visibility_status(request, status)
+    }
+
+    fn publish(
+        &self,
+        request: &BrowserVisibilityRequest,
+        visible: bool,
+        workspace: &ManifestWorkspace,
+    ) -> std::io::Result<OwnedStampOutcome> {
+        manifest::sync_owned_host_state(&request.panel_local_id, visible, workspace, &request.actor)
+    }
+
+    fn complete(&self, result: &BrowserVisibilityResult) -> std::io::Result<()> {
+        manifest::complete_visibility_request(result)
     }
 }
 
 /// Audits the request and publishes the manifest's new visibility and the
-/// result, on the coordination worker. A completion that cannot be audited
-/// restores the visibility the manifest had, and a request that expired, lost
-/// its owner, or whose board retired while earlier jobs ran is refused. Says whether the
-/// change was published.
+/// result, on the coordination worker. The owner is checked in the same locked
+/// transaction as each manifest write, so a lease that moves while earlier
+/// jobs or the audits run is never crossed. A completion that cannot be
+/// audited restores the visibility the manifest had, while the agent still
+/// holds the lease, and a request that expired, lost its owner, or whose board
+/// retired while earlier jobs ran is refused. Says whether the change was
+/// published.
 fn publish_visibility(
+    files: &impl VisibilityFiles,
     live: &BoardFence,
     request: &BrowserVisibilityRequest,
-    original_visible: bool,
     workspace: &ManifestWorkspace,
 ) -> bool {
     let refuse = |code, message| {
-        complete_visibility_failure(request, &BrowserVisibilityResult::failed(request, code, message));
+        complete_visibility_failure(files, request, &BrowserVisibilityResult::failed(request, code, message));
         false
     };
     if !live.holds() {
@@ -217,51 +257,58 @@ fn publish_visibility(
     if request.deadline_at_millis < manifest::now_millis() {
         return refuse("request_expired", "browser visibility request expired");
     }
-    // Checked here, just before the writes, so an agent that took the panel
-    // while earlier jobs ran keeps it.
-    let owned_by_actor = manifest::read(&request.panel_local_id)
-        .and_then(|manifest| {
-            manifest
-                .live_owner(manifest::now_millis())
-                .map(|owner| owner.name.clone())
-        })
-        .as_deref()
-        == Some(request.actor.as_str());
-    if !owned_by_actor {
-        return refuse("ownership_changed", "browser panel ownership changed");
-    }
-    if let Err(error) = manifest::record_visibility_status(request, BrowserVisibilityAuditStatus::Dispatched) {
+    if let Err(error) = files.audit(request, BrowserVisibilityAuditStatus::Dispatched) {
         tracing::warn!(request_id = %request.request_id, %error, "could not audit browser visibility dispatch");
         return refuse("audit_failed", "Horizon refused an unaudited visibility change");
     }
-    // Host writes of the manifest all run on this worker, in order, so this
-    // is what the requests before this one left.
-    let restore = manifest::read(&request.panel_local_id).map_or(original_visible, |manifest| !manifest.hidden);
-    if let Err(error) = publish_manifest_host_state(&request.panel_local_id, request.visible, workspace) {
-        tracing::warn!(request_id = %request.request_id, %error, "could not update browser manifest visibility");
-        return refuse(
-            "manifest_update_failed",
-            "browser panel visibility could not be updated",
-        );
-    }
-    if let Err(error) = manifest::record_visibility_status(request, BrowserVisibilityAuditStatus::Completed) {
+    let restore = match files.publish(request, request.visible, workspace) {
+        Ok(OwnedStampOutcome::Stamped {
+            stamp: HostStampOutcome::Written | HostStampOutcome::Unchanged,
+            was_visible,
+        }) => was_visible,
+        Ok(OwnedStampOutcome::OwnerChanged) => {
+            return refuse("ownership_changed", "browser panel ownership changed");
+        }
+        Ok(OwnedStampOutcome::Stamped {
+            stamp: HostStampOutcome::NotOwned,
+            ..
+        }) => {
+            tracing::warn!(request_id = %request.request_id, "browser panel's driver runs in another Horizon host");
+            return refuse(
+                "manifest_update_failed",
+                "browser panel visibility could not be updated",
+            );
+        }
+        Err(error) => {
+            tracing::warn!(request_id = %request.request_id, %error, "could not update browser manifest visibility");
+            return refuse(
+                "manifest_update_failed",
+                "browser panel visibility could not be updated",
+            );
+        }
+    };
+    if let Err(error) = files.audit(request, BrowserVisibilityAuditStatus::Completed) {
         tracing::warn!(request_id = %request.request_id, %error, "could not audit browser visibility completion");
-        let _ = publish_manifest_host_state(&request.panel_local_id, restore, workspace);
+        let _ = files.publish(request, restore, workspace);
         return refuse("audit_failed", "visibility change could not be audited");
     }
-    complete_visibility_result(&BrowserVisibilityResult::ready(request));
+    complete_visibility_result(files, &BrowserVisibilityResult::ready(request));
     true
 }
 
-fn complete_visibility_failure(request: &BrowserVisibilityRequest, result: &BrowserVisibilityResult) {
-    if let Err(error) = manifest::record_visibility_status(request, BrowserVisibilityAuditStatus::Failed) {
+fn complete_visibility_failure(
+    files: &impl VisibilityFiles,
+    request: &BrowserVisibilityRequest,
+    result: &BrowserVisibilityResult,
+) {
+    if let Err(error) = files.audit(request, BrowserVisibilityAuditStatus::Failed) {
         tracing::warn!(request_id = %request.request_id, %error, "could not append failed browser visibility audit");
     }
-    complete_visibility_result(result);
+    complete_visibility_result(files, result);
 }
 
-fn complete_visibility_result(result: &BrowserVisibilityResult) {
-    if let Err(error) = manifest::complete_visibility_request(result) {
+fn complete_visibility_result(files: &impl VisibilityFiles, result: &BrowserVisibilityResult) {
+    if let Err(error) = files.complete(result) {
         tracing::error!(request_id = %result.request_id, %error, "could not publish browser visibility result");
     }
 }
@@ -402,5 +449,128 @@ mod tests {
         assert!(visible(&app));
         app.finish_visibility_request(&second, Some(true));
         assert!(!visible(&app), "the second hide applies");
+    }
+
+    /// The files of one visibility request under a test root. `on_audit` runs
+    /// for each audit before it is recorded, and may fail it.
+    struct TestFiles<'a> {
+        root: &'a std::path::Path,
+        on_audit: Box<dyn Fn(BrowserVisibilityAuditStatus) -> std::io::Result<()> + 'a>,
+        results: std::cell::RefCell<Vec<BrowserVisibilityResult>>,
+    }
+
+    impl VisibilityFiles for TestFiles<'_> {
+        fn audit(&self, _: &BrowserVisibilityRequest, status: BrowserVisibilityAuditStatus) -> std::io::Result<()> {
+            (self.on_audit)(status)
+        }
+
+        fn publish(
+            &self,
+            request: &BrowserVisibilityRequest,
+            visible: bool,
+            workspace: &ManifestWorkspace,
+        ) -> std::io::Result<OwnedStampOutcome> {
+            manifest::sync_owned_host_state_in(self.root, &request.panel_local_id, visible, workspace, &request.actor)
+        }
+
+        fn complete(&self, result: &BrowserVisibilityResult) -> std::io::Result<()> {
+            self.results.borrow_mut().push(result.clone());
+            Ok(())
+        }
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
+    fn a_lease_that_moves_while_the_request_runs_keeps_the_new_owners_manifest() {
+        let (_temp, app, actor, _) = fixture();
+        let local_id = app.board.panel(PanelId(900)).expect("browser").local_id.clone();
+        let root = app.session_store.home().root().to_path_buf();
+        let path = manifest::manifest_path_for_root(&root, &local_id);
+        let workspace = ManifestWorkspace::new(
+            manifest::host_instance(),
+            "agent",
+            vec![actor.clone(), "horizon:other-agent".into()],
+        );
+        let lease = |name: &str| {
+            let mut live = manifest::read_at(&path).unwrap_or_default();
+            live.host = Some(manifest::host_instance().to_string());
+            live.owner = Some(manifest::ManifestOwner {
+                name: name.to_string(),
+                tty: None,
+                updated_at: manifest::now_millis(),
+            });
+            manifest::write_at(&path, &live).expect("lease");
+        };
+        let live = app.browser_create_host.io.live_fence();
+        let hide = request(&app, &actor, "hide", false);
+        // What the manifest holds once the other agent took it.
+        let taken = std::cell::RefCell::new(Vec::new());
+        let take = || {
+            lease("horizon:other-agent");
+            taken.replace(std::fs::read(&path).expect("manifest"));
+        };
+
+        // The agent owns the panel when the request starts; another agent takes
+        // it while the dispatch audit waits, after the old check point.
+        lease(&actor);
+        let files = TestFiles {
+            root: &root,
+            on_audit: Box::new(|status| {
+                if status == BrowserVisibilityAuditStatus::Dispatched {
+                    take();
+                }
+                Ok(())
+            }),
+            results: std::cell::RefCell::default(),
+        };
+        assert!(!publish_visibility(&files, &live, &hide, &workspace));
+        assert_eq!(
+            std::fs::read(&path).expect("manifest"),
+            taken.take(),
+            "nothing was written"
+        );
+        assert!(!manifest::read_at(&path).expect("manifest").hidden);
+        assert_eq!(
+            files.results.take(),
+            [BrowserVisibilityResult::failed(
+                &hide,
+                "ownership_changed",
+                "browser panel ownership changed"
+            )],
+            "the request does not report ready"
+        );
+
+        // The hide is written while the agent owns the panel; the lease moves
+        // before its completion audit fails, so the rollback leaves it alone.
+        lease(&actor);
+        let files = TestFiles {
+            root: &root,
+            on_audit: Box::new(|status| {
+                if status == BrowserVisibilityAuditStatus::Completed {
+                    take();
+                    return Err(std::io::Error::other("a fixture audit fails"));
+                }
+                Ok(())
+            }),
+            results: std::cell::RefCell::default(),
+        };
+        assert!(!publish_visibility(&files, &live, &hide, &workspace));
+        assert_eq!(
+            std::fs::read(&path).expect("manifest"),
+            taken.take(),
+            "nothing was rolled back"
+        );
+        assert!(
+            manifest::read_at(&path).expect("manifest").hidden,
+            "the hide was written before"
+        );
+        assert_eq!(
+            files.results.take(),
+            [BrowserVisibilityResult::failed(
+                &hide,
+                "audit_failed",
+                "visibility change could not be audited"
+            )]
+        );
     }
 }
