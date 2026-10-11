@@ -8,8 +8,11 @@
 //! missing or still has that digest. A YAML file that something else wrote, such as an
 //! earlier Horizon, wins over the index. A load also falls back to `runtime.yaml` when
 //! the index is missing, damaged or has no board yet, and a save sets a damaged index
-//! aside and builds a new one. An index from a newer Horizon is never read or changed.
+//! aside and builds a new one. An index from a newer Horizon is never read or changed. An
+//! index from an older Horizon must have the tables of its own schema version before it
+//! migrates; if not, it is damaged too.
 mod rows;
+mod schema;
 #[cfg(feature = "cloud-workspaces")]
 mod status;
 #[cfg(test)]
@@ -30,6 +33,7 @@ use super::{SessionStore, current_unix_millis, stable_state_key};
 use crate::error::{Error, Result};
 use crate::runtime_state::{PanelState, RuntimeState, WorkspaceState};
 use rows::{BoardRows, Encoded, Format};
+use schema::{check_header, header};
 
 #[cfg(feature = "cloud-workspaces")]
 pub use status::{CloudPanelStatus, ParkedPanel};
@@ -260,61 +264,6 @@ fn yaml_digest(yaml: &str) -> String {
     format!("fnv1a64:{}:{}", yaml.len(), stable_state_key(yaml))
 }
 
-fn header(connection: &Connection) -> std::result::Result<(i32, i32), IndexError> {
-    let application_id = connection.query_row("PRAGMA application_id", [], |row| row.get(0))?;
-    let version = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    Ok((application_id, version))
-}
-
-/// Refuses a file that is not a Horizon index and an index from a newer Horizon.
-/// Returns whether the index has its tables, as opposed to an empty new file.
-fn check_header(connection: &Connection) -> std::result::Result<bool, IndexError> {
-    match header(connection)? {
-        (APPLICATION_ID, version) if version > SCHEMA_VERSION => Err(IndexError::Newer(version)),
-        (APPLICATION_ID, SCHEMA_VERSION) => check_schema(connection).map(|()| true),
-        (APPLICATION_ID, version) if version > 0 => Ok(true),
-        (0, 0) => {
-            let tables: i64 = connection.query_row("SELECT count(*) FROM sqlite_schema", [], |row| row.get(0))?;
-            if tables == 0 {
-                Ok(false)
-            } else {
-                Err(IndexError::Damaged("the file is not a Horizon runtime index".into()))
-            }
-        }
-        _ => Err(IndexError::Damaged("the file is not a Horizon runtime index".into())),
-    }
-}
-
-/// Refuses an index that has the current schema version but not its tables and columns,
-/// so that a save sets it aside instead of failing on it every time.
-fn check_schema(connection: &Connection) -> std::result::Result<(), IndexError> {
-    let expected = Connection::open_in_memory()?;
-    expected.execute_batch(&MIGRATIONS.concat())?;
-    let found = columns(connection)?;
-    for (table, columns) in columns(&expected)? {
-        if found.get(&table) != Some(&columns) {
-            return Err(IndexError::Damaged(format!(
-                "the table {table} does not have the columns of schema version {SCHEMA_VERSION}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// The name and type of the columns of each table, in order.
-fn columns(connection: &Connection) -> rusqlite::Result<HashMap<String, Vec<(String, String)>>> {
-    let mut tables: HashMap<String, Vec<(String, String)>> = HashMap::new();
-    let mut select = connection.prepare(
-        "SELECT t.name, c.name, c.type FROM sqlite_schema AS t JOIN pragma_table_info(t.name) AS c
-         WHERE t.type = 'table' ORDER BY t.name, c.cid",
-    )?;
-    let mut query = select.query([])?;
-    while let Some(row) = query.next()? {
-        tables.entry(row.get(0)?).or_default().push((row.get(1)?, row.get(2)?));
-    }
-    Ok(tables)
-}
-
 fn open_for_read(path: &Path) -> std::result::Result<Option<Connection>, IndexError> {
     if !path.is_file() {
         return Ok(None);
@@ -322,19 +271,24 @@ fn open_for_read(path: &Path) -> std::result::Result<Option<Connection>, IndexEr
     let connection =
         Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
     connection.busy_timeout(BUSY_TIMEOUT)?;
-    if !check_header(&connection)? {
+    if !check_header(&connection, MIGRATIONS)? {
         return Ok(None);
     }
     Ok(Some(connection))
 }
 
 fn open_for_write(path: &Path) -> std::result::Result<Connection, IndexError> {
+    open_for_write_with(path, MIGRATIONS)
+}
+
+/// Opens the index at `path` and brings it to the last version of `migrations`.
+fn open_for_write_with(path: &Path, migrations: &[&str]) -> std::result::Result<Connection, IndexError> {
     let mut connection = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     connection.busy_timeout(BUSY_TIMEOUT)?;
-    check_header(&connection)?;
+    check_header(&connection, migrations)?;
     // WAL commits are atomic without a sync, and the index is not the only record while
     // runtime.yaml is still written. A file system without WAL keeps a synced rollback journal.
     let journal: String = connection.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))?;
@@ -344,23 +298,25 @@ fn open_for_write(path: &Path) -> std::result::Result<Connection, IndexError> {
         "FULL"
     };
     connection.pragma_update(None, "synchronous", synchronous)?;
-    migrate(&mut connection)?;
+    migrate(&mut connection, migrations)?;
     Ok(connection)
 }
 
-/// Brings the schema to `SCHEMA_VERSION`, in one transaction, so that two processes
-/// that open a new index at the same time do not both create it.
-fn migrate(connection: &mut Connection) -> std::result::Result<(), IndexError> {
+/// Brings the schema to the last version of `migrations`, in one transaction, so that
+/// two processes that open a new index at the same time do not both create it.
+fn migrate(connection: &mut Connection, migrations: &[&str]) -> std::result::Result<(), IndexError> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    check_header(&transaction)?;
+    check_header(&transaction, migrations)?;
     let (_, version) = header(&transaction)?;
     let applied = usize::try_from(version).map_err(|_| IndexError::Damaged(format!("schema version {version}")))?;
-    if applied < MIGRATIONS.len() {
-        for migration in MIGRATIONS.iter().skip(applied) {
+    if applied < migrations.len() {
+        for migration in migrations.iter().skip(applied) {
             transaction.execute_batch(migration)?;
         }
+        let latest = i32::try_from(migrations.len())
+            .map_err(|_| IndexError::State(Error::State("too many runtime index migrations".into())))?;
         transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
-        transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        transaction.pragma_update(None, "user_version", latest)?;
     }
     transaction.commit()?;
     Ok(())

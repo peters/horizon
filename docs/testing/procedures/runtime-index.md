@@ -51,6 +51,7 @@ These names apply in the steps:
 | `<home>` | The private home of the fixture, `<state>/data/home`. |
 | `<session>` | The session directory, `<home>/.horizon/sessions/<id>`. |
 | `<index>` | The runtime index, `<session>/runtime.sqlite`. |
+| `<new-state>` | The state directory of the baseline fixture in R06, `<run>/ephemeral`. This directory must not exist before R06. |
 
 Use this command to show the board that the index holds. The output gives the
 number of workspaces, the number of panels and the schema version.
@@ -265,9 +266,14 @@ python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(*(c.execut
 
 ### 6.6 R06: An ephemeral session writes no session file
 
-1. Start the baseline fixture `scripts/device-smoke/serve.py` with a new state directory.
+1. Start the baseline fixture `scripts/device-smoke/serve.py` with the state
+   directory `<new-state>`.
 
-   Result: The candidate starts with `--ephemeral`.
+   ```sh
+   python3 scripts/device-smoke/serve.py --horizon <run>/bin/horizon --native-view --state <new-state>
+   ```
+
+   Result: The candidate starts with `--ephemeral`. The output shows a `vnc_address`.
 
 2. Show the fixture in a Device panel. Move a panel with its title bar.
 
