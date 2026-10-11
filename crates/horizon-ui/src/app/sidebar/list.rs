@@ -10,6 +10,7 @@ use horizon_core::{AgentStatus, WorkspaceId};
 use crate::theme;
 
 use super::super::HorizonApp;
+use super::text;
 use super::{SidebarActions, SidebarWorkspaceDragState, WorkspaceSidebarEntry};
 
 const REFRESH: Duration = Duration::from_secs(1);
@@ -146,7 +147,10 @@ pub(super) fn accepts_drop(dragged: Group, target: &WorkspaceSidebarEntry) -> bo
     dragged == target.row.group && super::sidebar_workspace_drop_should_dock(target.detached)
 }
 
-const HEADER_TEXT_SIZE: f32 = 10.5;
+const HEADER_HEIGHT: f32 = 34.0;
+const HEADER_TEXT_SIZE: f32 = 12.0;
+const SUMMARY_TEXT_SIZE: f32 = 10.5;
+const HEADER_LEFT_MARGIN: f32 = 18.0;
 const HEADER_RIGHT_MARGIN: f32 = 14.0;
 
 /// The header of a group: its name, how many workspaces it has, a bulk stop when
@@ -159,59 +163,87 @@ pub(super) fn render_group_header(
     summary: &[String],
     idle: usize,
 ) -> bool {
+    let rect = ui.allocate_space(egui::vec2(ui.available_width(), HEADER_HEIGHT)).1;
+    let center_y = rect.max.y - 13.0;
+    let painter = ui.painter();
+    let mut x = rect.min.x + HEADER_LEFT_MARGIN;
+
+    let label = text::line(
+        ui,
+        group.label(),
+        HEADER_TEXT_SIZE,
+        text::SEMIBOLD,
+        theme::FG_SOFT(),
+        rect.width(),
+    );
+    painter.galley(
+        egui::pos2(x, center_y - label.size().y / 2.0),
+        label.clone(),
+        theme::FG_SOFT(),
+    );
+    x += label.size().x + 7.0;
+    let count = text::mono(ui, &count.to_string(), 11.0, theme::FG_DIM());
+    painter.galley(
+        egui::pos2(x, center_y - count.size().y / 2.0),
+        count.clone(),
+        theme::FG_DIM(),
+    );
+    x += count.size().x + 8.0;
+
     let mut stop = false;
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        ui.add_space(18.0);
-        ui.label(
-            egui::RichText::new(group.label().to_uppercase())
-                .color(theme::FG_DIM())
-                .size(HEADER_TEXT_SIZE)
-                .strong(),
+    if idle > 0 {
+        let text = egui::RichText::new("Stop idle…")
+            .color(theme::ACCENT())
+            .size(SUMMARY_TEXT_SIZE);
+        let clouds = if idle == 1 { "1 idle cloud" } else { "idle clouds" };
+        let button = ui.put(
+            egui::Rect::from_min_size(egui::pos2(x, center_y - 9.0), egui::vec2(64.0, 18.0)),
+            egui::Button::new(text).frame(false),
         );
-        ui.label(
-            egui::RichText::new(count.to_string())
-                .color(theme::FG_DIM())
-                .size(HEADER_TEXT_SIZE),
-        );
-        if idle > 0 {
-            let text = egui::RichText::new("Stop idle…")
-                .color(theme::ACCENT())
-                .size(HEADER_TEXT_SIZE);
-            let clouds = if idle == 1 { "1 idle cloud" } else { "idle clouds" };
-            stop = ui
-                .add(egui::Button::new(text).frame(false))
-                .on_hover_text(format!(
-                    "Choose which workers of the {clouds} in {} to stop",
-                    group.label()
-                ))
-                .clicked();
-        }
-        let width = ui.available_width() - HEADER_RIGHT_MARGIN - ui.spacing().item_spacing.x;
-        let Some(text) = fitted_summary(summary, width, |text| {
-            ui.painter()
-                .layout_no_wrap(
-                    text.to_owned(),
-                    egui::FontId::proportional(HEADER_TEXT_SIZE),
-                    theme::FG_DIM(),
-                )
-                .size()
-                .x
-        }) else {
-            return;
-        };
-        let full = summary.join(" · ");
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add_space(HEADER_RIGHT_MARGIN);
-            let response = ui.add(
-                egui::Label::new(egui::RichText::new(&text).color(theme::FG_DIM()).size(HEADER_TEXT_SIZE)).truncate(),
-            );
-            // A screen reader gets the whole summary, also when the header drops parts.
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &full));
-            response.on_hover_text(full);
-        });
-    });
-    ui.add_space(2.0);
+        x = button.rect.max.x + 6.0;
+        stop = button
+            .on_hover_text(format!(
+                "Choose which workers of the {clouds} in {} to stop",
+                group.label()
+            ))
+            .clicked();
+    }
+
+    let right = rect.max.x - HEADER_RIGHT_MARGIN;
+    let Some(fitted) = fitted_summary(summary, right - x, |text| {
+        ui.painter()
+            .layout_no_wrap(
+                text.to_owned(),
+                egui::FontId::proportional(SUMMARY_TEXT_SIZE),
+                theme::FG_DIM(),
+            )
+            .size()
+            .x
+    }) else {
+        return stop;
+    };
+    let galley = text::line(
+        ui,
+        &fitted,
+        SUMMARY_TEXT_SIZE,
+        text::REGULAR,
+        theme::FG_DIM(),
+        (right - x).max(0.0),
+    );
+    let summary_rect = egui::Rect::from_min_size(
+        egui::pos2(right - galley.size().x, center_y - galley.size().y / 2.0),
+        galley.size(),
+    );
+    ui.painter().galley(summary_rect.min, galley, theme::FG_DIM());
+    // A screen reader gets the whole summary, also when the header drops parts.
+    let full = summary.join(" · ");
+    let response = ui.interact(
+        summary_rect,
+        ui.make_persistent_id(("sidebar_group_summary", group.key())),
+        egui::Sense::hover(),
+    );
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &full));
+    response.on_hover_text(full);
     stop
 }
 

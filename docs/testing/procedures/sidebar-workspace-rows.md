@@ -1,0 +1,147 @@
+---
+procedure: sidebar-workspace-rows
+feature: The workspace and panel rows of the sidebar
+platforms: [linux]
+cost: none
+destructive: no
+secrets: none
+owner: peters
+---
+
+# Sidebar workspace rows test procedure
+
+## 1. Purpose
+
+This procedure makes sure that each workspace row in the sidebar shows a tile in
+the workspace color with the initials of its name, and a status badge only when
+the workspace is not idle. It also makes sure that the panel rows of the active
+workspace show the task of an agent, a working dot, and a close button only on
+the hovered or focused row.
+
+## 2. Applicability
+
+- Candidate: a build that shows workspace tiles in the sidebar.
+- Platforms: Linux.
+- This procedure does not test these functions:
+  - The groups **Needs you**, **Cloud** and **Parked**. The
+    [cloud list procedure](cloud-list.md) tests them with a real cloud.
+  - The status of a cloud workspace. The unit tests of the cloud list cover it.
+
+## 3. Safety
+
+> **CAUTION:** USE ONLY SYNTHETIC CONTENT AND GENERIC WORKSPACE NAMES.
+> Screenshots and recordings show the sidebar and the panels.
+
+## 4. Equipment and preconditions
+
+- A frozen candidate and its SHA-256.
+- The [local device smoke fixture](../../../scripts/device-smoke/README.md),
+  `scripts/device-smoke/serve.py`, with `--native-view`, and a Horizon host
+  with a Device panel for the fixture.
+- A script that acts as an agent. The script sets the terminal title to a
+  spinner glyph and a task, for example `◐ Fix the sync timeout`. When it works,
+  it shows a line such as `⠼ Working… (12s · esc to interrupt)` at the bottom
+  of its screen and changes the spinner glyph each 250 ms. When it is idle, it
+  shows `> Ask me to do anything` and stops.
+- A private configuration with `features: {sidebar_accordion: true}` and these
+  workspaces:
+  - `Checkout redesign`: a Claude Code panel that runs the script and works,
+    and an editor panel `notes.md`.
+  - `billing-service`: a command panel that prints one line and waits.
+  - `Horizon`: two Claude Code panels that work, one Claude Code panel that is
+    idle, and a Device panel.
+  - Six or more other workspaces with one or two panels each.
+
+## 5. Setup
+
+1. Start the fixture with the candidate and the private configuration. Open a
+   Device panel for its `vnc_address`.
+
+   Result: The Device panel shows the fixture desktop. The Horizon window shows
+   the sidebar with the header **Workspaces** and the group **This PC**.
+
+## 6. Tasks
+
+### 6.1 TILES: Workspace rows
+
+1. Look at the row of `billing-service`.
+
+   Result: The row shows a tile with `BS` in the workspace color, the name in
+   bold text and, under the name, the line that the panel printed. The panel
+   count `1` is in the right column. The tile has no badge.
+
+2. Look at the row of `Checkout redesign`.
+
+   Result: The tile shows `CR` and a green badge on its lower-right corner. The
+   line under the name shows the working line of the agent.
+
+3. Look at the counts of all rows.
+
+   Result: All counts are in one column at the right edge of the rows.
+
+4. Look at the group header.
+
+   Result: The header shows `This PC` in sentence case, the count of the
+   workspaces and, at the right, `live`.
+
+### 6.2 ACTIVE: Select a workspace
+
+1. Click the row of `Horizon`.
+
+   Result: The row becomes a card with an outline in the workspace color. Four
+   panel rows show under it. A tree line connects them to the tile.
+
+2. Look at the panel rows of the agents.
+
+   Result: Each row shows `CC` and the task of the agent, for example
+   `Fix recurring sync timeout`. The rows do not repeat the agent name and do
+   not show a spinner glyph. The rows of the working agents show a green dot at the right.
+
+### 6.3 PANEL: Hover and focus a panel
+
+1. Move the pointer on the second panel row.
+
+   Result: The row becomes lighter. A close button (×) replaces the green dot.
+
+2. Move the pointer away from the row.
+
+   Result: The close button goes away. The green dot shows again.
+
+3. Click the third panel row.
+
+   Result: The row becomes the focused row, with a tint of the workspace color
+   and a close button. The canvas shows the panel.
+
+### 6.4 SCROLL: A long list
+
+1. Make the Horizon window less high than the list. Turn the mouse wheel on the
+   sidebar.
+
+   Result: The list scrolls. The rows keep their tiles, names and counts.
+
+### 6.5 LIGHT: Light theme
+
+1. Set the appearance to light and restart the fixture.
+
+   Result: The tiles, the badges, the names and the lines are easy to read on
+   the light surface.
+
+## 7. Pass criteria
+
+- 6.1 shows a tile with initials on each row and a badge only on a working row.
+- 6.2 shows the active card, the tree line and the agent tasks.
+- 6.3 shows the close button only on the hovered or focused row.
+- 6.4 scrolls the list.
+- 6.5 keeps the rows readable in the light theme.
+
+## 8. Cleanup
+
+1. Close the Device panel. Stop the fixture with Ctrl+C in its terminal.
+
+   Result: The fixture stops its child processes and removes its target file.
+
+## 9. Record of results
+
+If the run must be kept, write a report in `docs/testing/reports/` with
+[the report template](../reports/TEMPLATE.md). If not, put the results in the
+pull request. Keep private evidence out of the repository.

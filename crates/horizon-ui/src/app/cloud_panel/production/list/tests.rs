@@ -184,9 +184,9 @@ fn the_sidebar_groups_workspaces_and_a_click_attaches_a_parked_cloud() {
     sidebar(&ctx, &mut app, Vec::new());
     let texts = texts(&sidebar(&ctx, &mut app, Vec::new()));
     let (parked, cloud, this_pc, local_row) = (
-        position(&texts, "PARKED"),
+        position(&texts, "Parked"),
         position(&texts, "Fixture"),
-        position(&texts, "THIS PC"),
+        position(&texts, "This PC"),
         position(&texts, "Local"),
     );
     assert!(parked.y < cloud.y && cloud.y < this_pc.y && this_pc.y < local_row.y);

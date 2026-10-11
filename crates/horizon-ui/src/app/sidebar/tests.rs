@@ -1,4 +1,3 @@
-use super::rows::sidebar_workspace_name_width;
 use super::{
     SidebarPanelEntry, SidebarWorkspaceInsert, sidebar_workspace_drop_should_dock, sidebar_workspace_insert_dock_side,
     sidebar_workspace_shows_panels,
@@ -187,34 +186,16 @@ fn sidebar_shows_panels_for_the_active_workspace_when_accordion_is_enabled() {
     assert!(sidebar_workspace_shows_panels(true, true));
 }
 
-#[test]
-fn accordion_name_width_fits_detached_row_at_minimum_sidebar() {
-    // 168px sidebar minus 14+3+8 leading chrome leaves 143px for name + badges.
-    let width = sidebar_workspace_name_width(143.0, true, true);
-    assert!(width < 48.0);
-    assert!((width - 29.0).abs() <= f32::EPSILON);
-}
-
-#[test]
-fn flat_name_width_reserves_only_the_detached_badge() {
-    // Flat rows draw no panel count, so the name keeps that room.
-    assert!((sidebar_workspace_name_width(143.0, false, false) - 133.0).abs() <= f32::EPSILON);
-    assert!((sidebar_workspace_name_width(143.0, true, false) - 57.0).abs() <= f32::EPSILON);
-}
-
-#[test]
-fn name_width_never_goes_negative() {
-    assert!(sidebar_workspace_name_width(20.0, true, true).abs() <= f32::EPSILON);
-}
-
 // `is_focused` is decorative in these tests: the reveal helpers read the
 // board's own focus state, not the sidebar entry flag.
 fn sidebar_entry(id: horizon_core::PanelId, is_focused: bool) -> SidebarPanelEntry {
     SidebarPanelEntry {
         id,
+        label: "panel".to_string(),
         title: "panel".to_string(),
         kind: horizon_core::PanelKind::Editor,
         is_focused,
+        working: false,
     }
 }
 
@@ -340,7 +321,8 @@ fn a_compact_parked_dot_tells_a_screen_reader_its_status_line() {
         false,
     );
     let labels = crate::test_egui::accesskit_texts(|ui| {
-        ui.horizontal(|ui| super::rows::render_sidebar_workspace_row_contents(ui, &workspace, false));
+        let row = ui.allocate_space(egui::vec2(210.0, super::rows::COMPACT_ROW_HEIGHT)).1;
+        super::rows::paint_workspace_row_contents(ui, row, &workspace, false);
     });
     assert!(
         labels
