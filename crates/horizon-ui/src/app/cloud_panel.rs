@@ -81,7 +81,6 @@ impl HorizonApp {
                         ) {
                             Ok(board) => {
                                 self.reset_native_file_input();
-                                self.browser_create_host.io.replace_board();
                                 self.board = board;
                                 self.cloud_prototype.groups = snapshot.groups;
                                 self.cloud_prototype.groups.restore_visibility(&mut self.board);

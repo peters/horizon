@@ -104,7 +104,9 @@ impl HostIo {
         }));
     }
 
-    /// Every place that replaces the board says so here.
+    /// Every place that replaces a board that can hold panels says so here.
+    /// The restore of a saved cloud prototype board needs not: it only
+    /// replaces an empty board, which no coordination outcome can name.
     pub(super) fn replace_board(&mut self) {
         self.replaced.fetch_add(1, Ordering::AcqRel);
     }

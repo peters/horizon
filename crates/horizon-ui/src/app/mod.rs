@@ -370,7 +370,9 @@ impl HorizonApp {
             ctx.request_repaint_after(delay);
         }
         self.exit_on_close_request(ctx);
-        // Also while the board is torn down, so every claimed request is answered.
+        // Also while the board is torn down, so every claimed request is
+        // answered; a finished job wakes this context to apply its outcome.
+        self.browser_create_host.io.wake_with(ctx);
         self.apply_browser_host_io();
 
         if self.shutdown_progress.is_some() {
