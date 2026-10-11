@@ -462,13 +462,15 @@ impl Job {
         let _ = self.stream(restore, log);
     }
 
-    /// Whether the default profile asks for a GPU; its proof then gets this computer's.
+    /// Whether the default profile asks for a GPU and this computer has an NVIDIA one;
+    /// Docker refuses `--gpus` without it, and that is no fault of the Dockerfile.
     fn gpu(&self) -> bool {
-        std::fs::read_to_string(self.repository.join(".horizon/cloud.yml"))
+        let wanted = std::fs::read_to_string(self.repository.join(".horizon/cloud.yml"))
             .ok()
             .and_then(|config| horizon_core::cloud_panel::CloudConfig::parse(&config).ok())
             .and_then(|config| config.profiles.get(&config.default).map(|profile| profile.gpu))
-            .unwrap_or(false)
+            .unwrap_or(false);
+        wanted && Path::new("/dev/nvidiactl").exists()
     }
 
     fn ci(&self, fast: bool, log: &mut Option<std::fs::File>) -> Result<(), String> {

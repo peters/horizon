@@ -164,10 +164,7 @@ impl HorizonApp {
         // A summary without a proof request, or over a setup that changed after its proof,
         // gets one reminder: Use needs Horizon's proof of the files as they are.
         let report = report
-            .or_else(|| {
-                (run.summary_without_proof() && !std::mem::replace(&mut run.proof_missing_reported, true))
-                    .then(|| MISSING_PROOF.to_owned())
-            })
+            .or_else(|| run.take_summary_without_proof().then(|| MISSING_PROOF.to_owned()))
             .or_else(|| {
                 (run.summary_over_stale_proof() && !std::mem::replace(&mut run.proof_stale_reported, true))
                     .then(|| STALE_PROOF.to_owned())

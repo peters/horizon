@@ -225,6 +225,11 @@ GitHub and chooses its repositories; agents cannot set it up.
   signs in once. No MCP tool lists or clones them: to start a cloud from a private
   repository, ask the person to pick it in **New cloud**. A repository missing from the
   list needs **Add repositories on GitHub** there.
+- A repository without `.horizon/cloud.yml` is set up in **New cloud** with **Set up
+  from CI**: a setup agent writes `.horizon` from the repository's CI, Horizon proves
+  the image on this computer (build, worker check, the CI jobs with localci, a fast
+  rerun) and **Use this setup** commits it. No MCP tool starts a setup: ask the person
+  to open **New cloud** for the repository.
 
 ## Development-only registry
 

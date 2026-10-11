@@ -107,8 +107,12 @@ pub fn build_config(docker_config: &Path) -> Result<(tempfile::TempDir, bool)> {
     build_config_with(docker_config, machine.as_deref())
 }
 
-/// The settings of the machine's Docker configuration that are not credentials.
-const MACHINE_SETTINGS: [&str; 3] = ["currentContext", "cliPluginsExtraDirs", "proxies"];
+/// The settings of the machine's Docker configuration that are not credentials. The
+/// context it names resolves only where its folders are linked in, so only there.
+#[cfg(unix)]
+const MACHINE_SETTINGS: &[&str] = &["currentContext", "cliPluginsExtraDirs", "proxies"];
+#[cfg(not(unix))]
+const MACHINE_SETTINGS: &[&str] = &["cliPluginsExtraDirs", "proxies"];
 
 fn build_config_with(docker_config: &Path, machine: Option<&Path>) -> Result<(tempfile::TempDir, bool)> {
     let directory = tempfile::Builder::new().prefix("horizon-build-docker-").tempdir()?;
@@ -136,7 +140,7 @@ fn build_config_with(docker_config: &Path, machine: Option<&Path>) -> Result<(te
             .ok()
             .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
         if let (Some(settings), Some(target)) = (settings, config.0.as_object_mut()) {
-            for key in MACHINE_SETTINGS {
+            for &key in MACHINE_SETTINGS {
                 if let Some(value) = settings.get(key) {
                     target.insert(key.to_owned(), value.clone());
                 }

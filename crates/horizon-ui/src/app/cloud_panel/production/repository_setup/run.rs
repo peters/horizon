@@ -78,8 +78,8 @@ pub(in crate::app::cloud_panel::production) struct Run {
     /// Horizon's own proof of the image, and the agent's request it answers.
     pub(super) proof: Option<Proof>,
     pub(super) proved_request: u64,
-    /// The agent wrote a summary without a proof Horizon could run, and was told once.
-    pub(super) proof_missing_reported: bool,
+    /// The summary the agent was last told needs a proof Horizon can run.
+    pub(super) missing_proof_summary: Option<String>,
     /// The setup changed after its proof passed, and the agent was told once.
     pub(super) proof_stale_reported: bool,
     /// The person allowed restoring private .NET packages on this computer for the proof.
@@ -144,7 +144,7 @@ impl Run {
             files: None,
             proof: None,
             proved_request: 0,
-            proof_missing_reported: false,
+            missing_proof_summary: None,
             proof_stale_reported: false,
             host_restore: false,
             inputs: None,
@@ -268,9 +268,15 @@ impl Run {
         }
     }
 
-    /// The agent wrote its summary without a proof request Horizon can run.
-    pub(super) fn summary_without_proof(&self) -> bool {
-        self.status.summary.is_some() && self.proof.is_none() && self.proof_wanted().is_none()
+    /// The agent wrote its summary without a proof request Horizon can run, and was not
+    /// told yet for this summary; a new summary without one is told again.
+    pub(super) fn take_summary_without_proof(&mut self) -> bool {
+        let without = self.status.summary.is_some() && self.proof.is_none() && self.proof_wanted().is_none();
+        if !without || self.missing_proof_summary == self.status.summary {
+            return false;
+        }
+        self.missing_proof_summary.clone_from(&self.status.summary);
+        true
     }
 
     /// The steps to draw: the agent's own, or the expected ones before its first report.
@@ -432,8 +438,15 @@ mod tests {
         assert!(!run.finished(), "the proof the agent asked for has not run");
         run.proved_request = 1;
         assert!(!run.finished(), "a summary is not a proof");
+        run.proved_request = 0;
         run.status = parse(r#"{"steps":[],"summary":"done"}"#).unwrap();
-        assert!(run.summary_without_proof(), "the agent is told to ask for a proof");
+        assert!(run.take_summary_without_proof(), "the agent is told to ask for a proof");
+        assert!(!run.take_summary_without_proof(), "once per summary");
+        run.status = parse(r#"{"steps":[],"summary":"done again"}"#).unwrap();
+        assert!(
+            run.take_summary_without_proof(),
+            "a new summary without one is told again"
+        );
     }
 
     #[test]

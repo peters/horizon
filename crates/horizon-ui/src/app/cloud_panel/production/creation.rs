@@ -303,8 +303,8 @@ impl HorizonApp {
         refocus_repository: bool,
         setup_output_beside: bool,
     ) {
-        // A read failure is what a fixing agent starts from.
-        let error = self.cloud_prototype.error.clone();
+        // A read failure of the settings, and nothing else, is what a fixing agent starts from.
+        let error = self.cloud_prototype.production.launch.read_error.clone();
         let form = &mut self.cloud_prototype.production;
         ui.add_enabled_ui(
             form.pending_creation.is_none() && !form.launch.submitted && form.launch.watch.is_none(),
