@@ -474,7 +474,8 @@ impl HorizonApp {
             .production
             .runtimes
             .get(&id)
-            .is_some_and(|runtime| runtime.receiver.is_some())
+            // A preparation that has not locked the record yet would write it again.
+            .is_some_and(|runtime| runtime.receiver.is_some() || runtime.preparation.is_some())
         {
             return;
         }

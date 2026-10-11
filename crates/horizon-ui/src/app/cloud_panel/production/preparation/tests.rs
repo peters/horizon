@@ -146,3 +146,35 @@ fn a_record_a_dropped_preparation_left_deploys_again_after_a_session_switch() {
     assert!(error.contains("settings.json"), "{error}");
     assert!(!runtime.busy());
 }
+
+#[test]
+fn a_cloud_is_not_removed_while_its_deployment_prepares() {
+    let (_temp, mut app, _) = stopped_cloud();
+    let ctx = egui::Context::default();
+    // A cloud that never started and has no record may be removed.
+    app.cloud_prototype.groups.0[0]
+        .remote
+        .as_mut()
+        .unwrap()
+        .deployment_started = false;
+    app.cloud_prototype.production.runtimes.insert(
+        1,
+        super::Runtime {
+            preparation: Some(super::Pending::running_for_test()),
+            ..Default::default()
+        },
+    );
+    app.remove_deleted_cloud(1, &ctx);
+    assert_eq!(
+        app.cloud_prototype.groups.0.len(),
+        1,
+        "the preparation would write the record of a removed cloud"
+    );
+
+    app.cloud_prototype.production.runtimes.get_mut(&1).unwrap().preparation = None;
+    app.remove_deleted_cloud(1, &ctx);
+    assert!(
+        app.cloud_prototype.groups.0.is_empty(),
+        "without it the cloud is removed"
+    );
+}

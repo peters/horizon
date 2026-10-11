@@ -75,7 +75,7 @@ fn deleted_runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runt
     {
         ui.colored_label(egui::Color32::LIGHT_RED, error);
     }
-    if runtime.receiver.is_some() {
+    if runtime.receiver.is_some() || runtime.preparation.is_some() {
         ui.label("Redeploying cloud…");
         progress_output(ui, id, runtime);
         return None;
@@ -167,6 +167,7 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
     }
     let removable = !runtime.state_unavailable
         && runtime.receiver.is_none()
+        && runtime.preparation.is_none()
         && runtime
             .state
             .as_ref()

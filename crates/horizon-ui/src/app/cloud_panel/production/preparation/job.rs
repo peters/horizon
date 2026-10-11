@@ -136,6 +136,12 @@ impl Pending {
         }
     }
 
+    /// A preparation that has reported nothing yet, for tests that do not poll it.
+    #[cfg(test)]
+    pub(in crate::app::cloud_panel::production) fn running_for_test() -> Self {
+        Self::new(channel().1, Vec::new(), None)
+    }
+
     /// The next report, if one arrived. A thread that ended without its last report
     /// fails the preparation.
     pub(super) fn next(&self) -> Option<Report> {
