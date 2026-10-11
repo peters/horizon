@@ -171,6 +171,10 @@ fn worker(runtime: &Runtime) -> String {
     if runtime.state_unavailable {
         return "Worker: unknown (record unavailable)".to_owned();
     }
+    // A deleted worker keeps its saved stage and last observed record, which read as live.
+    if super::cost::worker_deleted(runtime).is_some() {
+        return "Worker: deleted".to_owned();
+    }
     runtime
         .state
         .as_ref()
@@ -401,5 +405,31 @@ mod tests {
         assert_eq!(worker(&runtime), "Worker: requested · awaiting its details");
         runtime.state_unavailable = true;
         assert_eq!(worker(&runtime), "Worker: unknown (record unavailable)");
+    }
+
+    #[test]
+    fn a_deleted_worker_is_not_called_requested_or_live() {
+        use super::super::super::Stage;
+        // Deleted during Provision with its storage cleanup unfinished: the saved
+        // stage still reads Provision and no worker record was ever written.
+        let storage_left = Runtime {
+            stage: Some(Stage::Provision),
+            state: Some(
+                serde_json::from_value(serde_json::json!({
+                    "version":1,"cloud_id":"deleted","repository":"/synthetic","revision":"a",
+                    "profile":{"provider":"hetzner","image":"registry.example/worker","cpu":2,"memory_gb":4},
+                    "stage":"Provision","operation":{"state":"terminated","worker_id":"7"},
+                    "spec":null,"sessions":[],"worker":null
+                }))
+                .unwrap(),
+            ),
+            ..Runtime::default()
+        };
+        assert_eq!(worker(&storage_left), "Worker: deleted");
+        let fully = Runtime {
+            stage: Some(Stage::Deleted),
+            ..Runtime::default()
+        };
+        assert_eq!(worker(&fully), "Worker: deleted");
     }
 }
