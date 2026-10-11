@@ -588,6 +588,19 @@ an Anthropic API key is bound, approval of that key by its last 20 characters, n
 whole key. Existing entries are kept, the update is atomic and locked, and a failure to
 write it only brings the dialogs back. Subscription workers keep Claude's own sign-in.
 
+## Codex background server
+
+Codex 0.156 and later start a shared background server. This server refuses a control
+socket folder that other users can write to. Some network volumes show all folders to the
+agent user as writable by all users. The RunPod network volume does this. On such a volume,
+Codex stops before it shows its interface.
+
+Thus `horizon-worker-run` starts Codex with `--no-daemon` when `codex --help` shows that
+option. tmux keeps the session when the SSH connection stops, so the session does not need
+the background server. An older Codex has no background server and no `--no-daemon` option,
+so it starts with no option. If you start `codex` yourself in a Shell panel on such a
+volume, add `--no-daemon`.
+
 ## Session environment from image layers
 
 Sessions start over SSH, so they do not inherit a recipe's `ENV` instructions: a toolkit
