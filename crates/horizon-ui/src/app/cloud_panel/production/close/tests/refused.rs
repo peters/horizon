@@ -181,6 +181,19 @@ fn an_unreadable_record_offers_only_remove_anyway() {
 }
 
 #[test]
+fn a_cloud_that_never_deployed_is_removed_on_every_host() {
+    let (temp, mut app) = test_app();
+    add_cloud(&mut app, temp.path(), None);
+    app.request_cloud_close(101);
+    assert_eq!(current_offer(&app).primary, Some(Primary::Remove));
+
+    // Also where Horizon keeps no cloud records, so no lock can be taken.
+    app.remove_for_close(101, &egui::Context::default());
+    assert!(app.cloud_prototype.groups.0.is_empty());
+    assert!(app.cloud_prototype.production.close.confirming.is_none());
+}
+
+#[test]
 fn a_cloud_whose_identity_names_no_record_can_be_removed_anyway() {
     let (temp, mut app) = test_app();
     add_cloud(&mut app, temp.path(), Some(deployment()));

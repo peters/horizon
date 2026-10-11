@@ -482,6 +482,12 @@ impl HorizonApp {
         let Some(root) = &self.cloud_prototype.root else {
             return false;
         };
+        // A host without cloud records has no lock to take, and a cloud that never
+        // started a deployment and has no record holds nothing at its provider.
+        if !Store::supported() && !launch.deployment_started && !recorded(root, launch) {
+            self.discard_cloud(index, ctx);
+            return true;
+        }
         // Held until the cloud is discarded, so no operation can start in between.
         let _store = match removable(root, launch) {
             Ok((store, true)) => store,
@@ -520,9 +526,7 @@ impl HorizonApp {
             return Ok(true);
         };
         // Only asking must not leave a state directory behind for a cloud that never had one.
-        let recorded = cloud_runtime::state::cloud_directory(root, &launch.id)
-            .map_or(true, |path| path.try_exists().unwrap_or(true));
-        if !recorded {
+        if !recorded(root, launch) {
             return Ok(launch.deployment_started);
         }
         removable(root, launch).map(|(_, allowed)| !allowed)
@@ -560,6 +564,11 @@ impl HorizonApp {
         }
         self.cloud_prototype.error = Some(message);
     }
+}
+
+/// Whether `launch` may have a record directory. An unreadable path counts as one.
+fn recorded(root: &std::path::Path, launch: &horizon_core::cloud_panel::CloudLaunch) -> bool {
+    cloud_runtime::state::cloud_directory(root, &launch.id).map_or(true, |path| path.try_exists().unwrap_or(true))
 }
 
 /// Locks the saved record of `launch` and reads whether it holds no provider resources.
