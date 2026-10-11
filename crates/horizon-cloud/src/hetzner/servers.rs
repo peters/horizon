@@ -393,9 +393,11 @@ impl Hetzner {
             return Ok(true);
         }
         for action in &running {
-            match self.poll_action(action, deadline, cancel, || {
-                Ok(self.inspect_server(id, cancel)?.is_none())
-            })? {
+            let gone = || {
+                let left = deadline.saturating_duration_since(Instant::now());
+                Ok(self.inspect_server_within(id, cancel, Some(left))?.is_none())
+            };
+            match self.poll_action(action, deadline, cancel, gone)? {
                 Waited::Settled => return Ok(false),
                 Waited::Succeeded | Waited::Failed(_) => {}
                 Waited::TimedOut => break,

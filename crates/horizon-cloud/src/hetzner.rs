@@ -262,7 +262,10 @@ impl Hetzner {
     }
 
     /// Polls `action` until it finishes, `settled` observes the intended result, or
-    /// `deadline` passes. Only a request that fails is an error.
+    /// `deadline` passes. No poll starts after the deadline, each poll is bounded by
+    /// the time that remains, and a failure that ends after the deadline is a
+    /// timeout, so the deadline always ends the wait. `settled` should bound its own
+    /// requests to the deadline. Other failures and a cancellation are errors.
     pub(crate) fn poll_action(
         &self,
         action: &Action,
@@ -270,6 +273,13 @@ impl Hetzner {
         cancel: &Cancellation,
         mut settled: impl FnMut() -> Result<bool, CloudError>,
     ) -> Result<Waited, CloudError> {
+        let late = |error: CloudError| {
+            if !matches!(error, CloudError::Cancelled) && Instant::now() >= deadline {
+                Ok(Waited::TimedOut)
+            } else {
+                Err(error)
+            }
+        };
         let mut current = action.clone();
         loop {
             match current.status.as_str() {
@@ -282,25 +292,36 @@ impl Hetzner {
                 "running" => {}
                 _ => return Err(CloudError::InvalidResponse),
             }
-            // No request goes out after the deadline, so a late refusal cannot turn
-            // a timed-out wait into an error.
             if Instant::now() >= deadline {
                 return Ok(Waited::TimedOut);
             }
-            if settled()? {
-                return Ok(Waited::Settled);
+            match settled() {
+                Ok(true) => return Ok(Waited::Settled),
+                Ok(false) => {}
+                Err(error) => return late(error),
             }
             let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
                 return Ok(Waited::TimedOut);
             };
             std::thread::sleep(self.poll.min(remaining));
             cancel.check()?;
-            if Instant::now() >= deadline {
+            let Some(remaining) = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|left| !left.is_zero())
+            else {
                 return Ok(Waited::TimedOut);
-            }
-            let envelope: ActionEnvelope =
-                serde_json::from_value(self.send(Method::Get, &format!("/actions/{}", current.id), None, cancel)?)
-                    .map_err(|_| CloudError::InvalidResponse)?;
+            };
+            let value = match self.send_within(
+                Method::Get,
+                &format!("/actions/{}", current.id),
+                None,
+                cancel,
+                Some(remaining),
+            ) {
+                Ok(value) => value,
+                Err(failure) => return late(failure.into()),
+            };
+            let envelope: ActionEnvelope = serde_json::from_value(value).map_err(|_| CloudError::InvalidResponse)?;
             if envelope.action.id != current.id {
                 return Err(CloudError::InvalidResponse);
             }
