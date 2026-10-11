@@ -426,22 +426,33 @@ impl HorizonApp {
         self.cloud_prototype.groups.0.push(group);
         self.cloud_prototype.renaming = Some(id);
         self.cloud_prototype.title_draft = title.into();
+        // The workspace preset gives the cloud its slot before the view frames it.
+        self.cloud_prototype.groups.reconcile(&mut self.board);
         self.show_new_cloud(ctx, id);
     }
 
-    /// A new cloud takes the view to its own workspace, as Fit workspace does. Clouds in
-    /// other workspaces stay out of view, so their parked terminals stay parked.
+    /// A new cloud takes the view and the focus to its own workspace, and the fit keeps
+    /// the cloud clear of the overview controls and the minimap. Clouds in other
+    /// workspaces stay out of view, so their parked terminals stay parked.
     fn show_new_cloud(&mut self, ctx: &egui::Context, id: u32) {
-        let workspace = self
+        let Some(workspace) = self
             .cloud_prototype
             .groups
             .0
             .iter()
             .find(|group| group.issue == id)
-            .and_then(|group| self.board.workspace_id_by_local_id(&group.workspace));
-        if let Some(workspace) = workspace {
-            let _ = self.fit_workspace_visible(ctx, workspace);
-        }
+            .and_then(|group| self.board.workspace_id_by_local_id(&group.workspace))
+            .filter(|workspace| !self.workspace_is_detached(*workspace))
+        else {
+            return;
+        };
+        let Some((position, size)) = self.workspace_focus_frame(workspace) else {
+            return;
+        };
+        self.board.focus_workspace(workspace);
+        let max = position + size;
+        self.cloud_fit(ctx, [position.x, position.y], [max.x, max.y]);
+        self.mark_runtime_dirty();
     }
 
     fn cloud_overview(&mut self, ctx: &egui::Context) {
