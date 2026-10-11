@@ -273,7 +273,11 @@ impl HorizonApp {
             ui.make_persistent_id(("sidebar_ws_click", workspace.id.0)),
             Sense::click_and_drag(),
         );
-        row_response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &workspace.name));
+        row_response.widget_info(|| {
+            let panels = accordion.then_some(workspace.panels.len());
+            let spoken = text::workspace_spoken(&workspace.name, panels, workspace.detached);
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, spoken)
+        });
         // The tile, name and line tooltips go after the row: egui hovers a widget that
         // only senses hover when it lies above the row's click target.
         let tile_response = rows::paint_workspace_row_contents(ui, row_rect, workspace, accordion);
@@ -418,7 +422,10 @@ impl HorizonApp {
             ui.make_persistent_id(("sidebar_panel_click", panel.id.0)),
             Sense::click(),
         );
-        row_response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+        row_response.widget_info(|| {
+            let spoken = text::panel_spoken(panel.kind, &label, panel.working);
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, spoken)
+        });
         // The whole title, when the row cuts it or shows only the agent's task.
         let row_response = if title_elided || label != panel.title {
             row_response.on_hover_text(&panel.title)

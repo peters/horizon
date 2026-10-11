@@ -107,13 +107,38 @@ pub(super) fn name_labels_agent(kind: PanelKind, name: &str, name_is_custom: boo
             .any(|preset| preset.kind == kind && preset.name.eq_ignore_ascii_case(name))
 }
 
+/// What a screen reader says for a workspace row: its name, the panel count that
+/// the row shows (`panels`, accordion only) and whether it is in a new window.
+pub(super) fn workspace_spoken(name: &str, panels: Option<usize>, detached: bool) -> String {
+    let mut spoken = name.to_owned();
+    match panels {
+        Some(1) => spoken.push_str(", 1 panel"),
+        Some(count) => spoken.push_str(&format!(", {count} panels")),
+        None => {}
+    }
+    if detached {
+        spoken.push_str(", in a new window");
+    }
+    spoken
+}
+
+/// What a screen reader says for a panel row: the kind, the label and, for an
+/// agent that works, that it works.
+pub(super) fn panel_spoken(kind: PanelKind, label: &str, working: bool) -> String {
+    let mut spoken = format!("{}: {label}", kind.display_name());
+    if working {
+        spoken.push_str(", working");
+    }
+    spoken
+}
+
 #[cfg(test)]
 mod tests {
     use horizon_core::PanelKind;
 
     use horizon_core::PresetConfig;
 
-    use super::{fold_whitespace, initials, name_labels_agent, panel_label};
+    use super::{fold_whitespace, initials, name_labels_agent, panel_label, panel_spoken, workspace_spoken};
 
     #[test]
     fn initials_take_the_first_letters_of_the_first_two_words() {
@@ -192,5 +217,20 @@ mod tests {
             panel_label(PanelKind::Shell, None, "\u{25D0} build", "\u{25D0} build"),
             "\u{25D0} build"
         );
+    }
+
+    #[test]
+    fn a_screen_reader_hears_what_the_rows_show() {
+        assert_eq!(workspace_spoken("Horizon", Some(4), false), "Horizon, 4 panels");
+        assert_eq!(
+            workspace_spoken("Docs", Some(1), true),
+            "Docs, 1 panel, in a new window"
+        );
+        assert_eq!(workspace_spoken("Docs", None, false), "Docs");
+        assert_eq!(
+            panel_spoken(PanelKind::Claude, "Fix sync", true),
+            "Claude: Fix sync, working"
+        );
+        assert_eq!(panel_spoken(PanelKind::Editor, "notes.md", false), "Editor: notes.md");
     }
 }
