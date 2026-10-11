@@ -553,6 +553,9 @@ fn new_cloud_placement_is_relative_to_translated_workspace() {
             app.cloud_prototype.groups.0[0].position,
             [origin[0] + pad, origin[1] + pad],
         );
+        // Creation fits the workspace; a reconcile then moves no cloud, so the
+        // overview stays the same.
+        app.cloud_overview(&ctx);
         let initial_view = app.canvas_view;
         app.cloud_prototype.groups.reconcile(&mut app.board);
         app.cloud_overview(&ctx);
@@ -568,6 +571,7 @@ fn new_cloud_placement_is_relative_to_translated_workspace() {
         assert_position([0.0, second.position[1]], [0.0, first.position[1]]);
         assert_position(second.size, first.size);
         let positions = [first.position, second.position];
+        app.cloud_overview(&ctx);
         let overview = app.canvas_view;
         let saved = serde_json::to_vec(&app.cloud_prototype.groups).unwrap();
         app.cloud_prototype.groups = serde_json::from_slice(&saved).unwrap();
