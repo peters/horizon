@@ -309,8 +309,11 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
     authenticated requests routed from a live agent panel, and the host-owned
     workspace stamp that keeps MCP authorization current
   - `browser_host_io`: the one coordination worker that runs the claims of the
-    browser request pumps and the results of refused requests in the order
-    they were asked for; a later frame applies each outcome in the same order;
+    browser request pumps, and the refusals that a claim outcome issues itself
+    (a failed claim, a retiring or replaced board, an agent that left), in the
+    order they were asked for; the refusals of applying a claimed request, and
+    the results of pending requests, still complete on the UI thread; a later
+    frame applies each outcome in the same order;
     an outcome asked for on a board that a session switch or a cloud
     prototype restore replaced refuses its request and changes no panel of the
     board that stands now

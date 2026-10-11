@@ -1,9 +1,9 @@
-//! The coordination file work of the browser request pumps. Claims and the
-//! results of refused requests take coordination locks and sync their files to
-//! disk, so one worker thread does that work, in the order it was asked for. A
-//! slow disk, or a lock that an MCP server or a driver holds, then never stalls
-//! a frame. What the UI does with an outcome runs on a later frame, in the same
-//! order.
+//! The coordination file work of the browser request pumps. Claims, and the
+//! refusals that a claim outcome issues itself, take coordination locks and
+//! sync their files to disk, so one worker thread does that work, in the order
+//! it was asked for. A slow disk, or a lock that an MCP server or a driver
+//! holds, then never stalls a frame for that work. What the UI does with an
+//! outcome runs on a later frame, in the same order.
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
