@@ -110,7 +110,7 @@ impl HostIo {
     }
 
     /// Holds while the board stands.
-    fn board_fence(&self) -> BoardFence {
+    pub(super) fn board_fence(&self) -> BoardFence {
         BoardFence::new(&self.replaced)
     }
 
@@ -195,8 +195,9 @@ impl HostIo {
     }
 }
 
-/// Whether the board a job was asked for is still the one that stands.
-struct BoardFence {
+/// Whether the board a job was asked for is still the one that stands. A job
+/// checks it on the worker before it starts its file work.
+pub(super) struct BoardFence {
     count: Arc<AtomicU64>,
     asked: u64,
 }
@@ -209,7 +210,7 @@ impl BoardFence {
         }
     }
 
-    fn holds(&self) -> bool {
+    pub(super) fn holds(&self) -> bool {
         self.count.load(Ordering::Acquire) == self.asked
     }
 }
@@ -392,6 +393,16 @@ mod tests {
             "only the outcome of the replaced board refuses its request"
         );
         assert!(!app.browser_host_retiring());
+    }
+
+    #[test]
+    fn a_board_fence_fails_once_the_board_is_replaced() {
+        let mut io = HostIo::default();
+        let board = io.board_fence();
+        assert!(board.holds());
+        io.replace_board();
+        assert!(!board.holds());
+        assert!(io.board_fence().holds(), "a fence taken after it holds");
     }
 
     #[test]

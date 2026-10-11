@@ -62,9 +62,12 @@ impl HorizonApp {
             .filter(|panel| panel.kind.is_agent())
             .map(|panel| browser_actor(&panel.local_id))
             .collect();
-        self.browser_create_host
-            .io
-            .then(move || ClaimedRequests::claim(&actors), Self::apply_claimed_requests);
+        // A claim that starts after a session switch replaced the board takes nothing.
+        let board = self.browser_create_host.io.board_fence();
+        self.browser_create_host.io.then(
+            move || board.holds().then(|| ClaimedRequests::claim(&actors)),
+            |app, claimed| app.apply_claimed_requests(claimed.flatten()),
+        );
     }
 
     /// Starts what each claimed request asks for. An agent that left the
