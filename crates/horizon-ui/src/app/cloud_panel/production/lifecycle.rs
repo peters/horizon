@@ -547,7 +547,10 @@ impl HorizonApp {
         let Some(root) = self.cloud_prototype.root.as_ref().filter(|_| Store::supported()) else {
             return Ok(None);
         };
-        let path = cloud_runtime::state::cloud_directory(root, &launch.id)?;
+        // An identity that cannot name a record directory has no record to operate on.
+        let Ok(path) = cloud_runtime::state::cloud_directory(root, &launch.id) else {
+            return Ok(None);
+        };
         Store::lock_noting_creation(&path).map(Some)
     }
 

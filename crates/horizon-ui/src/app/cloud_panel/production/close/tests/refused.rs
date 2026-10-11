@@ -181,6 +181,20 @@ fn an_unreadable_record_offers_only_remove_anyway() {
 }
 
 #[test]
+fn a_cloud_whose_identity_names_no_record_can_be_removed_anyway() {
+    let (temp, mut app) = test_app();
+    add_cloud(&mut app, temp.path(), Some(deployment()));
+    app.cloud_prototype.groups.0[0].remote.as_mut().unwrap().id = "../outside".into();
+    app.request_cloud_close(101);
+    let offer = current_offer(&app);
+    assert_eq!((offer.primary, offer.remove_anyway), (None, true), "{offer:?}");
+
+    app.remove_cloud_anyway(101, &egui::Context::default());
+    assert!(app.cloud_prototype.groups.0.is_empty(), "no record can hold its lock");
+    assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
+}
+
+#[test]
 #[cfg(unix)] // Durable cloud records require Unix directory durability.
 fn another_controller_keeps_the_cloud_from_being_removed_anyway() {
     let (temp, mut app) = test_app();
