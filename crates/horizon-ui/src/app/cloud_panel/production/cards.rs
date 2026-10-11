@@ -120,8 +120,9 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
     if deleted_or_redeploying(runtime) {
         return deleted_runtime_actions(ui, id, runtime);
     }
-    // Deploy, Reconnect, Resume and Delete all wait for the preparation, so none is offered.
-    if runtime.preparation.is_some() {
+    // Every lifecycle action waits for a preparation or a session save that still runs,
+    // so none is offered.
+    if runtime.preparation.is_some() || runtime.sessions.saving() {
         ui.spinner();
         ui.label("Saving the session and the deployment record…");
         return None;

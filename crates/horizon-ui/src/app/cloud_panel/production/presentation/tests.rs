@@ -426,6 +426,7 @@ fn a_new_panel_adds_its_session_to_the_record_a_running_save_holds() {
         app.cloud_prototype.production.runtimes[&1].busy(),
         "no operation that locks the record starts while the save holds it"
     );
+    super::super::session_record::Sessions::end_for_test(&directory);
 }
 
 #[test]

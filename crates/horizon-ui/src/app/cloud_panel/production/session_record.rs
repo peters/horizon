@@ -55,10 +55,16 @@ fn running(directory: &Path) -> Option<Arc<Mutex<Flight>>> {
 
 /// Whether every save ended, so that quitting now loses no recorded session.
 fn all_ended() -> bool {
-    FLIGHTS
+    // Released before any flight is locked, so no lock is ever held while the registry's
+    // is taken or the other way round.
+    let flights: Vec<_> = FLIGHTS
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .values()
+        .cloned()
+        .collect();
+    flights
+        .iter()
         .all(|flight| flight.lock().unwrap_or_else(PoisonError::into_inner).done)
 }
 
@@ -182,6 +188,15 @@ impl Sessions {
             .unwrap_or_else(PoisonError::into_inner)
             .insert(directory.to_path_buf(), Arc::clone(&flight));
         Self::of(directory)
+    }
+
+    /// Ends the save that [`Self::saving_for_test`] made, so it holds no later exit check.
+    #[cfg(all(test, unix))]
+    pub(super) fn end_for_test(directory: &Path) {
+        let removed = FLIGHTS.lock().unwrap_or_else(PoisonError::into_inner).remove(directory);
+        if let Some(flight) = removed {
+            flight.lock().unwrap_or_else(PoisonError::into_inner).done = true;
+        }
     }
 
     /// The record a running save holds, which is newer than the saved one.
