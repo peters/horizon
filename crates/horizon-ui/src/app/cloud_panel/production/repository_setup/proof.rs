@@ -31,33 +31,46 @@ const CHECK_TIMEOUT: Duration = Duration::from_mins(5);
 /// proof says nothing about a setup that changed after it. FNV-1a, stable across runs.
 pub(super) fn fingerprint(repository: &Path, spec: &Spec) -> u64 {
     let mut files: Vec<PathBuf> = Vec::new();
+    let mut links: Vec<(PathBuf, PathBuf)> = Vec::new();
     let mut pending = vec![repository.join(".horizon")];
     while let Some(folder) = pending.pop() {
         for entry in std::fs::read_dir(&folder).into_iter().flatten().flatten() {
             let path = entry.path();
-            if path.is_dir() {
-                pending.push(path);
-            } else {
-                files.push(path);
+            // A link counts by its target's name, never followed: no loop, nothing outside.
+            match entry.file_type() {
+                Ok(kind) if kind.is_symlink() => {
+                    let target = std::fs::read_link(&path).unwrap_or_default();
+                    links.push((path, target));
+                }
+                Ok(kind) if kind.is_dir() => pending.push(path),
+                Ok(_) => files.push(path),
+                Err(_) => {}
             }
         }
     }
     files.sort();
+    links.sort();
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     let mut feed = |bytes: &[u8]| {
         for byte in bytes {
             hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3);
         }
     };
+    let relative = |path: &Path| {
+        path.strip_prefix(repository)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned()
+    };
     feed(format!("{spec:?}").as_bytes());
-    for file in files {
-        feed(
-            file.strip_prefix(repository)
-                .unwrap_or(&file)
-                .to_string_lossy()
-                .as_bytes(),
-        );
-        feed(&std::fs::read(&file).unwrap_or_default());
+    for file in &files {
+        feed(relative(file).as_bytes());
+        feed(&std::fs::read(file).unwrap_or_default());
+    }
+    for (link, target) in &links {
+        feed(relative(link).as_bytes());
+        feed(b" -> ");
+        feed(target.to_string_lossy().as_bytes());
     }
     hash
 }
@@ -491,8 +504,11 @@ impl Job {
             command.args(["--gpus", "all"]);
         }
         // Packages this computer already restored, private ones included, need no feed
-        // credential: NuGet reads them as a fallback folder before it asks a source.
-        if let Some(packages) = std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".nuget/packages"))
+        // credential: NuGet reads them as a fallback folder before it asks a source. Only
+        // with the person's consent, since the repository's CI could read every one.
+        if self.host_restore
+            && uses_nuget(&self.repository)
+            && let Some(packages) = std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".nuget/packages"))
             && packages.is_dir()
         {
             command
@@ -511,6 +527,14 @@ impl Job {
         );
         command.args(["--entrypoint", "bash", &self.image, "-c", &script]);
         self.stream_within(command, log, Some(CI_TIMEOUT))
+    }
+
+    fn remove_container(&self) {
+        let _ = Command::new("docker")
+            .args(["rm", "--force", &self.container])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .output();
     }
 
     /// Runs `command`, sending each output line to the dialog and the log file.
@@ -575,11 +599,14 @@ impl Job {
             if self.cancel.load(Ordering::Relaxed) {
                 let _ = child.kill();
                 let _ = child.wait();
+                self.remove_container();
                 return Err("stopped".to_owned());
             }
             if limit.is_some_and(|limit| started.elapsed() > limit) {
                 let _ = child.kill();
                 let _ = child.wait();
+                // Killing the docker client leaves its container running.
+                self.remove_container();
                 return Err(format!(
                     "still running after {} minutes; stopped",
                     started.elapsed().as_secs() / 60
@@ -714,6 +741,28 @@ mod tests {
         assert_ne!(first, edited, "an edited Dockerfile is not the proved one");
         let other = Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": ["lint"]})).unwrap();
         assert_ne!(edited, fingerprint(repository.path(), &other), "nor another request");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_in_the_setup_counts_by_its_target_and_is_never_followed() {
+        let repository = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(repository.path().join(".horizon")).unwrap();
+        std::fs::write(repository.path().join(".horizon/Dockerfile"), "FROM base\n").unwrap();
+        std::os::unix::fs::symlink(
+            repository.path().join(".horizon"),
+            repository.path().join(".horizon/loop"),
+        )
+        .unwrap();
+        let spec = Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": ["test"]})).unwrap();
+        let first = fingerprint(repository.path(), &spec);
+        std::fs::remove_file(repository.path().join(".horizon/loop")).unwrap();
+        std::os::unix::fs::symlink("/etc", repository.path().join(".horizon/loop")).unwrap();
+        assert_ne!(
+            first,
+            fingerprint(repository.path(), &spec),
+            "a link to elsewhere is a change"
+        );
     }
 
     #[test]

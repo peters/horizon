@@ -277,17 +277,35 @@ impl HorizonApp {
                 if self.board.panel(panel).is_some() {
                     self.close_panel(panel);
                 }
-                let _ = std::fs::remove_file(path);
+                remove_run_folder(&path);
             }
             Action::Use => self.use_cloud_repository_setup(ctx),
         }
     }
 
     /// Commits the files the agent wrote and reads them as the repository's settings.
+    /// The agent stops first, so nothing writes while the files are checked against the
+    /// proof once more and committed; files that changed after the proof are refused.
     fn use_cloud_repository_setup(&mut self, ctx: &egui::Context) {
-        let Some(run) = self.cloud_prototype.production.setup_run.as_ref() else {
+        let Some(panel) = self.cloud_prototype.production.setup_run.as_ref().map(|run| run.panel) else {
             return;
         };
+        if self.board.panel(panel).is_some() {
+            self.close_panel(panel);
+        }
+        let Some(run) = self.cloud_prototype.production.setup_run.as_mut() else {
+            return;
+        };
+        run.refresh_inputs_now();
+        if !run.finished() {
+            run.stopped = true;
+            self.cloud_prototype.error = Some(
+                "The .horizon files changed after Horizon's proof, so they are not committed. Start the setup again to prove them."
+                    .into(),
+            );
+            return;
+        }
+        let run = &*run;
         let repository = run.repository.clone();
         let message = run.mode.commit_message();
         let git = |args: &[&str]| {
@@ -326,10 +344,7 @@ impl HorizonApp {
             return;
         }
         if let Some(run) = self.cloud_prototype.production.setup_run.take() {
-            if self.board.panel(run.panel).is_some() {
-                self.close_panel(run.panel);
-            }
-            let _ = std::fs::remove_file(run.status_path);
+            remove_run_folder(&run.status_path);
         }
         set_configuration(&mut self.cloud_prototype.production, Configuration::Committed);
         self.read_cloud_profiles(ctx);
@@ -364,11 +379,29 @@ impl HorizonApp {
 }
 
 /// A private file for one run's status, outside the repository.
+/// The run's status file in a folder of its own that only this user may read: the
+/// proof logs and screenshots beside it can hold a private repository's output.
 fn status_path() -> PathBuf {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_millis());
-    std::env::temp_dir().join(format!("horizon-cloud-setup-{}-{stamp}.json", std::process::id()))
+    let folder = std::env::temp_dir().join(format!("horizon-cloud-setup-{}-{stamp}", std::process::id()));
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    let _ = builder.recursive(true).create(&folder);
+    folder.join("status.json")
+}
+
+/// Removes a finished run's folder: its status, proof logs and screenshots.
+fn remove_run_folder(status: &Path) {
+    if let Some(folder) = status.parent().filter(|folder| {
+        folder
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with("horizon-cloud-setup-"))
+    }) {
+        let _ = std::fs::remove_dir_all(folder);
+    }
 }
 
 /// The `.horizon` files the agent changed or added, as the finished card lists them.

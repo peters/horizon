@@ -107,12 +107,13 @@ pub fn build_config(docker_config: &Path) -> Result<(tempfile::TempDir, bool)> {
     build_config_with(docker_config, machine.as_deref())
 }
 
-/// The settings of the machine's Docker configuration that are not credentials. The
-/// context it names resolves only where its folders are linked in, so only there.
+/// The settings of the machine's Docker configuration that hold no credentials; proxy
+/// URLs can, so `proxies` stays out. The context it names resolves only where its
+/// folders are linked in, so only there.
 #[cfg(unix)]
-const MACHINE_SETTINGS: &[&str] = &["currentContext", "cliPluginsExtraDirs", "proxies"];
+const MACHINE_SETTINGS: &[&str] = &["currentContext", "cliPluginsExtraDirs"];
 #[cfg(not(unix))]
-const MACHINE_SETTINGS: &[&str] = &["cliPluginsExtraDirs", "proxies"];
+const MACHINE_SETTINGS: &[&str] = &["cliPluginsExtraDirs"];
 
 fn build_config_with(docker_config: &Path, machine: Option<&Path>) -> Result<(tempfile::TempDir, bool)> {
     let directory = tempfile::Builder::new().prefix("horizon-build-docker-").tempdir()?;

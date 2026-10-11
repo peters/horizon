@@ -263,6 +263,11 @@ impl Run {
         if self.inputs.is_some_and(|(at, _)| at.elapsed() < Duration::from_secs(1)) {
             return;
         }
+        self.refresh_inputs_now();
+    }
+
+    /// Reads the setup's fingerprint again now, as Use does before it commits.
+    pub(super) fn refresh_inputs_now(&mut self) {
         if let Some(spec) = self.status.proof.as_ref() {
             self.inputs = Some((Instant::now(), proof::fingerprint(&self.repository, spec)));
         }
