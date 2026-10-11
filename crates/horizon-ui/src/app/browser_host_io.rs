@@ -104,9 +104,7 @@ impl HostIo {
         }));
     }
 
-    /// Every place that replaces a board that can hold panels says so here.
-    /// The restore of a saved cloud prototype board needs not: it only
-    /// replaces an empty board, which no coordination outcome can name.
+    /// Every place that replaces the board says so here.
     pub(super) fn replace_board(&mut self) {
         self.replaced.fetch_add(1, Ordering::AcqRel);
     }
@@ -119,12 +117,6 @@ impl HostIo {
     /// Whether the outcome applying now was asked for on a replaced board.
     pub(super) fn applying_stale(&self) -> bool {
         self.stale
-    }
-
-    /// A session switch that held the board for the worker is done with its
-    /// bound, so a later exit waits for its own.
-    pub(super) fn end_teardown_wait(&mut self) {
-        self.exit_deadline = None;
     }
 
     /// Whether a job asked for has not reached the UI yet.
@@ -236,12 +228,11 @@ impl HorizonApp {
         applied
     }
 
-    /// Whether an exit, or a session switch before it replaces the board,
-    /// still waits for coordination work, which it does for at most
-    /// [`EXIT_FLUSH`] from the first call. Each outcome that landed
+    /// Whether an exit still waits for coordination work, which it does for
+    /// at most [`EXIT_FLUSH`] from the first call. Each outcome that landed
     /// is applied first, so a claimed request is answered, and a refusal or
     /// result it queues is written, before Horizon exits.
-    pub(super) fn browser_host_io_holds_teardown(&mut self) -> bool {
+    pub(super) fn browser_host_io_holds_exit(&mut self) -> bool {
         // Read before applying: a job that ends in between has queued its
         // outcome, which the next call applies.
         let busy = self.browser_create_host.io.busy();
@@ -259,7 +250,7 @@ impl HorizonApp {
     /// coordination job ran and its outcome applied. The exit that runs
     /// without further frames uses it.
     pub(super) fn flush_browser_host_io(&mut self) {
-        while self.browser_host_io_holds_teardown() {
+        while self.browser_host_io_holds_exit() {
             std::thread::sleep(Duration::from_millis(2));
         }
     }
@@ -354,7 +345,7 @@ mod tests {
                 app.browser_create_host.io.write(move || seen.send(()).unwrap());
             },
         );
-        assert!(app.browser_host_io_holds_teardown(), "the claim still runs");
+        assert!(app.browser_host_io_holds_exit(), "the claim still runs");
         release.send(()).unwrap();
         app.flush_browser_host_io();
         assert!(refused.try_recv().is_ok(), "the refusal was written before the exit");
@@ -365,12 +356,9 @@ mod tests {
         });
         app.browser_create_host.io.exit_deadline = Some(Instant::now());
         assert!(
-            !app.browser_host_io_holds_teardown(),
+            !app.browser_host_io_holds_exit(),
             "a job that never ends holds the exit only until the bound"
         );
-        // A session switch used that bound; a later exit waits for its own.
-        app.browser_create_host.io.end_teardown_wait();
-        assert!(app.browser_host_io_holds_teardown());
     }
 
     #[test]

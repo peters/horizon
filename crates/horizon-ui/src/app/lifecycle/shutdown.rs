@@ -87,7 +87,7 @@ impl HorizonApp {
         }
         // Requests claimed and results queued are answered before the exit,
         // within a bound, so no agent waits for a request Horizon took.
-        if self.browser_host_io_holds_teardown() {
+        if self.browser_host_io_holds_exit() {
             return;
         }
         // Browser sessions publish their committed URL before resolving the

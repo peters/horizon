@@ -340,13 +340,6 @@ impl HorizonApp {
             }
         }
 
-        // Coordination work asked for on the old board ends before the new
-        // board replaces it, within the same bound as an exit.
-        if self.browser_host_io_holds_teardown() {
-            ctx.request_repaint_after(Duration::from_millis(32));
-            return true;
-        }
-        self.browser_create_host.io.end_teardown_wait();
         let Some(pending) = self.pending_session_switch.take() else {
             return false;
         };
