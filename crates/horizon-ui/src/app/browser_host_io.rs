@@ -272,6 +272,15 @@ impl HorizonApp {
         }
     }
 
+    /// A session switch waits like an exit, on this thread and for at most
+    /// [`EXIT_FLUSH`], so the old board's outcomes apply, while it still
+    /// retires, before it is saved and replaced; claims of the old board then
+    /// take no request of the new one. A later exit waits for its own bound.
+    pub(super) fn finish_browser_host_io_for_switch(&mut self) {
+        self.flush_browser_host_io();
+        self.browser_create_host.io.exit_deadline = None;
+    }
+
     /// Applies outcomes until no coordination job is left. Tests use it where
     /// the UI would apply them on later frames.
     #[cfg(test)]
@@ -439,6 +448,38 @@ mod tests {
             "the bound was already used"
         );
         release.send(()).unwrap();
+    }
+
+    #[test]
+    fn a_session_switch_applies_the_outcomes_of_the_old_board_before_it_replaces_it() {
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        let target = app
+            .session_store
+            .create_session_from_runtime(horizon_core::RuntimeState::default())
+            .expect("target session");
+        let (release, released) = channel::<()>();
+        let (seen, applied) = channel();
+        app.browser_create_host.io.then(
+            move || {
+                let _ = released.recv();
+            },
+            move |app: &mut HorizonApp, _| {
+                let replaced = app.browser_create_host.io.applying_stale();
+                seen.send((app.browser_host_retiring(), replaced)).unwrap();
+            },
+        );
+        let releasing = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            release.send(()).unwrap();
+        });
+        app.activate_runtime_session(&egui::Context::default(), &target);
+        releasing.join().unwrap();
+        assert!(app.pending_session_switch.is_none(), "the switch completed");
+        assert_eq!(
+            applied.try_iter().collect::<Vec<_>>(),
+            [(true, false)],
+            "the outcome applied to the retiring old board, before the new one replaced it"
+        );
     }
 
     #[test]
