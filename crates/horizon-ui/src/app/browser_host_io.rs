@@ -1,5 +1,5 @@
-//! The coordination file work of the browser request pumps. Claims and the
-//! results of refused requests take coordination locks and sync their files to
+//! The coordination file work of the browser request pumps. Claims, audits,
+//! manifest stamps and results take coordination locks and sync their files to
 //! disk, so one worker thread does that work, in the order it was asked for. A
 //! slow disk, or a lock that an MCP server or a driver holds, then never stalls
 //! a frame. What the UI does with an outcome runs on a later frame, in the same
@@ -35,6 +35,8 @@ pub(super) struct HostIo {
     /// Counts the boards replaced, so a job knows whether the board it was
     /// asked for still stands.
     replaced: Arc<AtomicU64>,
+    /// Counts the boards replaced or retired for an exit or a session switch.
+    retired: Arc<AtomicU64>,
     /// The outcome applying now was asked for on a board that was replaced.
     stale: bool,
 }
@@ -51,6 +53,7 @@ impl Default for HostIo {
             wake: Arc::default(),
             exit_deadline: None,
             replaced: Arc::default(),
+            retired: Arc::default(),
             stale: false,
         }
     }
@@ -109,11 +112,24 @@ impl HostIo {
     /// replaces an empty board, which no coordination outcome can name.
     pub(super) fn replace_board(&mut self) {
         self.replaced.fetch_add(1, Ordering::AcqRel);
+        self.retired.fetch_add(1, Ordering::AcqRel);
     }
 
-    /// Holds while the board stands.
+    /// An exit or a session switch starts to tear the board down: a change
+    /// asked for before then is no longer published for it.
+    pub(super) fn retire_board(&mut self) {
+        self.retired.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Holds while the board stands, for a job that writes its placement.
     pub(super) fn board_fence(&self) -> BoardFence {
         BoardFence::new(&self.replaced)
+    }
+
+    /// Holds while the board stands and is not retiring, for a job that
+    /// publishes a change an agent asked for.
+    pub(super) fn live_fence(&self) -> BoardFence {
+        BoardFence::new(&self.retired)
     }
 
     /// Whether the outcome applying now was asked for on a replaced board.
@@ -197,8 +213,9 @@ impl HostIo {
     }
 }
 
-/// Whether the board a job was asked for is still the one that stands. A job
-/// checks it on the worker before it starts its file work.
+/// Whether the board a job was asked for is still as it was. The job checks
+/// it on the worker just before it writes, so work asked for on a board that
+/// was replaced, or retired, never writes over the one that stands now.
 pub(super) struct BoardFence {
     count: Arc<AtomicU64>,
     asked: u64,
@@ -405,6 +422,18 @@ mod tests {
         io.replace_board();
         assert!(!board.holds());
         assert!(io.board_fence().holds(), "a fence taken after it holds");
+    }
+
+    #[test]
+    fn a_fence_fails_once_its_board_retires_or_is_replaced() {
+        let mut io = HostIo::default();
+        let (board, live) = (io.board_fence(), io.live_fence());
+        io.retire_board();
+        assert!(board.holds(), "a retiring board still stands");
+        assert!(!live.holds(), "a retiring board publishes no change asked for before");
+        let (board, live) = (io.board_fence(), io.live_fence());
+        io.replace_board();
+        assert!(!board.holds() && !live.holds());
     }
 
     #[test]

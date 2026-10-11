@@ -120,5 +120,70 @@ impl HorizonApp {
     }
 }
 
+/// A remote allocation a stamp covers, and the placement the stamp writes.
+pub(super) struct StampedAllocation {
+    pub(super) local_id: String,
+    pub(super) allocation: horizon_core::browser::RemoteAllocation,
+    workspace: String,
+    owner: Option<String>,
+}
+
+impl StampedAllocation {
+    /// A panel moved and then closed before its stamp landed: its driver
+    /// kept the scope of the manifest as it was, which names the workspace
+    /// the panel left, while the allocation expects the one it moved to, so
+    /// no workspace could recover it. It keeps the scope this stamp would
+    /// have written, as when the stamp lands first. A scope a failed stamp
+    /// invalidated stays invalid, and without a known owner the driver's
+    /// scope stays, which refuses recovery.
+    fn keep_stamped_scope(&self) {
+        let Some(owner) = &self.owner else { return };
+        self.allocation.retain_scope(horizon_browser::RemoteAllocationScope {
+            admission_fallback: false,
+            host: manifest::host_instance().to_string(),
+            workspace: Some(self.workspace.clone()),
+            owner: Some(owner.clone()),
+        });
+    }
+}
+
+/// The allocations whose manifest is gone under `root`, read on the
+/// coordination worker after a stamp. The driver removes a manifest only
+/// after it kept its scope.
+pub(super) fn retired_allocations(root: &std::path::Path, stamped: Vec<StampedAllocation>) -> Vec<StampedAllocation> {
+    stamped
+        .into_iter()
+        .filter(|stamped| !manifest::manifest_path_for_root(root, &stamped.local_id).exists())
+        .collect()
+}
+
+impl HorizonApp {
+    /// The remote allocation of a panel a stamp places in `workspace`. It
+    /// expects that workspace from now on, before any file is touched.
+    pub(super) fn stamped_allocation(&self, local_id: &str, workspace: &str) -> Option<StampedAllocation> {
+        let allocation = self.panel_remote_allocation(local_id)?;
+        allocation.expect_workspace(workspace);
+        Some(StampedAllocation {
+            local_id: local_id.to_string(),
+            allocation: allocation.clone(),
+            workspace: workspace.to_string(),
+            owner: self
+                .browser_create_host
+                .remote_allocations
+                .owner(allocation)
+                .map(str::to_string),
+        })
+    }
+
+    /// Gives each retired allocation whose panel closed the scope its stamp wrote.
+    pub(super) fn keep_stamped_scopes(&self, retired: &[StampedAllocation]) {
+        for stamped in retired {
+            if self.board.panel_id_by_local_id(&stamped.local_id).is_none() {
+                stamped.keep_stamped_scope();
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;

@@ -12,8 +12,9 @@ use horizon_core::browser::{BackendAvailability, BackendKind, BrowserStatus};
 use horizon_core::{Board, PanelId, PanelKind, PanelOptions, WorkspaceId, browser_actor};
 
 use super::HorizonApp;
-use super::browser_host_io::HostIo;
-use super::browser_request_claims::HOST_RETIRING;
+use super::browser_host_io::{BoardFence, HostIo};
+use super::browser_recovery::retired_allocations;
+use super::browser_request_claims::{HOST_RETIRING, fail_create, refuse_expired_create};
 
 const CREATE_REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// How long a create with an initial URL waits, after the backend is ready,
@@ -48,15 +49,29 @@ pub(super) struct BrowserCreateHostState {
     /// Board placement the manifests were last stamped for; a change
     /// re-stamps on the same frame instead of waiting for the next tick.
     stamped_placement: Option<u64>,
+    /// Stamps queued on the coordination worker, and the placement of the
+    /// latest of them.
+    stamps_in_flight: usize,
+    queued_placement: Option<u64>,
+    /// Counts the ticks that asked for a new stamp, so a stamp that was
+    /// running then does not count as the one they asked for.
+    stamp_requests: u64,
+    /// A placement whose stamp did not complete. Frames do not stamp it again
+    /// until the next tick asks, so a manifest that cannot be written is not
+    /// retried at the frame rate.
+    stamp_failed: Option<u64>,
     /// A claim of the agents' requests runs on the coordination worker.
     pub(super) claiming: bool,
+    /// Panels whose visibility request runs on the coordination worker, with
+    /// the visibility it sets; no stamp writes their manifests until it ends.
+    pub(super) visibility_in_flight: Vec<super::browser_visibility_requests::VisibilityInFlight>,
     /// Does the coordination file work in order, off the UI thread.
     pub(super) io: HostIo,
 }
 
 struct PendingBrowserCreate {
     request: BrowserCreateRequest,
-    panel_id: PanelId,
+    /// The panel, by its persisted id: board ids restart with a new session.
     panel_local_id: String,
     backend: BackendKind,
     /// Resolved once from the launch plan; later configuration or device state
@@ -70,12 +85,26 @@ struct PendingBrowserCreate {
     /// User navigations the panel had seen when the create started; more
     /// means the user took the panel over before the first page committed.
     user_navigations_at_start: u32,
+    stage: CreateStage,
+}
+
+/// Where a pending create stands. Only a starting create is judged each
+/// poll; the others wait for their coordination work, which ends them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CreateStage {
+    /// Its dispatch is being audited; an unaudited create never completes.
+    Auditing,
+    /// The browser starts.
+    Starting,
+    /// Its ownership, audit and result are being published. A panel that
+    /// closes or leaves the agent's workspace during those few milliseconds
+    /// is still reported ready; the next stamp writes the board's placement.
+    Finishing,
 }
 
 /// The panel a test wants treated as still being created.
 #[cfg(test)]
 pub(super) struct PendingBrowserCreateProbe {
-    pub(super) panel_id: PanelId,
     pub(super) panel_local_id: String,
 }
 
@@ -160,6 +189,8 @@ enum BrowserCreateCompletion {
     Waiting,
     Completed,
     Failed,
+    /// Its publication runs on the coordination worker, which ends it.
+    Finishing,
 }
 
 /// One browser panel's host-owned state as the board currently has it.
@@ -171,11 +202,21 @@ struct BrowserPlacement {
 
 /// Outcome of stamping every browser manifest: whether any file changed and
 /// whether every manifest this host owns is now current. An incomplete sync
-/// keeps the placement fingerprint uncommitted so the next frame retries.
-#[derive(Clone, Copy)]
+/// keeps the placement fingerprint uncommitted so the next tick retries.
+#[derive(Clone, Copy, Default)]
 struct HostStateSync {
     changed: bool,
     complete: bool,
+}
+
+impl BrowserCreateHostState {
+    /// Asks for a fresh stamp of every manifest; a stamp that runs now does
+    /// not count as that one.
+    pub(super) fn forget_stamped_placement(&mut self) {
+        self.stamped_placement = None;
+        self.stamp_failed = None;
+        self.stamp_requests += 1;
+    }
 }
 
 impl HorizonApp {
@@ -194,7 +235,7 @@ impl HorizonApp {
             self.browser_create_host.last_request_poll = Some(now);
             changed |= self.close_ended_browser_panels();
             changed |= self.poll_host_requests();
-            self.browser_create_host.stamped_placement = None;
+            self.browser_create_host.forget_stamped_placement();
         }
         changed
     }
@@ -202,23 +243,90 @@ impl HorizonApp {
     /// Re-stamp the manifests as soon as the board placement they depend on
     /// changes. This runs at the end of every frame, after queued workspace
     /// changes and the moves made while rendering, so moving or hiding a
-    /// panel revokes the old workspace's access before the frame ends rather
+    /// panel starts revoking the old workspace's access on that frame rather
     /// than on a later tick.
     pub(super) fn restamp_browser_manifests_for_placement(&mut self) -> bool {
-        if self.browser_create_host.stamped_placement == Some(placement_fingerprint(&self.board)) {
+        let placement = Some(placement_fingerprint(&self.board));
+        let host = &self.browser_create_host;
+        if host.stamped_placement == placement || host.stamp_failed == placement {
             return false;
         }
         self.stamp_current_placement()
     }
 
-    /// Stamp every owned manifest for the current placement and remember the
-    /// placement only if all of them are current, so a failed write is
-    /// retried on the next frame instead of waiting for the next tick.
+    /// Stamp every owned manifest for the current placement on the
+    /// coordination worker, and remember the placement only if all of them
+    /// are current. A failed write is retried on the next tick, or at once
+    /// when the placement changes again. A placement is queued once: a slow disk
+    /// never queues a stamp per frame or per tick, while a panel moved and
+    /// then closed still has the stamp of its move queued before it closes.
+    /// A manifest whose visibility request runs is left to that request, and
+    /// stamped once it ends. Returns whether a stamp was queued.
+    ///
+    /// Until the stamp lands, a moved panel's remote allocation already
+    /// expects its new workspace, which refuses recovery through the old one.
     fn stamp_current_placement(&mut self) -> bool {
+        // A queued placement already set what its allocations expect.
         let placement = placement_fingerprint(&self.board);
-        let sync = self.sync_browser_manifest_host_state();
-        self.browser_create_host.stamped_placement = sync.complete.then_some(placement);
-        sync.changed
+        if self.browser_create_host.queued_placement == Some(placement) {
+            return false;
+        }
+        // The authoritative placement is set before any file is touched, also
+        // while an earlier stamp still runs.
+        let mut placements = browser_placements(&self.board);
+        let allocations: Vec<_> = placements
+            .iter()
+            .filter_map(|placement| self.stamped_allocation(&placement.local_id, &placement.workspace.local_id))
+            .collect();
+        let host = &self.browser_create_host;
+        let before = placements.len();
+        placements.retain(|placement| {
+            !host
+                .visibility_in_flight
+                .iter()
+                .any(|running| running.local_id == placement.local_id)
+        });
+        let skipped = placements.len() < before;
+        let root = self.host_manifest_root().to_path_buf();
+        let (requested, board) = (host.stamp_requests, host.io.board_fence());
+        self.browser_create_host.stamps_in_flight += 1;
+        self.browser_create_host.queued_placement = Some(placement);
+        self.browser_create_host.io.then(
+            move || {
+                // The placement of a replaced board is not written over the one that stands.
+                if !board.holds() {
+                    return (HostStateSync::default(), Vec::new());
+                }
+                let sync = sync_manifest_host_state(&root, &placements, |panel, confirmed| {
+                    for stamped in allocations.iter().filter(|stamped| stamped.local_id == panel) {
+                        stamped.allocation.confirm_scope(confirmed);
+                    }
+                });
+                if sync.changed {
+                    tracing::debug!("stamped browser manifests for a new board placement");
+                }
+                (sync, retired_allocations(&root, allocations))
+            },
+            move |app, outcome| {
+                let (sync, retired) = outcome.map_or((None, Vec::new()), |(sync, retired)| (Some(sync), retired));
+                app.keep_stamped_scopes(&retired);
+                let host = &mut app.browser_create_host;
+                host.stamps_in_flight -= 1;
+                if host.stamps_in_flight == 0 {
+                    host.queued_placement = None;
+                }
+                let asked_again = host.stamp_requests != requested;
+                let current = sync.is_some_and(|sync| sync.complete) && !skipped;
+                host.stamped_placement = (current && !asked_again).then_some(placement);
+                host.stamp_failed = (!current && !asked_again).then_some(placement);
+                // A placement that changed while this stamp ran is stamped now,
+                // also when no later frame comes, as during an exit.
+                if placement_fingerprint(&app.board) != placement {
+                    app.stamp_current_placement();
+                }
+            },
+        );
+        true
     }
 
     /// Root of the Horizon home whose manifests this host stamps. Production
@@ -240,13 +348,13 @@ impl HorizonApp {
         // Startup latency counts everything the host does from accepting the
         // request, including panel creation and the audit writes.
         let started_at = Instant::now();
-        if refuse_expired_create(&request) {
+        if refuse_expired_create(&mut self.browser_create_host.io, &request) {
             return;
         }
         let duplicate = match self.prepare_browser_duplicate(&mut request, actor_panel) {
             Ok(options) => options,
             Err((code, message)) => {
-                complete_failure(&request, code, message);
+                fail_create(&mut self.browser_create_host.io, &request, code, message);
                 return;
             }
         };
@@ -256,7 +364,12 @@ impl HorizonApp {
         let remote = match self.plan_and_admit_remote(&request, actor_panel.workspace_id) {
             Ok(plan) => plan,
             Err(refused) => {
-                complete_failure(&request, refused.code, &refused.message);
+                fail_create(
+                    &mut self.browser_create_host.io,
+                    &request,
+                    refused.code,
+                    &refused.message,
+                );
                 return;
             }
         };
@@ -267,11 +380,17 @@ impl HorizonApp {
         let startup_orientation = remote.as_ref().and_then(|plan| plan.request.orientation());
         if remote.is_none() {
             if let BackendAvailability::UnsupportedPlatform(reason) = backend.availability() {
-                complete_failure(&request, "unsupported_platform", reason);
+                fail_create(
+                    &mut self.browser_create_host.io,
+                    &request,
+                    "unsupported_platform",
+                    reason,
+                );
                 return;
             }
             if backend_session_limit_reached(&self.board, backend) {
-                complete_failure(
+                fail_create(
+                    &mut self.browser_create_host.io,
                     &request,
                     "session_limit_reached",
                     "the selected browser backend has reached its live-session limit",
@@ -298,7 +417,8 @@ impl HorizonApp {
                     recovery.cancel_before_launch();
                 }
                 tracing::error!(request_id = %request.request_id, %error, "failed to create requested browser panel");
-                complete_failure(
+                fail_create(
+                    &mut self.browser_create_host.io,
                     &request,
                     "panel_create_failed",
                     "Horizon could not create the requested browser panel; inspect local logs",
@@ -308,63 +428,92 @@ impl HorizonApp {
         };
         let Some(panel_local_id) = self.board.panel(panel_id).map(|panel| panel.local_id.clone()) else {
             tracing::error!(request_id = %request.request_id, "created browser panel disappeared before registration");
-            complete_failure(
+            fail_create(
+                &mut self.browser_create_host.io,
                 &request,
                 "panel_create_failed",
                 "Horizon could not register the requested browser panel",
             );
             return;
         };
-        for status in [BrowserCreateAuditStatus::Queued, BrowserCreateAuditStatus::Dispatched] {
-            if let Err(error) =
-                manifest::record_create_status(&panel_local_id, &request, backend, startup_orientation, status)
-            {
-                tracing::error!(request_id = %request.request_id, %error, "could not audit requested browser creation");
-                self.close_panel(panel_id);
-                complete_failure(
-                    &request,
-                    "audit_failed",
-                    "Horizon refused to create an unaudited browser panel",
-                );
-                return;
-            }
-        }
-        self.browser_create_host.pending.push(PendingBrowserCreate {
+        self.audit_requested_browser(PendingBrowserCreate {
             request,
-            panel_id,
             panel_local_id,
             backend,
             startup_orientation,
             started_at,
             ready_since: None,
             user_navigations_at_start: 0,
+            stage: CreateStage::Auditing,
         });
+    }
+
+    /// Registers the create and audits its dispatch on the coordination
+    /// worker. It waits for that audit before it may complete: a journal that
+    /// cannot be written closes the panel instead.
+    fn audit_requested_browser(&mut self, pending: PendingBrowserCreate) {
+        let request_id = pending.request.request_id.clone();
+        let audited = (pending.panel_local_id.clone(), pending.request.clone());
+        let (backend, startup_orientation) = (pending.backend, pending.startup_orientation);
+        self.browser_create_host.io.then(
+            move || {
+                let (panel_local_id, request) = audited;
+                [BrowserCreateAuditStatus::Queued, BrowserCreateAuditStatus::Dispatched]
+                    .into_iter()
+                    .try_for_each(|status| {
+                        manifest::record_create_status(&panel_local_id, &request, backend, startup_orientation, status)
+                    })
+            },
+            move |app, audited| app.apply_create_dispatch_audit(&request_id, audited),
+        );
+        self.browser_create_host.pending.push(pending);
         self.mark_runtime_dirty();
     }
 
-    /// Keep every live browser manifest's host-owned presentation and
-    /// workspace membership current, so MCP authorization follows panel moves
-    /// and visibility changes made through the UI.
-    fn sync_browser_manifest_host_state(&self) -> HostStateSync {
-        let placements = browser_placements(&self.board);
-        for placement in &placements {
-            if let Some(allocation) = self.panel_remote_allocation(&placement.local_id) {
-                allocation.expect_workspace(&placement.workspace.local_id);
+    /// Lets an audited create start, or closes the panel of one whose
+    /// dispatch could not be audited.
+    /// A create whose dispatch was audited while Horizon exits or switches
+    /// sessions is settled as `host_shutdown`: its panel is being torn down.
+    fn apply_create_dispatch_audit(&mut self, request_id: &str, audited: Option<std::io::Result<()>>) {
+        let retiring = self.browser_host_retiring();
+        let pending = &mut self.browser_create_host.pending;
+        let Some(index) = pending
+            .iter()
+            .position(|pending| pending.request.request_id == request_id)
+        else {
+            return;
+        };
+        let (code, message) = match audited {
+            Some(Ok(())) if retiring => HOST_RETIRING,
+            Some(Ok(())) => {
+                pending[index].stage = CreateStage::Starting;
+                return;
             }
+            Some(Err(error)) => {
+                tracing::error!(%request_id, %error, "could not audit requested browser creation");
+                ("audit_failed", "Horizon refused to create an unaudited browser panel")
+            }
+            None => ("audit_failed", "Horizon refused to create an unaudited browser panel"),
+        };
+        let pending = pending.remove(index);
+        // A replaced board took the panel with it; a panel of the same id now is another one.
+        if !self.browser_create_host.io.applying_stale()
+            && let Some(panel_id) = self.board.panel_id_by_local_id(&pending.panel_local_id)
+        {
+            self.close_panel(panel_id);
         }
-        sync_manifest_host_state(self.host_manifest_root(), &placements, |panel, confirmed| {
-            if let Some(allocation) = self.panel_remote_allocation(panel) {
-                allocation.confirm_scope(confirmed);
-            }
-        })
+        record_and_complete_failure(&mut self.browser_create_host.io, &pending, code, message);
     }
 
     /// Whether an agent create for this panel has not completed yet.
     pub(super) fn browser_create_is_pending(&self, panel_id: PanelId) -> bool {
+        let Some(panel) = self.board.panel(panel_id) else {
+            return false;
+        };
         self.browser_create_host
             .pending
             .iter()
-            .any(|pending| pending.panel_id == panel_id)
+            .any(|pending| pending.panel_local_id == panel.local_id)
     }
 
     /// Register a create as still pending, for tests of paths that must
@@ -373,13 +522,13 @@ impl HorizonApp {
     pub(super) fn mark_browser_create_pending_for_tests(&mut self, probe: PendingBrowserCreateProbe) {
         self.browser_create_host.pending.push(PendingBrowserCreate {
             request: BrowserCreateRequest::for_tests(&probe.panel_local_id),
-            panel_id: probe.panel_id,
             panel_local_id: probe.panel_local_id,
             backend: BackendKind::default(),
             startup_orientation: None,
             started_at: Instant::now(),
             ready_since: None,
             user_navigations_at_start: 0,
+            stage: CreateStage::Starting,
         });
     }
 
@@ -390,15 +539,27 @@ impl HorizonApp {
         let mut changed = false;
         let mut waiting = Vec::new();
         for mut pending in std::mem::take(&mut self.browser_create_host.pending) {
-            if browser_create_is_terminal(&self.board, &pending) {
+            if pending.stage != CreateStage::Starting {
+                waiting.push(pending);
+                continue;
+            }
+            let io = &mut self.browser_create_host.io;
+            if browser_create_is_terminal(&self.board, io, &pending) {
                 changed = true;
                 continue;
             }
-            match finish_ready_browser_create(&self.board, &mut pending) {
+            match finish_ready_browser_create(&self.board, io, &mut pending) {
                 BrowserCreateCompletion::Waiting => waiting.push(pending),
                 BrowserCreateCompletion::Completed => changed = true,
                 BrowserCreateCompletion::Failed => {
-                    self.close_panel(pending.panel_id);
+                    if let Some(panel_id) = self.board.panel_id_by_local_id(&pending.panel_local_id) {
+                        self.close_panel(panel_id);
+                    }
+                    changed = true;
+                }
+                BrowserCreateCompletion::Finishing => {
+                    pending.stage = CreateStage::Finishing;
+                    waiting.push(pending);
                     changed = true;
                 }
             }
@@ -407,11 +568,46 @@ impl HorizonApp {
         changed
     }
 
-    /// Refuses every create that has not completed: nothing polls it once
-    /// Horizon exits or switches sessions, and the teardown closes its panel.
-    pub(super) fn retire_pending_browser_creates(&mut self) {
-        for pending in std::mem::take(&mut self.browser_create_host.pending) {
-            record_and_complete_failure(&pending, HOST_RETIRING.0, HOST_RETIRING.1);
+    /// Refuses every create whose browser still starts, which nothing polls once Horizon exits or switches
+    /// sessions; the teardown closes its panel. A create whose coordination work runs ends with that work.
+    pub(super) fn retire_starting_browser_creates(&mut self) {
+        let host = &mut self.browser_create_host;
+        let (starting, waiting): (Vec<_>, _) = std::mem::take(&mut host.pending)
+            .into_iter()
+            .partition(|pending| pending.stage == CreateStage::Starting);
+        host.pending = waiting;
+        for pending in &starting {
+            record_and_complete_failure(&mut host.io, pending, HOST_RETIRING.0, HOST_RETIRING.1);
+        }
+    }
+
+    /// Ends a create whose publication finished; one that could not be
+    /// published closes its panel, as its failure result says.
+    fn finish_published_create(&mut self, request_id: &str, published: Option<bool>) {
+        let pending = &mut self.browser_create_host.pending;
+        let Some(index) = pending
+            .iter()
+            .position(|pending| pending.request.request_id == request_id)
+        else {
+            return;
+        };
+        let pending = pending.remove(index);
+        if published == Some(true) {
+            return;
+        }
+        // A replaced board took the panel with it; a panel of the same id now is another one.
+        if !self.browser_create_host.io.applying_stale()
+            && let Some(panel_id) = self.board.panel_id_by_local_id(&pending.panel_local_id)
+        {
+            self.close_panel(panel_id);
+        }
+        if published.is_none() {
+            record_and_complete_failure(
+                &mut self.browser_create_host.io,
+                &pending,
+                "manifest_update_failed",
+                "Horizon could not publish the new browser panel's visibility and workspace",
+            );
         }
     }
 }
@@ -537,8 +733,12 @@ fn backend_session_limit_reached(board: &Board, backend: BackendKind) -> bool {
     live >= usize::try_from(limit).unwrap_or(usize::MAX)
 }
 
-fn finish_ready_browser_create(board: &Board, pending: &mut PendingBrowserCreate) -> BrowserCreateCompletion {
-    let Some(browser) = board.panel(pending.panel_id).and_then(|panel| panel.browser()) else {
+fn finish_ready_browser_create(
+    board: &Board,
+    io: &mut HostIo,
+    pending: &mut PendingBrowserCreate,
+) -> BrowserCreateCompletion {
+    let Some(browser) = pending_panel(board, pending).and_then(|panel| panel.browser()) else {
         return BrowserCreateCompletion::Waiting;
     };
     let now = Instant::now();
@@ -576,11 +776,10 @@ fn finish_ready_browser_create(board: &Board, pending: &mut PendingBrowserCreate
         .flatten();
     let startup_millis =
         u64::try_from(now.saturating_duration_since(pending.started_at).as_millis()).unwrap_or(u64::MAX);
-    let Some(workspace) = board
-        .panel(pending.panel_id)
-        .and_then(|panel| browser_workspace(board, panel.workspace_id))
+    let Some(workspace) = pending_panel(board, pending).and_then(|panel| browser_workspace(board, panel.workspace_id))
     else {
         record_and_complete_failure(
+            io,
             pending,
             "workspace_unavailable",
             "Horizon could not determine the new browser panel's workspace",
@@ -591,62 +790,101 @@ fn finish_ready_browser_create(board: &Board, pending: &mut PendingBrowserCreate
         // The user moved a panel while the browser started. Keep the panel
         // where they put it and report the lost workspace instead of closing
         // it or handing an uncontrollable panel back as ready.
-        if let Err(error) = publish_manifest_host_state(&pending.panel_local_id, pending.request.visible, &workspace) {
-            tracing::warn!(request_id = %pending.request.request_id, %error, "could not stamp a moved browser panel");
-        }
+        let (panel_local_id, visible) = (pending.panel_local_id.clone(), pending.request.visible);
+        let request_id = pending.request.request_id.clone();
+        io.write(move || {
+            if let Err(error) = publish_manifest_host_state(&panel_local_id, visible, &workspace) {
+                tracing::warn!(%request_id, %error, "could not stamp a moved browser panel");
+            }
+        });
         record_and_complete_failure(
+            io,
             pending,
             "workspace_changed",
             "the browser panel left the requesting agent's workspace during creation and was left in place",
         );
         return BrowserCreateCompletion::Completed;
     }
-    // Stamp and assign ownership in one locked transaction so no other
-    // same-workspace agent can claim the new panel in between.
-    if let Err(error) = manifest::publish_requested_panel(
-        &pending.panel_local_id,
-        pending.request.visible,
-        &workspace,
-        host_identity(&pending.request.actor),
-    ) {
-        tracing::error!(request_id = %pending.request.request_id, %error, "could not publish requested browser panel");
-        let (code, message) = if error.kind() == std::io::ErrorKind::PermissionDenied {
-            (
-                "ownership_failed",
-                "Horizon could not assign the new browser panel to the requesting agent",
-            )
-        } else {
-            (
-                "manifest_update_failed",
-                "Horizon could not publish the new browser panel's visibility and workspace",
-            )
-        };
-        record_and_complete_failure(pending, code, message);
-        return BrowserCreateCompletion::Failed;
-    }
-    if let Err(error) = manifest::record_create_status(
-        &pending.panel_local_id,
-        &pending.request,
-        pending.backend,
-        pending.startup_orientation,
-        BrowserCreateAuditStatus::Completed,
-    ) {
-        tracing::error!(request_id = %pending.request.request_id, %error, "could not complete browser creation audit");
-        record_and_complete_failure(
-            pending,
-            "audit_failed",
-            "Horizon could not complete the browser creation audit",
-        );
-        return BrowserCreateCompletion::Failed;
-    }
-    complete_result(&BrowserCreateResult::ready(
+    let result = BrowserCreateResult::ready(
         &pending.request,
         pending.panel_local_id.clone(),
         navigation,
         navigation_error,
         startup_millis,
-    ));
-    BrowserCreateCompletion::Completed
+    );
+    let (panel, request, live) = (pending.panel_local_id.clone(), pending.request.clone(), io.live_fence());
+    let (backend, orientation) = (pending.backend, pending.startup_orientation);
+    io.then(
+        move || publish_requested_create(&live, &panel, &request, &workspace, backend, orientation, &result),
+        {
+            let request_id = pending.request.request_id.clone();
+            move |app, published| app.finish_published_create(&request_id, published)
+        },
+    );
+    BrowserCreateCompletion::Finishing
+}
+
+/// Stamps the new panel and assigns it to the requesting agent in one locked
+/// transaction, so no other same-workspace agent can claim it in between,
+/// then audits the completion and publishes `ready`, on the coordination
+/// worker. A step that fails publishes the failure instead, and so does a
+/// create whose board retired since it was asked for. Says whether the create
+/// was published as ready.
+fn publish_requested_create(
+    live: &BoardFence,
+    panel_local_id: &str,
+    request: &BrowserCreateRequest,
+    workspace: &ManifestWorkspace,
+    backend: BackendKind,
+    orientation: Option<horizon_core::browser::remote::RemoteOrientation>,
+    ready: &BrowserCreateResult,
+) -> bool {
+    let fail = |code, message| {
+        record_create_failure(panel_local_id, request, backend, orientation);
+        complete_result(&BrowserCreateResult::failed(request, code, message));
+        false
+    };
+    if !live.holds() {
+        return fail(HOST_RETIRING.0, HOST_RETIRING.1);
+    }
+    if let Err(error) = manifest::publish_requested_panel(
+        panel_local_id,
+        request.visible,
+        workspace,
+        host_identity(&request.actor),
+    ) {
+        tracing::error!(request_id = %request.request_id, %error, "could not publish requested browser panel");
+        return if error.kind() == std::io::ErrorKind::PermissionDenied {
+            fail(
+                "ownership_failed",
+                "Horizon could not assign the new browser panel to the requesting agent",
+            )
+        } else {
+            fail(
+                "manifest_update_failed",
+                "Horizon could not publish the new browser panel's visibility and workspace",
+            )
+        };
+    }
+    if let Err(error) = manifest::record_create_status(
+        panel_local_id,
+        request,
+        backend,
+        orientation,
+        BrowserCreateAuditStatus::Completed,
+    ) {
+        tracing::error!(request_id = %request.request_id, %error, "could not complete browser creation audit");
+        return fail("audit_failed", "Horizon could not complete the browser creation audit");
+    }
+    complete_result(ready);
+    true
+}
+
+/// The pending create's panel on this board, if it still has one.
+fn pending_panel<'a>(board: &'a Board, pending: &PendingBrowserCreate) -> Option<&'a horizon_core::Panel> {
+    board
+        .panel_id_by_local_id(&pending.panel_local_id)
+        .and_then(|panel_id| board.panel(panel_id))
 }
 
 /// The create deadline as an `Instant`, derived from the request's wall-clock
@@ -656,9 +894,10 @@ fn create_deadline(pending: &PendingBrowserCreate, now: Instant) -> Instant {
     now + Duration::from_millis(u64::try_from(remaining).unwrap_or(0))
 }
 
-fn browser_create_is_terminal(board: &Board, pending: &PendingBrowserCreate) -> bool {
-    let Some(browser) = board.panel(pending.panel_id).and_then(|panel| panel.browser()) else {
+fn browser_create_is_terminal(board: &Board, io: &mut HostIo, pending: &PendingBrowserCreate) -> bool {
+    let Some(browser) = pending_panel(board, pending).and_then(|panel| panel.browser()) else {
         record_and_complete_failure(
+            io,
             pending,
             "panel_closed",
             "the requested browser panel closed before it became controllable",
@@ -666,11 +905,12 @@ fn browser_create_is_terminal(board: &Board, pending: &PendingBrowserCreate) -> 
         return true;
     };
     if let Some((code, message)) = terminal_create_failure(browser) {
-        record_and_complete_failure(pending, code, message);
+        record_and_complete_failure(io, pending, code, message);
         return true;
     }
     if pending.request.deadline_at_millis < manifest::now_millis() {
         record_and_complete_failure(
+            io,
             pending,
             "create_timeout",
             "the browser panel did not become controllable before the create deadline",
@@ -704,21 +944,32 @@ fn terminal_create_failure(browser: &horizon_core::browser::BrowserPanelState) -
     }
 }
 
-fn record_and_complete_failure(pending: &PendingBrowserCreate, code: &str, message: &str) {
-    if let Err(error) = manifest::record_create_status(
-        &pending.panel_local_id,
-        &pending.request,
-        pending.backend,
-        pending.startup_orientation,
-        BrowserCreateAuditStatus::Failed,
-    ) {
-        tracing::warn!(request_id = %pending.request.request_id, %error, "could not append failed browser creation audit");
-    }
-    complete_failure(&pending.request, code, message);
+/// Audits and publishes a failed create on the coordination worker.
+fn record_and_complete_failure(io: &mut HostIo, pending: &PendingBrowserCreate, code: &str, message: &str) {
+    let result = BrowserCreateResult::failed(&pending.request, code, message);
+    let (panel_local_id, request) = (pending.panel_local_id.clone(), pending.request.clone());
+    let (backend, orientation) = (pending.backend, pending.startup_orientation);
+    io.write(move || {
+        record_create_failure(&panel_local_id, &request, backend, orientation);
+        complete_result(&result);
+    });
 }
 
-fn complete_failure(request: &BrowserCreateRequest, code: &str, message: &str) {
-    complete_result(&BrowserCreateResult::failed(request, code, message));
+fn record_create_failure(
+    panel_local_id: &str,
+    request: &BrowserCreateRequest,
+    backend: BackendKind,
+    orientation: Option<horizon_core::browser::remote::RemoteOrientation>,
+) {
+    if let Err(error) = manifest::record_create_status(
+        panel_local_id,
+        request,
+        backend,
+        orientation,
+        BrowserCreateAuditStatus::Failed,
+    ) {
+        tracing::warn!(request_id = %request.request_id, %error, "could not append failed browser creation audit");
+    }
 }
 
 pub(super) fn complete_result(result: &BrowserCreateResult) {
@@ -739,18 +990,6 @@ pub(super) fn publish_manifest_host_state(
             "browser panel's driver runs in another Horizon host",
         )),
     }
-}
-
-fn refuse_expired_create(request: &BrowserCreateRequest) -> bool {
-    if request.deadline_at_millis >= manifest::now_millis() {
-        return false;
-    }
-    complete_failure(
-        request,
-        "request_expired",
-        "browser create request expired before Horizon could accept it",
-    );
-    true
 }
 
 #[cfg(test)]
@@ -1138,14 +1377,28 @@ mod tests {
         let agent_id = app.board.create_panel(agent_options(), alpha).expect("agent panel");
 
         app.poll_browser_create_requests();
-        let first_poll = app.browser_create_host.last_request_poll.expect("first tick polls");
+        assert!(
+            app.browser_create_host.last_request_poll.is_some(),
+            "the first tick polls"
+        );
         assert!(
             app.browser_create_host.stamped_placement.is_none(),
             "the tick only requests a stamp; the end-of-frame check performs it"
         );
-        app.restamp_browser_manifests_for_placement();
-        let stamped = app.browser_create_host.stamped_placement.expect("end of frame stamps");
+        // The tick's recovery poll started a stamp; the tick asked for a later one.
+        app.settle_browser_host_io();
+        assert!(app.browser_create_host.stamped_placement.is_none());
+        assert!(
+            app.restamp_browser_manifests_for_placement(),
+            "the end of the frame starts a stamp"
+        );
+        app.settle_browser_host_io();
+        let stamped = app.browser_create_host.stamped_placement.expect("the stamp lands");
 
+        // The last tick is now, however long the stamps took, so the next one
+        // is not due during the checks below.
+        let first_poll = Instant::now();
+        app.browser_create_host.last_request_poll = Some(first_poll);
         app.poll_browser_create_requests();
         assert_eq!(
             app.browser_create_host.last_request_poll,
@@ -1155,19 +1408,21 @@ mod tests {
         assert_eq!(app.browser_create_host.stamped_placement, Some(stamped));
 
         app.board.assign_panel_to_workspace(agent_id, beta);
-        app.restamp_browser_manifests_for_placement();
+        assert!(
+            app.restamp_browser_manifests_for_placement(),
+            "a placement change starts a stamp on the same frame"
+        );
+        app.settle_browser_host_io();
         assert_eq!(
             app.browser_create_host.last_request_poll,
             Some(first_poll),
             "the end-of-frame re-stamp does not advance the request poll cadence"
         );
         let after_move = app.browser_create_host.stamped_placement;
-        assert_ne!(
-            after_move,
-            Some(stamped),
-            "a placement change re-stamps on the same frame"
-        );
+        assert_ne!(after_move, Some(stamped), "the moved placement is the one stamped");
 
+        let first_poll = Instant::now();
+        app.browser_create_host.last_request_poll = Some(first_poll);
         app.poll_browser_create_requests();
         assert_eq!(
             app.browser_create_host.stamped_placement, after_move,
@@ -1178,6 +1433,171 @@ mod tests {
             !app.restamp_browser_manifests_for_placement(),
             "an unchanged placement is not re-stamped again"
         );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
+    fn a_manifest_lock_held_elsewhere_never_stalls_the_frame_that_stamps() {
+        use horizon_core::browser::BrowserPanelState;
+        use horizon_core::{Panel, PanelContent};
+
+        let (_temp, mut app) = test_app();
+        let alpha = app.board.create_workspace("alpha");
+        app.board.create_panel(agent_options(), alpha).expect("agent panel");
+        let browser = Panel::from_content(
+            PanelId(900),
+            alpha,
+            PanelKind::Browser,
+            PanelContent::Browser(Box::new(BrowserPanelState::inert())),
+        );
+        let path = manifest::manifest_path_for_root(app.host_manifest_root(), &browser.local_id);
+        app.board.panels.push(browser);
+        app.board.assign_panel_to_workspace(PanelId(900), alpha);
+        manifest::write_at(
+            &path,
+            &manifest::BrowserManifest {
+                host: Some(manifest::host_instance().to_string()),
+                ..manifest::BrowserManifest::default()
+            },
+        )
+        .expect("live manifest");
+        // Another process holds the manifest's lock, as a driver whose write
+        // waits for a slow disk would.
+        let lock = std::fs::File::create(path.with_extension("json.lock")).expect("lock file");
+        lock.lock().expect("the test holds the lock");
+
+        let started = Instant::now();
+        assert!(app.restamp_browser_manifests_for_placement());
+        // The worker waits up to the lock's two-second bound; the frame only queues.
+        assert!(
+            started.elapsed() < Duration::from_millis(1500),
+            "the frame waited {:?} for the lock",
+            started.elapsed()
+        );
+        assert_eq!(
+            app.browser_create_host.stamps_in_flight, 1,
+            "the stamp waits on the worker"
+        );
+        assert!(app.browser_create_host.stamped_placement.is_none());
+
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            manifest::read_at(&path).expect("manifest").workspace.is_none(),
+            "nothing is written while the lock is held"
+        );
+        drop(lock);
+        app.settle_browser_host_io();
+        // A stamp that gave up waiting for the lock is queued again by the
+        // next tick; one that landed stays as it is.
+        app.browser_create_host.forget_stamped_placement();
+        app.restamp_browser_manifests_for_placement();
+        app.settle_browser_host_io();
+        assert!(
+            manifest::read_at(&path).expect("manifest").workspace.is_some(),
+            "the stamp lands once the lock is free"
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
+    fn a_stamp_that_cannot_be_written_waits_for_the_next_tick() {
+        use horizon_core::browser::BrowserPanelState;
+        use horizon_core::{Panel, PanelContent};
+
+        let (_temp, mut app) = test_app();
+        let alpha = app.board.create_workspace("alpha");
+        app.board.create_panel(agent_options(), alpha).expect("agent panel");
+        let browser = Panel::from_content(
+            PanelId(900),
+            alpha,
+            PanelKind::Browser,
+            PanelContent::Browser(Box::new(BrowserPanelState::inert())),
+        );
+        let path = manifest::manifest_path_for_root(app.host_manifest_root(), &browser.local_id);
+        app.board.panels.push(browser);
+        app.board.assign_panel_to_workspace(PanelId(900), alpha);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("directory");
+        std::fs::write(&path, "invalid manifest").expect("unreadable manifest fixture");
+
+        assert!(app.restamp_browser_manifests_for_placement());
+        app.settle_browser_host_io();
+        assert!(app.browser_create_host.stamped_placement.is_none());
+        assert!(
+            !app.restamp_browser_manifests_for_placement(),
+            "a frame does not stamp the placement that failed again"
+        );
+        app.browser_create_host.forget_stamped_placement();
+        assert!(
+            app.restamp_browser_manifests_for_placement(),
+            "the next tick tries again"
+        );
+        app.settle_browser_host_io();
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
+    fn a_stamp_asked_for_on_a_replaced_board_writes_nothing() {
+        use horizon_core::browser::BrowserPanelState;
+        use horizon_core::{Panel, PanelContent};
+
+        let (_temp, mut app) = test_app();
+        let alpha = app.board.create_workspace("alpha");
+        app.board.create_panel(agent_options(), alpha).expect("agent panel");
+        let browser = Panel::from_content(
+            PanelId(900),
+            alpha,
+            PanelKind::Browser,
+            PanelContent::Browser(Box::new(BrowserPanelState::inert())),
+        );
+        let path = manifest::manifest_path_for_root(app.host_manifest_root(), &browser.local_id);
+        app.board.panels.push(browser);
+        app.board.assign_panel_to_workspace(PanelId(900), alpha);
+        let live = manifest::BrowserManifest {
+            host: Some(manifest::host_instance().to_string()),
+            ..manifest::BrowserManifest::default()
+        };
+        manifest::write_at(&path, &live).expect("live manifest");
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        app.browser_create_host.io.write(move || {
+            let _ = released.recv();
+        });
+        assert!(app.restamp_browser_manifests_for_placement());
+        // A session switch replaces the board before the stamp runs.
+        app.browser_create_host.io.replace_board();
+        release.send(()).expect("the worker waits");
+        app.settle_browser_host_io();
+        assert!(
+            manifest::read_at(&path).expect("manifest").workspace.is_none(),
+            "the old board's placement is not written"
+        );
+        assert!(app.browser_create_host.stamped_placement.is_none());
+    }
+
+    #[test]
+    fn retiring_refuses_the_creates_that_start_and_leaves_the_others_to_their_work() {
+        let (_temp, mut app) = test_app();
+        for id in ["starting", "auditing"] {
+            app.mark_browser_create_pending_for_tests(PendingBrowserCreateProbe {
+                panel_local_id: id.into(),
+            });
+        }
+        app.browser_create_host.pending[1].stage = CreateStage::Auditing;
+        // The worker stays held, so the refusal is queued but never written to
+        // the coordination root of the machine that runs the test.
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        app.browser_create_host.io.write(move || {
+            let _ = released.recv();
+        });
+        app.retire_starting_browser_creates();
+        let left: Vec<_> = app
+            .browser_create_host
+            .pending
+            .iter()
+            .map(|pending| pending.panel_local_id.as_str())
+            .collect();
+        assert_eq!(left, ["auditing"], "its dispatch audit ends it");
+        std::mem::forget(release);
+        std::mem::forget(app);
     }
 
     #[test]

@@ -217,7 +217,17 @@ fn moving_then_bulk_closing_refreshes_the_remote_allocation_scope() {
         .expect("workspace")
         .panels
         .push(panel_id);
+    app.browser_create_host
+        .remote_allocations
+        .insert(horizon_core::browser::remote_recovery::HeldRemoteAllocation {
+            allocation: allocation.clone(),
+            provider: "fixture".into(),
+            workspace: original_local.clone(),
+            owner: "owner".into(),
+            lease: None,
+        });
     app.refresh_remote_recovery_scope();
+    app.settle_browser_host_io();
     assert_eq!(
         manifest::read_at(&path)
             .expect("manifest")
@@ -226,26 +236,50 @@ fn moving_then_bulk_closing_refreshes_the_remote_allocation_scope() {
             .local_id,
         original_local
     );
+    let retain = |snapshot: manifest::BrowserManifest| {
+        allocation.retain_scope(horizon_browser::RemoteAllocationScope {
+            admission_fallback: false,
+            host: snapshot.host.expect("host"),
+            workspace: snapshot.workspace.map(|workspace| workspace.local_id),
+            owner: snapshot.owner.map(|owner| owner.name),
+        });
+    };
+    let recoverable_through = |workspace: &str| {
+        allocation
+            .status_for(manifest::host_instance(), "owner", workspace, true)
+            .is_some()
+    };
 
+    // Hold the coordination worker, as a disk that does not answer would,
+    // with the tick's stamp of the old placement still to run: the close
+    // never waits for the stamp of the move.
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    app.browser_create_host.io.write(move || {
+        let _ = released.recv();
+    });
+    app.browser_create_host.forget_stamped_placement();
+    assert!(app.restamp_browser_manifests_for_placement());
     app.board.assign_panel_to_workspace(panel_id, destination);
     app.close_workspace_panels(destination);
     assert!(app.board.panel(panel_id).is_none());
-    let retired = manifest::read_at(&path).expect("driver retirement snapshot");
-    assert_eq!(retired.workspace.as_ref().expect("scope").local_id, destination_local);
-    allocation.retain_scope(horizon_browser::RemoteAllocationScope {
-        admission_fallback: false,
-        host: retired.host.expect("host"),
-        workspace: retired.workspace.map(|workspace| workspace.local_id),
-        owner: retired.owner.map(|owner| owner.name),
-    });
+    let stale = manifest::read_at(&path).expect("a retirement snapshot before the stamp lands");
+    assert_eq!(stale.workspace.as_ref().expect("scope").local_id, original_local);
+    retain(stale);
+    // The driver removes the manifest once it kept that scope.
+    std::fs::remove_file(&path).expect("retired manifest");
     assert!(
-        allocation
-            .status_for(manifest::host_instance(), "owner", &original_local, true)
-            .is_none()
+        !recoverable_through(&original_local) && !recoverable_through(&destination_local),
+        "a snapshot taken before the stamp landed authorizes no workspace until it lands"
+    );
+
+    release.send(()).expect("the worker waits");
+    app.settle_browser_host_io();
+    assert!(
+        !recoverable_through(&original_local),
+        "the workspace the panel left cannot recover it"
     );
     assert!(
-        allocation
-            .status_for(manifest::host_instance(), "owner", &destination_local, true)
-            .is_some()
+        recoverable_through(&destination_local),
+        "the workspace it moved to can, as when the stamp lands before the close"
     );
 }
