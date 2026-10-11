@@ -92,6 +92,37 @@ pub fn login(docker_config: &Path, image: &str, cloud_id: &str, runner: &Runner<
     write_auth(docker_config, &login, &token)
 }
 
+/// A throwaway Docker configuration for building on this computer: only Horizon's own
+/// `ghcr.io` login, renewed without asking when it is close to expiry, so private
+/// `ghcr.io` bases pull without the machine's credential helpers. Without a stored login
+/// it holds none, and public images pull anonymously. Returns the directory, deleted on
+/// drop, and whether it carries the login.
+/// # Errors
+/// The directory or its file cannot be written.
+pub fn build_config(docker_config: &Path) -> Result<(tempfile::TempDir, bool)> {
+    let directory = tempfile::Builder::new().prefix("horizon-build-docker-").tempdir()?;
+    let login = if docker_config.join(STORE).is_file() {
+        let client = Client::new();
+        stored::lock(&docker_config.join(LOCK), || Ok(()))
+            .ok()
+            .and_then(|_lock| current(docker_config, &client).ok().flatten())
+    } else {
+        None
+    };
+    let signed_in = login.is_some();
+    let config = match login {
+        Some((login, token)) => {
+            let plain = Zeroizing::new(format!("{login}:{}", token.expose()));
+            let auth = Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(plain.as_bytes()));
+            Config(serde_json::json!({ "auths": { REGISTRY: { "auth": auth.as_str() } } }))
+        }
+        None => Config(serde_json::json!({ "auths": {} })),
+    };
+    let bytes = stored::serialized(|writer| serde_json::to_writer(writer, &config.0))?;
+    write_private(directory.path(), "config.json", &bytes)?;
+    Ok((directory, signed_in))
+}
+
 /// The stored chain's account and a usable access token, renewed when it is close to its
 /// expiry, or `None` when the person must sign in.
 fn current(docker_config: &Path, client: &Client) -> Result<Option<(String, Secret)>> {

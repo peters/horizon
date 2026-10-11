@@ -213,3 +213,17 @@ fn cloud_settings_name_the_publishing_account_without_asking_github() {
     .unwrap();
     assert_eq!(publisher(docker.path()).as_deref(), Some("octo-cat"));
 }
+
+#[test]
+fn a_build_without_a_stored_login_pulls_anonymously() {
+    let home = tempfile::tempdir().unwrap();
+    let (directory, signed_in) = build_config(home.path()).unwrap();
+    assert!(!signed_in);
+    let config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.path().join("config.json")).unwrap()).unwrap();
+    assert_eq!(config, serde_json::json!({ "auths": {} }), "no helper, no login");
+    assert_eq!(mode(&directory.path().join("config.json")) & 0o077, 0, "private");
+    let path = directory.path().to_path_buf();
+    drop(directory);
+    assert!(!path.exists(), "the configuration goes with the build");
+}

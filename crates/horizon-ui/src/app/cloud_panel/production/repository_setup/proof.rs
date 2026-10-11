@@ -280,9 +280,22 @@ impl Job {
             .build
             .as_ref()
             .ok_or("the default profile has no build section")?;
+        // Only Horizon's own ghcr.io login, never this computer's credential helpers: a
+        // private ghcr.io base pulls with it, and every other image anonymously.
+        let horizon_docker = horizon_core::HorizonHome::resolve().root().join("cloud").join("docker");
+        let (docker_config, signed_in) = horizon_core::cloud_runtime::github::publish::build_config(&horizon_docker)
+            .map_err(|error| error.to_string())?;
+        let _ = self.sender.send(Event::Line(if signed_in {
+            "Pulling ghcr.io images with Horizon's GitHub login.".to_owned()
+        } else {
+            "No Horizon GitHub login for ghcr.io; images are pulled anonymously.".to_owned()
+        }));
         let mut command = Command::new("docker");
         command
             .current_dir(&self.repository)
+            .env_remove("DOCKER_AUTH_CONFIG")
+            .arg("--config")
+            .arg(docker_config.path())
             .args(["buildx", "build", "--load", "--progress", "plain", "--platform"])
             .arg(&build.platform)
             .arg("-f")
