@@ -64,6 +64,22 @@ impl HorizonApp {
         }
     }
 
+    /// A record that an operation held is read again once this instance runs none of
+    /// cloud `id`, so the open dialog offers the close when that operation ends.
+    fn reread_busy_close_record(&mut self, id: u32, ctx: &egui::Context) {
+        let production = &self.cloud_prototype.production;
+        if production.close.records.get(&id) != Some(&Record::Busy)
+            || production.runtimes.get(&id).is_some_and(Runtime::busy)
+        {
+            return;
+        }
+        let record = self.close_record(id);
+        if record == Record::Busy {
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+        self.cloud_prototype.production.close.records.insert(id, record);
+    }
+
     /// Forgets the dialog and what an earlier attempt of cloud `id`'s close left.
     fn end_close_confirmation(&mut self, id: u32) {
         let close = &mut self.cloud_prototype.production.close;
@@ -75,6 +91,7 @@ impl HorizonApp {
         let Some(id) = self.cloud_prototype.production.close.confirming else {
             return;
         };
+        self.reread_busy_close_record(id, ctx);
         let Some((group, launch)) = self
             .cloud_prototype
             .groups
@@ -86,21 +103,6 @@ impl HorizonApp {
             self.end_close_confirmation(id);
             return;
         };
-        // A record that an operation held is read again once this instance runs none,
-        // so the dialog offers the close when that operation ends.
-        let local_busy = self
-            .cloud_prototype
-            .production
-            .runtimes
-            .get(&id)
-            .is_some_and(Runtime::busy);
-        if self.cloud_prototype.production.close.records.get(&id) == Some(&Record::Busy) && !local_busy {
-            let record = self.close_record(id);
-            if record == Record::Busy {
-                ctx.request_repaint_after(std::time::Duration::from_secs(1));
-            }
-            self.cloud_prototype.production.close.records.insert(id, record);
-        }
         let close = &self.cloud_prototype.production.close;
         let runtime = self.cloud_prototype.production.runtimes.entry(id).or_default();
         let offer = offer::offer(

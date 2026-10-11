@@ -229,7 +229,7 @@ fn another_controller_keeps_the_cloud_from_being_removed_anyway() {
     let render = |app: &mut HorizonApp| {
         let _ = ctx
             .run_ui(egui::RawInput::default(), |ui| {
-                app.render_cloud_close_confirmation(ui.ctx())
+                app.render_cloud_close_confirmation(ui.ctx());
             })
             .discard_textures();
     };
