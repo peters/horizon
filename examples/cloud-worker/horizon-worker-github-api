@@ -8,6 +8,7 @@ reason that gh prints, and never reaches GitHub with a token. Redirects to GitHu
 hosts come back through the socket and go out without a token. A module that
 horizon-worker-github loads, not a command."""
 import contextlib
+import errno
 import http.client
 import importlib.machinery
 import importlib.util
@@ -503,7 +504,8 @@ def accept_forever(server, broker, allowed=ALLOWED_UIDS):
         try:
             connection, _ = server.accept()
         except OSError as error:
-            if server.fileno() < 0:
+            # Closed, or shut down by close(): see agents.accept_forever.
+            if server.fileno() < 0 or error.errno == errno.EINVAL:
                 return
             print('GitHub API broker accept failed: ' + type(error).__name__, flush=True)
             time.sleep(1)

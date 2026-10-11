@@ -4,6 +4,7 @@ task that asked (horizon-worker-github-tasks). The github_access MCP tool that m
 requests is horizon-worker-github-mcp. A module that horizon-worker-github loads, not a
 command."""
 import contextlib
+import errno
 import http.client
 import importlib.machinery
 import importlib.util
@@ -375,7 +376,9 @@ def accept_forever(server, store, book, report=None):
         try:
             connection, _ = server.accept()
         except OSError as error:
-            if server.fileno() < 0:
+            # Closed, or shut down to end this loop: a thread left in accept() on a closed
+            # socket can later take a connection from a socket that reuses the descriptor.
+            if server.fileno() < 0 or error.errno == errno.EINVAL:
                 return
             print('GitHub socket accept failed: ' + type(error).__name__, flush=True)
             time.sleep(1)

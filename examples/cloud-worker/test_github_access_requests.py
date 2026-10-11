@@ -321,9 +321,7 @@ class EndToEndTests(ServiceTestCase):
         super().setUp()
         self.install()
         path = self.root / 'run/worker/github.sock'
-        server = agents.listen(path)
-        self.addCleanup(server.close)
-        threading.Thread(target=agents.accept_forever, args=(server, self.store, self.book), daemon=True).start()
+        self.serve_agents(path)
         for target, name, value in [(agents, 'ALLOWED_UIDS', (os.getuid(),)), (auth, 'SERVICE_SOCKET', path),
                                     (agents, 'identify_session', lambda pid: ALPHA)]:
             patcher = mock.patch.object(target, name, value)

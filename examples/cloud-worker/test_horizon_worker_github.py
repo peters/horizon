@@ -116,6 +116,19 @@ class ServiceTestCase(unittest.TestCase):
         return service.install(value or installation(), self.store, now=lambda: now,
                                configure=self.configured.append, retire=lambda: self.retired.append(True))
 
+    def serve_agents(self, path, report=None):
+        """The agents' socket at `path`, answered until the test ends. The shutdown ends the
+        thread in accept(), which a plain close does not: that thread could take a connection
+        from a later test's socket that reuses the descriptor, and answer it as this service."""
+        server = agents.listen(path)
+        thread = threading.Thread(target=agents.accept_forever, args=(server, self.store, self.book, report),
+                                  daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, STUCK_SECONDS)
+        self.addCleanup(server.close)
+        self.addCleanup(server.shutdown, socket.SHUT_RDWR)
+        return thread
+
     def fake_github(self, *replies):
         github = FakeGitHub()
         self.addCleanup(github.server_close)
@@ -464,9 +477,7 @@ class SocketTests(ServiceTestCase):
         super().setUp()
         self.install()
         self.path = self.root / 'run/worker/github.sock'
-        server = agents.listen(self.path)
-        self.addCleanup(server.close)
-        threading.Thread(target=agents.accept_forever, args=(server, self.store, self.book), daemon=True).start()
+        self.serve_agents(self.path)
         for name, value in [('ALLOWED_UIDS', (os.getuid(),))]:
             patcher = mock.patch.object(agents, name, value)
             patcher.start()
@@ -540,6 +551,18 @@ class SocketTests(ServiceTestCase):
                                           ask=lambda request: {'ok': False, 'state': 'absent'})
         self.assertEqual(absent['GH_TOKEN'], common.PLACEHOLDER)
         self.assertIsNone(auth.service_environment({}, ['pr', 'list'], ask=lambda request: None))
+
+    def test_a_socket_that_is_shut_down_ends_its_accept_loop(self):
+        # Else the thread stays in accept() after the close, and can later take a connection from
+        # a socket that reuses the descriptor, such as a later test's fake GitHub.
+        for module, args in [(agents, (self.store, self.book)), (service.broker, (None,))]:
+            server = module.listen(self.root / (module.__name__ + '.sock'))
+            self.addCleanup(server.close)
+            thread = threading.Thread(target=module.accept_forever, args=(server, *args), daemon=True)
+            thread.start()
+            server.shutdown(socket.SHUT_RDWR)
+            thread.join(10)
+            self.assertFalse(thread.is_alive(), module.__name__)
 
 
 class SupervisionContractTests(unittest.TestCase):

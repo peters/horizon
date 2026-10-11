@@ -63,10 +63,7 @@ class HostStatusTests(ServiceTestCase):
         super().setUp()
         self.install()
         self.path = self.root / 'run/worker/github.sock'
-        server = agents.listen(self.path)
-        self.addCleanup(server.close)
-        threading.Thread(target=agents.accept_forever, args=(server, self.store, self.book, service.status),
-                         daemon=True).start()
+        self.serve_agents(self.path, service.status)
         patcher = mock.patch.object(agents, 'ALLOWED_UIDS', (os.getuid(),))
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -105,7 +102,7 @@ class StartTests(ServiceTestCase):
                                                           authority=self.root / 'ca.pem')
         self.addCleanup(server.close)
         self.addCleanup(git_proxy.close)
-        self.addCleanup(api_server.close)
+        self.addCleanup(service.broker.close, api_server, Path(api_server.getsockname()))
         self.assertTrue(path.exists())
         api = path.with_name('github-api.sock')
         self.assertEqual(api.stat().st_mode & 0o777, 0o666, 'any account connects; peer credentials decide')
@@ -150,7 +147,7 @@ class StartTests(ServiceTestCase):
                                                           authority=self.root / 'ca.pem')
         self.addCleanup(server.close)
         self.addCleanup(git_proxy.close)
-        self.addCleanup(api_server.close)
+        self.addCleanup(service.broker.close, api_server, Path(api_server.getsockname()))
         self.assertEqual(len(answers), 1)
         self.assertTrue(answers[0].startswith(b'HTTP/1.1 403'), answers)
 
@@ -500,7 +497,7 @@ class VolumeCopyTests(ServiceTestCase):
                                                           authority=self.root / 'ca.pem')
         self.addCleanup(server.close)
         self.addCleanup(git_proxy.close)
-        self.addCleanup(api_server.close)
+        self.addCleanup(service.broker.close, api_server, Path(api_server.getsockname()))
         self.assertEqual(seen, [False], 'reconciled once, before the socket existed')
         self.assertTrue(socket_path.exists())
 
