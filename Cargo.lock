@@ -2633,6 +2633,7 @@ dependencies = [
  "rustix 1.1.5",
  "secret-service",
  "security-framework",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",

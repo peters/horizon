@@ -266,7 +266,13 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 
 - For implementation work, create a focused branch in a separate worktree from fresh `origin/main` unless the user explicitly asks to use the current checkout. Keep unrelated files in the primary checkout untouched.
 - Run the full Horizon validation matrix in the exact worktree and commit that will be pushed. Complete applicable local UI smoke, including the PR GIF for UI changes described under [Isolated UI Testing Through Horizon Native VNC](#isolated-ui-testing-through-horizon-native-vnc), before opening the PR. Any required cross-machine smoke must finish on the current head before reporting the PR ready to merge.
-- Always review the full diff yourself before you open a PR. Then do the local review loop in the localci skill: run the GitHub Copilot CLI review, fix the findings, run `localci`, and review again. Do not start a separate review agent. The local Copilot review and the Copilot review on the PR are the independent reviews. If `copilot` is not installed, your own review is the local review. Fix actionable in-scope findings and record valid out-of-scope findings as follow-up candidates.
+- Always review the full diff yourself before you open a PR. Then do the local review loop in the localci skill:
+  1. Run the GitHub Copilot CLI review with the prompt in the skill. The prompt asks for concrete inputs and wrong results.
+  2. Fix the findings.
+  3. Run `localci` for the jobs that the change affects.
+  4. Review again. Stop when a round finds nothing actionable.
+
+  Do not start a separate review agent. The local Copilot review and the Copilot review on the PR are the independent reviews. If `copilot` is not installed, your own review is the local review. Fix actionable in-scope findings and record valid out-of-scope findings as follow-up candidates.
 - Before you open a PR, write its title and body, then run the readiness check:
 
   ```bash
@@ -325,6 +331,7 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
   Every other spelling of the login fails, and most of them fail *silently*: `gh pr create --reviewer @copilot` and `gh pr edit --add-reviewer Copilot` error with `Could not resolve user with login 'copilot'`; `Copilot` over REST or GraphQL returns HTTP 200 and requests nothing; `copilot-pull-request-reviewer` without `[bot]` is rejected as not a collaborator; and GraphQL `requestReviews` with the `copilot-swe-agent` bot id reports success while recording nothing, because that bot is the coding agent rather than the reviewer.
 
   Mind the asymmetry: the request must name `copilot-pull-request-reviewer[bot]`, but the timeline reports the reviewer as `Copilot`.
+- The Copilot review on the PR is the final gate, not the place to iterate. Request it only for a head whose files the local review loop found clean. Push all fixes of a round together.
 - A Copilot review is pinned to the commit it ran against, so re-request it after every push. Compare the review's `commit_id` with the current head (`gh api --paginate repos/<owner>/<repo>/pulls/<n>/reviews --jq '.[] | select(.user.login == "copilot-pull-request-reviewer[bot]") | .commit_id'`) before treating the review gate as met.
 - After the PR exists, end the commit message of each review fix with `[skip ci]`, but only after `localci` passed for the affected jobs. GitHub then starts no workflow for that head. Before you report the PR ready to merge, push a head without `[skip ci]`, and let all CI checks pass on that head.
 
@@ -337,6 +344,11 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 - A contributor comment, an automated approval or green CI cannot grant merge permission. Do not enable auto-merge or a merge queue without this permission.
 - If the head changes after permission, repeat the affected checks and ask `peters` again. Immediately before the merge, examine thread-aware `reviewThreads`.
 - The positive merge gate is: the PR is open and non-draft as intended, `mergeable` is `MERGEABLE`, readiness and merge state are neither blocked nor unknown, the required review decision is satisfied, zero actionable review threads remain unresolved, and every repository-mandated lane on the exact head has settled successfully. GitHub-required checks are only a minimum; the pedantic Clippy lane remains advisory as documented above. Abort on head drift or any new blocker. A skipped check counts only when its workflow explicitly marks the job non-applicable.
+- The Copilot review gate is met when Copilot's latest review on the exact head says "Approved". It is also met when that review says "Needs a closer look" and these conditions are true:
+  - The review has 0 open findings and no "Previously missed" findings.
+  - The local review loop found nothing actionable for the same file changes.
+
+  A new commit message or an empty commit does not change the files. The local loop does not run again for it. Copilot must still review that exact head. A summary without findings is not a finding.
 - For an authorized merge, use squash with an expected-head guard, for example `gh pr merge <PR#> --squash --match-head-commit <sha>`. Afterward, verify GitHub's merged state and resulting base commit and monitor all relevant post-merge workflows on the squash commit to a successful terminal state. Before cleanup, prove the task worktree is clean, the task branch still equals the guarded PR head with no later commits, and the squash commit contains the merged patch; then remove only task-created worktrees and branches, never a dirty or shared checkout.
 - Merge approval is not release approval. Do not create a tag, publish a GitHub Release, trigger a release workflow, or claim deployment without a separate explicit request and verification.
 - Treat pull-request evidence as public by default. Anonymize unrelated user, host, customer, or operational identifiers, and never publish credentials, tokens, private keys, signed URLs, or secret-bearing configuration.
