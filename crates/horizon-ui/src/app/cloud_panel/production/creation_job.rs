@@ -222,7 +222,7 @@ impl HorizonApp {
         self.cloud_prototype.production.checks = super::creation::checks::State::default();
         // The next cloud authorizes its own siblings; a reopened form starts unchecked.
         self.cloud_prototype.production.launch.siblings = super::creation::siblings::State::default();
-        self.cloud_overview(ctx);
+        self.show_new_cloud(ctx, id);
         if self.cloud_prototype.production.launch.workspace.is_some() {
             self.start_production_deployment(id, ctx);
         }
@@ -270,7 +270,7 @@ impl HorizonApp {
         group.reconcile(&mut self.board);
         self.cloud_prototype.groups.0.push(group);
         // Registered now, so a workspace preset gives the cloud its slot before the
-        // overview frames it.
+        // view frames its workspace.
         self.cloud_prototype.groups.reconcile(&mut self.board);
         self.save_cloud_prototype();
         Ok(id)
