@@ -403,6 +403,14 @@ impl HorizonApp {
             .on_hover_text("Close panel");
         close.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close panel"));
         let close_shows = hovered || panel.is_focused || close.hovered() || close.has_focus();
+        // A pointer press closes only a button that the person could see: a tap on
+        // the hidden button of another row focuses that row instead.
+        let shown_id = ui.make_persistent_id(("sidebar_panel_close_shown", panel.id.0));
+        let shown_before = ui.ctx().data(|data| data.get_temp::<bool>(shown_id)).unwrap_or(false);
+        ui.ctx().data_mut(|data| data.insert_temp(shown_id, close_shows));
+        let by_pointer = ui.input(|input| input.pointer.any_click());
+        let close_clicked = close.clicked() && (shown_before || close.has_focus() || !by_pointer);
+        let blind_tap = close.clicked() && !close_clicked;
         let title_elided = panel_rows::paint_panel_row(
             ui,
             row_rect,
@@ -436,9 +444,9 @@ impl HorizonApp {
             ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
         }
 
-        if close.clicked() {
+        if close_clicked {
             actions.close_panel = Some(panel.id);
-        } else if row_response.clicked() {
+        } else if row_response.clicked() || blind_tap {
             actions.focus_panel = Some(panel.id);
             actions.pan_to_panel = Some(panel.id);
         }

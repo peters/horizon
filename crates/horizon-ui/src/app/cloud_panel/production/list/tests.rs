@@ -232,3 +232,44 @@ fn the_tile_of_a_row_tells_its_status_on_hover() {
     let texts = texts(&sidebar(&ctx, &mut app, Vec::new()));
     assert!(texts.iter().any(|(text, _)| text == "Idle"), "{texts:?}");
 }
+
+#[test]
+fn a_tap_on_a_hidden_close_button_focuses_the_row_and_a_seen_one_closes_it() {
+    let (_temp, mut app) = test_app();
+    app.template_config.features.sidebar_accordion = true;
+    let workspace = app.board.create_workspace("Quiet zone");
+    let options = |name: &str| horizon_core::PanelOptions {
+        name: Some(name.to_owned()),
+        kind: horizon_core::PanelKind::Editor,
+        command: Some("seed".to_owned()),
+        ..horizon_core::PanelOptions::default()
+    };
+    let first = app.board.create_panel(options("first"), workspace).unwrap();
+    let second = app.board.create_panel(options("second"), workspace).unwrap();
+    app.board.active_workspace = Some(workspace);
+    app.board.focus(first);
+    let ctx = egui::Context::default();
+    // An area shows from its second frame on.
+    sidebar(&ctx, &mut app, Vec::new());
+    let row = position(&texts(&sidebar(&ctx, &mut app, Vec::new())), "second");
+    // The close button sits at the right of the 210 wide sidebar.
+    let close = Pos2::new(189.0, row.y);
+    let tap = |position| {
+        let press = |pressed| Event::PointerButton {
+            pos: position,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        vec![Event::PointerMoved(position), press(true), press(false)]
+    };
+
+    sidebar(&ctx, &mut app, tap(close));
+    assert!(app.board.panel(second).is_some(), "a blind tap does not close");
+    assert_eq!(app.board.focused, Some(second), "it focuses the row");
+
+    // Focused, the row shows its close button; a press on it now closes the panel.
+    sidebar(&ctx, &mut app, vec![Event::PointerMoved(close)]);
+    sidebar(&ctx, &mut app, tap(close));
+    assert!(app.board.panel(second).is_none(), "a seen close button closes");
+}

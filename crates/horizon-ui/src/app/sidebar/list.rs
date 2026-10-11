@@ -206,35 +206,9 @@ pub(super) fn render_group_header(
 
     let mut stop = false;
     if idle > 0 {
-        let label = text::line(ui, "Stop idle…", SUMMARY_TEXT_SIZE, text::MEDIUM, theme::ACCENT(), 80.0);
-        let button = egui::Rect::from_min_size(egui::pos2(x, center_y - label.size().y / 2.0), label.size());
-        ui.painter().galley(button.min, label, theme::ACCENT());
+        let button;
+        (stop, button) = stop_idle_button(ui, group, idle, egui::pos2(x, center_y));
         x = button.max.x + 6.0;
-        let clouds = if idle == 1 { "1 idle cloud" } else { "idle clouds" };
-        // Not `ui.put`: a widget placed that way moves the cursor of the list.
-        let response = ui.interact(
-            button.expand2(egui::vec2(2.0, 4.0)),
-            ui.make_persistent_id(("sidebar_group_stop", group.key())),
-            egui::Sense::click(),
-        );
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Stop idle…"));
-        if response.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
-        if response.has_focus() {
-            ui.painter().rect_stroke(
-                response.rect,
-                4,
-                egui::Stroke::new(1.5_f32, theme::ACCENT()),
-                egui::StrokeKind::Outside,
-            );
-        }
-        stop = response
-            .on_hover_text(format!(
-                "Choose which workers of the {clouds} in {} to stop",
-                group.label()
-            ))
-            .clicked();
     }
 
     let right = rect.max.x - HEADER_RIGHT_MARGIN;
@@ -273,6 +247,40 @@ pub(super) fn render_group_header(
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &full));
     response.on_hover_text(full);
     stop
+}
+
+/// The `Stop idle…` button of a header, left-centered on `at`. It is painted with
+/// its own click area, not placed with `ui.put`, which would move the list's cursor.
+/// Returns whether it was clicked, and its rect.
+fn stop_idle_button(ui: &egui::Ui, group: Group, idle: usize, at: egui::Pos2) -> (bool, egui::Rect) {
+    let label = text::line(ui, "Stop idle…", SUMMARY_TEXT_SIZE, text::MEDIUM, theme::ACCENT(), 80.0);
+    let button = egui::Rect::from_min_size(egui::pos2(at.x, at.y - label.size().y / 2.0), label.size());
+    ui.painter().galley(button.min, label, theme::ACCENT());
+    let response = ui.interact(
+        button.expand2(egui::vec2(2.0, 4.0)),
+        ui.make_persistent_id(("sidebar_group_stop", group.key())),
+        egui::Sense::click(),
+    );
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Stop idle…"));
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            response.rect,
+            4,
+            egui::Stroke::new(1.5_f32, theme::ACCENT()),
+            egui::StrokeKind::Outside,
+        );
+    }
+    let clouds = if idle == 1 { "1 idle cloud" } else { "idle clouds" };
+    let clicked = response
+        .on_hover_text(format!(
+            "Choose which workers of the {clouds} in {} to stop",
+            group.label()
+        ))
+        .clicked();
+    (clicked, button)
 }
 
 /// The most parts of `summary` that fit in `width`, joined. When not even the first
