@@ -238,7 +238,7 @@ fn another_controller_keeps_the_cloud_from_being_removed_anyway() {
     drop(other);
     render(&mut app);
     assert_eq!(current_offer(&app), busy, "read again at most once a second");
-    app.cloud_prototype.production.close.busy_read = None;
+    app.cloud_prototype.production.close.record_read = None;
     render(&mut app);
     assert_eq!(
         current_offer(&app).primary,
@@ -265,6 +265,39 @@ fn another_controller_keeps_the_cloud_from_being_removed_anyway() {
     app.remove_cloud_anyway(101, &ctx);
     assert!(app.cloud_prototype.groups.0.is_empty());
     assert!(path.exists(), "its record directory stays");
+}
+
+#[test]
+#[cfg(unix)] // Durable cloud records require Unix directory durability.
+fn an_operation_that_another_instance_starts_while_the_dialog_is_open_makes_it_wait() {
+    let (temp, mut app) = test_app();
+    add_cloud(&mut app, temp.path(), Some(deployment()));
+    app.request_cloud_close(101);
+    assert_eq!(current_offer(&app).primary, Some(Primary::Delete));
+    let ctx = egui::Context::default();
+    let render = |app: &mut HorizonApp| {
+        app.cloud_prototype.production.close.record_read = None; // A second later.
+        let _ = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                app.render_cloud_close_confirmation(ui.ctx());
+            })
+            .discard_textures();
+    };
+
+    let other = Store::lock(&temp.path().join("fixture")).unwrap();
+    render(&mut app);
+    assert_eq!(current_offer(&app).reason.as_deref(), Some(offer::BUSY));
+    assert_eq!(
+        (current_offer(&app).primary, current_offer(&app).remove_anyway),
+        (None, false)
+    );
+    drop(other);
+    render(&mut app);
+    assert_eq!(
+        current_offer(&app).primary,
+        Some(Primary::Delete),
+        "the operation ended"
+    );
 }
 
 #[test]

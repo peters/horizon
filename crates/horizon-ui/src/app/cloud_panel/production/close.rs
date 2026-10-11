@@ -13,8 +13,8 @@ pub(super) struct State {
     failed: BTreeMap<u32, Failure>,
     /// Per cloud, what its saved record held when its close was asked.
     records: BTreeMap<u32, Record>,
-    /// When the open dialog last read a record that an operation held.
-    busy_read: Option<std::time::Instant>,
+    /// When the open dialog last read the record of its cloud.
+    record_read: Option<std::time::Instant>,
     /// Per closing cloud, the panels that were showing when its disposal took over.
     hidden: BTreeMap<u32, Vec<String>>,
 }
@@ -66,24 +66,23 @@ impl HorizonApp {
         }
     }
 
-    /// A record that an operation held is read again once this instance runs none of
-    /// cloud `id`, so the open dialog offers the close when that operation ends.
-    fn reread_busy_close_record(&mut self, id: u32, ctx: &egui::Context) {
+    /// The record of cloud `id` is read again while its dialog is open and this instance
+    /// runs no operation of it, so the dialog waits for an operation that another Horizon
+    /// instance starts, and offers the close again when that operation ends.
+    fn reread_close_record(&mut self, id: u32, ctx: &egui::Context) {
         let production = &self.cloud_prototype.production;
-        if production.close.records.get(&id) != Some(&Record::Busy)
-            || production.runtimes.get(&id).is_some_and(Runtime::busy)
-        {
+        if production.runtimes.get(&id).is_some_and(Runtime::busy) {
             return;
         }
         // At most once a second: each read takes the lock and reads the record from disk.
         let second = std::time::Duration::from_secs(1);
         ctx.request_repaint_after(second);
-        if production.close.busy_read.is_some_and(|read| read.elapsed() < second) {
+        if production.close.record_read.is_some_and(|read| read.elapsed() < second) {
             return;
         }
         let record = self.close_record(id);
         let close = &mut self.cloud_prototype.production.close;
-        close.busy_read = Some(std::time::Instant::now());
+        close.record_read = Some(std::time::Instant::now());
         close.records.insert(id, record);
     }
 
@@ -98,7 +97,7 @@ impl HorizonApp {
         let Some(id) = self.cloud_prototype.production.close.confirming else {
             return;
         };
-        self.reread_busy_close_record(id, ctx);
+        self.reread_close_record(id, ctx);
         let Some((group, launch)) = self
             .cloud_prototype
             .groups
