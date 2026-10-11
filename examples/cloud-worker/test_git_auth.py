@@ -250,10 +250,16 @@ class GitAuthenticationTests(unittest.TestCase):
 
     def test_a_marker_the_agent_account_cannot_see_still_means_isolation(self):
         # As the agent account, the root-only directory of the marker refuses a look.
-        with mock.patch.object(auth.os, 'stat', side_effect=PermissionError(13, 'Permission denied')):
+        real = os.stat
+
+        def refused(path, *args, **options):
+            if str(path) == str(auth.AGENT_ISOLATION):
+                raise PermissionError(13, 'Permission denied')
+            return real(path, *args, **options)
+        auth.write_private(self.value, auth.CREDENTIAL)
+        with mock.patch.object(auth.os, 'stat', refused):
             self.assertTrue(auth.isolated())
             # The agent's restore of the static binding no longer fails on it, and reads no token file.
-            auth.write_private(self.value, auth.CREDENTIAL)
             with mock.patch.object(auth.subprocess, 'run'), \
                     mock.patch.object(auth, 'read_grants', side_effect=AssertionError('no token file')):
                 auth.restore_static({'previous': []})
