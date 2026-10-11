@@ -541,7 +541,6 @@ fn an_action_still_running_at_the_deadline_no_longer_holds_the_delete_back() {
             ),
         ),
         (200, json!({"server": server(42)})),
-        (200, json!({"server": server(42)})),
     ]);
     let present = hetzner
         .settle_actions(42, std::time::Instant::now(), &Cancellation::default())
@@ -555,6 +554,11 @@ fn an_action_still_running_at_the_deadline_no_longer_holds_the_delete_back() {
             .iter()
             .any(|request| request.starts_with("GET /actions/")),
         "nothing is polled past the deadline"
+    );
+    assert_eq!(
+        requests.lock().unwrap().len(),
+        2,
+        "only the action list and the final look at the server"
     );
 }
 

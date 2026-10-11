@@ -282,14 +282,22 @@ impl Hetzner {
                 "running" => {}
                 _ => return Err(CloudError::InvalidResponse),
             }
-            if settled()? {
-                return Ok(Waited::Settled);
-            }
+            // No request goes out after the deadline, so a late refusal cannot turn
+            // a timed-out wait into an error.
             if Instant::now() >= deadline {
                 return Ok(Waited::TimedOut);
             }
-            std::thread::sleep(self.poll);
+            if settled()? {
+                return Ok(Waited::Settled);
+            }
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                return Ok(Waited::TimedOut);
+            };
+            std::thread::sleep(self.poll.min(remaining));
             cancel.check()?;
+            if Instant::now() >= deadline {
+                return Ok(Waited::TimedOut);
+            }
             let envelope: ActionEnvelope =
                 serde_json::from_value(self.send(Method::Get, &format!("/actions/{}", current.id), None, cancel)?)
                     .map_err(|_| CloudError::InvalidResponse)?;
