@@ -135,6 +135,12 @@ Hetzner off requires a RunPod key again.
   delete has not finished cannot be deployed until it does; redeploying a
   deleted cloud creates a new volume. Stop and delete work even after the settings stop
   allowing the cloud's location.
+- Before stop or delete removes a server, Horizon waits up to five minutes for
+  the actions Hetzner still runs on it, such as the attach of the workspace
+  volume to a server that is still being created. A server deleted during that
+  attach left the volume attached to a server that no longer existed, so the
+  volume could not be deleted and kept billing. An action that still runs after
+  five minutes does not stop the delete.
 
 ## Idle stop
 
@@ -189,9 +195,9 @@ finishes the release and starts a new server on the previous image instead.
 
 Horizon targets the Hetzner Cloud API `v1` as described by its OpenAPI spec,
 <https://docs.hetzner.cloud/cloud.spec.json>, and the changelog feed,
-<https://docs.hetzner.cloud/changelog/feed.json>. Last checked on 2026-09-28
-against the spec published on 2026-09-23 (info.version 1.0.0; newest changelog
-entry 2026-09-23). `scripts/check-hetzner-api.py` checks every operation and
+<https://docs.hetzner.cloud/changelog/feed.json>. Last checked on 2026-10-11
+against the spec published on 2026-10-05 (info.version 1.0.0; newest changelog
+entry 2026-10-05). `scripts/check-hetzner-api.py` checks every operation and
 field Horizon uses against the live spec; run it before changing the Hetzner
 integration.
 

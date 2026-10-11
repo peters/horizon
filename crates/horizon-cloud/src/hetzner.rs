@@ -125,6 +125,17 @@ pub struct ActionError {
     #[serde(default)]
     pub message: String,
 }
+/// How polling a provider action ended.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Waited {
+    Succeeded,
+    /// The action failed, with the provider's message.
+    Failed(String),
+    /// The caller observed the intended result first.
+    Settled,
+    /// The action was still running at the deadline.
+    TimedOut,
+}
 #[derive(Deserialize)]
 struct ActionEnvelope {
     action: Action,
@@ -236,36 +247,81 @@ impl Hetzner {
         &self,
         action: &Action,
         cancel: &Cancellation,
-        mut settled: impl FnMut() -> Result<bool, CloudError>,
+        settled: impl FnMut() -> Result<bool, CloudError>,
     ) -> Result<(), CloudError> {
-        let deadline = Instant::now() + ACTION_TIMEOUT;
+        match self.poll_action(action, Instant::now() + ACTION_TIMEOUT, cancel, settled)? {
+            Waited::Succeeded | Waited::Settled => Ok(()),
+            Waited::Failed(message) => Err(CloudError::Rejected(Reason::from_text(
+                &message,
+                self.credential.value(),
+            ))),
+            Waited::TimedOut => Err(CloudError::Invalid(
+                "Provider action is still running; check again later",
+            )),
+        }
+    }
+
+    /// Polls `action` until it finishes, `settled` observes the intended result, or
+    /// `deadline` passes. No poll starts after the deadline, each poll is bounded by
+    /// the time that remains, and a failure that ends after the deadline is a
+    /// timeout, so the deadline always ends the wait. `settled` should bound its own
+    /// requests to the deadline. Other failures and a cancellation are errors.
+    pub(crate) fn poll_action(
+        &self,
+        action: &Action,
+        deadline: Instant,
+        cancel: &Cancellation,
+        mut settled: impl FnMut() -> Result<bool, CloudError>,
+    ) -> Result<Waited, CloudError> {
+        let late = |error: CloudError| {
+            if !matches!(error, CloudError::Cancelled) && Instant::now() >= deadline {
+                Ok(Waited::TimedOut)
+            } else {
+                Err(error)
+            }
+        };
         let mut current = action.clone();
         loop {
             match current.status.as_str() {
-                "success" => return Ok(()),
+                "success" => return Ok(Waited::Succeeded),
                 "error" => {
-                    let message = current.error.map(|error| error.message).unwrap_or_default();
-                    return Err(CloudError::Rejected(Reason::from_text(
-                        &message,
-                        self.credential.value(),
-                    )));
+                    return Ok(Waited::Failed(
+                        current.error.map(|error| error.message).unwrap_or_default(),
+                    ));
                 }
                 "running" => {}
                 _ => return Err(CloudError::InvalidResponse),
             }
-            if settled()? {
-                return Ok(());
-            }
             if Instant::now() >= deadline {
-                return Err(CloudError::Invalid(
-                    "Provider action is still running; check again later",
-                ));
+                return Ok(Waited::TimedOut);
             }
-            std::thread::sleep(self.poll);
+            match settled() {
+                Ok(true) => return Ok(Waited::Settled),
+                Ok(false) => {}
+                Err(error) => return late(error),
+            }
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                return Ok(Waited::TimedOut);
+            };
+            std::thread::sleep(self.poll.min(remaining));
             cancel.check()?;
-            let envelope: ActionEnvelope =
-                serde_json::from_value(self.send(Method::Get, &format!("/actions/{}", current.id), None, cancel)?)
-                    .map_err(|_| CloudError::InvalidResponse)?;
+            let Some(remaining) = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|left| !left.is_zero())
+            else {
+                return Ok(Waited::TimedOut);
+            };
+            let value = match self.send_within(
+                Method::Get,
+                &format!("/actions/{}", current.id),
+                None,
+                cancel,
+                Some(remaining),
+            ) {
+                Ok(value) => value,
+                Err(failure) => return late(failure.into()),
+            };
+            let envelope: ActionEnvelope = serde_json::from_value(value).map_err(|_| CloudError::InvalidResponse)?;
             if envelope.action.id != current.id {
                 return Err(CloudError::InvalidResponse);
             }

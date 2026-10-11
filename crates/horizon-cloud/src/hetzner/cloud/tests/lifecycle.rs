@@ -133,6 +133,7 @@ fn an_uncertain_server_is_found_by_label_and_deleted_with_its_volume() {
         vec![
             (200, listing("servers", &json!([server]))),
             (200, json!({"server": server})),
+            (200, listing("actions", &json!([]))),
             (200, json!({"action": {"id": 3, "status": "success"}})),
             gone(),
             (200, json!({"volume": free_volume()})),
