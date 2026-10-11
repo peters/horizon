@@ -236,6 +236,7 @@ class QueryTests(unittest.TestCase):
                              ('a"b "OR repo:example/secret" c"d repo:example/library', 'also not in quotation'),
                              ('a"b "org:example" c"d repo:example/library', 'also not in quotation'),
                              ('a"b "repo:example/secret" c"d repo:example/library', 'example/secret'),
+                             ('a"b "repo:"example/secret" repo:example/library', 'example/secret'),
                              ('repo:example/library "open', 'quotation mark'),
                              ('repo:example/library org:example', 'org:, user: or owner:'),
                              ('repo:example/library -user:x', 'org:, user: or owner:')]:
