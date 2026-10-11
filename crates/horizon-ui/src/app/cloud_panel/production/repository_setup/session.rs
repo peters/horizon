@@ -24,11 +24,8 @@ impl HorizonApp {
         if let Some(run) = self.cloud_prototype.production.setup_run.as_ref() {
             let same = std::fs::canonicalize(&self.cloud_prototype.production.repository)
                 .is_ok_and(|repository| repository == run.repository);
+            // The setup choices say so and offer nothing to click; this guards the action.
             if !same && !run.finished() && !run.stopped {
-                self.cloud_prototype.error = Some(format!(
-                    "The setup of {} is still working. Open New cloud for it to finish or stop it first.",
-                    run.repository.display()
-                ));
                 return;
             }
             self.cloud_repository_setup_action(ctx, Action::Stop);
@@ -164,8 +161,7 @@ impl HorizonApp {
                 .then(|| MISSING_PROOF.to_owned())
         });
         if let Some(report) = report {
-            panel.write_input(&run::pasted(&report));
-            run.submit_at = Some(Instant::now() + run::SUBMIT_DELAY);
+            run::paste(panel, &mut run.submit_at, &report);
         }
         // An agent without a prompt argument gets the instructions once it has drawn its
         // screen and gone quiet.
@@ -174,8 +170,7 @@ impl HorizonApp {
             && !panel.had_recent_output_within(PROMPT_QUIET)
             && let Some(instructions) = run.pending_prompt.take()
         {
-            panel.write_input(&run::pasted(&instructions));
-            run.submit_at = Some(Instant::now() + run::SUBMIT_DELAY);
+            run::paste(panel, &mut run.submit_at, &instructions);
         }
         if let Some(at) = run.submit_at {
             let now = Instant::now();
@@ -195,12 +190,12 @@ impl HorizonApp {
         ui: &mut egui::Ui,
         height: f32,
     ) {
-        let Some((panel_id, kind)) = self
+        let Some((panel_id, agent)) = self
             .cloud_prototype
             .production
             .setup_run
             .as_ref()
-            .map(|run| (run.panel, run.kind))
+            .map(|run| (run.panel, run.agent.clone()))
         else {
             return;
         };
@@ -213,7 +208,6 @@ impl HorizonApp {
             .inner_margin(egui::Margin::symmetric(12, 10))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    let agent = if kind == PanelKind::Codex { "Codex" } else { "Claude" };
                     ui.label(RichText::new(agent).size(14.0).strong().color(theme::FG()));
                     ui.label(
                         RichText::new("live · click to type to the agent")
@@ -256,8 +250,7 @@ impl HorizonApp {
         match action {
             Action::Steer(text) => {
                 if let Some(panel) = self.board.panel_mut(panel) {
-                    panel.write_input(&run::pasted(&text));
-                    run.submit_at = Some(Instant::now() + run::SUBMIT_DELAY);
+                    run::paste(panel, &mut run.submit_at, &text);
                     ctx.request_repaint_after(run::SUBMIT_DELAY);
                 }
             }

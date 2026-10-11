@@ -145,7 +145,10 @@ impl HorizonApp {
                 }
             });
         ctx.move_to_top(response.response.layer_id);
-        let dismissed = self.cloud_creation_dismissed(ctx, &response, picking, escape);
+        // Escape is the agent's while its live terminal shows and it still works.
+        let terminal_live =
+            width >= TWO_COLUMNS && super::repository_setup::working_here(&self.cloud_prototype.production);
+        let dismissed = self.cloud_creation_dismissed(ctx, &response, picking, escape && !terminal_live);
         if dismissed || actions.cancel {
             self.close_cloud_creation();
             return;
@@ -371,10 +374,10 @@ impl HorizonApp {
         escape: bool,
     ) -> bool {
         if !picking {
-            // While a setup agent works here, Escape is the agent's: Codex and Claude use it
-            // to interrupt. Close and the backdrop still close the dialog.
-            let agent_has_escape = escape && super::repository_setup::running_here(&self.cloud_prototype.production);
-            let dismissed = response.should_close() && !agent_has_escape;
+            // `escape` is false while the agent's live terminal has Escape: Codex and Claude
+            // use it to interrupt. Close and the backdrop still close the dialog.
+            let pressed = ctx.input(|input| input.key_pressed(egui::Key::Escape));
+            let dismissed = response.should_close() && (escape || !pressed);
             if dismissed && escape {
                 self.consume_navigation_key(ctx, navigation_key(ShortcutKey::Escape));
             }

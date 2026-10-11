@@ -95,11 +95,22 @@ pub fn login(docker_config: &Path, image: &str, cloud_id: &str, runner: &Runner<
 /// A throwaway Docker configuration for building on this computer: only Horizon's own
 /// `ghcr.io` login, renewed without asking when it is close to expiry, so private
 /// `ghcr.io` bases pull without the machine's credential helpers. Without a stored login
-/// it holds none, and public images pull anonymously. Returns the directory, deleted on
-/// drop, and whether it carries the login.
+/// it holds none, and public images pull anonymously. The machine's Docker context and
+/// CLI plugins carry over, so `buildx` and the daemon are the ones Docker normally uses.
+/// Returns the directory, deleted on drop, and whether it carries the login.
 /// # Errors
 /// The directory or its file cannot be written.
 pub fn build_config(docker_config: &Path) -> Result<(tempfile::TempDir, bool)> {
+    let machine = std::env::var_os("DOCKER_CONFIG")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".docker")));
+    build_config_with(docker_config, machine.as_deref())
+}
+
+/// The settings of the machine's Docker configuration that are not credentials.
+const MACHINE_SETTINGS: [&str; 3] = ["currentContext", "cliPluginsExtraDirs", "proxies"];
+
+fn build_config_with(docker_config: &Path, machine: Option<&Path>) -> Result<(tempfile::TempDir, bool)> {
     let directory = tempfile::Builder::new().prefix("horizon-build-docker-").tempdir()?;
     let login = if docker_config.join(STORE).is_file() {
         let client = Client::new();
@@ -110,7 +121,7 @@ pub fn build_config(docker_config: &Path) -> Result<(tempfile::TempDir, bool)> {
         None
     };
     let signed_in = login.is_some();
-    let config = match login {
+    let mut config = match login {
         Some((login, token)) => {
             let plain = Zeroizing::new(format!("{login}:{}", token.expose()));
             let auth = Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(plain.as_bytes()));
@@ -118,6 +129,25 @@ pub fn build_config(docker_config: &Path) -> Result<(tempfile::TempDir, bool)> {
         }
         None => Config(serde_json::json!({ "auths": {} })),
     };
+    if let Some(machine) = machine {
+        // Contexts and plugins, never auths or credential helpers.
+        let settings = std::fs::read(machine.join("config.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+        if let (Some(settings), Some(target)) = (settings, config.0.as_object_mut()) {
+            for key in MACHINE_SETTINGS {
+                if let Some(value) = settings.get(key) {
+                    target.insert(key.to_owned(), value.clone());
+                }
+            }
+        }
+        #[cfg(unix)]
+        for folder in ["contexts", "cli-plugins"] {
+            if machine.join(folder).is_dir() {
+                let _ = std::os::unix::fs::symlink(machine.join(folder), directory.path().join(folder));
+            }
+        }
+    }
     let bytes = stored::serialized(|writer| serde_json::to_writer(writer, &config.0))?;
     write_private(directory.path(), "config.json", &bytes)?;
     Ok((directory, signed_in))

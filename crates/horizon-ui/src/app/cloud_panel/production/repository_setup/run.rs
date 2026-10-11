@@ -40,9 +40,18 @@ pub(super) fn pasted(text: &str) -> Vec<u8> {
 /// text as one message and the key as sending it.
 pub(super) const SUBMIT_DELAY: Duration = Duration::from_millis(150);
 
+/// Pastes `text` as one message and schedules its Enter. An Enter still waiting for an
+/// earlier message goes first, so two messages never arrive as one.
+pub(super) fn paste(panel: &mut horizon_core::Panel, submit_at: &mut Option<Instant>, text: &str) {
+    if submit_at.take().is_some() {
+        panel.write_input(b"\r");
+    }
+    panel.write_input(&pasted(text));
+    *submit_at = Some(Instant::now() + SUBMIT_DELAY);
+}
+
 pub(in crate::app::cloud_panel::production) struct Run {
     pub(super) panel: PanelId,
-    pub(super) kind: PanelKind,
     /// The preset's name, as the dialog shows the agent.
     pub(super) agent: String,
     /// Instructions still to paste, for an agent that takes no starting prompt argument.
@@ -112,7 +121,6 @@ impl Run {
     pub(super) fn new(panel: PanelId, kind: PanelKind, repository: PathBuf, status_path: PathBuf, mode: Mode) -> Self {
         Self {
             panel,
-            kind,
             agent: kind.display_name().to_owned(),
             pending_prompt: None,
             repository,

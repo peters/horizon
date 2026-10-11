@@ -217,7 +217,7 @@ fn cloud_settings_name_the_publishing_account_without_asking_github() {
 #[test]
 fn a_build_without_a_stored_login_pulls_anonymously() {
     let home = tempfile::tempdir().unwrap();
-    let (directory, signed_in) = build_config(home.path()).unwrap();
+    let (directory, signed_in) = build_config_with(home.path(), None).unwrap();
     assert!(!signed_in);
     let config: serde_json::Value =
         serde_json::from_slice(&std::fs::read(directory.path().join("config.json")).unwrap()).unwrap();
@@ -226,4 +226,28 @@ fn a_build_without_a_stored_login_pulls_anonymously() {
     let path = directory.path().to_path_buf();
     drop(directory);
     assert!(!path.exists(), "the configuration goes with the build");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_build_keeps_the_machines_docker_context_and_plugins_but_none_of_its_credentials() {
+    let home = tempfile::tempdir().unwrap();
+    let machine = tempfile::tempdir().unwrap();
+    std::fs::write(
+        machine.path().join("config.json"),
+        r#"{"auths":{"ghcr.io":{"auth":"c3ludGhldGlj"}},"credsStore":"desktop","currentContext":"rootless","cliPluginsExtraDirs":["/opt/plugins"]}"#,
+    )
+    .unwrap();
+    std::fs::create_dir(machine.path().join("contexts")).unwrap();
+    let (directory, _) = build_config_with(home.path(), Some(machine.path())).unwrap();
+    let config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.path().join("config.json")).unwrap()).unwrap();
+    assert_eq!(config["currentContext"], "rootless");
+    assert_eq!(config["cliPluginsExtraDirs"], serde_json::json!(["/opt/plugins"]));
+    assert_eq!(config["auths"], serde_json::json!({}), "the machine's logins stay out");
+    assert!(config.get("credsStore").is_none(), "and its credential helpers");
+    assert!(
+        directory.path().join("contexts").is_dir(),
+        "the context it names resolves"
+    );
 }

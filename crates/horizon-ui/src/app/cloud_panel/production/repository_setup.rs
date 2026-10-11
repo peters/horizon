@@ -183,6 +183,39 @@ pub(super) fn footer(ui: &mut egui::Ui, form: &Production) -> Footer {
 }
 
 /// Whether a setup agent is working for the repository the dialog shows.
+/// The folder of a setup still working for another repository: one setup runs at a time.
+fn working_elsewhere(form: &Production) -> Option<String> {
+    form.setup_run
+        .as_ref()
+        .filter(|run| !run.finished() && !run.stopped && !running_here(form))
+        .map(|run| run.repository.display().to_string())
+}
+
+/// Says so, and offers nothing to start, while a setup still works for another
+/// repository: one setup runs at a time.
+fn busy_elsewhere(ui: &mut egui::Ui, form: &Production) -> bool {
+    let Some(other) = working_elsewhere(form) else {
+        return false;
+    };
+    ui.label(
+        RichText::new(format!(
+            "The setup of {other} is still working. Open New cloud for it to finish or stop it first."
+        ))
+        .size(12.5)
+        .color(theme::PALETTE_YELLOW()),
+    );
+    true
+}
+
+/// A setup agent for this repository is still working, so its terminal may take keys.
+pub(super) fn working_here(form: &Production) -> bool {
+    running_here(form)
+        && form
+            .setup_run
+            .as_ref()
+            .is_some_and(|run| !run.finished() && !run.stopped)
+}
+
 pub(super) fn running_here(form: &Production) -> bool {
     form.setup_run
         .as_ref()
@@ -217,6 +250,9 @@ fn same_folder(a: &Path, b: &str) -> bool {
 
 /// The start button, `verb` and the agent's name, with the agent chooser beside it.
 fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str) -> Choice {
+    if busy_elsewhere(ui, form) {
+        return Choice::None;
+    }
     let presets = setup_choices(form);
     let chosen = chosen_preset(form, &presets).map_or_else(|| "Claude Code".to_owned(), |preset| preset.name.clone());
     let mut open = false;
@@ -318,6 +354,9 @@ pub(super) fn quick_start_note(ui: &mut egui::Ui, form: &mut Production) -> bool
         return false;
     }
     ui.add_space(4.0);
+    if busy_elsewhere(ui, form) {
+        return false;
+    }
     let update = ui
         .add(action_button("Update setup from CI"))
         .on_hover_text("An agent checks the image against your CI now and updates .horizon in place.")

@@ -21,6 +21,9 @@ const LOG_LINES: usize = 200;
 /// The longest an image build may take before the proof reports it hung.
 const BUILD_TIMEOUT: Duration = Duration::from_mins(45);
 
+/// The longest the CI jobs may run in the image before the proof reports them hung.
+const CI_TIMEOUT: Duration = Duration::from_mins(90);
+
 /// What the agent asks Horizon to prove, from the status file's `proof`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Spec {
@@ -440,7 +443,7 @@ impl Job {
                 .join(" ")
         );
         command.args(["--entrypoint", "bash", &self.image, "-c", &script]);
-        self.stream(command, log)
+        self.stream_within(command, log, Some(CI_TIMEOUT))
     }
 
     /// Runs `command`, sending each output line to the dialog and the log file.
@@ -536,6 +539,8 @@ const CLONE: &str = "set -e; git config --system --add safe.directory '*'; \
 if [ -d /workspace/checkout/.git ]; then git -C /workspace/checkout fetch -q /src.git '+refs/*:refs/src/*'; \
 else git clone -q --no-hardlinks --no-checkout /src.git /workspace/checkout && \
 git -C /workspace/checkout fetch -q /src.git '+refs/*:refs/src/*'; fi; \
+git -C /workspace/checkout cat-file -e \"$HEAD_SHA^{commit}\" 2>/dev/null || \
+git -C /workspace/checkout fetch -q --upload-pack='git -c uploadpack.allowAnySHA1InWant=true upload-pack' /src.git \"$HEAD_SHA\"; \
 git -C /workspace/checkout checkout -q --force --detach \"$HEAD_SHA\"; \
 chown -R 10001:10001 /workspace/checkout";
 
