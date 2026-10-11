@@ -388,18 +388,17 @@ impl HorizonApp {
         let label = self.sidebar_panel_label(panel);
         let hovered = ui.rect_contains_pointer(row_rect);
         let close_rect = panel_rows::close_rect(row_rect);
-        // The close button shows only on the hovered or focused row.
-        let close = (hovered || panel.is_focused).then(|| {
-            ui.interact(
+        // The close button always takes clicks and tells a screen reader its name,
+        // but shows only on the hovered or focused row.
+        let close = ui
+            .interact(
                 close_rect,
                 ui.make_persistent_id(("sidebar_panel_close", panel.id.0)),
                 Sense::click(),
             )
-            .on_hover_text("Close panel")
-        });
-        if let Some(close) = &close {
-            close.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close panel"));
-        }
+            .on_hover_text("Close panel");
+        close.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close panel"));
+        let close_shows = hovered || panel.is_focused || close.hovered();
         let title_elided = panel_rows::paint_panel_row(
             ui,
             row_rect,
@@ -407,7 +406,7 @@ impl HorizonApp {
             panel,
             &label,
             hovered,
-            close.as_ref().map(egui::Response::hovered),
+            close_shows.then(|| close.hovered()),
             last,
         );
 
@@ -428,7 +427,7 @@ impl HorizonApp {
             ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
         }
 
-        if close.as_ref().is_some_and(egui::Response::clicked) {
+        if close.clicked() {
             actions.close_panel = Some(panel.id);
         } else if row_response.clicked() {
             actions.focus_panel = Some(panel.id);

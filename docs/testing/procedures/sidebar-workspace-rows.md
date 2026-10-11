@@ -99,7 +99,8 @@ the hovered or focused row.
 
 ### 6.3 PANEL: Hover and focus a panel
 
-1. Move the pointer on the second panel row.
+1. Move the pointer on the second panel row. This row is a working agent and
+   is not the focused row.
 
    Result: The row becomes lighter. A close button (×) replaces the green dot.
 
