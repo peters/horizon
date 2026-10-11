@@ -318,6 +318,7 @@ mod tests {
         );
         std::fs::remove_dir(&runtime_path).unwrap();
         app.start_production_deployment(101, &ctx);
+        app.finish_cloud_preparations(&ctx);
         let saved = RuntimeState::load(&runtime_path).unwrap().unwrap();
         assert_eq!(saved.cloud_groups.0.len(), 1);
         assert_eq!(saved.cloud_groups.0[0].remote.as_ref().unwrap().id, cloud_id);

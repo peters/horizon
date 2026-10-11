@@ -235,7 +235,7 @@ pub(super) fn requests(ui: &mut egui::Ui, runtime: &Runtime) -> Option<(String, 
 pub(super) fn renew_button(ui: &mut egui::Ui, cloud_id: &str, runtime: &Runtime) -> bool {
     // Not for access a worker kept after GitHub was disconnected here, nor once GitHub is
     // disconnected: nothing could sign it in again.
-    if !github::configured() || !renewable(runtime.github.as_ref()) {
+    if !github::configured() || !offers_renewal(runtime) {
         return false;
     }
     let clicked = ui
@@ -246,6 +246,16 @@ pub(super) fn renew_button(ui: &mut egui::Ui, cloud_id: &str, runtime: &Runtime)
         github::renew(cloud_id);
     }
     clicked
+}
+
+/// Whether the card offers a new sign-in now: only when the reconnect a click asks for can
+/// start. A running preparation, operation, deployment or provider check refuses it, and
+/// the mark would then ask for a sign-in at an unrelated later deployment.
+fn offers_renewal(runtime: &Runtime) -> bool {
+    !runtime.busy()
+        && !runtime.checking_provider()
+        && (runtime.receiver.is_none() || runtime.stage == Some(horizon_core::cloud_runtime::Stage::Ready))
+        && renewable(runtime.github.as_ref())
 }
 
 /// Whether a new sign-in can change this outcome: not for access a worker kept after a
@@ -367,6 +377,24 @@ mod tests {
             "an image without the service or a cloud without GitHub"
         );
         assert!(!renewable(None));
+        let mut runtime = Runtime {
+            github: Some(ended(true)),
+            ..Runtime::default()
+        };
+        assert!(offers_renewal(&runtime));
+        runtime.preparation = Some(super::super::super::preparation::Pending::running_for_test());
+        assert!(!offers_renewal(&runtime), "not while a preparation runs");
+        runtime.preparation = None;
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        runtime.receiver = Some(receiver);
+        runtime.stage = Some(horizon_core::cloud_runtime::Stage::Provision);
+        assert!(!offers_renewal(&runtime), "not while a deployment runs");
+        runtime.stage = Some(horizon_core::cloud_runtime::Stage::Ready);
+        assert!(offers_renewal(&runtime), "a ready cloud reconnects");
+        runtime.receiver = None;
+        let (_sender, recovery) = std::sync::mpsc::channel();
+        runtime.recovery_receiver = Some(recovery);
+        assert!(!offers_renewal(&runtime), "not while a provider check runs");
     }
 
     #[test]

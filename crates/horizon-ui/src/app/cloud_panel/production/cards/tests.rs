@@ -293,6 +293,10 @@ fn machine_size_is_fixed_while_busy_or_once_a_worker_is_requested() {
     runtime.receiver = Some(receiver);
     locked(&runtime, "8 vCPU · 32 GB · CPU only");
     runtime.receiver = None;
+    // A running preparation already took the size its deployment allocates.
+    runtime.preparation = Some(super::super::preparation::Pending::running_for_test());
+    locked(&runtime, "8 vCPU · 32 GB · CPU only");
+    runtime.preparation = None;
     // A requested worker shows its saved size, even if the launch profile differs.
     for (operation, worker) in [
         (serde_json::json!({"state":"requested"}), serde_json::Value::Null),
@@ -923,6 +927,12 @@ fn deleted_cloud_can_redeploy_without_removing_the_card() {
     assert_eq!(click(&mut runtime, "Redeploy cloud"), Some(Action::Deploy));
     runtime.confirmation = Confirmation::None;
     assert_eq!(click(&mut runtime, "Remove cloud"), Some(Action::Remove));
+
+    // While the redeploy prepares, the card shows its progress and offers no removal.
+    runtime.preparation = Some(super::super::preparation::Pending::running_for_test());
+    let (texts, _) = frame(&mut runtime, Vec::new());
+    assert!(texts.iter().any(|(text, _)| text == "Redeploying cloud…"));
+    assert!(!texts.iter().any(|(text, _)| text == "Remove cloud"));
 }
 
 #[test]
