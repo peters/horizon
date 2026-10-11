@@ -442,20 +442,31 @@ fn recovery_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<A
 }
 
 fn desktop_button(ui: &mut egui::Ui, runtime: &super::Runtime) -> bool {
-    let enabled = runtime
-        .state
-        .as_ref()
-        .is_some_and(|state| state.profile.capabilities.desktop);
+    let unavailable = desktop_unavailable(runtime);
     ui.add_enabled(
-        enabled && runtime.desktop.is_some(),
+        unavailable.is_none(),
         section::row_button(ui, action_button("Add desktop viewer")),
     )
-    .on_disabled_hover_text(if enabled {
-        "Desktop tunnel is not connected"
-    } else {
-        "Desktop is disabled by this cloud profile"
-    })
+    .on_disabled_hover_text(unavailable.unwrap_or_default())
     .clicked()
+}
+
+/// Why the desktop viewer cannot open now. A preparation refuses new panels, so the
+/// button waits for it too.
+fn desktop_unavailable(runtime: &super::Runtime) -> Option<&'static str> {
+    if !runtime
+        .state
+        .as_ref()
+        .is_some_and(|state| state.profile.capabilities.desktop)
+    {
+        Some("Desktop is disabled by this cloud profile")
+    } else if runtime.preparation.is_some() {
+        Some("Wait until the cloud has saved its session and record")
+    } else if runtime.desktop.is_none() {
+        Some("Desktop tunnel is not connected")
+    } else {
+        None
+    }
 }
 
 fn deleting(runtime: &super::Runtime) -> bool {

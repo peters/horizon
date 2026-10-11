@@ -159,3 +159,24 @@ fn a_cloud_offers_no_lifecycle_action_while_a_session_save_runs() {
         );
     }
 }
+
+#[test]
+fn the_desktop_viewer_waits_for_a_preparation() {
+    let mut record: Deployment = serde_json::from_value(serde_json::json!({
+        "version":1,"cloud_id":"desktop","repository":"/synthetic","revision":"a",
+        "profile":{"provider":"runpod","image":"example.invalid/team/worker","cpu":8,"memory_gb":32,"gpu":false},
+        "stage":"Ready","operation":{"state":"bound","worker_id":"worker1"},"spec":null,"worker":null,"sessions":[]
+    }))
+    .unwrap();
+    record.profile.capabilities.desktop = true;
+    let runtime = super::super::Runtime {
+        stage: Some(Stage::Ready),
+        state: Some(record),
+        preparation: Some(super::super::preparation::Pending::running_for_test()),
+        ..Default::default()
+    };
+    assert_eq!(
+        desktop_unavailable(&runtime),
+        Some("Wait until the cloud has saved its session and record")
+    );
+}
