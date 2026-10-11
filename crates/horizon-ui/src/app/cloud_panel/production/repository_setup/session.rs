@@ -103,11 +103,10 @@ impl HorizonApp {
         }
     }
 
-    /// Offers the agent presets of the New Workspace menu for the setup agent.
+    /// Offers the agent presets of the New Workspace menu for the setup agent, read again
+    /// each frame so a preset changed in Settings shows at once; a running setup keeps
+    /// the preset it started with.
     pub(in crate::app::cloud_panel::production) fn offer_setup_presets(&mut self) {
-        if !self.cloud_prototype.production.setup_presets.is_empty() {
-            return;
-        }
         self.cloud_prototype.production.setup_presets = self
             .presets
             .iter()
@@ -130,8 +129,15 @@ impl HorizonApp {
         // The agent asked for a (new) proof: Horizon builds and runs it itself.
         if let Some((request, spec)) = run.proof_wanted() {
             run.proved_request = request;
+            run.proof_stale_reported = false;
             let log = run.status_path.with_extension(format!("proof-{request}.log"));
-            run.proof = Some(super::proof::Proof::start(&run.repository, spec, log, ctx.clone()));
+            run.proof = Some(super::proof::Proof::start(
+                &run.repository,
+                (request, spec),
+                log,
+                run.host_restore,
+                ctx.clone(),
+            ));
         }
         let report = run.proof.as_mut().and_then(|proof| {
             proof.poll();
@@ -155,11 +161,17 @@ impl HorizonApp {
             }
             ctx.request_repaint_after(run::OUTPUT_EVERY);
         }
-        // A summary without a proof request gets one reminder: Use needs Horizon's proof.
-        let report = report.or_else(|| {
-            (run.summary_without_proof() && !std::mem::replace(&mut run.proof_missing_reported, true))
-                .then(|| MISSING_PROOF.to_owned())
-        });
+        // A summary without a proof request, or over a setup that changed after its proof,
+        // gets one reminder: Use needs Horizon's proof of the files as they are.
+        let report = report
+            .or_else(|| {
+                (run.summary_without_proof() && !std::mem::replace(&mut run.proof_missing_reported, true))
+                    .then(|| MISSING_PROOF.to_owned())
+            })
+            .or_else(|| {
+                (run.summary_over_stale_proof() && !std::mem::replace(&mut run.proof_stale_reported, true))
+                    .then(|| STALE_PROOF.to_owned())
+            });
         if let Some(report) = report {
             run::paste(panel, &mut run.submit_at, &report);
         }
@@ -329,6 +341,9 @@ impl HorizonApp {
 
 /// What the agent hears when it wrote a summary but no proof Horizon could run.
 const MISSING_PROOF: &str = "Horizon has no proof to run: put a valid proof in the status file (a workflow with at least one job, or commands) and set proof_request to 1. Use this setup waits for Horizon's proof.";
+
+/// What the agent hears when the setup changed after Horizon's proof passed.
+const STALE_PROOF: &str = "The .horizon files or the proof changed after Horizon's proof passed, so it no longer proves this setup. Increase proof_request by one so Horizon proves it again.";
 
 /// The name of a setup agent's hidden panel.
 const PANEL_NAME: &str = "Cloud repository setup";

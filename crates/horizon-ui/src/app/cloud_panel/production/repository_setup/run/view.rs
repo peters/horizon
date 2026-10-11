@@ -256,6 +256,16 @@ fn callout(ui: &mut Ui, question: &str) {
 /// The steering field with Send, then Show agent and Stop.
 fn working_actions(ui: &mut Ui, run: &mut Run, working: bool, inline: bool) -> Option<Action> {
     let mut action = None;
+    if working && super::super::proof::uses_nuget(&run.repository) {
+        ui.checkbox(
+            &mut run.host_restore,
+            RichText::new("Restore private NuGet packages on this computer for the proof").size(13.0),
+        )
+        .on_hover_text(
+            "Runs dotnet restore here, with this computer's feed logins and the repository's build files, before the next proof; the container then reads the packages without any credential.",
+        );
+        ui.add_space(6.0);
+    }
     if working && inline {
         let mut send = false;
         ui.horizontal(|ui| {
@@ -298,7 +308,7 @@ fn working_actions(ui: &mut Ui, run: &mut Run, working: bool, inline: bool) -> O
         if inline && ui.add(dialog_button(action_button("Show agent"))).clicked() {
             action = Some(Action::Show);
         }
-        let stop = if working { "Stop" } else { "Start again" };
+        let stop = if working { "Stop" } else { "Back to the choices" };
         if ui.add(dialog_button(danger_button(stop))).clicked() {
             action = Some(Action::Stop);
         }

@@ -304,16 +304,18 @@ fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str) -> Choice {
 /// the New Workspace menu's presets, or every built-in agent when there are none.
 /// Preset variants such as permission modes are left out, so the choice is the agent.
 pub(super) fn setup_choices(form: &Production) -> Vec<horizon_core::PresetConfig> {
-    let mut kinds: Vec<PanelKind> = Vec::new();
+    // The first preset of each agent in the New Workspace menu is its default mode; it
+    // keeps its command and arguments. Later variants (YOLO, Auto) are not offered.
+    let mut choices: Vec<horizon_core::PresetConfig> = Vec::new();
     for preset in &form.setup_presets {
-        if !kinds.contains(&preset.kind) {
-            kinds.push(preset.kind);
+        if !choices.iter().any(|choice| choice.kind == preset.kind) {
+            choices.push(preset.clone());
         }
     }
-    if kinds.is_empty() {
-        kinds = horizon_core::all_agent_kinds().to_vec();
+    if !choices.is_empty() {
+        return choices;
     }
-    kinds
+    horizon_core::all_agent_kinds()
         .iter()
         .map(|kind| horizon_core::PresetConfig {
             name: kind.display_name().to_owned(),
@@ -398,6 +400,32 @@ pub(super) fn set_configuration(form: &mut Production, configuration: Configurat
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn each_agent_is_offered_once_with_its_default_preset_command_and_arguments() {
+        let preset = |name: &str, kind, args: &[&str]| horizon_core::PresetConfig {
+            name: name.into(),
+            alias: None,
+            kind,
+            command: Some(format!("/opt/{name}")),
+            args: args.iter().map(|&arg| arg.to_owned()).collect(),
+            resume: horizon_core::PanelResume::default(),
+            ssh_connection: None,
+        };
+        let form = Production {
+            setup_presets: vec![
+                preset("Codex", PanelKind::Codex, &["--no-alt-screen"]),
+                preset("Codex (YOLO)", PanelKind::Codex, &["--yolo"]),
+                preset("Claude Code", PanelKind::Claude, &["--permission-mode", "auto"]),
+            ],
+            ..Production::default()
+        };
+        let choices = setup_choices(&form);
+        assert_eq!(choices.len(), 2, "no YOLO variant");
+        assert_eq!(choices[0].args, ["--no-alt-screen"]);
+        assert_eq!(choices[0].command.as_deref(), Some("/opt/Codex"));
+        assert_eq!(choices[1].args, ["--permission-mode", "auto"]);
+    }
+
     #[test]
     fn the_quick_start_detail_describes_the_builtin_profile() {
         let config = quick_start::builtin().unwrap();

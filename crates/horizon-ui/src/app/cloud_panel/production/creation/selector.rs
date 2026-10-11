@@ -327,8 +327,9 @@ pub(super) fn section(ui: &mut Ui, form: &mut Production) {
     let header = RichText::new(format!("{} All machines and filters", if open { "▾" } else { "▸" }))
         .size(14.0)
         .color(theme::FG_SOFT());
+    // A frameless button, so keyboard users reach it and Enter or Space opens it.
     if ui
-        .add(egui::Label::new(header).sense(egui::Sense::click()))
+        .add(egui::Button::new(header).frame(false))
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .clicked()
     {

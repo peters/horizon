@@ -504,7 +504,13 @@ computer with Docker. Horizon builds it, runs the worker check, runs the jobs
 with localci in a container of the image as the worker account, then once more
 with `--fast` to show the warm rerun, and tells the agent the result. The
 dialog shows these steps as proved by Horizon, with their times. **Use this
-setup** is available only after the proof that the agent asked for passed. For a
+setup** is available only after the proof that the agent asked for passed and
+only while the `.horizon` files are the ones it tested. For a .NET repository
+with private feeds, check **Restore private NuGet packages on this computer for
+the proof**: Horizon then runs `dotnet restore` here, with this computer's feed
+logins, and the container reads the packages from a read-only folder without any
+credential. It is off by default, because the restore runs the repository's
+build files on this computer. For a
 desktop app the agent starts the app on the worker desktop in the image, `:99`,
 which the cloud panel shows, and checks that a window drew. It asks before it uses a credential of yours, such as your
 GitHub token for a private package feed. It does not allocate compute, push

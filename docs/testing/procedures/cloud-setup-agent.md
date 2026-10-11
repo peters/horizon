@@ -169,15 +169,18 @@ setup** commits `.horizon` and reads it as the repository profile.
 
 - S01 to S08 give the results above.
 - The proof ran on this computer: `docker images` lists
-  `horizon-setup-<repository>:candidate`.
+  `horizon-setup-ci-app-<hash>:candidate`, where `<hash>` is six hexadecimal digits
+  that Horizon derives from the repository's path.
 - No cloud was started.
 
 ## 8. Cleanup
 
-1. Remove the proof image and volume: `docker rmi horizon-setup-ci-app:candidate`
-   and `docker volume rm horizon-setup-ci-app`.
+1. Find the proof image and volume with
+   `docker images --format '{{.Repository}}' | grep '^horizon-setup-ci-app-'` and
+   `docker volume ls --format '{{.Name}}' | grep '^horizon-setup-ci-app-'`, then remove
+   each with `docker rmi <name>:candidate` and `docker volume rm <name>`.
 
-   Result: `docker images` and `docker volume ls` no longer list them.
+   Result: The two commands no longer list them.
 
 2. Delete `<home>/smoke/ci-app`.
 

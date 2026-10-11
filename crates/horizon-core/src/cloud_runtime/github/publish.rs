@@ -113,10 +113,11 @@ const MACHINE_SETTINGS: [&str; 3] = ["currentContext", "cliPluginsExtraDirs", "p
 fn build_config_with(docker_config: &Path, machine: Option<&Path>) -> Result<(tempfile::TempDir, bool)> {
     let directory = tempfile::Builder::new().prefix("horizon-build-docker-").tempdir()?;
     let login = if docker_config.join(STORE).is_file() {
+        // The lock is held while the login renews; a renewal that fails says so instead of
+        // turning into an anonymous pull that a private base then refuses.
         let client = Client::new();
-        stored::lock(&docker_config.join(LOCK), || Ok(()))
-            .ok()
-            .and_then(|_lock| current(docker_config, &client).ok().flatten())
+        let _lock = stored::lock(&docker_config.join(LOCK), || Ok(()))?;
+        current(docker_config, &client)?
     } else {
         None
     };

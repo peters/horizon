@@ -24,6 +24,44 @@ const BUILD_TIMEOUT: Duration = Duration::from_mins(45);
 /// The longest the CI jobs may run in the image before the proof reports them hung.
 const CI_TIMEOUT: Duration = Duration::from_mins(90);
 
+/// The longest the worker check may take; it only reads the image.
+const CHECK_TIMEOUT: Duration = Duration::from_mins(5);
+
+/// What a proof tests: every file in `.horizon` and the proof request, so a passed
+/// proof says nothing about a setup that changed after it. FNV-1a, stable across runs.
+pub(super) fn fingerprint(repository: &Path, spec: &Spec) -> u64 {
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut pending = vec![repository.join(".horizon")];
+    while let Some(folder) = pending.pop() {
+        for entry in std::fs::read_dir(&folder).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let mut feed = |bytes: &[u8]| {
+        for byte in bytes {
+            hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3);
+        }
+    };
+    feed(format!("{spec:?}").as_bytes());
+    for file in files {
+        feed(
+            file.strip_prefix(repository)
+                .unwrap_or(&file)
+                .to_string_lossy()
+                .as_bytes(),
+        );
+        feed(&std::fs::read(&file).unwrap_or_default());
+    }
+    hash
+}
+
 /// What the agent asks Horizon to prove, from the status file's `proof`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Spec {
@@ -134,22 +172,35 @@ pub(super) struct Proof {
     pub(super) unreported: bool,
     /// The proof's container, so a stopped or replaced proof also stops its run.
     container: String,
+    /// The fingerprint of the setup and request this proof tests.
+    pub(super) inputs: u64,
 }
 
 impl Proof {
     /// Starts the proof of the setup in `repository`. `log_path` keeps the whole output.
-    pub(super) fn start(repository: &Path, spec: Spec, log_path: PathBuf, ctx: egui::Context) -> Self {
+    /// Starts proof number `request` of the setup in `repository`; each gets its own
+    /// container, so the cleanup of an earlier one never meets it. `host_restore` lets it
+    /// restore private .NET packages on this computer, which the person allowed.
+    pub(super) fn start(
+        repository: &Path,
+        (request, spec): (u64, Spec),
+        log_path: PathBuf,
+        host_restore: bool,
+        ctx: egui::Context,
+    ) -> Self {
         let (sender, receiver) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
+        let inputs = fingerprint(repository, &spec);
         let image = format!("horizon-setup-{}:candidate", slug(repository));
         let volume = format!("horizon-setup-{}", slug(repository));
-        let container = format!("{volume}-proof");
+        let container = format!("{volume}-proof-{request}");
         let job = Job {
             repository: repository.to_path_buf(),
             spec,
             image: image.clone(),
             volume,
             container: container.clone(),
+            host_restore,
             log_path: log_path.clone(),
             cancel: cancel.clone(),
             sender,
@@ -169,6 +220,7 @@ impl Proof {
             image,
             unreported: false,
             container,
+            inputs,
         }
     }
 
@@ -255,6 +307,7 @@ struct Job {
     image: String,
     volume: String,
     container: String,
+    host_restore: bool,
     log_path: PathBuf,
     cancel: Arc<AtomicBool>,
     sender: mpsc::Sender<Event>,
@@ -264,8 +317,21 @@ struct Job {
 impl Job {
     fn run(self) {
         let mut log = std::fs::File::create(&self.log_path).ok();
-        // An earlier proof of this repository may still be stopping.
-        let _ = Command::new("docker").args(["rm", "--force", &self.container]).output();
+        // An earlier proof of this repository may still be stopping: its container goes.
+        let earlier = Command::new("docker")
+            .args(["ps", "--all", "--quiet", "--filter"])
+            .arg(format!("name=^{}-proof-", self.volume))
+            .output()
+            .map(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .split_whitespace()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if !earlier.is_empty() {
+            let _ = Command::new("docker").args(["rm", "--force"]).args(&earlier).output();
+        }
         for phase in [Phase::Build, Phase::Ci, Phase::Fast] {
             if self.cancel.load(Ordering::Relaxed) {
                 return;
@@ -335,7 +401,7 @@ impl Job {
             "horizon-worker-check",
         ]);
         check.arg(&self.image).arg("--git-auth");
-        self.stream(check, log)
+        self.stream_within(check, log, Some(CHECK_TIMEOUT))
     }
 
     /// Clones the committed repository into the proof volume, or brings the clone
@@ -382,10 +448,9 @@ impl Job {
     /// folder and no credential ever enters it. Best effort: a failure here shows up in
     /// the CI step instead.
     fn warm_packages(&self, log: &mut Option<std::fs::File>) {
-        let dotnet = self.repository.join("nuget.config").is_file()
-            || self.repository.join("NuGet.Config").is_file()
-            || self.repository.join("Directory.Packages.props").is_file();
-        if !dotnet {
+        // It runs the repository's MSBuild files here, with this computer's feed logins,
+        // so only when the person allowed it in the dialog.
+        if !self.host_restore || !uses_nuget(&self.repository) {
             return;
         }
         let mut restore = Command::new("dotnet");
@@ -550,6 +615,13 @@ while IFS= read -r line || [ -n \"$line\" ]; do case \"$line\" in ''|'#'*) ;; \
 PATH_PREPEND=*) PATH=\"${line#PATH_PREPEND=}:$PATH\";; PATH_APPEND=*) PATH=\"$PATH:${line#PATH_APPEND=}\";; \
 *=*) export \"$line\";; esac; done < \"$f\"; done; export PATH;";
 
+/// Whether the repository restores .NET packages, possibly from private feeds.
+pub(super) fn uses_nuget(repository: &Path) -> bool {
+    ["nuget.config", "NuGet.Config", "Directory.Packages.props"]
+        .iter()
+        .any(|file| repository.join(file).is_file())
+}
+
 /// A name Docker accepts for the repository: its folder name and a short hash of its
 /// path, so two checkouts with the same folder name never share an image or a volume.
 fn slug(repository: &Path) -> String {
@@ -625,6 +697,21 @@ mod tests {
         assert!(a.starts_with("app-") && b.starts_with("app-"));
         assert_ne!(a, b, "two checkouts named app keep their own image and volume");
         assert_eq!(a, slug(Path::new("/home/a/app")), "the same path keeps its volume");
+    }
+
+    #[test]
+    fn a_proof_fingerprint_follows_the_setup_and_the_request() {
+        let repository = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(repository.path().join(".horizon")).unwrap();
+        std::fs::write(repository.path().join(".horizon/Dockerfile"), "FROM base\n").unwrap();
+        let spec = Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": ["test"]})).unwrap();
+        let first = fingerprint(repository.path(), &spec);
+        assert_eq!(first, fingerprint(repository.path(), &spec), "stable");
+        std::fs::write(repository.path().join(".horizon/Dockerfile"), "FROM base\nRUN true\n").unwrap();
+        let edited = fingerprint(repository.path(), &spec);
+        assert_ne!(first, edited, "an edited Dockerfile is not the proved one");
+        let other = Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": ["lint"]})).unwrap();
+        assert_ne!(edited, fingerprint(repository.path(), &other), "nor another request");
     }
 
     #[test]

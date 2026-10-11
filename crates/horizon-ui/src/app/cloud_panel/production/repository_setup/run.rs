@@ -80,6 +80,12 @@ pub(in crate::app::cloud_panel::production) struct Run {
     pub(super) proved_request: u64,
     /// The agent wrote a summary without a proof Horizon could run, and was told once.
     pub(super) proof_missing_reported: bool,
+    /// The setup changed after its proof passed, and the agent was told once.
+    pub(super) proof_stale_reported: bool,
+    /// The person allowed restoring private .NET packages on this computer for the proof.
+    pub(super) host_restore: bool,
+    /// The current fingerprint of the setup and proof request, and when it was read.
+    inputs: Option<(Instant, u64)>,
 }
 
 /// What the person did in the progress view.
@@ -139,6 +145,9 @@ impl Run {
             proof: None,
             proved_request: 0,
             proof_missing_reported: false,
+            proof_stale_reported: false,
+            host_restore: false,
+            inputs: None,
         }
     }
 
@@ -201,6 +210,7 @@ impl Run {
     /// Rereads the status file when it changed. A file the agent is still writing, or
     /// one that does not parse, keeps the last good status.
     pub(super) fn poll(&mut self) {
+        self.refresh_inputs();
         let Ok(modified) = std::fs::metadata(&self.status_path).and_then(|meta| meta.modified()) else {
             return;
         };
@@ -217,17 +227,45 @@ impl Run {
         }
     }
 
-    /// The agent wrote its summary and Horizon proved the image: the proof it asked for
-    /// last ran and passed. An agent that cannot wait may write a summary first.
+    /// The agent wrote its summary and Horizon proved this setup: the proof it asked for
+    /// last ran, passed, and tested the files as they are now. An agent that cannot wait
+    /// may write a summary first.
     pub(super) fn finished(&self) -> bool {
-        let proved = self.proof_wanted().is_none()
+        self.status.summary.is_some() && self.passed() && !self.changed_since_proof()
+    }
+
+    /// The last proof the agent asked for ran and passed.
+    fn passed(&self) -> bool {
+        self.proof_wanted().is_none()
             && self.proof.as_ref().is_some_and(|proof| {
                 proof
                     .phases
                     .iter()
                     .all(|(_, state)| state.ended.is_some() && state.failure.is_none())
-            });
-        self.status.summary.is_some() && proved
+            })
+    }
+
+    /// The `.horizon` files or the proof request changed after the proof that passed.
+    pub(super) fn changed_since_proof(&self) -> bool {
+        match (&self.proof, self.inputs) {
+            (Some(proof), Some((_, now))) => proof.inputs != now,
+            _ => false,
+        }
+    }
+
+    /// The agent wrote its summary over a proof that no longer matches the setup.
+    pub(super) fn summary_over_stale_proof(&self) -> bool {
+        self.status.summary.is_some() && self.passed() && self.changed_since_proof()
+    }
+
+    /// Reads the setup's fingerprint again, at most once a second.
+    fn refresh_inputs(&mut self) {
+        if self.inputs.is_some_and(|(at, _)| at.elapsed() < Duration::from_secs(1)) {
+            return;
+        }
+        if let Some(spec) = self.status.proof.as_ref() {
+            self.inputs = Some((Instant::now(), proof::fingerprint(&self.repository, spec)));
+        }
     }
 
     /// The agent wrote its summary without a proof request Horizon can run.
