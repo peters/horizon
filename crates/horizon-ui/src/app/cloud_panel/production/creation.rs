@@ -276,7 +276,6 @@ impl HorizonApp {
         // Start needs the tailnet settings, and their picker now waits in More options.
         self.cloud_prototype.production.tailnets.poll(ctx);
         self.offer_setup_presets();
-        self.sync_cloud_repository_setup(ctx);
         checks::update(
             &mut self.cloud_prototype.production,
             self.cloud_prototype.root.as_deref(),
