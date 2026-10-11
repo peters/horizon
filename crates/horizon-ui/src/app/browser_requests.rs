@@ -676,9 +676,8 @@ fn sync_manifest_host_state(
         complete: true,
     };
     for placement in placements {
-        let kept = || manifest::read_at(&manifest::manifest_path_for_root(root, &placement.local_id));
-        let visible = placement.visible.or_else(|| kept().map(|manifest| !manifest.hidden));
-        match manifest::sync_host_state_in(root, &placement.local_id, visible.unwrap_or(true), &placement.workspace) {
+        // A placement without a visibility keeps the manifest's, read under the write's lock.
+        match manifest::sync_host_state_in(root, &placement.local_id, placement.visible, &placement.workspace) {
             Ok(HostStampOutcome::Written) => {
                 sync.changed = true;
                 confirm_scope(&placement.local_id, true);
