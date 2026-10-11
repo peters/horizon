@@ -36,6 +36,18 @@ impl State {
     pub(super) fn busy(&self) -> bool {
         self.result.is_some()
     }
+
+    /// A resize whose result has not arrived yet, for tests that do not poll it.
+    #[cfg(test)]
+    pub(super) fn running_for_test() -> Self {
+        Self {
+            result: Some(Job {
+                root: PathBuf::new(),
+                receiver: std::sync::mpsc::channel().1,
+            }),
+            ..Self::default()
+        }
+    }
 }
 
 pub(super) fn restored(root: &Path) -> State {

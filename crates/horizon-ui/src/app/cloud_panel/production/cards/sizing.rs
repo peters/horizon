@@ -116,7 +116,11 @@ fn machine_size(
 ) -> Option<(u16, u16)> {
     use super::super::machine_size;
     let profile = &launch.profile;
-    let idle = runtime.receiver.is_none() && runtime.recovery_receiver.is_none() && !runtime.state_unavailable;
+    // A preparation already took the size its deployment allocates.
+    let idle = runtime.receiver.is_none()
+        && runtime.recovery_receiver.is_none()
+        && runtime.preparation.is_none()
+        && !runtime.state_unavailable;
     let flavors = cloud_runtime::provider::by_id(&profile.provider)
         .is_some_and(|provider| provider.pricing == cloud_runtime::provider::Pricing::Flavors);
     if profile.gpu

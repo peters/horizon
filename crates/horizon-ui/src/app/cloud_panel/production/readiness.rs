@@ -9,6 +9,8 @@ impl Production {
                 runtime.stage == Some(Stage::Ready)
                     && !runtime.state_unavailable
                     && runtime.recovery_receiver.is_none()
+                    // A reconnect that prepares refuses new panels until it has connected.
+                    && runtime.preparation.is_none()
                     && runtime.state.as_ref().is_some_and(|state| state.stage == Stage::Ready)
             })
     }

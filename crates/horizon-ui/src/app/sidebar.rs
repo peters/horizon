@@ -39,6 +39,9 @@ struct SidebarPanelEntry {
     id: PanelId,
     /// The panel's whole title.
     title: String,
+    /// What the row says: an agent's task, or the title. Empty while the row
+    /// does not show.
+    label: String,
     kind: PanelKind,
     is_focused: bool,
     working: bool,
@@ -116,39 +119,34 @@ impl HorizonApp {
     }
 
     fn sidebar_workspace_data(&self) -> Vec<WorkspaceSidebarEntry> {
-        let panel_data = self
+        let accordion = self.template_config.features.sidebar_accordion;
+        // One pass over the panels: rows read their panel from here, never by a
+        // lookup on the board.
+        let panels_by_id = self
             .board
             .panels
             .iter()
-            .map(|panel| {
-                (
-                    panel.id,
-                    SidebarPanelEntry {
-                        id: panel.id,
-                        title: panel.display_title().into_owned(),
-                        kind: panel.kind,
-                        is_focused: self.board.focused == Some(panel.id),
-                        working: panel.agent_status() == horizon_core::AgentStatus::Working,
-                    },
-                )
-            })
+            .map(|panel| (panel.id, panel))
             .collect::<HashMap<_, _>>();
 
         self.board
             .workspaces
             .iter()
             .map(|workspace| {
+                let is_active = self.board.active_workspace == Some(workspace.id);
+                let shows_panels = sidebar_workspace_shows_panels(is_active, accordion);
                 let panels = workspace
                     .panels
                     .iter()
-                    .filter_map(|panel_id| panel_data.get(panel_id).cloned())
+                    .filter_map(|panel_id| panels_by_id.get(panel_id))
+                    .map(|panel| self.sidebar_panel_entry(panel, shows_panels))
                     .collect::<Vec<_>>();
 
                 WorkspaceSidebarEntry {
                     id: workspace.id,
                     name: workspace.name.clone(),
                     color: theme::workspace_accent(workspace.color_idx),
-                    is_active: self.board.active_workspace == Some(workspace.id),
+                    is_active,
                     detached: self.workspace_is_detached(workspace.id),
                     capabilities: self.workspace_layout_capabilities(workspace.id),
                     panels,
@@ -156,6 +154,24 @@ impl HorizonApp {
                 }
             })
             .collect()
+    }
+
+    /// The sidebar entry of `panel`, with its row label when the row `shows`.
+    fn sidebar_panel_entry(&self, panel: &horizon_core::Panel, shows: bool) -> SidebarPanelEntry {
+        let title = panel.display_title().into_owned();
+        let label = if shows {
+            self.sidebar_panel_label(panel, &title)
+        } else {
+            String::new()
+        };
+        SidebarPanelEntry {
+            id: panel.id,
+            title,
+            label,
+            kind: panel.kind,
+            is_focused: self.board.focused == Some(panel.id),
+            working: panel.agent_status() == horizon_core::AgentStatus::Working,
+        }
     }
 
     fn paint_sidebar_frame(ui: &mut egui::Ui, sidebar_origin: Pos2, sidebar_size: Vec2, sidebar_width: f32) {
@@ -389,7 +405,7 @@ impl HorizonApp {
         let row_rect = ui
             .allocate_space(Vec2::new(ui.available_width(), panel_rows::PANEL_ROW_HEIGHT))
             .1;
-        let label = self.sidebar_panel_label(panel);
+        let label = &panel.label;
         let hovered = ui.rect_contains_pointer(row_rect);
         let close_rect = panel_rows::close_rect(row_rect);
         // The close button always takes clicks and tells a screen reader its name,
@@ -426,7 +442,7 @@ impl HorizonApp {
             row_rect,
             workspace,
             panel,
-            &label,
+            label,
             panel_rows::PanelRowState {
                 hovered,
                 close: close_shows.then(|| close.hovered() || close.has_focus()),
@@ -437,11 +453,11 @@ impl HorizonApp {
         let row_click_rect = Rect::from_min_max(row_rect.min, Pos2::new(close_rect.min.x, row_rect.max.y));
         let row_response = ui.interact(row_click_rect, row_id, Sense::click());
         row_response.widget_info(|| {
-            let spoken = text::panel_spoken(panel.kind, &label, panel.working);
+            let spoken = text::panel_spoken(panel.kind, label, panel.working);
             egui::WidgetInfo::labeled(egui::WidgetType::Button, true, spoken)
         });
         // The whole title, when the row cuts it or shows only the agent's task.
-        let row_response = if title_elided || label != panel.title {
+        let row_response = if title_elided || *label != panel.title {
             row_response.on_hover_text(&panel.title)
         } else {
             row_response
@@ -461,19 +477,16 @@ impl HorizonApp {
         ui.add_space(1.0);
     }
 
-    /// What the row of `panel` says: an agent's task, or the panel's title.
-    fn sidebar_panel_label(&self, panel: &SidebarPanelEntry) -> String {
-        let Some(board_panel) = self.board.panel(panel.id) else {
-            return panel.title.clone();
-        };
+    /// What the row of `panel` says: an agent's task, or `display_title`.
+    fn sidebar_panel_label(&self, panel: &horizon_core::Panel, display_title: &str) -> String {
         let own_name = (!text::name_labels_agent(
-            board_panel.kind,
-            &board_panel.title,
-            board_panel.name_is_custom(),
+            panel.kind,
+            &panel.title,
+            panel.name_is_custom(),
             &self.template_config.presets,
         ))
-        .then_some(board_panel.title.as_str());
-        text::panel_label(board_panel.kind, own_name, &panel.title, &board_panel.terminal_title)
+        .then_some(panel.title.as_str());
+        text::panel_label(panel.kind, own_name, display_title, &panel.terminal_title)
     }
 
     fn apply_sidebar_actions(&mut self, ctx: &Context, actions: &SidebarActions) {
