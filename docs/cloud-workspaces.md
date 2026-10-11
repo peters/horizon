@@ -879,8 +879,10 @@ move cloud members. Drag the bottom-right corner of a cloud frame to resize it.
 With Rows, Cols, or Grid, every visible member grows or shrinks together to fill
 the frame, down to the ordinary panel minimum. Default placement keeps each
 panel where it is and will not shrink the frame through those panels. A collapsed
-cloud has no resize corner. New clouds are placed relative to their workspace and are
-reconciled before the overview is fitted.
+cloud has no resize corner. New clouds are placed relative to their workspace. When
+you create a cloud, the view fits its workspace, as **Fit workspace** does. Clouds in
+other workspaces stay out of view, so their parked terminals stay parked. **Cloud ›
+Fit all clouds** shows the clouds of all workspaces.
 
 ## Sessions and lifecycle
 

@@ -426,7 +426,22 @@ impl HorizonApp {
         self.cloud_prototype.groups.0.push(group);
         self.cloud_prototype.renaming = Some(id);
         self.cloud_prototype.title_draft = title.into();
-        self.cloud_overview(ctx);
+        self.show_new_cloud(ctx, id);
+    }
+
+    /// A new cloud takes the view to its own workspace, as Fit workspace does. Clouds in
+    /// other workspaces stay out of view, so their parked terminals stay parked.
+    fn show_new_cloud(&mut self, ctx: &egui::Context, id: u32) {
+        let workspace = self
+            .cloud_prototype
+            .groups
+            .0
+            .iter()
+            .find(|group| group.issue == id)
+            .and_then(|group| self.board.workspace_id_by_local_id(&group.workspace));
+        if let Some(workspace) = workspace {
+            let _ = self.fit_workspace_visible(ctx, workspace);
+        }
     }
 
     fn cloud_overview(&mut self, ctx: &egui::Context) {

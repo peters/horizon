@@ -430,3 +430,65 @@ fn completed_creation_keeps_the_workspace_for_its_new_cloud() {
     assert!(app.board.workspace(workspace).is_some());
     assert!(app.cloud_prototype.creation_holds.is_empty());
 }
+
+#[test]
+fn a_new_cloud_frames_its_own_workspace_and_leaves_other_clouds_out_of_view() {
+    use crate::test_egui::DiscardTextures;
+
+    let (temp, mut app) = test_app();
+    let sender = pending(&mut app);
+    let destination = app
+        .board
+        .workspace_id_by_local_id(
+            &app.cloud_prototype
+                .production
+                .pending_creation
+                .as_ref()
+                .unwrap()
+                .workspace,
+        )
+        .unwrap();
+    // Clouds in two other workspaces, far from the new cloud.
+    for (issue, title, position) in [(201, "Left", [-9000.0, 0.0]), (202, "Below", [0.0, 9000.0])] {
+        let workspace = app.board.create_workspace_at(title, position);
+        let local = app.board.workspace(workspace).unwrap().local_id.clone();
+        let group = CloudGroup::new(issue, title.into(), local, temp.path().into(), position);
+        app.cloud_prototype.groups.0.push(group);
+    }
+    app.board.focus_workspace(
+        app.board
+            .workspace_id_by_local_id(&app.cloud_prototype.groups.0[0].workspace)
+            .unwrap(),
+    );
+    let ctx = egui::Context::default();
+    ctx.begin_pass(egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))),
+        ..Default::default()
+    });
+    sender.send(Ok(resolved(temp.path()))).unwrap();
+    app.poll_cloud_creation(&ctx);
+    assert!(app.cloud_prototype.error.is_none(), "{:?}", app.cloud_prototype.error);
+    let canvas = app.canvas_rect(&ctx);
+    let transform = crate::app::view::canvas_scene_transform(canvas, app.canvas_view);
+    let on_screen = |group: &CloudGroup| {
+        let (min, max) = group.overview_bounds();
+        transform * egui::Rect::from_min_max(min.into(), max.into())
+    };
+    for group in &app.cloud_prototype.groups.0 {
+        if group.title == "Captured title" {
+            assert!(canvas.contains_rect(on_screen(group)), "the new cloud is in view");
+        } else {
+            assert!(
+                !canvas.intersects(on_screen(group)),
+                "{} stays out of view",
+                group.title
+            );
+        }
+    }
+    assert_eq!(
+        app.board.active_workspace,
+        Some(destination),
+        "the person is in the new cloud's workspace"
+    );
+    let _ = ctx.end_pass().discard_textures();
+}
