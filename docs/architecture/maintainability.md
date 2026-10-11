@@ -311,8 +311,9 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   - `browser_host_io`: the one coordination worker that runs the claims,
     audits, manifest stamps and results of the browser request pumps in the
     order they were asked for; a later frame applies each outcome in the same
-    order; an outcome asked for on a board that a session switch replaced
-    refuses its request and changes no panel of the board that stands now
+    order; an outcome asked for on a board that a session switch or a cloud
+    prototype restore replaced refuses its request and changes no panel of the
+    board that stands now
   - `browser_request_claims`: the claims of create, visibility and close
     requests, which run on the coordination worker
   - `browser_visibility_requests`: visibility changes for agent requests; the
