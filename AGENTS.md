@@ -580,6 +580,7 @@ When creating an Azure VM for smoke testing, use **Standard_D4s_v3** with `Micro
 - **Main thread:** egui event loop + rendering
 - **Per-panel event loop thread:** alacritty_terminal `EventLoop` reads PTY output, parses VT sequences, and sends events via `mpsc::channel`
 - **Input:** main thread writes to PTY via `EventLoopSender`
+- **Do not block the UI thread.** The main thread is the UI thread. Run file I/O, `fsync`, file locks, network calls, processes, credential stores and other waits on a worker thread. Follow [the UI thread guide](docs/architecture/ui-thread.md) and its review checklist.
 
 ### Data Flow
 

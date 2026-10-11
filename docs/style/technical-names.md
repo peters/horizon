@@ -138,6 +138,16 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | HTTP fixture | A task-owned loopback server and synthetic pages for a browser test. | — |
 | document reference | A short-lived browser node reference tied to one document. | — |
 
+## UI code
+
+| Name | Meaning | Do not use |
+|---|---|---|
+| UI thread | The thread that runs the Horizon window and calls `App::ui`. It is the main thread of the process. | render thread, GUI thread |
+| frame | One call of `App::ui` that lays out and paints the window. | tick (for a frame) |
+| worker thread | A thread that does blocking work for the UI and sends the result back. | background task |
+| generation | A number that the UI increases when a request starts or its context changes. A result with an older generation is dropped. | epoch, version |
+| fence | A value that tells a worker to wait for earlier work, or to write nothing when its board was replaced. | barrier |
+
 ## Technical verbs
 
 | Verb | Meaning |

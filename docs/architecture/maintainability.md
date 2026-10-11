@@ -385,6 +385,9 @@ Use these checks during implementation and review:
 - Is render code mutating domain state directly when it could emit a deferred
   action instead?
 - Is a module tree clearer than one more helper stuffed into the current file?
+- Does code that runs during a frame wait for file I/O, a lock, a process or
+  the network? Move it to a worker thread. The
+  [UI thread guide](ui-thread.md) gives the patterns and a review checklist.
 
 If the answer to any of those is "yes", follow the
 [pull-request scope rules](../../AGENTS.md#pull-request-scope): land purely
