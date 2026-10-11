@@ -370,8 +370,20 @@ fn an_older_index_with_a_table_that_its_version_does_not_make_is_damage_before_t
     older_damage_is_found_before_the_migration("CREATE TABLE notes (text TEXT)");
 }
 
-/// Damages the index of a saved board with `sql`, so that the migration to the next
-/// version would fail on it with a plain `SQLITE_ERROR`. The check finds it first.
+#[test]
+fn an_older_index_with_another_definition_of_its_objects_is_damage_before_the_migration() {
+    // The same names, columns and types as version 1, with other indexed columns or constraints.
+    older_damage_is_found_before_the_migration(
+        "DROP INDEX workspaces_by_local_id; CREATE INDEX workspaces_by_local_id ON workspaces (seq)",
+    );
+    older_damage_is_found_before_the_migration(
+        "DROP TABLE board; CREATE TABLE board (id INTEGER PRIMARY KEY, format TEXT NOT NULL, \
+         data TEXT NOT NULL, yaml_digest TEXT, saved_at INTEGER NOT NULL) STRICT",
+    );
+}
+
+/// Damages the index of a saved board with `sql`. The check finds it before the migration
+/// to the next version, which could otherwise fail on it with a plain `SQLITE_ERROR`.
 fn older_damage_is_found_before_the_migration(sql: &str) {
     let fixture = Fixture::new();
     let session = fixture.create(board());

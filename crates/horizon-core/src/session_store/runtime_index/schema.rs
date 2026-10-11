@@ -1,5 +1,5 @@
 //! The checks that tell whether a file is a Horizon runtime index that this Horizon can use.
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
 use rusqlite::Connection;
 
@@ -32,13 +32,14 @@ pub(super) fn check_header(connection: &Connection, migrations: &[&str]) -> std:
 }
 
 /// Refuses an index whose schema is not the one that `applied`, the migrations of its
-/// schema version, make: a table, a column or another object is missing, different or
-/// extra. A save then sets it aside instead of failing on it every time, also in a
-/// migration to a later version that creates an object with the name of an extra one.
+/// schema version, make: a table, an index or another object is missing, extra, or has
+/// another definition, such as other columns, keys or constraints. A save then sets it
+/// aside instead of failing on it every time, also in a migration to a later version that
+/// creates an object with the name of an extra one.
 fn check_schema(connection: &Connection, applied: &[&str]) -> std::result::Result<(), IndexError> {
     let expected = Connection::open_in_memory()?;
     expected.execute_batch(&applied.concat())?;
-    if Schema::read(connection)? != Schema::read(&expected)? {
+    if schema(connection)? != schema(&expected)? {
         return Err(IndexError::Damaged(format!(
             "the index does not have the schema of version {}",
             applied.len()
@@ -47,33 +48,17 @@ fn check_schema(connection: &Connection, applied: &[&str]) -> std::result::Resul
     Ok(())
 }
 
-/// The schema of an index without the objects that SQLite keeps for itself.
-#[derive(Debug, PartialEq, Eq)]
-struct Schema {
-    /// The name and type of the columns of each table, in order.
-    tables: HashMap<String, Vec<(String, String)>>,
-    /// The type and name of every other object, such as an index.
-    objects: BTreeSet<(String, String)>,
-}
+/// The type, name and table of an object, and the SQL that defines it.
+type Object = (String, String, String, Option<String>);
 
-impl Schema {
-    fn read(connection: &Connection) -> rusqlite::Result<Self> {
-        const OWN: &str = r"name NOT LIKE 'sqlite\_%' ESCAPE '\'";
-        let mut tables: HashMap<String, Vec<(String, String)>> = HashMap::new();
-        let mut select = connection.prepare(&format!(
-            "SELECT t.name, c.name, c.type FROM sqlite_schema AS t JOIN pragma_table_info(t.name) AS c
-             WHERE t.type = 'table' AND t.{OWN} ORDER BY t.name, c.cid"
-        ))?;
-        let mut query = select.query([])?;
-        while let Some(row) = query.next()? {
-            tables.entry(row.get(0)?).or_default().push((row.get(1)?, row.get(2)?));
-        }
-        let mut select = connection.prepare(&format!(
-            "SELECT type, name FROM sqlite_schema WHERE type != 'table' AND {OWN}"
-        ))?;
-        let objects = select
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-            .collect::<rusqlite::Result<_>>()?;
-        Ok(Self { tables, objects })
-    }
+/// Each object of an index, without the objects that SQLite keeps for itself. SQLite keeps
+/// each definition as the migration wrote it, and updates it for a change such as
+/// `ALTER TABLE`, so the same migrations give the same definitions. A migration is never
+/// changed after a release.
+fn schema(connection: &Connection) -> rusqlite::Result<BTreeSet<Object>> {
+    let mut select = connection
+        .prepare(r"SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite\_%' ESCAPE '\'")?;
+    select
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))?
+        .collect()
 }
