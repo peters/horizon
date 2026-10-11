@@ -122,7 +122,8 @@ the worker contract or the agent CLIs in the base image must change for a releas
    [worker GitHub chain procedure](testing/procedures/worker-github-chain.md)
    with the scripts of the commit that the image was published from. Check out
    that commit first. Its SHA is the `headSha` of the Worker images run of step 1:
-   `gh run view <run> --json headSha`.
+   `gh run view <run> --json headSha`. Use the image reference of step 2 as
+   `<base>`, not the pin in that checkout: the checkout has the earlier pin.
 
    Result: In task C1, the GitHub service runs and the agent cannot see the
    isolation marker.
