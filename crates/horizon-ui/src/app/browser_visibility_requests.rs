@@ -21,7 +21,7 @@ pub(super) struct VisibilityInFlight {
     pub(super) local_id: String,
     request_id: String,
     /// The visibility it sets.
-    pub(super) visible: bool,
+    visible: bool,
     /// The visibility the panel has when it applies, unless the user changes it.
     before: bool,
 }
@@ -39,9 +39,9 @@ impl HorizonApp {
                 return;
             }
         };
-        // Until the request ends, a stamp writes the visibility it sets, so a
-        // move still updates the workspace while the visibility changes only
-        // through the audited transaction.
+        // Until the request ends, a stamp keeps the visibility the manifest has,
+        // so a move still updates the workspace while the visibility changes
+        // only through the audited transaction.
         self.browser_create_host.visibility_in_flight.push(VisibilityInFlight {
             local_id: request.panel_local_id.clone(),
             request_id: request.request_id.clone(),
@@ -357,7 +357,7 @@ mod tests {
 
     #[test]
     #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
-    fn a_stamp_moves_a_panel_whose_request_runs_and_keeps_the_visibility_it_sets() {
+    fn a_stamp_moves_a_panel_whose_request_runs_and_leaves_its_visibility_to_the_request() {
         let (_temp, mut app, actor, other) = fixture();
         let local_id = app.board.panel(PanelId(900)).expect("browser").local_id.clone();
         let path = manifest::manifest_path_for_root(app.session_store.home().root(), &local_id);
@@ -378,7 +378,10 @@ mod tests {
             Some(other_id),
             "the move revokes the old workspace at once"
         );
-        assert!(stamped.hidden, "the stamp writes the visibility the request sets");
+        assert!(
+            !stamped.hidden,
+            "only the request, or a stamp after it, changes the visibility"
+        );
     }
 
     #[test]

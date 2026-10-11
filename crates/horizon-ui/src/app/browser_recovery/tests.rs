@@ -217,15 +217,6 @@ fn moving_then_bulk_closing_refreshes_the_remote_allocation_scope() {
         .expect("workspace")
         .panels
         .push(panel_id);
-    app.browser_create_host
-        .remote_allocations
-        .insert(horizon_core::browser::remote_recovery::HeldRemoteAllocation {
-            allocation: allocation.clone(),
-            provider: "fixture".into(),
-            workspace: original_local.clone(),
-            owner: "owner".into(),
-            lease: None,
-        });
     app.refresh_remote_recovery_scope();
     app.settle_browser_host_io();
     assert_eq!(

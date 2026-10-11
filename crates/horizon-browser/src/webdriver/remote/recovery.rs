@@ -182,6 +182,15 @@ impl RemoteAllocation {
             .scope = Some(scope);
     }
 
+    /// Moves a scope the driver kept to `workspace`, for a panel the host moved
+    /// before its manifest recorded the move. The owner the driver kept stays.
+    pub fn move_retained_scope(&self, workspace: &str) {
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(scope) = &mut state.scope {
+            scope.workspace = Some(workspace.to_string());
+        }
+    }
+
     /// Update authoritative placement before attempting filesystem synchronization.
     pub fn expect_workspace(&self, workspace: &str) {
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);

@@ -68,7 +68,7 @@ pub(super) struct BrowserCreateHostState {
     /// A claim of the agents' requests runs on the coordination worker.
     pub(super) claiming: bool,
     /// Panels whose visibility request runs on the coordination worker, with
-    /// the visibility it sets, which a stamp writes until the request ends.
+    /// the visibility it sets; until it ends, a stamp keeps their manifest's.
     pub(super) visibility_in_flight: Vec<super::browser_visibility_requests::VisibilityInFlight>,
     /// Does the coordination file work in order, off the UI thread.
     pub(super) io: HostIo,
@@ -198,10 +198,10 @@ enum BrowserCreateCompletion {
     Finishing,
 }
 
-/// One browser panel's host-owned state as the board currently has it.
+/// One browser panel's host-owned state as the board has it; no visibility while a request for it runs.
 struct BrowserPlacement {
     local_id: String,
-    visible: bool,
+    visible: Option<bool>,
     workspace: ManifestWorkspace,
 }
 
@@ -259,17 +259,14 @@ impl HorizonApp {
         self.stamp_current_placement()
     }
 
-    /// Stamp every owned manifest for the current placement on the
-    /// coordination worker, and remember the placement only if all of them
-    /// are current. A failed write is retried on the next tick, or at once
-    /// when the placement changes again. A placement is queued once: a slow disk
-    /// never queues a stamp per frame or per tick, while a panel moved and
-    /// then closed still has the stamp of its move queued before it closes.
-    /// A panel whose visibility request runs keeps the visibility that request
-    /// sets, and is stamped again once it ends. Returns whether a stamp was queued.
-    ///
-    /// Until the stamp lands, a moved panel's remote allocation already
-    /// expects its new workspace, which refuses recovery through the old one.
+    /// Stamp every owned manifest for the current placement on the coordination worker, and remember the
+    /// placement only if all of them are current. A failed write is retried on the next tick, or at once when
+    /// the placement changes again. A placement is queued once: a slow disk never queues a stamp per frame or
+    /// per tick, while a panel moved and then closed still has the stamp of its move queued before it closes.
+    /// A panel whose visibility request runs keeps the visibility its manifest has (host writes of a manifest
+    /// all run on the worker, in order), and is stamped again once the request ends. Returns whether a stamp
+    /// was queued. Until the stamp lands, a moved panel's remote allocation already expects its new
+    /// workspace, which refuses recovery through the old one.
     fn stamp_current_placement(&mut self) -> bool {
         // A queued placement already set what its allocations expect.
         let placement = placement_fingerprint(&self.board);
@@ -286,9 +283,12 @@ impl HorizonApp {
         let host = &self.browser_create_host;
         let mut skipped = false;
         for placement in &mut placements {
-            let mut running = host.visibility_in_flight.iter().rev();
-            if let Some(running) = running.find(|running| running.local_id == placement.local_id) {
-                (placement.visible, skipped) = (running.visible, true);
+            if host
+                .visibility_in_flight
+                .iter()
+                .any(|running| running.local_id == placement.local_id)
+            {
+                (placement.visible, skipped) = (None, true);
             }
         }
         let root = self.host_manifest_root().to_path_buf();
@@ -654,7 +654,7 @@ fn browser_placements(board: &Board) -> Vec<BrowserPlacement> {
         .filter_map(|panel| {
             browser_workspace(board, panel.workspace_id).map(|workspace| BrowserPlacement {
                 local_id: panel.local_id.clone(),
-                visible: panel.visible,
+                visible: Some(panel.visible),
                 workspace,
             })
         })
@@ -676,7 +676,9 @@ fn sync_manifest_host_state(
         complete: true,
     };
     for placement in placements {
-        match manifest::sync_host_state_in(root, &placement.local_id, placement.visible, &placement.workspace) {
+        let kept = || manifest::read_at(&manifest::manifest_path_for_root(root, &placement.local_id));
+        let visible = placement.visible.or_else(|| kept().map(|manifest| !manifest.hidden));
+        match manifest::sync_host_state_in(root, &placement.local_id, visible.unwrap_or(true), &placement.workspace) {
             Ok(HostStampOutcome::Written) => {
                 sync.changed = true;
                 confirm_scope(&placement.local_id, true);
@@ -1298,7 +1300,7 @@ mod tests {
         let placements = |board: &Board, visible: bool| {
             vec![BrowserPlacement {
                 local_id: "browser-1".to_string(),
-                visible,
+                visible: Some(visible),
                 workspace: browser_workspace(board, alpha).expect("alpha workspace"),
             }]
         };
@@ -1327,7 +1329,7 @@ mod tests {
 
         let missing = vec![BrowserPlacement {
             local_id: "not-live-yet".to_string(),
-            visible: true,
+            visible: Some(true),
             workspace: browser_workspace(&board, alpha).expect("alpha workspace"),
         }];
         let sync = sync_manifest_host_state(root.path(), &missing, |_, _| {});
@@ -1345,7 +1347,7 @@ mod tests {
         std::fs::write(&path, "invalid manifest").expect("unreadable manifest fixture");
         let placements = vec![BrowserPlacement {
             local_id: "browser-1".into(),
-            visible: true,
+            visible: Some(true),
             workspace: ManifestWorkspace::new(manifest::host_instance(), "workspace", Vec::new()),
         }];
         let allocation = horizon_core::browser::RemoteAllocation::default();

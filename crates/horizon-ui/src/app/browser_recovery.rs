@@ -125,7 +125,6 @@ pub(super) struct StampedAllocation {
     pub(super) local_id: String,
     pub(super) allocation: horizon_core::browser::RemoteAllocation,
     workspace: String,
-    owner: Option<String>,
 }
 
 impl StampedAllocation {
@@ -133,17 +132,11 @@ impl StampedAllocation {
     /// kept the scope of the manifest as it was, which names the workspace
     /// the panel left, while the allocation expects the one it moved to, so
     /// no workspace could recover it. It keeps the scope this stamp would
-    /// have written, as when the stamp lands first. A scope a failed stamp
-    /// invalidated stays invalid, and without a known owner the driver's
-    /// scope stays, which refuses recovery.
+    /// have written, as when the stamp lands first: the driver's scope moves
+    /// to that workspace and keeps the owner the driver read. A scope a failed
+    /// stamp invalidated stays invalid.
     fn keep_stamped_scope(&self) {
-        let Some(owner) = &self.owner else { return };
-        self.allocation.retain_scope(horizon_browser::RemoteAllocationScope {
-            admission_fallback: false,
-            host: manifest::host_instance().to_string(),
-            workspace: Some(self.workspace.clone()),
-            owner: Some(owner.clone()),
-        });
+        self.allocation.move_retained_scope(&self.workspace);
     }
 }
 
@@ -167,11 +160,6 @@ impl HorizonApp {
             local_id: local_id.to_string(),
             allocation: allocation.clone(),
             workspace: workspace.to_string(),
-            owner: self
-                .browser_create_host
-                .remote_allocations
-                .owner(allocation)
-                .map(str::to_string),
         })
     }
 
