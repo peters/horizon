@@ -924,10 +924,10 @@ This keeps all controllers on the same lock file. **Cancel** keeps the cloud.
 While a different operation of the cloud runs, for example a deployment or a
 provider check, the dialog tells you to wait and shows only **Cancel**. This is
 also true for an operation in a different Horizon instance. When the operation
-ends, the open dialog shows the actions again. If
-Horizon cannot lock the state directory of the cloud, for example because a
-different Horizon instance runs an operation of the cloud, **Remove from Horizon
-anyway** keeps the cloud and the dialog shows the reason.
+ends, the open dialog shows the actions again. If another instance takes the
+record lock between a dialog refresh and a removal click, Horizon refuses the
+removal and keeps the cloud. The dialog shows only **Cancel** until that
+operation ends.
 
 ### Parked terminals
 
