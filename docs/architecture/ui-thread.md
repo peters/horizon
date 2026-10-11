@@ -12,9 +12,12 @@ facts below come from the source of that version.
 - One thread runs the window. `main` calls `run_native_with_keyboard_observer`
   ([`native_app.rs`](../../crates/horizon-ui/src/native_app.rs)), and the
   winit event loop runs on that thread. This guide calls it the UI thread.
-- eframe calls `App::ui` on the UI thread for each frame. In eframe 0.36,
-  `App::update` is replaced by `App::logic` and `App::ui`. Horizon does not
-  implement `logic`. eframe runs `BridgeApp`
+- eframe calls `App::ui` on the UI thread in each pass of a frame. A frame
+  is one call of `Context::run_ui`. It usually has one pass. When code calls
+  `request_discard`, egui discards the pass and runs one more, up to
+  `Options::max_passes` (2 by default). Thus, one frame can call `App::ui` two
+  times. In eframe 0.36, `App::update` is replaced by `App::logic` and
+  `App::ui`. Horizon does not implement `logic`. eframe runs `BridgeApp`
   ([`device_request_pump.rs`](../../crates/horizon-ui/src/app/device_request_pump.rs)),
   which locks a mutex and calls `ui` of `HorizonApp`
   ([`app/mod.rs`](../../crates/horizon-ui/src/app/mod.rs)).
@@ -84,8 +87,11 @@ Use these patterns. Each pattern names code that uses it.
 5. On the worker, call `ctx.request_repaint()` after the send.
 6. On each frame, read the `Receiver` with `try_recv`.
 7. Apply each result that came.
-8. Treat `TryRecvError::Disconnected` as a failure. The thread stopped before
-   it sent its result, for example after a panic.
+8. If the result has not come and `try_recv` returns
+   `TryRecvError::Disconnected`, treat it as a failure. The thread stopped
+   before it sent its result, for example after a panic. A worker that sent
+   its result and then ended also disconnects the channel. Thus, do not let a
+   disconnect after the result replace that result.
 
 Examples:
 
@@ -181,8 +187,9 @@ not wait for an unknown time.
 Use this list for each PR that changes `horizon-ui`, or `horizon-core` code
 that `horizon-ui` calls during a frame.
 
-- [ ] No new path from `App::ui` calls `std::fs` writes, `sync_all`,
-  `rename`, a file lock that waits, or `std::process::Command`.
+- [ ] No new path from `App::ui` does file I/O or starts a process. File I/O
+  includes opens, reads, writes, `sync_all`, `rename` and a file lock that
+  waits. A process includes `std::process::Command`.
 - [ ] No new `lock()` on the UI thread uses a mutex that a worker holds during
   I/O, a network call or a credential store call.
 - [ ] No new `recv`, `recv_timeout`, `join` or `sleep` runs on the UI thread,
@@ -206,16 +213,24 @@ Write a regression test that stops the fake I/O and measures the UI call.
      the code takes.
    - Give the worker a job that waits on a channel until the test sends a
      value.
-2. Record `Instant::now()`.
-3. Call the UI function, for example the poll function of the frame.
+2. Before the call, start a release thread. The thread waits for a signal
+   from the test with `recv_timeout` and a time limit that is longer than the
+   limit of step 6, for example 10 s. Then it releases the I/O.
+   Result: If the UI call waits for the I/O, the release thread releases it
+   after the time limit. The call returns, and the test fails at step 6. The
+   test does not wait forever.
+3. Record `Instant::now()`.
+4. Call the UI function, for example the poll function of the frame.
    Result: The call returns while the I/O still waits.
-4. Release the I/O before the first assertion.
+5. Send the signal to the release thread before the first assertion.
    Result: The worker thread can end, also when an assertion fails.
-5. Assert that the call took less than a limit, for example 2 s.
-6. Assert the busy state.
-7. Assert that the UI did not apply the result yet.
+6. Assert that the call took less than a limit, for example 2 s.
+7. Assert the busy state.
+8. Assert that the UI did not apply the result yet.
+9. Join the release thread.
 
-Examples:
+The examples below show how to make the I/O wait. They release the I/O only
+after the call, so a new test must also start the release thread of step 2.
 
 - `a_record_that_does_not_answer_never_stalls_the_frame_that_deploys` in
   [`preparation/tests.rs`](../../crates/horizon-ui/src/app/cloud_panel/production/preparation/tests.rs)
@@ -243,6 +258,10 @@ This work still runs on the UI thread. Do not copy it into new code.
   remote slot leases, `manifest::read` calls that retry on Windows, and
   transcript deletion. [#1470](https://github.com/peters/horizon/issues/1470)
   tracks them.
+- `capture_panel` in
+  [`device_requests.rs`](../../crates/horizon-ui/src/app/device_requests.rs)
+  calls `manifest::read` for the capture of a browser panel. On Windows, this
+  read can retry for up to 2 s. #1470 does not list this call.
 - `plan_remote_create` in
   [`browser_remote_create.rs`](../../crates/horizon-ui/src/app/browser_remote_create.rs)
   locks the keychain store mutex, which the credential worker can hold, and
@@ -252,8 +271,10 @@ This work still runs on the UI thread. Do not copy it into new code.
   and renames the session file on the UI thread.
   [#1448](https://github.com/peters/horizon/issues/1448) tracks a durable save
   off the UI thread.
-- `Choices::set` calls `sync_all` on the UI thread. With **Keep my choice for
-  this repository** selected, a cloud start and **Open on This PC** call it
+- `Choices::set` writes and renames its file on the UI thread. On Windows, it
+  also calls `sync_all` there. On Unix, a worker thread makes the file durable
+  ([#1491](https://github.com/peters/horizon/pull/1491)). With **Keep my choice
+  for this repository** selected, a cloud start and **Open on This PC** call it
   (`keep` in
   [`new_workspace.rs`](../../crates/horizon-ui/src/app/cloud_panel/production/new_workspace.rs)).
   The **Forget** link calls it too
