@@ -427,8 +427,8 @@ Rules of thumb:
 | 18 | Focus ring around a focused panel |
 | 16 | Terminal panel body and titlebar, large form dialogs' modal frame, egui windows, file-drop highlight on a panel |
 | 14 | Search dropdown (15 for its outer ring), upload dialog, session manager card |
-| 12 | Default widget radius in the egui style, overlay input wells, summary cards |
-| 10 | Buttons (primary, chrome, danger, 40 px dialog buttons), section cards, selector cards, sidebar rows, workspace labels, pills, toolbar search input shell |
+| 12 | Default widget radius in the egui style, overlay input wells, summary cards, sidebar workspace rows |
+| 10 | Buttons (primary, chrome, danger, 40 px dialog buttons), section cards, selector cards, workspace labels, pills, toolbar search input shell |
 | 8 | Tabs, chips, toggle buttons, status frames, palette rows, preset cards |
 | 6 | Search result rows |
 | 4 | Key-hint chips, checkbox box |
@@ -446,8 +446,8 @@ Nested shapes step down: an outer 16 modal holds 10 cards, which hold 8 chips.
 | 24 | Large form dialogs' `inner_margin`; dialog column gutter; settings panel horizontal margin |
 | 16 | Vertical gap after a dialog heading or settings heading; settings section-card margin; settings panel vertical margin |
 | 12 | Gap between a scroll body and its action bar; gap after a settings card |
-| 8 | Gap between form rows in a dialog |
-| 6 | Sidebar row horizontal inset; gap between preset cards |
+| 8 | Gap between form rows in a dialog; sidebar row horizontal inset |
+| 6 | Gap between preset cards |
 | 4 | Gap between tabs in the tab bar |
 
 Fixed metrics:
@@ -670,12 +670,32 @@ outline).
   short 44 x 2.5 accent bar under the title, a 1.8 px border and a 3 px glow.
 - The accent is the workspace accent when the panel belongs to a workspace and
   `ACCENT` (focused) or `BORDER_STRONG` (unfocused) otherwise.
-- Workspace labels on the canvas and sidebar use `blend(PANEL_BG_ALT, accent, t)`
+- Workspace labels on the canvas use `blend(PANEL_BG_ALT, accent, t)`
   with `t` = 0.08 rest, 0.14 active, 0.18 hover, 0.22 dragging, radius 10, and a
   1 px accent outline (alpha 90 rest, 160 active or hover).
-- Sidebar rows: 6 px inset, radius 10. Focused row `blend(.., accent, 0.22)`
-  alpha 200 plus a 2 px accent edge; active workspace 0.12 alpha 140; hover
-  `alpha(PANEL_BG_ALT, 160)`.
+- Sidebar workspace rows are cards with an 8 px inset and radius 12. The active
+  workspace has a `PANEL_BG_ALT` card with a 1 px accent outline (alpha 120).
+  Hover is `alpha(PANEL_BG_ALT, 170)` and dragging is
+  `blend(PANEL_BG_ALT, accent, 0.22)`. A row is 50 high, or 38 for a compact
+  parked row.
+- Each workspace row has a tile in the workspace accent: 30 x 30 (26 x 26 for a
+  compact row), radius 9, fill `blend(PANEL_BG_ALT, accent, 0.26)` or 0.42 for
+  the active workspace. The tile shows the first letters of the first two words
+  of the name in Inter weight 700. A status badge sits on the lower-right
+  corner of the tile with a 2 px ring in the surface color. An idle workspace
+  has no badge, so activity stands out.
+- The workspace name is Inter 13.5 at weight 620 (`FG`, or a blend toward
+  `FG_SOFT` for an idle, inactive row). The status line is 12, in `FG_SOFT`
+  blended 0.14 toward `BG_ELEVATED`, with terminal padding folded to single
+  spaces. The panel count is JetBrains Mono 11 in a fixed right column.
+- Group headers are sentence case, Inter 12 at weight 620 in `FG_SOFT`, with the
+  count in JetBrains Mono 11 `FG_DIM` and the summary at the right.
+- Panel rows hang from a 1 px tree guide (`BORDER_STRONG` alpha 200) under the
+  tile. An agent row shows the agent's task (its terminal title without the
+  spinner) next to the kind label. The focused row is
+  `blend(PANEL_BG_ALT, accent, 0.20)` with radius 8. The close button shows
+  only on the hovered or focused row; otherwise a working agent shows a
+  `PALETTE_GREEN` dot in its place.
 - Panel titlebar and sidebar "Move to Workspace" menus focus a search field
   once on open. Names filter case-insensitively; a bounded scroll list keeps
   other menu actions reachable as the workspace count grows. Rows use 12 pt
