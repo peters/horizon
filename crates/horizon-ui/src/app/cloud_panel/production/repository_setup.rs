@@ -216,25 +216,65 @@ fn same_folder(a: &Path, b: &str) -> bool {
 
 /// The start button, `verb` and the agent's name, with the agent chooser beside it.
 fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str) -> Choice {
-    let kind = *form.setup_agent.get_or_insert(PanelKind::Claude);
+    let presets = setup_choices(form);
+    let chosen = chosen_preset(form, &presets).map_or_else(|| "Claude Code".to_owned(), |preset| preset.name.clone());
     let mut open = false;
     ui.horizontal(|ui| {
-        let agent = if kind == PanelKind::Codex { "Codex" } else { "Claude" };
-        let label = format!("{verb} {agent}");
+        let label = format!("{verb} {chosen}");
         let primary = egui::Button::new(RichText::new(label).size(14.0).strong().color(theme::BG()))
             .fill(theme::ACCENT())
             .corner_radius(10)
             .min_size(Vec2::new(120.0, 40.0));
         open = ui.add_enabled(!form.repository.trim().is_empty(), primary).clicked();
         egui::ComboBox::from_id_salt("cloud-setup-agent")
-            .selected_text(if kind == PanelKind::Codex { "Codex" } else { "Claude" })
-            .width(84.0)
+            .selected_text(chosen.as_str())
+            .width(150.0)
             .show_ui(ui, |ui| {
-                ui.selectable_value(&mut form.setup_agent, Some(PanelKind::Claude), "Claude");
-                ui.selectable_value(&mut form.setup_agent, Some(PanelKind::Codex), "Codex");
+                for preset in &presets {
+                    let selected = preset.name == chosen;
+                    if ui.selectable_label(selected, &preset.name).clicked() {
+                        form.setup_preset = Some(preset.name.clone());
+                    }
+                }
             });
     });
     if open { Choice::SetupAgent } else { Choice::None }
+}
+
+/// The agents the setup can run: the agent presets of the New Workspace menu, or
+/// every built-in agent when there are none.
+pub(super) fn setup_choices(form: &Production) -> Vec<horizon_core::PresetConfig> {
+    if !form.setup_presets.is_empty() {
+        return form.setup_presets.clone();
+    }
+    horizon_core::all_agent_kinds()
+        .iter()
+        .map(|kind| horizon_core::PresetConfig {
+            name: kind.display_name().to_owned(),
+            alias: None,
+            kind: *kind,
+            command: None,
+            args: Vec::new(),
+            resume: horizon_core::PanelResume::default(),
+            ssh_connection: None,
+        })
+        .collect()
+}
+
+/// The chosen preset, else the first one of the machine account's preferred agent,
+/// else the first one.
+pub(super) fn chosen_preset<'a>(
+    form: &Production,
+    presets: &'a [horizon_core::PresetConfig],
+) -> Option<&'a horizon_core::PresetConfig> {
+    form.setup_preset
+        .as_deref()
+        .and_then(|name| presets.iter().find(|preset| preset.name == name))
+        .or_else(|| {
+            let preferred = form.setup_agent.unwrap_or(PanelKind::Claude);
+            presets.iter().find(|preset| preset.kind == preferred)
+        })
+        .or_else(|| presets.first())
 }
 
 /// Under the profiles: which image a quick start runs and how to leave it, or why
@@ -257,7 +297,6 @@ pub(super) fn quick_start_note(ui: &mut egui::Ui, form: &mut Production) -> bool
         .on_hover_text("An agent checks the image against your CI now and updates .horizon in place.")
         .clicked();
     if update {
-        form.setup_agent.get_or_insert(PanelKind::Claude);
         form.setup_mode = Mode::Update;
     }
     update

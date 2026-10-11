@@ -273,6 +273,7 @@ impl HorizonApp {
             self.read_cloud_profiles(ctx);
         }
         self.request_cloud_prices(ctx);
+        self.offer_setup_presets();
         self.sync_cloud_repository_setup(ctx);
         checks::update(
             &mut self.cloud_prototype.production,

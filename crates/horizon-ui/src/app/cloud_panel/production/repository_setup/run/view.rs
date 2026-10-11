@@ -4,7 +4,6 @@ use super::{Action, Run, State, Step};
 use crate::app::cloud_panel::runtime::{action_button, danger_button};
 use crate::theme;
 use egui::{Align, Color32, CornerRadius, Frame, Key, Layout, RichText, Sense, Stroke, TextEdit, Ui, Vec2};
-use horizon_core::PanelKind;
 use std::time::Duration;
 
 /// Dialog buttons and the steering field follow the creation dialog's sizes.
@@ -83,7 +82,7 @@ fn header(ui: &mut Ui, run: &Run, repository: &str, finished: bool) {
             format!("Setting up {repository}")
         };
         ui.label(RichText::new(title).size(17.0).strong().color(theme::FG()));
-        chip(ui, agent_name(run.kind));
+        chip(ui, &run.agent);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.label(
                 RichText::new(clock(run.started.elapsed()))
@@ -97,10 +96,6 @@ fn header(ui: &mut Ui, run: &Run, repository: &str, finished: bool) {
         ui.add_space(4.0);
         ui.label(RichText::new(summary).size(14.0).color(theme::FG_SOFT()));
     }
-}
-
-fn agent_name(kind: PanelKind) -> &'static str {
-    if kind == PanelKind::Codex { "Codex" } else { "Claude" }
 }
 
 fn progress_bar(ui: &mut Ui, steps: &[Step], tint: Color32) {
@@ -331,7 +326,7 @@ fn output_well(ui: &mut Ui, run: &Run, height: f32) {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Agent output").size(14.0).strong().color(theme::FG()));
                 ui.label(
-                    RichText::new(format!("{} · live", agent_name(run.kind)))
+                    RichText::new(format!("{} · live", run.agent))
                         .size(12.5)
                         .color(theme::FG_SOFT()),
                 );

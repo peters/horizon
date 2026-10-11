@@ -8,15 +8,39 @@ use crate::theme;
 use egui::{Frame, RichText, Stroke, Vec2};
 use horizon_core::cloud_runtime::repository::launch::Configuration;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// The least time an agent gets to start before its instructions are pasted.
+const PROMPT_SETTLE: Duration = Duration::from_secs(3);
+/// How long the agent's screen must stay still before the paste.
+const PROMPT_QUIET: Duration = Duration::from_millis(1200);
 
 impl HorizonApp {
     /// Starts the setup agent in a hidden panel; the dialog shows its progress and
     /// passes the person's messages to it.
     pub(in crate::app::cloud_panel::production) fn start_cloud_repository_setup(&mut self, ctx: &egui::Context) {
-        let Some(kind) = self.cloud_prototype.production.setup_agent else {
+        let presets = super::setup_choices(&self.cloud_prototype.production);
+        let preset = super::chosen_preset(&self.cloud_prototype.production, &presets)
+            .cloned()
+            // A machine account's agent without a preset of its own still starts plainly.
+            .or_else(|| {
+                self.cloud_prototype
+                    .production
+                    .setup_agent
+                    .map(|kind| horizon_core::PresetConfig {
+                        name: kind.display_name().to_owned(),
+                        alias: None,
+                        kind,
+                        command: None,
+                        args: Vec::new(),
+                        resume: horizon_core::PanelResume::default(),
+                        ssh_connection: None,
+                    })
+            });
+        let Some(preset) = preset else {
             return;
         };
+        let kind = preset.kind;
         let repository = match std::fs::canonicalize(&self.cloud_prototype.production.repository) {
             Ok(path) if path.is_dir() => path,
             _ => {
@@ -26,7 +50,17 @@ impl HorizonApp {
         };
         let status = status_path();
         let mode = std::mem::take(&mut self.cloud_prototype.production.setup_mode).resolve(&repository);
-        let args = vec![prompt(&self.cloud_prototype.production.setup_agents, &status, &mode)];
+        let instructions = prompt(&self.cloud_prototype.production.setup_agents, &status, &mode);
+        // Claude and Codex take the instructions as their starting prompt; other agents get
+        // them pasted once their session settles.
+        let takes_prompt = matches!(kind, PanelKind::Claude | PanelKind::Codex);
+        let mut args = preset.args.clone();
+        let mut pending_prompt = None;
+        if takes_prompt {
+            args.push(instructions);
+        } else {
+            pending_prompt = Some(instructions);
+        }
         let workspace = self.board.ensure_local_workspace("Cloud setup");
         // Deliberately local: config preparation must not inherit a focused cloud.
         let result = self.board.create_panel(
@@ -34,6 +68,7 @@ impl HorizonApp {
                 name: Some("Cloud repository setup".into()),
                 name_is_custom: Some(true),
                 kind,
+                command: preset.command.clone(),
                 cwd: Some(repository.clone()),
                 args,
                 transcript_root: self.transcript_root.clone(),
@@ -46,12 +81,28 @@ impl HorizonApp {
         );
         match result {
             Ok(panel) => {
-                self.cloud_prototype.production.setup_run = Some(Run::new(panel, kind, repository, status, mode));
+                let mut run = Run::new(panel, kind, repository, status, mode);
+                run.agent.clone_from(&preset.name);
+                run.pending_prompt = pending_prompt;
+                self.cloud_prototype.production.setup_run = Some(run);
                 self.cloud_prototype.error = None;
                 ctx.request_repaint();
             }
             Err(error) => self.cloud_prototype.error = Some(error.to_string()),
         }
+    }
+
+    /// Offers the agent presets of the New Workspace menu for the setup agent.
+    pub(in crate::app::cloud_panel::production) fn offer_setup_presets(&mut self) {
+        if !self.cloud_prototype.production.setup_presets.is_empty() {
+            return;
+        }
+        self.cloud_prototype.production.setup_presets = self
+            .presets
+            .iter()
+            .filter(|preset| preset.kind.is_agent() && preset.ssh_connection.is_none())
+            .cloned()
+            .collect();
     }
 
     /// Samples the agent's screen, delivers a pending Enter, lists the files of a
@@ -77,6 +128,16 @@ impl HorizonApp {
                 run.sampled = Some(Instant::now());
             }
             ctx.request_repaint_after(run::OUTPUT_EVERY);
+        }
+        // An agent without a prompt argument gets the instructions once it has drawn its
+        // screen and gone quiet.
+        if run.pending_prompt.is_some()
+            && run.started.elapsed() >= PROMPT_SETTLE
+            && !panel.had_recent_output_within(PROMPT_QUIET)
+            && let Some(instructions) = run.pending_prompt.take()
+        {
+            panel.write_input(&run::pasted(&instructions));
+            run.submit_at = Some(Instant::now() + run::SUBMIT_DELAY);
         }
         if let Some(at) = run.submit_at {
             let now = Instant::now();
@@ -156,12 +217,8 @@ impl HorizonApp {
         let panel = run.panel;
         match action {
             Action::Steer(text) => {
-                // Pasted, so a terminal agent takes it as one message even mid-turn.
-                let mut bytes = b"\x1b[200~".to_vec();
-                bytes.extend(text.replace(['\r', '\n'], " ").as_bytes());
-                bytes.extend(b"\x1b[201~");
                 if let Some(panel) = self.board.panel_mut(panel) {
-                    panel.write_input(&bytes);
+                    panel.write_input(&run::pasted(&text));
                     run.submit_at = Some(Instant::now() + run::SUBMIT_DELAY);
                     ctx.request_repaint_after(run::SUBMIT_DELAY);
                 }

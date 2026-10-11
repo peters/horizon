@@ -105,6 +105,10 @@ pub(super) struct Production {
     setup_run: Option<repository_setup::Run>,
     /// Where the next setup agent starts from: new, an update or a fix.
     setup_mode: repository_setup::Mode,
+    /// The agent presets of the New Workspace menu, offered for the setup agent.
+    setup_presets: Vec<horizon_core::PresetConfig>,
+    /// The chosen setup preset, by name.
+    setup_preset: Option<String>,
     session_id: Option<String>,
     pub runtimes: HashMap<u32, Runtime>,
     companions: companions::State,

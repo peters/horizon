@@ -27,6 +27,14 @@ pub(super) const STEPS: [&str; 7] = [
     "Fast rerun",
 ];
 
+/// `text` as one pasted message, so a terminal agent takes it whole even mid-turn.
+pub(super) fn pasted(text: &str) -> Vec<u8> {
+    let mut bytes = b"\x1b[200~".to_vec();
+    bytes.extend(text.replace(['\r', '\n'], " ").as_bytes());
+    bytes.extend(b"\x1b[201~");
+    bytes
+}
+
 /// Enter follows a pasted message after this pause, so the terminal app takes the
 /// text as one message and the key as sending it.
 pub(super) const SUBMIT_DELAY: Duration = Duration::from_millis(150);
@@ -34,9 +42,13 @@ pub(super) const SUBMIT_DELAY: Duration = Duration::from_millis(150);
 pub(in crate::app::cloud_panel::production) struct Run {
     pub(super) panel: PanelId,
     pub(super) kind: PanelKind,
+    /// The preset's name, as the dialog shows the agent.
+    pub(super) agent: String,
+    /// Instructions still to paste, for an agent that takes no starting prompt argument.
+    pub(super) pending_prompt: Option<String>,
     pub(super) repository: PathBuf,
     pub(super) status_path: PathBuf,
-    started: Instant,
+    pub(super) started: Instant,
     status: Status,
     modified: Option<SystemTime>,
     steer: String,
@@ -92,6 +104,8 @@ impl Run {
         Self {
             panel,
             kind,
+            agent: kind.display_name().to_owned(),
+            pending_prompt: None,
             repository,
             status_path,
             started: Instant::now(),
