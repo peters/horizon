@@ -118,10 +118,22 @@ the worker contract or the agent CLIs in the base image must change for a releas
 
    Result: The test pulls the pinned image and runs its worker check. It prints the
    report and finds the same markers as `CONTRACT`.
-9. CAUTION: The next step rents compute from RunPod.
-10. Do the [quick start test procedure](testing/procedures/cloud-quick-start.md)
-   with the new pin.
-11. Merge the change in a normal PR before you save the draft release.
+9. On a computer with Docker, do lane C of the
+   [worker GitHub chain procedure](testing/procedures/worker-github-chain.md)
+   with the scripts of the commit that the image was published from. Check out
+   that commit first. Its SHA is the `headSha` of the Worker images run of step 1:
+   `gh run view <run> --json headSha`. Use the image reference of step 2 as
+   `<base>`, not the pin in that checkout: the checkout has the earlier pin.
+
+   Result: In task C1, the GitHub service runs and the agent cannot see the
+   isolation marker.
+10. CAUTION: The next step rents compute from RunPod.
+11. Do the [quick start test procedure](testing/procedures/cloud-quick-start.md)
+   with the new pin. On the worker, examine `/run/horizon-worker/services.json`.
+
+   Result: It lists `github`. If `github` is not there, examine
+   `/workspace/github.log`, fix the cause and publish the image again.
+12. Merge the change in a normal PR before you save the draft release.
 
 ## CLI Alternative
 

@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import tempfile
@@ -56,6 +57,218 @@ class GitAuthenticationTests(unittest.TestCase):
         with mock.patch.object(auth.sys, 'argv', ['horizon-worker-git-auth', 'clear']):
             auth.main()
         self.assertIsNone(auth.read_grants())
+
+    def test_under_agent_isolation_root_keeps_the_token_and_agents_keep_only_identities(self):
+        root_file = self.path / 'root/static-binding.json'
+        identity = auth.identity_path()
+        steps = []
+
+        def agent(operation, value):
+            steps.append((operation, value))
+            # The earlier image's token file is out of the agents' reach while the agent works.
+            self.assertFalse(auth.CREDENTIAL.exists())
+            with mock.patch.object(auth, 'root_holds_token', return_value=False), \
+                    mock.patch.object(auth.subprocess, 'run'), \
+                    mock.patch.object(auth, 'AGENT_ISOLATION', self.path / 'isolated'):
+                (self.path / 'isolated').touch()
+                auth.install_identities(value['binding'], value['previous'])
+        # A token file that an earlier image left in the agents' directory.
+        auth.write_private(self.value, auth.CREDENTIAL)
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True), \
+                mock.patch.object(auth, 'AGENT_UID', os.getuid()):
+            auth.install_as_root(self.value, agent)
+        self.assertFalse(auth.CREDENTIAL.exists())
+        self.assertEqual(steps[0][1]['previous'], {key: self.value[key] for key in auth.IDENTITY_FIELDS},
+                         'root hands the agent the earlier identities without the token')
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True):
+            self.assertEqual(auth.read_grants()[1][0]['token'], self.value['token'], 'root reads the token')
+        self.assertEqual([operation for operation, _ in steps], ['install-identity'])
+        self.assertNotIn(self.value['token'], json.dumps(steps))
+        self.assertEqual(root_file.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn(self.value['token'], identity.read_text())
+        # The agent's view: no token, but the identities that the next install forgets.
+        self.assertIsNone(auth.read_grants())
+        self.assertEqual(auth.previous_grants()[1][0]['author_name'], 'Test User')
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True):
+            auth.clear()
+        self.assertFalse(root_file.exists())
+        self.assertFalse(identity.exists())
+        # Also when the isolation marker is gone, clear removes a root-only token.
+        auth.write_private(self.value, root_file)
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
+                mock.patch.object(auth, 'root_holds_token', return_value=False):
+            auth.clear()
+        self.assertFalse(root_file.exists())
+        # An agent's directory in place of a file does not keep the root token from going.
+        auth.write_private(self.value, root_file)
+        identity.mkdir()
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True):
+            auth.clear()
+        self.assertFalse(root_file.exists())
+
+    def test_an_earlier_token_file_is_emptied_with_its_hard_links_before_the_agent_works(self):
+        auth.write_private(self.value, auth.CREDENTIAL)
+        linked = auth.CREDENTIAL.with_name('copy.json')
+        os.link(auth.CREDENTIAL, linked)
+        root_file = self.path / 'root/static-binding.json'
+
+        def agent(operation, value):
+            self.assertEqual(linked.stat().st_size, 0, 'a hard link holds no token while the agent works')
+            self.assertFalse(auth.CREDENTIAL.exists())
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True), \
+                mock.patch.object(auth, 'AGENT_UID', os.getuid()):
+            auth.install_as_root(self.value, agent)
+        self.assertTrue(root_file.exists())
+
+    def test_a_link_in_place_of_the_earlier_file_is_removed_before_the_agent_works(self):
+        auth.CREDENTIAL.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(self.path / 'elsewhere.json', auth.CREDENTIAL)
+        seen = []
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', self.path / 'root/static-binding.json'), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True):
+            auth.install_as_root(self.value, lambda operation, value: seen.append(auth.CREDENTIAL.is_symlink()))
+        self.assertEqual(seen, [False])
+        self.assertFalse((self.path / 'elsewhere.json').exists(), 'root never writes through the link')
+
+    def test_the_gh_fallback_under_isolation_reads_the_routed_configuration(self):
+        isolated = self.path / 'isolated'
+        isolated.touch()
+        with mock.patch.object(auth, 'AGENT_ISOLATION', isolated), \
+                mock.patch.dict(auth.os.environ, {'GH_CONFIG_DIR': '/elsewhere'}, clear=True), \
+                mock.patch.object(auth.sys, 'argv', ['gh', 'pr', 'list']), \
+                mock.patch.object(auth.os, 'execve') as execute:
+            auth.main()
+        self.assertEqual(execute.call_args.args[2]['GH_CONFIG_DIR'], '/workspace/home/.config/gh')
+
+    def test_a_failed_root_write_puts_the_identities_of_the_binding_in_place_back(self):
+        root_file = self.path / 'root/static-binding.json'
+        older = dict(self.value, author_name='Older Author')
+        auth.write_private(older, root_file)
+        steps = []
+        write = auth.write_private
+
+        def failing(value, path):
+            if path == root_file:
+                raise ValueError('no storage')
+            return write(value, path)
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True), \
+                mock.patch.object(auth, 'write_private', failing), \
+                self.assertRaises(ValueError):
+            auth.install_as_root(dict(self.value, author_name='Newer Author'),
+                                 lambda operation, value: steps.append(value['binding']['author_name']))
+        self.assertEqual(steps, ['Newer Author', 'Older Author'], 'the agent configures Git for the older binding again')
+        self.assertEqual(json.loads(root_file.read_text())['author_name'], 'Older Author')
+
+    def test_an_agent_step_that_fails_part_way_is_rolled_back_to_the_binding_in_place(self):
+        root_file = self.path / 'root/static-binding.json'
+        auth.write_private(dict(self.value, author_name='Older Author'), root_file)
+        steps = []
+
+        def agent(operation, value):
+            steps.append(value['binding']['author_name'])
+            if len(steps) == 1:
+                raise subprocess.CalledProcessError(1, 'install-identity')
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True), \
+                self.assertRaises(subprocess.CalledProcessError):
+            auth.install_as_root(dict(self.value, author_name='Newer Author'), agent)
+        self.assertEqual(steps, ['Newer Author', 'Older Author'])
+
+    def test_an_earlier_token_file_that_stays_stops_the_install_before_the_agent_step(self):
+        auth.write_private(self.value, auth.CREDENTIAL)
+        steps = []
+        unlink = Path.unlink
+
+        def refused(path, *args, **options):
+            if path == auth.CREDENTIAL:
+                raise PermissionError(13, 'Permission denied')
+            return unlink(path, *args, **options)
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', self.path / 'root/static-binding.json'), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True), \
+                mock.patch.object(Path, 'unlink', refused), self.assertRaises(PermissionError):
+            auth.install_as_root(self.value, lambda operation, value: steps.append(operation))
+        self.assertEqual(steps, [])
+
+    def test_clear_empties_an_earlier_token_file_with_its_hard_links(self):
+        auth.write_private(self.value, auth.CREDENTIAL)
+        linked = auth.CREDENTIAL.with_name('copy.json')
+        os.link(auth.CREDENTIAL, linked)
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', self.path / 'root/static-binding.json'), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True), \
+                mock.patch.object(auth, 'AGENT_UID', os.getuid()):
+            auth.clear()
+        self.assertFalse(auth.CREDENTIAL.exists())
+        self.assertEqual(linked.stat().st_size, 0)
+
+    def test_a_broken_root_file_gives_way_to_the_earlier_binding_when_an_install_fails(self):
+        auth.write_private(self.value, auth.CREDENTIAL)
+        root_file = self.path / 'root/static-binding.json'
+        root_file.parent.mkdir(mode=0o700)
+        root_file.write_text('not json')
+
+        def agent(operation, value):
+            raise subprocess.CalledProcessError(1, operation)
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True), \
+                mock.patch.object(auth, 'AGENT_UID', os.getuid()), \
+                self.assertRaises(subprocess.CalledProcessError):
+            auth.install_as_root(dict(self.value, token='synthetic-new-token'), agent)
+        self.assertEqual(json.loads(root_file.read_text())['token'], self.value['token'])
+
+    def test_a_failed_install_keeps_the_earlier_binding_where_only_root_reads_it(self):
+        auth.write_private(self.value, auth.CREDENTIAL)
+        root_file = self.path / 'root/static-binding.json'
+
+        def agent(operation, value):
+            raise subprocess.CalledProcessError(1, 'install-identity')
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True), \
+                mock.patch.object(auth, 'AGENT_UID', os.getuid()), \
+                self.assertRaises(subprocess.CalledProcessError):
+            auth.install_as_root(dict(self.value, token='synthetic-new-token'), agent)
+        self.assertFalse(auth.CREDENTIAL.exists())
+        self.assertEqual(json.loads(root_file.read_text())['token'], self.value['token'])
+        # A root-only binding in place is never replaced by the earlier one.
+        auth.write_private(self.value, auth.CREDENTIAL)
+        with mock.patch.object(auth, 'ROOT_CREDENTIAL', root_file), \
+                mock.patch.object(auth, 'root_holds_token', return_value=True), \
+                mock.patch.object(auth, 'AGENT_UID', os.getuid()), \
+                self.assertRaises(subprocess.CalledProcessError):
+            auth.install_as_root(dict(self.value, token='synthetic-newer-token'), agent)
+
+    def test_a_token_file_of_another_account_is_refused(self):
+        with mock.patch.object(auth.subprocess, 'run'):
+            auth.install(self.value)
+        with mock.patch.object(auth.os, 'geteuid', return_value=os.geteuid() + 1), \
+                self.assertRaises(ValueError):
+            auth.read_grants()
+
+    def test_a_marker_the_agent_account_cannot_see_still_means_isolation(self):
+        # As the agent account, the root-only directory of the marker refuses a look.
+        real = os.stat
+
+        def refused(path, *args, **options):
+            if str(path) == str(auth.AGENT_ISOLATION):
+                raise PermissionError(13, 'Permission denied')
+            return real(path, *args, **options)
+        auth.write_private(self.value, auth.CREDENTIAL)
+        with mock.patch.object(auth.os, 'stat', refused):
+            self.assertTrue(auth.isolated())
+            # The agent's restore of the static binding no longer fails on it, and reads no token file.
+            with mock.patch.object(auth.subprocess, 'run'), \
+                    mock.patch.object(auth, 'read_grants', side_effect=AssertionError('no token file')):
+                auth.restore_static({'previous': []})
+        with mock.patch.object(auth, 'AGENT_ISOLATION', self.path / 'none'):
+            self.assertFalse(auth.isolated())
+        with mock.patch.object(auth.os, 'stat', side_effect=OSError(5, 'Input/output error')), \
+                self.assertRaises(OSError):
+            auth.isolated()
 
     def test_gh_injects_authentication_only_into_child_environment(self):
         with mock.patch.object(auth.subprocess, 'run'):
@@ -516,7 +729,7 @@ class GitGrantTests(unittest.TestCase):
         self.assertEqual(auth.read_grants(), (2, grants))
 
     def test_symlinked_or_shared_credential_files_are_refused(self):
-        auth.write_private(self.value)
+        auth.write_private(self.value, auth.CREDENTIAL)
         link = self.path / 'link.json'
         link.symlink_to(auth.CREDENTIAL)
         with mock.patch.object(auth, 'CREDENTIAL', link), self.assertRaises(OSError):
@@ -525,6 +738,85 @@ class GitGrantTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             auth.read_grants()
 
+
+@unittest.skipIf(os.geteuid() == 0, 'root sees into every directory')
+class AgentBehindTheRootOnlyMarkerTests(unittest.TestCase):
+    """The agent side of the helper with the isolation marker in a directory that this account
+    cannot look into, as /run/horizon-tailnet is on a worker (root, 0700)."""
+
+    def setUp(self):
+        self.root = tempfile.TemporaryDirectory()
+        self.addCleanup(self.root.cleanup)
+        self.path = Path(self.root.name)
+        hidden = self.path / 'horizon-tailnet'
+        hidden.mkdir()
+        (hidden / 'agent-isolation').touch()
+        hidden.chmod(0)
+        self.addCleanup(hidden.chmod, 0o700)
+        try:
+            os.stat(hidden / 'agent-isolation')
+            self.skipTest('this account sees into a directory with no permissions')
+        except PermissionError:
+            pass
+        home = self.path / 'home'
+        home.mkdir()
+        subprocess.run(['git', 'init', '-q', '--bare', str(self.path / 'repository.git')], check=True,
+                       env=dict(os.environ, HOME=str(home), GIT_CONFIG_NOSYSTEM='1'))
+        for name, value in [('AGENT_ISOLATION', hidden / 'agent-isolation'),
+                            ('CREDENTIAL', self.path / 'credentials/github.json'),
+                            ('SERVICE_SOCKET', self.path / 'no-service.sock'),
+                            ('GIT_DIR', self.path / 'repository.git'), ('HOME', str(home))]:
+            patcher = mock.patch.object(auth, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        environment = mock.patch.dict(auth.os.environ, {'HOME': str(home), 'GIT_CONFIG_NOSYSTEM': '1',
+                                                        'GIT_CONFIG_GLOBAL': str(home / '.gitconfig')})
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.identity = {'repository': 'example/project', 'author_name': 'Agent',
+                         'author_email': 'agent@example.invalid', 'target': 'primary'}
+
+    def main(self, *argv, stdin=''):
+        with mock.patch.object(auth.sys, 'argv', list(argv)), \
+                mock.patch.object(auth.sys, 'stdin', io.StringIO(stdin)), \
+                mock.patch.object(auth.sys, 'stdout', io.StringIO()) as output:
+            auth.main()
+        return output.getvalue()
+
+    def test_every_agent_side_operation_runs(self):
+        # Every operation that root runs as the agent, so all but auth.ROOT_OPERATIONS, through
+        # the same entry point. A stand-in gh records the route; the check's gh is not called.
+        self.assertFalse(auth.root_holds_token())
+        gh = self.path / 'gh'
+        calls = self.path / 'gh-calls'
+        gh.write_text('#!/bin/sh\necho "$*" >> %s\n' % shlex.quote(str(calls)))
+        gh.chmod(0o755)
+        helper = 'horizon-worker-git-auth'
+        identity = json.dumps({'version': 2, 'grants': [self.identity]})
+        route_file = Path(auth.HOME) / auth.ROUTE_FILE
+        # What the GitHub service runs at its start and for each install.
+        self.main(helper, 'restore', stdin='{"previous": []}')
+        self.main(helper, 'configure', stdin=json.dumps({'grants': [self.identity], 'previous': []}))
+        self.main(helper, 'install-identity', stdin='{"binding": %s, "previous": null}' % identity)
+        self.assertIsNotNone(auth.previous_grants())
+        with mock.patch.object(auth.targets, 'GH', str(gh)):
+            self.main(helper, 'route')
+            self.assertTrue(route_file.exists())
+            self.assertIn('config set http_unix_socket ' + auth.API_SOCKET, calls.read_text())
+            self.main(helper, 'unroute')
+            self.assertFalse(route_file.exists())
+        # Git's credential helper without a service, and its store and erase.
+        self.assertEqual(self.main(helper, 'get', stdin='protocol=https\nhost=github.com\npath=a/b\n'), '')
+        self.main(helper, 'store', stdin='protocol=https\nhost=github.com\n')
+        self.main(helper, 'erase', stdin='protocol=https\nhost=github.com\n')
+        # The image check and the gh wrapper without a service.
+        with mock.patch.object(auth.subprocess, 'run') as run:
+            self.main(helper, 'check')
+        self.assertEqual(run.call_args.args[0], ['/usr/bin/gh', '--version'])
+        with mock.patch.object(auth.os, 'execve') as execute:
+            self.main('gh', 'pr', 'list')
+        self.assertEqual(execute.call_args.args[2]['GH_CONFIG_DIR'], str(Path(auth.HOME) / '.config/gh'))
+        self.assertTrue(auth.isolated())
 
 if __name__ == '__main__':
     unittest.main()

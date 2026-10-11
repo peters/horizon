@@ -27,6 +27,7 @@
 !horizon-worker-github-graphql-policy
 !horizon-worker-github-tasks
 !horizon-worker-github-mcp
+!horizon-worker-gh-repository
 !horizon-worker-browserstack
 !bin/
 bin/**
