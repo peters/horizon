@@ -5,12 +5,13 @@
 //! `chatgpt.tokens.use.direct`, which lets eligible requests use their `ChatGPT` plan.
 //! Credential records live in private files under the cloud root; they never enter
 //! the settings file or deployment state.
+mod cancellation;
 mod flow;
 mod id_token;
 mod response;
 mod store;
 
-use super::Cancellation;
+pub use cancellation::Cancellation;
 use std::{path::Path, sync::mpsc::Receiver};
 pub use store::Connection;
 

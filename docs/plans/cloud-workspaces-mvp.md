@@ -744,7 +744,7 @@ private credential storage, rollback, stale saves and intervening external edits
 Toolbar layout tests and menu/modal reopening pass. Independent review identified
 durability, Windows file-handle, Escape-gesture and preference-propagation issues;
 corrections and affected regression tests are in progress. The retained first-use
-plan is `docs/testing/cloud-first-use-smoke.md`. Native visual acceptance, final
+plan is `docs/testing/procedures/cloud-first-use-smoke.md`. Native visual acceptance, final
 immutable-image cloud scenarios, the complete matrix, current-head hosted review
 and final cleanup are still pending. No new screenshots or final pass are claimed.
 

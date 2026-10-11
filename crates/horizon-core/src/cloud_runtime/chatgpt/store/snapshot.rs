@@ -109,7 +109,7 @@ fn read_records(lock: &SessionLock) -> Result<Vec<Record>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cloud_runtime::Cancellation;
+    use crate::cloud_runtime::chatgpt::Cancellation;
 
     #[test]
     fn a_dangling_selection_never_uses_another_account() {

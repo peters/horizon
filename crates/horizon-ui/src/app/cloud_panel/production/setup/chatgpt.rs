@@ -61,13 +61,14 @@ pub(in crate::app::cloud_panel) struct Card {
     connection: Option<chatgpt::Connection>,
     /// A failed sign-out leaves only the last known account, not verified status.
     sign_out_uncertain: bool,
+    account_label: String,
     message: Option<(MessageTone, String)>,
     /// Ends the sign-in under way when the card goes, such as on Cancel.
     abort: Option<Abort>,
 }
 
 /// Cancels its flow when dropped.
-struct Abort(horizon_core::cloud_runtime::Cancellation);
+struct Abort(chatgpt::Cancellation);
 
 impl Drop for Abort {
     fn drop(&mut self) {
@@ -85,9 +86,11 @@ impl Card {
     /// It runs on every frame, also while another mode is selected, so a finished
     /// flow always lands and the busy state always ends.
     pub(super) fn tick(&mut self, connection_slot: &mut Option<chatgpt::Connection>) {
+        let mut refresh_label = false;
         if !self.loaded {
             self.connection.clone_from(connection_slot);
             self.loaded = true;
+            refresh_label = true;
         }
         if let Some(rx) = &self.signing_in {
             match rx.try_recv() {
@@ -95,6 +98,7 @@ impl Card {
                     *connection_slot = Some(connection.clone());
                     self.connection = Some(connection);
                     self.sign_out_uncertain = false;
+                    refresh_label = true;
                     self.signing_in = None;
                 }
                 Ok(Err(message)) => {
@@ -113,12 +117,14 @@ impl Card {
                 Ok(Ok(result)) => self.finish_sign_out(result, connection_slot),
                 Ok(Err(message)) => {
                     self.sign_out_uncertain = true;
+                    refresh_label = true;
                     self.message = Some((MessageTone::Error, message));
                     self.signing_out = None;
                 }
                 Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => {
                     self.sign_out_uncertain = true;
+                    refresh_label = true;
                     self.message = Some((
                         MessageTone::Error,
                         "Sign-out could not be verified. Reopen settings to check the saved account.".into(),
@@ -159,6 +165,9 @@ impl Card {
                 }
             }
         }
+        if refresh_label {
+            self.refresh_account_label();
+        }
         // A finished attempt, also a failed one, stops its loopback server at once.
         if self.signing_in.is_none() {
             self.abort = None;
@@ -168,6 +177,7 @@ impl Card {
     fn finish_sign_out(&mut self, result: SignOutResult, connection_slot: &mut Option<chatgpt::Connection>) {
         self.sign_out_uncertain = false;
         self.connection = result.selected;
+        self.refresh_account_label();
         connection_slot.clone_from(&self.connection);
         let mut message = if self.connection.is_some() {
             "Signed out of the previous account. Another saved account is still selected.".to_owned()
@@ -186,7 +196,7 @@ impl Card {
         let (tx, rx) = channel();
         self.signing_in = Some(rx);
         self.message = None;
-        let cancel = horizon_core::cloud_runtime::Cancellation::default();
+        let cancel = chatgpt::Cancellation::default();
         self.abort = Some(Abort(cancel.clone()));
         let completion = Completion::new(tx, ctx);
         let root: std::path::PathBuf = root.to_owned();
@@ -240,19 +250,28 @@ impl Card {
         });
     }
 
+    fn refresh_account_label(&mut self) {
+        self.account_label.clear();
+        let Some(connection) = self.connection.as_ref() else {
+            return;
+        };
+        self.account_label.push_str(if self.sign_out_uncertain {
+            "Last known account: "
+        } else {
+            "Signed in as "
+        });
+        if let Some(email) = connection.email.as_deref() {
+            self.account_label.push_str(email);
+        } else {
+            self.account_label.push_str("account ");
+            self.account_label.push_str(&connection.subject);
+        }
+    }
+
     /// The account row of the connected card, with the plan-usage notice.
     fn connected(&mut self, ui: &mut egui::Ui, root: &std::path::Path, connection: &chatgpt::Connection) {
-        let name = connection
-            .email
-            .as_deref()
-            .map_or_else(|| format!("account {}", connection.subject), str::to_owned);
         ui.horizontal(|ui| {
-            let account = if self.sign_out_uncertain {
-                format!("Last known account: {name}")
-            } else {
-                format!("Signed in as {name}")
-            };
-            label(ui, &account);
+            label(ui, &self.account_label);
             if connection.plan_usage {
                 ui.label(RichText::new("ChatGPT plan").size(12.0).color(theme::PALETTE_GREEN()));
             }
@@ -361,6 +380,7 @@ pub(super) fn row(
 mod tests {
     use super::{Abort, Card, Completion, MessageTone, SignOutResult};
     use crate::test_egui::DiscardTextures as _;
+    use horizon_core::cloud_runtime::chatgpt;
 
     #[test]
     fn worker_publication_and_panics_wake_after_channel_state_changes() {
@@ -424,6 +444,7 @@ mod tests {
         card.tick(&mut slot);
         assert_eq!(slot.as_ref().unwrap().client_id, "client-b");
         assert_eq!(card.connection.as_ref().unwrap().client_id, "client-b");
+        assert_eq!(card.account_label, "Signed in as account client-b");
         assert!(!card.sign_out_uncertain);
         assert!(!card.busy());
         let message = &card.message.as_ref().unwrap().1;
@@ -466,6 +487,7 @@ mod tests {
             assert_eq!(card.connection.as_ref().unwrap().client_id, "client-a");
             assert!(slot.as_ref().unwrap().signed_in);
             assert!(card.sign_out_uncertain);
+            assert_eq!(card.account_label, "Last known account: account account-a");
             assert!(!card.busy());
             assert!(card.message.is_some());
         }
@@ -475,7 +497,7 @@ mod tests {
     fn a_failed_sign_in_stops_its_server_at_once() {
         let root = tempfile::tempdir().unwrap();
         let mut draft = horizon_core::cloud_runtime::setup::Draft::load(root.path()).unwrap();
-        let cancel = horizon_core::cloud_runtime::Cancellation::default();
+        let cancel = chatgpt::Cancellation::default();
         let (sender, receiver) = std::sync::mpsc::channel();
         let mut card = Card {
             signing_in: Some(receiver),
@@ -492,7 +514,7 @@ mod tests {
 
     #[test]
     fn disconnected_workers_report_failure_and_release_the_form() {
-        let cancel = horizon_core::cloud_runtime::Cancellation::default();
+        let cancel = chatgpt::Cancellation::default();
         let (sender, receiver) = std::sync::mpsc::channel();
         let mut card = Card {
             signing_in: Some(receiver),

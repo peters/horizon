@@ -1,10 +1,9 @@
 //! The loopback OAuth flow: authorize in the system browser, receive the callback on
 //! 127.0.0.1, exchange the code, validate the ID token, and store the registration.
 use super::{
-    CONFIG_URL, Error, Result, id_token,
+    CONFIG_URL, Cancellation, Error, Result, id_token,
     store::{self, Record},
 };
-use crate::cloud_runtime::Cancellation;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use ring::rand::SecureRandom as _;
 use std::{
@@ -133,10 +132,9 @@ pub(super) fn start(
     std::thread::spawn(move || {
         let _ = tx.send(serve(&listener, &attempt, &root, &cancel));
     });
-    opening_cancel.check().map_err(|_| Error::Declined)?;
-    if let Err(error) = open(&url) {
+    if let Err(error) = opening_cancel.dispatch(|| open(&url)) {
         opening_cancel.cancel();
-        return Err(error.into());
+        return Err(error);
     }
     Ok(rx)
 }
@@ -302,14 +300,14 @@ enum Callback {
     Denied(Option<String>),
 }
 
-fn param<'a>(params: &'a [(String, String)], key: &str) -> Option<&'a str> {
+fn param<'a>(params: &'a [(zeroize::Zeroizing<String>, zeroize::Zeroizing<String>)], key: &str) -> Option<&'a str> {
     params
         .iter()
-        .find(|(name, _)| name == key)
+        .find(|(name, _)| name.as_str() == key)
         .map(|(_, value)| value.as_str())
 }
 
-fn parse_query(query: &str) -> Vec<(String, String)> {
+fn parse_query(query: &str) -> Vec<(zeroize::Zeroizing<String>, zeroize::Zeroizing<String>)> {
     query
         .split('&')
         .filter_map(|pair| {
@@ -319,9 +317,9 @@ fn parse_query(query: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-fn percent_decode(value: &str) -> String {
+fn percent_decode(value: &str) -> zeroize::Zeroizing<String> {
     let bytes = value.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
+    let mut out = zeroize::Zeroizing::new(Vec::with_capacity(bytes.len()));
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
@@ -345,7 +343,7 @@ fn percent_decode(value: &str) -> String {
             }
         }
     }
-    String::from_utf8_lossy(&out).into_owned()
+    zeroize::Zeroizing::new(String::from_utf8_lossy(&out).into_owned())
 }
 
 fn finish(root: &Path, attempt: &Attempt, callback: Callback, cancel: &Cancellation) -> Result<super::Connection> {
@@ -695,8 +693,8 @@ mod tests {
     fn urlencode_and_percent_decode_round_trip() {
         let encoded = urlencode("a b+c/d@e~f_1");
         assert_eq!(encoded, "a%20b%2Bc%2Fd%40e~f_1");
-        assert_eq!(percent_decode(&encoded), "a b+c/d@e~f_1");
-        assert_eq!(percent_decode("a+b"), "a b");
+        assert_eq!(percent_decode(&encoded).as_str(), "a b+c/d@e~f_1");
+        assert_eq!(percent_decode("a+b").as_str(), "a b");
     }
 
     fn attempt(root: &std::path::Path) -> Attempt {

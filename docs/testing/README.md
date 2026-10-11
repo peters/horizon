@@ -31,6 +31,7 @@ documents that are not yet STE.
 | [chromecast-live-progressive](procedures/chromecast-live-progressive.md) | Chromecast live cast, progressive transport | none |
 | [cloud-agent-browser](procedures/cloud-agent-browser.md) | Browser tools of an agent panel in a cloud with agent isolation | rents compute |
 | [cloud-agent-panel-start](procedures/cloud-agent-panel-start.md) | Agent panel start in a cloud, host instance and browser runtime root owner | rents compute |
+| [cloud-first-use-smoke](procedures/cloud-first-use-smoke.md) | Cloud setup, first-use repair, authentication choices and persistence | rents compute |
 | [cloud-idle-stop](procedures/cloud-idle-stop.md) | Cloud idle stop on RunPod and Hetzner, and the stopped card | rents compute |
 | [cloud-panels](procedures/cloud-panels.md) | Cloud panels end to end: 114 tests in 12 area files | rents compute |
 | [cloud-quick-start](procedures/cloud-quick-start.md) | Quick start on the base image for a repository without `.horizon/cloud.yml` | rents compute |
