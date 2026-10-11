@@ -200,6 +200,8 @@ impl HorizonApp {
 /// The file work of one visibility request: its audits, the locked manifest
 /// write and its result. The worker uses those of this Horizon home.
 trait VisibilityFiles {
+    /// The agent that holds the panel's live lease, read without the lock.
+    fn owner(&self, request: &BrowserVisibilityRequest) -> Option<String>;
     fn audit(&self, request: &BrowserVisibilityRequest, status: BrowserVisibilityAuditStatus) -> std::io::Result<()>;
     /// Writes `visible` only while the requesting agent holds the panel's lease.
     fn publish(
@@ -215,6 +217,13 @@ trait VisibilityFiles {
 struct HomeFiles;
 
 impl VisibilityFiles for HomeFiles {
+    fn owner(&self, request: &BrowserVisibilityRequest) -> Option<String> {
+        let manifest = manifest::read(&request.panel_local_id)?;
+        manifest
+            .live_owner(manifest::now_millis())
+            .map(|owner| owner.name.clone())
+    }
+
     fn audit(&self, request: &BrowserVisibilityRequest, status: BrowserVisibilityAuditStatus) -> std::io::Result<()> {
         manifest::record_visibility_status(request, status)
     }
@@ -234,9 +243,9 @@ impl VisibilityFiles for HomeFiles {
 }
 
 /// Audits the request and publishes the manifest's new visibility and the
-/// result, on the coordination worker. The owner is checked in the same locked
-/// transaction as each manifest write, so a lease that moves while earlier
-/// jobs or the audits run is never crossed. A completion that cannot be
+/// result, on the coordination worker. The owner is checked again in the same
+/// locked transaction as each manifest write, so a lease that moves while
+/// earlier jobs or the audits run is never crossed. A completion that cannot be
 /// audited restores the visibility the manifest had, while the agent still
 /// holds the lease, and a request that expired, lost its owner, or whose board
 /// retired while earlier jobs ran is refused. Says whether the change was
@@ -256,6 +265,11 @@ fn publish_visibility(
     }
     if request.deadline_at_millis < manifest::now_millis() {
         return refuse("request_expired", "browser visibility request expired");
+    }
+    // A request that already lost its owner is refused before it is audited
+    // as dispatched; the locked write checks the owner again.
+    if files.owner(request).as_deref() != Some(request.actor.as_str()) {
+        return refuse("ownership_changed", "browser panel ownership changed");
     }
     if let Err(error) = files.audit(request, BrowserVisibilityAuditStatus::Dispatched) {
         tracing::warn!(request_id = %request.request_id, %error, "could not audit browser visibility dispatch");
@@ -460,6 +474,14 @@ mod tests {
     }
 
     impl VisibilityFiles for TestFiles<'_> {
+        fn owner(&self, request: &BrowserVisibilityRequest) -> Option<String> {
+            let path = manifest::manifest_path_for_root(self.root, &request.panel_local_id);
+            let manifest = manifest::read_at(&path)?;
+            manifest
+                .live_owner(manifest::now_millis())
+                .map(|owner| owner.name.clone())
+        }
+
         fn audit(&self, _: &BrowserVisibilityRequest, status: BrowserVisibilityAuditStatus) -> std::io::Result<()> {
             (self.on_audit)(status)
         }
@@ -511,7 +533,7 @@ mod tests {
         };
 
         // The agent owns the panel when the request starts; another agent takes
-        // it while the dispatch audit waits, after the old check point.
+        // it while the dispatch audit waits, after the early check.
         lease(&actor);
         let files = TestFiles {
             root: &root,
@@ -571,6 +593,23 @@ mod tests {
                 "audit_failed",
                 "visibility change could not be audited"
             )]
+        );
+
+        // An agent that keeps the lease gets the visibility it replaced back.
+        lease(&actor);
+        let show = request(&app, &actor, "show", true);
+        let files = TestFiles {
+            root: &root,
+            on_audit: Box::new(|status| match status {
+                BrowserVisibilityAuditStatus::Completed => Err(std::io::Error::other("a fixture audit fails")),
+                _ => Ok(()),
+            }),
+            results: std::cell::RefCell::default(),
+        };
+        assert!(!publish_visibility(&files, &live, &show, &workspace));
+        assert!(
+            manifest::read_at(&path).expect("manifest").hidden,
+            "the show was rolled back"
         );
     }
 }
