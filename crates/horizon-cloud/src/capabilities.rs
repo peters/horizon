@@ -38,6 +38,24 @@ impl BrowserEngine {
     }
 }
 
+/// Whether agent sessions on the worker ask before they run a command or edit a file.
+/// Auto mode is the default: a cloud worker is a disposable container whose agent runs
+/// unprivileged, so the container is the boundary. `ask` keeps each agent's own prompts.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentApprovals {
+    #[default]
+    Auto,
+    Ask,
+}
+
+impl AgentApprovals {
+    #[must_use]
+    pub const fn is_auto(&self) -> bool {
+        matches!(self, Self::Auto)
+    }
+}
+
 /// An omitted capabilities section preserves the original worker contract.
 /// An explicit section selects only its entries; `{}` is a shell-only worker.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -52,6 +70,9 @@ pub struct Capabilities {
     /// Remote device targets require an explicit machine-local credential grant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browserstack: Option<BrowserStack>,
+    /// Left out unless `ask`, so a profile in auto mode reaches every image unchanged.
+    #[serde(default, skip_serializing_if = "AgentApprovals::is_auto")]
+    pub agent_approvals: AgentApprovals,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -91,6 +112,7 @@ impl Default for Capabilities {
             browsers: [BrowserEngine::Chromium].into(),
             desktop: true,
             browserstack: None,
+            agent_approvals: AgentApprovals::Auto,
         }
     }
 }
@@ -168,6 +190,23 @@ mod tests {
             native,
             serde_json::from_str(&serde_json::to_string(&native).unwrap()).unwrap()
         );
+    }
+
+    #[test]
+    fn agent_approvals_default_to_auto_and_only_ask_is_written() {
+        let auto: Capabilities = serde_json::from_str(r#"{"agents":["codex"]}"#).unwrap();
+        assert_eq!(auto.agent_approvals, AgentApprovals::Auto);
+        assert!(!serde_json::to_string(&auto).unwrap().contains("agent_approvals"));
+        let explicit: Capabilities = serde_json::from_str(r#"{"agent_approvals":"auto"}"#).unwrap();
+        assert!(!serde_json::to_string(&explicit).unwrap().contains("agent_approvals"));
+        let ask: Capabilities = serde_json::from_str(r#"{"agents":["codex"],"agent_approvals":"ask"}"#).unwrap();
+        assert_eq!(ask.agent_approvals, AgentApprovals::Ask);
+        assert!(
+            serde_json::to_string(&ask)
+                .unwrap()
+                .contains(r#""agent_approvals":"ask""#)
+        );
+        assert!(serde_json::from_str::<Capabilities>(r#"{"agent_approvals":"never"}"#).is_err());
     }
 
     #[test]

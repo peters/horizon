@@ -14,7 +14,7 @@ pub mod provider;
 mod reason;
 mod ssh_endpoint;
 mod startup;
-pub use capabilities::{Agent, BrowserEngine, BrowserStack, Capabilities};
+pub use capabilities::{Agent, AgentApprovals, BrowserEngine, BrowserStack, Capabilities};
 pub use reason::Reason;
 pub use ssh_endpoint::{SshEndpoint, SshHost};
 pub use startup::StartupMetadata;

@@ -23,7 +23,7 @@ parser.add_argument('--ready', action='store_true')
 args = parser.parse_args()
 
 def capabilities(value):
-    if not isinstance(value, dict) or set(value) - {'agents', 'browsers', 'desktop', 'browserstack'}:
+    if not isinstance(value, dict) or set(value) - {'agents', 'browsers', 'desktop', 'browserstack', 'agent_approvals'}:
         raise ValueError('Invalid worker capability configuration')
     for field, allowed in [('agents', {'codex', 'claude', 'grok'}), ('browsers', {'chromium', 'firefox'})]:
         values = value.get(field, [])
@@ -32,6 +32,13 @@ def capabilities(value):
     if not isinstance(value.get('desktop', False), bool):
         raise ValueError('Invalid desktop capability')
     result = {'agents': value.get('agents', []), 'browsers': value.get('browsers', []), 'desktop': value.get('desktop', False)}
+    # Auto mode is the default and is never written, so a profile in auto mode compares
+    # equal to one that leaves the field out. horizon-worker-run reads `ask` from here.
+    approvals = value.get('agent_approvals', 'auto')
+    if approvals not in ('auto', 'ask'):
+        raise ValueError('Invalid agent approvals setting')
+    if approvals == 'ask':
+        result['agent_approvals'] = 'ask'
     remote = value.get('browserstack')
     if remote is not None:
         if not isinstance(remote, dict) or set(remote) - {'provider', 'targets', 'local_ports'}:
@@ -319,7 +326,8 @@ try:
                 print('horizon-tailnet-contract=2')
     # Session restart: horizon-worker-session --relaunch replaces a lost process in its worktree.
     print('horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n'
-          'horizon-session-restart-contract=1\nhorizon-shared-checkout-contract=1\nhorizon-prepare-checkout-contract=1')
+          'horizon-session-restart-contract=1\nhorizon-shared-checkout-contract=1\nhorizon-prepare-checkout-contract=1\n'
+          'horizon-agent-approvals-contract=1')
 except (ValueError, AttributeError, OSError, subprocess.SubprocessError):
     print('Worker validation failed: requested capability runtime is missing, disabled or unusable', file=sys.stderr)
     sys.exit(1)

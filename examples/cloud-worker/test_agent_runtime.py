@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 
 
@@ -70,10 +71,10 @@ if sys.argv[1:] == ['--help']:
         self.env = {'PATH': str(tools) + os.pathsep + os.defpath,
                     'CHILD_RECEIPT': str(self.root / 'child.json'), 'HORIZON': 'parent-host'}
 
-    def launch(self, agent='claude', **environment):
+    def launch(self, agent='claude', cwd=None, **environment):
         result = subprocess.run(['bash', str(self.script), 'test-panel', agent],
                                 env=dict(self.env, **environment), capture_output=True,
-                                text=True, timeout=10, check=True)
+                                text=True, timeout=10, check=True, cwd=cwd)
         self.assertEqual((self.workspace / 'sessions/test-panel/exit-status').read_text(), '23\n')
         self.assertIn('Session process exited with status 23', result.stdout)
         self.stderr = result.stderr
@@ -276,6 +277,79 @@ if sys.argv[1:] == ['--help']:
         child = self.launch('codex')
         self.assertEqual(child['args'], ['--no-daemon'])
         self.assertTrue(child['path'].startswith(f'{layer}:'), child['path'])
+
+    def select(self, **settings):
+        """The worker's selection for this cloud, as horizon-worker-check --write-runtime keeps it."""
+        (self.workspace / 'capabilities.json').write_text(json.dumps({'agents': ['claude', 'codex'], **settings}))
+
+    def as_uid(self, uid):
+        # The launcher decides on root by `id -u`; this stands in for it so the test does not
+        # depend on the account that runs it.
+        tool = self.tools / 'id'
+        tool.write_text(f'#!/bin/sh\n[ "$1" = -u ] && echo {uid} && exit 0\nexec /usr/bin/id "$@"\n')
+        tool.chmod(0o700)
+
+    def checkout(self):
+        folder = self.workspace / 'checkout'
+        folder.mkdir(exist_ok=True)
+        return folder
+
+    def codex_config(self):
+        return self.workspace / 'home/.codex/config.toml'
+
+    def test_auto_mode_skips_claude_prompts_and_accepts_its_warning(self):
+        self.as_uid(10001)
+        self.select()
+        child = self.launch()
+        self.assertEqual(child['args'][2:], ['--dangerously-skip-permissions',
+                                             '--mcp-config', str(self.workspace / 'agent-mcp.json')])
+        self.assertIs(self.claude_config()['bypassPermissionsModeAccepted'], True)
+
+    def test_ask_an_unreadable_selection_or_root_keeps_claude_prompts(self):
+        selection = self.workspace / 'capabilities.json'
+        for uid, text in [(10001, json.dumps({'agent_approvals': 'ask'})), (10001, None),
+                          (10001, '{not json'), (0, json.dumps({}))]:
+            with self.subTest(uid=uid, selection=text):
+                self.as_uid(uid)
+                selection.unlink(missing_ok=True)
+                if text is not None:
+                    selection.write_text(text)
+                child = self.launch()
+                self.assertNotIn('--dangerously-skip-permissions', child['args'])
+                self.assertNotIn('bypassPermissionsModeAccepted', self.claude_config())
+
+    def test_auto_mode_codex_skips_prompts_and_the_sandbox_and_trusts_its_folder(self):
+        self.as_uid(10001)
+        self.select()
+        folder = self.checkout()
+        child = self.launch('codex', cwd=folder, CODEX_DAEMON='1')
+        self.assertEqual(child['args'], ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox'])
+        config = tomllib.loads(self.codex_config().read_text())
+        self.assertEqual(config['projects'][str(folder.resolve())], {'trust_level': 'trusted'})
+
+    def test_codex_with_ask_keeps_prompts_and_an_existing_folder_decision(self):
+        self.as_uid(10001)
+        self.select(agent_approvals='ask')
+        folder = self.checkout()
+        self.codex_config().parent.mkdir(parents=True)
+        saved = f'model = "saved"\n\n[projects.{json.dumps(str(folder.resolve()))}]\ntrust_level = "untrusted"\n'
+        self.codex_config().write_text(saved)
+        self.assertEqual(self.launch('codex', cwd=folder)['args'], [])
+        self.assertEqual(self.codex_config().read_text(), saved)
+
+    def test_codex_folder_trust_is_added_once_and_a_broken_config_is_left_alone(self):
+        folder = self.checkout()
+        self.codex_config().parent.mkdir(parents=True)
+        self.codex_config().write_text('model = "saved"')
+        self.launch('codex', cwd=folder)
+        self.launch('codex', cwd=folder)
+        text = self.codex_config().read_text()
+        self.assertTrue(text.startswith('model = "saved"\n'), text)
+        self.assertEqual(text.count('[projects.'), 1, text)
+        self.assertEqual(tomllib.loads(text)['projects'][str(folder.resolve())], {'trust_level': 'trusted'})
+        self.codex_config().write_text('model = [')
+        self.launch('codex', cwd=folder)
+        self.assertEqual(self.codex_config().read_text(), 'model = [')
 
     def test_inherited_session_directory_is_replaced(self):
         child = self.launch(HORIZON_SESSION_DIR='/elsewhere')

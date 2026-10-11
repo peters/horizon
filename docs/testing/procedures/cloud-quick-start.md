@@ -24,6 +24,8 @@ items:
 - Each segment of the stage track shows its hover text.
 - **Rebuild image & restart** moves a quick start cloud to the pinned image and
   keeps its workspace.
+- Claude Code and Codex run in auto mode: they run a command and write a file
+  without a prompt.
 
 ## 2. Applicability
 
@@ -383,6 +385,50 @@ This task allocates nothing.
     Result: The pod image is the pin of the candidate. The pod ID, the network
     volume and the marker did not change.
 
+### 6.7 Q07 — Agents in auto mode
+
+> **CAUTION:** THIS TASK SENDS PROMPTS TO ANTHROPIC AND OPENAI WITH THE API KEY
+> FILES OF THE CLOUD SETTINGS. Each prompt uses a small amount of API credit.
+
+Do this task only if `<settings>` has an Anthropic API key file and an OpenAI API
+key file.
+
+1. Open the panel picker of the cloud and click **Claude Code**.
+
+   Result: A Claude Code panel opens and shows its prompt. It shows no first-run
+   dialog and no warning about the bypass of permissions.
+
+2. Type this task in the Claude Code panel and press Enter:
+
+   ```text
+   Run the shell command uname -sr. Then create a file q07-claude.txt that contains hello.
+   ```
+
+   Result: Claude Code shows the output of `uname -sr` and writes the file. It
+   does not ask for approval.
+
+3. Open the panel picker of the cloud and click **Codex**.
+
+   Result: A Codex panel opens and shows `Ask Codex to do anything`. It does not
+   ask if you trust the folder.
+
+4. Type this task in the Codex panel and press Enter:
+
+   ```text
+   Run the shell command uname -sr. Then create a file q07-codex.txt that contains hello.
+   ```
+
+   Result: Codex shows the output of `uname -sr` and writes the file. It does
+   not ask for approval, and it shows no sandbox error.
+
+5. Type this command in a worker shell:
+
+   ```bash
+   stat -c '%U %n' /workspace/checkout/q07-claude.txt /workspace/checkout/q07-codex.txt
+   ```
+
+   Result: The owner of each file is `horizon-agent`.
+
 ## 7. Pass criteria
 
 - Q01 shows the guidance section and no red error.
@@ -403,6 +449,8 @@ This task allocates nothing.
 - Q06 reports an unchanged image for the same pin. It switches the pod to the
   other pin and back, and keeps the pod, the volume and `/workspace`. No candidate
   in Q06 can start Docker.
+- In Q07, Claude Code and Codex each run a command and write a file as
+  `horizon-agent`, with no prompt and no sandbox error.
 - Cleanup removes the pod and the network volume of this run.
 
 ## 8. Cleanup

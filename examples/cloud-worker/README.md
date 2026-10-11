@@ -29,7 +29,8 @@ its native executable and geckodriver. A new browser panel without an engine
 preference uses the first enabled engine in the centralized profile order; an
 explicitly disabled engine fails, and an existing session never switches engine
 on reconnect. Inside an explicit capability section, omitted lists are empty and
-omitted desktop support is disabled.
+omitted desktop support is disabled. `agent_approvals` is `auto` (the default) or
+`ask`; see [agent approvals](#agent-approvals).
 
 The base always includes SSH, Git/LFS, tmux, the source/worktree helpers and worker
 control service. When the worker is created with `HORIZON_IDLE_STOP_MINUTES`, the
@@ -600,6 +601,44 @@ option. tmux keeps the session when the SSH connection stops, so the session doe
 the background server. An older Codex has no background server and no `--no-daemon` option,
 so it starts with no option. If you start `codex` yourself in a Shell panel on such a
 volume, add `--no-daemon`.
+
+## Agent approvals
+
+By default, Claude Code and Codex on a worker run in auto mode: they run commands and edit
+files without asking first. The worker is a disposable container, and the agent runs as the
+unprivileged agent account (UID 10001), so the container is the boundary. Codex cannot start
+its own sandbox on a provider that denies user namespaces, such as RunPod, so in auto mode
+Codex also runs without that sandbox.
+
+> **CAUTION:** IN AUTO MODE, AN AGENT DOES NOT ASK BEFORE IT RUNS A COMMAND. Text that the
+> agent reads, for example in the repository, in an issue or on a web page, can make it run
+> commands. Those commands can push to the repositories that the worker has access to, use
+> API credit, or read the credentials on the worker.
+
+To keep the prompts of each agent, set `agent_approvals: ask` in the capabilities of the
+profile:
+
+```yaml
+capabilities:
+  agents: [codex, claude]
+  agent_approvals: ask
+```
+
+`horizon-worker-run` uses auto mode only when all of these conditions are true:
+
+- The agent runs as an account that is not root. An image without agent isolation runs its
+  agents as root, and Claude Code refuses to skip its prompts as root.
+- `/workspace/capabilities.json` can be read and does not set `agent_approvals: ask`.
+
+In auto mode, Claude Code starts with `--dangerously-skip-permissions`, and the launcher
+records in `~/.claude.json` that the one-time warning for this mode is accepted. Codex starts
+with `--dangerously-bypass-approvals-and-sandbox`. In both modes, the launcher records in
+the Codex `config.toml` that the folder of the session is trusted, because Codex asks this
+question for each repository folder. An existing decision for that folder is kept.
+
+`horizon-worker-check` reports `horizon-agent-approvals-contract=1` for images that support
+this setting. Horizon refuses to deploy a profile with `agent_approvals: ask` to other
+images. An image without this marker runs its agents with their prompts.
 
 ## Session environment from image layers
 

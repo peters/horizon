@@ -109,6 +109,22 @@ fn the_container_start_is_read_only_from_its_exact_marker() {
 }
 
 #[test]
+fn keeping_agent_prompts_requires_its_exact_marker_and_auto_mode_needs_none() {
+    let current = "horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n";
+    let auto: Capabilities = serde_json::from_str(r#"{"agents":["codex"]}"#).unwrap();
+    assert!(validate(current, &auto, false, false).is_ok());
+    let ask: Capabilities = serde_json::from_str(r#"{"agents":["codex"],"agent_approvals":"ask"}"#).unwrap();
+    assert!(validate(current, &ask, false, false).is_err());
+    for incidental in [
+        "horizon-agent-approvals-contract=2",
+        " horizon-agent-approvals-contract=1",
+    ] {
+        assert!(validate(&format!("{current}{incidental}\n"), &ask, false, false).is_err());
+    }
+    assert!(validate(&format!("{current}{AGENT_APPROVALS_MARKER}\n"), &ask, false, false).is_ok());
+}
+
+#[test]
 fn idle_stop_requires_its_exact_marker_only_when_requested() {
     let current = "horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n";
     assert!(validate(current, &Capabilities::default(), false, false).is_ok());

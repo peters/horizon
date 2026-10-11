@@ -362,6 +362,24 @@ class CapabilitiesTests(unittest.TestCase):
         self.path('/etc/horizon-worker/agent-versions.json').write_text('{')
         self.assertEqual(self.run_check(reported=reported)[0], 1)
 
+    def test_agent_approvals_are_kept_only_for_ask_and_reported_by_their_marker(self):
+        for value, stored in [('ask', 'ask'), ('auto', None)]:
+            requested = dict(self.available, agent_approvals=value)
+            status, output, _ = self.run_check('--write-runtime', '--capabilities-json', json.dumps(requested))
+            self.assertEqual(status, 0, output)
+            self.assertIn('horizon-agent-approvals-contract=1', output.splitlines())
+            runtime = json.loads(self.path('/workspace/capabilities.json').read_text())
+            self.assertEqual(runtime.get('agent_approvals'), stored)
+        status, _, _ = self.run_check('--capabilities-json', json.dumps(dict(self.available, agent_approvals='never')))
+        self.assertEqual(status, 1)
+
+    def test_readiness_refuses_a_changed_agent_approvals_setting(self):
+        self.write('/workspace/capabilities.json', dict(self.available, agent_approvals='ask'))
+        with mock.patch('socket.create_connection') as connect:
+            status, _, _ = self.run_check('--ready', '--capabilities-json', json.dumps(self.available))
+        self.assertEqual(status, 1)
+        connect.assert_not_called()
+
     def test_readiness_refuses_profile_drift_before_contacting_services(self):
         for active, requested in [(self.available, {}), ({}, self.available)]:
             self.write('/workspace/capabilities.json', active)

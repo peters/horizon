@@ -17,6 +17,7 @@ fn setup_request(f: &CoordinatorFixture, name: &str) -> SetupRequest {
             browsers: BTreeSet::new(),
             desktop: false,
             browserstack: None,
+            agent_approvals: horizon_cloud::AgentApprovals::Auto,
         },
         agents: vec![Agent::Claude; 2],
     }
