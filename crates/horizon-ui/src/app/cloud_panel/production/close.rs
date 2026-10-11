@@ -47,16 +47,21 @@ impl HorizonApp {
     /// The × of a cloud: its close always offers to delete its resources first, so a
     /// failure from an earlier close, possibly since retried from the card, is forgotten.
     pub(in crate::app::cloud_panel) fn request_cloud_close(&mut self, id: u32) {
-        let record = match self.cloud_holds_resources(id) {
-            Ok(false) => Record::Empty,
-            Ok(true) => Record::Holds,
-            Err(super::cloud_runtime::Error::Busy) => Record::Busy,
-            Err(error) => Record::Unreadable(error.to_string()),
-        };
+        let record = self.close_record(id);
         let close = &mut self.cloud_prototype.production.close;
         close.failed.remove(&id);
         close.records.insert(id, record);
         close.confirming = Some(id);
+    }
+
+    /// What the saved record of cloud `id` holds now.
+    fn close_record(&self, id: u32) -> Record {
+        match self.cloud_holds_resources(id) {
+            Ok(false) => Record::Empty,
+            Ok(true) => Record::Holds,
+            Err(super::cloud_runtime::Error::Busy) => Record::Busy,
+            Err(error) => Record::Unreadable(error.to_string()),
+        }
     }
 
     /// Forgets the dialog and what an earlier attempt of cloud `id`'s close left.
@@ -81,6 +86,21 @@ impl HorizonApp {
             self.end_close_confirmation(id);
             return;
         };
+        // A record that an operation held is read again once this instance runs none,
+        // so the dialog offers the close when that operation ends.
+        let local_busy = self
+            .cloud_prototype
+            .production
+            .runtimes
+            .get(&id)
+            .is_some_and(Runtime::busy);
+        if self.cloud_prototype.production.close.records.get(&id) == Some(&Record::Busy) && !local_busy {
+            let record = self.close_record(id);
+            if record == Record::Busy {
+                ctx.request_repaint_after(std::time::Duration::from_secs(1));
+            }
+            self.cloud_prototype.production.close.records.insert(id, record);
+        }
         let close = &self.cloud_prototype.production.close;
         let runtime = self.cloud_prototype.production.runtimes.entry(id).or_default();
         let offer = offer::offer(

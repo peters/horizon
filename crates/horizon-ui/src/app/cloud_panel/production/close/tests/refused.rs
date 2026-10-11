@@ -225,12 +225,26 @@ fn another_controller_keeps_the_cloud_from_being_removed_anyway() {
         busy,
         "an operation runs in another Horizon instance"
     );
-
-    // The operation starts after the dialog opened.
-    drop(other);
-    app.request_cloud_close(101);
-    let other = Store::lock(&path).unwrap();
     let ctx = egui::Context::default();
+    let render = |app: &mut HorizonApp| {
+        let _ = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                app.render_cloud_close_confirmation(ui.ctx())
+            })
+            .discard_textures();
+    };
+    render(&mut app);
+    assert_eq!(current_offer(&app), busy, "still running");
+    drop(other);
+    render(&mut app);
+    assert_eq!(
+        current_offer(&app).primary,
+        Some(Primary::Delete),
+        "the open dialog offers the deletion once that operation ended"
+    );
+
+    // An operation starts after the dialog opened.
+    let other = Store::lock(&path).unwrap();
     app.delete_for_close(101, &ctx);
     assert!(current_offer(&app).remove_anyway, "the deletion could not start");
 
