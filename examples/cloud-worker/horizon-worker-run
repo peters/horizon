@@ -149,6 +149,17 @@ PY
     env -- "${session_env_assignments[@]}" claude "${claude_args[@]}" --mcp-config /workspace/agent-mcp.json
 elif [ "$agent" = grok ]; then
     env -- "${session_env_assignments[@]}" grok --no-leader
+elif [ "$agent" = codex ]; then
+    # Codex 0.156 and later start a shared background server, which refuses a control socket
+    # folder that other users could write to. A network volume can report every folder as
+    # writable by anyone to the agent user (RunPod's does), so Codex ends before it opens.
+    # tmux already keeps the session running, so start without that server. An older Codex
+    # has neither the server nor the option; the probe uses the PATH that the launch uses.
+    codex_args=()
+    if env -- "${session_env_assignments[@]}" codex --help 2>/dev/null | grep -q -e '--no-daemon'; then
+        codex_args=(--no-daemon)
+    fi
+    env -- "${session_env_assignments[@]}" codex "${codex_args[@]}"
 else
     env -- "${session_env_assignments[@]}" "$agent"
 fi

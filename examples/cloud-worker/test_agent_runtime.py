@@ -46,7 +46,14 @@ Path(os.environ['CHILD_RECEIPT']).write_text(json.dumps({
     'layer': {key: os.environ[key] for key in ['_', 'IFS', 'BASH_ALIASES', 'UID'] if key in os.environ}}))
 sys.exit(23)
 '''
-        for name, body in [('claude', child), ('grok', child), ('sleep', 'import sys\nsys.exit(0)\n')]:
+        # Lists --no-daemon in its help only when CODEX_DAEMON=1, like Codex 0.156 and later.
+        self.codex = '''import os, sys
+if sys.argv[1:] == ['--help']:
+    print('Options:\\n      --no-daemon' if os.environ.get('CODEX_DAEMON') == '1' else 'Options:')
+    sys.exit(0)
+''' + child
+        for name, body in [('claude', child), ('grok', child), ('codex', self.codex),
+                           ('sleep', 'import sys\nsys.exit(0)\n')]:
             tool = tools / name
             tool.write_text('#!' + sys.executable + '\n' + body)
             tool.chmod(0o700)
@@ -249,6 +256,26 @@ sys.exit(23)
         self.assertIsNone(child['env']['ANTHROPIC_API_KEY'])
         self.assertEqual(child['args'], ['--no-leader'])
         self.assertEqual(child['env']['HORIZON_SESSION_DIR'], str(self.workspace / 'session-data/test-panel'))
+
+    def test_codex_starts_without_the_background_server(self):
+        child = self.launch('codex', CODEX_DAEMON='1')
+        self.assertEqual(child['args'], ['--no-daemon'])
+        self.assertEqual(child['env']['HOME'], str(self.workspace / 'home'))
+
+    def test_codex_without_the_server_option_starts_with_no_arguments(self):
+        self.assertEqual(self.launch('codex')['args'], [])
+
+    def test_codex_option_probe_uses_the_session_path(self):
+        layer = self.root / 'layer-bin'
+        layer.mkdir()
+        tool = layer / 'codex'
+        tool.write_text('#!' + sys.executable + '\nimport os\nos.environ["CODEX_DAEMON"] = "1"\n' + self.codex)
+        tool.chmod(0o700)
+        self.fragments.mkdir()
+        (self.fragments / '20-codex.env').write_text(f'PATH_PREPEND={layer}\n')
+        child = self.launch('codex')
+        self.assertEqual(child['args'], ['--no-daemon'])
+        self.assertTrue(child['path'].startswith(f'{layer}:'), child['path'])
 
     def test_inherited_session_directory_is_replaced(self):
         child = self.launch(HORIZON_SESSION_DIR='/elsewhere')
