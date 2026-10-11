@@ -321,7 +321,7 @@ fn a_compact_parked_dot_tells_a_screen_reader_its_status_line() {
     );
     let labels = crate::test_egui::accesskit_texts(|ui| {
         let row = ui.allocate_space(egui::vec2(210.0, super::rows::COMPACT_ROW_HEIGHT)).1;
-        super::rows::paint_workspace_row_contents(ui, row, &workspace, false);
+        super::rows::paint_workspace_row_contents(ui, row, &workspace, false, crate::theme::BG_ELEVATED());
     });
     assert!(
         labels
@@ -361,4 +361,29 @@ fn the_new_window_badge_gives_way_to_the_name_at_the_minimum_sidebar() {
     assert!((right - 113.0).abs() <= f32::EPSILON);
     // Without a count or a badge the name runs to the right edge.
     assert_eq!(name_right(64.0, 192.0, None, None), (192.0, false));
+}
+
+#[test]
+fn the_badge_ring_takes_the_color_of_the_card_in_every_state() {
+    use super::rows::{card_fill, row_surface};
+    use crate::theme;
+    let accent = egui::Color32::from_rgb(137, 180, 250);
+    assert_eq!(
+        row_surface(card_fill(accent, false, false, false)),
+        theme::BG_ELEVATED()
+    );
+    assert_eq!(
+        row_surface(card_fill(accent, true, false, false)),
+        theme::PANEL_BG_ALT()
+    );
+    let hovered = row_surface(card_fill(accent, false, true, false));
+    assert_eq!(
+        hovered,
+        theme::composite_over(theme::BG_ELEVATED(), theme::alpha(theme::PANEL_BG_ALT(), 170))
+    );
+    assert_ne!(hovered, theme::BG_ELEVATED());
+    assert_eq!(
+        row_surface(card_fill(accent, true, true, true)),
+        theme::blend(theme::PANEL_BG_ALT(), accent, 0.22)
+    );
 }

@@ -260,7 +260,7 @@ impl HorizonApp {
             .allocate_space(Vec2::new(ui.available_width(), rows::row_height(workspace)))
             .1;
         let mut click_target_hovered = ui.rect_contains_pointer(row_rect);
-        rows::paint_workspace_row_bg(
+        let surface = rows::paint_workspace_row_bg(
             ui,
             row_rect,
             workspace.color,
@@ -280,7 +280,7 @@ impl HorizonApp {
         });
         // The tile, name and line tooltips go after the row: egui hovers a widget that
         // only senses hover when it lies above the row's click target.
-        let tile_response = rows::paint_workspace_row_contents(ui, row_rect, workspace, accordion);
+        let tile_response = rows::paint_workspace_row_contents(ui, row_rect, workspace, accordion, surface);
         click_target_hovered |= row_response.hovered() || tile_response.hovered();
         let row_clicked = row_response.clicked();
         self.handle_sidebar_workspace_drag(ui, workspace, row_rect, &row_response, drag_state, click_target_hovered);
@@ -411,7 +411,7 @@ impl HorizonApp {
             &label,
             panel_rows::PanelRowState {
                 hovered,
-                close: close_shows.then(|| close.hovered()),
+                close: close_shows.then(|| close.hovered() || close.has_focus()),
                 last,
             },
         );

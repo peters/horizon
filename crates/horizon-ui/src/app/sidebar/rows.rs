@@ -79,8 +79,29 @@ pub(super) fn paint_dot(painter: &egui::Painter, center: Pos2, dot: Dot) {
     }
 }
 
+/// The fill of a row's card: the accent blend while dragged, `PANEL_BG_ALT` for the
+/// active workspace, a translucent `PANEL_BG_ALT` while hovered, or none at rest.
+pub(super) fn card_fill(workspace_color: Color32, is_active: bool, hovered: bool, dragging: bool) -> Option<Color32> {
+    if dragging {
+        Some(theme::blend(theme::PANEL_BG_ALT(), workspace_color, 0.22))
+    } else if is_active {
+        Some(theme::PANEL_BG_ALT())
+    } else if hovered {
+        Some(theme::alpha(theme::PANEL_BG_ALT(), 170))
+    } else {
+        None
+    }
+}
+
+/// The color that a row shows behind its tile, for the ring that cuts the badge out.
+pub(super) fn row_surface(card_fill: Option<Color32>) -> Color32 {
+    card_fill.map_or_else(theme::BG_ELEVATED, |fill| {
+        theme::composite_over(theme::BG_ELEVATED(), fill)
+    })
+}
+
 /// Paints the card of a row: a filled, outlined card for the active workspace,
-/// a lighter one while dragged or hovered.
+/// a lighter one while dragged or hovered. Returns the color behind the tile.
 pub(super) fn paint_workspace_row_bg(
     ui: &egui::Ui,
     row: Rect,
@@ -88,26 +109,22 @@ pub(super) fn paint_workspace_row_bg(
     is_active: bool,
     hovered: bool,
     dragging: bool,
-) {
+) -> Color32 {
     let card = card(row);
     let painter = ui.painter();
-    if dragging {
-        painter.rect_filled(
-            card,
-            CARD_RADIUS,
-            theme::blend(theme::PANEL_BG_ALT(), workspace_color, 0.22),
-        );
-    } else if is_active {
-        painter.rect_filled(card, CARD_RADIUS, theme::PANEL_BG_ALT());
+    let fill = card_fill(workspace_color, is_active, hovered, dragging);
+    if let Some(fill) = fill {
+        painter.rect_filled(card, CARD_RADIUS, fill);
+    }
+    if is_active && !dragging {
         painter.rect_stroke(
             card,
             CARD_RADIUS,
             Stroke::new(1.0_f32, theme::alpha(workspace_color, 120)),
             StrokeKind::Inside,
         );
-    } else if hovered {
-        painter.rect_filled(card, CARD_RADIUS, theme::alpha(theme::PANEL_BG_ALT(), 170));
     }
+    row_surface(fill)
 }
 
 /// Paints the tile, the name with its badges and, unless the row is compact, the
@@ -117,6 +134,7 @@ pub(super) fn paint_workspace_row_contents(
     row: Rect,
     workspace: &WorkspaceSidebarEntry,
     accordion: bool,
+    surface: Color32,
 ) -> egui::Response {
     let card = card(row);
     let compact = is_compact(workspace);
@@ -127,7 +145,7 @@ pub(super) fn paint_workspace_row_contents(
         card.center().y
     };
 
-    let tile = paint_tile(ui, card, workspace, compact);
+    let tile = paint_tile(ui, card, workspace, compact, surface);
     let text_left = tile.max.x + 10.0;
     let (name_right, badge_shows) = paint_badges(ui, card, workspace, accordion, text_left, first_line_y);
     let meaning = dot_meaning(workspace.row.dot);
@@ -184,8 +202,9 @@ fn hover_text(ui: &egui::Ui, rect: Rect, id: (&str, u64), text: &str) {
     response.on_hover_text(text);
 }
 
-/// Paints the tile with its initials and status badge; returns its rect.
-fn paint_tile(ui: &egui::Ui, card: Rect, workspace: &WorkspaceSidebarEntry, compact: bool) -> Rect {
+/// Paints the tile with its initials and status badge; `surface` is the color
+/// around the tile, which the badge's ring uses to cut the badge out.
+fn paint_tile(ui: &egui::Ui, card: Rect, workspace: &WorkspaceSidebarEntry, compact: bool, surface: Color32) -> Rect {
     let painter = ui.painter();
     let accent = workspace.color;
     let side = if compact { COMPACT_TILE_SIDE } else { TILE_SIDE };
@@ -212,12 +231,7 @@ fn paint_tile(ui: &egui::Ui, card: Rect, workspace: &WorkspaceSidebarEntry, comp
 
     if has_badge(workspace.row.dot) {
         let center = tile.right_bottom() - vec2(2.0, 2.0);
-        let ring = if workspace.is_active {
-            theme::PANEL_BG_ALT()
-        } else {
-            theme::BG_ELEVATED()
-        };
-        painter.circle_filled(center, DOT_RADIUS + 2.0, ring);
+        painter.circle_filled(center, DOT_RADIUS + 2.0, surface);
         paint_dot(painter, center, workspace.row.dot);
     }
     tile

@@ -221,6 +221,14 @@ pub(super) fn render_group_header(
         if response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
+        if response.has_focus() {
+            ui.painter().rect_stroke(
+                response.rect,
+                4,
+                egui::Stroke::new(1.5_f32, theme::ACCENT()),
+                egui::StrokeKind::Outside,
+            );
+        }
         stop = response
             .on_hover_text(format!(
                 "Choose which workers of the {clouds} in {} to stop",
