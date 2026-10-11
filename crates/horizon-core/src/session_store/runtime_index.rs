@@ -12,6 +12,7 @@
 //! index from an older Horizon must have the tables of its own schema version before it
 //! migrates; if not, it is damaged too.
 mod rows;
+mod schema;
 #[cfg(feature = "cloud-workspaces")]
 mod status;
 #[cfg(test)]
@@ -32,6 +33,7 @@ use super::{SessionStore, current_unix_millis, stable_state_key};
 use crate::error::{Error, Result};
 use crate::runtime_state::{PanelState, RuntimeState, WorkspaceState};
 use rows::{BoardRows, Encoded, Format};
+use schema::{check_header, header};
 
 #[cfg(feature = "cloud-workspaces")]
 pub use status::{CloudPanelStatus, ParkedPanel};
@@ -260,64 +262,6 @@ impl SessionStore {
 /// The digest of a `runtime.yaml` text, which tells whether the file changed after a save.
 fn yaml_digest(yaml: &str) -> String {
     format!("fnv1a64:{}:{}", yaml.len(), stable_state_key(yaml))
-}
-
-fn header(connection: &Connection) -> std::result::Result<(i32, i32), IndexError> {
-    let application_id = connection.query_row("PRAGMA application_id", [], |row| row.get(0))?;
-    let version = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    Ok((application_id, version))
-}
-
-/// Refuses a file that is not a Horizon index, an index from a newer Horizon, and an
-/// index without the tables of the schema version that it reports, current or older.
-/// Returns whether the index has its tables, as opposed to an empty new file.
-fn check_header(connection: &Connection, migrations: &[&str]) -> std::result::Result<bool, IndexError> {
-    let (application_id, version) = header(connection)?;
-    match (application_id, usize::try_from(version)) {
-        (APPLICATION_ID, Ok(applied)) if applied > migrations.len() => Err(IndexError::Newer(version)),
-        (APPLICATION_ID, Ok(applied)) if applied > 0 => check_schema(connection, &migrations[..applied]).map(|()| true),
-        (0, Ok(0)) => {
-            let tables: i64 = connection.query_row("SELECT count(*) FROM sqlite_schema", [], |row| row.get(0))?;
-            if tables == 0 {
-                Ok(false)
-            } else {
-                Err(IndexError::Damaged("the file is not a Horizon runtime index".into()))
-            }
-        }
-        _ => Err(IndexError::Damaged("the file is not a Horizon runtime index".into())),
-    }
-}
-
-/// Refuses an index that does not have the tables and columns that `applied`, the
-/// migrations of its schema version, make. A save then sets it aside instead of failing
-/// on it every time, also in a migration to a later version.
-fn check_schema(connection: &Connection, applied: &[&str]) -> std::result::Result<(), IndexError> {
-    let expected = Connection::open_in_memory()?;
-    expected.execute_batch(&applied.concat())?;
-    let found = columns(connection)?;
-    for (table, columns) in columns(&expected)? {
-        if found.get(&table) != Some(&columns) {
-            return Err(IndexError::Damaged(format!(
-                "the table {table} does not have the columns of schema version {}",
-                applied.len()
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// The name and type of the columns of each table, in order.
-fn columns(connection: &Connection) -> rusqlite::Result<HashMap<String, Vec<(String, String)>>> {
-    let mut tables: HashMap<String, Vec<(String, String)>> = HashMap::new();
-    let mut select = connection.prepare(
-        "SELECT t.name, c.name, c.type FROM sqlite_schema AS t JOIN pragma_table_info(t.name) AS c
-         WHERE t.type = 'table' ORDER BY t.name, c.cid",
-    )?;
-    let mut query = select.query([])?;
-    while let Some(row) = query.next()? {
-        tables.entry(row.get(0)?).or_default().push((row.get(1)?, row.get(2)?));
-    }
-    Ok(tables)
 }
 
 fn open_for_read(path: &Path) -> std::result::Result<Option<Connection>, IndexError> {
