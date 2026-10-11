@@ -86,8 +86,9 @@ impl HostIo {
     /// Does `work` after every job asked for before it, then `apply` on the UI
     /// thread with its outcome, or with `None` when `work` panicked, so the UI
     /// always learns that the work ended. An outcome asked for on a board that
-    /// a session switch replaced applies as Horizon retiring that board: it
-    /// refuses its request and changes no panel of the board that stands now.
+    /// was replaced, by a session switch or a cloud prototype restore, applies
+    /// as Horizon retiring that board: it refuses its request and changes no
+    /// panel of the board that stands now.
     pub(super) fn then<T: Send + 'static>(
         &mut self,
         work: impl FnOnce() -> T + Send + 'static,
@@ -454,6 +455,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "cloud-workspaces")]
     #[test]
     fn a_cloud_prototype_restore_applies_the_outcomes_of_the_old_board_before_it_replaces_it() {
         let (_temp, mut app) = crate::app::test_support::test_app();
