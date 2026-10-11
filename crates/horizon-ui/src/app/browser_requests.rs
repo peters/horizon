@@ -68,7 +68,7 @@ pub(super) struct BrowserCreateHostState {
     /// A claim of the agents' requests runs on the coordination worker.
     pub(super) claiming: bool,
     /// Panels whose visibility request runs on the coordination worker, with
-    /// the visibility it sets; no stamp writes their manifests until it ends.
+    /// the visibility it sets, which a stamp writes until the request ends.
     pub(super) visibility_in_flight: Vec<super::browser_visibility_requests::VisibilityInFlight>,
     /// Does the coordination file work in order, off the UI thread.
     pub(super) io: HostIo,
@@ -265,8 +265,8 @@ impl HorizonApp {
     /// when the placement changes again. A placement is queued once: a slow disk
     /// never queues a stamp per frame or per tick, while a panel moved and
     /// then closed still has the stamp of its move queued before it closes.
-    /// A manifest whose visibility request runs is left to that request, and
-    /// stamped once it ends. Returns whether a stamp was queued.
+    /// A panel whose visibility request runs keeps the visibility that request
+    /// sets, and is stamped again once it ends. Returns whether a stamp was queued.
     ///
     /// Until the stamp lands, a moved panel's remote allocation already
     /// expects its new workspace, which refuses recovery through the old one.
@@ -284,14 +284,13 @@ impl HorizonApp {
             .filter_map(|placement| self.stamped_allocation(&placement.local_id, &placement.workspace.local_id))
             .collect();
         let host = &self.browser_create_host;
-        let before = placements.len();
-        placements.retain(|placement| {
-            !host
-                .visibility_in_flight
-                .iter()
-                .any(|running| running.local_id == placement.local_id)
-        });
-        let skipped = placements.len() < before;
+        let mut skipped = false;
+        for placement in &mut placements {
+            let mut running = host.visibility_in_flight.iter().rev();
+            if let Some(running) = running.find(|running| running.local_id == placement.local_id) {
+                (placement.visible, skipped) = (running.visible, true);
+            }
+        }
         let root = self.host_manifest_root().to_path_buf();
         let (requested, board) = (host.stamp_requests, host.io.board_fence());
         self.browser_create_host.stamps_in_flight += 1;

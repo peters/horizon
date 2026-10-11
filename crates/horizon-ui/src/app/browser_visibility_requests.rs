@@ -21,7 +21,7 @@ pub(super) struct VisibilityInFlight {
     pub(super) local_id: String,
     request_id: String,
     /// The visibility it sets.
-    visible: bool,
+    pub(super) visible: bool,
     /// The visibility the panel has when it applies, unless the user changes it.
     before: bool,
 }
@@ -39,8 +39,9 @@ impl HorizonApp {
                 return;
             }
         };
-        // No stamp writes this manifest until the request ends, so its
-        // visibility changes only through the audited transaction.
+        // Until the request ends, a stamp writes the visibility it sets, so a
+        // move still updates the workspace while the visibility changes only
+        // through the audited transaction.
         self.browser_create_host.visibility_in_flight.push(VisibilityInFlight {
             local_id: request.panel_local_id.clone(),
             request_id: request.request_id.clone(),
@@ -352,6 +353,32 @@ mod tests {
         running(&mut app, &show);
         app.finish_visibility_request(&show, Some(true));
         assert!(visible(&app), "a request that still applies shows the panel");
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
+    fn a_stamp_moves_a_panel_whose_request_runs_and_keeps_the_visibility_it_sets() {
+        let (_temp, mut app, actor, other) = fixture();
+        let local_id = app.board.panel(PanelId(900)).expect("browser").local_id.clone();
+        let path = manifest::manifest_path_for_root(app.session_store.home().root(), &local_id);
+        let live = manifest::BrowserManifest {
+            host: Some(manifest::host_instance().to_string()),
+            ..manifest::BrowserManifest::default()
+        };
+        manifest::write_at(&path, &live).expect("live manifest");
+        let hide = request(&app, &actor, "hide", false);
+        running(&mut app, &hide);
+        app.board.assign_panel_to_workspace(PanelId(900), other);
+        assert!(app.restamp_browser_manifests_for_placement());
+        app.settle_browser_host_io();
+        let stamped = manifest::read_at(&path).expect("manifest");
+        let other_id = app.board.workspace(other).expect("other").local_id.clone();
+        assert_eq!(
+            stamped.workspace.map(|workspace| workspace.local_id),
+            Some(other_id),
+            "the move revokes the old workspace at once"
+        );
+        assert!(stamped.hidden, "the stamp writes the visibility the request sets");
     }
 
     #[test]
