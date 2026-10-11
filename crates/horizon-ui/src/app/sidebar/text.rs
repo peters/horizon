@@ -5,7 +5,7 @@ use std::sync::Arc;
 use egui::epaint::text::VariationCoords;
 use egui::text::{LayoutJob, TextWrapping};
 use egui::{Color32, FontId, Galley, TextFormat};
-use horizon_core::PanelKind;
+use horizon_core::{PanelKind, agent_definition};
 
 use crate::theme;
 
@@ -74,13 +74,26 @@ fn is_title_symbol(character: char) -> bool {
 }
 
 /// The text of a panel row. An agent row shows the agent's terminal title, which
-/// names its task, without the spinner in front: the kind label already names
-/// the agent. Other panels, and agents without a title, show `display_title`.
-pub(super) fn panel_label(kind: PanelKind, display_title: &str, terminal_title: &str) -> String {
-    if kind.is_agent() {
+/// names its task, without the spinner in front. The kind label already names
+/// the agent, so a panel name that only repeats the agent's name (a preset such
+/// as `Claude Code`) is left out; any other name stays in front of the task.
+/// Other panels, and agents without a title, show `display_title`.
+pub(super) fn panel_label(
+    kind: PanelKind,
+    name: &str,
+    name_is_custom: bool,
+    display_title: &str,
+    terminal_title: &str,
+) -> String {
+    if let Some(agent) = agent_definition(kind) {
         let task = fold_whitespace(terminal_title.trim_start_matches(is_title_symbol));
         if !task.is_empty() {
-            return task;
+            let repeats_agent = name.to_lowercase().starts_with(&agent.display_name.to_lowercase());
+            return if !name_is_custom || repeats_agent || name == terminal_title {
+                task
+            } else {
+                format!("{} \u{00B7} {task}", fold_whitespace(name))
+            };
         }
     }
     fold_whitespace(display_title)
@@ -109,7 +122,15 @@ mod tests {
 
     #[test]
     fn an_agent_row_shows_the_task_without_its_spinner() {
-        let label = |terminal_title| panel_label(PanelKind::Claude, "Claude Code — title", terminal_title);
+        let label = |terminal_title| {
+            panel_label(
+                PanelKind::Claude,
+                "Claude Code",
+                true,
+                "Claude Code — title",
+                terminal_title,
+            )
+        };
         assert_eq!(
             label("\u{25D0} Fix recurring sync timeout"),
             "Fix recurring sync timeout"
@@ -119,16 +140,35 @@ mod tests {
         // Without a title the row keeps the panel's own title.
         assert_eq!(label(""), "Claude Code — title");
         assert_eq!(label("\u{25D0} "), "Claude Code — title");
+        // A panel without a custom name shows the task too.
+        assert_eq!(
+            panel_label(PanelKind::Codex, "Codex", false, "\u{280B} Fix", "\u{280B} Fix"),
+            "Fix"
+        );
+    }
+
+    #[test]
+    fn an_agent_row_keeps_a_name_that_the_person_gave() {
+        assert_eq!(
+            panel_label(
+                PanelKind::Claude,
+                "Backend",
+                true,
+                "Backend — \u{25D0} Fix sync",
+                "\u{25D0} Fix sync"
+            ),
+            "Backend \u{00B7} Fix sync"
+        );
     }
 
     #[test]
     fn other_panels_keep_their_title() {
         assert_eq!(
-            panel_label(PanelKind::Browser, "Docs — Example page", "Example page"),
+            panel_label(PanelKind::Browser, "Docs", true, "Docs — Example page", "Example page"),
             "Docs — Example page"
         );
         assert_eq!(
-            panel_label(PanelKind::Shell, "\u{25D0} build", "\u{25D0} build"),
+            panel_label(PanelKind::Shell, "build", false, "\u{25D0} build", "\u{25D0} build"),
             "\u{25D0} build"
         );
     }

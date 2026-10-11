@@ -127,7 +127,13 @@ impl HorizonApp {
                     panel.id,
                     SidebarPanelEntry {
                         id: panel.id,
-                        label: text::panel_label(panel.kind, &panel.display_title(), &panel.terminal_title),
+                        label: text::panel_label(
+                            panel.kind,
+                            &panel.title,
+                            panel.name_is_custom(),
+                            &panel.display_title(),
+                            &panel.terminal_title,
+                        ),
                         title: panel.display_title().into_owned(),
                         kind: panel.kind,
                         is_focused: self.board.focused == Some(panel.id),
@@ -271,14 +277,15 @@ impl HorizonApp {
             click_target_hovered,
             self.sidebar_drag_workspace == Some(workspace.id),
         );
-        let tile_response = rows::paint_workspace_row_contents(ui, row_rect, workspace, accordion);
-
         let row_response = ui.interact(
             row_rect,
             ui.make_persistent_id(("sidebar_ws_click", workspace.id.0)),
             Sense::click_and_drag(),
         );
         row_response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &workspace.name));
+        // The tile, name and line tooltips go after the row: egui hovers a widget that
+        // only senses hover when it lies above the row's click target.
+        let tile_response = rows::paint_workspace_row_contents(ui, row_rect, workspace, accordion);
         click_target_hovered |= row_response.hovered() || tile_response.hovered();
         let row_clicked = row_response.clicked();
         self.handle_sidebar_workspace_drag(ui, workspace, row_rect, &row_response, drag_state, click_target_hovered);

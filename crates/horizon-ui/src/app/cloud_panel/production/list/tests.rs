@@ -217,3 +217,18 @@ fn the_sidebar_groups_workspaces_and_a_click_attaches_a_parked_cloud() {
         "the cloud attaches when it is in use"
     );
 }
+
+#[test]
+fn the_tile_of_a_row_tells_its_status_on_hover() {
+    let (_temp, mut app) = test_app();
+    let quiet = app.board.create_workspace("Quiet zone");
+    app.board.active_workspace = Some(quiet);
+    let ctx = egui::Context::default();
+    ctx.all_styles_mut(|style| style.interaction.tooltip_delay = 0.0);
+    // An area shows from its second frame on.
+    sidebar(&ctx, &mut app, Vec::new());
+    let tile = position(&texts(&sidebar(&ctx, &mut app, Vec::new())), "QZ");
+    sidebar(&ctx, &mut app, vec![Event::PointerMoved(tile)]);
+    let texts = texts(&sidebar(&ctx, &mut app, Vec::new()));
+    assert!(texts.iter().any(|(text, _)| text == "Idle"), "{texts:?}");
+}
