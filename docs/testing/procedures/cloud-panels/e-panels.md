@@ -86,6 +86,30 @@ worker MCP servers and the SSH route.
 
    Result: The output is `10001`.
 
+5. In the fixture terminal, find `<cloud-id>` of `smoke-a` as in E09 step 1. Then
+   make the cloud's folder read-only.
+
+   ```sh
+   chmod u-w <data-home>/.horizon/cloud/<cloud-id>
+   ```
+
+   Result: `ls -ld <data-home>/.horizon/cloud/<cloud-id>` shows no `w` for the user.
+
+6. Open a second Shell panel in `smoke-a` as in steps 1 and 2. Wait 90 seconds.
+   Then open **Manage** on the card.
+
+   Result: The second Shell panel shows a prompt. **Manage** shows **A panel's
+   session is not in this cloud's record yet** and offers **Stop worker…** again.
+
+7. Make the cloud's folder writable again, and wait 10 seconds.
+
+   ```sh
+   chmod u+w <data-home>/.horizon/cloud/<cloud-id>
+   ```
+
+   Result: The warning is gone from **Manage**. `deployment.json` in the folder
+   holds the session of the second Shell panel.
+
 ### 6.2 E02 — Start a Claude Code panel that is signed in
 
 Device `type` actions can change a typed key
