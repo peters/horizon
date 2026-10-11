@@ -17,9 +17,21 @@ ARG DEBIAN_FRONTEND=noninteractive
 # Package installation generates SSH host keys; remove them in the same layer so no
 # image layer carries a shared private key. Worker start creates per-volume keys.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    openssh-server tmux git git-lfs gh rsync ca-certificates curl python3 tini util-linux \
+    openssh-server tmux git git-lfs rsync ca-certificates curl python3 tini util-linux \
     && rm -rf /var/lib/apt/lists/* \
     && rm -f /etc/ssh/ssh_host_*
+# gh comes from its own pinned release: Ubuntu's gh 2.45.0 asks GitHub for Projects
+# (classic), which GitHub retired, so its `gh pr view` and `gh issue view` fail.
+RUN arch=$(dpkg --print-architecture) && case "$arch" in \
+        amd64) sum=7e54a307f90afdc59796c325ec0c49fb09e6c18537727207a8ac7513584ea5b0;; \
+        arm64) sum=5006962696f01e1624b3fcf1f9d8e1a11547f24bf067dd2a0371b7b421945237;; \
+        *) echo "no pinned gh release for $arch" >&2; exit 1;; esac \
+    && curl -fsSL "https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_$arch.deb" -o /tmp/gh.deb \
+    && echo "$sum  /tmp/gh.deb" | sha256sum -c - \
+    && dpkg -i /tmp/gh.deb && rm /tmp/gh.deb \
+    && mkdir -p /usr/local/share/licenses/gh \
+    && curl -fsSL https://raw.githubusercontent.com/cli/cli/v2.102.0/LICENSE -o /usr/local/share/licenses/gh/LICENSE \
+    && /usr/bin/gh --version | grep -q '^gh version 2\.102\.0 '
 COPY --from=tailscale-runtime /usr/local/bin/tailscale /usr/local/bin/tailscaled /usr/local/bin/
 RUN groupadd --gid 10001 horizon-agent \
     && useradd --uid 10001 --gid 10001 --no-create-home --shell /bin/bash horizon-agent

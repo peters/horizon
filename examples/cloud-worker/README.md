@@ -87,6 +87,15 @@ required libraries and GPU environment. Never derive a minimal image from an old
 full worker: deleting files in later layers does not remove inherited bytes.
 CPU/GPU selection remains a hard profile requirement; there is no CPU fallback.
 
+The recipe installs `gh` from a pinned GitHub CLI release, not from the Ubuntu
+archive. Ubuntu 24.04 has `gh` 2.45.0, which asks GitHub for Projects (classic).
+GitHub retired Projects (classic), so `gh pr view` and `gh issue view` fail with
+that release. The recipe checks the package against its SHA-256 for `amd64` and
+`arm64`; a base with another architecture fails the build. The GitHub CLI
+license goes to `/usr/local/share/licenses/gh/`. To update `gh`, change the
+version in the URLs and the version check, and copy both checksums from the
+release's `gh_<version>_checksums.txt`.
+
 Prepare a new context with `python3 examples/cloud-worker/prepare-context.py
 --bin-dir target/release --output <new-directory>` after building the matching
 release helpers. It copies only worker scripts and helpers, strips the final
@@ -1006,9 +1015,15 @@ The broker does these steps for each connection:
     GitHub for the current name of the repository for each request, and then
     applies the rules above.
   - `/search/issues`, `/search/commits`, `/search/code` and
-    `/search/repositories` with one `q` that has a `repo:` qualifier for each
-    repository, all granted, and no `OR`, `AND`, `NOT`, parentheses, `org:`,
-    `user:` or `owner:`.
+    `/search/repositories` with one `q` that has a `repo:` qualifier outside
+    quotation marks. Every repository that `q` names, also in quotation marks,
+    must be granted, and `q` has no `OR`, `AND`, `NOT`, `org:`, `user:` or
+    `owner:`, also not in quotation marks. Quotation marks go only around a whole
+    word or the value of a qualifier, and `q` has no backslash: GitHub could read
+    other quotation marks otherwise than the broker. A parenthesis must be a word
+    of its own, and each group must close. `gh` puts the keywords of a search in
+    such a group, for example `( fix bug ) repo:owner/name type:pr`. A `-` goes
+    directly before a word.
   - `GET /`, `/rate_limit` and `/meta`.
   - `POST /graphql`, checked by the GraphQL policy below.
 - On `uploads.github.com` it accepts only a release asset upload, with `push`.
@@ -1043,9 +1058,10 @@ asks GitHub for once per start:
   `read` grant, the whole reply is refused. The broker removes the added fields
   before `gh` gets the reply.
 - A mutation must be one that `gh` uses for pull requests, issues, comments,
-  labels and reviews. Before it is sent, the broker asks GitHub what each ID of
-  its input is. Each must be a repository with a `push` grant, a thing in one,
-  or a user, bot or team.
+  labels, assignees and reviews. `gh` sets assignees and reviewers by login
+  (`replaceActorsForAssignable` and `requestReviewsByLogin`). Before it is sent,
+  the broker asks GitHub what each ID of its input is. Each must be a repository
+  with a `push` grant, a thing in one, or a user, bot or team.
 - The chain's token serves a request first. The static token file's token serves
   it only when the chain reaches none of the repositories that the request names
   or that its IDs are in, so a repository that the chain grants for reading only,

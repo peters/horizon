@@ -215,6 +215,7 @@ class RestTests(BrokerTestCase):
                 ('GET', '/repos/example/project/contents/a%2F..%2F..', 400, 'encoded slash'),
                 ('GET', '/search/issues?q=is%3Aopen', 403, 'needs a repo: qualifier'),
                 ('GET', '/search/issues?q=repo%3Aexample%2Fproject+OR+repo%3Aexample%2Fsecret', 403, 'cannot use OR'),
+                ('GET', '/search/issues?q=%28+x+%29+repo%3Aexample%2Fproject%28x%29', 403, 'parenthesis in a word'),
                 ('GET', '/search/issues?q=repo%3Aexample%2Fproject+repo%3Aexample%2Fsecret', 403, 'example/secret'),
                 ('GET', '/repositories/222/issues', 403, 'has no GitHub grant'),
                 ('GET', '/repositories/999', 403, 'has no GitHub grant')]:
@@ -232,6 +233,8 @@ class RestTests(BrokerTestCase):
         status, _, payload = self.send('GET', '/repositories/111/issues?page=2')
         self.assertEqual((status, json.loads(payload)['path']), (200, '/repositories/111/issues?page=2'))
         self.assertEqual(self.send('GET', '/search/issues?q=repo%3Aexample%2Fproject+is%3Aopen')[0], 200)
+        self.assertEqual(self.send('GET', '/search/issues?advanced_search=true&q=%28+fix+%29+repo%3Aexample%2Fproject'
+                                   '+type%3Apr')[0], 200)
         self.assertEqual(self.send('GET', '/rate_limit')[0], 200)
         self.assertEqual(self.api.seen[-1][3], 'token ' + ACCESS)
         status, _, _ = self.send('POST', '/repos/example/project/releases/7/assets?name=a.zip',
