@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::Connection;
 use serde_json::Value;
 
-use super::{APPLICATION_ID, MIGRATIONS, SCHEMA_VERSION, read_board};
+use super::{APPLICATION_ID, IndexError, MIGRATIONS, SCHEMA_VERSION, open_for_write_with, read_board};
 use crate::panel::PanelResume;
 use crate::{
     AgentSessionBinding, CanvasViewState, HorizonHome, PanelKind, PanelState, RuntimeState, SessionStore, WindowConfig,
@@ -324,6 +324,81 @@ fn an_index_without_the_tables_of_its_version_is_set_aside_and_rebuilt() {
 #[test]
 fn an_index_with_a_row_that_does_not_decode_is_set_aside_and_rebuilt() {
     damage_is_set_aside_and_rebuilt("UPDATE panels SET format = 'synthetic' WHERE seq = 0");
+}
+
+#[test]
+fn an_index_with_an_unknown_schema_version_is_set_aside_and_rebuilt() {
+    damage_is_set_aside_and_rebuilt("PRAGMA user_version = -1");
+}
+
+/// The migrations of a later Horizon: those of this Horizon and one more.
+fn with_next_version() -> Vec<&'static str> {
+    MIGRATIONS
+        .iter()
+        .copied()
+        .chain(["ALTER TABLE board ADD COLUMN note TEXT; CREATE TABLE notes (id INTEGER PRIMARY KEY) STRICT;"])
+        .collect()
+}
+
+#[test]
+fn an_older_index_migrates_to_the_next_version_and_keeps_its_rows() {
+    let fixture = Fixture::new();
+    let session = fixture.create(board());
+    fixture.store.index.forget(&session);
+    let path = fixture.index(&session);
+    let next = with_next_version();
+    let panels = query::<i64>(&path, "SELECT count(*) FROM panels");
+
+    drop(open_for_write_with(&path, &next).expect("migrate an older index"));
+
+    assert_eq!(
+        query::<i32>(&path, "PRAGMA user_version"),
+        i32::try_from(next.len()).expect("version")
+    );
+    assert_eq!(query::<Option<String>>(&path, "SELECT note FROM board"), None);
+    assert_eq!(query::<i64>(&path, "SELECT count(*) FROM notes"), 0);
+    assert_eq!(query::<i64>(&path, "SELECT count(*) FROM panels"), panels);
+}
+
+#[test]
+fn an_older_index_without_the_tables_of_its_version_is_damage_before_the_migration() {
+    older_damage_is_found_before_the_migration("DROP TABLE board");
+}
+
+#[test]
+fn an_older_index_with_a_table_that_its_version_does_not_make_is_damage_before_the_migration() {
+    older_damage_is_found_before_the_migration("CREATE TABLE notes (text TEXT)");
+}
+
+#[test]
+fn an_older_index_with_another_definition_of_its_objects_is_damage_before_the_migration() {
+    // The same names, columns and types as version 1, with other indexed columns or constraints.
+    older_damage_is_found_before_the_migration(
+        "DROP INDEX workspaces_by_local_id; CREATE INDEX workspaces_by_local_id ON workspaces (seq)",
+    );
+    older_damage_is_found_before_the_migration(
+        "DROP TABLE board; CREATE TABLE board (id INTEGER PRIMARY KEY, format TEXT NOT NULL, \
+         data TEXT NOT NULL, yaml_digest TEXT, saved_at INTEGER NOT NULL) STRICT",
+    );
+}
+
+/// Damages the index of a saved board with `sql`. The check finds it before the migration
+/// to the next version, which could otherwise fail on it with a plain `SQLITE_ERROR`.
+fn older_damage_is_found_before_the_migration(sql: &str) {
+    let fixture = Fixture::new();
+    let session = fixture.create(board());
+    fixture.store.index.forget(&session);
+    let path = fixture.index(&session);
+    Connection::open(&path)
+        .expect("open index")
+        .execute_batch(sql)
+        .expect("damage the index");
+
+    let error = open_for_write_with(&path, &with_next_version()).expect_err("damaged older index");
+
+    assert!(matches!(error, IndexError::Damaged(_)), "{error}");
+    assert!(error.is_damage());
+    assert_eq!(query::<i32>(&path, "PRAGMA user_version"), SCHEMA_VERSION);
 }
 
 /// Damages the index of a saved board with `sql`. A load then falls back to

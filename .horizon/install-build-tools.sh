@@ -48,7 +48,7 @@ printf '%s\n' 'deb [signed-by=/etc/apt/keyrings/mozilla.asc] https://packages.mo
 printf 'Package: firefox*\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' > /etc/apt/preferences.d/mozilla
 apt-get update
 apt-get install -y --no-install-recommends \
-    openssh-server tmux git git-lfs gh rsync tini util-linux \
+    openssh-server tmux git git-lfs rsync tini util-linux \
     build-essential pkg-config cmake clang nasm libssl-dev \
     libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libxcb-render0-dev libxcb-shape0-dev \
     libxcb-xfixes0-dev libvulkan-dev libgl-dev libasound2-dev \
@@ -65,6 +65,14 @@ tar -xzf /tmp/geckodriver.tar.gz -C /usr/local/bin
 rm /tmp/geckodriver.tar.gz
 mkdir -p /usr/local/share/licenses/geckodriver
 curl -fsSL https://raw.githubusercontent.com/mozilla/geckodriver/v0.36.0/LICENSE -o /usr/local/share/licenses/geckodriver/LICENSE
+# gh comes from its own pinned release: Ubuntu's gh 2.45.0 asks GitHub for Projects
+# (classic), which GitHub retired, so its `gh pr view` and `gh issue view` fail.
+curl -fsSL https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_amd64.deb -o /tmp/gh.deb
+printf '%s\n' '7e54a307f90afdc59796c325ec0c49fb09e6c18537727207a8ac7513584ea5b0  /tmp/gh.deb' | sha256sum -c -
+dpkg -i /tmp/gh.deb
+rm /tmp/gh.deb
+mkdir -p /usr/local/share/licenses/gh
+curl -fsSL https://raw.githubusercontent.com/cli/cli/v2.102.0/LICENSE -o /usr/local/share/licenses/gh/LICENSE
 CARGO_HOME=/usr/local/cargo rustup component add rustfmt clippy
 mkdir -p /etc/horizon-worker /run/sshd /workspace
 printf '%s\n' '{"agents":["codex","claude"],"browsers":["chromium","firefox"],"desktop":true}' > /etc/horizon-worker/capabilities.json
@@ -75,3 +83,4 @@ rustc --version
 cargo --version
 chromium --version
 firefox --version
+/usr/bin/gh --version | grep "^gh version 2\.102\.0 "

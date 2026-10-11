@@ -62,12 +62,17 @@ the decision.
 - A private evidence directory, `<evidence>`, outside the checkout.
 - The pinned base image from
   `crates/horizon-core/src/cloud_runtime/repository/launch/quick_start.rs`. In
-  this procedure, `<base>` is its reference with the digest.
+  this procedure, `<base>` is its reference with the digest. If the candidate
+  changes the recipe in `examples/cloud-worker/Dockerfile`, build `<base>` from
+  the candidate with `examples/cloud-worker/build-base-image.sh` instead. The
+  README of `examples/cloud-worker` gives the command.
 - For lane G only:
   - A test GitHub App with the device flow on and expiring user tokens on.
     `<client-id>` is its client ID.
   - A test GitHub account that can push to a synthetic repository,
     `<owner>/<name>`. The app must be installed on that repository.
+  - In that repository, an open issue `<issue>` and an open pull request `<pr>`.
+    A second test account, `<reviewer>`, can read the repository.
 
 In this procedure, `<c>` is the container name `chain-smoke-<nonce>`, and `<v>`
 is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this run.
@@ -263,6 +268,17 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
    Result: The JSON shows `"state":"absent"`, `"serving":true` and an empty
    `repositories` list.
+
+7. Examine the version of `gh`:
+
+   ```bash
+   docker exec <c> /usr/bin/gh --version
+   ```
+
+   Result: The first line shows the version in the `gh` URLs of
+   `examples/cloud-worker/Dockerfile`, for example `gh version 2.102.0`. An
+   image with the `gh` 2.45.0 of Ubuntu fails this step: its `gh pr view` and
+   `gh issue view` ask GitHub for Projects (classic), which GitHub retired.
 
 ### 6.3 C2: Install
 
@@ -466,6 +482,28 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
     Result: The first command shows `200`: the broker adds the token, and the
     caller holds none. The log shows `api /repos/example/project token` for
     steps 11 and 13 only. No line names `example/secret` or `/user/repos`.
+
+14. Search the granted repository as `gh` does. `gh` puts the keywords of a
+    search in a group of their own. Then use a parenthesis in a word. Then put
+    a repository that has no grant in quotation marks:
+
+    ```bash
+    docker exec <c> horizon-worker-tailnet agent sh -c 'cd /workspace/home/project \
+        && gh api -X GET search/issues -f q="( fix bug ) repo:example/project type:pr"'
+    docker exec <c> horizon-worker-tailnet agent sh -c 'cd /workspace/home/project \
+        && gh api -X GET search/issues -f q="repo:example/project(x)"'
+    docker exec <c> horizon-worker-tailnet agent sh -c 'cd /workspace/home/project \
+        && gh api -X GET search/issues -f q="\"repo:example/secret\" repo:example/project"'
+    docker exec <c> grep '^api /search' /root/github/seen.log
+    ```
+
+    Result: The first command shows `{"permissions": {"pull": true, "push": true}}`:
+    the broker sends the search to GitHub. The second command fails with `gh:
+    Horizon: a search on this worker cannot use OR, AND, NOT or a parenthesis in
+    a word. (HTTP 403)`. The third command fails with `gh: Horizon:
+    example/secret has no GitHub grant on this worker. Ask for access with the
+    github_access tool. (HTTP 403)`. The log shows one `api /search/issues?...`
+    line with `token`, for the first command only.
 
 ### 6.6 C5: Private storage
 
@@ -896,22 +934,54 @@ the steps 1 and 2 of task C1 without that variable, and step 1 of task C2.
    empty list), then fails with `GraphQL: Horizon: cli/cli has no GitHub grant
    on this worker`.
 
+8. Show the issue and the pull request with `gh`:
+
+   ```bash
+   docker exec <c> horizon-worker-tailnet agent sh -c 'cd /workspace \
+       && gh issue view <issue> -R <owner>/<name> && gh pr view <pr> -R <owner>/<name>'
+   ```
+
+   Result: `gh` shows the title and the state of the issue, then of the pull
+   request. No line contains `Projects (classic)`.
+
+> **CAUTION:** THE NEXT STEP CHANGES THE ISSUE AND THE PULL REQUEST IN THE
+> SYNTHETIC REPOSITORY. Use only the synthetic repository of this run.
+
+9. Set an assignee and a reviewer by login, as `gh` does on github.com. Then
+   remove them again:
+
+   ```bash
+   docker exec <c> horizon-worker-tailnet agent sh -c 'cd /workspace \
+       && gh issue edit <issue> -R <owner>/<name> --add-assignee @me \
+       && gh pr edit <pr> -R <owner>/<name> --add-reviewer <reviewer> \
+       && gh issue view <issue> -R <owner>/<name> --json assignees \
+       && gh pr view <pr> -R <owner>/<name> --json reviewRequests \
+       && gh issue edit <issue> -R <owner>/<name> --remove-assignee @me \
+       && gh pr edit <pr> -R <owner>/<name> --remove-reviewer <reviewer>'
+   ```
+
+   Result: The command exits with status 0. The `assignees` JSON shows the test
+   account, and the `reviewRequests` JSON shows `<reviewer>`. Thus the broker
+   sent the mutations `replaceActorsForAssignable` and `requestReviewsByLogin`
+   to GitHub. If the broker refuses a mutation, `gh` shows `GraphQL: Horizon:`
+   and the command stops.
+
 > **CAUTION:** THE NEXT STEP SENDS THE OLD REFRESH TOKEN TO GITHUB. The token goes
 > over standard input, never in a command line, so it stays out of the shell
 > history and the process list.
 
-8. Try to refresh with the old refresh token from `<evidence>/reply.json`:
+10. Try to refresh with the old refresh token from `<evidence>/reply.json`:
 
-   ```bash
-   python3 -c 'import json, sys, urllib.parse; r = json.load(open(sys.argv[1]))
-   sys.stdout.write(urllib.parse.urlencode({"client_id": sys.argv[2], "grant_type": "refresh_token",
-                                            "refresh_token": r["refresh_token"]}))' \
-       <evidence>/reply.json <client-id> \
-     | curl -s -X POST https://github.com/login/oauth/access_token -H 'Accept: application/json' --data @-
-   ```
+    ```bash
+    python3 -c 'import json, sys, urllib.parse; r = json.load(open(sys.argv[1]))
+    sys.stdout.write(urllib.parse.urlencode({"client_id": sys.argv[2], "grant_type": "refresh_token",
+                                             "refresh_token": r["refresh_token"]}))' \
+        <evidence>/reply.json <client-id> \
+      | curl -s -X POST https://github.com/login/oauth/access_token -H 'Accept: application/json' --data @-
+    ```
 
-   Result: GitHub answers `"error":"bad_refresh_token"`. The chain service
-   rotated the chain, and GitHub cancelled the old one.
+    Result: GitHub answers `"error":"bad_refresh_token"`. The chain service
+    rotated the chain, and GitHub cancelled the old one.
 
 ## 7. Pass criteria
 
@@ -928,6 +998,8 @@ the steps 1 and 2 of task C1 without that variable, and step 1 of task C2.
   token. A repository without a grant and a path outside a repository get a
   `Horizon:` refusal, and those requests do not reach GitHub. In lane G, the
   GraphQL policy refuses a repository without a grant.
+- The image has the pinned `gh` release. In lane G, `gh issue view` and `gh pr
+  view` work, and `gh` sets assignees and reviewers by login through the broker.
 - A static binding also goes through the Git proxy. Git gets no token from it, and
   no agent process can read its token.
 - The agent user cannot read the token chain. No reply and no log line contains

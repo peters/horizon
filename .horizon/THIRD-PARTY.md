@@ -52,6 +52,9 @@ copyright notices when redistributing the image.
 - Geckodriver 0.36.0 is unmodified, with MPL-2.0 license and corresponding source
   at https://github.com/mozilla/geckodriver/tree/v0.36.0 . Its license is retained
   under `/usr/local/share/licenses/geckodriver/`.
+- GitHub CLI (`gh`) 2.102.0 is the unmodified release package, with MIT license
+  and corresponding source at https://github.com/cli/cli/tree/v2.102.0 . Its
+  license is retained under `/usr/local/share/licenses/gh/`.
 - The GPU image derives directly from the complete official CUDA development
   container. Its container license, CUDA EULA and package notices remain in
   place. The container's distribution grant and restrictions, including the
