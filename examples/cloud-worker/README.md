@@ -87,6 +87,15 @@ required libraries and GPU environment. Never derive a minimal image from an old
 full worker: deleting files in later layers does not remove inherited bytes.
 CPU/GPU selection remains a hard profile requirement; there is no CPU fallback.
 
+The recipe installs `gh` from a pinned GitHub CLI release, not from the Ubuntu
+archive. Ubuntu 24.04 has `gh` 2.45.0, which asks GitHub for Projects (classic).
+GitHub retired Projects (classic), so `gh pr view` and `gh issue view` fail with
+that release. The recipe checks the package against its SHA-256 for `amd64` and
+`arm64`; a base with another architecture fails the build. The GitHub CLI
+license goes to `/usr/local/share/licenses/gh/`. To update `gh`, change the
+version in the URLs and the version check, and copy both checksums from the
+release's `gh_<version>_checksums.txt`.
+
 Prepare a new context with `python3 examples/cloud-worker/prepare-context.py
 --bin-dir target/release --output <new-directory>` after building the matching
 release helpers. It copies only worker scripts and helpers, strips the final
