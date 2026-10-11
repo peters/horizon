@@ -205,9 +205,10 @@ fixture terminal.
 
 ### 6.2 D02 — Deploy a RunPod CPU cloud on a network volume
 
-1. Open **Cloud › New cloud…**.
+1. Click **New** in the sidebar, then click **Cloud**.
 
-   Result: The New cloud dialog opens.
+   Result: The New cloud dialog opens for a new workspace. The workspace of
+   `smoke-a` is not the workspace of the new cloud.
 
 2. Wait 3 seconds.
 
@@ -254,6 +255,9 @@ fixture terminal.
 11. Click **Start cloud**.
 
     Result: The card of `smoke-r` shows the active stage and its elapsed time.
+    The view fits the workspace of `smoke-r` at the left edge of the canvas. The
+    overview controls and the minimap do not cover the card. The view does not zoom
+    out to show the clouds of other workspaces: the card of `smoke-a` is not in view.
 
 12. Wait until the card shows **Ready**.
 
@@ -568,6 +572,8 @@ before Horizon requests a worker. It uses the changed settings of D06.
 ## 7. Pass criteria
 
 - `smoke-a`, `smoke-r` and `smoke-g` each show **Ready**.
+- A new cloud takes the view to its own workspace, and the clouds of other
+  workspaces stay out of view.
 - The resource ledger records each server, pod, volume, SSH key and tailnet node.
 - `nvidia-smi` on `smoke-g` shows a CUDA version of 12.8 or higher.
 - The checkout of `smoke-r` is at the recorded commit and has no sentinel file.
