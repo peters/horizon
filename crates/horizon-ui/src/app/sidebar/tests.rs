@@ -192,6 +192,7 @@ fn sidebar_entry(id: horizon_core::PanelId, is_focused: bool) -> SidebarPanelEnt
     SidebarPanelEntry {
         id,
         title: "panel".to_string(),
+        label: "panel".to_string(),
         kind: horizon_core::PanelKind::Editor,
         is_focused,
         working: false,
@@ -445,4 +446,35 @@ fn keyboard_focus_on_a_panel_row_shows_its_close_button() {
         crosses_on(&frame(&mut app), "second"),
         "a keyboard-focused row shows it"
     );
+}
+
+#[test]
+fn the_snapshot_labels_only_the_panel_rows_that_show() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let shown = app.board.create_workspace("shown");
+    let hidden = app.board.create_workspace("hidden");
+    app.board
+        .create_panel(editor_panel_options("first"), shown)
+        .expect("panel");
+    app.board
+        .create_panel(editor_panel_options("second"), hidden)
+        .expect("panel");
+    app.board.active_workspace = Some(shown);
+    let labels = |app: &crate::app::HorizonApp, workspace| {
+        app.sidebar_workspace_data()
+            .into_iter()
+            .find(|entry| entry.id == workspace)
+            .expect("workspace")
+            .panels
+            .into_iter()
+            .map(|panel| panel.label)
+            .collect::<Vec<_>>()
+    };
+
+    app.template_config.features.sidebar_accordion = true;
+    assert_eq!(labels(&app, shown), ["first"]);
+    assert_eq!(labels(&app, hidden), [""], "a collapsed workspace builds no labels");
+
+    app.template_config.features.sidebar_accordion = false;
+    assert_eq!(labels(&app, hidden), ["second"], "flat rows all show");
 }
