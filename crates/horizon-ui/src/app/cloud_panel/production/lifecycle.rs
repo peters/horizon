@@ -472,7 +472,7 @@ impl HorizonApp {
             .production
             .runtimes
             .get(&id)
-            .is_some_and(|runtime| runtime.receiver.is_some())
+            .is_some_and(Runtime::busy)
         {
             return false;
         }
@@ -480,7 +480,11 @@ impl HorizonApp {
             return false;
         };
         let Some(root) = &self.cloud_prototype.root else {
-            return false;
+            if launch.deployment_started {
+                return false;
+            }
+            self.discard_cloud(index, ctx);
+            return true;
         };
         // A host without cloud records has no lock to take, and a cloud that never
         // started a deployment and has no record holds nothing at its provider.
@@ -523,7 +527,7 @@ impl HorizonApp {
             return Ok(false);
         };
         let Some(root) = &self.cloud_prototype.root else {
-            return Ok(true);
+            return Ok(launch.deployment_started);
         };
         // Only asking must not leave a state directory behind for a cloud that never had one.
         if !recorded(root, launch) {
@@ -533,11 +537,11 @@ impl HorizonApp {
     }
 
     /// Locks the saved record of cloud `id`, so no other controller operates on it while
-    /// it is held, and says whether taking the lock created its directory. `None` when
+    /// it is held. `None` when
     /// Horizon keeps no cloud records, here or on this host.
     /// # Errors
     /// `Busy` while another controller owns it, or the lock cannot be taken.
-    pub(super) fn lock_cloud_record(&self, id: u32) -> cloud_runtime::Result<Option<(Store, bool)>> {
+    pub(super) fn lock_cloud_record(&self, id: u32) -> cloud_runtime::Result<Option<Store>> {
         let Some(launch) = self
             .cloud_prototype
             .groups
@@ -555,7 +559,7 @@ impl HorizonApp {
         let Ok(path) = cloud_runtime::state::cloud_directory(root, &launch.id) else {
             return Ok(None);
         };
-        Store::lock_noting_creation(&path).map(Some)
+        Store::lock(&path).map(Some)
     }
 
     fn cloud_removal_error(&mut self, id: u32, message: String) {

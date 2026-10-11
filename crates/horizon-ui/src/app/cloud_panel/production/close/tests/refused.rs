@@ -112,9 +112,11 @@ fn a_discarded_cloud_leaves_no_close_behind() {
     app.finish_closing_clouds(&ctx);
     assert!(!app.cloud_prototype.production.close.hidden.is_empty());
 
+    app.request_cloud_close(101);
     app.discard_cloud(0, &ctx);
     let close = &app.cloud_prototype.production.close;
     assert!(close.deleting.is_empty() && close.hidden.is_empty());
+    assert!(close.confirming.is_none() && close.records.is_empty());
     app.finish_closing_clouds(&ctx);
     assert!(
         !app.cloud_close_confirmation_open(),
@@ -132,9 +134,17 @@ fn an_operation_started_while_the_dialog_was_open_keeps_it_open() {
     close
         .failed
         .insert(101, Failure::new("Could not delete the cloud resources", true, None));
-    app.remove_cloud_anyway(101, &egui::Context::default());
+    let ctx = egui::Context::default();
+    for action in [
+        HorizonApp::remove_cloud_anyway,
+        HorizonApp::remove_for_close,
+        HorizonApp::delete_for_close,
+    ] {
+        action(&mut app, 101, &ctx);
+        assert!(app.cloud_close_confirmation_open(), "the dialog shows the operation");
+        assert!(app.cloud_prototype.production.close.failed[&101].deletion_tried);
+    }
     assert_eq!(app.cloud_prototype.groups.0.len(), 1);
-    assert!(app.cloud_close_confirmation_open(), "the dialog shows the operation");
     assert_eq!(
         current_offer(&app),
         offer::Offer {
@@ -302,13 +312,22 @@ fn an_operation_that_another_instance_starts_while_the_dialog_is_open_makes_it_w
 
 #[test]
 #[cfg(unix)] // Durable cloud records require Unix directory durability.
-fn removing_anyway_leaves_no_record_directory_it_created() {
+fn removing_anyway_preserves_the_operation_lock_identity() {
     let (temp, mut app) = test_app();
     add_cloud(&mut app, temp.path(), Some(deployment()));
     app.request_cloud_close(101);
     app.remove_cloud_anyway(101, &egui::Context::default());
     assert!(app.cloud_prototype.groups.0.is_empty());
-    assert!(!temp.path().join("fixture").exists());
+    let path = temp.path().join("fixture");
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path.join("operation.lock"))
+        .unwrap();
+    let next = Store::lock(&path).unwrap();
+    assert!(lock.try_lock().is_err(), "all controllers must use the same lock file");
+    drop(next);
+    assert!(lock.try_lock().is_ok());
 }
 
 #[test]
@@ -359,4 +378,24 @@ fn a_storage_journal_without_its_deployment_offers_the_deletion() {
 
     app.remove_for_close(101, &egui::Context::default());
     assert_eq!(app.cloud_prototype.groups.0.len(), 1, "the storage may remain");
+}
+
+#[test]
+fn a_never_deployed_cloud_without_a_state_root_is_removed_directly() {
+    let (temp, mut app) = test_app();
+    add_cloud(&mut app, temp.path(), None);
+    app.cloud_prototype.root = None;
+    app.request_cloud_close(101);
+    assert_eq!(current_offer(&app).primary, Some(Primary::Remove));
+    app.remove_for_close(101, &egui::Context::default());
+    assert!(app.cloud_prototype.groups.0.is_empty());
+}
+
+#[test]
+fn a_deployed_cloud_without_a_state_root_is_retained() {
+    let (temp, mut app) = test_app();
+    add_cloud(&mut app, temp.path(), Some(deployment()));
+    app.cloud_prototype.root = None;
+    assert!(!app.remove_deleted_cloud(101, &egui::Context::default()));
+    assert_eq!(app.cloud_prototype.groups.0.len(), 1);
 }

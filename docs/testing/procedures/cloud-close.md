@@ -142,7 +142,7 @@ Give each task an ID. A report uses the ID to give a result.
 2. Click **Remove cloud**.
 
    Result: The dialog closes. The cloud `scratch-notes` and its panel go off
-   the board.
+   the board. The operation lock stays in the state directory.
 
 ### 6.4 C04: Close a cloud that has storage but no worker request
 

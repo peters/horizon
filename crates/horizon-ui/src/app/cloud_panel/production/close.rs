@@ -54,6 +54,7 @@ impl HorizonApp {
         close.failed.remove(&id);
         close.records.insert(id, record);
         close.confirming = Some(id);
+        close.record_read = Some(std::time::Instant::now());
     }
 
     /// What the saved record of cloud `id` holds now.
@@ -91,6 +92,8 @@ impl HorizonApp {
         let close = &mut self.cloud_prototype.production.close;
         close.confirming = None;
         close.failed.remove(&id);
+        close.records.remove(&id);
+        close.record_read = None;
     }
 
     pub(in crate::app::cloud_panel) fn render_cloud_close_confirmation(&mut self, ctx: &egui::Context) {
@@ -214,7 +217,7 @@ impl HorizonApp {
         };
         // Held until the cloud is discarded, so no operation of another controller runs
         // meanwhile. Without the lock, one may be under way.
-        let record = match self.lock_cloud_record(id) {
+        let _record = match self.lock_cloud_record(id) {
             Ok(record) => record,
             Err(error) => {
                 self.close_failed(id, "Could not remove the cloud", true, Some(error.to_string()));
@@ -225,17 +228,20 @@ impl HorizonApp {
             tracing::warn!(cloud = %launch.id, "removed from Horizon while its provider resources may remain");
         }
         self.discard_cloud(index, ctx);
-        // A record directory that only taking the lock created leaves with the cloud.
-        if let Some((store, true)) = record
-            && let Err(error) = store.remove_if_empty()
-        {
-            tracing::warn!(%error, "kept the record directory of a removed cloud");
-        }
     }
 
     /// Removes cloud `id`, which has nothing at its provider. A removal the saved record
     /// refuses keeps the dialog open, now offering to delete what it holds.
     fn remove_for_close(&mut self, id: u32, ctx: &egui::Context) {
+        if self
+            .cloud_prototype
+            .production
+            .runtimes
+            .get(&id)
+            .is_some_and(Runtime::busy)
+        {
+            return;
+        }
         let (removed, error) = self.close_step(id, |app| app.remove_deleted_cloud(id, ctx));
         if removed {
             self.cloud_prototype.production.close.confirming = None;
@@ -247,6 +253,15 @@ impl HorizonApp {
     /// Starts deleting the resources of cloud `id`; the cloud closes once they are gone.
     /// A deletion that cannot start keeps the dialog open with the reason.
     fn delete_for_close(&mut self, id: u32, ctx: &egui::Context) {
+        if self
+            .cloud_prototype
+            .production
+            .runtimes
+            .get(&id)
+            .is_some_and(Runtime::busy)
+        {
+            return;
+        }
         self.cloud_prototype.production.close.failed.remove(&id);
         let (started, error) = self.close_step(id, |app| {
             app.change_production_worker(id, Action::Delete, ctx);
@@ -323,6 +338,10 @@ impl HorizonApp {
         close.records.remove(&id);
         close.deleting.remove(&id);
         close.hidden.remove(&id);
+        if close.confirming == Some(id) {
+            close.confirming = None;
+            close.record_read = None;
+        }
         super::cards::forget_log_heights(ctx, id);
         self.save_cloud_prototype();
         self.release_removed_cloud_workspace(&group.workspace, ctx);

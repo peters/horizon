@@ -175,24 +175,6 @@ impl Store {
         crate::session_store::require_directory_durability().is_ok()
     }
 
-    /// Locks like [`Store::lock`] and says whether taking the lock created the record
-    /// directory. A directory it created but could not lock is removed again while empty.
-    /// # Errors
-    /// As [`Store::lock`].
-    pub fn lock_noting_creation(root: &Path) -> Result<(Self, bool)> {
-        let created = !root.try_exists()?;
-        match Self::lock(root) {
-            Ok(store) => Ok((store, created)),
-            Err(error) => {
-                // Busy means another controller holds a lock file in it. Otherwise
-                // anything in it is not this attempt's, and removing fails on it.
-                if created && !matches!(error, Error::Busy) {
-                    let _ = std::fs::remove_dir(root);
-                }
-                Err(error)
-            }
-        }
-    }
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
@@ -242,26 +224,6 @@ impl Store {
         file.persist(self.root.join("deployment.json")).map_err(|e| e.error)?;
         #[cfg(unix)]
         File::open(&self.root)?.sync_all()?;
-        Ok(())
-    }
-
-    /// Releases the lock and removes the record directory when the lock file is all it
-    /// holds, as when only taking the lock created it.
-    /// # Errors
-    /// The directory cannot be read or removed.
-    pub fn remove_if_empty(self) -> Result<()> {
-        let lock = self.root.join("operation.lock");
-        for entry in std::fs::read_dir(&self.root)? {
-            if entry?.path() != lock {
-                return Ok(());
-            }
-        }
-        // Unlinked while still held: a controller that opens it now creates a new lock
-        // file, which keeps the directory, instead of locking the one being removed.
-        std::fs::remove_file(&lock)?;
-        let root = self.root.clone();
-        drop(self);
-        std::fs::remove_dir(root)?;
         Ok(())
     }
 }
@@ -332,44 +294,6 @@ mod tests {
             temp.path().join("cloud-123")
         );
         assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
-    }
-    #[test]
-    #[cfg(unix)]
-    fn only_a_record_directory_holding_just_its_lock_is_removed() {
-        let root = tempfile::tempdir().unwrap();
-        let fresh = root.path().join("fresh");
-        Store::lock(&fresh).unwrap().remove_if_empty().unwrap();
-        assert!(!fresh.exists());
-
-        let kept = root.path().join("kept");
-        let store = Store::lock(&kept).unwrap();
-        std::fs::write(kept.join("workspace-volume.required"), b"").unwrap();
-        store.remove_if_empty().unwrap();
-        assert!(kept.join("operation.lock").exists());
-        assert!(Store::lock(&kept).is_ok(), "the lock was released");
-    }
-    #[test]
-    #[cfg(target_os = "linux")] // Linux refuses paths of PATH_MAX (4096) bytes or more.
-    fn a_record_directory_that_cannot_be_locked_is_not_left_behind() {
-        let temp = tempfile::tempdir().unwrap();
-        let fresh = temp.path().join("fresh");
-        assert!(Store::lock_noting_creation(&fresh).unwrap().1);
-        assert!(!Store::lock_noting_creation(&fresh).unwrap().1);
-
-        // Short enough to create, too long for its lock file to open.
-        let mut parent = temp.path().to_path_buf();
-        while parent.as_os_str().len() < 3900 {
-            parent.push("d".repeat(150));
-        }
-        parent.push("d".repeat(4079 - parent.as_os_str().len()));
-        std::fs::create_dir_all(&parent).unwrap();
-        let record = parent.join("record");
-        assert!(matches!(Store::lock_noting_creation(&record), Err(Error::Io(_))));
-        assert!(parent.exists() && !record.exists());
-
-        std::fs::create_dir(&record).unwrap();
-        assert!(Store::lock_noting_creation(&record).is_err());
-        assert!(record.exists(), "a directory that was there stays");
     }
     #[test]
     #[cfg(unix)]

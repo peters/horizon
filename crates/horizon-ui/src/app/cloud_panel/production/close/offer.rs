@@ -6,7 +6,7 @@ use horizon_core::cloud_runtime::{
     provider::{self, StoppedCost},
 };
 
-use super::super::{Runtime, Stage};
+use super::super::Runtime;
 
 pub(super) const BUSY: &str = "Wait for the current cloud operation to finish before closing.";
 pub(super) const STATE_UNKNOWN: &str = "Horizon cannot read this cloud's resource state, so it cannot delete them.";
@@ -70,6 +70,13 @@ pub(super) fn offer(runtime: &Runtime, deployment_started: bool, record: &Record
             reason: Some(BUSY.into()),
         };
     }
+    if *record == Record::Empty && failure.is_none() {
+        return Offer {
+            primary: Some(Primary::Remove),
+            remove_anyway: false,
+            reason: None,
+        };
+    }
     let state = runtime.state.as_ref();
     let reason = failure.map(|failure| failure.reason.clone());
     let unreadable = match record {
@@ -97,17 +104,11 @@ pub(super) fn offer(runtime: &Runtime, deployment_started: bool, record: &Record
             remove_anyway: false,
             reason,
         },
-        None => {
-            let empty = *record == Record::Empty
-                && state.is_none_or(|state| {
-                    state.stage == Stage::Deleted || (state.operation == CreateState::Prepared && state.spec.is_none())
-                });
-            Offer {
-                primary: Some(if empty { Primary::Remove } else { Primary::Delete }),
-                remove_anyway: false,
-                reason: None,
-            }
-        }
+        None => Offer {
+            primary: Some(Primary::Delete),
+            remove_anyway: false,
+            reason: None,
+        },
     }
 }
 

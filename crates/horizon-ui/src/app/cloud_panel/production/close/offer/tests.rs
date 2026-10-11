@@ -1,4 +1,5 @@
 use super::super::super::Runtime;
+use super::super::super::Stage;
 use super::*;
 use horizon_core::cloud_runtime::state::Deployment;
 
@@ -269,4 +270,16 @@ fn what_may_remain_is_named_where_the_record_knows_it() {
         "no worker was requested"
     );
     assert!(remains(&Runtime::default(), "elsewhere").contains("at the provider"));
+}
+
+#[test]
+fn an_empty_record_overrides_a_stale_runtime_snapshot() {
+    let mut runtime = bound("runpod");
+    for unavailable in [false, true] {
+        runtime.state_unavailable = unavailable;
+        assert_eq!(
+            offer(&runtime, true, &Record::Empty, None),
+            offered(Some(Primary::Remove), false, None)
+        );
+    }
 }

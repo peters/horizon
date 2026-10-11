@@ -918,7 +918,8 @@ state of the cloud, the dialog shows the reason and **Remove from Horizon
 anyway**. This action removes the cloud and its panels from Horizon, but it
 does not delete the resources at the provider. The dialog names the resources
 that can remain. They can cost money until you delete them at the provider.
-Horizon keeps the state directory of the cloud. **Cancel** keeps the cloud.
+Horizon keeps the state directory of the cloud, including its operation lock.
+This keeps all controllers on the same lock file. **Cancel** keeps the cloud.
 
 While a different operation of the cloud runs, for example a deployment or a
 provider check, the dialog tells you to wait and shows only **Cancel**. This is
