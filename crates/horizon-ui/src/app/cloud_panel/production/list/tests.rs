@@ -254,22 +254,35 @@ fn a_tap_on_a_hidden_close_button_focuses_the_row_and_a_seen_one_closes_it() {
     let row = position(&texts(&sidebar(&ctx, &mut app, Vec::new())), "second");
     // The close button sits at the right of the 210 wide sidebar.
     let close = Pos2::new(189.0, row.y);
-    let tap = |position| {
-        let press = |pressed| Event::PointerButton {
-            pos: position,
-            button: PointerButton::Primary,
-            pressed,
-            modifiers: egui::Modifiers::NONE,
-        };
-        vec![Event::PointerMoved(position), press(true), press(false)]
+    let press = |position, pressed| Event::PointerButton {
+        pos: position,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
     };
 
-    sidebar(&ctx, &mut app, tap(close));
+    // A touch tap: the press and the release arrive in separate frames.
+    sidebar(&ctx, &mut app, vec![Event::PointerMoved(close), press(close, true)]);
+    sidebar(&ctx, &mut app, vec![press(close, false)]);
     assert!(app.board.panel(second).is_some(), "a blind tap does not close");
     assert_eq!(app.board.focused, Some(second), "it focuses the row");
+    // The same in one frame.
+    app.board.focus(first);
+    sidebar(&ctx, &mut app, vec![Event::PointerMoved(Pos2::new(600.0, 600.0))]);
+    sidebar(&ctx, &mut app, vec![Event::PointerMoved(Pos2::new(600.0, 600.0))]);
+    sidebar(
+        &ctx,
+        &mut app,
+        vec![Event::PointerMoved(close), press(close, true), press(close, false)],
+    );
+    assert!(
+        app.board.panel(second).is_some(),
+        "a blind tap in one frame does not close"
+    );
 
-    // Focused, the row shows its close button; a press on it now closes the panel.
+    // Seen first, the close button closes the panel on a press in a later frame.
     sidebar(&ctx, &mut app, vec![Event::PointerMoved(close)]);
-    sidebar(&ctx, &mut app, tap(close));
+    sidebar(&ctx, &mut app, vec![press(close, true)]);
+    sidebar(&ctx, &mut app, vec![press(close, false)]);
     assert!(app.board.panel(second).is_none(), "a seen close button closes");
 }

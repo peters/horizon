@@ -403,13 +403,20 @@ impl HorizonApp {
             .on_hover_text("Close panel");
         close.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close panel"));
         let close_shows = hovered || panel.is_focused || close.hovered() || close.has_focus();
-        // A pointer press closes only a button that the person could see: a tap on
-        // the hidden button of another row focuses that row instead.
+        // A pointer press closes only a button that the person could see before the
+        // press began: a tap on the hidden button of another row focuses that row
+        // instead. The decision is kept from pointer-down until the release.
         let shown_id = ui.make_persistent_id(("sidebar_panel_close_shown", panel.id.0));
+        let armed_id = ui.make_persistent_id(("sidebar_panel_close_armed", panel.id.0));
         let shown_before = ui.ctx().data(|data| data.get_temp::<bool>(shown_id)).unwrap_or(false);
+        let (pressed, press_origin) = ui.input(|input| (input.pointer.any_pressed(), input.pointer.press_origin()));
+        if pressed && press_origin.is_some_and(|origin| close_rect.contains(origin)) {
+            ui.ctx().data_mut(|data| data.insert_temp(armed_id, shown_before));
+        }
         ui.ctx().data_mut(|data| data.insert_temp(shown_id, close_shows));
+        let armed = ui.ctx().data(|data| data.get_temp::<bool>(armed_id)).unwrap_or(false);
         let by_pointer = ui.input(|input| input.pointer.any_click());
-        let close_clicked = close.clicked() && (shown_before || close.has_focus() || !by_pointer);
+        let close_clicked = close.clicked() && (armed || close.has_focus() || !by_pointer);
         let blind_tap = close.clicked() && !close_clicked;
         let title_elided = panel_rows::paint_panel_row(
             ui,
