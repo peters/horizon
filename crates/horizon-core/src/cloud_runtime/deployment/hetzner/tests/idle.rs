@@ -115,6 +115,7 @@ fn a_cloud_idle_for_its_whole_period_is_stopped_and_keeps_its_volume() {
         off.clone(),
         off.clone(),
         off,
+        super::deletion_points::no_actions(),
         (200, json!({"action": {"id": 3, "status": "success"}}).to_string()),
         (
             404,
