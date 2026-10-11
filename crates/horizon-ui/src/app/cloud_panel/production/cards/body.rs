@@ -426,9 +426,26 @@ mod tests {
             ..Runtime::default()
         };
         assert_eq!(worker(&storage_left), "Worker: deleted");
+        // Deleted after Ready: the record in memory still holds the running worker
+        // last observed, and the deletion's event only moves the stage.
+        let ready = Runtime {
+            stage: Some(Stage::Ready),
+            state: Some(
+                serde_json::from_value(serde_json::json!({
+                    "version":1,"cloud_id":"deleted","repository":"/synthetic","revision":"a",
+                    "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8},
+                    "stage":"Ready","operation":{"state":"bound","worker_id":"worker1"},
+                    "spec":null,"sessions":[],"worker":{"id":"worker1","name":"fixture",
+                        "imageName":"registry.example/worker","desiredStatus":"RUNNING"}
+                }))
+                .unwrap(),
+            ),
+            ..Runtime::default()
+        };
+        assert_eq!(worker(&ready), "Worker: RUNNING (last observed)");
         let fully = Runtime {
             stage: Some(Stage::Deleted),
-            ..Runtime::default()
+            ..ready
         };
         assert_eq!(worker(&fully), "Worker: deleted");
     }
