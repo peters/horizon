@@ -111,16 +111,25 @@ def alias(document, prefix):
 
 def search_repositories(text):
     """The repositories that a search query is limited to. A query without a `repo:`
-    qualifier, or with a boolean operator or a parenthesis that could widen it, is refused."""
+    qualifier, or with a boolean operator or a parenthesis in a word, is refused. A parenthesis
+    that is a word of its own only groups words: current gh releases put the keywords of a
+    search in a group, such as `( fix bug ) repo:owner/name type:pr`. Without OR, AND and NOT,
+    a group only narrows the search."""
     if not isinstance(text, str) or len(text) > 1024:
         raise Refused('a search needs a query of at most 1024 characters.')
     if text.count('"') % 2:
         raise Refused('a search on this worker closes each quotation mark.')
     words = re.findall(r'-?[A-Za-z_]+:"[^"]*"|"[^"]*"|\S+', text)
     found = []
+    depth = 0
     for word in words:
+        if word in ('(', ')'):
+            depth += 1 if word == '(' else -1
+            if depth < 0:
+                break
+            continue
         if word in ('OR', 'AND', 'NOT') or ('(' in word or ')' in word) and not word.startswith('"'):
-            raise Refused('a search on this worker cannot use OR, AND, NOT or parentheses.')
+            raise Refused('a search on this worker cannot use OR, AND, NOT or a parenthesis in a word.')
         if word.lower().lstrip('-').startswith(WIDENING):
             raise Refused('a search on this worker cannot use org:, user: or owner:; GitHub adds their '
                           'repositories to the repo: qualifiers.')
@@ -129,6 +138,8 @@ def search_repositories(text):
             if not REPOSITORY.fullmatch(value):
                 raise Refused('a search names a repository that is not owner/name.')
             found.append(value)
+    if depth:
+        raise Refused('a search on this worker closes each parenthesis.')
     if not found:
         raise Refused('a search on this worker needs a repo: qualifier for a granted repository.')
     return found

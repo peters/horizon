@@ -1016,8 +1016,10 @@ The broker does these steps for each connection:
     applies the rules above.
   - `/search/issues`, `/search/commits`, `/search/code` and
     `/search/repositories` with one `q` that has a `repo:` qualifier for each
-    repository, all granted, and no `OR`, `AND`, `NOT`, parentheses, `org:`,
-    `user:` or `owner:`.
+    repository, all granted, and no `OR`, `AND`, `NOT`, `org:`, `user:` or
+    `owner:`. A parenthesis must be a word of its own, and each group must
+    close. `gh` puts the keywords of a search in such a group, for example
+    `( fix bug ) repo:owner/name type:pr`.
   - `GET /`, `/rate_limit` and `/meta`.
   - `POST /graphql`, checked by the GraphQL policy below.
 - On `uploads.github.com` it accepts only a release asset upload, with `push`.

@@ -467,6 +467,23 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
     caller holds none. The log shows `api /repos/example/project token` for
     steps 11 and 13 only. No line names `example/secret` or `/user/repos`.
 
+14. Search the granted repository as `gh` does. `gh` puts the keywords of a
+    search in a group of their own. Then use a parenthesis in a word:
+
+    ```bash
+    docker exec <c> horizon-worker-tailnet agent sh -c 'cd /workspace/home/project \
+        && gh api -X GET search/issues -f q="( fix bug ) repo:example/project type:pr"'
+    docker exec <c> horizon-worker-tailnet agent sh -c 'cd /workspace/home/project \
+        && gh api -X GET search/issues -f q="repo:example/project(x)"'
+    docker exec <c> grep '^api /search' /root/github/seen.log
+    ```
+
+    Result: The first command shows `{"permissions": {"pull": true, "push": true}}`:
+    the broker sends the search to GitHub. The second command fails with `gh:
+    Horizon: a search on this worker cannot use OR, AND, NOT or a parenthesis in
+    a word. (HTTP 403)`. The log shows one `api /search/issues?...` line with
+    `token`, for the first command only.
+
 ### 6.6 C5: Private storage
 
 1. Try to read the chain as the agent user:
