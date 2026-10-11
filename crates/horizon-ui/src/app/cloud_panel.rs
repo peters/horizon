@@ -1,4 +1,5 @@
 mod fullscreen;
+mod new_cloud_view;
 mod ownership;
 mod production;
 mod render;
@@ -431,64 +432,12 @@ impl HorizonApp {
         self.show_new_cloud(ctx, id);
     }
 
-    /// A new cloud takes the view and the focus to its own workspace, and the fit keeps
-    /// the cloud clear of the overview controls and the minimap. Clouds in other
-    /// workspaces stay out of view, so their parked terminals stay parked.
-    fn show_new_cloud(&mut self, ctx: &egui::Context, id: u32) {
-        let Some(workspace) = self
-            .cloud_prototype
-            .groups
-            .0
-            .iter()
-            .find(|group| group.issue == id)
-            .and_then(|group| self.board.workspace_id_by_local_id(&group.workspace))
-            .filter(|workspace| !self.workspace_is_detached(*workspace))
-        else {
-            return;
-        };
-        let Some((position, size)) = self.workspace_focus_frame(workspace) else {
-            return;
-        };
-        self.board.focus_workspace(workspace);
-        let max = position + size;
-        self.cloud_fit_left(ctx, [position.x, position.y], [max.x, max.y]);
-        self.mark_runtime_dirty();
-    }
-
     /// The overview controls and the minimap, which a fitted cloud must not go under.
-    fn cloud_overlays(&self, ctx: &egui::Context, canvas: egui::Rect) -> (egui::Rect, Option<egui::Rect>) {
+    pub(super) fn cloud_overlays(&self, ctx: &egui::Context, canvas: egui::Rect) -> (egui::Rect, Option<egui::Rect>) {
         let controls = ctx
             .memory(|memory| memory.area_rect(egui::Id::new("cloud-controls")))
             .unwrap_or_else(|| egui::Rect::from_min_size(canvas.min + egui::vec2(24.0, 20.0), egui::vec2(370.0, 58.0)));
         (controls, self.minimap_overlay_rect(ctx))
-    }
-
-    /// Fits `min`..`max` between the overview controls and the minimap, at the left edge
-    /// of the canvas, as a click on a workspace row aligns it. A new workspace takes the
-    /// rightmost slot, so on any window width the other workspaces stay left of the view.
-    fn cloud_fit_left(&mut self, ctx: &egui::Context, min: [f32; 2], max: [f32; 2]) {
-        // `fitted_region` keeps this margin on each side of the region.
-        const MARGIN: f32 = 12.0;
-        if self.cloud_prototype.fullscreen.is_some() {
-            self.cloud_fit(ctx, min, max);
-            return;
-        }
-        let canvas = self.canvas_rect(ctx);
-        let (controls, minimap) = self.cloud_overlays(ctx, canvas);
-        let top = controls.bottom() + 12.0;
-        let bottom = minimap.map_or(canvas.bottom(), |rect| rect.top() - super::MINIMAP_MARGIN);
-        let mut view = CloudGroups::fitted_region(
-            min,
-            max,
-            [0.0, top - canvas.top()],
-            [canvas.width(), (bottom - top).max(1.0)],
-        );
-        view.set_pan_offset([MARGIN - min[0] * view.zoom, view.pan_offset[1]]);
-        self.pan_target = None;
-        if self.canvas_view != view {
-            self.canvas_view = view;
-            ctx.request_repaint();
-        }
     }
 
     fn cloud_overview(&mut self, ctx: &egui::Context) {

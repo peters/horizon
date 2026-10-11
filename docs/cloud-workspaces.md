@@ -880,11 +880,11 @@ With Rows, Cols, or Grid, every visible member grows or shrinks together to fill
 the frame, down to the ordinary panel minimum. Default placement keeps each
 panel where it is and will not shrink the frame through those panels. A collapsed
 cloud has no resize corner. New clouds are placed relative to their workspace. When
-you create a cloud, the view fits its workspace at the left edge of the canvas, below
-the overview controls and above the minimap. A new workspace takes the rightmost slot,
-so the clouds of other workspaces stay out of view and their parked terminals stay
-parked. When you add a cloud to a workspace that has more workspaces on its right, a
-wide window can show the start of the next workspace. **Cloud ›
+you create a cloud, the view fits its workspace below the overview controls and above
+the minimap. The view shows as little of the clouds of other workspaces as possible,
+so their parked terminals stay parked. A new workspace is at the right of the others,
+so the view puts it at the left edge of the canvas. A window that is wider than the
+space between two workspaces can show a part of the next workspace. **Cloud ›
 Fit all clouds** shows the clouds of all workspaces.
 
 ## Sessions and lifecycle
