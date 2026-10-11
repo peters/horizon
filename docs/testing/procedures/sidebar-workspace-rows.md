@@ -204,7 +204,17 @@ the hovered or focused row.
 
 ## 8. Cleanup
 
-1. Close the Device panel. Stop the fixture with Ctrl+C in its terminal.
+1. Close Horizon normally in the fixture, for example with the window close
+   button.
+
+   Result: The candidate process exits. Make sure that no process with the
+   PID of the candidate remains.
+
+2. Close the Device panel with the `device_panel` operation `close`.
+
+   Result: The Device panel goes away. The viewer connection closes.
+
+3. Stop the fixture with Ctrl+C in its terminal.
 
    Result: The fixture stops its child processes and removes its target file.
 

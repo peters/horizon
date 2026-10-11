@@ -950,7 +950,9 @@ Each group header shows how many workspaces it has. At the right of the header
 line, a summary in secondary text shows the hourly rate of the running workers of
 the group, **no local cost** for **Parked**, and **live** for **This PC**. The
 summary never wraps. When the sidebar is narrow, it shows fewer parts, and then a
-shortened first part. Hover over it to see all of it.
+shortened first part. Hover over it to see all of it. If no part fits, for example
+next to **Stop idle…** on the narrowest sidebar, the header does not show the
+summary. A screen reader still reads it after the group name and count.
 
 Each row shows a tile, the workspace name and one status line. The tile has the
 color of the workspace on the canvas and the first letters of the first two words

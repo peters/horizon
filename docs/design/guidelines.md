@@ -670,7 +670,7 @@ outline).
   short 44 x 2.5 accent bar under the title, a 1.8 px border and a 3 px glow.
 - The accent is the workspace accent when the panel belongs to a workspace and
   `ACCENT` (focused) or `BORDER_STRONG` (unfocused) otherwise.
-- Workspace labels on the canvas and sidebar use `blend(PANEL_BG_ALT, accent, t)`
+- Workspace labels on the canvas use `blend(PANEL_BG_ALT, accent, t)`
   with `t` = 0.08 rest, 0.14 active, 0.18 hover, 0.22 dragging, radius 10, and a
   1 px accent outline (alpha 90 rest, 160 active or hover).
 - Sidebar workspace rows are cards with an 8 px inset and radius 12. The active
