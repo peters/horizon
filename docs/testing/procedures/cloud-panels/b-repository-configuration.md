@@ -119,17 +119,17 @@ bind of S02 alone does not change the socket that the candidate uses.
 
    Result: The dialog reads the repository. It finds no `.horizon/cloud.yml`.
 
-4. Examine the section **This commit has no .horizon/cloud.yml**.
+4. Examine the section **No cloud setup yet**.
 
-   Result: The section is open. It shows **Quick start on the public base
-   image**, **Codex**, **Claude** and **Open setup agent**. The dialog shows no
-   red error. Do not click quick start. The
+   Result: It shows two cards: **Quick start** with **Start on the base image**,
+   and **Set up from CI** with one chip for each agent. The dialog shows no red
+   error. Do not click quick start. The
    [quick start procedure](../cloud-quick-start.md) tests it.
 
-5. Click **Claude**.
+5. Click the **Claude** chip.
 
-   Result: **Open setup agent** is available. Do not click it. The setup agent
-   uses the local agent login of the fixture.
+   Result: **Set up with Claude** is available. Do not click it. The
+   [setup agent procedure](../cloud-setup-agent.md) tests it.
 
 6. Click **Cancel**.
 
