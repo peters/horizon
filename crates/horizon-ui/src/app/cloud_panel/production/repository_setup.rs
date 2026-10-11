@@ -10,9 +10,14 @@ use horizon_core::{
 };
 
 fn prompt(agents: &[horizon_core::cloud_runtime::setup::Agent]) -> String {
+    let base = quick_start::IMAGE;
+    // No machine account yet means no preference, not a profile without agents.
+    if agents.is_empty() {
+        return format!("{PROMPT}\nThe worker base for step 4 is {base}.");
+    }
     let selection = agents.iter().map(|agent| agent.as_str()).collect::<Vec<_>>().join(", ");
     format!(
-        "{PROMPT}\nMachine account preference for new profiles: agents [{selection}]. Preserve existing repository profile choices unless I explicitly ask to change them."
+        "{PROMPT}\nThe worker base for step 4 is {base}.\nMachine account preference for new profiles: agents [{selection}]. Preserve existing repository profile choices unless I explicitly ask to change them."
     )
 }
 
@@ -82,7 +87,7 @@ fn unconfigured(ui: &mut egui::Ui, form: &mut Production) -> Choice {
 const QUICK_START_DETAIL: &str = "A 2 vCPU, 4 GB RunPod worker with Claude, Codex, Chromium and a desktop. It needs no registry login, no image build and no Docker on this computer.";
 
 fn setup_agent(ui: &mut egui::Ui, form: &mut Production) -> Choice {
-    ui.label("Let a local agent inspect this repository and prepare its worker image and cloud.yml. Review and commit the files, then return here and reload.");
+    ui.label("Let a local agent read this repository's CI and files, then prepare a worker image that runs its build and tests, and its cloud.yml. Review and commit the files, then return here and reload.");
     ui.small(
         "This setup terminal uses your local agent login. Cloud settings configure authentication on remote workers.",
     );
@@ -178,7 +183,16 @@ impl HorizonApp {
     }
 }
 
-const PROMPT: &str = "Prepare this repository for Horizon Cloud Workspaces. First inspect AGENTS.md, its build/test requirements and existing Dockerfiles. Explain your proposed setup before editing. Create or update .horizon/cloud.yml version 1 with a named default profile, provider: runpod, image, optional build {context, dockerfile, platform: linux/amd64}, min_cpu, min_memory_gb (resource minimums), gpu and explicit capabilities {agents, browsers, desktop}. Preserve required GPU/runtime dependencies; never silently choose a CPU fallback. Ask which coding agents and tools are wanted if not known. Native desktop/VNC does not need browsers. A worker image must satisfy Horizon's SSH, Git, tmux and enabled agent/tool contract; use the documented Horizon worker examples, not an arbitrary application image. Keep all credentials in machine-local bindings, never YAML, source, images or build caches. Do not allocate compute, push images, commit, or open a PR automatically. Run applicable config/build checks, explain prerequisites and ask me to review and commit the setup. Then tell me to return to Cloud > New cloud and reload .horizon/cloud.yml.";
+/// The setup agent derives the worker image from the repository's own CI first:
+/// CI is the tested recipe that turns a clean Linux machine into one that builds.
+const PROMPT: &str = "Prepare this repository for Horizon Cloud Workspaces. Derive the worker image from the repository's own CI and files, so that the restore, build and test commands its Linux CI runs also pass on the worker.
+1. Read the CI first: .github/workflows, and other CI files such as .gitlab-ci.yml or azure-pipelines.yml. Pick the Linux jobs that restore, build and test. Resolve every tool version to its source: follow env values, matrix values and job outputs back to repository files such as global.json, Directory.Build.props, .nvmrc, .python-version, rust-toolchain.toml or go.mod. Also list tools that steps use but CI never installs because the hosted runner provides them, for example shell: pwsh, jq or a preinstalled SDK.
+2. Then read AGENTS.md, the README and any existing Dockerfiles or devcontainer files. Reuse their pinned bases and install steps where they match the CI.
+3. Show the plan as a table: each CI step, its tool and version, where the version comes from, and how the image provides it, or why the step is skipped (secrets, publishing, other operating systems, services that need Docker). Then continue unless something is ambiguous.
+4. Write .horizon/Dockerfile FROM the worker base named below: Horizon's public Ubuntu 24.04 worker with SSH, Git, tmux, gh, Node 22, the Horizon helpers, Claude, Codex, Chromium and a desktop. Add the toolchains as root and pin their versions. Only when the CI runs in another container or operating system, start from that image instead and copy the Horizon helpers as the worker README describes. Sessions start over SSH and do not inherit ENV, so put each toolchain on PATH with a /etc/horizon-worker/session-env.d/20-REPOSITORY.env file (PATH_PREPEND=DIR and KEY=VALUE lines).
+5. Write .horizon/cloud.yml version 1 with a named default profile: provider: runpod, image (ghcr.io/OWNER/REPOSITORY-worker from the origin remote unless I name another), build {context: .horizon, dockerfile: .horizon/Dockerfile, platform: linux/amd64}, min_cpu and min_memory_gb sized for the build, gpu, and capabilities {agents, browsers, desktop} limited to what the base provides. Preserve GPU and runtime needs; never silently choose a CPU fallback.
+6. Prove it when Docker is available: build the image, run horizon-worker-check --git-auth in it, then run the CI restore, build and test commands in a container as UID 10001, with the repository at /workspace/checkout, HOME on a writable directory and the session-env.d entries applied. Fix the Dockerfile until they pass. Report each CI step as passed, skipped with the reason, or failed.
+Keep all credentials in machine-local bindings, never in YAML, source, images or build caches; skip CI steps that need secrets instead of copying them. Do not allocate compute, push images, commit, or open a PR. References: https://github.com/peters/horizon/blob/main/docs/cloud-workspaces.md and https://github.com/peters/horizon/blob/main/examples/cloud-worker/README.md. When you are done, ask me to review and commit the setup, then to return to Cloud > New cloud and reload .horizon/cloud.yml.";
 
 #[cfg(test)]
 mod tests {
@@ -220,6 +234,27 @@ mod tests {
         assert!(!text.contains("agents [codex"));
         assert!(text.contains("Preserve existing repository profile choices"));
         assert!(!text.contains("settings.json"));
+    }
+
+    #[test]
+    fn the_setup_agent_starts_from_ci_and_builds_on_the_pinned_base() {
+        let text = prompt(&[horizon_core::cloud_runtime::setup::Agent::Claude]);
+        let ci = text.find(".github/workflows").unwrap();
+        assert!(
+            ci < text.find("AGENTS.md").unwrap(),
+            "CI is read before other repository files"
+        );
+        assert!(text.contains(&format!("The worker base for step 4 is {}.", quick_start::IMAGE)));
+        assert!(text.contains("session-env.d"));
+        assert!(text.contains("horizon-worker-check --git-auth"));
+        assert!(text.contains("Do not allocate compute, push images, commit, or open a PR."));
+    }
+
+    #[test]
+    fn no_machine_account_states_no_agent_preference() {
+        let text = prompt(&[]);
+        assert!(!text.contains("agents []"), "{text}");
+        assert!(!text.contains("Machine account preference"));
     }
 
     #[test]

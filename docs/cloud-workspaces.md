@@ -481,8 +481,15 @@ shows two choices:
 
 The setup agent is a normal local agent panel with its existing local login.
 Horizon does not export the API-key bindings of remote workers to it. The agent
-examines the repository requirements and proposes the capabilities before it
-prepares files. Review its changes and prerequisites, run the repository checks
+reads the CI of the repository first, for example `.github/workflows`: the Linux
+jobs that restore, build and test, the tool versions they use and where those
+versions come from. Then it reads `AGENTS.md`, the README and existing
+Dockerfiles. It shows a plan with each CI step and how the worker image provides
+its tools, or why it skips the step. Then it writes `.horizon/Dockerfile` on the
+public worker base of [Quick start](#quick-start) and `.horizon/cloud.yml`. When
+Docker is available, it builds the image, runs the worker check and runs the CI
+restore, build and test commands in the image. It does not allocate compute,
+push images, commit or open a pull request. Review its changes and prerequisites, run the repository checks
 and commit the setup. Then go back to **New cloud** and choose **Read
 .horizon/cloud.yml**. A change of the repository or YAML that is not valid clears
 the profiles that the dialog read before. Thus you cannot deploy an old profile
