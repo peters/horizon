@@ -264,13 +264,20 @@ fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str) -> Choice {
     if open { Choice::SetupAgent } else { Choice::None }
 }
 
-/// The agents the setup can run: the agent presets of the New Workspace menu, or
-/// every built-in agent when there are none.
+/// The agents the setup can run, each once and in its default mode: the agents of
+/// the New Workspace menu's presets, or every built-in agent when there are none.
+/// Preset variants such as permission modes are left out, so the choice is the agent.
 pub(super) fn setup_choices(form: &Production) -> Vec<horizon_core::PresetConfig> {
-    if !form.setup_presets.is_empty() {
-        return form.setup_presets.clone();
+    let mut kinds: Vec<PanelKind> = Vec::new();
+    for preset in &form.setup_presets {
+        if !kinds.contains(&preset.kind) {
+            kinds.push(preset.kind);
+        }
     }
-    horizon_core::all_agent_kinds()
+    if kinds.is_empty() {
+        kinds = horizon_core::all_agent_kinds().to_vec();
+    }
+    kinds
         .iter()
         .map(|kind| horizon_core::PresetConfig {
             name: kind.display_name().to_owned(),
