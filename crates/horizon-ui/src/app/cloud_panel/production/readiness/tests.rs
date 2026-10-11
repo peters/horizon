@@ -58,6 +58,15 @@ fn panel_creation_waits_for_a_ready_runtime_and_current_state() {
     assert!(!production.accepts_panels(&group));
     let current = production.runtimes.get_mut(&group.issue).unwrap();
     current.state_unavailable = false;
+    current.preparation = Some(super::super::preparation::Pending::running_for_test());
+    assert!(
+        !production.accepts_panels(&group),
+        "a reconnect that prepares takes no panel until it has connected"
+    );
+    let current = production.runtimes.get_mut(&group.issue).unwrap();
+    current.preparation = None;
+    assert!(production.accepts_panels(&group));
+    let current = production.runtimes.get_mut(&group.issue).unwrap();
     current.state = None;
     assert!(!production.accepts_panels(&group));
 }

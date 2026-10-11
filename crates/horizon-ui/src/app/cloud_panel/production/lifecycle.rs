@@ -252,6 +252,9 @@ impl Runtime {
 
     pub(super) fn can_release_remote_devices(&self) -> bool {
         self.remote_release.is_none()
+            // The release locks the record, which a preparation or a session save holds.
+            && self.preparation.is_none()
+            && !self.sessions.saving()
             && (self.receiver.is_none() || self.stage == Some(Stage::Ready))
             && self.state.as_ref().is_some_and(|state| {
                 state.requires_browserstack_release()

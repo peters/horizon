@@ -112,9 +112,17 @@ fn a_cloud_offers_no_lifecycle_action_while_a_session_save_runs() {
     let mut runtime = super::super::Runtime {
         stage: Some(Stage::Stopped),
         state: Some(record.clone()),
-        sessions: super::super::session_record::Sessions::saving_for_test(&directory, record),
         ..Default::default()
     };
+    let header = |runtime: &super::super::Runtime| {
+        status::of(runtime, status::Occupancy::default(), std::time::SystemTime::now()).primary
+    };
+    assert!(header(&runtime).is_some(), "a stopped cloud offers Resume");
+    runtime.sessions = super::super::session_record::Sessions::saving_for_test(&directory, record);
+    assert!(
+        header(&runtime).is_none(),
+        "the header offers nothing while the save runs"
+    );
     let output = ctx
         .run_ui(
             egui::RawInput {

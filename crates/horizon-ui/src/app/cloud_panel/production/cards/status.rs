@@ -370,6 +370,11 @@ pub(super) fn keep(runtime: &mut Runtime, status: Status, frame: u64) {
 
 pub(super) fn of(runtime: &Runtime, occupancy: Occupancy, now: SystemTime) -> Status {
     let mut status = unmarked(runtime, occupancy, now);
+    // A new panel's session is still being saved in the record: every lifecycle action
+    // waits for it, so the card, and the cloud list that counts what it can stop, offer none.
+    if runtime.sessions.saving() {
+        status.primary = None;
+    }
     status.track.skipped = skipped(runtime, status.track.stages);
     status.binds_image = runtime.state.as_ref().map_or(runtime.launched_binds, |state| {
         horizon_core::cloud_runtime::registry::repository_of(&state.profile.image).is_some()
