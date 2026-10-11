@@ -405,7 +405,8 @@ Use `smoke-x` from L07.
 
 2. Click **Delete resources permanently**.
 
-   Result: The card shows **Deleted** and **Workspace storage cleaned up**.
+   Result: The card shows **Deleted** and **Workspace storage cleaned up**. The
+   line under the machine size shows **Worker: deleted**.
 
 3. Mark the volume and the SSH key of `smoke-x` as deleted in the resource ledger.
 

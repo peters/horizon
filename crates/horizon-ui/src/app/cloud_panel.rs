@@ -1,4 +1,5 @@
 mod fullscreen;
+mod new_cloud_view;
 mod ownership;
 mod production;
 mod render;
@@ -426,7 +427,17 @@ impl HorizonApp {
         self.cloud_prototype.groups.0.push(group);
         self.cloud_prototype.renaming = Some(id);
         self.cloud_prototype.title_draft = title.into();
-        self.cloud_overview(ctx);
+        // The workspace preset gives the cloud its slot before the view frames it.
+        self.cloud_prototype.groups.reconcile(&mut self.board);
+        self.show_new_cloud(ctx, id);
+    }
+
+    /// The overview controls and the minimap, which a fitted cloud must not go under.
+    pub(super) fn cloud_overlays(&self, ctx: &egui::Context, canvas: egui::Rect) -> (egui::Rect, Option<egui::Rect>) {
+        let controls = ctx
+            .memory(|memory| memory.area_rect(egui::Id::new("cloud-controls")))
+            .unwrap_or_else(|| egui::Rect::from_min_size(canvas.min + egui::vec2(24.0, 20.0), egui::vec2(370.0, 58.0)));
+        (controls, self.minimap_overlay_rect(ctx))
     }
 
     fn cloud_overview(&mut self, ctx: &egui::Context) {
@@ -449,12 +460,7 @@ impl HorizonApp {
         self.pan_target = None;
         let mut view = CloudGroups::fitted_view(min, max, [canvas.width(), canvas.height()]);
         if self.cloud_prototype.fullscreen.is_none() {
-            let controls = ctx
-                .memory(|memory| memory.area_rect(egui::Id::new("cloud-controls")))
-                .unwrap_or_else(|| {
-                    egui::Rect::from_min_size(canvas.min + egui::vec2(24.0, 20.0), egui::vec2(370.0, 58.0))
-                });
-            let minimap = self.minimap_overlay_rect(ctx);
+            let (controls, minimap) = self.cloud_overlays(ctx, canvas);
             let transform = crate::app::view::canvas_scene_transform(canvas, view);
             let overlaps = self.cloud_prototype.groups.0.iter().any(|group| {
                 let (min, max) = group.overview_bounds();
