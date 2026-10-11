@@ -9,7 +9,7 @@ use horizon_cloud::{Capabilities, Profile};
 // to put here; docs/release-flow.md describes the update, which also updates CONTRACT.
 macro_rules! image {
     () => {
-        "ghcr.io/peters/horizon-worker-base@sha256:f2fc6e9db2816841bfa2ca155e03f0ce4fca861a55427c9dd924e48e177e59fd"
+        "ghcr.io/peters/horizon-worker-base@sha256:944de4206921d50e04582d026a8d0d13079754e900149d8c5dcc86afc85362dd"
     };
 }
 
