@@ -1057,8 +1057,8 @@ asks GitHub for once per start:
 - A mutation must be one that `gh` uses for pull requests, issues, comments,
   labels, assignees and reviews. `gh` sets assignees and reviewers by login
   (`replaceActorsForAssignable` and `requestReviewsByLogin`). Before it is sent,
-  the broker asks GitHub what each ID of its input is. Each must be a repository with a `push` grant, a thing in one,
-  or a user, bot or team.
+  the broker asks GitHub what each ID of its input is. Each must be a repository
+  with a `push` grant, a thing in one, or a user, bot or team.
 - The chain's token serves a request first. The static token file's token serves
   it only when the chain reaches none of the repositories that the request names
   or that its IDs are in, so a repository that the chain grants for reading only,
