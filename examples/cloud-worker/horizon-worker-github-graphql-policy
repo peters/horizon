@@ -9,9 +9,9 @@ that the caller is granted:
 - Each selection that can hold a repository's data also asks GitHub which repository that is,
   under an alias the request does not use. Each object in the reply must be in a granted
   repository; the broker removes those fields before the agent sees the reply.
-- A mutation is one that gh uses for pull requests, issues, comments, labels and reviews.
-  Before it is sent, every ID in its input is looked up: each must name a repository the
-  caller may push to, a thing in one, or a user, bot or team.
+- A mutation is one that gh uses for pull requests, issues, comments, labels, assignees and
+  reviews. Before it is sent, every ID in its input is looked up: each must name a repository
+  the caller may push to, a thing in one, or a user, bot or team.
 
 A module that horizon-worker-github loads, not a command."""
 import importlib.machinery
@@ -40,13 +40,15 @@ def load_graphql():
 graphql = load_graphql()
 
 ROOTS = {'repository', 'node', 'nodes', 'search', 'viewer', 'rateLimit', 'meta', '__type', '__schema', '__typename'}
+# On github.com, current gh releases set assignees with replaceActorsForAssignable and
+# reviewers with requestReviewsByLogin; both name people by login, not by ID.
 MUTATIONS = {
     'addComment', 'addLabelsToLabelable', 'addPullRequestReview', 'closeIssue', 'closePullRequest',
     'convertPullRequestToDraft', 'createIssue', 'createLinkedBranch', 'createPullRequest', 'deleteIssue',
     'enablePullRequestAutoMerge', 'lockLockable', 'markPullRequestReadyForReview', 'mergePullRequest',
-    'pinIssue', 'removeLabelsFromLabelable', 'reopenIssue', 'reopenPullRequest', 'requestReviews',
-    'transferIssue', 'unlockLockable', 'unpinIssue', 'updateIssue', 'updateIssueComment',
-    'updatePullRequest', '__typename'}
+    'pinIssue', 'removeLabelsFromLabelable', 'reopenIssue', 'reopenPullRequest', 'replaceActorsForAssignable',
+    'requestReviews', 'requestReviewsByLogin', 'transferIssue', 'unlockLockable', 'unpinIssue', 'updateIssue',
+    'updateIssueComment', 'updatePullRequest', '__typename'}
 # Owners and other things above a repository: only their own plain fields. A topic lists the
 # repositories that have it.
 OWNERS = {'User', 'Organization', 'Bot', 'Mannequin', 'EnterpriseUserAccount', 'Enterprise', 'Team', 'App',

@@ -1054,8 +1054,9 @@ asks GitHub for once per start:
   `read` grant, the whole reply is refused. The broker removes the added fields
   before `gh` gets the reply.
 - A mutation must be one that `gh` uses for pull requests, issues, comments,
-  labels and reviews. Before it is sent, the broker asks GitHub what each ID of
-  its input is. Each must be a repository with a `push` grant, a thing in one,
+  labels, assignees and reviews. `gh` sets assignees and reviewers by login
+  (`replaceActorsForAssignable` and `requestReviewsByLogin`). Before it is sent,
+  the broker asks GitHub what each ID of its input is. Each must be a repository with a `push` grant, a thing in one,
   or a user, bot or team.
 - The chain's token serves a request first. The static token file's token serves
   it only when the chain reaches none of the repositories that the request names

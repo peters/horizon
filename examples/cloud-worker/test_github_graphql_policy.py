@@ -69,7 +69,9 @@ TYPES = [
         'viewer: User!', 'rateLimit: RateLimit', 'organization(login: String!): Organization'),
     obj('Mutation', 'addComment(input: AddCommentInput!): AddCommentPayload',
         'createPullRequest(input: CreatePullRequestInput!): CreatePullRequestPayload',
-        'createRepository(input: CreateRepositoryInput!): CreateRepositoryPayload'),
+        'createRepository(input: CreateRepositoryInput!): CreateRepositoryPayload',
+        'replaceActorsForAssignable(input: ReplaceActorsForAssignableInput!): ReplaceActorsForAssignablePayload',
+        'requestReviewsByLogin(input: RequestReviewsByLoginInput!): RequestReviewsByLoginPayload'),
     obj('Repository', 'id: ID!', 'name: String!', 'nameWithOwner: String!', 'isPrivate: Boolean!',
         'owner: RepositoryOwner!', 'parent: Repository', 'pullRequest(number: Int!): PullRequest',
         'issues(first: Int): IssueConnection!'),
@@ -93,6 +95,8 @@ TYPES = [
     obj('AddCommentPayload', 'subject: Node', 'clientMutationId: String'),
     obj('CreatePullRequestPayload', 'pullRequest: PullRequest'),
     obj('CreateRepositoryPayload', 'repository: Repository'),
+    obj('ReplaceActorsForAssignablePayload', 'clientMutationId: String'),
+    obj('RequestReviewsByLoginPayload', 'clientMutationId: String'),
     kind('Node', 'INTERFACE', ['id: ID!'],
          ['Repository', 'PullRequest', 'Issue', 'IssueComment', 'User', 'Organization', 'Bot', 'Topic',
           'MarketplaceListing', 'ProjectV2']),
@@ -104,6 +108,10 @@ TYPES = [
     kind('CreatePullRequestInput', 'INPUT_OBJECT',
          inputs=['repositoryId: ID!', 'baseRefName: String!', 'headRefName: String!', 'title: String!']),
     kind('CreateRepositoryInput', 'INPUT_OBJECT', inputs=['name: String!']),
+    kind('ReplaceActorsForAssignableInput', 'INPUT_OBJECT', inputs=['assignableId: ID!', 'actorLogins: [String!]']),
+    kind('RequestReviewsByLoginInput', 'INPUT_OBJECT',
+         inputs=['pullRequestId: ID!', 'userLogins: [String!]', 'botLogins: [String!]', 'teamSlugs: [String!]',
+                 'union: Boolean']),
     obj('__Schema', 'types: [__Type!]!'),
     obj('__Type', 'name: String', 'kind: __TypeKind!', 'fields(includeDeprecated: Boolean): [__Field!]'),
     obj('__Field', 'name: String!'),
@@ -111,7 +119,8 @@ TYPES = [
     kind('SearchType', 'ENUM'), kind('__TypeKind', 'ENUM'),
 ]
 # The input object kinds above are written as OBJECT references; fix them by name.
-INPUTS = {'AddCommentInput', 'CreatePullRequestInput', 'CreateRepositoryInput'}
+INPUTS = {'AddCommentInput', 'CreatePullRequestInput', 'CreateRepositoryInput', 'ReplaceActorsForAssignableInput',
+          'RequestReviewsByLoginInput'}
 INTERFACES = {'Node': 'INTERFACE', 'RepositoryOwner': 'INTERFACE', 'Actor': 'INTERFACE', 'SearchResultItem': 'UNION'}
 
 
@@ -358,6 +367,24 @@ class MutationTests(unittest.TestCase):
             with self.assertRaisesRegex(policy.Refused, reason):
                 policy.check_lookup({'data': {'nodes': nodes}}, sent.ids, allowed)
         policy.check_lookup({'data': {'nodes': [{'__typename': 'User'}]}}, sent.ids, allowed)
+
+    def test_assignees_and_reviewers_by_login_as_current_gh_sends_them(self):
+        sent = plan('mutation ReplaceActorsForAssignable($input:ReplaceActorsForAssignableInput!)'
+                    '{replaceActorsForAssignable(input: $input){__typename}}',
+                    {'input': {'assignableId': 'I_1', 'actorLogins': ['octocat', 'copilot-swe-agent[bot]']}},
+                    operationName='ReplaceActorsForAssignable')
+        self.assertEqual((sent.mutation, sent.ids), (True, ['I_1']))
+        sent = plan('mutation RequestReviewsByLogin($input:RequestReviewsByLoginInput!)'
+                    '{requestReviewsByLogin(input: $input){clientMutationId}}',
+                    {'input': {'pullRequestId': 'PR_1', 'userLogins': ['octocat'], 'botLogins': [],
+                               'teamSlugs': ['example/team'], 'union': True}},
+                    operationName='RequestReviewsByLogin')
+        self.assertEqual((sent.mutation, sent.ids), (True, ['PR_1']))
+        # The IDs are looked up as for every mutation, so a pull request outside a push grant is refused.
+        with self.assertRaisesRegex(policy.Refused, 'no GitHub grant'):
+            policy.check_lookup({'data': {'nodes': [{'__typename': 'PullRequest',
+                                                      'held': {'nameWithOwner': 'example/library'}}]}},
+                                sent.ids, allowed)
 
     def test_inputs_follow_the_schema(self):
         for variables, reason in [({'input': {'subjectId': 1, 'body': 'x'}}, 'not a string'),
