@@ -92,7 +92,8 @@ whose session ends goes to **Needs you**.
    narrower with the window.
 
    Result: No header summary goes to a second line. A summary that does not fit
-   becomes shorter.
+   becomes shorter. If no part fits, for example next to **Stop idle…**, the
+   summary goes away.
 
 ### 6.2 PARKED: A parked row
 

@@ -152,6 +152,8 @@ const HEADER_TEXT_SIZE: f32 = 12.0;
 const SUMMARY_TEXT_SIZE: f32 = 10.5;
 const HEADER_LEFT_MARGIN: f32 = 18.0;
 const HEADER_RIGHT_MARGIN: f32 = 14.0;
+/// The least room for the summary: about one short part, such as `live`.
+const MIN_SUMMARY_WIDTH: f32 = 24.0;
 
 /// The header of a group: its name, how many workspaces it has, a bulk stop when
 /// `idle` clouds of the group can stop and, at the right, its summary on the same
@@ -212,6 +214,10 @@ pub(super) fn render_group_header(
     }
 
     let right = rect.max.x - HEADER_RIGHT_MARGIN;
+    // A narrow header leaves the summary out rather than draw it over the button.
+    if right - x < MIN_SUMMARY_WIDTH {
+        return stop;
+    }
     let Some(fitted) = fitted_summary(summary, right - x, |text| {
         ui.painter()
             .layout_no_wrap(
@@ -363,5 +369,33 @@ mod tests {
                 .discard_textures();
         }
         assert!((heights[0] - heights[1]).abs() <= f32::EPSILON, "{heights:?}");
+    }
+
+    #[test]
+    fn a_narrow_header_leaves_the_summary_out_instead_of_covering_stop_idle() {
+        use crate::test_egui::DiscardTextures;
+
+        let summary = ["$0.254/h".to_owned()];
+        let ctx = egui::Context::default();
+        let output = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                ui.allocate_ui(egui::vec2(168.0, 40.0), |ui| {
+                    super::render_group_header(ui, horizon_core::cloud_list::Group::NeedsYou, 2, &summary, 1);
+                });
+            })
+            .discard_textures();
+        let texts: Vec<String> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        assert!(texts.iter().any(|text| text == "Stop idle…"), "{texts:?}");
+        assert!(
+            texts.iter().all(|text| !text.contains("$0.254") && text != "…"),
+            "{texts:?}"
+        );
     }
 }
