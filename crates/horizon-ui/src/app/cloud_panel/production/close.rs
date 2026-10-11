@@ -60,8 +60,9 @@ impl HorizonApp {
     /// What the saved record of cloud `id` holds now.
     fn close_record(&self, id: u32) -> Record {
         match self.cloud_holds_resources(id) {
-            Ok(false) => Record::Empty,
-            Ok(true) => Record::Holds,
+            Ok(Some(false)) => Record::Empty,
+            Ok(Some(true)) => Record::Holds,
+            Ok(None) => Record::Unreadable("No saved deployment record".into()),
             Err(super::cloud_runtime::Error::Busy) => Record::Busy,
             Err(error) => Record::Unreadable(error.to_string()),
         }

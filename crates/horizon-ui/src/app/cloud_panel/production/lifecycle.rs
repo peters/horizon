@@ -518,11 +518,11 @@ impl HorizonApp {
         true
     }
 
-    /// Whether the saved record of cloud `id` may hold provider resources, so removing
-    /// it needs their deletion first.
+    /// Whether the saved record of cloud `id` holds provider resources. `None` means
+    /// a deployed cloud's record is missing, so its resource state is unknown.
     /// # Errors
     /// The record cannot be read, or a running operation holds it.
-    pub(super) fn cloud_holds_resources(&self, id: u32) -> cloud_runtime::Result<bool> {
+    pub(super) fn cloud_holds_resources(&self, id: u32) -> cloud_runtime::Result<Option<bool>> {
         let Some(launch) = self
             .cloud_prototype
             .groups
@@ -531,16 +531,17 @@ impl HorizonApp {
             .find(|group| group.issue == id)
             .and_then(|group| group.remote.as_ref())
         else {
-            return Ok(false);
+            return Ok(Some(false));
         };
         let Some(root) = &self.cloud_prototype.root else {
-            return Ok(launch.deployment_started);
+            return Ok((!launch.deployment_started).then_some(false));
         };
         // Only asking must not leave a state directory behind for a cloud that never had one.
         if !recorded(root, launch) {
-            return Ok(launch.deployment_started);
+            return Ok((!launch.deployment_started).then_some(false));
         }
-        removable(root, launch).map(|(_, allowed)| !allowed)
+        let (store, allowed) = removable(root, launch)?;
+        Ok((!launch.deployment_started || store.load()?.is_some()).then_some(!allowed))
     }
 
     /// Locks the saved record of cloud `id`, so no other controller operates on it while

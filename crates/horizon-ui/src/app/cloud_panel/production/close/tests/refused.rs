@@ -223,6 +223,7 @@ fn another_controller_keeps_the_cloud_from_being_removed_anyway() {
     let (temp, mut app) = test_app();
     let path = temp.path().join("fixture");
     let other = Store::lock(&path).unwrap();
+    other.save(&deployment()).unwrap();
     add_cloud(&mut app, temp.path(), Some(deployment()));
     app.request_cloud_close(101);
     let busy = offer::Offer {
@@ -285,6 +286,10 @@ fn another_controller_keeps_the_cloud_from_being_removed_anyway() {
 #[cfg(unix)] // Durable cloud records require Unix directory durability.
 fn an_operation_that_another_instance_starts_while_the_dialog_is_open_makes_it_wait() {
     let (temp, mut app) = test_app();
+    Store::lock(&temp.path().join("fixture"))
+        .unwrap()
+        .save(&deployment())
+        .unwrap();
     add_cloud(&mut app, temp.path(), Some(deployment()));
     app.request_cloud_close(101);
     assert_eq!(current_offer(&app).primary, Some(Primary::Delete));
@@ -396,10 +401,23 @@ fn a_never_deployed_cloud_without_a_state_root_is_removed_directly() {
 }
 
 #[test]
-fn a_deployed_cloud_without_a_state_root_is_retained() {
+fn a_deployed_cloud_without_a_record_is_unknown_and_retained() {
     let (temp, mut app) = test_app();
     add_cloud(&mut app, temp.path(), Some(deployment()));
-    app.cloud_prototype.root = None;
-    assert!(!app.remove_deleted_cloud(101, &egui::Context::default()));
-    assert_eq!(app.cloud_prototype.groups.0.len(), 1);
+    for (missing_root, directory_exists) in [(true, false), (false, false), (false, true)] {
+        if directory_exists {
+            std::fs::create_dir_all(temp.path().join("fixture")).unwrap();
+        }
+        app.cloud_prototype.root = (!missing_root).then(|| temp.path().into());
+        app.request_cloud_close(101);
+        assert!(matches!(
+            app.cloud_prototype.production.close.records[&101],
+            Record::Unreadable(_)
+        ));
+        let offered = current_offer(&app);
+        assert_eq!(offered.primary, None);
+        assert!(offered.remove_anyway);
+        assert!(!app.remove_deleted_cloud(101, &egui::Context::default()));
+        assert_eq!(app.cloud_prototype.groups.0.len(), 1);
+    }
 }

@@ -70,7 +70,7 @@ pub(super) fn offer(runtime: &Runtime, deployment_started: bool, record: &Record
             reason: Some(BUSY.into()),
         };
     }
-    if *record == Record::Empty && failure.is_none() {
+    if *record == Record::Empty {
         return Offer {
             primary: Some(Primary::Remove),
             remove_anyway: false,

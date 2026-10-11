@@ -25,8 +25,8 @@ Keep credentials in Horizon. Do not send keys, tokens, endpoints, or raw provide
 capabilities as tool arguments. Preserve an uncertain operation's identity.
 
 The cloud header's × asks to delete provider resources before removing the cloud.
-A cloud with no resources offers Remove cloud. After deletion fails, or when the
-resource record cannot be read, Remove from Horizon anyway leaves provider
+A current empty record offers Remove cloud, even after a prior failure. After
+deletion fails, or when a deployed cloud's resource record is missing or unreadable, Remove from Horizon anyway leaves provider
 resources and saved records in place; they can still cost money. While a local
 or another controller's operation runs, the dialog offers only Cancel.
 This UI close dialog does not grant lifecycle authorization through MCP.

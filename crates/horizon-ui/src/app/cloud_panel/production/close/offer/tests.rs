@@ -31,6 +31,18 @@ fn bound(provider: &str) -> Runtime {
     }
 }
 
+fn unrequested() -> Runtime {
+    Runtime {
+        state: Some(deployment(
+            "runpod",
+            "Push",
+            &serde_json::json!({"state": "prepared"}),
+            false,
+        )),
+        ..Runtime::default()
+    }
+}
+
 fn deletion_failed(reason: &str) -> Failure {
     Failure {
         deletion_tried: true,
@@ -92,15 +104,7 @@ fn a_cloud_without_resources_is_removed_directly() {
         offered(Some(Primary::Remove), false, None),
         "already deleted"
     );
-    let unrequested = Runtime {
-        state: Some(deployment(
-            "runpod",
-            "Push",
-            &serde_json::json!({"state": "prepared"}),
-            false,
-        )),
-        ..Runtime::default()
-    };
+    let unrequested = unrequested();
     assert_eq!(
         offer(&unrequested, true, &Record::Empty, None),
         offered(Some(Primary::Remove), false, None),
@@ -110,15 +114,7 @@ fn a_cloud_without_resources_is_removed_directly() {
 
 #[test]
 fn storage_on_disk_offers_its_deletion_even_without_a_worker_request() {
-    let unrequested = Runtime {
-        state: Some(deployment(
-            "runpod",
-            "Push",
-            &serde_json::json!({"state": "prepared"}),
-            false,
-        )),
-        ..Runtime::default()
-    };
+    let unrequested = unrequested();
     assert_eq!(
         offer(&unrequested, true, &Record::Holds, None),
         offered(Some(Primary::Delete), false, None),
@@ -128,18 +124,10 @@ fn storage_on_disk_offers_its_deletion_even_without_a_worker_request() {
 
 #[test]
 fn a_refused_removal_offers_the_deletion_before_removing_anyway() {
-    let unrequested = Runtime {
-        state: Some(deployment(
-            "runpod",
-            "Push",
-            &serde_json::json!({"state": "prepared"}),
-            false,
-        )),
-        ..Runtime::default()
-    };
+    let unrequested = unrequested();
     let refused = Failure::new("Could not remove the cloud", false, Some("storage remains"));
     assert_eq!(
-        offer(&unrequested, true, &Record::Empty, Some(&refused)),
+        offer(&unrequested, true, &Record::Holds, Some(&refused)),
         offered(
             Some(Primary::Delete),
             false,
@@ -255,15 +243,7 @@ fn what_may_remain_is_named_where_the_record_knows_it() {
         remains(&terminated, "runpod"),
         "The workspace storage may still exist at RunPod (runpod.io) and cost money until you delete them there."
     );
-    let unrequested = Runtime {
-        state: Some(deployment(
-            "runpod",
-            "Push",
-            &serde_json::json!({"state": "prepared"}),
-            false,
-        )),
-        ..Runtime::default()
-    };
+    let unrequested = unrequested();
     assert_eq!(
         remains(&unrequested, "runpod"),
         "The workspace storage may still exist at RunPod (runpod.io) and cost money until you delete them there.",
@@ -277,9 +257,11 @@ fn an_empty_record_overrides_a_stale_runtime_snapshot() {
     let mut runtime = bound("runpod");
     for unavailable in [false, true] {
         runtime.state_unavailable = unavailable;
-        assert_eq!(
-            offer(&runtime, true, &Record::Empty, None),
-            offered(Some(Primary::Remove), false, None)
-        );
+        for failure in [None, Some(&deletion_failed("stale deletion failure"))] {
+            assert_eq!(
+                offer(&runtime, true, &Record::Empty, failure),
+                offered(Some(Primary::Remove), false, None)
+            );
+        }
     }
 }

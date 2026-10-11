@@ -165,16 +165,39 @@ Give each task an ID. A report uses the ID to give a result.
    Result: The dialog closes. The cloud `image-push` and its panel go off the
    board.
 
+### 6.5 C05: Refresh an unknown or externally deleted record
+
+Use a new fixture for this task. Change only its private synthetic records.
+
+1. Move `demo-api/deployment.json` out of the fixture's cloud directory.
+   Click **×** on `demo-api`.
+
+   Result: The dialog explains that the resource state cannot be read. It
+   shows **Remove from Horizon anyway** and **Cancel**, with no deletion action.
+
+2. Click **Cancel**. Restore the record, open the dialog and click
+   **Delete cloud resources**.
+
+   Result: The fixture refuses deletion and shows its failure.
+
+3. In the private record, set the stage to `Deleted` and the operation to
+   `terminated`, as if another controller completed deletion. Wait for the
+   open dialog to refresh.
+
+   Result: The dialog offers **Remove cloud**, with no stale failure or
+   warning that resources remain. Click **Remove cloud**. The cloud disappears.
+
 ## 7. Pass criteria
 
-- The first dialog for a deployed cloud never shows **Remove from Horizon
-  anyway**.
+- The first dialog for a deployed cloud with a readable resource record
+  offers deletion. A missing record offers removal anyway with an unknown-state warning.
 - **Remove from Horizon anyway** shows only after a deletion fails or cannot
   start, and the dialog names what can stay at the provider.
 - A cloud without resources closes with **Remove cloud**.
 - A cloud whose record has storage offers **Delete cloud resources** first,
   even without a worker request.
 - **Cancel** and the Escape key keep the cloud.
+- A current empty record offers **Remove cloud** after an earlier failure.
 
 ## 8. Cleanup
 
