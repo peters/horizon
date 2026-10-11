@@ -168,6 +168,13 @@ impl Store {
         })
     }
 
+    /// Whether this host keeps cloud records. Where it does not, no controller can lock
+    /// or operate on one.
+    #[must_use]
+    pub fn supported() -> bool {
+        crate::session_store::require_directory_durability().is_ok()
+    }
+
     /// Locks like [`Store::lock`] and says whether taking the lock created the record
     /// directory. A directory it created but could not lock is removed again while empty.
     /// # Errors

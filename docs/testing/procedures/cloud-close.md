@@ -27,6 +27,9 @@ closes with **Remove cloud**.
     resources.
   - A deletion that starts and fails at the provider. The fixture has no
     provider settings, so the deletion cannot start.
+  - **Remove from Horizon anyway** when Horizon cannot lock the state
+    directory of the cloud. Unit tests make sure that the cloud stays and
+    that the dialog shows the reason.
 
 ## 3. Safety
 

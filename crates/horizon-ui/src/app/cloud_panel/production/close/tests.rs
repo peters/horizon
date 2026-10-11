@@ -383,7 +383,6 @@ fn a_finished_close_leaves_no_disposal_marker_behind() {
 }
 
 #[test]
-#[cfg(unix)] // Durable cloud records require Unix directory durability.
 fn a_deletion_that_cannot_start_asks_again_and_can_remove_anyway() {
     let (temp, mut app) = test_app();
     add_cloud(&mut app, temp.path(), Some(deployment()));
