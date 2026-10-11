@@ -436,7 +436,7 @@ this order. Each task starts with the result of the task before it.
 
 ### 6.12 C23 — Totals for 730 hours
 
-1. Set **Compare for** to `730` hours.
+1. Open **All machines and filters**, then set **Compare for** to `730` hours.
 
    Result: The totals on the cards and the summary change.
 
@@ -465,7 +465,7 @@ this order. Each task starts with the result of the task before it.
 
    Result: The worker list shows RunPod rows and Hetzner rows.
 
-7. Set **Compare for** to `1` hour.
+7. Open **All machines and filters**, then set **Compare for** to `1` hour.
 
    Result: The totals go back to the values for one hour.
 

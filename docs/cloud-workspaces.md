@@ -498,11 +498,15 @@ image must supply. Then it reads `AGENTS.md`, the README and existing Dockerfile
 It writes `.horizon/Dockerfile` on the public worker base of
 [Quick start](#quick-start) and `.horizon/cloud.yml`. The image also gets a pinned
 localci release, so agents on the worker run the CI jobs with
-`localci run --fast`. When Docker is available, the setup agent builds the image,
-runs the worker check and runs the CI jobs in the image with localci, then once
-more with `--fast` to show the warm rerun. For a desktop app it starts the app on
-the worker desktop in the image, `:99`, which the cloud panel shows, and checks
-that a window drew. It asks before it uses a credential of yours, such as your
+`localci run --fast`. The agent does not build the image or run the CI itself:
+it names the CI jobs in its status file, and Horizon proves the image on this
+computer with Docker. Horizon builds it, runs the worker check, runs the jobs
+with localci in a container of the image as the worker account, then once more
+with `--fast` to show the warm rerun, and tells the agent the result. The
+dialog shows these steps as proved by Horizon, with their times. **Use this
+setup** is available only after the proof that the agent asked for passed. For a
+desktop app the agent starts the app on the worker desktop in the image, `:99`,
+which the cloud panel shows, and checks that a window drew. It asks before it uses a credential of yours, such as your
 GitHub token for a private package feed. It does not allocate compute, push
 images, commit or open a pull request.
 

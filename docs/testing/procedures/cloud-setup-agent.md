@@ -126,9 +126,48 @@ setup** commits `.horizon` and reads it as the repository profile.
    Result: The agent stops, its hidden panel closes and the dialog shows the setup
    choices again. No file outside `.horizon` changed.
 
+### 6.6 S06 — Close the dialog and come back
+
+1. Start the setup agent on a copy of the fixture without `.horizon`, then click
+   **Close** while it works.
+
+   Result: The dialog closes. The agent keeps working.
+
+2. Wait one minute, then open **New cloud** for the same repository.
+
+   Result: The dialog shows the same run with its steps and elapsed times. A proof
+   that the agent asked for while the dialog was closed ran or runs.
+
+### 6.7 S07 — A failed proof
+
+1. Start the setup agent on a copy of the fixture whose `test.sh` ends with
+   `exit 1`.
+
+   Result: Run CI in image shows a red failure with the exit code, and the last
+   lines of the proof log show the failing test.
+
+2. Examine the footer.
+
+   Result: **Use this setup** is not available while the proof failed, even when
+   the agent wrote a summary. The agent gets the failure and the path of the whole
+   log.
+
+### 6.8 S08 — Update a committed setup
+
+1. Open **New cloud** for `<home>/smoke/ci-app` after S04, and click **Update setup
+   from CI**.
+
+   Result: The dialog shows **Update the setup of ci-app**. The agent starts from
+   the committed `.horizon` files and keeps the profile choices.
+
+2. When the run is ready, click **Use this setup**.
+
+   Result: When the agent changed nothing, no new commit is made and the dialog
+   reads the committed profile, with no error.
+
 ## 7. Pass criteria
 
-- S01 to S05 give the results above.
+- S01 to S08 give the results above.
 - The proof ran on this computer: `docker images` lists
   `horizon-setup-<repository>:candidate`.
 - No cloud was started.

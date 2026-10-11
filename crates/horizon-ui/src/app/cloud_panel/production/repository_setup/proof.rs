@@ -129,6 +129,8 @@ pub(super) struct Proof {
     pub(super) image: String,
     /// The proof ended, passed or not, and the agent has not been told yet.
     pub(super) unreported: bool,
+    /// The proof's container, so a stopped or replaced proof also stops its run.
+    container: String,
 }
 
 impl Proof {
@@ -137,11 +139,14 @@ impl Proof {
         let (sender, receiver) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let image = format!("horizon-setup-{}:candidate", slug(repository));
+        let volume = format!("horizon-setup-{}", slug(repository));
+        let container = format!("{volume}-proof");
         let job = Job {
             repository: repository.to_path_buf(),
             spec,
             image: image.clone(),
-            volume: format!("horizon-setup-{}", slug(repository)),
+            volume,
+            container: container.clone(),
             log_path: log_path.clone(),
             cancel: cancel.clone(),
             sender,
@@ -160,6 +165,7 @@ impl Proof {
             log_path,
             image,
             unreported: false,
+            container,
         }
     }
 
@@ -231,6 +237,12 @@ impl Proof {
 impl Drop for Proof {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
+        // Killing the docker client leaves its container running; the run goes too.
+        let _ = Command::new("docker")
+            .args(["rm", "--force", &self.container])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
     }
 }
 
@@ -239,6 +251,7 @@ struct Job {
     spec: Spec,
     image: String,
     volume: String,
+    container: String,
     log_path: PathBuf,
     cancel: Arc<AtomicBool>,
     sender: mpsc::Sender<Event>,
@@ -248,6 +261,8 @@ struct Job {
 impl Job {
     fn run(self) {
         let mut log = std::fs::File::create(&self.log_path).ok();
+        // An earlier proof of this repository may still be stopping.
+        let _ = Command::new("docker").args(["rm", "--force", &self.container]).output();
         for phase in [Phase::Build, Phase::Ci, Phase::Fast] {
             if self.cancel.load(Ordering::Relaxed) {
                 return;
@@ -256,7 +271,10 @@ impl Job {
             self.ctx.request_repaint();
             let result = match phase {
                 Phase::Build => self.build(&mut log),
-                Phase::Ci => self.prepare(&mut log).and_then(|()| self.ci(false, &mut log)),
+                Phase::Ci => self.prepare(&mut log).and_then(|()| {
+                    self.warm_packages(&mut log);
+                    self.ci(false, &mut log)
+                }),
                 Phase::Fast => self.ci(true, &mut log),
             };
             let failed = result.is_err();
@@ -336,14 +354,16 @@ impl Job {
         let common = git(&["rev-parse", "--path-format=absolute", "--git-common-dir"])
             .ok_or("cannot find the repository's git folder")?;
         let mut own = Command::new("docker");
-        own.args(["run", "--rm", "-v"])
+        own.args(["run", "--rm", "--name", &self.container, "-v"])
             .arg(format!("{}:/workspace", self.volume))
             .args(["--entrypoint", "sh", &self.image, "-c"])
             .arg("mkdir -p /workspace/home && chown 10001:10001 /workspace /workspace/home");
         self.stream(own, log)?;
+        // As root, so object files only their owner may read still copy; the checkout
+        // then belongs to the worker's account.
         let mut clone = Command::new("docker");
         clone
-            .args(["run", "--rm", "--user", "10001:10001", "-v"])
+            .args(["run", "--rm", "--name", &self.container, "-v"])
             .arg(format!("{}:/workspace", self.volume))
             .arg("-v")
             .arg(format!("{common}:/src.git:ro"))
@@ -352,6 +372,35 @@ impl Job {
             .args(["--entrypoint", "sh", &self.image, "-c"])
             .arg(CLONE);
         self.stream(clone, log)
+    }
+
+    /// Restores a .NET repository's packages on this computer first, with its own feed
+    /// credentials, so the container finds private packages in the read-only fallback
+    /// folder and no credential ever enters it. Best effort: a failure here shows up in
+    /// the CI step instead.
+    fn warm_packages(&self, log: &mut Option<std::fs::File>) {
+        let dotnet = self.repository.join("nuget.config").is_file()
+            || self.repository.join("NuGet.Config").is_file()
+            || self.repository.join("Directory.Packages.props").is_file();
+        if !dotnet {
+            return;
+        }
+        let mut restore = Command::new("dotnet");
+        restore
+            .current_dir(&self.repository)
+            .args(["restore", "--nologo", "-v", "quiet"])
+            .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
+            .env("DOTNET_NOLOGO", "1");
+        let _ = self.stream(restore, log);
+    }
+
+    /// Whether the default profile asks for a GPU; its proof then gets this computer's.
+    fn gpu(&self) -> bool {
+        std::fs::read_to_string(self.repository.join(".horizon/cloud.yml"))
+            .ok()
+            .and_then(|config| horizon_core::cloud_panel::CloudConfig::parse(&config).ok())
+            .and_then(|config| config.profiles.get(&config.default).map(|profile| profile.gpu))
+            .unwrap_or(false)
     }
 
     fn ci(&self, fast: bool, log: &mut Option<std::fs::File>) -> Result<(), String> {
@@ -365,9 +414,12 @@ impl Job {
             .unwrap_or_default();
         let mut command = Command::new("docker");
         command
-            .args(["run", "--rm", "--user", "10001:10001", "-v"])
+            .args(["run", "--rm", "--name", &self.container, "--user", "10001:10001", "-v"])
             .arg(format!("{}:/workspace", self.volume))
             .args(["-w", "/workspace/checkout", "-e", "HOME=/workspace/home"]);
+        if self.gpu() {
+            command.args(["--gpus", "all"]);
+        }
         // Packages this computer already restored, private ones included, need no feed
         // credential: NuGet reads them as a fallback folder before it asks a source.
         if let Some(packages) = std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".nuget/packages"))
@@ -427,8 +479,13 @@ impl Job {
         {
             let lines = lines.clone();
             std::thread::spawn(move || {
-                for line in BufReader::new(pipe).lines().map_while(Result::ok) {
-                    let _ = lines.send(line);
+                let mut reader = BufReader::new(pipe);
+                let mut bytes = Vec::new();
+                // Bytes that are not UTF-8 become replacement characters, not the end of the log.
+                while reader.read_until(b'\n', &mut bytes).is_ok_and(|read| read > 0) {
+                    let line = String::from_utf8_lossy(&bytes);
+                    let _ = lines.send(line.trim_end_matches(['\n', '\r']).to_owned());
+                    bytes.clear();
                 }
             });
         }
@@ -475,9 +532,11 @@ impl Job {
 /// Clones the repository's git folder into the volume once, fetches it after, and checks
 /// out the commit Horizon names; build output and caches stay between runs.
 const CLONE: &str = "set -e; git config --global --add safe.directory '*'; \
-if [ -d /workspace/checkout/.git ]; then git -C /workspace/checkout fetch -q /src.git '+refs/heads/*:refs/remotes/src/*'; \
-else git clone -q --no-hardlinks --no-checkout /src.git /workspace/checkout; fi; \
-git -C /workspace/checkout checkout -q --force --detach \"$HEAD_SHA\"";
+if [ -d /workspace/checkout/.git ]; then git -C /workspace/checkout fetch -q /src.git '+refs/*:refs/src/*'; \
+else git clone -q --no-hardlinks --no-checkout /src.git /workspace/checkout && \
+git -C /workspace/checkout fetch -q /src.git '+refs/*:refs/src/*'; fi; \
+git -C /workspace/checkout checkout -q --force --detach \"$HEAD_SHA\"; \
+chown -R 10001:10001 /workspace/checkout";
 
 /// Applies the image's session environment, as a worker session gets it.
 const SESSION_ENV: &str = "for f in /etc/horizon-worker/session-env.d/*.env; do [ -f \"$f\" ] || continue; \
@@ -485,8 +544,19 @@ while IFS= read -r line || [ -n \"$line\" ]; do case \"$line\" in ''|'#'*) ;; \
 PATH_PREPEND=*) PATH=\"${line#PATH_PREPEND=}:$PATH\";; PATH_APPEND=*) PATH=\"$PATH:${line#PATH_APPEND=}\";; \
 *=*) export \"$line\";; esac; done < \"$f\"; done; export PATH;";
 
-/// A name Docker accepts for the repository folder.
+/// A name Docker accepts for the repository: its folder name and a short hash of its
+/// path, so two checkouts with the same folder name never share an image or a volume.
 fn slug(repository: &Path) -> String {
+    let hash = repository
+        .to_string_lossy()
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+        });
+    format!("{}-{:06x}", folder_slug(repository), hash & 0xff_ffff)
+}
+
+fn folder_slug(repository: &Path) -> String {
     let name = repository
         .file_name()
         .map(|name| name.to_string_lossy().to_ascii_lowercase())
@@ -543,8 +613,12 @@ mod tests {
 
     #[test]
     fn the_image_and_volume_take_a_name_docker_accepts() {
-        assert_eq!(slug(Path::new("/home/me/YouPay v2")), "youpay-v2");
-        assert_eq!(slug(Path::new("/")), "repository");
+        assert_eq!(folder_slug(Path::new("/home/me/YouPay v2")), "youpay-v2");
+        assert_eq!(folder_slug(Path::new("/")), "repository");
+        let (a, b) = (slug(Path::new("/home/a/app")), slug(Path::new("/home/b/app")));
+        assert!(a.starts_with("app-") && b.starts_with("app-"));
+        assert_ne!(a, b, "two checkouts named app keep their own image and volume");
+        assert_eq!(a, slug(Path::new("/home/a/app")), "the same path keeps its volume");
     }
 
     #[test]

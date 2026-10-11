@@ -206,8 +206,17 @@ impl Run {
         }
     }
 
+    /// The agent wrote its summary, and no proof it asked for is waiting, running or
+    /// failed; an agent that cannot wait may write a summary before Horizon proved it.
     pub(super) fn finished(&self) -> bool {
-        self.status.summary.is_some()
+        let proof_settled = self.proof_wanted().is_none()
+            && self.proof.as_ref().is_none_or(|proof| {
+                proof
+                    .phases
+                    .iter()
+                    .all(|(_, state)| state.ended.is_some() && state.failure.is_none())
+            });
+        self.status.summary.is_some() && proof_settled
     }
 
     /// The steps to draw: the agent's own, or the expected ones before its first report.
@@ -352,6 +361,23 @@ mod tests {
         assert_eq!(Some(start), run.times["Read CI"].1, "it starts where Read CI ended");
         assert!(end.is_some());
         assert_eq!(run.elapsed("Write Dockerfile"), None, "pending steps have no time");
+    }
+
+    #[test]
+    fn a_summary_before_the_proof_is_not_ready() {
+        let mut run = Run::new(
+            PanelId(1),
+            PanelKind::Codex,
+            PathBuf::from("."),
+            PathBuf::from("missing.json"),
+            Mode::New,
+        );
+        run.status =
+            parse(r#"{"steps":[],"summary":"done","proof":{"workflow":"ci.yml","jobs":["test"]},"proof_request":1}"#)
+                .unwrap();
+        assert!(!run.finished(), "the proof the agent asked for has not run");
+        run.proved_request = 1;
+        assert!(run.finished(), "no proof waits or failed");
     }
 
     #[test]

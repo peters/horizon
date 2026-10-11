@@ -306,10 +306,11 @@ impl HorizonApp {
         ui.add_enabled_ui(
             form.pending_creation.is_none() && !form.launch.submitted && form.launch.watch.is_none(),
             |ui| {
-                // Beside its own output, a setup run needs none of the cloud's fields yet.
-                if setup_output_beside {
+                // A setup run needs none of the cloud's fields yet: beside its own output, or
+                // inline with the output below it in a narrow dialog.
+                if setup_output_beside || super::repository_setup::running_here(form) {
                     if let super::repository_setup::Choice::Run(action) =
-                        super::repository_setup::render(ui, form, true, None)
+                        super::repository_setup::render(ui, form, setup_output_beside, None)
                     {
                         actions.repository = RepositoryAction::SetupRun(action);
                     }
@@ -370,7 +371,10 @@ impl HorizonApp {
         escape: bool,
     ) -> bool {
         if !picking {
-            let dismissed = response.should_close();
+            // While a setup agent works here, Escape is the agent's: Codex and Claude use it
+            // to interrupt. Close and the backdrop still close the dialog.
+            let agent_has_escape = escape && super::repository_setup::running_here(&self.cloud_prototype.production);
+            let dismissed = response.should_close() && !agent_has_escape;
             if dismissed && escape {
                 self.consume_navigation_key(ctx, navigation_key(ShortcutKey::Escape));
             }

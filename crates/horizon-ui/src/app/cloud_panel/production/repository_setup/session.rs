@@ -19,6 +19,11 @@ impl HorizonApp {
     /// Starts the setup agent in a hidden panel; the dialog shows its progress and
     /// passes the person's messages to it.
     pub(in crate::app::cloud_panel::production) fn start_cloud_repository_setup(&mut self, ctx: &egui::Context) {
+        // One setup at a time: a run left working with the dialog closed stops first, so
+        // its hidden agent never runs on without a view.
+        if self.cloud_prototype.production.setup_run.is_some() {
+            self.cloud_repository_setup_action(ctx, Action::Stop);
+        }
         let presets = super::setup_choices(&self.cloud_prototype.production);
         let preset = super::chosen_preset(&self.cloud_prototype.production, &presets)
             .cloned()
@@ -283,8 +288,22 @@ impl HorizonApp {
                     }
                 })
         };
-        let committed =
-            git(&["add", "--", ".horizon"]).and_then(|()| git(&["commit", "--quiet", "-m", message, "--", ".horizon"]));
+        // An update that changed nothing has nothing to commit; the committed setup is read.
+        let unchanged = || {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repository)
+                .args(["diff", "--cached", "--quiet", "--", ".horizon"])
+                .status()
+                .is_ok_and(|status| status.success())
+        };
+        let committed = git(&["add", "--", ".horizon"]).and_then(|()| {
+            if unchanged() {
+                Ok(())
+            } else {
+                git(&["commit", "--quiet", "-m", message, "--", ".horizon"])
+            }
+        });
         if let Err(error) = committed {
             self.cloud_prototype.error = Some(format!("Could not commit .horizon: {error}"));
             return;

@@ -110,9 +110,9 @@ remote authentication, cloud/session persistence and post-review smoke remain op
 ### Setup from an existing cloud workspace
 
 With a cloud workspace active, open Cloud > New cloud, select a local repository
-without YAML and choose Open setup agent. Verify the real setup panel opens in an
-ordinary local workspace, has the selected repository as its working directory,
-and is not a child of the existing cloud. Repeat with a local workspace already
+without YAML and click **Set up with** an agent. Verify the setup agent's hidden
+panel opens in an ordinary local workspace, has the selected repository as its
+working directory, and is not a child of the existing cloud. Repeat with a local workspace already
 available: it should be reused. A legacy remote workspace must never be selected.
 The setup action must not allocate compute or inherit remote credentials.
 

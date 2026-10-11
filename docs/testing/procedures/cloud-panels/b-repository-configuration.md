@@ -347,8 +347,8 @@ bind of S02 alone does not change the socket that the candidate uses.
 
 ## 7. Pass criteria
 
-- B01 shows **This commit has no .horizon/cloud.yml** with quick start, Codex
-  and Claude, and no error.
+- B01 shows **No cloud setup yet** with the **Quick start** and **Set up from CI**
+  cards and one chip for each agent, and no error.
 - B02 lists the six profiles from the committed file.
 - B03 shows the error and clears the profiles.
 - B04 refuses a build default and offers only profiles without `build`.
