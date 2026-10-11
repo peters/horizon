@@ -203,8 +203,11 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
             return Some(Action::Remove);
         }
     }
+    // A deletion waits for the reconnect, resume, stop or resize that runs, so it is
+    // offered once that ends; the operation's own Cancel is above.
+    let operating = runtime.receiver.is_some() && runtime.stage != Some(Stage::Ready);
     bound_provider_check(ui, runtime)
-        .or_else(|| deletion_action(ui, runtime))
+        .or_else(|| (!operating).then(|| deletion_action(ui, runtime)).flatten())
         .or(action)
 }
 

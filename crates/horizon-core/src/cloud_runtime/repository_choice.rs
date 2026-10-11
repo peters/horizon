@@ -53,7 +53,12 @@ impl Choices {
     }
 
     /// Keeps `choice` for `repository`, or forgets it with `None`, and saves all choices
-    /// under `root`.
+    /// under `root`. The file is written and renamed into place here, so a save that cannot
+    /// be written fails now; making it durable can take seconds on a busy disk, so that runs
+    /// on a worker thread. A crash before then can leave the file unreadable on a file
+    /// system that does not write data before a rename. An unreadable file keeps nothing
+    /// ([`Self::load`]), so every repository then asks again: the choices are a convenience,
+    /// not worth a stalled frame.
     ///
     /// # Errors
     /// The field is empty, too many repositories are kept, or the file cannot be written.
@@ -71,11 +76,28 @@ impl Choices {
         std::fs::create_dir_all(root)?;
         let mut file = tempfile::NamedTempFile::new_in(root)?;
         file.write_all(&bytes)?;
-        file.as_file().sync_all()?;
         file.persist(root.join(FILE)).map_err(|error| error.error)?;
         self.0 = next;
+        let root = root.to_path_buf();
+        std::thread::spawn(move || {
+            if let Err(error) = sync(&root) {
+                tracing::warn!(root = %root.display(), %error, "the repository choices are saved but not yet durable");
+            }
+        });
         Ok(())
     }
+}
+
+/// Makes the saved choices under `root`, and their name in the folder, durable.
+fn sync(root: &Path) -> std::io::Result<()> {
+    // Windows flushes a file only through a handle that may write it.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(root.join(FILE))?
+        .sync_all()?;
+    #[cfg(unix)]
+    std::fs::File::open(root)?.sync_all()?;
+    Ok(())
 }
 
 #[cfg(test)]
