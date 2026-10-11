@@ -39,6 +39,10 @@ def wait_for(condition, timeout=BOUND):
                      'worker scripts need util-linux flock and setsid, and Git')
 class SharedCheckoutRecoveryTests(unittest.TestCase):
     def setUp(self):
+        # A hangup ends the scripts as in an SSH session, also when the test runner ignores
+        # SIGHUP, as under nohup: a child keeps a signal ignored, and bash cannot trap it then.
+        hangup = signal.signal(signal.SIGHUP, signal.SIG_DFL)
+        self.addCleanup(signal.signal, signal.SIGHUP, hangup)
         self.fixture = fixtures.SessionRelaunchTests(methodName='runTest')
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
