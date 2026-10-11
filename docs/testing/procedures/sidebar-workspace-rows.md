@@ -126,6 +126,34 @@ the hovered or focused row.
    Result: The tiles, the badges, the names and the lines are easy to read on
    the light surface.
 
+### 6.6 NARROW: A narrow sidebar
+
+1. Hold the pointer on a workspace name that ends with `…`, then on a status
+   line that ends with `…`, then on a panel row that ends with `…`.
+
+   Result: Each time, a tooltip shows the full text.
+
+2. Right-click the row of `billing-service` and click **Open in New Window**.
+   Look at its row in the main window.
+
+   Result: The row shows the `NEW WINDOW` badge before the panel count.
+
+3. Make the Horizon window 900 pixels wide or less. The sidebar becomes 168
+   pixels wide.
+
+   Result: The row of `billing-service` shows no `NEW WINDOW` badge. The name
+   keeps its room. The group header summary becomes shorter or goes away; it
+   does not go to a second line.
+
+4. Hold the pointer on the tile of `billing-service`.
+
+   Result: The tooltip shows `Idle` and `In a new window`.
+
+5. Right-click the row of `billing-service` and click **Move to Main Window**.
+   Make the Horizon window wide again.
+
+   Result: The workspace is back in the main window. The row shows no badge.
+
 ## 7. Pass criteria
 
 - 6.1 shows a tile with initials on each row and a badge only on a working row.
@@ -133,6 +161,8 @@ the hovered or focused row.
 - 6.3 shows the close button only on the hovered or focused row.
 - 6.4 scrolls the list.
 - 6.5 keeps the rows readable in the light theme.
+- 6.6 shows the full text of a cut name, line or title on hover, and moves the
+  `NEW WINDOW` badge to the tile tooltip on a narrow sidebar.
 
 ## 8. Cleanup
 
