@@ -237,6 +237,8 @@ impl Drop for Store {
 #[cfg(test)]
 mod tests {
     #[test]
+    // Cloud records need directory durability, which only Unix hosts have.
+    #[cfg(unix)]
     fn a_lock_on_a_removed_folder_does_not_make_it_again() {
         let temp = tempfile::tempdir().unwrap();
         let removed = temp.path().join("removed");
