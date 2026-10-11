@@ -579,3 +579,52 @@ fn a_new_cloud_between_two_workspaces_shows_neither_when_the_window_allows() {
     let framed = frame_new_cloud(egui::vec2(3840.0, 1600.0), &others, Some([1720.0, 40.0]));
     assert_framed_alone(&framed, "between, wide");
 }
+
+#[test]
+fn a_new_cloud_leaves_the_view_and_focus_of_a_full_screen_cloud() {
+    let (temp, mut app) = test_app();
+    let other = app.board.create_workspace("Other");
+    let local = app.board.workspace(other).unwrap().local_id.clone();
+    let position = app.cloud_prototype.groups.next_position(&local, &app.board);
+    let mut group = CloudGroup::new(201, "Other".into(), local, temp.path().into(), position);
+    group.reconcile(&mut app.board);
+    app.cloud_prototype.groups.0.push(group);
+    let usage = |position| PanelOptions {
+        kind: PanelKind::Usage,
+        position: Some(position),
+        size: Some(CHILD_SIZE),
+        ..PanelOptions::default()
+    };
+    let position = app.cloud_prototype.groups.0[0].next_position(&app.board);
+    let member = app.create_cloud_member(0, usage(position), other).unwrap();
+    let destination = app.board.create_workspace("New");
+    // A panel the focus would move to if the new cloud took the workspace.
+    let at = app.board.workspace(destination).unwrap().position;
+    app.board
+        .create_panel(usage([at[0] + 40.0, at[1] + 80.0]), destination)
+        .unwrap();
+    app.board.focus_workspace(other);
+    app.board.focus(member);
+    let ctx = egui::Context::default();
+    app.toggle_cloud_fullscreen(&ctx, 201);
+    let before = (app.canvas_view, app.board.focused, app.board.active_workspace);
+    assert_eq!(before.1, Some(member), "the full-screen cloud's panel has the focus");
+    let sender = pending_in(&mut app, destination);
+    sender.send(Ok(resolved(temp.path()))).unwrap();
+    app.poll_cloud_creation(&ctx);
+    assert!(app.cloud_prototype.error.is_none(), "{:?}", app.cloud_prototype.error);
+    assert!(
+        app.cloud_prototype
+            .groups
+            .0
+            .iter()
+            .any(|group| group.title == "Captured title")
+    );
+    assert_eq!(app.cloud_prototype.fullscreen.as_ref().map(|view| view.id), Some(201));
+    assert_eq!(
+        app.board.focused, before.1,
+        "the full-screen cloud's panel keeps the focus"
+    );
+    assert_eq!(app.board.active_workspace, before.2, "the active workspace stays");
+    assert_eq!(app.canvas_view, before.0, "the view stays");
+}
