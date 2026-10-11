@@ -305,9 +305,21 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
 - `app/` leaf modules stay focused:
   - `actions/`: overlay/layout math, panel lifecycle helpers, palette/shortcut
     dispatch, picker flows, and canvas interaction helpers
-  - `browser_requests`: transient host polling, panel creation, visibility
-    changes for authenticated requests routed from a live agent panel, and the
-    host-owned workspace stamp that keeps MCP authorization current
+  - `browser_requests`: transient host polling and panel creation for
+    authenticated requests routed from a live agent panel, and the host-owned
+    workspace stamp that keeps MCP authorization current
+  - `browser_host_io`: the one coordination worker that runs the claims of the
+    browser request pumps, and the refusals that a claim outcome issues itself
+    (a failed claim, a retiring or replaced board, an agent that left), in the
+    order they were asked for; the refusals of applying a claimed request, and
+    the results of pending requests, still complete on the UI thread; a later
+    frame applies each outcome in the same order;
+    an outcome asked for on a board that a session switch or a cloud
+    prototype restore replaced refuses its request and changes no panel of the
+    board that stands now
+  - `browser_request_claims`: the claims of create, visibility and close
+    requests, which run on the coordination worker
+  - `browser_visibility_requests`: visibility changes for agent requests
   - `browser_close_requests`: the audited close queue, kept pending until the
     panel's teardown signal settles and the remote release is established
   - `browser_cleanup`: closes ended browser panels on the host polling cadence,

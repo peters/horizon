@@ -5,11 +5,14 @@ mod browser_close_requests;
 mod browser_connectors;
 mod browser_duplicate;
 mod browser_file_chooser;
+mod browser_host_io;
 mod browser_provider_catalog;
 mod browser_provider_usage;
 mod browser_recovery;
 mod browser_remote_create;
+mod browser_request_claims;
 mod browser_requests;
+mod browser_visibility_requests;
 mod canvas;
 mod canvas_drag;
 mod canvas_gesture;
@@ -367,6 +370,10 @@ impl HorizonApp {
             ctx.request_repaint_after(delay);
         }
         self.exit_on_close_request(ctx);
+        // Also while the board is torn down, so every claimed request is
+        // answered; a finished job wakes this context to apply its outcome.
+        self.browser_create_host.io.wake_with(ctx);
+        self.apply_browser_host_io();
 
         if self.shutdown_progress.is_some() {
             self.render_shutdown_overlay(ui);

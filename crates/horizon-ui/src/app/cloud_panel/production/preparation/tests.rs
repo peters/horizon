@@ -190,3 +190,65 @@ fn a_cloud_is_not_removed_while_its_deployment_prepares() {
         "without it the cloud is removed"
     );
 }
+
+#[test]
+fn connect_github_again_asks_only_the_deployment_that_starts_next() {
+    let (temp, mut app, mut record) = stopped_cloud();
+    let ctx = egui::Context::default();
+    record["stage"] = "Ready".into();
+    std::fs::create_dir_all(temp.path().join("fixture")).unwrap();
+    std::fs::write(temp.path().join("fixture/deployment.json"), record.to_string()).unwrap();
+    std::fs::write(
+        temp.path().join("settings.json"),
+        serde_json::json!({
+            "runpod_key_file":temp.path().join("unused-key"),"ssh_identity_file":temp.path().join("absent-identity"),
+            "docker_config":temp.path().join("docker"),"registry_pull_auth_id":null,"cpu_flavors":[],"gpu_types":[]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    // Connect GitHub again was clicked.
+    app.cloud_prototype
+        .production
+        .runtimes
+        .entry(1)
+        .or_default()
+        .renew_github
+        .set(true);
+    app.start_production_deployment(1, &ctx);
+    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    assert!(!runtime.renew_github.get(), "this deployment took the request");
+    let pending = runtime.preparation.as_ref().expect("the deployment prepares");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match pending.next() {
+            Some(super::job::Report::Prepared { request, .. }) => {
+                assert!(request.renew_github, "the deployment's request signs in again");
+                break;
+            }
+            Some(super::job::Report::Failed(_)) => panic!("the preparation failed"),
+            Some(_) => {}
+            None => {
+                assert!(Instant::now() < deadline, "the preparation did not report");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+}
+
+#[test]
+fn a_deploy_that_a_provider_check_refuses_forgets_connect_github_again() {
+    let (_temp, mut app, _record) = stopped_cloud();
+    let ctx = egui::Context::default();
+    let runtime = app.cloud_prototype.production.runtimes.entry(1).or_default();
+    let (_sender, recovery) = std::sync::mpsc::channel();
+    runtime.recovery_receiver = Some(recovery);
+    runtime.renew_github.set(true);
+    app.start_production_deployment(1, &ctx);
+    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    assert!(runtime.preparation.is_none(), "nothing deploys during the check");
+    assert!(
+        !runtime.renew_github.get(),
+        "no later deployment signs in for this click"
+    );
+}

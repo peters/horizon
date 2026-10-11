@@ -196,6 +196,11 @@ after one approval.
 
    Result: The card shows **Ready** and **GitHub: signed in as <login> · 1 repository**.
 
+4. Click **Reconnect** on the `gh-ask` card again.
+
+   Result: The card continues to **Ready** and does not show a code. Only the
+   reconnect that **Connect GitHub again** started signs in again.
+
 ### 6.5 G05 — Skip the sign-in
 
 > **CAUTION:** THE NEXT STEP RENTS COMPUTE FOR `gh-skip`. It costs money until the

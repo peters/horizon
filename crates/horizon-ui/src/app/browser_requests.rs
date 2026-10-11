@@ -5,14 +5,15 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use horizon_core::browser::manifest::{
-    self, AgentIdentity, BrowserCreateAuditStatus, BrowserCreateRequest, BrowserCreateResult,
-    BrowserVisibilityAuditStatus, BrowserVisibilityRequest, BrowserVisibilityResult, CreateNavigation,
+    self, AgentIdentity, BrowserCreateAuditStatus, BrowserCreateRequest, BrowserCreateResult, CreateNavigation,
     HostStampOutcome, ManifestWorkspace,
 };
 use horizon_core::browser::{BackendAvailability, BackendKind, BrowserStatus};
 use horizon_core::{Board, PanelId, PanelKind, PanelOptions, WorkspaceId, browser_actor};
 
 use super::HorizonApp;
+use super::browser_host_io::HostIo;
+use super::browser_request_claims::HOST_RETIRING;
 
 const CREATE_REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// How long a create with an initial URL waits, after the backend is ready,
@@ -47,6 +48,10 @@ pub(super) struct BrowserCreateHostState {
     /// Board placement the manifests were last stamped for; a change
     /// re-stamps on the same frame instead of waiting for the next tick.
     stamped_placement: Option<u64>,
+    /// A claim of the agents' requests runs on the coordination worker.
+    pub(super) claiming: bool,
+    /// Does the coordination file work in order, off the UI thread.
+    pub(super) io: HostIo,
 }
 
 struct PendingBrowserCreate {
@@ -175,7 +180,8 @@ struct HostStateSync {
 
 impl HorizonApp {
     pub(super) fn poll_browser_create_requests(&mut self) -> bool {
-        let mut changed = self.finish_pending_browser_creates();
+        let mut changed = self.apply_browser_host_io();
+        changed |= self.finish_pending_browser_creates();
         let now = Instant::now();
         let poll_due = self
             .browser_create_host
@@ -223,49 +229,14 @@ impl HorizonApp {
     }
 
     fn poll_host_requests(&mut self) -> bool {
-        let mut changed = false;
-        // The create, visibility and close queues are independent: a create
-        // queue that cannot be read (one malformed request is enough) must
-        // not stop closes from being claimed or their results published.
-        let requests = match manifest::list_create_requests() {
-            Ok(requests) => requests,
-            Err(error) => {
-                tracing::warn!(error = %error, "could not poll browser create requests");
-                Vec::new()
-            }
-        };
-        for request in requests {
-            if !launched_by_this_host(request.host_instance.as_deref()) {
-                continue;
-            }
-            let Some(actor_panel) = actor_panel(&self.board, &request.actor) else {
-                continue;
-            };
-            let request = match manifest::claim_create_request(
-                &request.request_id,
-                &request.actor,
-                manifest::host_instance(),
-                std::process::id(),
-            ) {
-                Ok(Some(request)) => request,
-                Ok(None) => continue,
-                Err(error) => {
-                    tracing::warn!(request_id = %request.request_id, error = %error, "could not claim browser create request");
-                    continue;
-                }
-            };
-            changed = true;
-            self.start_requested_browser(request, actor_panel);
-        }
-        changed
-            | self.poll_browser_visibility_requests()
-            | self.poll_browser_close_requests()
+        self.claim_host_requests();
+        self.poll_browser_close_requests()
             | self.poll_remote_recovery()
             | self.poll_provider_usage()
             | self.poll_provider_catalog()
     }
 
-    fn start_requested_browser(&mut self, mut request: BrowserCreateRequest, actor_panel: ActorPanel) {
+    pub(super) fn start_requested_browser(&mut self, mut request: BrowserCreateRequest, actor_panel: ActorPanel) {
         // Startup latency counts everything the host does from accepting the
         // request, including panel creation and the audit writes.
         let started_at = Instant::now();
@@ -371,129 +342,6 @@ impl HorizonApp {
         self.mark_runtime_dirty();
     }
 
-    fn poll_browser_visibility_requests(&mut self) -> bool {
-        let requests = match manifest::list_visibility_requests() {
-            Ok(requests) => requests,
-            Err(error) => {
-                tracing::warn!(error = %error, "could not poll browser visibility requests");
-                return false;
-            }
-        };
-        let mut changed = false;
-        for request in requests {
-            if !launched_by_this_host(request.host_instance.as_deref()) {
-                continue;
-            }
-            let Some(actor_panel) = actor_panel(&self.board, &request.actor) else {
-                continue;
-            };
-            let request = match manifest::claim_visibility_request(
-                &request.request_id,
-                &request.actor,
-                manifest::host_instance(),
-                std::process::id(),
-            ) {
-                Ok(Some(request)) => request,
-                Ok(None) => continue,
-                Err(error) => {
-                    tracing::warn!(request_id = %request.request_id, error = %error, "could not claim browser visibility request");
-                    continue;
-                }
-            };
-            changed |= self.apply_browser_visibility_request(&request, actor_panel);
-        }
-        changed
-    }
-
-    fn apply_browser_visibility_request(
-        &mut self,
-        request: &BrowserVisibilityRequest,
-        actor_panel: ActorPanel,
-    ) -> bool {
-        if request.deadline_at_millis < manifest::now_millis() {
-            complete_visibility_failure(request, "request_expired", "browser visibility request expired");
-            return false;
-        }
-        let Some(panel_id) = self.board.panel_id_by_local_id(&request.panel_local_id) else {
-            complete_visibility_failure(
-                request,
-                "panel_not_in_host",
-                "browser panel is not hosted by the requesting agent's Horizon instance",
-            );
-            return false;
-        };
-        let Some(panel) = self.board.panel(panel_id) else {
-            complete_visibility_failure(request, "panel_closed", "browser panel is not live");
-            return false;
-        };
-        if panel.kind != PanelKind::Browser {
-            complete_visibility_failure(request, "not_browser_panel", "target panel is not a browser panel");
-            return false;
-        }
-        if panel.workspace_id != actor_panel.workspace_id {
-            complete_visibility_failure(
-                request,
-                "panel_outside_workspace",
-                "browser panel is outside the requesting agent's Horizon workspace",
-            );
-            return false;
-        }
-        let Some(workspace) = browser_workspace(&self.board, panel.workspace_id) else {
-            complete_visibility_failure(request, "workspace_unavailable", "browser panel workspace is not live");
-            return false;
-        };
-        let original_visible = panel.visible;
-        let owned_by_actor = manifest::read(&request.panel_local_id)
-            .and_then(|manifest| {
-                manifest
-                    .live_owner(manifest::now_millis())
-                    .map(|owner| owner.name.clone())
-            })
-            .as_deref()
-            == Some(request.actor.as_str());
-        if !owned_by_actor {
-            complete_visibility_failure(request, "ownership_changed", "browser panel ownership changed");
-            return false;
-        }
-        if let Err(error) = manifest::record_visibility_status(request, BrowserVisibilityAuditStatus::Dispatched) {
-            tracing::warn!(request_id = %request.request_id, %error, "could not audit browser visibility dispatch");
-            complete_visibility_failure(
-                request,
-                "audit_failed",
-                "Horizon refused an unaudited visibility change",
-            );
-            return false;
-        }
-        if let Err(error) = publish_manifest_host_state(&request.panel_local_id, request.visible, &workspace) {
-            tracing::warn!(request_id = %request.request_id, %error, "could not update browser manifest visibility");
-            complete_visibility_failure(
-                request,
-                "manifest_update_failed",
-                "browser panel visibility could not be updated",
-            );
-            return false;
-        }
-        let local_changed = self.board.set_panel_visible(panel_id, request.visible);
-        if !request.visible && self.fullscreen_panel == Some(panel_id) {
-            self.fullscreen_panel = None;
-        }
-        if !request.visible && self.board.focused.is_none() {
-            self.board.focus(actor_panel.panel_id);
-        }
-        if let Err(error) = manifest::record_visibility_status(request, BrowserVisibilityAuditStatus::Completed) {
-            tracing::warn!(request_id = %request.request_id, %error, "could not audit browser visibility completion");
-            let _ = publish_manifest_host_state(&request.panel_local_id, original_visible, &workspace);
-            let _ = self.board.set_panel_visible(panel_id, original_visible);
-            complete_visibility_failure(request, "audit_failed", "visibility change could not be audited");
-            return false;
-        }
-        complete_visibility_result(&BrowserVisibilityResult::ready(request));
-        if local_changed {
-            self.mark_runtime_dirty();
-        }
-        local_changed
-    }
-
     /// Keep every live browser manifest's host-owned presentation and
     /// workspace membership current, so MCP authorization follows panel moves
     /// and visibility changes made through the UI.
@@ -558,6 +406,14 @@ impl HorizonApp {
         self.browser_create_host.pending = waiting;
         changed
     }
+
+    /// Refuses every create that has not completed: nothing polls it once
+    /// Horizon exits or switches sessions, and the teardown closes its panel.
+    pub(super) fn retire_pending_browser_creates(&mut self) {
+        for pending in std::mem::take(&mut self.browser_create_host.pending) {
+            record_and_complete_failure(&pending, HOST_RETIRING.0, HOST_RETIRING.1);
+        }
+    }
 }
 
 pub(super) fn actor_panel(board: &Board, actor: &str) -> Option<ActorPanel> {
@@ -573,7 +429,7 @@ pub(super) fn actor_panel(board: &Board, actor: &str) -> Option<ActorPanel> {
 
 /// The workspace stamp for browser panels in `workspace_id`: this host plus
 /// the identities of every agent panel currently sharing that workspace.
-fn browser_workspace(board: &Board, workspace_id: WorkspaceId) -> Option<ManifestWorkspace> {
+pub(super) fn browser_workspace(board: &Board, workspace_id: WorkspaceId) -> Option<ManifestWorkspace> {
     let workspace = board.workspace(workspace_id)?;
     let actors = board
         .panels
@@ -662,12 +518,6 @@ fn placement_fingerprint(board: &Board) -> u64 {
         (browser && panel.visible).hash(&mut hasher);
     }
     hasher.finish()
-}
-
-/// Requests name the host that launched the agent; a second Horizon process
-/// hosting a copy of the same session must leave them alone.
-pub(super) fn launched_by_this_host(host_instance: Option<&str>) -> bool {
-    host_instance == Some(manifest::host_instance())
 }
 
 fn host_identity(actor: &str) -> AgentIdentity<'_> {
@@ -871,13 +721,13 @@ fn complete_failure(request: &BrowserCreateRequest, code: &str, message: &str) {
     complete_result(&BrowserCreateResult::failed(request, code, message));
 }
 
-fn complete_result(result: &BrowserCreateResult) {
+pub(super) fn complete_result(result: &BrowserCreateResult) {
     if let Err(error) = manifest::complete_create_request(result) {
         tracing::error!(request_id = %result.request_id, %error, "could not publish browser create result");
     }
 }
 
-fn publish_manifest_host_state(
+pub(super) fn publish_manifest_host_state(
     panel_local_id: &str,
     visible: bool,
     workspace: &ManifestWorkspace,
@@ -888,19 +738,6 @@ fn publish_manifest_host_state(
             std::io::ErrorKind::PermissionDenied,
             "browser panel's driver runs in another Horizon host",
         )),
-    }
-}
-
-fn complete_visibility_failure(request: &BrowserVisibilityRequest, code: &str, message: &str) {
-    if let Err(error) = manifest::record_visibility_status(request, BrowserVisibilityAuditStatus::Failed) {
-        tracing::warn!(request_id = %request.request_id, %error, "could not append failed browser visibility audit");
-    }
-    complete_visibility_result(&BrowserVisibilityResult::failed(request, code, message));
-}
-
-fn complete_visibility_result(result: &BrowserVisibilityResult) {
-    if let Err(error) = manifest::complete_visibility_request(result) {
-        tracing::error!(request_id = %result.request_id, %error, "could not publish browser visibility result");
     }
 }
 
@@ -919,6 +756,7 @@ fn refuse_expired_create(request: &BrowserCreateRequest) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::browser_request_claims::launched_by_this_host;
     use crate::app::test_support::test_app;
 
     fn agent_options() -> PanelOptions {
