@@ -521,10 +521,11 @@ class SupervisionTests(unittest.TestCase):
         parent = self.start('control', 'import subprocess,time; from pathlib import Path; '
                             'child=subprocess.Popen(["sleep","60"]); '
                             'Path(' + repr(str(child_pid)) + ').write_text(str(child.pid)); time.sleep(60)')
-        deadline = time.monotonic() + 3
-        while not child_pid.exists() and time.monotonic() < deadline:
+        # write_text() makes the file before it writes the number.
+        deadline = time.monotonic() + 30
+        while not (child_pid.exists() and child_pid.read_text()) and time.monotonic() < deadline:
             time.sleep(.01)
-        self.assertTrue(child_pid.exists())
+        self.assertTrue(child_pid.exists() and child_pid.read_text(), 'the control child wrote its child pid')
         descendant = int(child_pid.read_text())
         self.start('sshd')
         self.supervisor.publish(False)

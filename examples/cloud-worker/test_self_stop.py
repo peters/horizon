@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import runpy
+import socket
 import subprocess
 import tempfile
 import threading
@@ -146,8 +147,19 @@ class WatcherTests(unittest.TestCase):
             return f'Stop requested by {requester[1]}.'
         threading.Thread(target=IDLE['serve_stop_requests'], args=('pod1', 'key', path, stop, identify),
                          daemon=True).start()
-        deadline = time.time() + 5
-        while not path.exists() and time.time() < deadline:
+
+        def answering():
+            # The path exists from bind() on, and a connection is refused until listen().
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                    probe.connect(str(path))
+                    probe.sendall(b'probe\n')
+                    with probe.makefile('r') as reply:
+                        return reply.readline() != ''
+            except OSError:
+                return False
+        deadline = time.time() + 30
+        while not answering() and time.time() < deadline:
             time.sleep(0.01)
         request = STOP['request_stop']
         self.assertEqual(request('done', path=path), (True, 'Stop requested by agent-a.'))
