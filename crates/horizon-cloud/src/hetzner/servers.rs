@@ -1,13 +1,15 @@
 //! Servers. A worker is one server named and labelled after its operation; the
 //! caller durably persists `CreateState` before every create request.
 use super::{
-    Action, Failure, Hetzner, Method, OPERATION_LABEL, keys::SshKey, resource_name, valid_name, volumes::Volume,
+    ACTION_TIMEOUT, Action, Failure, Hetzner, Method, OPERATION_LABEL, Waited, keys::SshKey, resource_name, valid_name,
+    volumes::Volume,
 };
 use crate::{Cancellation, CloudError, CreateState, Progress, Reason, WorkerStatus};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    time::Instant,
 };
 
 /// Hetzner's limit for server user data.
@@ -315,7 +317,8 @@ impl Hetzner {
     }
 
     /// Deletes only the server recorded for this operation and proves it is gone.
-    /// Attached volumes are detached by the provider and kept.
+    /// Attached volumes are detached by the provider and kept. The server's running
+    /// actions finish first, so a delete during provisioning waits for the volume attach.
     /// # Errors
     /// Refuses unbound or mismatching servers and reports unfinished deletion.
     pub fn delete_server(
@@ -349,15 +352,17 @@ impl Hetzner {
         progress(Progress::ConfirmingWorker);
         if let Some(server) = self.inspect_server(id, cancel)? {
             server.verify(operation_id)?;
-            progress(Progress::Terminating);
-            announce(Announcement::Before)?;
-            match self.send(Method::Delete, &format!("/servers/{id}"), None, cancel) {
-                Ok(value) => {
-                    let acted: Acted = serde_json::from_value(value).map_err(|_| CloudError::InvalidResponse)?;
-                    self.wait_until(&acted.action, cancel, || Ok(self.inspect_server(id, cancel)?.is_none()))?;
+            if self.settle_actions(id, Instant::now() + ACTION_TIMEOUT, cancel)? {
+                progress(Progress::Terminating);
+                announce(Announcement::Before)?;
+                match self.send(Method::Delete, &format!("/servers/{id}"), None, cancel) {
+                    Ok(value) => {
+                        let acted: Acted = serde_json::from_value(value).map_err(|_| CloudError::InvalidResponse)?;
+                        self.wait_until(&acted.action, cancel, || Ok(self.inspect_server(id, cancel)?.is_none()))?;
+                    }
+                    Err(failure) if failure.not_found() => {}
+                    Err(failure) => return Err(refused(failure.into(), announce)),
                 }
-                Err(failure) if failure.not_found() => {}
-                Err(failure) => return Err(refused(failure.into(), announce)),
             }
             progress(Progress::ConfirmingTermination);
             if self.inspect_server(id, cancel)?.is_some() {
@@ -368,6 +373,38 @@ impl Hetzner {
         persist(&next)?;
         *state = next;
         Ok(())
+    }
+
+    /// Waits for the server's running actions, such as the volume attach its
+    /// creation started, until `deadline`, and returns whether the server is still
+    /// there. A server deleted while its volume was still attaching left Hetzner's
+    /// detach running for good and the volume held by the deleted server, so the
+    /// volume could not be deleted. A failed action has finished too. An action
+    /// still running at the deadline no longer holds the delete back, so a stuck
+    /// action cannot keep the server billing.
+    pub(super) fn settle_actions(&self, id: u64, deadline: Instant, cancel: &Cancellation) -> Result<bool, CloudError> {
+        let running: Vec<Action> =
+            match self.list_all(&format!("/servers/{id}/actions"), "status=running", "actions", cancel) {
+                Ok(running) => running,
+                Err(failure) if failure.not_found() => return Ok(false),
+                Err(failure) => return Err(failure.into()),
+            };
+        if running.is_empty() {
+            return Ok(true);
+        }
+        for action in &running {
+            let gone = || {
+                let left = deadline.saturating_duration_since(Instant::now());
+                Ok(self.inspect_server_within(id, cancel, Some(left))?.is_none())
+            };
+            match self.poll_action(action, deadline, cancel, gone)? {
+                Waited::Settled => return Ok(false),
+                Waited::Succeeded | Waited::Failed(_) => {}
+                Waited::TimedOut => break,
+            }
+        }
+        // The last action can be an earlier delete that finished with its server.
+        Ok(self.inspect_server(id, cancel)?.is_some())
     }
 
     fn act(

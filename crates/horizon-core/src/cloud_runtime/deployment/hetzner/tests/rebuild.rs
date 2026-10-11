@@ -1,7 +1,7 @@
 //! The Hetzner half of an image rebuild: the server is released as a stop releases
 //! it, but the deployment keeps the rebuild's `Replace` stage.
 use super::{
-    deletion_points::{act_on, gone, journal},
+    deletion_points::{act_on, gone, journal, no_actions},
     server,
 };
 use crate::cloud_runtime::{
@@ -27,6 +27,7 @@ fn a_rebuild_releases_the_server_without_recording_a_stop() {
     let responses = vec![
         off.clone(),
         off,
+        no_actions(),
         (200, json!({"action": {"id": 3, "status": "success"}}).to_string()),
         gone(),
     ];

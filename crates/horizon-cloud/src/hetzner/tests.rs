@@ -365,3 +365,36 @@ fn a_loopback_client_talks_only_to_this_machine() {
     task.join().unwrap();
     assert!(requests.lock().unwrap()[0].starts_with("GET /servers/42 "));
 }
+
+#[test]
+fn a_poll_failure_that_ends_after_the_deadline_is_a_timeout() {
+    let (hetzner, _, task) = provider(Vec::new());
+    let running = Action {
+        id: 7,
+        status: "running".into(),
+        error: None,
+    };
+    let cancel = Cancellation::default();
+    let deadline = std::time::Instant::now() + Duration::from_millis(20);
+    let late = hetzner.poll_action(&running, deadline, &cancel, || {
+        thread::sleep(Duration::from_millis(40));
+        Err(CloudError::Transport)
+    });
+    assert_eq!(late.unwrap(), Waited::TimedOut);
+    let far = std::time::Instant::now() + Duration::from_secs(60);
+    let early = hetzner.poll_action(&running, far, &cancel, || Err(CloudError::Transport));
+    assert!(
+        matches!(early, Err(CloudError::Transport)),
+        "a failure before the deadline stays an error"
+    );
+    let deadline = std::time::Instant::now() + Duration::from_millis(20);
+    let cancelled = hetzner.poll_action(&running, deadline, &cancel, || {
+        thread::sleep(Duration::from_millis(40));
+        Err(CloudError::Cancelled)
+    });
+    assert!(
+        matches!(cancelled, Err(CloudError::Cancelled)),
+        "a cancellation is never a timeout"
+    );
+    task.join().unwrap();
+}
