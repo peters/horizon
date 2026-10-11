@@ -27,7 +27,7 @@ mod stored;
 mod tests;
 mod worker;
 
-pub use signin::{Prompt, renew, skip};
+pub use signin::{Prompt, skip};
 
 /// Why a worker whose GitHub service is not running has no GitHub access.
 const SERVICE_DOWN: &str = "The worker's GitHub service is not running, so Git and gh have no GitHub access. \
@@ -208,6 +208,7 @@ pub fn configure(
     connection: &Connection,
     runner: &Runner<'_>,
     legacy: bool,
+    renew: bool,
 ) -> Result<bool> {
     let say = |text: &str| (runner.emit)(Event::Output(format!("GitHub: {text}")));
     // A cloud without GitHub access from the app may still have a credential binding
@@ -229,8 +230,6 @@ pub fn configure(
             renewable: settings.is_some(),
         }));
     };
-    // Consumed once, whatever the worker holds, so a later reconnect never signs in anew.
-    let renew = signin::renewing(&state.cloud_id);
     let grants = match settings {
         Some(_) => grants(state, runner)?,
         None => Vec::new(),

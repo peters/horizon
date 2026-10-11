@@ -1,5 +1,5 @@
 //! Git credential binding transferred to the worker for the deployed repository.
-use super::{Connection, Result, Runner};
+use super::{Connection, Request, Result, Runner};
 use std::time::Duration;
 
 /// Gives the worker's GitHub service current access when GitHub is connected. Without
@@ -7,13 +7,15 @@ use std::time::Duration;
 /// it, or without a binding, any earlier binding is removed from the worker.
 pub(super) fn configure_git_auth(
     git_auth: Option<crate::cloud_runtime::git_auth::Prepared>,
-    github: Option<&crate::cloud_runtime::github::Settings>,
+    request: &Request,
     state: &crate::cloud_runtime::state::Deployment,
     connection: &Connection,
     runner: &Runner<'_>,
 ) -> Result<()> {
     let legacy = git_auth.is_some();
-    let served = crate::cloud_runtime::github::configure(github, state, connection, runner, legacy)?;
+    let github = request.settings.github.as_ref();
+    let served =
+        crate::cloud_runtime::github::configure(github, state, connection, runner, legacy, request.renew_github)?;
     match git_auth {
         Some(git_auth) if !served => git_auth.install(connection, runner),
         _ => runner

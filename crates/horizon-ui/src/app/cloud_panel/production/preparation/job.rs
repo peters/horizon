@@ -84,6 +84,8 @@ pub(super) struct Input {
     pub first: Option<Durability>,
     /// A new panel's session save that holds the record's lock.
     pub fence: super::super::session_record::Fence,
+    /// The deployment signs in to GitHub again; see [`Request::renew_github`].
+    pub renew_github: bool,
 }
 
 pub(super) enum Report {
@@ -216,7 +218,7 @@ impl Input {
         send(Report::Record(record.map(Box::new)));
         let settings = Settings::for_cloud(&self.settings_path, &self.launch.placement)
             .map_err(|error| Failure::Unconfigured(format!("{error}. Configure {}", self.settings_path.display())))?;
-        let request = Request::new(
+        let mut request = Request::new(
             self.launch.id,
             self.repository,
             self.launch.revision,
@@ -224,6 +226,7 @@ impl Input {
             self.state_root,
             settings,
         );
+        request.renew_github = self.renew_github;
         deployment::prepare(&request).map_err(|error| Failure::Refused(error.to_string()))?;
         send(Report::Prepared {
             request: Box::new(request),

@@ -217,6 +217,9 @@ pub(super) struct Runtime {
     receiver: Option<Receiver<Event>>,
     /// Sessions new panels added to the record, saved on a worker thread.
     sessions: session_record::Sessions,
+    /// **Connect GitHub again** asked the next deployment to sign in again. The deployment
+    /// that starts next takes it into its request, so no later one can.
+    renew_github: std::cell::Cell<bool>,
     /// The deployment being prepared on a worker thread; it starts once prepared.
     preparation: Option<preparation::Pending>,
     recovery_receiver: Option<Receiver<cloud_runtime::Result<cloud_runtime::lifecycle::ReconciledDeployment>>>,
@@ -809,7 +812,9 @@ impl HorizonApp {
     /// `then` is the operation the deployment continues.
     fn start_production_deployment_as(&mut self, id: u32, then: Option<lifecycle::Action>, ctx: &egui::Context) {
         let runtimes = &self.cloud_prototype.production.runtimes;
-        if runtimes.get(&id).is_some_and(Runtime::checking_provider) {
+        if let Some(runtime) = runtimes.get(&id).filter(|runtime| runtime.checking_provider()) {
+            // Nothing deploys now, so nothing signs in to GitHub for this click.
+            runtime.renew_github.set(false);
             return;
         }
         self.prepare_production_deployment(id, then, ctx);

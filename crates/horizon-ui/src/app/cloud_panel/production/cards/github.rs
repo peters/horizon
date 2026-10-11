@@ -231,8 +231,8 @@ pub(super) fn requests(ui: &mut egui::Ui, runtime: &Runtime) -> Option<(String, 
 }
 
 /// **Connect GitHub again**, once this cloud's GitHub step reported its outcome. A click
-/// marks the cloud for a new sign-in; the caller then reconnects it.
-pub(super) fn renew_button(ui: &mut egui::Ui, cloud_id: &str, runtime: &Runtime) -> bool {
+/// asks the next deployment to sign in again; the caller then reconnects it.
+pub(super) fn renew_button(ui: &mut egui::Ui, runtime: &Runtime) -> bool {
     // Not for access a worker kept after GitHub was disconnected here, nor once GitHub is
     // disconnected: nothing could sign it in again.
     if !github::configured() || !offers_renewal(runtime) {
@@ -243,7 +243,7 @@ pub(super) fn renew_button(ui: &mut egui::Ui, cloud_id: &str, runtime: &Runtime)
         .on_hover_text("Reconnect this cloud and sign in to GitHub again, for example to add a repository.")
         .clicked();
     if clicked {
-        github::renew(cloud_id);
+        runtime.renew_github.set(true);
     }
     clicked
 }

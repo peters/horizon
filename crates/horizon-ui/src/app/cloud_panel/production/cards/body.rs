@@ -106,7 +106,7 @@ fn steps_card(
                 .inner;
             let renew = ui
                 .with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                    let renew = super::github::renew_button(ui, &launch.id, runtime);
+                    let renew = super::github::renew_button(ui, runtime);
                     if let Some((line, connected)) = super::github::summary(runtime) {
                         let color = if connected {
                             theme::PALETTE_GREEN()
