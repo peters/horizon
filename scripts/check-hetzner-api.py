@@ -43,6 +43,8 @@ USED = [
      prefixed("server", SERVER) + prefixed("action", ACTION) + prefixed("next_actions.[]", ACTION)),
     ("get", "/servers/{id}", [], [], "200", prefixed("server", SERVER)),
     ("delete", "/servers/{id}", [], [], "200", prefixed("action", ACTION)),
+    ("get", "/servers/{id}/actions", ["status", "page", "per_page"], [], "200",
+     prefixed("actions.[]", ACTION) + ["meta.pagination.next_page"]),
     ("post", "/servers/{id}/actions/poweron", [], [], "201", prefixed("action", ACTION)),
     ("post", "/servers/{id}/actions/shutdown", [], [], "201", prefixed("action", ACTION)),
     ("post", "/servers/{id}/actions/poweroff", [], [], "201", prefixed("action", ACTION)),

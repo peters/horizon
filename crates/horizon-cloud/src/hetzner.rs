@@ -125,6 +125,17 @@ pub struct ActionError {
     #[serde(default)]
     pub message: String,
 }
+/// How polling a provider action ended.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Waited {
+    Succeeded,
+    /// The action failed, with the provider's message.
+    Failed(String),
+    /// The caller observed the intended result first.
+    Settled,
+    /// The action was still running at the deadline.
+    TimedOut,
+}
 #[derive(Deserialize)]
 struct ActionEnvelope {
     action: Action,
@@ -236,30 +247,46 @@ impl Hetzner {
         &self,
         action: &Action,
         cancel: &Cancellation,
-        mut settled: impl FnMut() -> Result<bool, CloudError>,
+        settled: impl FnMut() -> Result<bool, CloudError>,
     ) -> Result<(), CloudError> {
-        let deadline = Instant::now() + ACTION_TIMEOUT;
+        match self.poll_action(action, Instant::now() + ACTION_TIMEOUT, cancel, settled)? {
+            Waited::Succeeded | Waited::Settled => Ok(()),
+            Waited::Failed(message) => Err(CloudError::Rejected(Reason::from_text(
+                &message,
+                self.credential.value(),
+            ))),
+            Waited::TimedOut => Err(CloudError::Invalid(
+                "Provider action is still running; check again later",
+            )),
+        }
+    }
+
+    /// Polls `action` until it finishes, `settled` observes the intended result, or
+    /// `deadline` passes. Only a request that fails is an error.
+    pub(crate) fn poll_action(
+        &self,
+        action: &Action,
+        deadline: Instant,
+        cancel: &Cancellation,
+        mut settled: impl FnMut() -> Result<bool, CloudError>,
+    ) -> Result<Waited, CloudError> {
         let mut current = action.clone();
         loop {
             match current.status.as_str() {
-                "success" => return Ok(()),
+                "success" => return Ok(Waited::Succeeded),
                 "error" => {
-                    let message = current.error.map(|error| error.message).unwrap_or_default();
-                    return Err(CloudError::Rejected(Reason::from_text(
-                        &message,
-                        self.credential.value(),
-                    )));
+                    return Ok(Waited::Failed(
+                        current.error.map(|error| error.message).unwrap_or_default(),
+                    ));
                 }
                 "running" => {}
                 _ => return Err(CloudError::InvalidResponse),
             }
             if settled()? {
-                return Ok(());
+                return Ok(Waited::Settled);
             }
             if Instant::now() >= deadline {
-                return Err(CloudError::Invalid(
-                    "Provider action is still running; check again later",
-                ));
+                return Ok(Waited::TimedOut);
             }
             std::thread::sleep(self.poll);
             cancel.check()?;

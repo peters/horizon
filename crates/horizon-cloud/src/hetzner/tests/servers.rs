@@ -391,6 +391,7 @@ fn invalid_requests_never_reach_the_provider() {
 fn deletion_verifies_identity_waits_for_the_action_and_proves_absence() {
     let (hetzner, requests, task) = provider(vec![
         (200, json!({"server": server(42)})),
+        (200, listing("actions", json!([]))),
         (200, json!({"action": action(5, "running")})),
         // Hetzner can keep the delete action running after the server is gone.
         (200, json!({"server": server(42)})),
@@ -426,14 +427,229 @@ fn deletion_verifies_identity_waits_for_the_action_and_proves_absence() {
     );
     task.join().unwrap();
     let requests = requests.lock().unwrap();
-    assert!(requests[1].starts_with("DELETE /servers/42 "));
-    assert!(requests[2].starts_with("GET /servers/42 "));
-    assert!(requests[3].starts_with("GET /actions/5 "));
-    assert!(requests[4].starts_with("GET /servers/42 "));
+    assert!(requests[1].starts_with("GET /servers/42/actions?status=running&page=1&per_page=50 "));
+    assert!(requests[2].starts_with("DELETE /servers/42 "));
+    assert!(requests[3].starts_with("GET /servers/42 "));
+    assert!(requests[4].starts_with("GET /actions/5 "));
+    assert!(requests[5].starts_with("GET /servers/42 "));
     assert!(matches!(
         hetzner.delete_server(OPERATION, &mut CreateState::Requested, &cancel, |_| Ok(()), |_| {}),
         Err(CloudError::CreationUnresolved)
     ));
+}
+
+#[test]
+fn deletion_waits_for_the_servers_running_actions_such_as_the_volume_attach() {
+    let (hetzner, requests, task) = provider(vec![
+        (200, json!({"server": server(42)})),
+        (
+            200,
+            listing(
+                "actions",
+                json!([
+                    {"id": 7, "command": "attach_volume", "status": "running", "error": null},
+                    {"id": 8, "command": "start_server", "status": "running", "error": null},
+                ]),
+            ),
+        ),
+        (200, json!({"server": server(42)})),
+        (
+            200,
+            json!({"action": {"id": 7, "command": "attach_volume", "status": "success", "error": null}}),
+        ),
+        (200, json!({"server": server(42)})),
+        // A failed action has finished too, so it does not hold the delete back.
+        (
+            200,
+            json!({"action": {"id": 8, "command": "start_server", "status": "error",
+                "error": {"code": "action_failed", "message": "start failed"}}}),
+        ),
+        (200, json!({"server": server(42)})),
+        (200, json!({"action": action(5, "success")})),
+        (404, error("not_found", "server not found")),
+    ]);
+    let mut state = CreateState::Bound { worker_id: "42".into() };
+    hetzner
+        .delete_server(OPERATION, &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
+        .unwrap();
+    task.join().unwrap();
+    assert_eq!(state, CreateState::Terminated { worker_id: "42".into() });
+    let requests = requests.lock().unwrap();
+    assert!(requests[3].starts_with("GET /actions/7 "));
+    assert!(requests[5].starts_with("GET /actions/8 "));
+    assert!(requests[6].starts_with("GET /servers/42 "));
+    assert!(
+        requests[7].starts_with("DELETE /servers/42 "),
+        "the delete is sent only after the attach finished"
+    );
+}
+
+#[test]
+fn a_server_gone_once_its_last_action_finished_is_not_deleted_again() {
+    let (hetzner, requests, task) = provider(vec![
+        (200, json!({"server": server(42)})),
+        (
+            200,
+            listing(
+                "actions",
+                json!([{"id": 5, "command": "delete_server", "status": "running", "error": null}]),
+            ),
+        ),
+        (200, json!({"server": server(42)})),
+        (
+            200,
+            json!({"action": {"id": 5, "command": "delete_server", "status": "success", "error": null}}),
+        ),
+        (404, error("not_found", "server not found")),
+        (404, error("not_found", "server not found")),
+    ]);
+    let mut state = CreateState::Bound { worker_id: "42".into() };
+    let mut announced = 0;
+    hetzner
+        .delete_server_announced(
+            OPERATION,
+            &mut state,
+            &Cancellation::default(),
+            |_| Ok(()),
+            |_| {},
+            &mut |_| {
+                announced += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+    task.join().unwrap();
+    assert_eq!(state, CreateState::Terminated { worker_id: "42".into() });
+    assert_eq!(announced, 0);
+    assert!(
+        !requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|request| request.starts_with("DELETE "))
+    );
+}
+
+#[test]
+fn an_action_still_running_at_the_deadline_no_longer_holds_the_delete_back() {
+    let (hetzner, requests, task) = provider(vec![
+        (
+            200,
+            listing(
+                "actions",
+                json!([{"id": 7, "command": "attach_volume", "status": "running", "error": null}]),
+            ),
+        ),
+        (200, json!({"server": server(42)})),
+        (200, json!({"server": server(42)})),
+    ]);
+    let present = hetzner
+        .settle_actions(42, std::time::Instant::now(), &Cancellation::default())
+        .unwrap();
+    task.join().unwrap();
+    assert!(present, "the server is still there, so the delete goes ahead");
+    assert!(
+        !requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|request| request.starts_with("GET /actions/")),
+        "nothing is polled past the deadline"
+    );
+}
+
+#[test]
+fn a_refused_action_poll_is_an_error_and_sends_no_delete() {
+    let (hetzner, requests, task) = provider(vec![
+        (200, json!({"server": server(42)})),
+        (
+            200,
+            listing(
+                "actions",
+                json!([{"id": 7, "command": "attach_volume", "status": "running", "error": null}]),
+            ),
+        ),
+        (200, json!({"server": server(42)})),
+        (422, error("invalid_input", "invalid action")),
+    ]);
+    let mut state = CreateState::Bound { worker_id: "42".into() };
+    assert!(matches!(
+        hetzner.delete_server(OPERATION, &mut state, &Cancellation::default(), |_| Ok(()), |_| {}),
+        Err(CloudError::Rejected(_))
+    ));
+    task.join().unwrap();
+    assert_eq!(state, CreateState::Bound { worker_id: "42".into() });
+    assert!(
+        !requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|request| request.starts_with("DELETE "))
+    );
+}
+
+#[test]
+fn a_server_gone_while_its_actions_run_is_not_deleted_again() {
+    let (hetzner, requests, task) = provider(vec![
+        (200, json!({"server": server(42)})),
+        // An earlier delete whose action Hetzner still reports as running.
+        (
+            200,
+            listing(
+                "actions",
+                json!([{"id": 5, "command": "delete_server", "status": "running", "error": null}]),
+            ),
+        ),
+        (404, error("not_found", "server not found")),
+        (404, error("not_found", "server not found")),
+    ]);
+    let mut state = CreateState::Bound { worker_id: "42".into() };
+    let mut announced = 0;
+    hetzner
+        .delete_server_announced(
+            OPERATION,
+            &mut state,
+            &Cancellation::default(),
+            |_| Ok(()),
+            |_| {},
+            &mut |_| {
+                announced += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+    task.join().unwrap();
+    assert_eq!(state, CreateState::Terminated { worker_id: "42".into() });
+    assert_eq!(announced, 0, "nothing is announced for a server already gone");
+    assert!(
+        !requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|request| request.starts_with("DELETE "))
+    );
+}
+
+#[test]
+fn a_server_gone_before_its_actions_are_listed_is_recorded_terminated() {
+    let (hetzner, requests, task) = provider(vec![
+        (200, json!({"server": server(42)})),
+        (404, error("not_found", "server not found")),
+        (404, error("not_found", "server not found")),
+    ]);
+    let mut state = CreateState::Bound { worker_id: "42".into() };
+    hetzner
+        .delete_server(OPERATION, &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
+        .unwrap();
+    task.join().unwrap();
+    assert_eq!(state, CreateState::Terminated { worker_id: "42".into() });
+    assert!(
+        !requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|request| request.starts_with("DELETE "))
+    );
 }
 
 #[test]
@@ -615,6 +831,7 @@ fn a_failed_create_action_keeps_the_server_bound_for_deletion() {
 fn a_server_still_present_after_deletion_stays_bound() {
     let (hetzner, _, task) = provider(vec![
         (200, json!({"server": server(42)})),
+        (200, listing("actions", json!([]))),
         (200, json!({"action": action(5, "success")})),
         (200, json!({"server": server(42)})),
     ]);
