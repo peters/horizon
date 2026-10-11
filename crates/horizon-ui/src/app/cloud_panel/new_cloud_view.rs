@@ -19,12 +19,13 @@ const CLEAR: f32 = 1.0;
 /// The offsets of the frame in `slack` free pixels to try on one axis: the preferred
 /// places, then each offset that puts a cloud just past an edge of the canvas. The shown
 /// area changes linearly between these offsets, so its least value is at one of them.
-/// `spans` are the clouds' extents from the frame's start, in pixels; `view` is the
-/// canvas length.
-fn offsets(slack: f32, preferred: [f32; 3], spans: &[(f32, f32)], view: f32) -> Vec<f32> {
+/// At offset `o` the frame starts `origin + MARGIN + o` pixels into a canvas that is
+/// `length` pixels long; `spans` are the clouds' extents from the frame's start.
+fn offsets(slack: f32, preferred: [f32; 3], spans: &[(f32, f32)], origin: f32, length: f32) -> Vec<f32> {
+    let start = origin + MARGIN;
     let edges = spans
         .iter()
-        .flat_map(|&(start, end)| [-MARGIN - end - CLEAR, view - MARGIN - start + CLEAR]);
+        .flat_map(move |&(from, to)| [-start - to - CLEAR, length - start - from + CLEAR]);
     preferred
         .iter()
         .map(|part| part * slack)
@@ -91,8 +92,13 @@ impl HorizonApp {
             .0
             .iter()
             .filter(|group| group.workspace != workspace)
+            .filter(|group| {
+                self.board
+                    .workspace_id_by_local_id(&group.workspace)
+                    .is_some_and(|id| !self.workspace_is_detached(id))
+            })
             .map(|group| {
-                let (min, max) = group.overview_bounds();
+                let (min, max) = group.placed_overview_bounds(&self.board);
                 egui::Rect::from_min_max(min.into(), max.into())
             })
             .collect();
@@ -117,8 +123,8 @@ impl HorizonApp {
                 .collect()
         };
         let mut best: Option<(f32, CanvasViewState)> = None;
-        for x in offsets(slack[0], HORIZONTAL, &spans(0), canvas.width()) {
-            for y in offsets(slack[1], VERTICAL, &spans(1), canvas.height() - top) {
+        for x in offsets(slack[0], HORIZONTAL, &spans(0), 0.0, canvas.width()) {
+            for y in offsets(slack[1], VERTICAL, &spans(1), top, canvas.height()) {
                 let view = CanvasViewState::new([MARGIN + x - min[0] * zoom, top + MARGIN + y - min[1] * zoom], zoom);
                 let area = shown(view);
                 if best.is_none_or(|(least, _)| area < least) {
@@ -130,5 +136,34 @@ impl HorizonApp {
             || CloudGroups::fitted_region(min, max, [0.0, top], region),
             |(_, view)| view,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CLEAR, MARGIN, offsets};
+
+    #[test]
+    fn each_edge_offset_puts_its_cloud_just_past_the_canvas() {
+        // The frame starts below a 90 px band; one cloud ends 150 px above the frame,
+        // one starts 400 px below it.
+        let (origin, length) = (90.0, 900.0);
+        let spans = [(-152.0, -150.0), (400.0, 401.0)];
+        let found = offsets(486.0, [0.5, 0.0, 1.0], &spans, origin, length);
+        let start = |offset: f32| origin + MARGIN + offset;
+        assert!(
+            found.iter().any(|&o| (start(o) + spans[0].1 + CLEAR).abs() < 1e-3),
+            "the cloud above ends just above the canvas at some offset: {found:?}"
+        );
+        assert!(
+            found
+                .iter()
+                .any(|&o| (start(o) + spans[1].0 - length - CLEAR).abs() < 1e-3),
+            "the cloud below starts just below the canvas at some offset: {found:?}"
+        );
+        assert!(
+            found.iter().all(|o| (0.0..=486.0).contains(o)),
+            "every offset stays in the free space"
+        );
     }
 }
