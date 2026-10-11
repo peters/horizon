@@ -18,6 +18,9 @@ pub(super) const FAST: &str = "Fast rerun";
 /// Lines of proof output the dialog keeps.
 const LOG_LINES: usize = 200;
 
+/// The longest an image build may take before the proof reports it hung.
+const BUILD_TIMEOUT: Duration = Duration::from_mins(45);
+
 /// What the agent asks Horizon to prove, from the status file's `proof`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Spec {
@@ -287,7 +290,7 @@ impl Job {
             .arg("-t")
             .arg(&self.image)
             .arg(&build.context);
-        self.stream(command, log)?;
+        self.stream_within(command, log, Some(BUILD_TIMEOUT))?;
         let mut check = Command::new("docker");
         check.args([
             "run",
@@ -376,7 +379,17 @@ impl Job {
     }
 
     /// Runs `command`, sending each output line to the dialog and the log file.
-    fn stream(&self, mut command: Command, log: &mut Option<std::fs::File>) -> Result<(), String> {
+    fn stream(&self, command: Command, log: &mut Option<std::fs::File>) -> Result<(), String> {
+        self.stream_within(command, log, None)
+    }
+
+    /// As [`Self::stream`], stopping the command once it has run for `limit`.
+    fn stream_within(
+        &self,
+        mut command: Command,
+        log: &mut Option<std::fs::File>,
+        limit: Option<Duration>,
+    ) -> Result<(), String> {
         use std::io::Write;
         let started = Instant::now();
         let mut child = command
@@ -423,6 +436,14 @@ impl Job {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err("stopped".to_owned());
+            }
+            if limit.is_some_and(|limit| started.elapsed() > limit) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "still running after {} minutes; stopped",
+                    started.elapsed().as_secs() / 60
+                ));
             }
         }
         let status = child.wait().map_err(|error| error.to_string())?;
