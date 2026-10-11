@@ -738,5 +738,55 @@ class GitGrantTests(unittest.TestCase):
             auth.read_grants()
 
 
+
+@unittest.skipIf(os.geteuid() == 0, 'root sees into every directory')
+class AgentBehindTheRootOnlyMarkerTests(unittest.TestCase):
+    """The agent side of the helper with the isolation marker in a directory that this account
+    cannot look into, as /run/horizon-tailnet is on a worker (root, 0700)."""
+
+    def setUp(self):
+        self.root = tempfile.TemporaryDirectory()
+        self.addCleanup(self.root.cleanup)
+        self.path = Path(self.root.name)
+        hidden = self.path / 'horizon-tailnet'
+        hidden.mkdir()
+        (hidden / 'agent-isolation').touch()
+        hidden.chmod(0)
+        self.addCleanup(hidden.chmod, 0o700)
+        home = self.path / 'home'
+        home.mkdir()
+        subprocess.run(['git', 'init', '-q', '--bare', str(self.path / 'repository.git')], check=True)
+        for name, value in [('AGENT_ISOLATION', hidden / 'agent-isolation'),
+                            ('CREDENTIAL', self.path / 'credentials/github.json'),
+                            ('SERVICE_SOCKET', self.path / 'no-service.sock'),
+                            ('GIT_DIR', self.path / 'repository.git'), ('HOME', str(home))]:
+            patcher = mock.patch.object(auth, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        environment = mock.patch.dict(auth.os.environ, {'HOME': str(home), 'GIT_CONFIG_NOSYSTEM': '1',
+                                                        'GIT_CONFIG_GLOBAL': str(home / '.gitconfig')})
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.identity = {'repository': 'example/project', 'author_name': 'Agent',
+                         'author_email': 'agent@example.invalid', 'target': 'primary'}
+
+    def test_every_agent_operation_runs(self):
+        self.assertFalse(auth.root_holds_token())
+        # What the GitHub service runs as the agent at its start and for each install.
+        auth.restore_static({'previous': []})
+        auth.configure_chain({'grants': [self.identity], 'previous': []})
+        auth.install_identities({'version': 2, 'grants': [self.identity]})
+        self.assertIsNotNone(auth.previous_grants())
+        # Git's credential helper and the gh wrapper without a service.
+        with mock.patch.object(auth.sys, 'argv', ['horizon-worker-git-auth', 'get']), \
+                mock.patch.object(auth.sys, 'stdin', io.StringIO('protocol=https\nhost=github.com\npath=a/b\n')), \
+                mock.patch.object(auth.sys, 'stdout', io.StringIO()):
+            auth.main()
+        with mock.patch.object(auth.sys, 'argv', ['gh', 'pr', 'list']), \
+                mock.patch.object(auth.os, 'execve') as execute:
+            auth.main()
+        self.assertEqual(execute.call_args.args[2]['GH_CONFIG_DIR'], str(Path(auth.HOME) / '.config/gh'))
+        self.assertTrue(auth.isolated())
+
 if __name__ == '__main__':
     unittest.main()

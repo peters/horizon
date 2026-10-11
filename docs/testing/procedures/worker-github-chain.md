@@ -32,6 +32,9 @@ the decision.
   `horizon-worker-git-auth`, `horizon-worker-supervise` or the token chain part
   of `horizon-worker-check`.
 - Platforms: Linux with Docker.
+- Do lanes C and R on the exact head that merges. A later change to a helper
+  that runs as the agent needs a new run: unit tests cannot show every
+  permission of a real worker.
 - Lanes:
   - Lane U: the unit tests.
   - Lane C: a local worker container and a fake GitHub.
@@ -235,8 +238,23 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    ```
 
    Result: `services.json` contains `github`. The socket has the mode `srw-rw-rw-`.
+   If `github` is not there, examine `/workspace/github.log`: the service did not
+   start, and the run fails here.
 
-5. Examine the status:
+5. Examine the isolation marker as root and as the agent:
+
+   ```bash
+   docker exec <c> stat -c '%U %a %n' /run/horizon-tailnet /run/horizon-tailnet/agent-isolation
+   docker exec <c> horizon-worker-tailnet agent ls /run/horizon-tailnet; echo "exit=$?"
+   ```
+
+   Result: The first command shows `root 700 /run/horizon-tailnet` and
+   `root 600 /run/horizon-tailnet/agent-isolation`. The second shows
+   `Permission denied` and a nonzero exit. The agent cannot see the marker, as
+   on a worker at a provider, so the helpers that run as the agent are tested
+   with the real permissions.
+
+6. Examine the status:
 
    ```bash
    docker exec <c> horizon-worker-github status
