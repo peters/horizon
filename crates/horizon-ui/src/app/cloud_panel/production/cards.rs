@@ -14,6 +14,8 @@ mod machine;
 mod next;
 mod output;
 pub(super) mod placement;
+#[cfg(test)]
+mod preparation_tests;
 mod rebuild;
 pub(super) mod section;
 mod self_stop;
@@ -117,6 +119,12 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
     }
     if deleted_or_redeploying(runtime) {
         return deleted_runtime_actions(ui, id, runtime);
+    }
+    // Deploy, Reconnect, Resume and Delete all wait for the preparation, so none is offered.
+    if runtime.preparation.is_some() {
+        ui.spinner();
+        ui.label("Saving the session and the deployment record…");
+        return None;
     }
     if runtime.state.as_ref().is_some_and(|state| {
         matches!(

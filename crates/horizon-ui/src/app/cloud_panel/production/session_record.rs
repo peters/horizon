@@ -53,6 +53,23 @@ fn running(directory: &Path) -> Option<Arc<Mutex<Flight>>> {
         .cloned()
 }
 
+/// Whether every save ended, so that quitting now loses no recorded session.
+fn all_ended() -> bool {
+    FLIGHTS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .values()
+        .all(|flight| flight.lock().unwrap_or_else(PoisonError::into_inner).done)
+}
+
+impl HorizonApp {
+    /// Whether the sessions of new cloud panels are all in their records. Shutdown waits
+    /// for this, within its time limit, so a quit does not drop a save that still runs.
+    pub(in crate::app) fn cloud_sessions_recorded() -> bool {
+        all_ended()
+    }
+}
+
 impl Sessions {
     /// The sessions of a runtime that a session switch rebuilt; it joins the save that
     /// still runs for its cloud, so the cloud stays busy until that save ends.
@@ -446,5 +463,38 @@ mod tests {
         fence(&directory).wait();
         assert!(!sessions.saving(), "the cloud is no longer busy");
         assert!(!directory.exists(), "the save does not make the folder again");
+    }
+
+    #[test]
+    fn a_save_that_still_runs_holds_the_exit_until_it_records() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("fixture");
+        let record: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"fixture","repository":"/synthetic","revision":"a".repeat(40),
+            "profile":{"provider":"runpod","image":"example/worker","cpu":4,"memory_gb":8},
+            "stage":"Ready","operation":{"state":"bound","worker_id":"worker"},"spec":null,"sessions":[]
+        }))
+        .unwrap();
+        Store::lock(&directory).unwrap().save(&record).unwrap();
+        let sessions = Sessions::default();
+        set_writable(&directory, false);
+        sessions
+            .with_record(&directory, None, |record| {
+                record.sessions.push(session("panel"));
+                ((), true)
+            })
+            .unwrap();
+        // Saves of other tests can run in this process too, so this one is checked by its
+        // folder: exit waits for every save that has not ended.
+        let held =
+            running(&directory).is_some_and(|flight| !flight.lock().unwrap_or_else(PoisonError::into_inner).done);
+        assert!(held && !all_ended(), "a save that keeps failing holds the exit");
+        set_writable(&directory, true);
+        fence(&directory).wait();
+        assert!(
+            running(&directory).is_none(),
+            "the recorded save no longer holds the exit"
+        );
+        assert_eq!(recorded(&directory), ["panel"]);
     }
 }

@@ -61,6 +61,15 @@ impl HorizonApp {
         #[cfg(target_os = "linux")]
         let complete = complete && self.casting.finished();
         let timed_out = progress.started_at().elapsed() > MAX_SHUTDOWN_WAIT;
+        // The record of a cloud must hold the session of each panel the board saves.
+        #[cfg(feature = "cloud-workspaces")]
+        let recorded = Self::cloud_sessions_recorded();
+        #[cfg(feature = "cloud-workspaces")]
+        if timed_out && !recorded {
+            tracing::warn!("exiting while a cloud panel session is not yet in its cloud record");
+        }
+        #[cfg(feature = "cloud-workspaces")]
+        let complete = complete && recorded;
         let mut browser_outcome = if progress.browser_shutdown_is_complete() {
             BrowserShutdownOutcome::Complete
         } else {

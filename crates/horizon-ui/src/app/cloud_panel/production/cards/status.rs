@@ -279,6 +279,16 @@ fn exceptional(runtime: &Runtime) -> Option<Status> {
     if deleting(runtime) {
         return Some(deletion(runtime, base));
     }
+    // The session and the record are saved off the frame before a deployment starts;
+    // until then no action can start, so none is offered.
+    if runtime.preparation.is_some() {
+        return Some(Status {
+            tone: Tone::Live,
+            verb: "Preparing".into(),
+            numbers: "Saving the session and the deployment record".into(),
+            ..base
+        });
+    }
     if deleted_or_redeploying(runtime) && runtime.receiver.is_none() {
         // A finished deletion leaves its summary in the error slot; that is not a failure.
         if let Some(error) = runtime
