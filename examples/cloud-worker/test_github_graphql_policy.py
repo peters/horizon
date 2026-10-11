@@ -220,7 +220,8 @@ class QueryTests(unittest.TestCase):
         plan('{ search(query: "is:open repo:example/library", type: ISSUE) { issueCount } }')
         # Current gh releases group the keywords of a search, also for `gh pr list --search`.
         for text in ['( fix bug ) repo:example/library state:open type:pr', '( -label:bug ) repo:example/library',
-                     '( "\\"exact phrase\\"" ) repo:example/library', '( ( x ) y ) repo:example/library']:
+                     '( "\\"exact phrase\\"" ) repo:example/library', '( ( x ) y ) repo:example/library',
+                     'label:"good first issue" repo:"example/library"']:
             self.assertEqual(policy.search_repositories(text), ['example/library'], text)
         for text, reason in [('is:open', 'needs a repo: qualifier'), ('repo:example/secret', 'example/secret'),
                              ('repo:example/library OR repo:example/secret', 'cannot use OR'),
@@ -231,6 +232,10 @@ class QueryTests(unittest.TestCase):
                              ('( x repo:example/library', 'closes each parenthesis'),
                              (') x ( repo:example/library', 'closes each parenthesis'),
                              ('( repo:example/secret ) repo:example/library', 'example/secret'),
+                             # A word that GitHub could read outside the quotation marks.
+                             ('a"b "OR repo:example/secret" c"d repo:example/library', 'also not in quotation'),
+                             ('a"b "org:example" c"d repo:example/library', 'also not in quotation'),
+                             ('a"b "repo:example/secret" c"d repo:example/library', 'example/secret'),
                              ('repo:example/library "open', 'quotation mark'),
                              ('repo:example/library org:example', 'org:, user: or owner:'),
                              ('repo:example/library -user:x', 'org:, user: or owner:')]:

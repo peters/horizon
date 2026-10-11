@@ -142,9 +142,21 @@ def search_repositories(text):
             found.append(value)
     if depth:
         raise Refused('a search on this worker closes each parenthesis.')
+    # GitHub can read a quotation mark in a word, or one after a backslash, otherwise than
+    # the words above do, and so read a quoted word as a live one. Each piece of each word
+    # between quotation marks, backslashes and parentheses is therefore checked as well.
+    for piece in re.split(r'["\\()\s]+', text):
+        if piece in ('OR', 'AND', 'NOT'):
+            raise Refused('a search on this worker cannot use OR, AND or NOT, also not in quotation marks.')
+        if piece.lower().lstrip('-').startswith(WIDENING):
+            raise Refused('a search on this worker cannot use org:, user: or owner:, also not in quotation marks.')
+        if piece.lower().startswith('repo:') and piece[5:]:
+            if not REPOSITORY.fullmatch(piece[5:]):
+                raise Refused('a search names a repository that is not owner/name.')
+            found.append(piece[5:])
     if not found:
         raise Refused('a search on this worker needs a repo: qualifier for a granted repository.')
-    return found
+    return list(dict.fromkeys(found))
 
 
 class Walk:
