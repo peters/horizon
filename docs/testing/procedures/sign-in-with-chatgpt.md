@@ -3,7 +3,7 @@ procedure: sign-in-with-chatgpt
 feature: Sign in with ChatGPT for Codex (Cloud settings)
 platforms: [linux, macos, windows]
 cost: none
-destructive: no
+destructive: yes
 secrets: [a test ChatGPT account for sign-in]
 owner: peters
 ---
