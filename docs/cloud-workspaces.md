@@ -950,18 +950,25 @@ Each group header shows how many workspaces it has. At the right of the header
 line, a summary in secondary text shows the hourly rate of the running workers of
 the group, **no local cost** for **Parked**, and **live** for **This PC**. The
 summary never wraps. When the sidebar is narrow, it shows fewer parts, and then a
-shortened first part. Hover over it to see all of it.
+shortened first part. Hover over it to see all of it. If no part fits, for example
+next to **Stop idle…** on the narrowest sidebar, the header does not show the
+summary. A screen reader still reads it after the group name and count.
 
-Each row shows a status dot, the workspace name and one status line. The status
-line is the last line with words on the screen of the primary terminal (the first
-agent, else the focused terminal, else the first terminal). Frames, prompts and
-footer hints are not status lines. For a parked cloud, the line comes from the
-session status that the worker sends. A parked row is compact: it shows only the
-dot and the name, and its dot shows the status line on hover. A filled dot is
+Each row shows a tile, the workspace name and one status line. The tile has the
+color of the workspace on the canvas and the first letters of the first two words
+of its name. The status line is the last line with words on the screen of the
+primary terminal (the first agent, else the focused terminal, else the first
+terminal). Frames, prompts and footer hints are not status lines, and terminal
+padding becomes single spaces. For a parked cloud, the line comes from the session
+status that the worker sends. A parked row is compact: it shows only a smaller
+tile and the name, and its tile shows the status line on hover.
+
+A badge on the lower-right corner of the tile shows the status. A filled badge is
 green when an agent works, yellow when the workspace waits for you, red when an
-operation failed, the accent color while Horizon works on the cloud, and grey when
-nothing runs. A ring is a parked cloud (green when an agent still works on the
-worker), or a stopped worker.
+operation failed, and the accent color while Horizon works on the cloud. A ring is
+a parked cloud (green when an agent still works on the worker), or a stopped
+worker. A workspace where nothing runs has no badge. Hover over the tile to see
+what the badge means.
 
 Click a row to go to its workspace. A parked cloud then attaches, as described in
 [Parked terminals](#parked-terminals).
