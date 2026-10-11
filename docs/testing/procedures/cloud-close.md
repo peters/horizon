@@ -155,9 +155,10 @@ Give each task an ID. A report uses the ID to give a result.
 2. Click **Delete cloud resources**.
 
    Result: The dialog stays open. It shows the reason in red, after
-   "Could not delete the cloud resources". It tells that a worker and its
-   workspace storage can stay at RunPod and cost money. It shows
-   **Remove from Horizon anyway** and **Cancel**.
+   "Could not delete the cloud resources". It tells that the workspace
+   storage can stay at RunPod and cost money. It does not name a worker,
+   because no worker was requested. It shows **Remove from Horizon anyway**
+   and **Cancel**.
 
 3. Click **Remove from Horizon anyway**.
 

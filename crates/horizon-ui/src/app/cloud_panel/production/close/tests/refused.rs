@@ -237,6 +237,9 @@ fn another_controller_keeps_the_cloud_from_being_removed_anyway() {
     assert_eq!(current_offer(&app), busy, "still running");
     drop(other);
     render(&mut app);
+    assert_eq!(current_offer(&app), busy, "read again at most once a second");
+    app.cloud_prototype.production.close.busy_read = None;
+    render(&mut app);
     assert_eq!(
         current_offer(&app).primary,
         Some(Primary::Delete),

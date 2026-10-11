@@ -118,9 +118,12 @@ pub(super) fn remains(runtime: &Runtime, provider_id: &str) -> String {
         return "Its worker and storage may still exist at the provider and cost money until you delete them there."
             .into();
     };
-    let worker = match runtime.state.as_ref().map(|state| &state.operation) {
+    let state = runtime.state.as_ref();
+    let worker = match state.map(|state| &state.operation) {
         Some(CreateState::Bound { worker_id }) => Some(format!("{} {worker_id}", noun(provider.stopped))),
         Some(CreateState::Terminated { .. }) => None,
+        // No worker was requested.
+        Some(CreateState::Prepared) if state.is_some_and(|state| state.spec.is_none()) => None,
         _ => Some(format!("A {}", noun(provider.stopped).to_lowercase())),
     };
     let storage = match provider.stopped {

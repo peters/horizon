@@ -254,5 +254,19 @@ fn what_may_remain_is_named_where_the_record_knows_it() {
         remains(&terminated, "runpod"),
         "The workspace storage may still exist at RunPod (runpod.io) and cost money until you delete them there."
     );
+    let unrequested = Runtime {
+        state: Some(deployment(
+            "runpod",
+            "Push",
+            &serde_json::json!({"state": "prepared"}),
+            false,
+        )),
+        ..Runtime::default()
+    };
+    assert_eq!(
+        remains(&unrequested, "runpod"),
+        "The workspace storage may still exist at RunPod (runpod.io) and cost money until you delete them there.",
+        "no worker was requested"
+    );
     assert!(remains(&Runtime::default(), "elsewhere").contains("at the provider"));
 }

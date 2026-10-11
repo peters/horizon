@@ -13,6 +13,8 @@ pub(super) struct State {
     failed: BTreeMap<u32, Failure>,
     /// Per cloud, what its saved record held when its close was asked.
     records: BTreeMap<u32, Record>,
+    /// When the open dialog last read a record that an operation held.
+    busy_read: Option<std::time::Instant>,
     /// Per closing cloud, the panels that were showing when its disposal took over.
     hidden: BTreeMap<u32, Vec<String>>,
 }
@@ -73,11 +75,16 @@ impl HorizonApp {
         {
             return;
         }
-        let record = self.close_record(id);
-        if record == Record::Busy {
-            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        // At most once a second: each read takes the lock and reads the record from disk.
+        let second = std::time::Duration::from_secs(1);
+        ctx.request_repaint_after(second);
+        if production.close.busy_read.is_some_and(|read| read.elapsed() < second) {
+            return;
         }
-        self.cloud_prototype.production.close.records.insert(id, record);
+        let record = self.close_record(id);
+        let close = &mut self.cloud_prototype.production.close;
+        close.busy_read = Some(std::time::Instant::now());
+        close.records.insert(id, record);
     }
 
     /// Forgets the dialog and what an earlier attempt of cloud `id`'s close left.
