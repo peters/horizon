@@ -215,6 +215,21 @@ fn another_controller_keeps_the_cloud_from_being_removed_anyway() {
     let other = Store::lock(&path).unwrap();
     add_cloud(&mut app, temp.path(), Some(deployment()));
     app.request_cloud_close(101);
+    let busy = offer::Offer {
+        primary: None,
+        remove_anyway: false,
+        reason: Some(offer::BUSY.into()),
+    };
+    assert_eq!(
+        current_offer(&app),
+        busy,
+        "an operation runs in another Horizon instance"
+    );
+
+    // The operation starts after the dialog opened.
+    drop(other);
+    app.request_cloud_close(101);
+    let other = Store::lock(&path).unwrap();
     let ctx = egui::Context::default();
     app.delete_for_close(101, &ctx);
     assert!(current_offer(&app).remove_anyway, "the deletion could not start");

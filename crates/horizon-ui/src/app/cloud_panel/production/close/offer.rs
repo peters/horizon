@@ -35,6 +35,8 @@ pub(super) enum Record {
     Empty,
     /// Provider resources, or possibly so.
     Holds,
+    /// An operation holds the record, possibly in another Horizon instance.
+    Busy,
     /// The record cannot be read, so its resources cannot be deleted.
     Unreadable(String),
 }
@@ -61,7 +63,7 @@ impl Failure {
 /// `record` is what the saved record holds, and `failure` what stopped this close's last
 /// deletion or removal.
 pub(super) fn offer(runtime: &Runtime, deployment_started: bool, record: &Record, failure: Option<&Failure>) -> Offer {
-    if runtime.busy() {
+    if runtime.busy() || *record == Record::Busy {
         return Offer {
             primary: None,
             remove_anyway: false,
@@ -72,7 +74,7 @@ pub(super) fn offer(runtime: &Runtime, deployment_started: bool, record: &Record
     let reason = failure.map(|failure| failure.reason.clone());
     let unreadable = match record {
         Record::Unreadable(error) => Some(format!("{STATE_UNKNOWN} {error}")),
-        Record::Empty | Record::Holds => None,
+        Record::Empty | Record::Holds | Record::Busy => None,
     };
     if unreadable.is_some() || runtime.state_unavailable || (state.is_none() && deployment_started) {
         return Offer {

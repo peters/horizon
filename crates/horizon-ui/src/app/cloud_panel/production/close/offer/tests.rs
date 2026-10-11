@@ -218,6 +218,13 @@ fn a_busy_cloud_offers_only_cancel() {
         Some(Primary::Delete),
         "a ready connection does not block closing"
     );
+    runtime.receiver = None;
+    runtime.state_unavailable = true;
+    assert_eq!(
+        offer(&runtime, true, &Record::Busy, None),
+        offered(None, false, Some(BUSY)),
+        "an operation of another Horizon instance blocks closing too"
+    );
 }
 
 #[test]

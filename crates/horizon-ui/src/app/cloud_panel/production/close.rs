@@ -49,8 +49,8 @@ impl HorizonApp {
     pub(in crate::app::cloud_panel) fn request_cloud_close(&mut self, id: u32) {
         let record = match self.cloud_holds_resources(id) {
             Ok(false) => Record::Empty,
-            // An operation holds the record, so it may hold resources.
-            Ok(true) | Err(super::cloud_runtime::Error::Busy) => Record::Holds,
+            Ok(true) => Record::Holds,
+            Err(super::cloud_runtime::Error::Busy) => Record::Busy,
             Err(error) => Record::Unreadable(error.to_string()),
         };
         let close = &mut self.cloud_prototype.production.close;
