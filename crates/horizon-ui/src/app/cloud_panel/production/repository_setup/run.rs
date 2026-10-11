@@ -69,6 +69,8 @@ pub(in crate::app::cloud_panel::production) struct Run {
     /// Horizon's own proof of the image, and the agent's request it answers.
     pub(super) proof: Option<Proof>,
     pub(super) proved_request: u64,
+    /// The agent wrote a summary without a proof Horizon could run, and was told once.
+    pub(super) proof_missing_reported: bool,
 }
 
 /// What the person did in the progress view.
@@ -128,6 +130,7 @@ impl Run {
             files: None,
             proof: None,
             proved_request: 0,
+            proof_missing_reported: false,
         }
     }
 
@@ -206,17 +209,22 @@ impl Run {
         }
     }
 
-    /// The agent wrote its summary, and no proof it asked for is waiting, running or
-    /// failed; an agent that cannot wait may write a summary before Horizon proved it.
+    /// The agent wrote its summary and Horizon proved the image: the proof it asked for
+    /// last ran and passed. An agent that cannot wait may write a summary first.
     pub(super) fn finished(&self) -> bool {
-        let proof_settled = self.proof_wanted().is_none()
-            && self.proof.as_ref().is_none_or(|proof| {
+        let proved = self.proof_wanted().is_none()
+            && self.proof.as_ref().is_some_and(|proof| {
                 proof
                     .phases
                     .iter()
                     .all(|(_, state)| state.ended.is_some() && state.failure.is_none())
             });
-        self.status.summary.is_some() && proof_settled
+        self.status.summary.is_some() && proved
+    }
+
+    /// The agent wrote its summary without a proof request Horizon can run.
+    pub(super) fn summary_without_proof(&self) -> bool {
+        self.status.summary.is_some() && self.proof.is_none() && self.proof_wanted().is_none()
     }
 
     /// The steps to draw: the agent's own, or the expected ones before its first report.
@@ -377,7 +385,9 @@ mod tests {
                 .unwrap();
         assert!(!run.finished(), "the proof the agent asked for has not run");
         run.proved_request = 1;
-        assert!(run.finished(), "no proof waits or failed");
+        assert!(!run.finished(), "a summary is not a proof");
+        run.status = parse(r#"{"steps":[],"summary":"done"}"#).unwrap();
+        assert!(run.summary_without_proof(), "the agent is told to ask for a proof");
     }
 
     #[test]

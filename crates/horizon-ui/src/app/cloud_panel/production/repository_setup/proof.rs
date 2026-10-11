@@ -530,8 +530,9 @@ impl Job {
 }
 
 /// Clones the repository's git folder into the volume once, fetches it after, and checks
-/// out the commit Horizon names; build output and caches stay between runs.
-const CLONE: &str = "set -e; git config --global --add safe.directory '*'; \
+/// out the commit Horizon names; build output and caches stay between runs. It runs as
+/// root, so its Git settings go to the container's system file, not the shared home.
+const CLONE: &str = "set -e; git config --system --add safe.directory '*'; \
 if [ -d /workspace/checkout/.git ]; then git -C /workspace/checkout fetch -q /src.git '+refs/*:refs/src/*'; \
 else git clone -q --no-hardlinks --no-checkout /src.git /workspace/checkout && \
 git -C /workspace/checkout fetch -q /src.git '+refs/*:refs/src/*'; fi; \

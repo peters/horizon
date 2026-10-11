@@ -19,9 +19,18 @@ impl HorizonApp {
     /// Starts the setup agent in a hidden panel; the dialog shows its progress and
     /// passes the person's messages to it.
     pub(in crate::app::cloud_panel::production) fn start_cloud_repository_setup(&mut self, ctx: &egui::Context) {
-        // One setup at a time: a run left working with the dialog closed stops first, so
-        // its hidden agent never runs on without a view.
-        if self.cloud_prototype.production.setup_run.is_some() {
+        // One setup at a time. A run still working for another repository is not stopped
+        // behind the person's back; a finished or stopped one is cleared.
+        if let Some(run) = self.cloud_prototype.production.setup_run.as_ref() {
+            let same = std::fs::canonicalize(&self.cloud_prototype.production.repository)
+                .is_ok_and(|repository| repository == run.repository);
+            if !same && !run.finished() && !run.stopped {
+                self.cloud_prototype.error = Some(format!(
+                    "The setup of {} is still working. Open New cloud for it to finish or stop it first.",
+                    run.repository.display()
+                ));
+                return;
+            }
             self.cloud_repository_setup_action(ctx, Action::Stop);
         }
         let presets = super::setup_choices(&self.cloud_prototype.production);
@@ -70,7 +79,7 @@ impl HorizonApp {
         // Deliberately local: config preparation must not inherit a focused cloud.
         let result = self.board.create_panel(
             PanelOptions {
-                name: Some("Cloud repository setup".into()),
+                name: Some(PANEL_NAME.into()),
                 name_is_custom: Some(true),
                 kind,
                 command: preset.command.clone(),
@@ -113,6 +122,7 @@ impl HorizonApp {
     /// Samples the agent's screen, delivers a pending Enter, lists the files of a
     /// finished run and notices a setup panel that closed.
     pub(in crate::app::cloud_panel::production) fn sync_cloud_repository_setup(&mut self, ctx: &egui::Context) {
+        self.close_orphaned_setup_panels();
         let Some(run) = self.cloud_prototype.production.setup_run.as_mut() else {
             return;
         };
@@ -148,6 +158,11 @@ impl HorizonApp {
             }
             ctx.request_repaint_after(run::OUTPUT_EVERY);
         }
+        // A summary without a proof request gets one reminder: Use needs Horizon's proof.
+        let report = report.or_else(|| {
+            (run.summary_without_proof() && !std::mem::replace(&mut run.proof_missing_reported, true))
+                .then(|| MISSING_PROOF.to_owned())
+        });
         if let Some(report) = report {
             panel.write_input(&run::pasted(&report));
             run.submit_at = Some(Instant::now() + run::SUBMIT_DELAY);
@@ -316,6 +331,30 @@ impl HorizonApp {
         }
         set_configuration(&mut self.cloud_prototype.production, Configuration::Committed);
         self.read_cloud_profiles(ctx);
+    }
+}
+
+/// What the agent hears when it wrote a summary but no proof Horizon could run.
+const MISSING_PROOF: &str = "Horizon has no proof to run: put a valid proof in the status file (a workflow with at least one job, or commands) and set proof_request to 1. Use this setup waits for Horizon's proof.";
+
+/// The name of a setup agent's hidden panel.
+const PANEL_NAME: &str = "Cloud repository setup";
+
+impl HorizonApp {
+    /// Closes hidden setup panels that no run follows, such as one restored after a
+    /// restart: its saved arguments hold the prompt, so it would set up again unseen.
+    fn close_orphaned_setup_panels(&mut self) {
+        let current = self.cloud_prototype.production.setup_run.as_ref().map(|run| run.panel);
+        let orphans: Vec<_> = self
+            .board
+            .panels
+            .iter()
+            .filter(|panel| !panel.visible && panel.title == PANEL_NAME && Some(panel.id) != current)
+            .map(|panel| panel.id)
+            .collect();
+        for panel in orphans {
+            self.close_panel(panel);
+        }
     }
 }
 

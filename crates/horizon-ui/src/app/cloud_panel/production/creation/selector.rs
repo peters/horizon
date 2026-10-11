@@ -36,8 +36,7 @@ impl Default for State {
             in_stock_only: true,
             show_below_minimums: false,
             wait_for_stock: false,
-            // People start with the three picks; UI tests work with every worker and filter.
-            show_all: cfg!(test),
+            show_all: false,
         }
     }
 }
