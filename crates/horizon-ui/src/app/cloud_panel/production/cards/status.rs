@@ -262,6 +262,17 @@ fn blank() -> Status {
 /// its aftermath, and a running provider check.
 fn exceptional(runtime: &Runtime) -> Option<Status> {
     let base = blank();
+    // The session and the record are saved off the frame before a deployment starts;
+    // until then no action can start, so none is offered. A retried read of an
+    // unreadable record is a preparation too, and still says so.
+    if runtime.preparation.is_some() {
+        return Some(Status {
+            tone: Tone::Live,
+            verb: "Preparing".into(),
+            numbers: "Saving the session and the deployment record".into(),
+            ..base
+        });
+    }
     if runtime.state_unavailable {
         return Some(Status {
             tone: Tone::Failed,
@@ -359,6 +370,11 @@ pub(super) fn keep(runtime: &mut Runtime, status: Status, frame: u64) {
 
 pub(super) fn of(runtime: &Runtime, occupancy: Occupancy, now: SystemTime) -> Status {
     let mut status = unmarked(runtime, occupancy, now);
+    // A new panel's session is still being saved in the record: every lifecycle action
+    // waits for it, so the card, and the cloud list that counts what it can stop, offer none.
+    if runtime.sessions.saving() {
+        status.primary = None;
+    }
     status.track.skipped = skipped(runtime, status.track.stages);
     status.binds_image = runtime.state.as_ref().map_or(runtime.launched_binds, |state| {
         horizon_core::cloud_runtime::registry::repository_of(&state.profile.image).is_some()

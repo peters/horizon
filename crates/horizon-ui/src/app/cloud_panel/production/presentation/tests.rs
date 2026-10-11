@@ -227,6 +227,7 @@ fn new_panels_share_a_checkout_while_recorded_sessions_keep_their_paths() {
         let command = options.args.last().unwrap();
         assert_eq!(command.contains("--shared"), id != "legacy");
     }
+    app.cloud_prototype.production.runtimes[&1].sessions.wait();
     let store = cloud_runtime::state::Store::lock(&directory).unwrap();
     let saved = store.load().unwrap().unwrap();
     assert_eq!(saved.sessions.len(), 3);
@@ -379,6 +380,117 @@ fn add_restored_member(app: &mut HorizonApp, local: &str, kind: PanelKind) {
 
 #[test]
 #[cfg(unix)]
+fn a_new_panel_adds_its_session_to_the_record_a_running_save_holds() {
+    let (temp, mut app) = restore_fixture();
+    let directory = temp.path().join("fixture");
+    let record = cloud_runtime::state::Store::lock(&directory)
+        .unwrap()
+        .load()
+        .unwrap()
+        .unwrap();
+    app.cloud_prototype.production.runtimes.get_mut(&1).unwrap().sessions =
+        super::super::session_record::Sessions::saving_for_test(&directory, record);
+    // The save holds the record's lock, and the disk would not answer a read.
+    std::fs::remove_file(directory.join("deployment.json")).unwrap();
+    let made = std::process::Command::new("mkfifo")
+        .arg(directory.join("deployment.json"))
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let started = std::time::Instant::now();
+    for _ in 0..2 {
+        let mut options = horizon_core::PanelOptions {
+            kind: PanelKind::Shell,
+            local_id: Some("new-shell".into()),
+            ..Default::default()
+        };
+        app.prepare_cloud_remote_panel(0, &mut options).unwrap();
+        assert!(options.args.last().unwrap().contains("new-shell"));
+    }
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    let saving = app.cloud_prototype.production.runtimes[&1]
+        .sessions
+        .saving_record()
+        .unwrap();
+    let added: Vec<_> = saving
+        .sessions
+        .iter()
+        .map(|session| session.panel_id.as_str())
+        .collect();
+    assert_eq!(
+        added,
+        ["new-shell"],
+        "the second panel found the session the first added"
+    );
+    assert!(
+        app.cloud_prototype.production.runtimes[&1].busy(),
+        "no operation that locks the record starts while the save holds it"
+    );
+    super::super::session_record::Sessions::end_for_test(&directory);
+}
+
+#[test]
+#[cfg(unix)]
+fn a_preparation_after_a_session_switch_waits_for_the_save_the_old_runtime_started() {
+    use std::os::unix::fs::PermissionsExt;
+    let (temp, mut app) = restore_fixture();
+    let ctx = egui::Context::default();
+    let directory = temp.path().join("fixture");
+    let writable = |mode| std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(mode)).unwrap();
+    // The record's folder takes no new file, so the save of the new panel's session fails.
+    writable(0o500);
+    let mut options = horizon_core::PanelOptions {
+        kind: PanelKind::Shell,
+        local_id: Some("new-shell".into()),
+        ..Default::default()
+    };
+    app.prepare_cloud_remote_panel(0, &mut options).unwrap();
+    // A session switch drops the runtimes but keeps the cloud.
+    let state = app.cloud_prototype.production.runtimes[&1].state.clone();
+    app.cloud_prototype.production.runtimes.clear();
+    app.cloud_prototype.production.runtimes.insert(
+        1,
+        Runtime {
+            state,
+            sessions: super::super::session_record::Sessions::of(&directory),
+            ..Default::default()
+        },
+    );
+    assert!(
+        app.cloud_prototype.production.runtimes[&1].busy(),
+        "the new runtime counts the cloud as busy while the save runs"
+    );
+    // Without settings the preparation stops once it read the record.
+    std::fs::remove_file(temp.path().join("settings.json")).unwrap();
+    app.start_production_deployment(1, &ctx);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    app.poll_cloud_preparations(&ctx);
+    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    assert!(
+        runtime.preparation.is_some() && runtime.error.is_none(),
+        "the preparation waits for the save before it reads the record"
+    );
+
+    writable(0o700);
+    app.finish_cloud_preparations(&ctx);
+    let error = app.cloud_prototype.production.runtimes[&1]
+        .error
+        .clone()
+        .unwrap_or_default();
+    assert!(error.contains("settings.json"), "{error}");
+    let saved = cloud_runtime::state::Store::lock(&directory)
+        .unwrap()
+        .load()
+        .unwrap()
+        .unwrap();
+    assert!(
+        saved.sessions.iter().any(|session| session.panel_id == "new-shell"),
+        "the save recorded the session before the preparation read the record"
+    );
+}
+
+#[test]
+#[cfg(unix)]
 fn failed_member_attachment_retries_without_replacing_successful_terminal() {
     let (temp, mut app) = restore_fixture();
     add_restored_member(&mut app, "first-shell", PanelKind::Shell);
@@ -409,6 +521,7 @@ fn failed_member_attachment_retries_without_replacing_successful_terminal() {
         .get_mut(&1)
         .unwrap()
         .next_attachment_attempt = None;
+    app.cloud_prototype.production.runtimes[&1].sessions.wait();
     let lock = cloud_runtime::state::Store::lock(&temp.path().join("fixture")).unwrap();
     app.sync_cloud_presentations();
     assert!(

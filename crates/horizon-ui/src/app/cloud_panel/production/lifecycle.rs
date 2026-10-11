@@ -103,7 +103,9 @@ impl Runtime {
     ) {
         let tx = self.hold_failure_for_check();
         let ctx = ctx.clone();
+        let fence = super::session_record::fence(&state_root);
         std::thread::spawn(move || {
+            fence.wait();
             let result = cloud_runtime::lifecycle::check_lost_worker(
                 &state_root,
                 &settings,
@@ -218,6 +220,8 @@ impl Runtime {
         self.remote_release.is_some()
             || self.resize.busy()
             || self.checking_provider()
+            || self.preparation.is_some()
+            || self.sessions.saving()
             || (self.receiver.is_some() && self.stage != Some(Stage::Ready))
     }
 
@@ -248,6 +252,9 @@ impl Runtime {
 
     pub(super) fn can_release_remote_devices(&self) -> bool {
         self.remote_release.is_none()
+            // The release locks the record, which a preparation or a session save holds.
+            && self.preparation.is_none()
+            && !self.sessions.saving()
             && (self.receiver.is_none() || self.stage == Some(Stage::Ready))
             && self.state.as_ref().is_some_and(|state| {
                 state.requires_browserstack_release()
@@ -470,7 +477,8 @@ impl HorizonApp {
             .production
             .runtimes
             .get(&id)
-            .is_some_and(|runtime| runtime.receiver.is_some())
+            // A preparation that has not locked the record yet would write it again.
+            .is_some_and(|runtime| runtime.receiver.is_some() || runtime.preparation.is_some())
         {
             return;
         }
