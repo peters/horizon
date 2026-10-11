@@ -273,6 +273,8 @@ impl HorizonApp {
             self.read_cloud_profiles(ctx);
         }
         self.request_cloud_prices(ctx);
+        // Start needs the tailnet settings, and their picker now waits in More options.
+        self.cloud_prototype.production.tailnets.poll(ctx);
         self.offer_setup_presets();
         self.sync_cloud_repository_setup(ctx);
         checks::update(
@@ -526,7 +528,6 @@ fn title_field(ui: &mut Ui, form: &mut Production, submit: &mut bool) {
         &mut form.title,
         "e.g. Feature development",
     );
-    title_requirement(ui, form);
     if title.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) && can_submit(form) {
         *submit = true;
     }
@@ -569,8 +570,6 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
             action = RepositoryAction::Setup;
         }
         ui.add_space(12.0);
-        form.tailnets.choice(ui, &mut form.tailnet);
-        ui.add_space(12.0);
         machine(ui, form)
     } else {
         false
@@ -587,6 +586,11 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
         .id_salt("cloud-more-options")
         .default_open(form.profiles.is_none() && !form.launch.loading())
         .show(ui, |ui| {
+            // A tailnet is chosen rarely, so it waits here instead of above the machine.
+            if form.profiles.is_some() && !form.launch.loading() {
+                form.tailnets.choice(ui, &mut form.tailnet);
+                ui.add_space(8.0);
+            }
             if listed
                 && let Some(profile) = form
                     .profiles
@@ -682,16 +686,6 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production) -> RepositoryAction {
         RepositoryAction::Load
     } else {
         RepositoryAction::None
-    }
-}
-
-fn title_requirement(ui: &mut Ui, form: &Production) {
-    if form.title.trim().is_empty() && !checks::source_step(form) {
-        ui.label(
-            RichText::new("A cloud title is required before Start cloud can be used.")
-                .size(14.0)
-                .color(theme::FG()),
-        );
     }
 }
 

@@ -310,13 +310,9 @@ pub(super) fn quick_start_note(ui: &mut egui::Ui, form: &mut Production) -> bool
     if form.profiles.is_none() || form.launch.configuration != Configuration::Committed {
         return false;
     }
-    ui.add_space(6.0);
+    ui.add_space(4.0);
     let update = ui
-        .add(
-            action_button("Update setup from CI")
-                .min_size(Vec2::new(120.0, 40.0))
-                .corner_radius(10),
-        )
+        .add(action_button("Update setup from CI"))
         .on_hover_text("An agent checks the image against your CI now and updates .horizon in place.")
         .clicked();
     if update {
@@ -324,11 +320,6 @@ pub(super) fn quick_start_note(ui: &mut egui::Ui, form: &mut Production) -> bool
     }
     update
 }
-
-/// Profiles read from the commit mean it has its own `.horizon/cloud.yml`; a missing
-/// one leaves no profiles.
-const COMMITTED_NOTE: &str =
-    "Quick start does not apply: this commit has its own .horizon/cloud.yml, so its profiles are used.";
 
 fn quick_start_text(form: &Production) -> Option<String> {
     form.profiles.as_ref()?;
@@ -342,8 +333,8 @@ fn quick_start_text(form: &Production) -> Option<String> {
                 digest.get(..12).unwrap_or(digest)
             ))
         }
-        Configuration::Committed => Some(COMMITTED_NOTE.to_owned()),
-        Configuration::LocalImageOnly => None,
+        // Profiles read from the commit or the working copy need no note.
+        Configuration::Committed | Configuration::LocalImageOnly => None,
     }
 }
 
@@ -383,7 +374,7 @@ mod tests {
         let mut form = Production::default();
         assert_eq!(quick_start_text(&form), None, "nothing is read yet");
         form.profiles = Some(quick_start::builtin().unwrap());
-        assert_eq!(quick_start_text(&form).as_deref(), Some(COMMITTED_NOTE));
+        assert_eq!(quick_start_text(&form), None, "committed profiles need no note");
         form.launch.configuration = Configuration::QuickStart;
         let note = quick_start_text(&form).unwrap();
         assert!(note.starts_with("Quick start on the public base image"), "{note}");

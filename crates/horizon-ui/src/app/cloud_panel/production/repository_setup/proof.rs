@@ -56,15 +56,21 @@ impl Spec {
         })
     }
 
-    /// The localci arguments for this proof; `fast` for the warm rerun.
-    fn localci_args(&self, fast: bool) -> Vec<String> {
+    /// The localci arguments for this proof; `fast` for the warm rerun, which compares
+    /// against `base`, the proved commit, since the clone's own default branch is
+    /// whatever this computer's checkout last fetched.
+    fn localci_args(&self, fast: bool, base: &str) -> Vec<String> {
         let mut args = vec!["run".to_owned(), "-w".to_owned(), self.workflow.clone()];
         args.extend(self.jobs.iter().cloned());
         args.extend(["--event".to_owned(), self.event.clone()]);
         for step in &self.skip {
             args.extend(["--skip".to_owned(), step.clone()]);
         }
-        args.push(if fast { "--fast" } else { "--cache" }.to_owned());
+        if fast {
+            args.extend(["--fast".to_owned(), "--base".to_owned(), base.to_owned()]);
+        } else {
+            args.push("--cache".to_owned());
+        }
         args
     }
 }
@@ -298,6 +304,21 @@ impl Job {
     /// Clones the committed repository into the proof volume, or brings the clone
     /// up to date, so build output and caches stay between runs.
     fn prepare(&self, log: &mut Option<std::fs::File>) -> Result<(), String> {
+        // A worktree's .git only points into its repository's shared git folder, so the
+        // clone reads that folder and checks out the worktree's own commit.
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .arg("-C")
+                .arg(&self.repository)
+                .args(args)
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        };
+        let head = git(&["rev-parse", "HEAD"]).ok_or("the repository has no commit")?;
+        let common = git(&["rev-parse", "--path-format=absolute", "--git-common-dir"])
+            .ok_or("cannot find the repository's git folder")?;
         let mut own = Command::new("docker");
         own.args(["run", "--rm", "-v"])
             .arg(format!("{}:/workspace", self.volume))
@@ -309,13 +330,23 @@ impl Job {
             .args(["run", "--rm", "--user", "10001:10001", "-v"])
             .arg(format!("{}:/workspace", self.volume))
             .arg("-v")
-            .arg(format!("{}:/src:ro", self.repository.display()))
-            .args(["-e", "HOME=/workspace/home", "--entrypoint", "sh", &self.image, "-c"])
+            .arg(format!("{common}:/src.git:ro"))
+            .args(["-e", "HOME=/workspace/home", "-e"])
+            .arg(format!("HEAD_SHA={head}"))
+            .args(["--entrypoint", "sh", &self.image, "-c"])
             .arg(CLONE);
         self.stream(clone, log)
     }
 
     fn ci(&self, fast: bool, log: &mut Option<std::fs::File>) -> Result<(), String> {
+        let head = Command::new("git")
+            .arg("-C")
+            .arg(&self.repository)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .ok()
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+            .unwrap_or_default();
         let mut command = Command::new("docker");
         command
             .args(["run", "--rm", "--user", "10001:10001", "-v"])
@@ -334,7 +365,7 @@ impl Job {
         let script = format!(
             "{SESSION_ENV} exec localci {}",
             self.spec
-                .localci_args(fast)
+                .localci_args(fast, &head)
                 .iter()
                 .map(|arg| shell_quote(arg))
                 .collect::<Vec<_>>()
@@ -407,10 +438,12 @@ impl Job {
     }
 }
 
-/// Clones `/src` into the volume once and moves the clone to its committed head after.
+/// Clones the repository's git folder into the volume once, fetches it after, and checks
+/// out the commit Horizon names; build output and caches stay between runs.
 const CLONE: &str = "set -e; git config --global --add safe.directory '*'; \
-if [ -d /workspace/checkout/.git ]; then git -C /workspace/checkout fetch -q /src HEAD && git -C /workspace/checkout reset -q --hard FETCH_HEAD; \
-else git clone -q --no-hardlinks /src /workspace/checkout; fi";
+if [ -d /workspace/checkout/.git ]; then git -C /workspace/checkout fetch -q /src.git '+refs/heads/*:refs/remotes/src/*'; \
+else git clone -q --no-hardlinks --no-checkout /src.git /workspace/checkout; fi; \
+git -C /workspace/checkout checkout -q --force --detach \"$HEAD_SHA\"";
 
 /// Applies the image's session environment, as a worker session gets it.
 const SESSION_ENV: &str = "for f in /etc/horizon-worker/session-env.d/*.env; do [ -f \"$f\" ] || continue; \
@@ -454,7 +487,7 @@ mod tests {
         .unwrap();
         assert_eq!(spec.event, "push", "push by default");
         assert_eq!(
-            spec.localci_args(true),
+            spec.localci_args(true, "abc123"),
             [
                 "run",
                 "-w",
@@ -465,7 +498,9 @@ mod tests {
                 "push",
                 "--skip",
                 "Use isolated NuGet caches",
-                "--fast"
+                "--fast",
+                "--base",
+                "abc123"
             ]
         );
         assert!(Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": []})).is_none());

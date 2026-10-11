@@ -152,8 +152,13 @@ pub(super) fn field(ui: &mut Ui, profile: &mut Profile, provider: &Description) 
     } else {
         provider.cpu_volume_gb
     };
+    let workspace_note = if profile.gpu {
+        "Files survive a stop, but are deleted with the pod."
+    } else {
+        "Your workspace is retained when the worker stops."
+    };
     ui.horizontal(|ui| {
-        let label = ui.label("Workspace size");
+        let label = ui.label("Workspace size").on_hover_text(workspace_note);
         ui.add(
             DragValue::new(&mut profile.storage.volume_gb)
                 .range(f64::from(min)..=f64::from(max))
@@ -161,33 +166,30 @@ pub(super) fn field(ui: &mut Ui, profile: &mut Profile, provider: &Description) 
         )
         .labelled_by(label.id);
     });
-    ui.small(if profile.gpu {
-        "Files survive a stop, but are deleted with the pod."
-    } else {
-        "Your workspace is retained when the worker stops."
-    });
     let container_max = if provider.kind == Kind::RunPod && !profile.gpu {
         flavors::max_container_gb()
     } else {
         u16::MAX
     };
+    let disk_note = if provider.kind == Kind::Hetzner {
+        "Choose a server type with at least this much system disk."
+    } else {
+        "Temporary storage for the image and installed tools; cleared when the worker stops."
+    };
     ui.horizontal(|ui| {
-        let label = ui.label(if provider.kind == Kind::Hetzner {
-            "System disk requirement"
-        } else {
-            "Container disk"
-        });
+        let label = ui
+            .label(if provider.kind == Kind::Hetzner {
+                "System disk requirement"
+            } else {
+                "Container disk"
+            })
+            .on_hover_text(disk_note);
         ui.add(
             DragValue::new(&mut profile.storage.container_gb)
                 .range(1..=container_max)
                 .suffix(" GB"),
         )
         .labelled_by(label.id);
-    });
-    ui.small(if provider.kind == Kind::Hetzner {
-        "Choose a server type with at least this much system disk."
-    } else {
-        "Temporary storage for the image and installed tools; cleared when the worker stops."
     });
     before != profile.storage
 }
