@@ -101,6 +101,10 @@ pub(super) struct Production {
     prices: prices::State,
     setup_agent: Option<PanelKind>,
     setup_agents: Vec<horizon_core::cloud_runtime::setup::Agent>,
+    /// The setup agent working for a repository without settings; it outlives the dialog.
+    setup_run: Option<repository_setup::Run>,
+    /// Where the next setup agent starts from: new, an update or a fix.
+    setup_mode: repository_setup::Mode,
     session_id: Option<String>,
     pub runtimes: HashMap<u32, Runtime>,
     companions: companions::State,

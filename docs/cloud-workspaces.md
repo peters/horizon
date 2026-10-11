@@ -471,33 +471,45 @@ is checked; they do not mean a worker is missing or authorize a replacement.
 ## Repository setup and deployment
 
 If the selected commit has no `.horizon/cloud.yml`, **New cloud** shows
-**This commit has no .horizon/cloud.yml**. This is not an error. The dialog then
-shows two choices:
+**No cloud setup yet**. This is not an error. The dialog then shows two choices:
 
-- **Quick start on the public base image** starts the repository on the base image.
-  See [Quick start](#quick-start).
-- **Open setup agent** opens a local agent panel that prepares the settings of the
-  repository.
+- **Quick start** starts the repository on the base image. See
+  [Quick start](#quick-start).
+- **Set up from CI** starts a setup agent, Claude or Codex, that prepares the
+  settings of the repository.
 
-The setup agent is a normal local agent panel with its existing local login.
-Horizon does not export the API-key bindings of remote workers to it. The agent
-reads the CI of the repository first, for example `.github/workflows`: the Linux
-jobs that restore, build and test, the tool versions they use and where those
-versions come from. For GitHub Actions it uses
+The setup agent is a normal local agent session with its existing local login.
+Horizon does not export the API-key bindings of remote workers to it. Its panel is
+hidden: the dialog becomes a preparation view, **Set up REPOSITORY**, because
+nothing is rented yet. The left column shows the steps (Read CI, Find tools,
+Write Dockerfile, Build image, Run CI in image, Desktop preview, Fast rerun), each
+with a short detail and its elapsed time. The right column is the agent's own
+terminal without panel chrome. Click it to type to the agent, for example to
+answer a question or to change its plan. A question also shows above the steps.
+**Stop** closes the agent. **Close** keeps it working, and **New cloud** shows it
+again for the same repository.
+
+The agent reads the CI of the repository first, for example `.github/workflows`:
+the Linux jobs that restore, build and test, the tool versions they use and where
+those versions come from. For GitHub Actions it uses
 [localci](https://github.com/peters/localci) when it is installed: `localci plan`
 resolves the jobs, and each `uses:` step that localci skips is a tool that the
-image must supply. Then it reads `AGENTS.md`, the README and existing
-Dockerfiles. It shows a plan with each CI step and how the worker image provides
-its tools, or why it skips the step. Then it writes `.horizon/Dockerfile` on the
-public worker base of [Quick start](#quick-start) and `.horizon/cloud.yml`. The image
-also gets a pinned localci release, so agents on the worker run the CI jobs with
-`localci run --fast`. When Docker is available, the setup agent builds the
-image, runs the worker check and runs the CI jobs in the image with localci,
-then once more with `--fast` to show the warm rerun. It does not allocate compute,
-push images, commit or open a pull request. Review its changes and prerequisites, run the repository checks
-and commit the setup. Then go back to **New cloud** and choose **Read
-.horizon/cloud.yml**. A change of the repository or YAML that is not valid clears
-the profiles that the dialog read before. Thus you cannot deploy an old profile
+image must supply. Then it reads `AGENTS.md`, the README and existing Dockerfiles.
+It writes `.horizon/Dockerfile` on the public worker base of
+[Quick start](#quick-start) and `.horizon/cloud.yml`. The image also gets a pinned
+localci release, so agents on the worker run the CI jobs with
+`localci run --fast`. When Docker is available, the setup agent builds the image,
+runs the worker check and runs the CI jobs in the image with localci, then once
+more with `--fast` to show the warm rerun. For a desktop app it starts the app on
+the worker desktop in the image, `:99`, which the cloud panel shows, and checks
+that a window drew. It asks before it uses a credential of yours, such as your
+GitHub token for a private package feed. It does not allocate compute, push
+images, commit or open a pull request.
+
+When the agent is done, **Use this setup** commits the files in `.horizon` and
+reads them as the repository profile, so **Start cloud** can use them. A change
+of the repository or YAML that is not valid clears the profiles that the dialog
+read before. Thus you cannot deploy an old profile
 by accident.
 
 If the read fails for a different cause, for example a committed

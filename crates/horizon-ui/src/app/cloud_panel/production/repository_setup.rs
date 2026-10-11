@@ -1,115 +1,266 @@
 //! A repository without cloud settings: quick start on the public base image, or a
 //! real local agent prepares the settings, before any allocation.
-use super::{HorizonApp, PanelKind, PanelOptions, Production};
+use super::{PanelKind, Production};
 use crate::app::cloud_panel::runtime::action_button;
 use crate::theme;
-use egui::{Frame, RichText, Stroke, Vec2};
+use egui::{Color32, Frame, RichText, Stroke, Vec2};
 use horizon_core::{
     cloud_panel::Placement,
     cloud_runtime::repository::launch::{Configuration, quick_start},
 };
+use std::path::Path;
 
-fn prompt(agents: &[horizon_core::cloud_runtime::setup::Agent]) -> String {
-    let base = quick_start::IMAGE;
-    // No machine account yet means no preference, not a profile without agents.
-    if agents.is_empty() {
-        return format!("{PROMPT}\nThe worker base for step 4 is {base}.");
-    }
-    let selection = agents.iter().map(|agent| agent.as_str()).collect::<Vec<_>>().join(", ");
-    format!(
-        "{PROMPT}\nThe worker base for step 4 is {base}.\nMachine account preference for new profiles: agents [{selection}]. Preserve existing repository profile choices unless I explicitly ask to change them."
-    )
-}
+mod prompt;
+mod run;
+mod session;
+pub(super) use prompt::Mode;
+#[cfg(test)]
+use prompt::prompt;
+pub(super) use run::{Action, Run};
 
 /// What the person chose for a repository without cloud settings.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(super) enum Choice {
     None,
     QuickStart,
     SetupAgent,
+    /// Something in the progress view of a running setup agent.
+    Run(Action),
 }
 
 /// The next steps for a repository without cloud settings. A commit with no
 /// `.horizon/cloud.yml` is a normal start, not a fault, so both choices show open as
-/// guidance; after another read failure the setup agent stays behind a section.
-pub(super) fn render(ui: &mut egui::Ui, form: &mut Production) -> Choice {
-    ui.add_space(12.0);
+/// guidance. After another read failure, `error`, the agent is offered to fix the settings.
+pub(super) fn render(ui: &mut egui::Ui, form: &mut Production, output_beside: bool, error: Option<&str>) -> Choice {
+    if !output_beside {
+        ui.add_space(12.0);
+    }
+    let repository = form.repository.clone();
+    if let Some(run) = form
+        .setup_run
+        .as_mut()
+        .filter(|run| same_folder(&run.repository, &repository))
+    {
+        let name = run.repository.file_name().map_or_else(
+            || "the repository".to_owned(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        // In one column the output well follows the steps, with the height the window leaves.
+        let output_height = (!output_beside).then(|| (ui.ctx().content_rect().height() - 700.0).clamp(160.0, 900.0));
+        return run::render(ui, run, &name, output_height).map_or(Choice::None, Choice::Run);
+    }
     if form.launch.unconfigured {
         return unconfigured(ui, form);
     }
-    ui.collapsing("No cloud configuration yet?", |ui| setup_agent(ui, form))
+    if let Some(error) = error {
+        return fix(ui, form, error);
+    }
+    ui.collapsing("No cloud configuration yet?", |ui| setup_agent(ui, form, "Set up"))
         .body_returned
         .unwrap_or(Choice::None)
 }
 
+/// Settings that do not load: the agent starts from the error instead of from nothing.
+fn fix(ui: &mut egui::Ui, form: &mut Production, error: &str) -> Choice {
+    let mut choice = Choice::None;
+    option_card(ui, theme::PALETTE_YELLOW(), |ui| {
+        ui.label(
+            RichText::new("Fix the settings with an agent")
+                .size(15.0)
+                .strong()
+                .color(theme::FG()),
+        );
+        ui.label(
+            RichText::new("It starts from the read error shown below, keeps the profile choices that are valid and proves the result.")
+                .size(12.5)
+                .color(theme::FG_SOFT()),
+        );
+        ui.add_space(8.0);
+        if setup_agent(ui, form, "Fix with") == Choice::SetupAgent {
+            form.setup_mode = Mode::Fix(error.to_owned());
+            choice = Choice::SetupAgent;
+        }
+    });
+    choice
+}
+
 fn unconfigured(ui: &mut egui::Ui, form: &mut Production) -> Choice {
     let mut choice = Choice::None;
-    Frame::new()
-        .fill(theme::PANEL_BG_ALT())
-        .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
-        .corner_radius(10)
-        .inner_margin(14)
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(
-                RichText::new("This commit has no .horizon/cloud.yml")
-                    .size(15.0)
-                    .strong()
-                    .color(theme::FG()),
-            );
-            ui.label(
-                RichText::new("Choose how this repository starts in the cloud.")
-                    .size(13.0)
-                    .color(theme::FG_SOFT()),
-            );
-            ui.add_space(10.0);
+    ui.label(
+        RichText::new("No cloud setup yet")
+            .size(15.0)
+            .strong()
+            .color(theme::FG()),
+    );
+    ui.add_space(6.0);
+    ui.columns(2, |columns| {
+        option_card(&mut columns[0], theme::FG_DIM(), |ui| {
+            ui.label(RichText::new("Quick start").size(15.0).strong().color(theme::FG()));
+            ui.label(RichText::new(QUICK_START_DETAIL).size(12.5).color(theme::FG_SOFT()));
+            ui.add_space(8.0);
             if ui
-                .add(action_button("Quick start on the public base image").min_size(Vec2::new(0.0, 34.0)))
+                .add(
+                    action_button("Start on the base image")
+                        .min_size(Vec2::new(120.0, 40.0))
+                        .corner_radius(10),
+                )
                 .clicked()
             {
                 choice = Choice::QuickStart;
             }
-            ui.label(RichText::new(QUICK_START_DETAIL).size(12.0).color(theme::FG_SOFT()));
-            ui.add_space(14.0);
-            ui.label(
-                RichText::new("Or prepare the repository's own settings")
-                    .size(13.0)
-                    .strong()
-                    .color(theme::FG()),
-            );
-            if setup_agent(ui, form) == Choice::SetupAgent {
+        });
+        // Files an earlier setup left uncommitted are where the agent continues.
+        let earlier = prompt::has_setup_files(Path::new(form.repository.trim()));
+        option_card(&mut columns[1], theme::ACCENT(), |ui| {
+            ui.label(RichText::new("Set up from CI").size(15.0).strong().color(theme::FG()));
+            let detail = if earlier { CONTINUE_DETAIL } else { SETUP_DETAIL };
+            ui.label(RichText::new(detail).size(12.5).color(theme::FG_SOFT()));
+            ui.add_space(8.0);
+            let verb = if earlier { "Continue with" } else { "Set up with" };
+            if setup_agent(ui, form, verb) == Choice::SetupAgent {
+                form.setup_mode = Mode::New;
                 choice = Choice::SetupAgent;
             }
         });
+    });
     choice
 }
 
-const QUICK_START_DETAIL: &str = "A 2 vCPU, 4 GB RunPod worker with Claude, Codex, Chromium and a desktop. It needs no registry login, no image build and no Docker on this computer.";
-
-fn setup_agent(ui: &mut egui::Ui, form: &mut Production) -> Choice {
-    ui.label("Let a local agent read this repository's CI and files, then prepare a worker image that runs its build and tests, and its cloud.yml. Review and commit the files, then return here and reload.");
-    ui.small(
-        "This setup terminal uses your local agent login. Cloud settings configure authentication on remote workers.",
+/// The preparation view's heading: no provider yet, because nothing is rented.
+pub(super) fn heading(ui: &mut egui::Ui, form: &Production) {
+    let name = Path::new(form.repository.trim()).file_name().map_or_else(
+        || "the repository".to_owned(),
+        |name| name.to_string_lossy().into_owned(),
     );
-    ui.horizontal_wrapped(|ui| {
-        ui.selectable_value(&mut form.setup_agent, Some(PanelKind::Codex), "Codex");
-        ui.selectable_value(&mut form.setup_agent, Some(PanelKind::Claude), "Claude");
+    let title = form
+        .setup_run
+        .as_ref()
+        .map_or_else(|| Mode::New.heading(&name), |run| run.mode.heading(&name));
+    ui.label(RichText::new(title).size(26.0).strong().color(theme::FG()));
+    ui.label(
+        RichText::new("An agent prepares a worker image from your CI. Nothing is rented yet.")
+            .size(14.0)
+            .color(theme::FG_SOFT()),
+    );
+}
+
+/// What the preparation view's footer asks for.
+pub(super) enum Footer {
+    None,
+    Close,
+    Run(Action),
+}
+
+/// Close keeps the agent working; Use this setup appears once it reports a summary.
+pub(super) fn footer(ui: &mut egui::Ui, form: &Production) -> Footer {
+    let finished = form.setup_run.as_ref().is_some_and(Run::finished);
+    let mut footer = Footer::None;
+    ui.horizontal(|ui| {
+        let hint = if finished {
+            "Use this setup commits the files in .horizon and reads them as this repository's profile."
+        } else {
+            "Close keeps the agent working. Open New cloud again to come back."
+        };
+        ui.label(RichText::new(hint).size(13.0).color(theme::FG_SOFT()));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if finished {
+                let primary = egui::Button::new(RichText::new("Use this setup").size(14.0).strong().color(theme::BG()))
+                    .fill(theme::ACCENT())
+                    .corner_radius(10)
+                    .min_size(Vec2::new(120.0, 40.0));
+                if ui.add(primary).clicked() {
+                    footer = Footer::Run(Action::Use);
+                }
+            }
+            let close = egui::Button::new(RichText::new("Close").size(14.0)).min_size(Vec2::new(120.0, 40.0));
+            if ui.add(close).clicked() {
+                footer = Footer::Close;
+            }
+        });
     });
-    let open = ui
-        .add_enabled(
-            !form.repository.trim().is_empty() && form.setup_agent.is_some(),
-            egui::Button::new("Open setup agent").fill(theme::PANEL_BG_ALT()),
-        )
-        .clicked();
+    footer
+}
+
+/// Whether a setup agent is working for the repository the dialog shows.
+pub(super) fn running_here(form: &Production) -> bool {
+    form.setup_run
+        .as_ref()
+        .is_some_and(|run| same_folder(&run.repository, &form.repository))
+}
+
+fn option_card(ui: &mut egui::Ui, tint: Color32, add: impl FnOnce(&mut egui::Ui)) {
+    Frame::new()
+        .fill(theme::blend(theme::PANEL_BG_ALT(), tint, 0.04))
+        .stroke(Stroke::new(
+            1.0,
+            theme::alpha(theme::blend(theme::BORDER_SUBTLE(), tint, 0.3), 220),
+        ))
+        .corner_radius(10)
+        .inner_margin(14)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.set_min_height(136.0);
+            // Columns lay out justified; card text and buttons keep their natural width.
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), add);
+        });
+}
+
+const QUICK_START_DETAIL: &str = "A 2 vCPU, 4 GB RunPod worker with Claude, Codex, Chromium and a desktop. It needs no registry login, no image build and no Docker on this computer.";
+const SETUP_DETAIL: &str = "An agent reads your CI, builds a worker image and runs your tests in it.";
+const CONTINUE_DETAIL: &str = "This folder has uncommitted files in .horizon. An agent continues from them, checks them against your CI and runs your tests.";
+
+fn same_folder(a: &Path, b: &str) -> bool {
+    let b = Path::new(b.trim());
+    a == b || std::fs::canonicalize(b).is_ok_and(|b| a == b)
+}
+
+/// The start button, `verb` and the agent's name, with the agent chooser beside it.
+fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str) -> Choice {
+    let kind = *form.setup_agent.get_or_insert(PanelKind::Claude);
+    let mut open = false;
+    ui.horizontal(|ui| {
+        let agent = if kind == PanelKind::Codex { "Codex" } else { "Claude" };
+        let label = format!("{verb} {agent}");
+        let primary = egui::Button::new(RichText::new(label).size(14.0).strong().color(theme::BG()))
+            .fill(theme::ACCENT())
+            .corner_radius(10)
+            .min_size(Vec2::new(120.0, 40.0));
+        open = ui.add_enabled(!form.repository.trim().is_empty(), primary).clicked();
+        egui::ComboBox::from_id_salt("cloud-setup-agent")
+            .selected_text(if kind == PanelKind::Codex { "Codex" } else { "Claude" })
+            .width(84.0)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut form.setup_agent, Some(PanelKind::Claude), "Claude");
+                ui.selectable_value(&mut form.setup_agent, Some(PanelKind::Codex), "Codex");
+            });
+    });
     if open { Choice::SetupAgent } else { Choice::None }
 }
 
 /// Under the profiles: which image a quick start runs and how to leave it, or why
-/// quick start does not apply to a commit with its own settings.
-pub(super) fn quick_start_note(ui: &mut egui::Ui, form: &Production) {
+/// quick start does not apply to a commit with its own settings. Committed settings
+/// can be updated from the CI; true when the person asked for that.
+pub(super) fn quick_start_note(ui: &mut egui::Ui, form: &mut Production) -> bool {
     if let Some(note) = quick_start_text(form) {
         ui.label(RichText::new(note).size(12.0).color(theme::FG_SOFT()));
     }
+    if form.profiles.is_none() || form.launch.configuration != Configuration::Committed {
+        return false;
+    }
+    ui.add_space(6.0);
+    let update = ui
+        .add(
+            action_button("Update setup from CI")
+                .min_size(Vec2::new(120.0, 40.0))
+                .corner_radius(10),
+        )
+        .on_hover_text("An agent checks the image against your CI now and updates .horizon in place.")
+        .clicked();
+    if update {
+        form.setup_agent.get_or_insert(PanelKind::Claude);
+        form.setup_mode = Mode::Update;
+    }
+    update
 }
 
 /// Profiles read from the commit mean it has its own `.horizon/cloud.yml`; a missing
@@ -144,55 +295,6 @@ pub(super) fn set_configuration(form: &mut Production, configuration: Configurat
     form.provider = None;
     form.launch.siblings = super::creation::siblings::State::default();
 }
-
-impl HorizonApp {
-    pub(super) fn start_cloud_repository_setup(&mut self, ctx: &egui::Context) {
-        let form = &self.cloud_prototype.production;
-        let Some(kind) = form.setup_agent else { return };
-        let repository = match std::fs::canonicalize(&form.repository) {
-            Ok(path) if path.is_dir() => path,
-            _ => {
-                self.cloud_prototype.error = Some("Choose an existing local repository directory".into());
-                return;
-            }
-        };
-        let workspace = self.board.ensure_local_workspace("Cloud setup");
-        // Deliberately local: config preparation must not inherit a focused cloud.
-        let result = self.board.create_panel(
-            PanelOptions {
-                name: Some("Cloud repository setup".into()),
-                name_is_custom: Some(true),
-                kind,
-                cwd: Some(repository),
-                args: vec![prompt(&form.setup_agents)],
-                transcript_root: self.transcript_root.clone(),
-                ..PanelOptions::default()
-            },
-            workspace,
-        );
-        match result {
-            Ok(panel) => {
-                self.cloud_prototype.production.creating = false;
-                // The workspace now holds the setup agent.
-                self.cloud_prototype.production.new_workspace = None;
-                self.cloud_prototype.error = None;
-                self.reveal_new_panel(ctx, workspace, panel);
-            }
-            Err(error) => self.cloud_prototype.error = Some(error.to_string()),
-        }
-    }
-}
-
-/// The setup agent derives the worker image from the repository's own CI first:
-/// CI is the tested recipe that turns a clean Linux machine into one that builds.
-const PROMPT: &str = "Prepare this repository for Horizon Cloud Workspaces. Derive the worker image from the repository's own CI and files, so that the restore, build and test commands its Linux CI runs also pass on the worker.
-1. Read the CI first: .github/workflows, and other CI files such as .gitlab-ci.yml or azure-pipelines.yml. Pick the Linux jobs that restore, build and test. Resolve every tool version to its source: follow env values, matrix values and job outputs back to repository files such as global.json, Directory.Build.props, .nvmrc, .python-version, rust-toolchain.toml or go.mod. Also list tools that steps use but CI never installs because the hosted runner provides them, for example shell: pwsh, jq or a preinstalled SDK. For GitHub Actions, use localci (https://github.com/peters/localci) when it is installed: localci check, then localci plan --json for those jobs. It resolves matrices, needs, outputs and conditions, and each uses: step it skips is a tool the image must provide.
-2. Then read AGENTS.md, the README and any existing Dockerfiles or devcontainer files. Reuse their pinned bases and install steps where they match the CI.
-3. Show the plan as a table: each CI step, its tool and version, where the version comes from, and how the image provides it, or why the step is skipped (secrets, publishing, other operating systems, services that need Docker). Then continue unless something is ambiguous.
-4. Write .horizon/Dockerfile FROM the worker base named below: Horizon's public Ubuntu 24.04 worker with SSH, Git, tmux, gh, Node 22, the Horizon helpers, Claude, Codex, Chromium and a desktop. Add the toolchains as root and pin their versions. Only when the CI runs in another container or operating system, start from that image instead and copy the Horizon helpers as the worker README describes. Sessions start over SSH and do not inherit ENV, so put each toolchain on PATH with a /etc/horizon-worker/session-env.d/20-REPOSITORY.env file (PATH_PREPEND=DIR and KEY=VALUE lines). For GitHub Actions, also install the newest localci release (x86_64-unknown-linux-musl), pinned by version and checked against its SHA256SUMS, so agents on the worker run the CI jobs in seconds with localci run --fast.
-5. Write .horizon/cloud.yml version 1 with a named default profile: provider: runpod, image (ghcr.io/OWNER/REPOSITORY-worker from the origin remote unless I name another), build {context: .horizon, dockerfile: .horizon/Dockerfile, platform: linux/amd64}, min_cpu and min_memory_gb sized for the build, gpu, and capabilities {agents, browsers, desktop} limited to what the base provides. Preserve GPU and runtime needs; never silently choose a CPU fallback.
-6. Prove it when Docker is available: build the image and run horizon-worker-check --git-auth in it. Then, in a container of the image as UID 10001, with the repository at /workspace/checkout, HOME on a writable directory and the session-env.d entries applied, run the CI jobs with localci run -w WORKFLOW JOB (add --event push or --ignore-if when a job condition is false locally), or run their commands directly for other CI systems. Run localci a second time with --fast to show the warm rerun a worker gets. Fix the Dockerfile until the jobs pass. Report each CI step as passed, skipped with the reason, or failed, and both run times.
-Keep all credentials in machine-local bindings, never in YAML, source, images or build caches; skip CI steps that need secrets instead of copying them. Do not allocate compute, push images, commit, or open a PR. References: https://github.com/peters/horizon/blob/main/docs/cloud-workspaces.md and https://github.com/peters/horizon/blob/main/examples/cloud-worker/README.md. When you are done, ask me to review and commit the setup, then to return to Cloud > New cloud and reload .horizon/cloud.yml.";
 
 #[cfg(test)]
 mod tests {
@@ -229,7 +331,11 @@ mod tests {
 
     #[test]
     fn selected_agent_preference_is_passed_without_machine_bindings() {
-        let text = prompt(&[horizon_core::cloud_runtime::setup::Agent::Claude]);
+        let text = prompt(
+            &[horizon_core::cloud_runtime::setup::Agent::Claude],
+            Path::new("/status.json"),
+            &Mode::New,
+        );
         assert!(text.contains("agents [claude]"));
         assert!(!text.contains("agents [codex"));
         assert!(text.contains("Preserve existing repository profile choices"));
@@ -238,7 +344,11 @@ mod tests {
 
     #[test]
     fn the_setup_agent_starts_from_ci_and_builds_on_the_pinned_base() {
-        let text = prompt(&[horizon_core::cloud_runtime::setup::Agent::Claude]);
+        let text = prompt(
+            &[horizon_core::cloud_runtime::setup::Agent::Claude],
+            Path::new("/status.json"),
+            &Mode::New,
+        );
         let ci = text.find(".github/workflows").unwrap();
         assert!(
             ci < text.find("AGENTS.md").unwrap(),
@@ -253,11 +363,18 @@ mod tests {
             "the worker iterates with a warm rerun"
         );
         assert!(text.contains("Do not allocate compute, push images, commit, or open a PR."));
+        assert!(
+            text.contains("rewrite the JSON file /status.json"),
+            "progress goes to the run's file"
+        );
+        for step in run::STEPS {
+            assert!(text.contains(step), "{step}");
+        }
     }
 
     #[test]
     fn no_machine_account_states_no_agent_preference() {
-        let text = prompt(&[]);
+        let text = prompt(&[], Path::new("/status.json"), &Mode::New);
         assert!(!text.contains("agents []"), "{text}");
         assert!(!text.contains("Machine account preference"));
     }
@@ -287,7 +404,10 @@ mod tests {
             .find(|panel| panel.title == "Cloud repository setup")
             .unwrap();
         assert_ne!(panel.workspace_id, cloud);
+        assert!(!panel.visible, "the dialog shows the agent's progress instead");
         assert!(panel.remote_workspace().is_none());
+        let run = app.cloud_prototype.production.setup_run.as_ref().unwrap();
+        assert_eq!(run.panel, panel.id);
         assert!(!app.board.cloud_groups.contains_panel(&app.board, panel.id));
         let workspace = panel.workspace_id;
         app.board.active_workspace = Some(cloud);
