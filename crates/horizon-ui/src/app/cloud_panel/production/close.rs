@@ -305,7 +305,10 @@ impl HorizonApp {
             return;
         }
         let error = error.filter(|error| error != super::DELETED_RESOURCES_MESSAGE);
+        let record = self.close_record(id);
         let close = &mut self.cloud_prototype.production.close;
+        close.records.insert(id, record);
+        close.record_read = Some(std::time::Instant::now());
         close
             .failed
             .insert(id, Failure::new(what, deletion_tried, error.as_deref()));
