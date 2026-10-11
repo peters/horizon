@@ -203,6 +203,13 @@ impl Draft {
                 continue;
             }
             if !value.is_empty() || (self.selected_agents().contains(&agent) && mode == Authentication::ApiKey) {
+                if value.is_empty() && saved.is_none() {
+                    return Err(Error::Invalid(if agent == Agent::Codex {
+                        "Enter a Codex API key or choose ChatGPT plan"
+                    } else {
+                        "Enter a Claude API key or choose subscription login"
+                    }));
+                }
                 validate_input(value, saved)?;
             }
         }
@@ -400,9 +407,7 @@ fn authentication(binding: Option<&PathBuf>) -> Authentication {
 
 fn validate_input(value: &str, saved: Option<&PathBuf>) -> Result<()> {
     if value.is_empty() {
-        return settings::validate_private_key_file(
-            saved.ok_or(Error::Invalid("Enter an API key or choose subscription login"))?,
-        );
+        return settings::validate_private_key_file(saved.ok_or(Error::Invalid("Enter an API key"))?);
     }
     let value = value.trim();
     if value.is_empty() || value.len() > 4096 || value.chars().any(|c| c.is_control() || c.is_whitespace()) {

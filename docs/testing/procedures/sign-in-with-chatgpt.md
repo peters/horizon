@@ -17,6 +17,11 @@ It checks the saved account, the plan notice, settings save, cancellation and
 sign-out. Codex offers **API key** and **ChatGPT plan** only. A saved Codex
 subscription choice changes to **ChatGPT plan** when the form opens.
 
+Settings saved by this build include `openai_auth`. Older builds that do not
+recognize this field refuse the settings file, also after an API-key save.
+Keep a private backup of the old settings before a downgrade test. Do not copy
+the new settings file to a machine with an older build.
+
 ## 2. Applicability
 
 - Candidate: a Horizon build with Sign in with ChatGPT in the Coding agents
@@ -91,7 +96,7 @@ subscription choice changes to **ChatGPT plan** when the form opens.
 
 1. Look at the connected card for an account granted plan usage.
 
-   Result: The card shows **You're using your ChatGPT plan for eligible work**
+   Result: The card shows **Your ChatGPT plan is connected on this computer**
    and a **Got it** button.
 
 2. Click **Got it**. Reopen Cloud settings.

@@ -1,5 +1,5 @@
-//! The Codex sign-in card: sign in with `ChatGPT` and let eligible work use the
-//! user's `ChatGPT` plan. The flow runs in the system browser against a loopback
+//! The Codex sign-in card stores a local `ChatGPT` plan connection. The flow
+//! runs in the system browser against a loopback
 //! callback; only the token-less account summary comes back to the form.
 use super::dashboard::{caption, label};
 use crate::{app::util::primary_button, theme};
@@ -172,7 +172,7 @@ impl Card {
         let mut message = if self.connection.is_some() {
             "Signed out of the previous account. Another saved account is still selected.".to_owned()
         } else {
-            "Signed out locally. Codex no longer uses your ChatGPT plan.".to_owned()
+            "Signed out locally. The saved ChatGPT plan connection was cleared.".to_owned()
         };
         if result.revoked != Some(true) {
             message.push_str(" Remote revocation was not confirmed; disconnect this app in ChatGPT Settings.");
@@ -261,7 +261,7 @@ impl Card {
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 ui.label(
-                    RichText::new("You're using your ChatGPT plan for eligible work.")
+                    RichText::new("Your ChatGPT plan is connected on this computer.")
                         .size(12.0)
                         .color(theme::PALETTE_YELLOW()),
                 );
@@ -301,7 +301,7 @@ impl Card {
         if !connection.plan_usage {
             caption(
                 ui,
-                "Sign this account in with a ChatGPT plan to use the plan for eligible work.",
+                "Sign in with an account that has a ChatGPT plan to enable this local connection.",
             );
         }
     }
@@ -325,7 +325,7 @@ pub(super) fn row(
     } else {
         caption(
             ui,
-            "Use your ChatGPT plan for eligible Codex work. Sign-in happens once, in your browser.",
+            "Connect your ChatGPT plan on this computer. Sign in once in your browser.",
         );
         if ui
             .add_enabled(

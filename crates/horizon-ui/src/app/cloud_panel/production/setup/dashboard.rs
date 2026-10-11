@@ -192,9 +192,9 @@ impl Readiness {
                 if draft.chatgpt_status_error.is_some() {
                     "The saved account status could not be verified. Reopen Cloud settings to retry.".into()
                 } else if plan_grant_missing(draft) {
-                    "This account lacks plan access. Sign out and use an eligible account, or choose an API key.".into()
+                    "This account lacks plan access. Sign out and use an eligible account, or select API key and enter a Codex API key.".into()
                 } else {
-                    "Sign in with ChatGPT for Codex, or choose another Codex option.".into()
+                    "Sign in locally with a ChatGPT plan for Codex, or select API key and enter a Codex API key.".into()
                 }
             } else if *agent == Agent::Codex {
                 "Paste the Codex API key, or choose ChatGPT plan.".into()

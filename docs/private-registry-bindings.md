@@ -97,6 +97,19 @@ target/debug/examples/cloud_deploy registry /private/cloud/settings.json /privat
 ```
 
 Import uses the same private settings transaction and rotation rules as the form.
+The selected agents need their saved credentials. For Codex with **ChatGPT plan**,
+complete the local sign-in in the **Cloud settings** UI and grant plan access
+before you import a binding. The sign-in must use the same cloud root: the
+directory that contains the `settings.json` path passed to the command. A
+sign-in saved under a different settings directory does not satisfy this gate.
+The headless `registry-bind`
+command cannot start this sign-in. You can select **API key** and enter a Codex
+API key in Cloud settings, or clear **Codex** from the selected agents instead.
+Keep at least one coding agent selected.
+An old Codex subscription choice changes to **ChatGPT plan** when settings load.
+Older builds cannot read settings saved by this build. Keep a private backup
+of the old settings before a downgrade test. See the
+[settings compatibility note](cloud-workspaces.md#one-time-machine-setup).
 Action JSON is one of:
 
 ```json

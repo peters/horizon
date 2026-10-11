@@ -183,11 +183,17 @@ fn credentials_are_required_only_for_selected_api_agents() {
     draft.openai_auth = Authentication::ApiKey;
     draft.anthropic_auth = Authentication::ApiKey;
     draft.settings.default_agents = vec![Agent::Codex];
-    assert!(draft.validate().is_err());
+    assert_eq!(
+        draft.validate().unwrap_err().to_string(),
+        "Enter a Codex API key or choose ChatGPT plan"
+    );
     *draft.openai_key = "synthetic-agent-key".into();
     assert!(draft.validate().is_ok());
     draft.settings.default_agents.push(Agent::Claude);
-    assert!(draft.validate().is_err());
+    assert_eq!(
+        draft.validate().unwrap_err().to_string(),
+        "Enter a Claude API key or choose subscription login"
+    );
     draft.anthropic_auth = Authentication::Subscription;
     assert!(draft.validate().is_ok());
     draft.settings.default_agents.clear();

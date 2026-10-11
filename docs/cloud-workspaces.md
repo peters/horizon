@@ -235,11 +235,25 @@ link, and how long it has run. No time left is shown for the whole clone: on
 that are known only at the end.
 
 Missing account settings open a repair form without losing the title or target
-workspace. Enter the compute API key and choose API-key or subscription login for
-the profile's agents. **Save and start** continues the submitted launch. A dedicated
+workspace. Enter the compute API key. For Codex, choose **API key** or
+**ChatGPT plan**. For Claude, choose **API key** or **Subscription login**.
+**Save and start** continues the submitted launch. A dedicated
 SSH identity is created when needed and keys stay in private machine-local files.
-Blank replacement fields preserve saved keys. Subscription login happens through
-the actual agent on the worker; worker readiness does not prove authentication.
+Blank replacement fields preserve saved keys. **ChatGPT plan** signs in on this
+computer; its saved credentials do not go to workers. Workers use their own
+terminal authentication. Claude subscription login happens through the actual
+agent on the worker. Worker readiness does not prove authentication.
+An old Codex subscription choice changes to **ChatGPT plan** when Cloud settings
+opens. The **Cloud settings** and **New cloud** forms in the Horizon UI require
+a local sign-in with plan access for this choice. To use the other choice,
+select **API key** and enter a Codex API key. You can also clear **Codex** from
+the selected agents. Keep at least one coding agent selected. CLI and MCP deploy paths do not check or use this local
+plan account. The local account does not replace worker terminal authentication.
+
+Settings saved by this build include the `openai_auth` field, also for API-key
+mode. Older builds that do not recognize this field refuse the settings file.
+Keep a private backup of the old settings before a downgrade test. Do not copy
+the new settings file to a machine with an older build.
 Open **Cloud > Cloud settings** to change machine defaults without launching.
 On narrow windows, Cloud appears in the toolbar overflow.
 

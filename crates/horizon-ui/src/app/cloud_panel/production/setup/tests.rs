@@ -472,11 +472,9 @@ fn readiness_names_the_first_thing_left_to_do() {
     assert_eq!(first.tone, Tone::Attention);
     assert!(first.cause.contains("RunPod or Hetzner"));
     *draft.runpod_key = "synthetic-key".into();
-    assert!(
-        Readiness::of(&draft, None, &verified, false)
-            .cause
-            .contains("Sign in with ChatGPT")
-    );
+    let sign_in = Readiness::of(&draft, None, &verified, false);
+    assert!(sign_in.cause.contains("Sign in locally with a ChatGPT plan"));
+    assert!(sign_in.cause.contains("select API key and enter a Codex API key"));
     with_codex_api_key(&mut draft);
     assert!(
         Readiness::of(&draft, None, &verified, false)

@@ -16,7 +16,8 @@ groups and one primary action. Do not add an issue or device picker.
 The global Cloud menu owns New cloud, Cloud settings and Fit all. Remove the
 floating Cloud/RunPod control strip from the canvas. Settings uses a compact
 modal sharing the New cloud surface, with RunPod access followed by individual
-agent choices and API-key/subscription options. Advanced paths and registry
+agent choices. Codex has **API key** and **ChatGPT plan**. Claude has **API key**
+and **Subscription login**. Advanced paths and registry
 bindings remain available without making them the first-use experience.
 
 ```text
@@ -50,14 +51,17 @@ capabilities and missing authentication plainly.
 1. Open Cloud from a fresh instance. New cloud leads to the missing-account
    setup route without a hidden-file prerequisite. Cancel and Escape allocate
    nothing; keyboard focus stays contained and returns to the previous view.
-2. Enter a compute key and choose one or both supported agents. Configure API
-   authentication for one and subscription login for the other. Save once;
+2. Enter a compute key and choose one or both supported agents. Select **API key**
+   for Codex and **Subscription login** for Claude. If the test uses **ChatGPT
+   plan** for Codex, complete the local sign-in with the plan grant first. Save once;
    verify private machine-local files, no secret in YAML, logs, launch arguments,
    persisted panel data or clipboard. Blank replacement fields preserve saved
    credentials. Failed saves report errors and preserve the previous settings.
-3. Verify selected agents alone require credentials. Subscription authentication
-   opens the real worker CLI login flow and never claims an API key enables a
-   subscription. Explain when a browser-assisted login needs another device.
+3. Verify that only selected agents require credentials. Claude subscription
+   authentication uses the worker CLI login flow. The Codex **ChatGPT plan**
+   connection stays on this computer. Workers keep their terminal authentication.
+   Do not claim that an API key enables a subscription. Explain when a
+   browser-assisted login needs another device.
 4. Exercise an existing cloud.yml and then a repository without one. Start its
    setup in a real local agent panel, prepare the worker contract and YAML, reload
    it, and verify profile selection. No source changes are silently committed or

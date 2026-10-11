@@ -210,8 +210,8 @@ setting must open a repair form.
 
 2. Select **Codex** and **Claude**.
 
-   Result: The card shows a sign-in choice for each agent: **API key** or
-   **Subscription login**.
+   Result: Codex shows **API key** and **ChatGPT plan**. Claude shows **API key**
+   and **Subscription login**.
 
 3. For Claude, select **API key**.
 
@@ -224,7 +224,7 @@ setting must open a repair form.
 
    Result: The field shows a masked value.
 
-5. For Codex, select **API key** or **Subscription login**, as the test plan tells you.
+5. For Codex, select **API key** or **ChatGPT plan**, as the test plan tells you.
 
    Result: The card shows the choice.
 
@@ -232,8 +232,14 @@ setting must open a repair form.
    > device action, because characters can change.
 
 6. If Codex uses **API key**, ask the operator to paste the Codex API key.
+   If Codex uses **ChatGPT plan**, complete
+   [the local sign-in procedure](../sign-in-with-chatgpt.md) before you save.
+   To use the other choice, select **API key** and enter a Codex API key.
+   If the test does not need Codex, clear **Codex** from the selected agents.
 
-   Result: The field shows a masked value.
+   Result: The API key field shows a masked value, or the card shows the local
+   plan account. The saved account stays on this computer. Workers use their
+   own terminal authentication.
 
 7. Click **Save settings**.
 

@@ -334,13 +334,25 @@ A first cloud needs these items today:
 | Docker with buildx | Required, except for quick start. Quick start does not use Docker. | This computer |
 | `.horizon/cloud.yml` in the selected commit | Required, except for quick start or local image-only settings in **More options** | The repository. **New cloud** can open a setup agent that writes it. See [Repository setup](cloud-workspaces.md#repository-setup-and-deployment) |
 | Registry push and pull logins | Required for a private image | **Cloud settings > Container registry** |
-| Agent API key or subscription login | One for each agent | **Cloud settings** |
+| Codex API key or local ChatGPT plan; Claude API key or worker subscription login | One choice for each agent | **Cloud settings** |
 | Tailscale auth key | Optional | **Settings > Tailnets** |
 | Git push credential for the worker | Optional | `~/.horizon/cloud/settings.json` |
 
 Horizon makes the SSH identity for the worker. **Cloud settings** does not
 test a key when you save it. **New cloud** uses the key to get the live worker
 catalog. If it cannot get the catalog, you cannot start the cloud.
+
+The ChatGPT plan account stays on this computer. Its credentials do not go to
+workers. Workers use their own terminal authentication.
+An old Codex subscription choice changes to **ChatGPT plan**. With no Codex API
+key, the **Cloud settings** and **New cloud** forms in the Horizon UI require
+a local sign-in with plan access. You can select **API key** and enter a Codex
+API key, or clear **Codex** from the selected agents instead. Keep at least one
+coding agent selected. CLI and MCP deploy
+paths do not check or use this local plan account.
+Older builds cannot read settings saved by this build. See the
+[settings compatibility note](cloud-workspaces.md#one-time-machine-setup) before
+you test a downgrade or copy settings to another machine.
 
 Deploy sends committed source only. Horizon does not fetch your local clone
 from `origin` before deploy. Commit and update the branch before you start.

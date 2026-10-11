@@ -180,55 +180,6 @@ With Connect GitHub (Horizon **Cloud settings › GitHub**), each cloud's worker
 its own GitHub access, as the person, and renews it itself. The person connects
 GitHub and chooses its repositories; agents cannot set it up.
 
-## Codex authentication
-
-In **Cloud settings › Coding agents**, Codex takes **API key** or **ChatGPT
-plan**; the ChatGPT plan mode signs in with a ChatGPT account through the
-person's browser (Sign in with ChatGPT), and the stored tokens stay under the
-cloud root on the person's machine. Agents cannot run the sign-in, and worker
-handoff of the saved sign-in is not implemented yet: a worker's Codex without
-an API key still signs in through its own terminal.
-
-This is account setup on this machine, as with Connect GitHub. The flow opens
-the system browser. It does not add a Horizon browser-panel operation. Only
-the person authorizes the account. Settings save requires a renewable sign-in
-and the plan access grant. Public account status contains no tokens. An
-account with no grant shows **Needs plan access**. On Windows, the system
-Windows PowerShell installation must be available. Horizon verifies a
-protected discretionary access control list (DACL) for the current user
-before it writes or reads credentials.
-On macOS, the system `/bin/ls` and `/bin/chmod` must be available.
-Credential readers reject extended ACLs on directories and files. Writers remove
-extended ACLs from owned credential objects before they write token bytes.
-A cancelled attempt does not open a new authorization page.
-On Unix, credential reads reject a directory that another user owns or can access.
-Save checks the current saved account again. If another window changes or signs
-out that account, reopen settings before saving. If sign-out fails, the card
-keeps the last known account and shows the error. Reopen settings to check it.
-After sign-out, the card reads the selected account again. Another selected
-account stays visible. A missing or empty token key ID is refused.
-An ID token must include its issuance time. A time more than 60 seconds in the
-future is refused. Expiration and not-before checks have no clock-skew allowance.
-Local tokens are cleared before remote revocation starts. Remote requests do not
-hold the session lock after that clear. Discovery endpoints must use HTTPS on
-the trusted provider origin. Provider requests do not follow redirects.
-Empty access and refresh tokens are rejected before storage.
-A private journal lets Horizon recover an interrupted sign-in publication.
-Credential readers hold the session lock until all records and the active account
-selection are read. A concurrent sign-in cannot change part of that snapshot.
-If the selected account record is missing, Horizon refuses the store. It does
-not select another saved account. The newest record is used only when there is
-no active account selection.
-A browser sign-in can finish only if the selected account and its saved record
-remain unchanged. If another sign-in, sign-out or refresh changes them, start
-a new sign-in attempt.
-The loopback callback has a ten-minute deadline. Local connections cannot extend
-that deadline. Incomplete HTTP requests are refused.
-It restores the previous account selection if the credential write did not finish.
-A refresh before the provider's earliest time fails without a provider request.
-It does not wait or schedule a retry. A refused or malformed response does not
-change the saved token pair. Token responses must specify the Bearer token type.
-
 - Git and `gh` work without a token in the environment. The worker's root service
   answers for the cloud's repositories and its same-worker siblings. Agents never
   see the refresh token.
@@ -273,12 +224,79 @@ change the saved token pair. Token responses must specify the Bearer token type.
   repository, ask the person to pick it in **New cloud**. A repository missing from the
   list needs **Add repositories on GitHub** there.
 
+## Codex authentication
+
+In **Cloud settings › Coding agents**, Codex takes **API key** or **ChatGPT
+plan**; the ChatGPT plan mode signs in with a ChatGPT account through the
+person's browser (Sign in with ChatGPT), and the stored tokens stay under the
+cloud root on the person's machine. Agents cannot run the sign-in, and worker
+handoff of the saved sign-in is not implemented yet: a worker's Codex without
+an API key still signs in through its own terminal.
+
+An old Codex subscription choice changes to **ChatGPT plan** when settings load.
+The Cloud settings and New cloud forms in the Horizon UI require the local
+sign-in with the plan grant for this choice. The headless `registry-bind` command
+requires the same saved account. Complete its sign-in in Cloud settings before
+import. The sign-in must be in the same cloud root: the directory that contains
+the `settings.json` path passed to `registry-bind`. A sign-in in another settings
+directory does not satisfy this gate. CLI and MCP deploy paths do not check or use this
+local plan account. To use the API-key
+choice instead, select **API key** and enter a Codex API key. Worker terminal
+sign-in alone does not satisfy the local settings gate. You can also clear
+**Codex** from the selected agents. Keep at least one coding agent selected.
+
+Settings saved by this build include `openai_auth`, also for API-key mode.
+Older builds that do not recognize this field refuse the settings file. Keep a
+private backup of the old settings before a downgrade test. Do not copy the new
+settings file to a machine with an older build.
+
+This is account setup on this machine, as with Connect GitHub. The flow opens
+the system browser. It does not add a Horizon browser-panel operation. Only
+the person authorizes the account. Settings save requires a renewable sign-in
+and the plan access grant. Public account status contains no tokens. An
+account with no grant shows **Needs plan access**. On Windows, the system
+Windows PowerShell installation must be available. Horizon verifies a
+protected discretionary access control list (DACL) for the current user
+before it writes or reads credentials.
+On macOS, the system `/bin/ls` and `/bin/chmod` must be available.
+Credential readers reject extended ACLs on directories and files. Writers remove
+extended ACLs from owned credential objects before they write token bytes.
+A cancelled attempt does not open a new authorization page.
+On Unix, credential reads reject a directory that another user owns or can access.
+Save checks the current saved account again. If another window changes or signs
+out that account, reopen settings before saving. If sign-out fails, the card
+keeps the last known account and shows the error. Reopen settings to check it.
+After sign-out, the card reads the selected account again. Another selected
+account stays visible. A missing or empty token key ID is refused.
+An ID token must include its issuance time. A time more than 60 seconds in the
+future is refused. Expiration and not-before checks have no clock-skew allowance.
+Local tokens are cleared before remote revocation starts. Remote requests do not
+hold the session lock after that clear. Discovery endpoints must use HTTPS on
+the trusted provider origin. Provider requests do not follow redirects.
+Empty access and refresh tokens are rejected before storage.
+A private journal lets Horizon recover an interrupted sign-in publication.
+Credential readers hold the session lock until all records and the active account
+selection are read. A concurrent sign-in cannot change part of that snapshot.
+If the selected account record is missing, Horizon refuses the store. It does
+not select another saved account. The newest record is used only when there is
+no active account selection.
+A browser sign-in can finish only if the selected account and its saved record
+remain unchanged. If another sign-in, sign-out or refresh changes them, start
+a new sign-in attempt.
+The loopback callback has a ten-minute deadline. Local connections cannot extend
+that deadline. Incomplete HTTP requests are refused.
+The private journal restores the previous account selection if the credential
+write did not finish.
+A refresh before the provider's earliest time fails without a provider request.
+It does not wait or schedule a retry. A refused or malformed response does not
+change the saved token pair. Token responses must specify the Bearer token type.
+
+If the saved account status cannot be read, Cloud settings shows the error.
+A busy account lock does not prove that the account is signed out. Reopen
+Cloud settings after the other operation ends.
+
 ## Development-only registry
 
 The source example `cloud_deploy registry-mcp <registry-path>` exposes
 `cloud_registry`. It is not a shipped Horizon agent capability. Do not teach
 an agent to construct or change a private registry through it as a lifecycle fallback.
-
-If the saved account status cannot be read, Cloud settings shows the error.
-A busy account lock does not prove that the account is signed out. Reopen
-Cloud settings after the other operation ends.

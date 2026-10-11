@@ -4,7 +4,7 @@ feature: Cloud panels smoke test, area E (panels in a cloud)
 platforms: [linux]
 cost: rents compute
 destructive: no
-secrets: [Claude API key or subscription login, Codex API key or subscription login, cloud SSH identity in the private home]
+secrets: [Claude API key or subscription login, Codex API key or local ChatGPT plan, cloud SSH identity in the private home]
 owner: peters
 ---
 
