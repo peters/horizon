@@ -221,6 +221,33 @@ fn removing_anyway_leaves_no_record_directory_it_created() {
 
 #[test]
 #[cfg(unix)] // Durable cloud records require Unix directory durability.
+fn a_record_that_cannot_be_locked_keeps_the_cloud() {
+    let (temp, mut app) = test_app();
+    // A directory where the lock file goes: the record cannot be locked.
+    let lock = temp.path().join("fixture").join("operation.lock");
+    std::fs::create_dir_all(&lock).unwrap();
+    add_cloud(&mut app, temp.path(), Some(deployment()));
+    let close = &mut app.cloud_prototype.production.close;
+    close.confirming = Some(101);
+    close
+        .failed
+        .insert(101, Failure::new("Could not delete the cloud resources", true, None));
+    app.remove_cloud_anyway(101, &egui::Context::default());
+    assert_eq!(app.cloud_prototype.groups.0.len(), 1, "the cloud stays");
+    assert!(app.cloud_close_confirmation_open(), "the dialog asks again");
+    let failure = &app.cloud_prototype.production.close.failed[&101];
+    assert!(failure.deletion_tried, "removing anyway stays offered");
+    assert!(
+        failure
+            .reason
+            .starts_with("Could not remove the cloud: Cloud state I/O failed"),
+        "{failure:?}"
+    );
+    assert!(lock.is_dir(), "the record stays as it was");
+}
+
+#[test]
+#[cfg(unix)] // Durable cloud records require Unix directory durability.
 fn a_storage_journal_without_its_deployment_offers_the_deletion() {
     let (temp, mut app) = test_app();
     let path = temp.path().join("fixture");

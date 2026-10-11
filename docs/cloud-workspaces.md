@@ -916,7 +916,8 @@ that can remain. They can cost money until you delete them at the provider.
 Horizon keeps the state directory of the cloud. **Cancel** keeps the cloud.
 
 While a different operation of the cloud runs, for example a deployment or a
-provider check, the dialog tells you to wait and shows only **Cancel**. If a
+provider check, the dialog tells you to wait and shows only **Cancel**. If
+Horizon cannot lock the state directory of the cloud, for example because a
 different Horizon instance runs an operation of the cloud, **Remove from Horizon
 anyway** keeps the cloud and the dialog shows the reason.
 

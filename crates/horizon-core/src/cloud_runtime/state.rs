@@ -167,6 +167,25 @@ impl Store {
             lock_file: file,
         })
     }
+
+    /// Locks like [`Store::lock`] and says whether taking the lock created the record
+    /// directory. A directory it created but could not lock is removed again while empty.
+    /// # Errors
+    /// As [`Store::lock`].
+    pub fn lock_noting_creation(root: &Path) -> Result<(Self, bool)> {
+        let created = !root.try_exists()?;
+        match Self::lock(root) {
+            Ok(store) => Ok((store, created)),
+            Err(error) => {
+                // Busy means another controller holds a lock file in it. Otherwise
+                // anything in it is not this attempt's, and removing fails on it.
+                if created && !matches!(error, Error::Busy) {
+                    let _ = std::fs::remove_dir(root);
+                }
+                Err(error)
+            }
+        }
+    }
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
@@ -321,6 +340,29 @@ mod tests {
         store.remove_if_empty().unwrap();
         assert!(kept.join("operation.lock").exists());
         assert!(Store::lock(&kept).is_ok(), "the lock was released");
+    }
+    #[test]
+    #[cfg(target_os = "linux")] // Linux refuses paths of PATH_MAX (4096) bytes or more.
+    fn a_record_directory_that_cannot_be_locked_is_not_left_behind() {
+        let temp = tempfile::tempdir().unwrap();
+        let fresh = temp.path().join("fresh");
+        assert!(Store::lock_noting_creation(&fresh).unwrap().1);
+        assert!(!Store::lock_noting_creation(&fresh).unwrap().1);
+
+        // Short enough to create, too long for its lock file to open.
+        let mut parent = temp.path().to_path_buf();
+        while parent.as_os_str().len() < 3900 {
+            parent.push("d".repeat(150));
+        }
+        parent.push("d".repeat(4079 - parent.as_os_str().len()));
+        std::fs::create_dir_all(&parent).unwrap();
+        let record = parent.join("record");
+        assert!(matches!(Store::lock_noting_creation(&record), Err(Error::Io(_))));
+        assert!(parent.exists() && !record.exists());
+
+        std::fs::create_dir(&record).unwrap();
+        assert!(Store::lock_noting_creation(&record).is_err());
+        assert!(record.exists(), "a directory that was there stays");
     }
     #[test]
     #[cfg(unix)]

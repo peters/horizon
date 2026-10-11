@@ -548,8 +548,7 @@ impl HorizonApp {
             return Ok(None);
         };
         let path = cloud_runtime::state::cloud_directory(root, &launch.id)?;
-        let created = !path.try_exists()?;
-        Store::lock(&path).map(|store| Some((store, created)))
+        Store::lock_noting_creation(&path).map(Some)
     }
 
     fn cloud_removal_error(&mut self, id: u32, message: String) {
