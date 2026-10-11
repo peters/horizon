@@ -206,16 +206,22 @@ pub(super) fn render_group_header(
 
     let mut stop = false;
     if idle > 0 {
-        let text = egui::RichText::new("Stop idle…")
-            .color(theme::ACCENT())
-            .size(SUMMARY_TEXT_SIZE);
+        let label = text::line(ui, "Stop idle…", SUMMARY_TEXT_SIZE, text::MEDIUM, theme::ACCENT(), 80.0);
+        let button = egui::Rect::from_min_size(egui::pos2(x, center_y - label.size().y / 2.0), label.size());
+        ui.painter().galley(button.min, label, theme::ACCENT());
+        x = button.max.x + 6.0;
         let clouds = if idle == 1 { "1 idle cloud" } else { "idle clouds" };
-        let button = ui.put(
-            egui::Rect::from_min_size(egui::pos2(x, center_y - 9.0), egui::vec2(64.0, 18.0)),
-            egui::Button::new(text).frame(false),
+        // Not `ui.put`: a widget placed that way moves the cursor of the list.
+        let response = ui.interact(
+            button.expand2(egui::vec2(2.0, 4.0)),
+            ui.make_persistent_id(("sidebar_group_stop", group.key())),
+            egui::Sense::click(),
         );
-        x = button.rect.max.x + 6.0;
-        stop = button
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Stop idle…"));
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        stop = response
             .on_hover_text(format!(
                 "Choose which workers of the {clouds} in {} to stop",
                 group.label()
@@ -323,5 +329,23 @@ mod tests {
             labels.iter().any(|(label, _)| label == "$0.254/h · no local cost"),
             "{labels:?}"
         );
+    }
+
+    #[test]
+    fn a_header_with_stop_idle_keeps_the_list_where_it_was() {
+        use crate::test_egui::DiscardTextures;
+
+        let ctx = egui::Context::default();
+        let mut heights = Vec::new();
+        for idle in [0, 1] {
+            let _output = ctx
+                .run_ui(egui::RawInput::default(), |ui| {
+                    let top = ui.cursor().min.y;
+                    super::render_group_header(ui, horizon_core::cloud_list::Group::Cloud, 2, &[], idle);
+                    heights.push(ui.cursor().min.y - top);
+                })
+                .discard_textures();
+        }
+        assert!((heights[0] - heights[1]).abs() <= f32::EPSILON, "{heights:?}");
     }
 }

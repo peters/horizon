@@ -110,12 +110,11 @@ pub(super) fn name_labels_agent(kind: PanelKind, name: &str, name_is_custom: boo
 /// What a screen reader says for a workspace row: its name, the panel count that
 /// the row shows (`panels`, accordion only) and whether it is in a new window.
 pub(super) fn workspace_spoken(name: &str, panels: Option<usize>, detached: bool) -> String {
-    let mut spoken = name.to_owned();
-    match panels {
-        Some(1) => spoken.push_str(", 1 panel"),
-        Some(count) => spoken.push_str(&format!(", {count} panels")),
-        None => {}
-    }
+    let mut spoken = match panels {
+        Some(1) => format!("{name}, 1 panel"),
+        Some(count) => format!("{name}, {count} panels"),
+        None => name.to_owned(),
+    };
     if detached {
         spoken.push_str(", in a new window");
     }
