@@ -10,7 +10,7 @@ repository.workspace = true
 
 [features]
 default = ["cloud-workspaces"]
-cloud-workspaces = ["dep:horizon-cloud", "dep:horizon-cloud-protocol", "dep:ring", "dep:ed25519-dalek", "dep:if-addrs", "dep:simple-dns", "dep:socket2", "dep:tar"]
+cloud-workspaces = ["dep:horizon-cloud", "dep:horizon-cloud-protocol", "dep:ring", "dep:ed25519-dalek", "dep:if-addrs", "dep:simple-dns", "dep:socket2", "dep:tar", "dep:semver"]
 cloud-panel-mock = ["cloud-workspaces"]
 trace-profiling = ["profiling/profile-with-tracing"]
 
@@ -38,6 +38,7 @@ profiling.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
 serde_json.workspace = true
+semver = { workspace = true, optional = true }
 url.workspace = true
 ureq.workspace = true
 time.workspace = true
