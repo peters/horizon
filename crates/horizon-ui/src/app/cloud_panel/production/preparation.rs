@@ -43,6 +43,9 @@ impl HorizonApp {
         then: Option<lifecycle::Action>,
         ctx: &egui::Context,
     ) {
+        // Taken first, so a deployment that does not start leaves no sign-in for a later one.
+        let renew_github =
+            (self.cloud_prototype.production.runtimes.get(&id)).is_some_and(|runtime| runtime.renew_github.take());
         if self
             .cloud_prototype
             .production
@@ -91,6 +94,7 @@ impl HorizonApp {
                 settings_path: root.join("settings.json"),
                 first,
                 fence,
+                renew_github,
             },
             ctx,
         );
