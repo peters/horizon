@@ -340,7 +340,7 @@ impl HorizonApp {
             }
         }
 
-        self.finish_browser_host_io_for_switch();
+        self.finish_browser_host_io_before_replacement();
         let Some(pending) = self.pending_session_switch.take() else {
             return false;
         };
@@ -372,7 +372,7 @@ impl HorizonApp {
         if self.pending_session_switch.is_none() {
             return;
         }
-        self.finish_browser_host_io_for_switch();
+        self.finish_browser_host_io_before_replacement();
         let Some(pending) = self.pending_session_switch.take() else {
             return;
         };
