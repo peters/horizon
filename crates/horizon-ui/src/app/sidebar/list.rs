@@ -182,13 +182,27 @@ pub(super) fn render_group_header(
         theme::FG_SOFT(),
     );
     x += label.size().x + 7.0;
+    let workspaces = count;
     let count = text::mono(ui, &count.to_string(), 11.0, theme::FG_DIM());
     painter.galley(
         egui::pos2(x, center_y - count.size().y / 2.0),
         count.clone(),
         theme::FG_DIM(),
     );
+    let caption = egui::Rect::from_x_y_ranges(rect.min.x + HEADER_LEFT_MARGIN..=x + count.size().x, rect.y_range());
     x += count.size().x + 8.0;
+    let caption_response = ui.interact(
+        caption,
+        ui.make_persistent_id(("sidebar_group_caption", group.key())),
+        egui::Sense::hover(),
+    );
+    caption_response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Label,
+            true,
+            format!("{} {}", group.label(), workspaces),
+        )
+    });
 
     let mut stop = false;
     if idle > 0 {

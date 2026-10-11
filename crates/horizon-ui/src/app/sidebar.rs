@@ -37,9 +37,7 @@ struct WorkspaceSidebarEntry {
 #[derive(Clone)]
 struct SidebarPanelEntry {
     id: PanelId,
-    /// What the row says: an agent's task, or the panel's title.
-    label: String,
-    /// The panel's whole title, for the hover text.
+    /// The panel's whole title.
     title: String,
     kind: PanelKind,
     is_focused: bool,
@@ -127,13 +125,6 @@ impl HorizonApp {
                     panel.id,
                     SidebarPanelEntry {
                         id: panel.id,
-                        label: text::panel_label(
-                            panel.kind,
-                            &panel.title,
-                            panel.name_is_custom(),
-                            &panel.display_title(),
-                            &panel.terminal_title,
-                        ),
                         title: panel.display_title().into_owned(),
                         kind: panel.kind,
                         is_focused: self.board.focused == Some(panel.id),
@@ -394,6 +385,7 @@ impl HorizonApp {
         let row_rect = ui
             .allocate_space(Vec2::new(ui.available_width(), panel_rows::PANEL_ROW_HEIGHT))
             .1;
+        let label = self.sidebar_panel_label(panel);
         let hovered = ui.rect_contains_pointer(row_rect);
         let close_rect = panel_rows::close_rect(row_rect);
         // The close button shows only on the hovered or focused row.
@@ -413,6 +405,7 @@ impl HorizonApp {
             row_rect,
             workspace,
             panel,
+            &label,
             hovered,
             close.as_ref().map(egui::Response::hovered),
             last,
@@ -424,9 +417,9 @@ impl HorizonApp {
             ui.make_persistent_id(("sidebar_panel_click", panel.id.0)),
             Sense::click(),
         );
-        row_response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &panel.label));
+        row_response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
         // The whole title, when the row cuts it or shows only the agent's task.
-        let row_response = if title_elided || panel.label != panel.title {
+        let row_response = if title_elided || label != panel.title {
             row_response.on_hover_text(&panel.title)
         } else {
             row_response
@@ -444,6 +437,21 @@ impl HorizonApp {
 
         self.show_sidebar_panel_context_menu(&row_response, workspace, panel.id, panel.kind, actions);
         ui.add_space(1.0);
+    }
+
+    /// What the row of `panel` says: an agent's task, or the panel's title.
+    fn sidebar_panel_label(&self, panel: &SidebarPanelEntry) -> String {
+        let Some(board_panel) = self.board.panel(panel.id) else {
+            return panel.title.clone();
+        };
+        let own_name = (!text::name_labels_agent(
+            board_panel.kind,
+            &board_panel.title,
+            board_panel.name_is_custom(),
+            &self.template_config.presets,
+        ))
+        .then_some(board_panel.title.as_str());
+        text::panel_label(board_panel.kind, own_name, &panel.title, &board_panel.terminal_title)
     }
 
     fn apply_sidebar_actions(&mut self, ctx: &Context, actions: &SidebarActions) {

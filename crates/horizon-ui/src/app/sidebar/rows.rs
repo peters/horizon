@@ -128,12 +128,18 @@ pub(super) fn paint_workspace_row_contents(
     };
 
     let tile = paint_tile(ui, card, workspace, compact);
+    let text_left = tile.max.x + 10.0;
+    let (name_right, badge_shows) = paint_badges(ui, card, workspace, accordion, text_left, first_line_y);
     let meaning = dot_meaning(workspace.row.dot);
-    let spoken = if compact && !workspace.row.line.is_empty() {
+    let mut spoken = if compact && !workspace.row.line.is_empty() {
         format!("{meaning}\n{}", workspace.row.line)
     } else {
         meaning.to_owned()
     };
+    // A narrow sidebar leaves out the badge, so the tile tells it.
+    if workspace.detached && !badge_shows {
+        spoken.push_str("\nIn a new window");
+    }
     let tile_response = ui.interact(
         tile.expand(2.0),
         ui.make_persistent_id(("sidebar_ws_tile", workspace.id.0)),
@@ -142,8 +148,6 @@ pub(super) fn paint_workspace_row_contents(
     tile_response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &spoken));
     let tile_response = tile_response.on_hover_text(spoken);
 
-    let text_left = tile.max.x + 10.0;
-    let name_right = paint_badges(ui, card, workspace, accordion, first_line_y);
     let name_color = if workspace.is_active || has_badge(workspace.row.dot) {
         theme::FG()
     } else {
@@ -219,28 +223,64 @@ fn paint_tile(ui: &egui::Ui, card: Rect, workspace: &WorkspaceSidebarEntry, comp
     tile
 }
 
-/// Paints the panel count (accordion only) and the `NEW WINDOW` badge at the
-/// right of the first line; returns where the name must end.
-fn paint_badges(ui: &egui::Ui, card: Rect, workspace: &WorkspaceSidebarEntry, accordion: bool, y: f32) -> f32 {
-    let mut right = card.max.x - 10.0;
-    if accordion {
-        let color = if workspace.is_active {
-            theme::FG_SOFT()
-        } else {
-            theme::FG_DIM()
-        };
-        let count = text::mono(ui, &workspace.panels.len().to_string(), 11.0, color);
+/// The least room that the name keeps before the `NEW WINDOW` badge gives way.
+const MIN_NAME_WIDTH: f32 = 48.0;
+const COUNT_GAP: f32 = 8.0;
+const BADGE_GAP: f32 = 6.0;
+
+/// Where the name must end, from the right edge of the first line: after the
+/// panel count of `count_width` and the `NEW WINDOW` badge of `badge_width`.
+/// The badge shows only when the name keeps `MIN_NAME_WIDTH`; the second value
+/// tells whether it shows.
+pub(super) fn name_right(
+    text_left: f32,
+    right: f32,
+    count_width: Option<f32>,
+    badge_width: Option<f32>,
+) -> (f32, bool) {
+    let right = count_width.map_or(right, |width| right - width - COUNT_GAP);
+    match badge_width {
+        Some(width) if right - width - BADGE_GAP - text_left >= MIN_NAME_WIDTH => (right - width - BADGE_GAP, true),
+        _ => (right, false),
+    }
+}
+
+/// Paints the panel count (accordion only) and, when it fits, the `NEW WINDOW`
+/// badge at the right of the first line. Returns where the name must end and
+/// whether the badge shows.
+fn paint_badges(
+    ui: &egui::Ui,
+    card: Rect,
+    workspace: &WorkspaceSidebarEntry,
+    accordion: bool,
+    text_left: f32,
+    y: f32,
+) -> (f32, bool) {
+    let right = card.max.x - 10.0;
+    let count_color = if workspace.is_active {
+        theme::FG_SOFT()
+    } else {
+        theme::FG_DIM()
+    };
+    let count = accordion.then(|| text::mono(ui, &workspace.panels.len().to_string(), 11.0, count_color));
+    let badge = workspace
+        .detached
+        .then(|| text::line(ui, "NEW WINDOW", 8.5, SEMIBOLD, theme::FG_DIM(), 80.0));
+    let (name_right, badge_shows) = name_right(
+        text_left,
+        right,
+        count.as_ref().map(|count| count.size().x),
+        badge.as_ref().map(|badge| badge.size().x),
+    );
+    if let Some(count) = count {
         let pos = pos2(right - count.size().x, y - count.size().y / 2.0);
-        ui.painter().galley(pos, count, color);
-        right = pos.x - 8.0;
+        ui.painter().galley(pos, count, count_color);
     }
-    if workspace.detached {
-        let badge = text::line(ui, "NEW WINDOW", 8.5, SEMIBOLD, theme::FG_DIM(), 80.0);
-        let pos = pos2(right - badge.size().x, y - badge.size().y / 2.0);
+    if let Some(badge) = badge.filter(|_| badge_shows) {
+        let pos = pos2(name_right + BADGE_GAP, y - badge.size().y / 2.0);
         ui.painter().galley(pos, badge, theme::FG_DIM());
-        right = pos.x - 6.0;
     }
-    right
+    (name_right, badge_shows)
 }
 
 pub(super) fn paint_workspace_drop_indicator(

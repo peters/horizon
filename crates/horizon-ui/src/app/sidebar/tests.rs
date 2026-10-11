@@ -191,7 +191,6 @@ fn sidebar_shows_panels_for_the_active_workspace_when_accordion_is_enabled() {
 fn sidebar_entry(id: horizon_core::PanelId, is_focused: bool) -> SidebarPanelEntry {
     SidebarPanelEntry {
         id,
-        label: "panel".to_string(),
         title: "panel".to_string(),
         kind: horizon_core::PanelKind::Editor,
         is_focused,
@@ -347,4 +346,19 @@ fn a_dragged_workspace_drops_only_in_its_own_group() {
         Group::Cloud,
         &workspace_entry(row(Group::Cloud), true)
     ));
+}
+
+#[test]
+fn the_new_window_badge_gives_way_to_the_name_at_the_minimum_sidebar() {
+    use super::rows::name_right;
+    // The minimum sidebar is 168 wide: the name starts at 64 and the first line ends at 150.
+    let (right, badge) = name_right(64.0, 150.0, Some(7.0), Some(58.0));
+    assert!(!badge, "a narrow row keeps the room for the name");
+    assert!((right - 135.0).abs() <= f32::EPSILON);
+    // The default sidebar is 210 wide: the badge fits and the name keeps 49.
+    let (right, badge) = name_right(64.0, 192.0, Some(7.0), Some(58.0));
+    assert!(badge);
+    assert!((right - 113.0).abs() <= f32::EPSILON);
+    // Without a count or a badge the name runs to the right edge.
+    assert_eq!(name_right(64.0, 192.0, None, None), (192.0, false));
 }

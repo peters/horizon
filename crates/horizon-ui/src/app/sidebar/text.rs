@@ -5,7 +5,7 @@ use std::sync::Arc;
 use egui::epaint::text::VariationCoords;
 use egui::text::{LayoutJob, TextWrapping};
 use egui::{Color32, FontId, Galley, TextFormat};
-use horizon_core::{PanelKind, agent_definition};
+use horizon_core::{PanelKind, PresetConfig, agent_definition};
 
 use crate::theme;
 
@@ -74,36 +74,45 @@ fn is_title_symbol(character: char) -> bool {
 }
 
 /// The text of a panel row. An agent row shows the agent's terminal title, which
-/// names its task, without the spinner in front. The kind label already names
-/// the agent, so a panel name that only repeats the agent's name (a preset such
-/// as `Claude Code`) is left out; any other name stays in front of the task.
+/// names its task, without the spinner in front. `own_name` is a name that the
+/// person gave the panel; it stays in front of the task. A name that only labels
+/// the agent (`None`) is left out, because the kind label already names the agent.
 /// Other panels, and agents without a title, show `display_title`.
 pub(super) fn panel_label(
     kind: PanelKind,
-    name: &str,
-    name_is_custom: bool,
+    own_name: Option<&str>,
     display_title: &str,
     terminal_title: &str,
 ) -> String {
-    if let Some(agent) = agent_definition(kind) {
+    if kind.is_agent() {
         let task = fold_whitespace(terminal_title.trim_start_matches(is_title_symbol));
         if !task.is_empty() {
-            let repeats_agent = name.to_lowercase().starts_with(&agent.display_name.to_lowercase());
-            return if !name_is_custom || repeats_agent || name == terminal_title {
-                task
-            } else {
-                format!("{} \u{00B7} {task}", fold_whitespace(name))
+            return match own_name {
+                Some(name) if name != terminal_title => format!("{} \u{00B7} {task}", fold_whitespace(name)),
+                _ => task,
             };
         }
     }
     fold_whitespace(display_title)
 }
 
+/// Whether the name of an agent panel only labels the agent: it is not custom,
+/// or it is the agent's own name or the name of a preset of that agent kind.
+pub(super) fn name_labels_agent(kind: PanelKind, name: &str, name_is_custom: bool, presets: &[PresetConfig]) -> bool {
+    !name_is_custom
+        || agent_definition(kind).is_some_and(|agent| name.eq_ignore_ascii_case(agent.display_name))
+        || presets
+            .iter()
+            .any(|preset| preset.kind == kind && preset.name.eq_ignore_ascii_case(name))
+}
+
 #[cfg(test)]
 mod tests {
     use horizon_core::PanelKind;
 
-    use super::{fold_whitespace, initials, panel_label};
+    use horizon_core::PresetConfig;
+
+    use super::{fold_whitespace, initials, name_labels_agent, panel_label};
 
     #[test]
     fn initials_take_the_first_letters_of_the_first_two_words() {
@@ -122,15 +131,7 @@ mod tests {
 
     #[test]
     fn an_agent_row_shows_the_task_without_its_spinner() {
-        let label = |terminal_title| {
-            panel_label(
-                PanelKind::Claude,
-                "Claude Code",
-                true,
-                "Claude Code — title",
-                terminal_title,
-            )
-        };
+        let label = |terminal_title| panel_label(PanelKind::Claude, None, "Claude Code — title", terminal_title);
         assert_eq!(
             label("\u{25D0} Fix recurring sync timeout"),
             "Fix recurring sync timeout"
@@ -140,11 +141,6 @@ mod tests {
         // Without a title the row keeps the panel's own title.
         assert_eq!(label(""), "Claude Code — title");
         assert_eq!(label("\u{25D0} "), "Claude Code — title");
-        // A panel without a custom name shows the task too.
-        assert_eq!(
-            panel_label(PanelKind::Codex, "Codex", false, "\u{280B} Fix", "\u{280B} Fix"),
-            "Fix"
-        );
     }
 
     #[test]
@@ -152,23 +148,45 @@ mod tests {
         assert_eq!(
             panel_label(
                 PanelKind::Claude,
-                "Backend",
-                true,
-                "Backend — \u{25D0} Fix sync",
+                Some("Claude Code backend"),
+                "Claude Code backend — \u{25D0} Fix sync",
                 "\u{25D0} Fix sync"
             ),
-            "Backend \u{00B7} Fix sync"
+            "Claude Code backend \u{00B7} Fix sync"
         );
+    }
+
+    #[test]
+    fn only_a_preset_or_agent_name_labels_the_agent() {
+        let presets = [PresetConfig {
+            name: "Claude Code".to_owned(),
+            alias: None,
+            kind: PanelKind::Claude,
+            command: None,
+            args: Vec::new(),
+            resume: horizon_core::PanelResume::Fresh,
+            ssh_connection: None,
+        }];
+        assert!(name_labels_agent(PanelKind::Claude, "claude code", true, &presets));
+        assert!(name_labels_agent(PanelKind::Claude, "Claude", true, &[]));
+        assert!(name_labels_agent(PanelKind::Codex, "Backend", false, &[]));
+        assert!(!name_labels_agent(
+            PanelKind::Claude,
+            "Claude Code backend",
+            true,
+            &presets
+        ));
+        assert!(!name_labels_agent(PanelKind::Codex, "Claude Code", true, &presets));
     }
 
     #[test]
     fn other_panels_keep_their_title() {
         assert_eq!(
-            panel_label(PanelKind::Browser, "Docs", true, "Docs — Example page", "Example page"),
+            panel_label(PanelKind::Browser, Some("Docs"), "Docs — Example page", "Example page"),
             "Docs — Example page"
         );
         assert_eq!(
-            panel_label(PanelKind::Shell, "build", false, "\u{25D0} build", "\u{25D0} build"),
+            panel_label(PanelKind::Shell, None, "\u{25D0} build", "\u{25D0} build"),
             "\u{25D0} build"
         );
     }

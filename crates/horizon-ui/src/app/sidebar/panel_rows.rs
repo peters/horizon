@@ -26,6 +26,7 @@ pub(super) fn paint_panel_row(
     row: Rect,
     workspace: &WorkspaceSidebarEntry,
     panel: &SidebarPanelEntry,
+    label: &str,
     hovered: bool,
     close: Option<bool>,
     last: bool,
@@ -58,14 +59,7 @@ pub(super) fn paint_panel_row(
     } else {
         theme::FG_SOFT()
     };
-    let title = text::line(
-        ui,
-        &panel.label,
-        12.5,
-        text::MEDIUM,
-        color,
-        card.max.x - 26.0 - title_left,
-    );
+    let title = text::line(ui, label, 12.5, text::MEDIUM, color, card.max.x - 26.0 - title_left);
     let title_elided = title.elided;
     painter.galley(pos2(title_left, center_y - title.size().y / 2.0), title, color);
 
