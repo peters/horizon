@@ -30,6 +30,9 @@ closes with **Remove cloud**.
   - **Remove from Horizon anyway** when Horizon cannot lock the state
     directory of the cloud. Unit tests make sure that the cloud stays and
     that the dialog shows the reason.
+  - The dialog while a different Horizon instance runs an operation of the
+    cloud. Unit tests make sure that the dialog shows only **Cancel** until
+    that operation ends.
 
 ## 3. Safety
 
