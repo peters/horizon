@@ -86,6 +86,10 @@ worker MCP servers and the SSH route.
 
    Result: The output is `10001`.
 
+   > **CAUTION:** THE NEXT STEP REMOVES WRITE ACCESS TO
+   > `<data-home>/.horizon/cloud/<cloud-id>`. Horizon cannot save the cloud's record
+   > until step 7 gives the access back. Do step 7 also when the test stops early.
+
 5. In the fixture terminal, find `<cloud-id>` of `smoke-a` as in E09 step 1. Then
    make the cloud's folder read-only.
 
@@ -100,6 +104,10 @@ worker MCP servers and the SSH route.
 
    Result: The second Shell panel shows a prompt. **Manage** shows **A panel's
    session is not in this cloud's record yet** and offers **Stop worker…** again.
+
+   > **CAUTION:** THE NEXT STEP CHANGES THE ACCESS TO
+   > `<data-home>/.horizon/cloud/<cloud-id>` again. It gives back the write access
+   > that step 5 removed.
 
 7. Make the cloud's folder writable again, and wait 10 seconds.
 

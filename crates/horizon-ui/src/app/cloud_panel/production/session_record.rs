@@ -1,13 +1,19 @@
 //! The sessions new cloud panels add to their cloud's record. A worker thread saves the
 //! record, so a slow disk never stalls a frame. While that save runs it holds the record's
 //! lock, so the record it saves is where the next panel looks and adds its session. A save
-//! that fails is retried until it holds every session, and the cloud stays busy until then:
-//! no operation saves a record that lacks the session of a running panel.
+//! that fails is retried, and the cloud stays busy: no operation saves a record that lacks
+//! the session of a running panel.
+//!
+//! A save that fails for [`RELEASE_AFTER`] releases the cloud, so the person can stop a
+//! worker that bills: it gives up the record's lock, the cloud is no longer busy, and the
+//! card warns that a panel's session is not in the record. Other operations, deletion
+//! among them, then save the record, and each later try adds the sessions the record
+//! lacks to the record it finds. A deleted cloud ends the save.
 //!
 //! A save belongs to its cloud, not to the runtime that started it: a session switch drops
 //! the runtimes but keeps the clouds, so a later runtime of the same cloud finds the save
-//! and joins or waits for it. A save ends only once it recorded every session; deleting
-//! the cloud locks the record, so it cannot start while a save runs.
+//! and joins or waits for it. A save ends once it recorded every session, or once its
+//! cloud's folder or record is gone.
 use super::{HorizonApp, Store, cloud_runtime};
 use cloud_runtime::state::Deployment;
 use std::{
@@ -402,11 +408,11 @@ fn attempt_held(store: Store, flight: &Arc<Mutex<Flight>>) -> Attempt {
 /// and saves that. A cloud whose folder or record is gone ends the save, and its folder
 /// is not made again.
 fn attempt_released(directory: &Path, flight: &Arc<Mutex<Flight>>) -> Attempt {
-    if std::fs::metadata(directory).is_err_and(|gone| gone.kind() == std::io::ErrorKind::NotFound) {
-        return Attempt::Gone(None);
-    }
-    let store = match Store::lock(directory) {
+    let store = match Store::lock_existing(directory) {
         Ok(store) => store,
+        Err(_) if std::fs::metadata(directory).is_err_and(|gone| gone.kind() == std::io::ErrorKind::NotFound) => {
+            return Attempt::Gone(None);
+        }
         Err(error) => return Attempt::Failed(None, error.to_string()),
     };
     let mut record = match store.load() {
@@ -724,6 +730,10 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(!sessions.saving(), "a released cloud is not busy");
+        assert!(
+            Sessions::of(&directory).saving_record().is_none(),
+            "a runtime a session switch rebuilds reads the record from disk, not the save's copy"
+        );
         fence(&directory).wait();
         // Stop saves the record while the save waits to try again.
         set_writable(&directory, true);
