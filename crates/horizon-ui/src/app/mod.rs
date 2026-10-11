@@ -520,8 +520,13 @@ impl eframe::App for HorizonApp {
             while !self.finish_cloud_companion_shutdown(&ctx) {
                 std::thread::sleep(Duration::from_millis(25));
             }
-            // A cloud session save that keeps failing must not keep Horizon open.
-            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            // A cloud session save that keeps failing must not keep Horizon open. The limit
+            // counts from the start of a shutdown that already waited for it.
+            let started = self
+                .shutdown_progress
+                .as_ref()
+                .map_or_else(std::time::Instant::now, horizon_core::ShutdownProgress::started_at);
+            let deadline = started + Duration::from_secs(10);
             while !Self::cloud_sessions_recorded() && std::time::Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(25));
             }

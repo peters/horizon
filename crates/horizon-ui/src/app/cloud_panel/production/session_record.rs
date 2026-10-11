@@ -263,7 +263,10 @@ fn save(store: Store, directory: &Path, flight: &Arc<Mutex<Flight>>, repaint: Op
                     return;
                 }
             }
-            Err(error) if !directory.exists() => {
+            // Only a folder that is really gone ends the save; an unreadable one is retried.
+            Err(error)
+                if std::fs::metadata(directory).is_err_and(|gone| gone.kind() == std::io::ErrorKind::NotFound) =>
+            {
                 tracing::warn!(directory = %directory.display(), %error, "a cloud's folder is gone; its sessions are not recorded");
                 let held = flight.lock().unwrap_or_else(PoisonError::into_inner);
                 land(store, held, directory, flight, repaint);
@@ -511,5 +514,40 @@ mod tests {
             "the recorded save no longer holds the exit"
         );
         assert_eq!(recorded(&directory), ["panel"]);
+    }
+
+    #[test]
+    fn a_save_whose_cloud_folder_cannot_be_read_keeps_trying() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("clouds");
+        let directory = parent.join("fixture");
+        let record: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"fixture","repository":"/synthetic","revision":"a".repeat(40),
+            "profile":{"provider":"runpod","image":"example/worker","cpu":4,"memory_gb":8},
+            "stage":"Ready","operation":{"state":"bound","worker_id":"worker"},"spec":null,"sessions":[]
+        }))
+        .unwrap();
+        Store::lock(&directory).unwrap().save(&record).unwrap();
+        let sessions = Sessions::default();
+        // The first save fails and retries; then the folder still exists but cannot be read.
+        set_writable(&directory, false);
+        sessions
+            .with_record(&directory, None, |record| {
+                record.sessions.push(session("panel"));
+                ((), true)
+            })
+            .unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o000)).unwrap();
+        std::thread::sleep(FIRST_RETRY * 3);
+        let still_trying = sessions.saving();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        set_writable(&directory, true);
+        assert!(still_trying, "an unreadable folder is not a deleted cloud");
+        fence(&directory).wait();
+        assert_eq!(
+            recorded(&directory),
+            ["panel"],
+            "the session is recorded once the folder can be read"
+        );
     }
 }
