@@ -54,11 +54,12 @@ impl Choices {
 
     /// Keeps `choice` for `repository`, or forgets it with `None`, and saves all choices
     /// under `root`. The file is written and renamed into place here, so a save that cannot
-    /// be written fails now; making it durable can take seconds on a busy disk, so that runs
-    /// on a worker thread. A crash before then can leave the file unreadable on a file
-    /// system that does not write data before a rename. An unreadable file keeps nothing
-    /// ([`Self::load`]), so every repository then asks again: the choices are a convenience,
-    /// not worth a stalled frame.
+    /// be written fails now. On Unix, making it durable can take seconds on a busy disk, so
+    /// that runs on a worker thread; a crash before then can leave the file unreadable on a
+    /// file system that does not write data before a rename. An unreadable file keeps
+    /// nothing ([`Self::load`]), so every repository then asks again: the choices are a
+    /// convenience, not worth a stalled frame. Windows cannot replace a file that another
+    /// handle holds open, so there the file is made durable before the rename.
     ///
     /// # Errors
     /// The field is empty, too many repositories are kept, or the file cannot be written.
@@ -76,28 +77,51 @@ impl Choices {
         std::fs::create_dir_all(root)?;
         let mut file = tempfile::NamedTempFile::new_in(root)?;
         file.write_all(&bytes)?;
+        #[cfg(not(unix))]
+        file.as_file().sync_all()?;
         file.persist(root.join(FILE)).map_err(|error| error.error)?;
         self.0 = next;
-        let root = root.to_path_buf();
-        std::thread::spawn(move || {
-            if let Err(error) = sync(&root) {
-                tracing::warn!(root = %root.display(), %error, "the repository choices are saved but not yet durable");
-            }
-        });
+        #[cfg(unix)]
+        {
+            let root = root.to_path_buf();
+            std::thread::spawn(move || sync_in_background(&root));
+        }
         Ok(())
     }
 }
 
+/// A test holds the sync of the choices under a folder until it sends, and learns when
+/// the sync ran.
+/// What a test holds a folder's sync with: the gate it opens, and where the sync says it ran.
+#[cfg(all(test, unix))]
+type SyncGate = (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>);
+
+#[cfg(all(test, unix))]
+static SYNC_GATES: std::sync::Mutex<BTreeMap<std::path::PathBuf, SyncGate>> = std::sync::Mutex::new(BTreeMap::new());
+
 /// Makes the saved choices under `root`, and their name in the folder, durable.
-fn sync(root: &Path) -> std::io::Result<()> {
-    // Windows flushes a file only through a handle that may write it.
-    std::fs::OpenOptions::new()
-        .write(true)
-        .open(root.join(FILE))?
-        .sync_all()?;
-    #[cfg(unix)]
-    std::fs::File::open(root)?.sync_all()?;
-    Ok(())
+#[cfg(unix)]
+fn sync_in_background(root: &Path) {
+    #[cfg(test)]
+    let gate = SYNC_GATES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(root);
+    #[cfg(test)]
+    if let Some((opened, _)) = &gate {
+        // Bounded, so a sync that runs on the caller fails the test instead of hanging it.
+        opened.recv_timeout(std::time::Duration::from_secs(5)).ok();
+    }
+    let synced = std::fs::File::open(root.join(FILE))
+        .and_then(|file| file.sync_all())
+        .and_then(|()| std::fs::File::open(root)?.sync_all());
+    if let Err(error) = synced {
+        tracing::warn!(root = %root.display(), %error, "the repository choices are saved but not yet durable");
+    }
+    #[cfg(test)]
+    if let Some((_, ran)) = gate {
+        ran.send(()).ok();
+    }
 }
 
 #[cfg(test)]
@@ -150,5 +174,29 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join(FILE), b"{not json").unwrap();
         assert_eq!(Choices::load(root.path()), Choices::default());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_kept_choice_is_saved_before_it_is_made_durable() {
+        let root = tempfile::tempdir().unwrap();
+        let (open, opened) = std::sync::mpsc::channel();
+        let (ran, synced) = std::sync::mpsc::channel();
+        SYNC_GATES
+            .lock()
+            .unwrap()
+            .insert(root.path().to_path_buf(), (opened, ran));
+        let mut choices = Choices::default();
+        let link = "https://github.com/example/app";
+        // The sync waits for the gate, so `set` returning shows that it does not wait.
+        choices.set(root.path(), link, Some(WorkspacePlacement::Cloud)).unwrap();
+        assert_eq!(
+            Choices::load(root.path()).get(link),
+            Some(WorkspacePlacement::Cloud),
+            "the file is in place before it is durable"
+        );
+        assert!(synced.try_recv().is_err(), "the sync has not run yet");
+        open.send(()).unwrap();
+        synced.recv().unwrap();
     }
 }
