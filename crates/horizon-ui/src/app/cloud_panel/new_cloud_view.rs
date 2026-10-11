@@ -17,8 +17,11 @@ const VERTICAL: [f32; 3] = [0.5, 0.0, 1.0];
 const CLEAR: f32 = 1.0;
 
 /// The offsets of the frame in `slack` free pixels to try on one axis: the preferred
-/// places, then each offset that puts a cloud just past an edge of the canvas. The shown
-/// area changes linearly between these offsets, so its least value is at one of them.
+/// places, then each offset that puts a cloud just past an edge of the canvas. Along one
+/// axis, a cloud's overlap with the canvas is zero beyond those two offsets and concave
+/// between them: it grows, stays while the cloud is fully in view, then shrinks. So
+/// between two neighbouring offsets the shown area is a sum of zeros and concave parts,
+/// and its least value is at one of the offsets, not between them.
 /// At offset `o` the frame starts `origin + MARGIN + o` pixels into a canvas that is
 /// `length` pixels long; `spans` are the clouds' extents from the frame's start.
 fn offsets(slack: f32, preferred: [f32; 3], spans: &[(f32, f32)], origin: f32, length: f32) -> Vec<f32> {
