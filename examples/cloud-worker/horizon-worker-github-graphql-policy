@@ -428,6 +428,30 @@ def check_lookup(reply, ids, allowed):
             raise Refused('the GraphQL mutation names a %s, which is not allowed on this worker.' % kind)
 
 
+def lookup_repositories(reply):
+    """The repositories that the reply of `lookup` names."""
+    nodes = ((reply or {}).get('data') or {}).get('nodes') if isinstance(reply, dict) else None
+    found = []
+    for node in nodes if isinstance(nodes, list) else ():
+        if isinstance(node, dict):
+            held = node.get('held') or node.get('maybe') or {}
+            repository = node.get('repo') or (held.get('nameWithOwner') if isinstance(held, dict) else None)
+            if isinstance(repository, str):
+                found.append(repository)
+    return found
+
+
+def named_repositories(schema, body):
+    """The repositories that a request names by owner and name (entry fields and searches),
+    or an empty list when the request is refused for another reason."""
+    named = []
+    try:
+        plan(schema, body, lambda repository, access: named.append(repository) or True)
+    except Refused:
+        pass
+    return named
+
+
 def verify(plan, reply, allowed):
     """Removes the added fields from GitHub's reply after it checks each object's repository.
     Refuses the whole reply when one object is in a repository the caller may not read, is in

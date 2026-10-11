@@ -1,10 +1,11 @@
 //! Requests agents make for more GitHub access, and the person's decisions.
 //!
 //! An agent asks with the worker's `github_access` tool. The worker keeps the request;
-//! Horizon lists it on the cloud card, and the person allows it for the cloud or
-//! denies it. The worker checks that the repository is reachable before it allows
-//! anything. Access is per cloud: every agent session of the cloud uses the same token,
-//! and the worker's grants route credentials rather than isolate sessions (#1393).
+//! Horizon lists it on the cloud card, and the person allows it for the task that asked,
+//! for the whole cloud, or denies it. The worker checks that the repository is reachable
+//! before it allows anything. Agents never hold the token: the worker's Git proxy and API
+//! broker add it to the requests that a grant covers. Every agent session runs as the same
+//! account, so a task grant is least privilege, not isolation between sessions.
 use super::{Result, Runner};
 use crate::cloud_runtime::ssh::Connection;
 use serde::Deserialize;
@@ -28,12 +29,17 @@ pub struct Request {
     /// The agent that asked, such as `claude`.
     #[serde(default)]
     pub agent: String,
+    /// Whether the worker can allow it for the task that asked: an older worker, or a
+    /// request whose session it cannot name, takes only a decision for the whole cloud.
+    #[serde(default)]
+    pub task: bool,
 }
 
-/// What the person chose. Access is per cloud: every agent session of the cloud uses
-/// the same token, so an allowed repository reaches all of them.
+/// What the person chose: the repository for the agent session that asked until it ends,
+/// for every agent session of the cloud, or not at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Decision {
+    AllowTask,
     AllowCloud,
     Deny,
 }
@@ -41,6 +47,7 @@ pub enum Decision {
 impl Decision {
     const fn argument(self) -> &'static str {
         match self {
+            Self::AllowTask => "allow-task",
             Self::AllowCloud => "allow-cloud",
             Self::Deny => "deny",
         }
@@ -148,7 +155,13 @@ fn explain(code: &str) -> String {
                 .into()
         }
         "no_push" => "Your GitHub account cannot push to this repository.".into(),
-        "session_ended" | "not_pending" | "unknown_request" => "This request is no longer waiting.".into(),
+        "session_ended" => {
+            "The agent session that asked has ended. Allow it for the cloud, or wait for a new request.".into()
+        }
+        "not_pending" | "unknown_request" => "This request is no longer waiting.".into(),
+        "too_many_task_grants" => {
+            "This worker holds the most repositories that tasks can have. Allow it for the cloud instead.".into()
+        }
         "no_chain" | "token_expired" | "token_invalid" => {
             "This cloud has no current GitHub access. Connect GitHub again on the cloud card.".into()
         }

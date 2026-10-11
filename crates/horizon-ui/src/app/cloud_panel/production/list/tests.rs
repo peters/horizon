@@ -111,6 +111,7 @@ fn an_agent_waiting_for_github_access_needs_the_user() {
         reason: "open a pull request".to_owned(),
         session: String::new(),
         agent: "claude".to_owned(),
+        task: false,
     });
     let row = row(&app);
     assert_eq!(row.group, Group::NeedsYou);

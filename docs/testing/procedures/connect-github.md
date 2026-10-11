@@ -217,7 +217,8 @@ after one approval.
 
    Result: The agent waits. The cloud shows a request at the top right:
    **Push to <owner>/<repo-b>** with the reason, and the buttons
-   **Allow for this cloud** and **Deny**.
+   **Allow for this task**, **Allow for this cloud** and **Deny**. A worker image
+   from before task grants shows only **Allow for this cloud** and **Deny**.
 
 2. Click **Deny**.
 
@@ -234,20 +235,33 @@ after one approval.
    Result: GitHub shows two repositories for the app.
 
 5. Wait until the request shows again on the cloud, then click
-   **Allow for this cloud**.
+   **Allow for this task**.
 
    Result: The request card closes. The agent's `github_access` call reports that
-   access was allowed.
+   access was allowed for this task.
 
-6. Ask the agent to run `git ls-remote https://github.com/<owner>/<repo-b>`.
+6. Ask the agent to run `git ls-remote https://github.com/<owner>/<repo-b>` and
+   `gh api repos/<owner>/<repo-b> --jq .full_name`.
 
-   Result: Git shows the references. It asks for no password.
+   Result: Git shows the references, and `gh` shows `<owner>/<repo-b>`. Neither
+   asks for a password.
 
 7. Open a new agent panel in `gh-ask`. Ask its agent to run
    `git ls-remote https://github.com/<owner>/<repo-b>`.
 
-   Result: Git shows the references without a new request. Access is per cloud,
-   so every agent session of the cloud reaches the repository.
+   Result: Git shows `remote: Horizon: <owner>/<repo-b> has no GitHub grant on
+   this worker`. The task grant reaches only the session that asked.
+
+8. Ask the agent of the new panel to call `github_access` for `<owner>/<repo-b>`
+   with push access, and click **Allow for this cloud**.
+
+   Result: The agent's call reports that access was allowed for this cloud.
+
+9. Ask the agent of the new panel to run
+   `git ls-remote https://github.com/<owner>/<repo-b>` again.
+
+   Result: Git shows the references. A cloud grant reaches every agent session of
+   the cloud.
 
 ### 6.7 G07 — Sign in new clouds automatically
 
@@ -437,8 +451,9 @@ this task and G11 use.
 - Agents push and open a pull request from a checkout without a password, and
   cannot read the stored chain.
 - A request for a repository outside the installation is not allowed.
-- **Allow for this cloud** and **Deny** reach the agent.
-- An allowed repository reaches every agent session of the cloud.
+- **Allow for this task**, **Allow for this cloud** and **Deny** reach the agent.
+- A repository allowed for a task reaches only the session that asked. A repository
+  allowed for the cloud reaches every agent session of the cloud.
 - The first push to `ghcr.io` asks once to publish images, and a later push does not.
 - New cloud lists the connected repositories after one sign-in of this computer and
   clones a private one without a token.

@@ -67,17 +67,22 @@ exit 0
         harness
     }
 
+    /// Returns after the poll that drains the wakeup for `text`, so the next frame sees output.
+    /// `alacritty_terminal` queues its wakeup before it releases the grid lock. If a poll drains
+    /// that wakeup while the grid is busy, the text appears only after a poll with no output.
+    /// So each poll retries the snapshot until the grid is free, and that poll sees the text.
     fn wait_for_text(&mut self, text: &str) {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             self.panel.process_output();
-            let seen = self
-                .panel
-                .terminal()
-                .expect("terminal")
-                .try_last_lines_text(20)
-                .is_some_and(|lines| lines.contains(text));
-            if seen {
+            let lines = loop {
+                if let Some(lines) = self.panel.terminal().expect("terminal").try_last_lines_text(20) {
+                    break lines;
+                }
+                assert!(Instant::now() < deadline, "terminal grid stayed busy");
+                std::thread::sleep(Duration::from_millis(1));
+            };
+            if lines.contains(text) {
                 return;
             }
             assert!(Instant::now() < deadline, "terminal did not produce {text}");

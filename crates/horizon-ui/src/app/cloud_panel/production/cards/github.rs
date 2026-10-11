@@ -188,7 +188,25 @@ pub(super) fn requests(ui: &mut egui::Ui, runtime: &Runtime) -> Option<(String, 
                 ui.add_space(4.0);
                 ui.add_enabled_ui(!state.busy(), |ui| {
                     ui.horizontal_wrapped(|ui| {
-                        if ui.add(primary_button("Allow for this cloud")).clicked() {
+                        // The narrowest grant comes first where the worker can give it.
+                        if request.task
+                            && ui
+                                .add(primary_button("Allow for this task"))
+                                .on_hover_text("Only the agent session that asked, until it ends.")
+                                .clicked()
+                        {
+                            chosen = Some((request.id.clone(), Decision::AllowTask));
+                        }
+                        let cloud = if request.task {
+                            chrome_button("Allow for this cloud")
+                        } else {
+                            primary_button("Allow for this cloud")
+                        };
+                        if ui
+                            .add(cloud)
+                            .on_hover_text("Every agent session of this cloud, now and later.")
+                            .clicked()
+                        {
                             chosen = Some((request.id.clone(), Decision::AllowCloud));
                         }
                         if ui.add(chrome_button("Deny")).clicked() {
@@ -363,6 +381,7 @@ mod tests {
                 reason: "The shared Button needs the same fix".into(),
                 session: "panel-2".into(),
                 agent: "claude".into(),
+                task: n > 0,
             })
             .collect();
         let texts: Vec<String> = egui::Context::default()
@@ -390,8 +409,15 @@ mod tests {
             SHOWN
         );
         assert!(texts.iter().any(|text| text == "2 more requests wait."));
-        assert!(texts.iter().any(|text| text == "Allow for this cloud"));
-        assert!(!texts.iter().any(|text| text.contains("task")), "access is per cloud");
+        assert_eq!(
+            texts.iter().filter(|text| *text == "Allow for this cloud").count(),
+            SHOWN
+        );
+        assert_eq!(
+            texts.iter().filter(|text| *text == "Allow for this task").count(),
+            SHOWN - 1,
+            "only a worker that can name the session offers the task"
+        );
     }
 
     #[test]

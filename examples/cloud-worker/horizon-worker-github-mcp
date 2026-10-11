@@ -1,0 +1,114 @@
+"""The github_access MCP tool of horizon-worker-github: an agent asks the person in Horizon for
+access to one more repository, and the call waits for the decision. A module that
+horizon-worker-github loads, not a command."""
+import importlib.machinery
+import importlib.util
+import json
+from pathlib import Path
+import sys
+import time
+
+
+def load_common():
+    name = 'horizon_worker_github_common'
+    if name not in sys.modules:
+        loader = importlib.machinery.SourceFileLoader(
+            name, str(Path(__file__).resolve().with_name('horizon-worker-github-common')))
+        module = importlib.util.module_from_spec(importlib.util.spec_from_loader(name, loader))
+        sys.modules[name] = module
+        loader.exec_module(module)
+    return sys.modules[name]
+
+
+common = load_common()
+auth = common.auth
+# The MCP framing of the stop tool, so both tools speak MCP the same way.
+stop = common.load_sibling('horizon-worker-stop', 'horizon_worker_stop')
+
+TOOL = 'github_access'
+WAIT_SECONDS = 600
+POLL_SECONDS = 5
+
+
+GUIDANCE = (
+    'Ask the person for GitHub access to a repository that this task needs and that Git or gh refuses. '
+    'The person decides in Horizon: for this task only (this agent session, until it ends), for this whole '
+    'cloud, which gives every agent session on it the repository, or not at all. Give the repository '
+    'as owner/name, the access as read or push, and a short reason that the person reads. The call waits up '
+    'to 10 minutes for the decision. If the person has not decided by then, call again later with the same '
+    'repository: it returns the same request. Do not ask again after a denial.')
+
+
+def call_tool(arguments, ask_service=auth.ask_service, sleep=time.sleep, clock=time.monotonic,
+              wait=WAIT_SECONDS, poll=POLL_SECONDS):
+    """Runs one github_access call. Returns (success, text)."""
+    repository = arguments.get('repository')
+    reply = ask_service({'request': 'request', 'repository': repository, 'access': arguments.get('access'),
+                         'reason': arguments.get('reason')})
+    if reply is None:
+        return False, 'GitHub is not connected for this cloud. Ask the person to connect GitHub in Horizon.'
+    if reply.get('ok') is not True:
+        return False, str(reply.get('message', 'The worker refused the request.'))
+    deadline = clock() + wait
+    while reply.get('status') == 'pending' and clock() < deadline:
+        sleep(poll)
+        status = ask_service({'request': 'request-status', 'id': reply['id']})
+        if status is None or status.get('ok') is not True:
+            return False, 'The worker lost the request; ask again.'
+        reply = dict(status, id=reply['id'])
+    if reply.get('status') == 'allowed':
+        if reply.get('scope') == 'task':
+            return True, ('Allowed for this task: Git and gh in this agent session now reach %s, until the '
+                          'session ends. Run the command again.' % repository)
+        return True, ('Allowed for this cloud: Git and gh in every agent session on this worker now reach %s. '
+                      'Run the command again.' % repository)
+    if reply.get('status') == 'denied':
+        return True, 'The person denied access to %s. Do not ask again; continue without it.' % repository
+    if reply.get('status') == 'expired':
+        return True, 'The request for %s expired without a decision.' % repository
+    return True, ('Still waiting for the person to decide (request %s). Ask again later with the same '
+                  'repository.' % reply.get('id'))
+
+
+def respond(message, call=call_tool):
+    """One MCP reply for a JSON-RPC message, or None for notifications."""
+    method, ident = message.get('method'), message.get('id')
+    if ident is None:
+        return None
+    params = message.get('params') if isinstance(message.get('params'), dict) else {}
+    if method == 'initialize':
+        requested = params.get('protocolVersion')
+        version = requested if requested in stop.PROTOCOL_VERSIONS else stop.PROTOCOL_VERSIONS[0]
+        result = {'protocolVersion': version, 'capabilities': {'tools': {}},
+                  'serverInfo': {'name': 'horizon-github', 'version': '1'}}
+    elif method == 'ping':
+        result = {}
+    elif method == 'tools/list':
+        result = {'tools': [{'name': TOOL, 'description': GUIDANCE, 'inputSchema': {
+            'type': 'object', 'required': ['repository', 'access', 'reason'], 'properties': {
+                'repository': {'type': 'string', 'description': 'The repository as owner/name.'},
+                'access': {'type': 'string', 'enum': list(common.ACCESS)},
+                'reason': {'type': 'string', 'description': 'Why the task needs it, in one line.'}}}}]}
+    elif method == 'tools/call' and params.get('name') == TOOL:
+        arguments = params.get('arguments') if isinstance(params.get('arguments'), dict) else {}
+        success, text = call(arguments)
+        result = {'content': [{'type': 'text', 'text': text}], 'isError': not success}
+    else:
+        return {'jsonrpc': '2.0', 'id': ident, 'error': {'code': -32601, 'message': 'Unknown method'}}
+    return {'jsonrpc': '2.0', 'id': ident, 'result': result}
+
+
+def serve_mcp(stdin=sys.stdin, stdout=sys.stdout, call=call_tool):
+    for line in stdin:
+        try:
+            message = json.loads(line)
+        except ValueError:
+            continue
+        reply = respond(message, call) if isinstance(message, dict) else None
+        if reply is not None:
+            stdout.write(json.dumps(reply) + '\n')
+            stdout.flush()
+
+
+if __name__ == '__main__':
+    sys.exit('horizon-worker-github-mcp is a module of horizon-worker-github, not a command.')

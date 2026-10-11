@@ -76,6 +76,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | Git proxy | The loopback HTTPS proxy of the chain service on `127.0.0.1:47281`. Git on the worker reaches `github.com` through it. It adds an access token only to requests for a granted repository. | credential proxy, Git gateway |
 | access request | A request of an agent session for GitHub access to one repository, made with the `github_access` MCP tool. The person allows it or denies it in Horizon. | permission request |
 | cloud grant | Access that **Allow for this cloud** gives to every session of a cloud. The worker stores it with the token chain. | permanent grant |
+| task grant | Access that **Allow for this task** gives to the one agent session that asked, until that session ends. The worker keeps it with the access requests. | session grant, temporary grant |
 
 ## Install and build
 

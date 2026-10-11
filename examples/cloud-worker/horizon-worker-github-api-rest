@@ -1,0 +1,202 @@
+"""The REST policy of the worker's API broker: which GitHub REST requests an agent may send
+with the cloud's token, and for which repository and access. gh reaches the broker for every
+host, so the policy also names the hosts that GitHub redirects to, which get no token:
+
+- api.github.com: a repository's own paths (`/repos/OWNER/NAME/...` or
+  `/repositories/ID/...`), searches limited to granted repositories, and `/`, `/rate_limit`
+  and `/meta`. A read needs a read grant. A change needs a push grant and must be one of the
+  changes that pull requests, issues, releases, commits, checks and workflow runs make; no
+  change to a repository's settings, access, secrets or hooks, and no delete of a repository.
+- uploads.github.com: a release asset upload, with a push grant.
+- codeload.github.com and *.githubusercontent.com (archives, release assets, raw files and
+  workflow logs that GitHub redirects to): a GET or HEAD only, without the token. The address
+  that GitHub gave carries its own short-lived signature.
+
+A module that horizon-worker-github loads, not a command."""
+import importlib.machinery
+import importlib.util
+from pathlib import Path
+import re
+import sys
+import urllib.parse
+
+
+def load_policy():
+    name = 'horizon_worker_github_graphql_policy'
+    if name not in sys.modules:
+        loader = importlib.machinery.SourceFileLoader(
+            name, str(Path(__file__).resolve().with_name('horizon-worker-github-graphql-policy')))
+        module = importlib.util.module_from_spec(importlib.util.spec_from_loader(name, loader))
+        sys.modules[name] = module
+        try:
+            loader.exec_module(module)
+        except BaseException:
+            del sys.modules[name]
+            raise
+    return sys.modules[name]
+
+
+policy = load_policy()
+
+API = 'api.github.com'
+UPLOADS = 'uploads.github.com'
+CONTENT = re.compile(r'codeload\.github\.com|(?:[a-z0-9-]{1,63}\.){1,3}githubusercontent\.com')
+READS = ('GET', 'HEAD')
+OWNER = r'(?P<owner>[A-Za-z0-9-]{1,39})'
+NAME = r'(?P<name>[A-Za-z0-9._-]{1,100})'
+# Percent-encoding is allowed after the repository, for a branch or a file path, but never a
+# dot segment or an encoded slash, so GitHub reads the same repository the policy checked.
+REST = r'(?P<rest>(?:/[A-Za-z0-9._~%!$&\'()*+,;=:@-]{1,1024}){0,16})'
+REPOSITORY = re.compile(r'/repos/%s/%s%s' % (OWNER, NAME, REST))
+BY_ID = re.compile(r'/repositories/(?P<id>[1-9][0-9]{0,19})%s' % REST)
+SEARCH = re.compile(r'/search/(?P<kind>issues|commits|code|repositories)')
+PLAIN = {'/', '/rate_limit', '/meta'}
+ASSETS = re.compile(r'/repos/%s/%s/releases/[1-9][0-9]{0,19}/assets' % (OWNER, NAME))
+QUERY = re.compile(r'[A-Za-z0-9._~%!$&\'()*+,;=:@/?-]{0,8192}')
+# The first part of a repository path that a push grant may change, and for `actions` the
+# second: runs and jobs can be started again or stopped, workflows dispatched, caches and
+# artifacts removed. Settings, collaborators, hooks, keys, secrets, variables, environments,
+# rulesets, runners, branch protection and transfers are not here.
+CHANGES = {'pulls', 'issues', 'labels', 'milestones', 'releases', 'git', 'contents', 'merges', 'statuses',
+           'check-runs', 'check-suites', 'comments', 'commits', 'actions', 'dispatches', 'deployments',
+           'merge-upstream'}
+ACTIONS = {'runs', 'jobs', 'workflows', 'caches', 'artifacts'}
+WORKFLOW_CHANGES = re.compile(r'/actions/workflows/[^/]{1,256}/dispatches')
+# Parts of a repository that a grant does not read either: its access, hooks, keys, secrets,
+# variables (whose values a read returns), environments, runners and branch protection.
+# Forks, topics and rulesets are refused too, as their changes are.
+PRIVATE_READS = {'hooks', 'keys', 'collaborators', 'invitations', 'environments', 'dependabot', 'codespaces',
+                 'secret-scanning', 'autolinks', 'interaction-limits', 'teams', 'forks', 'topics', 'rulesets',
+                 'rules'}
+PRIVATE_ACTIONS = {'secrets', 'variables', 'runners', 'permissions', 'oidc', 'organization-secrets',
+                   'organization-variables'}
+
+
+class Refused(Exception):
+    """A request that the broker answers itself; the text says why."""
+
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+class Route:
+    """Where one request goes and what it needs. `repository` is owner/name, or None with
+    `repository_id` set for a `/repositories/ID` path that the broker resolves first. `access`
+    is `read` or `push`; `token` is whether the request carries the cloud's token. `repositories`
+    are the granted repositories that a search is limited to."""
+
+    def __init__(self, host, kind, access=None, repository=None, repository_id=None, repositories=(),
+                 token=True):
+        self.host, self.kind, self.access, self.token = host, kind, access, token
+        self.repository, self.repository_id, self.repositories = repository, repository_id, tuple(repositories)
+
+
+def split(target):
+    path, mark, query = target.partition('?')
+    if not QUERY.fullmatch(query) or (mark and not query):
+        raise Refused(400, 'the request has a query that the worker does not read.')
+    if '//' in path or any(part in ('.', '..') or part.lower() in ('%2e', '%2e%2e', '.%2e', '%2e.')
+                           for part in path.split('/')):
+        raise Refused(400, 'the request path has an empty or dot segment.')
+    if re.search(r'%(?:2[fF]|5[cC]|00)', path):
+        raise Refused(400, 'the request path has an encoded slash or NUL.')
+    if '\\' in path:
+        raise Refused(400, 'the request path has a backslash.')
+    return path, query
+
+
+def parts_of(rest):
+    """The segments of the path after OWNER/NAME as GitHub reads them, percent-decoded. split()
+    already refused an encoded slash, backslash, NUL or dot segment."""
+    return [urllib.parse.unquote(part) for part in rest.split('/')[1:]]
+
+
+def read_allowed(rest):
+    """Whether a read grant may read the repository path after OWNER/NAME."""
+    parts = parts_of(rest)
+    if not parts:
+        return True
+    if parts[0] in PRIVATE_READS or parts[0] == 'branches' and 'protection' in parts[2:]:
+        return False
+    # Also nested, such as a workflow's permissions or an environment's secrets.
+    return not (parts[0] == 'actions' and any(part in PRIVATE_ACTIONS for part in parts[1:]))
+
+
+def change_allowed(rest, method):
+    """Whether a push grant may send `method` to the repository path after OWNER/NAME."""
+    if method in READS:
+        return True
+    parts = parts_of(rest)
+    if not parts or parts[0] not in CHANGES:
+        return False
+    if parts[0] == 'actions':
+        if len(parts) < 2 or parts[1] not in ACTIONS:
+            return False
+        if parts[1] == 'workflows':
+            return bool(WORKFLOW_CHANGES.fullmatch(rest)) and method == 'POST'
+    return True
+
+
+def repository_route(host, method, owner, name, rest):
+    if not change_allowed(rest, method):
+        raise Refused(403, 'this worker does not let an agent change %s %s on %s/%s: only pull requests, '
+                           'issues, releases, commits, checks and workflow runs.' % (method, rest or '/', owner, name))
+    if not read_allowed(rest):
+        raise Refused(403, 'this worker does not let an agent reach %s on %s/%s: the repository\'s access, '
+                           'hooks, keys, secrets, variables, environments and runners stay with the person.'
+                      % (rest, owner, name))
+    return Route(host, 'repository', 'read' if method in READS else 'push', repository=owner + '/' + name)
+
+
+def route(method, host, target):
+    """The Route of one request from gh, or Refused."""
+    host = (host or '').lower()
+    path, query = split(target)
+    if host == API:
+        if (match := REPOSITORY.fullmatch(path)):
+            return repository_route(host, method, match['owner'], match['name'], match['rest'])
+        if (match := BY_ID.fullmatch(path)):
+            if not change_allowed(match['rest'], method):
+                raise Refused(403, 'this worker does not let an agent change %s %s on a repository: only pull '
+                                   'requests, issues, releases, commits, checks and workflow runs.'
+                              % (method, match['rest'] or '/'))
+            if not read_allowed(match['rest']):
+                raise Refused(403, 'this worker does not let an agent reach %s on a repository: its access, '
+                                   'hooks, keys, secrets, variables, environments and runners stay with the person.'
+                              % match['rest'])
+            return Route(host, 'repository', 'read' if method in READS else 'push',
+                         repository_id=match['id'])
+        if (match := SEARCH.fullmatch(path)):
+            if method not in READS:
+                raise Refused(405, 'a search is a GET.')
+            values = urllib.parse.parse_qs(query, keep_blank_values=True).get('q', [])
+            if len(values) != 1:
+                raise Refused(403, 'a search on this worker has one q parameter.')
+            try:
+                repositories = policy.search_repositories(values[0])
+            except policy.Refused as refused:
+                raise Refused(403, str(refused)) from None
+            return Route(host, 'search', 'read', repositories=repositories)
+        if path in PLAIN and method in READS:
+            return Route(host, 'plain')
+        if path == '/graphql':
+            if method != 'POST':
+                raise Refused(405, 'GraphQL is a POST.')
+            return Route(host, 'graphql')
+        raise Refused(403, 'this worker does not let an agent reach %s on GitHub\'s API: only a granted '
+                           'repository\'s own paths, searches in granted repositories and GraphQL.' % path)
+    if host == UPLOADS:
+        if (match := ASSETS.fullmatch(path)) and method == 'POST':
+            return Route(host, 'repository', 'push', repository=match['owner'] + '/' + match['name'])
+        raise Refused(403, 'this worker sends only release asset uploads to uploads.github.com.')
+    if CONTENT.fullmatch(host):
+        if method not in READS:
+            raise Refused(405, 'this worker sends only GET and HEAD to %s.' % host)
+        return Route(host, 'content', token=False)
+    raise Refused(403, 'this worker does not reach %s for gh.' % (host or 'a request without a host'))
+
+
+if __name__ == '__main__':
+    raise SystemExit('horizon-worker-github-api-rest is a module of horizon-worker-github, not a command.')

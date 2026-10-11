@@ -52,6 +52,9 @@ MAX_STATE = 131072
 ACCESS = ('push', 'read')
 # A token this close to its expiry is refused: Git or gh would fail with it mid-operation.
 SERVE_MARGIN = 60
+# What an agent's gh holds instead of a token: gh reaches GitHub through the API broker, which
+# drops it and adds the token of the grant that covers each request.
+PLACEHOLDER = auth.PLACEHOLDER
 # Tests only: a fake GitHub on the loopback address. Nothing else is accepted.
 TEST_URL = 'HORIZON_WORKER_GITHUB_TEST_URL'
 CHAIN_FIELDS = {'access_token', 'access_expires_at', 'refresh_token', 'refresh_expires_at'}

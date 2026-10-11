@@ -188,12 +188,15 @@ def static_binding(repository, read=None):
     return None
 
 
-def plan(store, repository, access, now, static=static_binding):
-    """The Plan for one request. A grant of the chain comes first; the static binding serves
+def plan(store, repository, access, now, static=static_binding, holders=lambda: []):
+    """The Plan for one request. A grant of the chain comes first, with the task grants of
+    the session whose processes (`holders`) hold the client's end; the static binding serves
     a repository that the chain has no grant for, and its token's own permissions decide what
     it may do. Raises Refusal for a push that neither covers."""
     state, problem = usable_state(store)
-    granted, name = agents.granted_access(state, repository) if state is not None else (None, repository)
+    book = agents.Book(store.runtime)
+    granted, name = agents.granted_access(state, repository, agents.task_access(
+        book, state, holders)) if state is not None else (None, repository)
     if granted is not None and agents.covered(granted, access):
         if state['chain']['access_expires_at'] - now <= common.SERVE_MARGIN:
             raise refusal(503, 'the GitHub access token expired and this worker could not refresh it yet.')
@@ -237,9 +240,15 @@ TABLES = (Path('/proc/net/tcp'), Path('/proc/net/tcp6'))
 
 def socket_owner(connection, tables=TABLES):
     """The UID that owns the client end of an established loopback connection, as the kernel
-    reports it, or None. An IPv6 client that reaches the IPv4 port is in the second table. A
-    socket that its process already closed reports root, so only an established one with an
-    inode counts."""
+    reports it, or None."""
+    return socket_entry(connection, tables)[0]
+
+
+def socket_entry(connection, tables=TABLES):
+    """(UID, inode) of the client end of an established loopback connection, as the kernel
+    reports them, or (None, None). An IPv6 client that reaches the IPv4 port is in the second
+    table. A socket that its process already closed reports root, so only an established one
+    with an inode counts."""
     client, server = connection.getpeername(), connection.getsockname()
     for mapped, table in enumerate(tables):
         local = '%s:%04X' % (address_hex(client[0], mapped), client[1])
@@ -249,8 +258,10 @@ def socket_owner(connection, tables=TABLES):
             for line in lines:
                 fields = line.split()
                 if len(fields) > 9 and fields[1] == local and fields[2] == remote:
-                    return int(fields[7]) if fields[3] == '01' and fields[9] != '0' else None
-    return None
+                    if fields[3] == '01' and fields[9] != '0':
+                        return int(fields[7]), int(fields[9])
+                    return None, None
+    return None, None
 
 
 def owner_allowed(connection, allowed, tables=TABLES):
@@ -297,10 +308,22 @@ class Exchange:
     """One Git request inside one tunnel. It updates `record` in place, so the log keeps what
     happened also when the connection ends early."""
 
-    def __init__(self, store, stream, output, environ, headed, owned=lambda: True, record=None):
+    def __init__(self, store, stream, output, environ, headed, owned=lambda: True, record=None,
+                 holders=lambda: []):
         self.store, self.stream, self.output, self.environ = store, stream, output, environ
-        # `owned` tells whether the allowed account still holds the client end.
+        # `owned` tells whether the allowed account still holds the client end; `holders`
+        # gives the processes that hold it, for task grants.
         self.headed, self.owned = headed, owned
+        found = []
+
+        def once():
+            # Scanned once for the plan; the check before sending scans again (self.scan).
+            if not found:
+                found.append(holders())
+            return found[0]
+        self.holders = once
+        # The check before sending scans again: the socket can pass to another session.
+        self.scan = holders
         self.record = record if record is not None else new_record('invalid')
         self.request = None
         # Set once the reply to the client may have begun; no refusal can follow it.
@@ -320,7 +343,7 @@ class Exchange:
             relay.continue_if_asked(request, self.output)
             access, data = batch(relay.read_body(request, MAX_LFS_REQUEST))
         self.record['request'] = kind + '-' + access
-        chosen = plan(self.store, repository, access, time.time())
+        chosen = plan(self.store, repository, access, time.time(), holders=self.holders)
         # Checked again before anything reaches GitHub: the account that opened the
         # connection must still hold it.
         if not self.owned():
@@ -341,6 +364,12 @@ class Exchange:
         target = upstream(self.environ)
         connection = target.connect(TIMEOUT)
         try:
+            # Planned again just before the token goes out: a task's session can end while the
+            # request is read.
+            if chosen.token is not None and plan(self.store, repository, access, time.time(),
+                                                 holders=self.scan).token != chosen.token:
+                raise refusal(403, '%s has no GitHub grant on this worker any more. Ask for access with the '
+                                   'github_access tool.' % repository)
             try:
                 response = relay.send(connection, target, request.method, request.target, fields, pieces, length,
                                       sent=lambda: self.record.update(granted=chosen.token is not None))
@@ -410,11 +439,11 @@ def refuse_tunnel(connection, status):
 CLIENT_ERRORS = (relay.ClientGone, ssl.SSLError, TimeoutError, ConnectionError)
 
 
-def tunnel_exchange(tls, store, environ, headed, owned=lambda: True, record=None):
+def tunnel_exchange(tls, store, environ, headed, owned=lambda: True, record=None, holders=lambda: []):
     """The Git request inside an open tunnel; updates `record` in place. Returns whether the
     client got a whole answer, which the tunnel may then end cleanly."""
     with tls.makefile('rb') as stream, tls.makefile('wb') as output:
-        exchange = Exchange(store, stream, output, environ, headed, owned, record)
+        exchange = Exchange(store, stream, output, environ, headed, owned, record, holders)
         record = exchange.record
         try:
             exchange.run()
@@ -454,12 +483,12 @@ def handle(connection, store, context, allowed=AGENT_UIDS, environ=os.environ, t
     watchdog.start()
     # Made here and updated in place, so it is logged however the connection ends.
     record = new_record('tunnel')
-    uid = None
+    uid = inode = None
     try:
         connection.settimeout(TIMEOUT)
         # Before any byte is read, so another account cannot hold a slot.
         with contextlib.suppress(OSError, ValueError):
-            uid = socket_owner(connection, tables)
+            uid, inode = socket_entry(connection, tables)
         if uid not in allowed:
             record['outcome'] = 'refused'
             return refuse_tunnel(connection, 403)
@@ -484,7 +513,7 @@ def handle(connection, store, context, allowed=AGENT_UIDS, environ=os.environ, t
             # close_notify: Git's GnuTLS reports a tunnel that ends without it as an error. A
             # reply that broke off gets none, so the client never takes it for a whole one.
             if tunnel_exchange(tls, store, environ, watchdog.cancel, lambda: owner_allowed(tls, (uid,), tables),
-                               record):
+                               record, lambda: agents.tasks.holders(inode) if inode else []):
                 tls.settimeout(CLOSE_SECONDS)
                 with contextlib.suppress(OSError, ValueError):
                     tls.unwrap()

@@ -5,14 +5,17 @@ use super::*;
 fn requests_keep_only_well_formed_entries() {
     let listed = requests::parse_list(
         "{\"requests\":[\
-         {\"id\":\"r1\",\"repository\":\"acme/design-system\",\"access\":\"push\",\"reason\":\"Shared fix\",\"session\":\"panel-2\",\"agent\":\"claude\",\"created_at\":1},\
+         {\"id\":\"r1\",\"repository\":\"acme/design-system\",\"access\":\"push\",\"reason\":\"Shared fix\",\"session\":\"panel-2\",\"agent\":\"claude\",\"created_at\":1,\"task\":true},\
+         {\"id\":\"r1b\",\"repository\":\"acme/older\",\"access\":\"read\",\"reason\":\"x\"},\
          {\"id\":\"r 2\",\"repository\":\"acme/x\",\"access\":\"push\",\"reason\":\"x\"},\
          {\"id\":\"r3\",\"repository\":\"acme/x\",\"access\":\"admin\",\"reason\":\"x\"},\
          {\"id\":\"r4\",\"repository\":\"acme/x\",\"access\":\"read\",\"reason\":\"line\\nbreak\"}]}",
     );
-    assert_eq!(listed.len(), 1);
+    assert_eq!(listed.len(), 2);
     assert_eq!(listed[0].repository, "acme/design-system");
     assert_eq!(listed[0].agent, "claude");
+    assert!(listed[0].task, "the worker can allow it for the task");
+    assert!(!listed[1].task, "an older worker takes only a decision for the cloud");
     assert!(requests::parse_list("not json").is_empty());
     for misleading in ["\\u202e", "\\u2066", "\\u200f"] {
         let reordered = requests::parse_list(&format!(
@@ -53,4 +56,14 @@ fn a_refused_decision_is_explained() {
         "The worker refused the decision."
     );
     assert!(requests::parse_decision("").is_some());
+    assert!(
+        requests::parse_decision("{\"ok\":false,\"error\":\"session_ended\"}")
+            .unwrap()
+            .contains("session that asked has ended")
+    );
+    assert!(
+        requests::parse_decision("{\"ok\":false,\"error\":\"too_many_task_grants\"}")
+            .unwrap()
+            .contains("Allow it for the cloud")
+    );
 }

@@ -1,0 +1,159 @@
+"""Grants for one task: a repository that the person allowed for the agent session that asked,
+and for no other session of the cloud. A grant names the process of the session's tmux pane by
+its process ID and its start time, as the kernel reports them, so it ends when that process
+ends and never passes to a later process with the same ID. The Git proxy, the API broker and
+the service's socket give a task grant only to a caller whose own process tree goes up to that
+process.
+
+Every agent session runs as the same account, so this is least privilege, not isolation: a
+process of one session can still type into another session's pane or change files that it
+runs. A module that horizon-worker-github loads, not a command."""
+import contextlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+
+def load_common():
+    name = 'horizon_worker_github_common'
+    if name not in sys.modules:
+        loader = importlib.machinery.SourceFileLoader(
+            name, str(Path(__file__).resolve().with_name('horizon-worker-github-common')))
+        module = importlib.util.module_from_spec(importlib.util.spec_from_loader(name, loader))
+        sys.modules[name] = module
+        loader.exec_module(module)
+    return sys.modules[name]
+
+
+common = load_common()
+auth = common.auth
+
+PROC = Path('/proc')
+# The account of every agent session (horizon-worker-tailnet isolate).
+AGENT_UID = 10001
+# Task grants live in the request book, whose file has a size limit when it is read back.
+MAX_TASK_GRANTS = 64
+FIELDS = {'repository', 'access', 'root', 'window', 'session', 'account', 'granted_at'}
+
+
+def started(pid, proc=PROC):
+    """The start time of process `pid` in clock ticks after boot, or None when it has ended."""
+    try:
+        return int((proc / str(pid) / 'stat').read_text().rsplit(') ', 1)[1].split()[19])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def parent(pid, proc=PROC):
+    """The parent process of `pid`, or 0 when it has ended."""
+    try:
+        return int((proc / str(pid) / 'stat').read_text().rsplit(') ', 1)[1].split()[1])
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
+def root(pid, proc=PROC):
+    """[pid, start time] of a session's pane process, or None when it has ended."""
+    start = started(pid, proc)
+    return None if start is None else [pid, start]
+
+
+def lineage(pid, proc=PROC):
+    """(pid, start time) of `pid` and of each process above it."""
+    found, seen = set(), set()
+    while pid > 1 and pid not in seen:
+        seen.add(pid)
+        start = started(pid, proc)
+        if start is None:
+            break
+        found.add((pid, start))
+        pid = parent(pid, proc)
+    return found
+
+
+def alive(grant, proc=PROC):
+    return started(grant['root'][0], proc) == grant['root'][1]
+
+
+def valid(grant):
+    return (isinstance(grant, dict) and set(grant) == FIELDS and auth.valid_repository(grant['repository'])
+            and grant['access'] in common.ACCESS and isinstance(grant['root'], list) and len(grant['root']) == 2
+            and all(type(item) is int and item > 0 for item in grant['root'])
+            and isinstance(grant['window'], str) and isinstance(grant['session'], str)
+            and isinstance(grant['account'], list) and type(grant['granted_at']) is int)
+
+
+def widest(grants, repository, roots, account):
+    """The widest access that the grants of `account` whose pane process is in `roots` give
+    `repository`, or None."""
+    best = None
+    for grant in grants:
+        if (grant['account'] == account and tuple(grant['root']) in roots
+                and auth.same_repository(repository, grant['repository'])):
+            best = common.stronger(best, grant['access'])
+    return best
+
+
+def access(grants, repository, pids, account, proc=PROC):
+    """The access that task grants give `repository` for a caller held by the processes
+    `pids`: only when every one of them is in the same task's process tree."""
+    if not grants or not pids:
+        return None
+    roots = {tuple(grant['root']) for grant in grants}
+    # The pane of each holder that has task grants; every holder must be below the same one.
+    panes = {frozenset(roots & lineage(pid, proc)) for pid in pids}
+    if len(panes) != 1:
+        return None
+    pane = panes.pop()
+    return widest(grants, repository, pane, account) if len(pane) == 1 else None
+
+
+def holders(inode, proc=PROC, run=subprocess.run):
+    """The agent processes that hold the socket `inode` open. Root without CAP_SYS_PTRACE,
+    which Docker does not give, cannot read the descriptors of another account's processes,
+    so root asks a short process of the agent account, which starts without capabilities."""
+    if os.geteuid() != 0:
+        return scan(inode, proc)
+    try:
+        found = json.loads(run([sys.executable, '-I', str(Path(__file__).resolve()), 'holders', str(inode)],
+                               user=AGENT_UID, group=AGENT_UID, extra_groups=[], env={'PATH': '/usr/bin:/bin'},
+                               cwd='/', stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10,
+                               check=True).stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return []
+    return [pid for pid in found if type(pid) is int and pid > 1] if isinstance(found, list) else []
+
+
+def scan(inode, proc=PROC):
+    """The processes that hold the socket `inode` open, of those whose descriptors this account
+    may read."""
+    target = 'socket:[%d]' % inode
+    found = []
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        with contextlib.suppress(OSError):
+            for descriptor in (entry / 'fd').iterdir():
+                with contextlib.suppress(OSError):
+                    if os.readlink(descriptor) == target:
+                        found.append(int(entry.name))
+                        break
+    return found
+
+
+def prune(grants, proc=PROC):
+    """The grants whose session still runs."""
+    return [grant for grant in grants if alive(grant, proc)]
+
+
+if __name__ == '__main__':
+    # Only for holders(): the GitHub service runs it as the agent account.
+    if len(sys.argv) == 3 and sys.argv[1] == 'holders' and sys.argv[2].isdigit():
+        print(json.dumps(scan(int(sys.argv[2]))))
+    else:
+        raise SystemExit('horizon-worker-github-tasks is a module of horizon-worker-github; it runs only '
+                         '`holders INODE` for the service.')
