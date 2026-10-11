@@ -231,3 +231,34 @@ GitHub and chooses its repositories; agents cannot set it up.
 The source example `cloud_deploy registry-mcp <registry-path>` exposes
 `cloud_registry`. It is not a shipped Horizon agent capability. Do not teach
 an agent to construct or change a private registry through it as a lifecycle fallback.
+
+## Existing Docker engine probe
+
+The core library provides a read-only Docker engine probe for local, SSH key
+and Tailscale SSH connections. It reports missing requirements and remedies.
+Key authentication needs a pinned host-key file. Tailscale SSH uses trust from
+the local network map and needs no private-key file.
+
+This foundation has no public MCP operation or deployment interface.
+It installs no software and changes no access. The controller runs on Linux
+or macOS. Docker must expose a local Linux engine with stable Docker 28 or later.
+Docker Desktop is not supported. The selected account must be able to query
+free space on the engine's storage filesystem. Directory listing and file
+read access are not required. An unknown storage result blocks admission.
+The Linux host needs `uname` and a `stat` tool that supports filesystem format
+`%a %S`. The output contains only available blocks and their block size.
+
+Host operating-system and kernel checks detect common virtual-machine
+mismatches. A matching kernel version does not prove filesystem identity.
+Configure a native engine bound directly to the selected host. Engine storage in
+another filesystem namespace and forwarded Unix sockets are not supported.
+
+The live SSH lane was tested with Tailscale 1.102.4. Its wrapper consumes the
+destination first and forwards the remaining arguments to OpenSSH. It supplies
+tailnet host keys and strict host-key checking before those arguments.
+Horizon does not override those trust options. See the verified
+[wrapper source](https://github.com/tailscale/tailscale/blob/3caf7d9e7dcaba589cfc58beda596929733e4fea/cmd/tailscale/cli/ssh.go#L105-L156).
+
+The probe requires a complete engine release version. It accepts build metadata and the Community or Enterprise suffix. Development and release-candidate versions do not pass admission. CPU, memory and free storage must be positive even when no profile is selected.
+
+The worker image runs natively on x86 hosts. ARM64 can use an explicit emulation policy, which produces a warning and requires deployment validation. Empty and unsupported architecture values block admission even when emulation is selected. The live test is excluded when the cloud-workspaces feature is disabled.

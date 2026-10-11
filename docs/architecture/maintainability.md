@@ -997,3 +997,10 @@ and `horizon-app-runtime` retains the private account journal and reconciliation
 The separate process and journal boundaries exist for crash ownership, not to
 create another in-memory session controller. Read [the runbook](remote-device-testing.md)
 for setup, limits and evidence boundaries.
+
+### Existing Docker engine probe
+
+`cloud_runtime::docker_host` owns the typed connection binding and read-only
+admission checks. Its transport runs bounded commands against a local engine
+or an authenticated SSH host. Tailscale trust checks are separate from command
+construction. The probe changes no host software or access.
