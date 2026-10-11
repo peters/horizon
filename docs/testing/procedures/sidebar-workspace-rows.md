@@ -113,7 +113,11 @@ the hovered or focused row.
    Result: The row becomes the focused row, with a tint of the workspace color
    and a close button. The canvas shows the panel.
 
-4. If the computer has a touch screen, tap the right end of a panel row that is
+4. Push Tab until a panel row that is not focused has the keyboard focus.
+
+   Result: The row shows its close button while it has the keyboard focus.
+
+5. If the computer has a touch screen, tap the right end of a panel row that is
    not focused and that you did not touch before. If not, use a script that
    moves the pointer and clicks in one step, for example
    `xdotool mousemove <x> <y> click 1` on the fixture display.

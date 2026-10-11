@@ -393,7 +393,8 @@ impl HorizonApp {
         let hovered = ui.rect_contains_pointer(row_rect);
         let close_rect = panel_rows::close_rect(row_rect);
         // The close button always takes clicks and tells a screen reader its name,
-        // but shows only on the hovered or focused row, or with keyboard focus.
+        // but shows only on the hovered or focused row, or while the row or the
+        // button has keyboard focus.
         let close = ui
             .interact(
                 close_rect,
@@ -402,7 +403,9 @@ impl HorizonApp {
             )
             .on_hover_text("Close panel");
         close.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close panel"));
-        let close_shows = hovered || panel.is_focused || close.hovered() || close.has_focus();
+        let row_id = sidebar_panel_row_id(panel.id);
+        let row_focused = ui.memory(|memory| memory.has_focus(row_id));
+        let close_shows = hovered || panel.is_focused || row_focused || close.hovered() || close.has_focus();
         // A pointer press closes only a button that the person could see before the
         // press began: a tap on the hidden button of another row focuses that row
         // instead. The decision is kept from pointer-down until the release.
@@ -432,11 +435,7 @@ impl HorizonApp {
         );
 
         let row_click_rect = Rect::from_min_max(row_rect.min, Pos2::new(close_rect.min.x, row_rect.max.y));
-        let row_response = ui.interact(
-            row_click_rect,
-            ui.make_persistent_id(("sidebar_panel_click", panel.id.0)),
-            Sense::click(),
-        );
+        let row_response = ui.interact(row_click_rect, row_id, Sense::click());
         row_response.widget_info(|| {
             let spoken = text::panel_spoken(panel.kind, &label, panel.working);
             egui::WidgetInfo::labeled(egui::WidgetType::Button, true, spoken)
@@ -572,6 +571,12 @@ impl HorizonApp {
             self.mark_runtime_dirty();
         }
     }
+}
+
+/// The widget id of a panel row: global, so that the close button can read the
+/// row's keyboard focus before the row is registered.
+fn sidebar_panel_row_id(panel: PanelId) -> Id {
+    Id::new(("sidebar_panel_click", panel.0))
 }
 
 fn sidebar_workspace_insert_dock_side(insert: SidebarWorkspaceInsert) -> WorkspaceDockSide {

@@ -387,3 +387,62 @@ fn the_badge_ring_takes_the_color_of_the_card_in_every_state() {
         theme::blend(theme::PANEL_BG_ALT(), accent, 0.22)
     );
 }
+
+#[test]
+fn keyboard_focus_on_a_panel_row_shows_its_close_button() {
+    use crate::test_egui::DiscardTextures;
+    use egui::epaint::Shape;
+
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    app.template_config.features.sidebar_accordion = true;
+    let workspace = app.board.create_workspace("Quiet zone");
+    let first = app
+        .board
+        .create_panel(editor_panel_options("first"), workspace)
+        .expect("panel");
+    let second = app
+        .board
+        .create_panel(editor_panel_options("second"), workspace)
+        .expect("panel");
+    app.board.active_workspace = Some(workspace);
+    app.board.focus(first);
+    let ctx = egui::Context::default();
+    let frame = |app: &mut crate::app::HorizonApp| {
+        let input = crate::app::test_support::raw_input([1400.0, 900.0], None);
+        ctx.run_ui(input, |ui| app.render_sidebar(ui.ctx())).discard_textures()
+    };
+    let crosses_on = |output: &egui::FullOutput, label: &str| {
+        let texts: Vec<(String, egui::Pos2)> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                Shape::Text(text) => Some((
+                    text.galley.job.text.clone(),
+                    egui::Rect::from_min_size(text.pos, text.galley.size()).center(),
+                )),
+                _ => None,
+            })
+            .collect();
+        let row = texts
+            .iter()
+            .find(|(text, _)| text == label)
+            .map(|(_, at)| *at)
+            .expect(label);
+        texts
+            .iter()
+            .any(|(text, at)| text == "\u{00D7}" && (at.y - row.y).abs() < 4.0)
+    };
+    // An area shows from its second frame on.
+    frame(&mut app);
+    assert!(
+        !crosses_on(&frame(&mut app), "second"),
+        "a resting row hides its close button"
+    );
+
+    ctx.memory_mut(|memory| memory.request_focus(super::sidebar_panel_row_id(second)));
+    frame(&mut app);
+    assert!(
+        crosses_on(&frame(&mut app), "second"),
+        "a keyboard-focused row shows it"
+    );
+}
