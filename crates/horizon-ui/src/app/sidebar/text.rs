@@ -64,7 +64,8 @@ pub(super) fn initials(name: &str) -> String {
     name.split(|character: char| !character.is_alphanumeric())
         .filter_map(|word| word.chars().next())
         .take(2)
-        .flat_map(char::to_uppercase)
+        // One character per word: some letters upper-case to more than one (ß to SS).
+        .filter_map(|letter| letter.to_uppercase().next())
         .collect()
 }
 
@@ -122,6 +123,8 @@ mod tests {
         assert_eq!(initials("Horizon"), "H");
         assert_eq!(initials("é-mail"), "ÉM");
         assert_eq!(initials("  "), "");
+        assert_eq!(initials("ßeta ßig"), "SS");
+        assert_eq!(initials("ßeta").chars().count(), 1);
     }
 
     #[test]
