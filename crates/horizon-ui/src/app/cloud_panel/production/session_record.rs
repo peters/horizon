@@ -735,9 +735,17 @@ mod tests {
             "a runtime a session switch rebuilds reads the record from disk, not the save's copy"
         );
         fence(&directory).wait();
-        // Stop saves the record while the save waits to try again.
+        // Stop takes the record's lock while the folder is still read-only, so the save
+        // cannot record its session first; a try of the save holds the lock only briefly.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let store = loop {
+            if let Ok(store) = Store::lock_existing(&directory) {
+                break store;
+            }
+            assert!(Instant::now() < deadline, "the save never gave up the record's lock");
+            std::thread::sleep(Duration::from_millis(5));
+        };
         set_writable(&directory, true);
-        let store = Store::lock(&directory).expect("the save gave up the record's lock");
         let mut stopped = store.load().unwrap().unwrap();
         assert!(stopped.sessions.is_empty(), "the session was not recorded yet");
         stopped.stage = cloud_runtime::Stage::Stopped;
