@@ -224,7 +224,7 @@ impl HorizonApp {
             .map(|session| session.session_id.as_str())
     }
 
-    fn activate_runtime_session(&mut self, ctx: &Context, session: &ResolvedSession) {
+    pub(super) fn activate_runtime_session(&mut self, ctx: &Context, session: &ResolvedSession) {
         if self.root_viewport_stabilization_blocks_interaction() {
             tracing::debug!("session switch ignored while the root viewport is stabilizing");
             return;
@@ -340,6 +340,7 @@ impl HorizonApp {
             }
         }
 
+        self.finish_browser_host_io_for_switch();
         let Some(pending) = self.pending_session_switch.take() else {
             return false;
         };
@@ -368,6 +369,10 @@ impl HorizonApp {
     }
 
     fn finish_aborted_session_switch(&mut self) {
+        if self.pending_session_switch.is_none() {
+            return;
+        }
+        self.finish_browser_host_io_for_switch();
         let Some(pending) = self.pending_session_switch.take() else {
             return;
         };
