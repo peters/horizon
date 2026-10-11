@@ -9,6 +9,9 @@ use std::{
 };
 
 const MISSING_RECORD: &str = "Deployment record is missing; reconcile its worker before continuing";
+/// How often the session is synced again because a save replaced it meanwhile, before
+/// the preparation gives up; the UI saves at most every half second, so a few passes settle.
+const SYNC_PASSES: usize = 8;
 
 /// A saved session that a worker thread makes durable before anything is allocated for it.
 pub(in crate::app::cloud_panel::production) struct Durability {
@@ -27,10 +30,11 @@ impl Durability {
 
     /// Syncs until no save replaced a session file meanwhile. The UI may save the session
     /// again while this runs, and a file it replaced after the sync opened the old one is
-    /// not durable; the snapshot reported durable must be the one on disk. `synced` runs
-    /// after each pass.
+    /// not durable; the snapshot reported durable must be the one on disk. A session that
+    /// keeps changing for [`SYNC_PASSES`] passes is refused, so the card says why instead
+    /// of preparing without end. `synced` runs after each pass.
     fn sync_until_unchanged(&self, mut synced: impl FnMut()) -> Result<(), String> {
-        loop {
+        for _ in 0..SYNC_PASSES {
             let before = self.identities();
             self.store
                 .sync_runtime_state(&self.session_id)
@@ -40,6 +44,7 @@ impl Durability {
                 return Ok(());
             }
         }
+        Err("The workspace kept changing while Horizon saved it; try again".into())
     }
 
     /// Which file each session path names. A save replaces a file with a new one, which
@@ -248,5 +253,25 @@ mod tests {
             })
             .unwrap();
         assert_eq!(passes, 2, "the replaced files are synced once more");
+    }
+
+    #[test]
+    fn a_session_that_keeps_changing_is_refused_after_a_few_passes() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(
+            HorizonHome::from_root(temp.path().join("home")),
+            temp.path().join("config.yaml"),
+        );
+        store.save_runtime_state("session", &RuntimeState::default()).unwrap();
+        let durability = Durability::new(store.clone(), "session".into());
+        let mut passes = 0;
+        let refused = durability
+            .sync_until_unchanged(|| {
+                passes += 1;
+                store.save_runtime_state("session", &RuntimeState::default()).unwrap();
+            })
+            .unwrap_err();
+        assert_eq!(passes, SYNC_PASSES);
+        assert!(refused.contains("try again"), "{refused}");
     }
 }
