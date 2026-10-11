@@ -111,9 +111,23 @@ impl HorizonApp {
         let Some(run) = self.cloud_prototype.production.setup_run.as_mut() else {
             return;
         };
+        run.poll();
         if run.finished() && run.files.is_none() {
             run.files = Some(changed_files(&run.repository));
         }
+        // The agent asked for a (new) proof: Horizon builds and runs it itself.
+        if let Some((request, spec)) = run.proof_wanted() {
+            run.proved_request = request;
+            let log = run.status_path.with_extension(format!("proof-{request}.log"));
+            run.proof = Some(super::proof::Proof::start(&run.repository, spec, log, ctx.clone()));
+        }
+        let report = run.proof.as_mut().and_then(|proof| {
+            proof.poll();
+            if proof.running() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+            }
+            std::mem::take(&mut proof.unreported).then(|| proof.report())
+        });
         let Some(panel) = self.board.panel_mut(run.panel) else {
             run.stopped = !run.finished();
             return;
@@ -128,6 +142,10 @@ impl HorizonApp {
                 run.sampled = Some(Instant::now());
             }
             ctx.request_repaint_after(run::OUTPUT_EVERY);
+        }
+        if let Some(report) = report {
+            panel.write_input(&run::pasted(&report));
+            run.submit_at = Some(Instant::now() + run::SUBMIT_DELAY);
         }
         // An agent without a prompt argument gets the instructions once it has drawn its
         // screen and gone quiet.

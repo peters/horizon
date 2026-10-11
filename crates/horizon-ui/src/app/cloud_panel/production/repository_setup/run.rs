@@ -2,6 +2,7 @@
 //! progress. The agent keeps a small status file current; the person reads the steps
 //! here and steers the agent by typing into its terminal from the dialog.
 use super::Mode;
+use super::proof::{self, Phase, Proof};
 use horizon_core::{PanelId, PanelKind};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -65,6 +66,9 @@ pub(in crate::app::cloud_panel::production) struct Run {
     pub(super) mode: Mode,
     /// The `.horizon` files changed or added, once the agent is done.
     pub(super) files: Option<String>,
+    /// Horizon's own proof of the image, and the agent's request it answers.
+    pub(super) proof: Option<Proof>,
+    pub(super) proved_request: u64,
 }
 
 /// What the person did in the progress view.
@@ -81,6 +85,9 @@ struct Status {
     steps: Vec<Step>,
     question: Option<String>,
     summary: Option<String>,
+    /// What the agent asks Horizon to prove, and how often it asked.
+    proof: Option<proof::Spec>,
+    proof_request: u64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -119,6 +126,8 @@ impl Run {
             sampled: None,
             mode,
             files: None,
+            proof: None,
+            proved_request: 0,
         }
     }
 
@@ -146,7 +155,34 @@ impl Run {
     }
 
     /// How long a step has taken so far, or took.
+    /// A newer proof the agent asked for than the one Horizon ran last.
+    pub(super) fn proof_wanted(&self) -> Option<(u64, proof::Spec)> {
+        let request = self.status.proof_request;
+        (request > self.proved_request)
+            .then(|| self.status.proof.clone())
+            .flatten()
+            .map(|spec| (request, spec))
+    }
+
+    /// The step Horizon owns for `title`, once a proof exists.
+    fn proof_phase(&self, title: &str) -> Option<&proof::PhaseState> {
+        let proof = self.proof.as_ref()?;
+        [Phase::Build, Phase::Ci, Phase::Fast]
+            .into_iter()
+            .find(|phase| phase.title() == title)
+            .map(|phase| proof.phase(phase))
+    }
+
     fn elapsed(&self, title: &str) -> Option<Duration> {
+        if let Some(phase) = self.proof_phase(title) {
+            let start = phase.started?;
+            return Some(
+                phase
+                    .ended
+                    .unwrap_or_else(Instant::now)
+                    .saturating_duration_since(start),
+            );
+        }
         let (start, end) = self.times.get(title)?;
         Some(end.unwrap_or_else(Instant::now).saturating_duration_since(*start))
     }
@@ -177,7 +213,12 @@ impl Run {
     /// The steps to draw: the agent's own, or the expected ones before its first report.
     fn steps(&self) -> Vec<Step> {
         if !self.status.steps.is_empty() {
-            return self.status.steps.iter().map(Step::clone_view).collect();
+            return self
+                .status
+                .steps
+                .iter()
+                .map(|step| self.proof_step(step).unwrap_or_else(|| step.clone_view()))
+                .collect();
         }
         STEPS
             .iter()
@@ -188,6 +229,24 @@ impl Run {
                 detail: String::new(),
             })
             .collect()
+    }
+}
+
+impl Run {
+    /// Horizon's own state of a step it owns, in place of what the agent wrote.
+    fn proof_step(&self, step: &Step) -> Option<Step> {
+        let phase = self.proof_phase(&step.title)?;
+        let (state, detail) = match (phase.started, phase.ended, phase.failure.as_deref()) {
+            (_, Some(_), Some(failure)) => (State::Failed, failure.to_owned()),
+            (_, Some(_), None) => (State::Done, "proved by Horizon".to_owned()),
+            (Some(_), None, _) => (State::Running, "Horizon is running it".to_owned()),
+            (None, _, _) => (State::Pending, String::new()),
+        };
+        Some(Step {
+            title: step.title.clone(),
+            state,
+            detail,
+        })
     }
 }
 
@@ -237,6 +296,11 @@ fn parse(text: &str) -> Option<Status> {
         steps,
         question: line("question"),
         summary: line("summary"),
+        proof: value.get("proof").and_then(proof::Spec::parse),
+        proof_request: value
+            .get("proof_request")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_default(),
     })
 }
 

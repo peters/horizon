@@ -11,6 +11,7 @@ use horizon_core::{
 use std::path::Path;
 
 mod prompt;
+mod proof;
 mod run;
 mod session;
 pub(super) use prompt::Mode;
@@ -226,17 +227,39 @@ fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str) -> Choice {
             .corner_radius(10)
             .min_size(Vec2::new(120.0, 40.0));
         open = ui.add_enabled(!form.repository.trim().is_empty(), primary).clicked();
-        egui::ComboBox::from_id_salt("cloud-setup-agent")
-            .selected_text(chosen.as_str())
-            .width(150.0)
-            .show_ui(ui, |ui| {
-                for preset in &presets {
-                    let selected = preset.name == chosen;
-                    if ui.selectable_label(selected, &preset.name).clicked() {
-                        form.setup_preset = Some(preset.name.clone());
-                    }
-                }
-            });
+    });
+    // The agent presets of the New Workspace menu, as chips: no popup to hide behind the
+    // dialog, and every choice in view.
+    ui.add_space(6.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
+        for preset in &presets {
+            let selected = preset.name == chosen;
+            let fill = if selected {
+                theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.22)
+            } else {
+                theme::PANEL_BG_ALT()
+            };
+            let chip = egui::Button::new(RichText::new(&preset.name).size(12.5).color(if selected {
+                theme::FG()
+            } else {
+                theme::FG_SOFT()
+            }))
+            .fill(fill)
+            .stroke(Stroke::new(
+                1.0,
+                if selected {
+                    theme::blend(theme::BORDER_SUBTLE(), theme::ACCENT(), 0.5)
+                } else {
+                    theme::BORDER_SUBTLE()
+                },
+            ))
+            .corner_radius(8)
+            .min_size(Vec2::new(0.0, 28.0));
+            if ui.add(chip).clicked() {
+                form.setup_preset = Some(preset.name.clone());
+            }
+        }
     });
     if open { Choice::SetupAgent } else { Choice::None }
 }

@@ -46,6 +46,14 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn render(
             for step in &steps {
                 step_row(ui, step, run.elapsed(&step.title));
             }
+            if let Some(proof) = run
+                .proof
+                .as_ref()
+                .filter(|proof| proof.running() || !proof.log.is_empty())
+            {
+                ui.add_space(8.0);
+                proof_tail(ui, proof);
+            }
             if let Some(question) = run.status.question.as_deref().filter(|_| working) {
                 ui.add_space(8.0);
                 callout(ui, question);
@@ -213,6 +221,21 @@ fn step_icon(ui: &Ui, rect: egui::Rect, state: State) {
             painter.line_segment([center + Vec2::new(-3.0, 3.0), center + Vec2::new(3.0, -3.0)], stroke);
         }
     }
+}
+
+/// The last lines of Horizon's own proof run, so a build or test can be followed.
+fn proof_tail(ui: &mut Ui, proof: &super::Proof) {
+    Frame::new()
+        .fill(theme::PANEL_BG())
+        .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
+        .corner_radius(8)
+        .inner_margin(egui::Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            for line in proof.log.iter().rev().take(6).collect::<Vec<_>>().into_iter().rev() {
+                ui.add(egui::Label::new(RichText::new(line).monospace().size(11.5).color(theme::FG_SOFT())).truncate());
+            }
+        });
 }
 
 fn callout(ui: &mut Ui, question: &str) {
