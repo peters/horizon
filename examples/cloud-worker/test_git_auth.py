@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import tempfile
@@ -775,24 +776,47 @@ class AgentBehindTheRootOnlyMarkerTests(unittest.TestCase):
         self.identity = {'repository': 'example/project', 'author_name': 'Agent',
                          'author_email': 'agent@example.invalid', 'target': 'primary'}
 
-    def test_every_agent_operation_runs(self):
+    def main(self, *argv, stdin=''):
+        with mock.patch.object(auth.sys, 'argv', list(argv)), \
+                mock.patch.object(auth.sys, 'stdin', io.StringIO(stdin)), \
+                mock.patch.object(auth.sys, 'stdout', io.StringIO()) as output:
+            auth.main()
+        return output.getvalue()
+
+    def test_every_agent_side_operation_runs(self):
+        # Every operation that root runs as the agent, so all but auth.ROOT_OPERATIONS, through
+        # the same entry point. A stand-in gh records the route; the check's gh is not called.
         self.assertFalse(auth.root_holds_token())
-        # What the GitHub service runs as the agent at its start and for each install.
-        auth.restore_static({'previous': []})
-        auth.configure_chain({'grants': [self.identity], 'previous': []})
-        auth.install_identities({'version': 2, 'grants': [self.identity]})
+        gh = self.path / 'gh'
+        calls = self.path / 'gh-calls'
+        gh.write_text('#!/bin/sh\necho "$*" >> %s\n' % shlex.quote(str(calls)))
+        gh.chmod(0o755)
+        helper = 'horizon-worker-git-auth'
+        identity = json.dumps({'version': 2, 'grants': [self.identity]})
+        route_file = Path(auth.HOME) / auth.ROUTE_FILE
+        # What the GitHub service runs at its start and for each install.
+        self.main(helper, 'restore', stdin='{"previous": []}')
+        self.main(helper, 'configure', stdin=json.dumps({'grants': [self.identity], 'previous': []}))
+        self.main(helper, 'install-identity', stdin='{"binding": %s, "previous": null}' % identity)
         self.assertIsNotNone(auth.previous_grants())
-        # Git's credential helper and the gh wrapper without a service.
-        with mock.patch.object(auth.sys, 'argv', ['horizon-worker-git-auth', 'get']), \
-                mock.patch.object(auth.sys, 'stdin', io.StringIO('protocol=https\nhost=github.com\npath=a/b\n')), \
-                mock.patch.object(auth.sys, 'stdout', io.StringIO()):
-            auth.main()
-        with mock.patch.object(auth.sys, 'argv', ['gh', 'pr', 'list']), \
-                mock.patch.object(auth.os, 'execve') as execute:
-            auth.main()
+        with mock.patch.object(auth.targets, 'GH', str(gh)):
+            self.main(helper, 'route')
+            self.assertTrue(route_file.exists())
+            self.assertIn('config set http_unix_socket ' + auth.API_SOCKET, calls.read_text())
+            self.main(helper, 'unroute')
+            self.assertFalse(route_file.exists())
+        # Git's credential helper without a service, and its store and erase.
+        self.assertEqual(self.main(helper, 'get', stdin='protocol=https\nhost=github.com\npath=a/b\n'), '')
+        self.main(helper, 'store', stdin='protocol=https\nhost=github.com\n')
+        self.main(helper, 'erase', stdin='protocol=https\nhost=github.com\n')
+        # The image check and the gh wrapper without a service.
+        with mock.patch.object(auth.subprocess, 'run') as run:
+            self.main(helper, 'check')
+        self.assertEqual(run.call_args.args[0], ['/usr/bin/gh', '--version'])
+        with mock.patch.object(auth.os, 'execve') as execute:
+            self.main('gh', 'pr', 'list')
         self.assertEqual(execute.call_args.args[2]['GH_CONFIG_DIR'], str(Path(auth.HOME) / '.config/gh'))
         self.assertTrue(auth.isolated())
-
 
 if __name__ == '__main__':
     unittest.main()

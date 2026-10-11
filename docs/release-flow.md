@@ -120,8 +120,9 @@ the worker contract or the agent CLIs in the base image must change for a releas
    report and finds the same markers as `CONTRACT`.
 9. On a computer with Docker, do lane C of the
    [worker GitHub chain procedure](testing/procedures/worker-github-chain.md)
-   with the scripts of the commit that the image was published from (the
-   `headSha` of the Worker images run of step 1).
+   with the scripts of the commit that the image was published from. Check out
+   that commit first. Its SHA is the `headSha` of the Worker images run of step 1:
+   `gh run view <run> --json headSha`.
 
    Result: In task C1, the GitHub service runs and the agent cannot see the
    isolation marker.
@@ -129,7 +130,8 @@ the worker contract or the agent CLIs in the base image must change for a releas
 11. Do the [quick start test procedure](testing/procedures/cloud-quick-start.md)
    with the new pin. On the worker, examine `/run/horizon-worker/services.json`.
 
-   Result: It lists `github` when the image has the GitHub service.
+   Result: It lists `github`. If `github` is not there, examine
+   `/workspace/github.log`, fix the cause and publish the image again.
 12. Merge the change in a normal PR before you save the draft release.
 
 ## CLI Alternative

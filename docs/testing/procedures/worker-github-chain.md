@@ -32,8 +32,8 @@ the decision.
   `horizon-worker-git-auth`, `horizon-worker-supervise` or the token chain part
   of `horizon-worker-check`.
 - Platforms: Linux with Docker.
-- Do lanes C and R on the exact head that merges. A later change to a helper
-  that runs as the agent needs a new run: unit tests cannot show every
+- Do lanes C and R on the exact head that merges. If a later change touches a
+  helper that runs as the agent, do them again. Unit tests cannot show every
   permission of a real worker.
 - Lanes:
   - Lane U: the unit tests.
@@ -241,7 +241,8 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    If `github` is not there, examine `/workspace/github.log`: the service did not
    start, and the run fails here.
 
-5. Examine the isolation marker as root and as the agent:
+5. Examine the isolation marker as root and as the agent. `docker exec` runs as
+   root, and the `agent` launcher returns the exit code of its command:
 
    ```bash
    docker exec <c> stat -c '%U %a %n' /run/horizon-tailnet /run/horizon-tailnet/agent-isolation
