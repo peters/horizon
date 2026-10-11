@@ -120,7 +120,8 @@ the worker contract or the agent CLIs in the base image must change for a releas
    report and finds the same markers as `CONTRACT`.
 9. On a computer with Docker, do lane C of the
    [worker GitHub chain procedure](testing/procedures/worker-github-chain.md)
-   with the scripts of the commit that the image was published from.
+   with the scripts of the commit that the image was published from (the
+   `headSha` of the Worker images run of step 1).
 
    Result: In task C1, the GitHub service runs and the agent cannot see the
    isolation marker.

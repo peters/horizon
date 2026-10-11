@@ -738,7 +738,6 @@ class GitGrantTests(unittest.TestCase):
             auth.read_grants()
 
 
-
 @unittest.skipIf(os.geteuid() == 0, 'root sees into every directory')
 class AgentBehindTheRootOnlyMarkerTests(unittest.TestCase):
     """The agent side of the helper with the isolation marker in a directory that this account
@@ -753,9 +752,15 @@ class AgentBehindTheRootOnlyMarkerTests(unittest.TestCase):
         (hidden / 'agent-isolation').touch()
         hidden.chmod(0)
         self.addCleanup(hidden.chmod, 0o700)
+        try:
+            os.stat(hidden / 'agent-isolation')
+            self.skipTest('this account sees into a directory with no permissions')
+        except PermissionError:
+            pass
         home = self.path / 'home'
         home.mkdir()
-        subprocess.run(['git', 'init', '-q', '--bare', str(self.path / 'repository.git')], check=True)
+        subprocess.run(['git', 'init', '-q', '--bare', str(self.path / 'repository.git')], check=True,
+                       env=dict(os.environ, HOME=str(home), GIT_CONFIG_NOSYSTEM='1'))
         for name, value in [('AGENT_ISOLATION', hidden / 'agent-isolation'),
                             ('CREDENTIAL', self.path / 'credentials/github.json'),
                             ('SERVICE_SOCKET', self.path / 'no-service.sock'),
@@ -787,6 +792,7 @@ class AgentBehindTheRootOnlyMarkerTests(unittest.TestCase):
             auth.main()
         self.assertEqual(execute.call_args.args[2]['GH_CONFIG_DIR'], str(Path(auth.HOME) / '.config/gh'))
         self.assertTrue(auth.isolated())
+
 
 if __name__ == '__main__':
     unittest.main()

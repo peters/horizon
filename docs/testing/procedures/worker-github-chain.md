@@ -250,7 +250,7 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
    Result: The first command shows `root 700 /run/horizon-tailnet` and
    `root 600 /run/horizon-tailnet/agent-isolation`. The second shows
-   `Permission denied` and a nonzero exit. The agent cannot see the marker, as
+   `Permission denied` and a nonzero exit, as expected. The agent cannot see the marker, as
    on a worker at a provider, so the helpers that run as the agent are tested
    with the real permissions.
 
