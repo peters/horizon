@@ -374,7 +374,7 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 
   Mind the asymmetry: the request must name `copilot-pull-request-reviewer[bot]`, but the timeline reports the reviewer as `Copilot`.
 - The Copilot review on the PR is the final gate, not the place to iterate. Request it only for a head whose files the local review loop found clean. Push all fixes of a round together.
-- A Copilot review is pinned to the commit it ran against, so re-request it after every push. Compare the review's `commit_id` with the current head (`gh api --paginate repos/<owner>/<repo>/pulls/<n>/reviews --jq '.[] | select(.user.login == "copilot-pull-request-reviewer[bot]") | .commit_id'`) before treating the review gate as met.
+- A Copilot review is pinned to the commit it ran against, so re-request it after every push until the round limit above is reached. Compare the review's `commit_id` with the current head (`gh api --paginate repos/<owner>/<repo>/pulls/<n>/reviews --jq '.[] | select(.user.login == "copilot-pull-request-reviewer[bot]") | .commit_id'`) before treating the review gate as met.
 - For a candidate expected to finish review, use a normal commit message so CI and review run on the same head.
   For intermediate review fixes, `[skip ci]` is optional after the affected local checks pass.
   Before final readiness, push a head without that marker and wait for all required CI checks on that head.
@@ -384,7 +384,7 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 - Wait for the requested Copilot review and all repository-mandated checks on the current head.
   For an intermediate head with `[skip ci]`, wait only for its review. That head cannot be ready to merge.
   Fix actionable in-scope findings on this PR. Record valid out-of-scope findings as follow-up candidates and leave no actionable thread unresolved.
-  Before each push, apply the validation and reuse rules above. After the push, refresh the review and checks for the new head.
+  Before each push, apply the validation and reuse rules above. After the push, refresh the review and checks for the new head; after the round limit, refresh only the checks.
   Rerun affected smoke scenarios after a behavior change.
 - Apply repository-standard metadata only when the convention is unambiguous: assignee `@me`, `Awaiting Review` label, current milestone, and project. Otherwise report and skip the ambiguous item rather than guessing.
 - Every PR merge requires explicit final permission from `peters` in the current user conversation. This rule applies to every author, including `peters`.
@@ -397,9 +397,9 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
   - The review has 0 open findings and no "Previously missed" findings.
   - The local review loop found nothing actionable for the same file changes.
 
-  A new commit message or an empty commit does not change the files. The local loop does not run again for it. Copilot must still review that exact head. A summary without findings is not a finding.
+  A new commit message or an empty commit does not change the files. The local loop does not run again for it. Copilot must still review that exact head, except after the round limit. A summary without findings is not a finding.
 
-  After the round limit above, the gate is met when the findings of the fifth review are fixed and the local review loop found nothing actionable on that head.
+  After the round limit above, the gate is met without a Copilot review of the final head: the findings of the fifth review are fixed, and the local review loop found nothing actionable on that head. The round limit and this exception never apply to external contributions.
 - For an authorized merge, use squash with an expected-head guard, for example `gh pr merge <PR#> --squash --match-head-commit <sha>`. Afterward, verify GitHub's merged state and resulting base commit and monitor all relevant post-merge workflows on the squash commit to a successful terminal state. Before cleanup, prove the task worktree is clean, the task branch still equals the guarded PR head with no later commits, and the squash commit contains the merged patch; then remove only task-created worktrees and branches, never a dirty or shared checkout.
 - Merge approval is not release approval. Do not create a tag, publish a GitHub Release, trigger a release workflow, or claim deployment without a separate explicit request and verification.
 - Treat pull-request evidence as public by default. Anonymize unrelated user, host, customer, or operational identifiers, and never publish credentials, tokens, private keys, signed URLs, or secret-bearing configuration.
@@ -431,7 +431,7 @@ The final merge permission rule above applies to all PRs.
 - If safe isolation is unavailable, report the blocked execution gate. Do not weaken the boundary to obtain a passing test.
 - Do not expose data from this PC through comments, uploads, logs, artifacts, network requests or commands from a contributor.
 - Publish only reviewed evidence required for the PR. Use synthetic data and remove local paths, machine details and unrelated private information.
-- Require independent Copilot review, applicable tests and zero unresolved actionable findings on the exact head. These gates do not prove absence of malware.
+- Require independent Copilot review, applicable tests and zero unresolved actionable findings on the exact head, with no round limit. These gates do not prove absence of malware.
 - After every new push, review the complete current diff again. Refresh the review, affected tests and final permission from `peters`.
 - Stop on suspicious content or unexplained behavior. Report the evidence to `peters` without running or publishing the suspect material.
 
