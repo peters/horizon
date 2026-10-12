@@ -129,6 +129,35 @@ fn a_save_outside_the_queue_is_refused_while_park_records_of_the_session_are_wri
     assert!(store.save_runtime_state("session", &board("direct")).is_ok());
 }
 
+#[cfg(unix)]
+#[test]
+#[cfg(unix)]
+fn the_writer_leaves_a_session_alone_while_a_save_outside_the_queue_writes_it() {
+    let (_temp, store) = store();
+    let direct = store.writer.supersede("session", &board("direct")).unwrap();
+    assert!(
+        store.writer.supersede("session", &board("again")).is_err(),
+        "one direct save at a time"
+    );
+    assert!(
+        store.writer.forget("session").is_err(),
+        "a delete waits for the direct save"
+    );
+    let generation = store.queue_runtime_state("session", board("queued"));
+    assert_eq!(
+        store.wait_runtime_state_durable("session", generation, Duration::from_millis(200)),
+        Err(None),
+        "the queued board waits"
+    );
+    drop(direct);
+    assert_eq!(
+        store.wait_runtime_state_durable("session", generation, Duration::from_secs(30)),
+        Ok(())
+    );
+    assert_eq!(on_disk(&store).as_deref(), Some("queued"));
+}
+
+#[cfg(unix)]
 fn park(parked: bool, line: Option<&str>) -> Park {
     Park {
         local_id: "panel".into(),
@@ -172,6 +201,24 @@ fn park_records_of_a_session_that_cannot_be_saved_do_not_pile_up() {
         "a record without a status keeps the queued status"
     );
     drop(state);
+    let mut with_panel = board("again");
+    with_panel.workspaces.push(crate::WorkspaceState {
+        panels: vec![crate::PanelState {
+            local_id: "panel".into(),
+            ..crate::PanelState::default()
+        }],
+        ..crate::WorkspaceState::default()
+    });
+    let _ = store.queue_runtime_state("broken", with_panel);
+    assert!(
+        store.writer.lock().parks.contains_key("broken"),
+        "the panel is on the newer board"
+    );
+    let _ = store.queue_runtime_state("broken", board("without the panel"));
+    assert!(
+        !store.writer.lock().parks.contains_key("broken"),
+        "a record of a panel that left the board is dropped, so it cannot add the panel back"
+    );
     while store.writer.forget("broken").is_err() {
         std::thread::sleep(Duration::from_millis(5));
     }

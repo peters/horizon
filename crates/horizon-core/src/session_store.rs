@@ -247,7 +247,7 @@ impl SessionStore {
     /// The board or metadata cannot be serialized or written, or the session writer
     /// writes this session now.
     pub fn save_runtime_state(&self, session_id: &str, runtime_state: &RuntimeState) -> Result<()> {
-        self.writer.supersede(session_id)?;
+        let _direct = self.writer.supersede(session_id, runtime_state)?;
         self.write_runtime_state(session_id, runtime_state, atomic_write)?;
         self.update_session_index(|index| index.touch_profile_session(&self.profile_id, session_id))
     }
