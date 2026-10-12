@@ -137,18 +137,20 @@ pub(super) fn commit(repository: &Path, message: &str, setup: &super::snapshot::
         return Err("HEAD moved after Horizon read the setup; start the setup again".to_owned());
     }
     let entries = entries_of(repository, &setup.entries)?;
-    let index = git(
-        repository,
-        None,
-        &["rev-parse", "--git-path", "horizon-setup-index"],
-        None,
-    )?;
-    let index = repository.join(index);
-    let _ = std::fs::remove_file(&index);
+    // An index of this commit's own, with a name no other Use, in this Horizon or
+    // another one on the same checkout, can share; it goes when the tree is written.
+    let git_dir = git(repository, None, &["rev-parse", "--absolute-git-dir"], None)?;
+    let index = tempfile::Builder::new()
+        .prefix("horizon-setup-index-")
+        .tempfile_in(&git_dir)
+        .map_err(|error| format!("cannot make a temporary index: {error}"))?
+        .into_temp_path();
+    // git writes the index itself; it refuses an empty file in its place.
+    std::fs::remove_file(&index).map_err(|error| error.to_string())?;
     let tree = git(repository, Some(&index), &["read-tree", &head], None)
         .and_then(|_| stage(repository, Some(&index), &entries))
         .and_then(|()| git(repository, Some(&index), &["write-tree"], None));
-    let _ = std::fs::remove_file(&index);
+    drop(index);
     let tree = tree?;
     if tree == git(repository, None, &["rev-parse", &format!("{head}^{{tree}}")], None)? {
         // Nothing to commit, but the person's index still gets the setup as it is, so a
@@ -419,6 +421,12 @@ mod tests {
             "a changed setup commits"
         );
         assert!(!mark.exists(), "no hook or filter ran");
+        let leftovers = std::fs::read_dir(path.join(".git"))
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("horizon-setup-index"))
+            .count();
+        assert_eq!(leftovers, 0, "the commit's own index goes with it");
         assert_eq!(run(path, &["log", "-1", "--format=%s"]), "Add the cloud setup");
         assert_eq!(
             run(path, &["ls-tree", "-r", "--name-only", "HEAD", "--", ".horizon"]),

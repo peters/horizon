@@ -19,6 +19,10 @@ impl HorizonApp {
     /// Starts the setup agent in a hidden panel; the dialog shows its progress and
     /// passes the person's messages to it.
     pub(in crate::app::cloud_panel::production) fn start_cloud_repository_setup(&mut self, ctx: &egui::Context) {
+        if cfg!(windows) {
+            self.cloud_prototype.error = Some(super::WINDOWS_NOTE.into());
+            return;
+        }
         // One setup at a time. A run still working for another repository is not stopped
         // behind the person's back; a finished or stopped one is cleared.
         if let Some(run) = self.cloud_prototype.production.setup_run.as_ref() {
@@ -106,12 +110,7 @@ impl HorizonApp {
                     created.transient = true;
                 }
                 let mut run = Run::new(panel, kind, repository, status, mode);
-                run.agent_process = self
-                    .board
-                    .panel(panel)
-                    .and_then(horizon_core::Panel::terminal)
-                    .and_then(horizon_core::Terminal::child_pid)
-                    .map(super::agent::AgentProcess::of);
+                run.agent_process = self.agent_process_of(panel);
                 run.agent.clone_from(&preset.name);
                 run.pending_prompt = pending_prompt;
                 run.outside = outside;
@@ -156,6 +155,7 @@ impl HorizonApp {
         if let Some((request, spec)) = run.proof_wanted() {
             run.proved_request = request;
             run.proof_stale_reported = false;
+            run.forget_inputs();
             // The finished card lists the files of the proof that passes, not an earlier one.
             run.files = None;
             let log = run.status_path.with_extension(format!("proof-{request}.log"));
@@ -420,6 +420,15 @@ const STALE_PROOF: &str = "The .horizon files or the proof changed after Horizon
 const PANEL_NAME: &str = "Cloud repository setup";
 
 impl HorizonApp {
+    /// The process the agent's panel started, which leads its own process group.
+    fn agent_process_of(&self, panel: horizon_core::PanelId) -> Option<super::agent::AgentProcess> {
+        self.board
+            .panel(panel)
+            .and_then(horizon_core::Panel::terminal)
+            .and_then(horizon_core::Terminal::child_pid)
+            .map(super::agent::AgentProcess::of)
+    }
+
     /// Closes hidden setup panels that no run follows. Setup panels are transient and
     /// never saved; this closes one an older Horizon saved before that.
     fn close_orphaned_setup_panels(&mut self) {

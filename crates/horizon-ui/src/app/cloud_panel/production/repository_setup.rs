@@ -268,7 +268,16 @@ fn same_folder(a: &Path, b: &str) -> bool {
 }
 
 /// The start button, `verb` and the agent's name, with the agent chooser beside it.
+/// Why the setup agent is not offered on Windows: Horizon can neither end an agent's
+/// processes there nor be sure that nothing it started still writes.
+pub(super) const WINDOWS_NOTE: &str =
+    "Set up from CI runs on Linux and macOS. On Windows, use Quick start or write .horizon yourself.";
+
 fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str) -> Choice {
+    if cfg!(windows) {
+        ui.label(RichText::new(WINDOWS_NOTE).size(12.5).color(theme::FG_SOFT()));
+        return Choice::None;
+    }
     if busy_elsewhere(ui, form) {
         return Choice::None;
     }

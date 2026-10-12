@@ -42,12 +42,19 @@ fn read_bounded_line(reader: &mut impl BufRead, line: &mut Vec<u8>) -> std::io::
 
 /// Ends `child` and every process in its group, then reaps it.
 fn end_tree(child: &mut std::process::Child) {
-    #[cfg(unix)]
-    if let Some(group) = i32::try_from(child.id()).ok().and_then(rustix::process::Pid::from_raw) {
-        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
-    }
+    end_group(child.id());
     let _ = child.kill();
     let _ = child.wait();
+}
+
+/// Kills every process in the group the command `leader` started.
+fn end_group(leader: u32) {
+    #[cfg(unix)]
+    if let Some(group) = i32::try_from(leader).ok().and_then(rustix::process::Pid::from_raw) {
+        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+    }
+    #[cfg(not(unix))]
+    let _ = leader;
 }
 
 impl Job {
@@ -157,6 +164,9 @@ impl Job {
                 ));
             }
         }
+        // The command ended: whatever it left running in its group goes too, so a step
+        // never passes while something it started still runs.
+        end_group(child.id());
         let status = child.wait().map_err(|error| error.to_string())?;
         if status.success() {
             Ok(())

@@ -89,6 +89,10 @@ pub(in crate::app::cloud_panel::production) struct Run {
     pub(super) host_restore: bool,
     /// The current fingerprint of the setup and proof request, and when it was read.
     inputs: Option<(Instant, Option<[u8; 32]>)>,
+    /// A fingerprint being read off the dialog's thread.
+    inputs_job: Option<std::sync::mpsc::Receiver<Option<[u8; 32]>>>,
+    /// The proof's containers, image and volume are already being removed.
+    proof_released: bool,
     /// The files outside `.horizon` when the run started, to find what changed since.
     pub(super) outside: super::commit::Outside,
     /// Whether the repository restores .NET packages, read once when the run starts.
@@ -160,6 +164,8 @@ impl Run {
             proof_stale_reported: false,
             host_restore: false,
             inputs: None,
+            inputs_job: None,
+            proof_released: false,
             outside: super::commit::Outside::default(),
             dotnet: false,
             released: false,
@@ -248,7 +254,18 @@ impl Run {
     /// last ran, passed, and tested the files as they are now. An agent that cannot wait
     /// may write a summary first.
     pub(super) fn finished(&self) -> bool {
-        self.status.summary.is_some() && self.passed() && !self.changed_since_proof() && self.agent_steps_done()
+        self.status.summary.is_some() && self.passed() && self.inputs_proved() && self.agent_steps_done()
+    }
+
+    /// The setup as last read is the one the proof that passed tested.
+    fn inputs_proved(&self) -> bool {
+        matches!((&self.proof, self.inputs), (Some(proof), Some((_, Some(now)))) if now == proof.inputs)
+    }
+
+    /// A new proof starts: the fingerprint read for the earlier one says nothing about it.
+    pub(super) fn forget_inputs(&mut self) {
+        self.inputs = None;
+        self.inputs_job = None;
     }
 
     /// Every step the agent owns is reported done or skipped, and no step failed; the
@@ -298,12 +315,31 @@ impl Run {
         self.status.summary.is_some() && self.passed() && self.changed_since_proof()
     }
 
-    /// Reads the setup's fingerprint again, at most once a second.
+    /// Reads the setup's fingerprint again, at most once a second and only while a proof
+    /// passed, on a thread of its own: the setup can hold many files, and the dialog
+    /// must not wait for them. Use reads it once more itself before it commits.
     fn refresh_inputs(&mut self) {
-        if self.inputs.is_some_and(|(at, _)| at.elapsed() < Duration::from_secs(1)) {
+        if let Some(job) = &self.inputs_job {
+            match job.try_recv() {
+                Ok(now) => self.inputs = Some((Instant::now(), now)),
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+            }
+            self.inputs_job = None;
             return;
         }
-        self.refresh_inputs_now();
+        if !self.passed() || self.inputs.is_some_and(|(at, _)| at.elapsed() < Duration::from_secs(1)) {
+            return;
+        }
+        let Some(spec) = self.status.proof.clone() else {
+            return;
+        };
+        let repository = self.repository.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(super::snapshot::fingerprint(&repository, &spec).ok());
+        });
+        self.inputs_job = Some(receiver);
     }
 
     /// Reads the setup's fingerprint again now, as Use does before it commits.
@@ -342,9 +378,18 @@ impl Run {
         if let Some(agent) = self.agent_process.take() {
             std::thread::spawn(move || agent.end());
         }
+        self.release_proof(false);
+    }
+
+    /// Stops the proof and removes its containers, image and volume once its run has
+    /// ended, only once: a second, unordered removal could race the first.
+    fn release_proof(&mut self, wait: bool) {
+        if std::mem::replace(&mut self.proof_released, true) {
+            return;
+        }
         if let Some(proof) = self.proof.as_mut() {
             let worker = proof.stop();
-            proof::remove_run_resources(&self.repository, &proof::run_id(&self.status_path), worker, false);
+            proof::remove_run_resources(&self.repository, &proof::run_id(&self.status_path), worker, wait);
         }
     }
 
@@ -361,10 +406,7 @@ impl Run {
         if let Some(agent) = self.agent_process.take() {
             agent.end();
         }
-        if let Some(proof) = self.proof.as_mut() {
-            let worker = proof.stop();
-            proof::remove_run_resources(&self.repository, &proof::run_id(&self.status_path), worker, wait);
-        }
+        self.release_proof(wait);
         remove_run_folder(&self.status_path);
     }
 
