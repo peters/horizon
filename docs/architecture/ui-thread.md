@@ -68,10 +68,11 @@ for seconds at a time. One `fsync` took 0.2 to 2.8 s. The UI thread called
   [#1436](https://github.com/peters/horizon/pull/1436) moved them to worker
   threads.
 - The coordination files of browser MCP requests: claims, manifest stamps,
-  audits and results. The open PRs
-  [#1469](https://github.com/peters/horizon/pull/1469) (claims) and
-  [#1489](https://github.com/peters/horizon/pull/1489) (stamps, audits and
-  results) move them to one ordered worker.
+  audits and results.
+  [#1469](https://github.com/peters/horizon/pull/1469) moved the claims to
+  one ordered worker. The open PR
+  [#1489](https://github.com/peters/horizon/pull/1489) moves the stamps,
+  audits and results to the same worker.
 
 ## Patterns
 
@@ -134,10 +135,11 @@ start one thread for each write.
   [`workbench.rs`](../../crates/horizon-core/src/remote_browser_credential/workbench.rs)
   owns the OS credential store on one thread. The UI sends commands, and
   `poll` reads the events.
-- The open PR [#1469](https://github.com/peters/horizon/pull/1469) adds
-  `HostIo` for the browser coordination files, and #1489 adds jobs to it. Its worker runs the jobs in the
-  order that the UI sends them, and the UI applies the outcomes in the same
-  order. A board fence makes a job write nothing when its board was replaced.
+- `HostIo` in
+  [`browser_host_io.rs`](../../crates/horizon-ui/src/app/browser_host_io.rs)
+  does the work on the browser coordination files. #1489 adds jobs to it.
+  Its worker runs the jobs in the order that the UI sends them, and the UI
+  applies the outcomes in the same order. A board fence makes a job write nothing when its board was replaced.
 
 ### A bounded queue
 
@@ -248,11 +250,10 @@ Named pipes are not available on Windows. Put the test module behind
 
 This work still runs on the UI thread. Do not copy it into new code.
 
-- The browser request claims, the manifest stamps after a panel moves
+- The manifest stamps after a panel moves
   (`restamp_browser_manifests_for_placement`, which each frame calls), and
-  the audits, manifest
-  writes and results of creates, visibility changes and closes. #1469 and
-  #1489 move them.
+  the audits, manifest writes and results of creates, visibility changes and
+  closes. #1489 moves them.
 - Browser request file work that #1469 and #1489 do not move: recovery claims,
   provider usage and catalog results, `poll_cloud_offers` on each frame,
   remote slot leases, `manifest::read` calls that retry on Windows, and
