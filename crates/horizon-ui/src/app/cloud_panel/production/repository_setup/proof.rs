@@ -27,42 +27,37 @@ const CI_TIMEOUT: Duration = Duration::from_mins(90);
 /// The longest the worker check may take; it only reads the image.
 const CHECK_TIMEOUT: Duration = Duration::from_mins(5);
 
-/// What a proof tests: every file in `.horizon` and the proof request, so a passed
-/// proof says nothing about a setup that changed after it. FNV-1a, stable across runs.
-pub(super) fn fingerprint(repository: &Path, spec: &Spec) -> u64 {
-    let mut files: Vec<PathBuf> = Vec::new();
-    let mut links: Vec<(PathBuf, PathBuf)> = Vec::new();
+/// What a proof tests: every file in `.horizon`, the commit and the proof request, so
+/// a passed proof says nothing about a setup that changed after it. SHA-256 over framed
+/// records (kind, path, mode and content, each with its length), so no two setups read
+/// as the same bytes.
+pub(super) fn fingerprint(repository: &Path, spec: &Spec) -> [u8; 32] {
+    use sha2::{Digest as _, Sha256};
+    let mut entries: Vec<(String, std::fs::DirEntry)> = Vec::new();
     let mut pending = vec![repository.join(".horizon")];
     while let Some(folder) = pending.pop() {
         for entry in std::fs::read_dir(&folder).into_iter().flatten().flatten() {
             let path = entry.path();
-            // A link counts by its target's name, never followed: no loop, nothing outside.
-            match entry.file_type() {
-                Ok(kind) if kind.is_symlink() => {
-                    let target = std::fs::read_link(&path).unwrap_or_default();
-                    links.push((path, target));
-                }
-                Ok(kind) if kind.is_dir() => pending.push(path),
-                Ok(_) => files.push(path),
-                Err(_) => {}
+            if entry.file_type().is_ok_and(|kind| kind.is_dir() && !kind.is_symlink()) {
+                pending.push(path);
+                continue;
             }
+            let relative = path
+                .strip_prefix(repository)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .into_owned();
+            entries.push((relative, entry));
         }
     }
-    files.sort();
-    links.sort();
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    let mut feed = |bytes: &[u8]| {
-        for byte in bytes {
-            hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3);
-        }
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut hash = Sha256::new();
+    let mut record = |kind: &[u8], bytes: &[u8]| {
+        hash.update(kind);
+        hash.update((bytes.len() as u64).to_le_bytes());
+        hash.update(bytes);
     };
-    let relative = |path: &Path| {
-        path.strip_prefix(repository)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .into_owned()
-    };
-    feed(format!("{spec:?}").as_bytes());
+    record(b"spec", format!("{spec:?}").as_bytes());
     // The commit too: a context outside .horizon builds from the committed tree.
     let head = Command::new("git")
         .arg("-C")
@@ -71,17 +66,49 @@ pub(super) fn fingerprint(repository: &Path, spec: &Spec) -> u64 {
         .output()
         .map(|output| output.stdout)
         .unwrap_or_default();
-    feed(&head);
-    for file in &files {
-        feed(relative(file).as_bytes());
-        feed(&std::fs::read(file).unwrap_or_default());
+    record(b"head", &head);
+    for (relative, entry) in &entries {
+        record(b"path", relative.as_bytes());
+        // A link counts by its target's name, never followed: no loop, nothing outside.
+        match entry.file_type() {
+            Ok(kind) if kind.is_symlink() => {
+                let target = std::fs::read_link(entry.path()).unwrap_or_default();
+                record(b"link", target.to_string_lossy().as_bytes());
+            }
+            _ => {
+                record(b"mode", if executable(entry) { b"755" } else { b"644" });
+                record(b"file", &std::fs::read(entry.path()).unwrap_or_default());
+            }
+        }
     }
-    for (link, target) in &links {
-        feed(relative(link).as_bytes());
-        feed(b" -> ");
-        feed(target.to_string_lossy().as_bytes());
+    hash.finalize().into()
+}
+
+#[cfg(unix)]
+fn executable(entry: &std::fs::DirEntry) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    entry
+        .metadata()
+        .is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn executable(_: &std::fs::DirEntry) -> bool {
+    false
+}
+
+/// Creates a file Horizon writes in the run's folder. The agent can write there too, so
+/// whatever is at the path goes first (a link itself, never its target) and the file
+/// is created new, never through a link someone put in its place.
+fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
+    if std::fs::symlink_metadata(path).is_ok() {
+        std::fs::remove_file(path)?;
     }
-    hash
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(path)
 }
 
 /// What the agent asks Horizon to prove, from the status file's `proof`.
@@ -195,20 +222,23 @@ pub(super) struct Proof {
     /// The proof's container, so a stopped or replaced proof also stops its run.
     container: String,
     /// The fingerprint of the setup and request this proof tests.
-    pub(super) inputs: u64,
+    pub(super) inputs: [u8; 32],
+    /// The background run, so cleanup waits until it can create nothing more.
+    worker: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Proof {
     /// Starts the proof of the setup in `repository`. `log_path` keeps the whole output.
     /// Starts proof number `request` of the setup in `repository`; each gets its own
     /// container, so the cleanup of an earlier one never meets it. `host_restore` lets it
-    /// restore private .NET packages on this computer, which the person allowed.
+    /// restore private .NET packages on this computer, which the person allowed. It
+    /// begins once `after`, the run of the proof it replaces, has ended.
     pub(super) fn start(
         (repository, run): (&Path, &str),
         (request, spec): (u64, Spec),
         log_path: PathBuf,
         host_restore: bool,
-        ctx: egui::Context,
+        (after, ctx): (Option<std::thread::JoinHandle<()>>, egui::Context),
     ) -> Self {
         let (sender, receiver) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -227,7 +257,12 @@ impl Proof {
             sender,
             ctx,
         };
-        std::thread::spawn(move || job.run());
+        let worker = std::thread::spawn(move || {
+            if let Some(after) = after {
+                let _ = after.join();
+            }
+            job.run();
+        });
         Self {
             receiver,
             cancel,
@@ -242,7 +277,24 @@ impl Proof {
             unreported: false,
             container,
             inputs,
+            worker: Some(worker),
         }
+    }
+
+    /// Stops the proof and hands back its run, to wait for before its resources go.
+    pub(super) fn stop(&mut self) -> Option<std::thread::JoinHandle<()>> {
+        self.cancel.store(true, Ordering::Relaxed);
+        self.remove_container();
+        self.worker.take()
+    }
+
+    fn remove_container(&self) {
+        // Killing the docker client leaves its container running; the run goes too.
+        let _ = Command::new("docker")
+            .args(["rm", "--force", &self.container])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
     }
 
     /// Takes what the background run reported since the last frame.
@@ -313,12 +365,7 @@ impl Proof {
 impl Drop for Proof {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
-        // Killing the docker client leaves its container running; the run goes too.
-        let _ = Command::new("docker")
-            .args(["rm", "--force", &self.container])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
+        self.remove_container();
     }
 }
 
@@ -337,7 +384,7 @@ struct Job {
 
 impl Job {
     fn run(self) {
-        let mut log = std::fs::File::create(&self.log_path).ok();
+        let mut log = create_private(&self.log_path).ok();
         // An earlier proof of this repository may still be stopping: its container goes.
         let earlier = Command::new("docker")
             .args(["ps", "--all", "--quiet", "--filter"])
@@ -479,7 +526,12 @@ impl Job {
             .filter(|output| output.status.success())
             .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
             .ok_or("the repository has no commit")?;
-        let bundle = self.log_path.with_file_name("head.bundle");
+        // In a new private folder with a random name, never beside the agent's files.
+        let folder = tempfile::Builder::new()
+            .prefix("horizon-setup-bundle-")
+            .tempdir()
+            .map_err(|error| format!("cannot make a private folder for the bundle: {error}"))?;
+        let bundle = folder.path().join("head.bundle");
         let mut create = Command::new("git");
         create
             .arg("-C")
@@ -506,7 +558,7 @@ impl Job {
             .args(["--entrypoint", "sh", &self.image, "-c"])
             .arg(CLONE);
         let result = self.stream(clone, log);
-        let _ = std::fs::remove_file(&bundle);
+        drop(folder);
         result
     }
 
@@ -787,10 +839,14 @@ pub(super) fn run_id(status: &Path) -> String {
     format!("{:08x}", hash & 0xffff_ffff)
 }
 
-/// Removes a finished run's containers, image and volume, in the background.
-pub(super) fn remove_run_resources(repository: &Path, run: &str) {
+/// Removes a finished run's containers, image and volume, in the background, once
+/// `after`, the run's stopped proof, has ended and can create nothing more.
+pub(super) fn remove_run_resources(repository: &Path, run: &str, after: Option<std::thread::JoinHandle<()>>) {
     let (image, volume) = run_names(repository, run);
     std::thread::spawn(move || {
+        if let Some(after) = after {
+            let _ = after.join();
+        }
         let containers = Command::new("docker")
             .args(["ps", "--all", "--quiet", "--filter"])
             .arg(format!("name=^{volume}-"))
@@ -1012,6 +1068,46 @@ mod tests {
                 .unwrap_err()
                 .contains("leaves the repository")
         );
+    }
+
+    #[test]
+    fn the_fingerprint_frames_each_file() {
+        let spec = Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": ["test"]})).unwrap();
+        let read = |files: &[(&str, &str)]| {
+            let repository = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(repository.path().join(".horizon")).unwrap();
+            for (name, content) in files {
+                std::fs::write(repository.path().join(".horizon").join(name), content).unwrap();
+            }
+            (fingerprint(repository.path(), &spec), repository)
+        };
+        let (one, _kept) = read(&[("a", "b")]);
+        let (other, repository) = read(&[("ab", "")]);
+        assert_ne!(one, other, "a path and its content never run together");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let file = repository.path().join(".horizon/ab");
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert_ne!(
+                fingerprint(repository.path(), &spec),
+                other,
+                "the executable bit counts"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_log_never_writes_through_a_link_the_agent_left() {
+        let folder = tempfile::tempdir().unwrap();
+        let target = folder.path().join("someone-elses-file");
+        std::fs::write(&target, "keep").unwrap();
+        let log = folder.path().join("status.proof-1.log");
+        std::os::unix::fs::symlink(&target, &log).unwrap();
+        std::io::Write::write_all(&mut create_private(&log).unwrap(), b"proof output").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep");
+        assert!(!std::fs::symlink_metadata(&log).unwrap().file_type().is_symlink());
     }
 
     #[test]

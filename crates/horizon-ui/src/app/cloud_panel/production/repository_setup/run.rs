@@ -85,7 +85,7 @@ pub(in crate::app::cloud_panel::production) struct Run {
     /// The person allowed restoring private .NET packages on this computer for the proof.
     pub(super) host_restore: bool,
     /// The current fingerprint of the setup and proof request, and when it was read.
-    inputs: Option<(Instant, u64)>,
+    inputs: Option<(Instant, [u8; 32])>,
     /// The files outside `.horizon` when the run started, to find what changed since.
     pub(super) outside: super::commit::Outside,
 }

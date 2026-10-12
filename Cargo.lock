@@ -2734,6 +2734,7 @@ dependencies = [
  "rusqlite",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "smithay-clipboard",
  "tempfile",
  "thiserror 2.0.21",

@@ -59,7 +59,13 @@ impl HorizonApp {
                 return;
             }
         };
-        let status = status_path();
+        let status = match status_path() {
+            Ok(status) => status,
+            Err(error) => {
+                self.cloud_prototype.error = Some(error);
+                return;
+            }
+        };
         let chosen_mode = std::mem::take(&mut self.cloud_prototype.production.setup_mode);
         let mode = chosen_mode.clone().resolve(&repository);
         let instructions = prompt(&self.cloud_prototype.production.setup_agents, &status, &mode);
@@ -139,12 +145,14 @@ impl HorizonApp {
             run.proof_stale_reported = false;
             let log = run.status_path.with_extension(format!("proof-{request}.log"));
             let id = super::proof::run_id(&run.status_path);
+            // The proof it replaces stops first, so the two never build the same image.
+            let after = run.proof.as_mut().and_then(super::proof::Proof::stop);
             run.proof = Some(super::proof::Proof::start(
                 (&run.repository, &id),
                 (request, spec),
                 log,
                 run.host_restore,
-                ctx.clone(),
+                (after, ctx.clone()),
             ));
         }
         let report = run.proof.as_mut().and_then(|proof| {
@@ -282,12 +290,13 @@ impl HorizonApp {
             Action::Stop => {
                 let path = run.status_path.clone();
                 let repository = run.repository.clone();
+                let worker = run.proof.as_mut().and_then(super::proof::Proof::stop);
                 self.cloud_prototype.production.setup_run = None;
                 if self.board.panel(panel).is_some() {
                     self.close_panel(panel);
                 }
                 remove_run_folder(&path);
-                super::proof::remove_run_resources(&repository, &super::proof::run_id(&path));
+                super::proof::remove_run_resources(&repository, &super::proof::run_id(&path), worker);
             }
             Action::Use => self.use_cloud_repository_setup(ctx),
         }
@@ -329,9 +338,10 @@ impl HorizonApp {
             self.cloud_prototype.error = Some(format!("Could not commit .horizon: {error}"));
             return;
         }
-        if let Some(run) = self.cloud_prototype.production.setup_run.take() {
+        if let Some(mut run) = self.cloud_prototype.production.setup_run.take() {
+            let worker = run.proof.as_mut().and_then(super::proof::Proof::stop);
             remove_run_folder(&run.status_path);
-            super::proof::remove_run_resources(&run.repository, &super::proof::run_id(&run.status_path));
+            super::proof::remove_run_resources(&run.repository, &super::proof::run_id(&run.status_path), worker);
         }
         // The setup was made and committed on HEAD, so the dialog reads HEAD again.
         self.cloud_prototype.production.revision.clear();
@@ -379,19 +389,14 @@ impl HorizonApp {
     }
 }
 
-/// A private file for one run's status, outside the repository.
-/// The run's status file in a folder of its own that only this user may read: the
-/// proof logs and screenshots beside it can hold a private repository's output.
-fn status_path() -> PathBuf {
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_millis());
-    let folder = std::env::temp_dir().join(format!("horizon-cloud-setup-{}-{stamp}", std::process::id()));
-    let mut builder = std::fs::DirBuilder::new();
-    #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
-    let _ = builder.recursive(true).create(&folder);
-    folder.join("status.json")
+/// The run's status file in a new folder that only this user may read, with a random
+/// name made atomically: the proof logs beside it can hold a private repository's output.
+fn status_path() -> Result<PathBuf, String> {
+    let folder = tempfile::Builder::new()
+        .prefix("horizon-cloud-setup-")
+        .tempdir()
+        .map_err(|error| format!("Could not make a private folder for the setup: {error}"))?;
+    Ok(folder.keep().join("status.json"))
 }
 
 /// Removes a finished run's folder: its status, proof logs and screenshots.
