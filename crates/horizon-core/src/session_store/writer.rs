@@ -264,7 +264,8 @@ impl Writer {
     fn drop_session(&self, session_id: &str, reason: &str, deleted: bool) -> StoreResult<Option<RuntimeState>> {
         let mut state = self.lock();
         if state.writing.as_ref().is_some_and(|(writing, _)| writing == session_id)
-            || state.writing_parks.as_deref() == Some(session_id)
+            // A park write may open the index again; a board save does not touch those rows.
+            || (deleted && state.writing_parks.as_deref() == Some(session_id))
         {
             return Err(Error::State(format!(
                 "Horizon is still saving session {session_id}; try again in a moment"
