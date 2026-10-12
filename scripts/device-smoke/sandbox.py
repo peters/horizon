@@ -1,7 +1,10 @@
 """Private session bus and writable namespace for the isolated desktop fixture."""
+import contextlib
 import os
 from pathlib import Path
+import signal
 import stat
+import subprocess
 import time
 
 
@@ -61,6 +64,48 @@ def diagnose_apparmor(bound):
 def dbus_daemon_command(address):
     return ['dbus-daemon', '--session', f'--address={address}',
             '--nofork', '--nopidfile', '--nosyslog']
+
+
+def start(command, **popen_args):
+    """Start a sandboxed command in a process group of its own; stop it with `end`.
+
+    bwrap's --die-with-parent does not end the command bwrap runs when bwrap itself
+    is terminated, so terminating bwrap alone leaves a bus daemon, and the services
+    it activated, running for good. The process group reaches all of them.
+    """
+    return subprocess.Popen(command, start_new_session=True, **popen_args)
+
+
+def _group_runs(group):
+    """Whether a process of `group` other than a zombie still runs."""
+    for stat_file in Path('/proc').glob('[0-9]*/stat'):
+        try:
+            fields = stat_file.read_text().rsplit(')', 1)[1].split()
+        except (OSError, IndexError):
+            continue
+        if len(fields) > 2 and fields[2] == str(group) and fields[0] != 'Z':
+            return True
+    return False
+
+
+def end(process, timeout=5):
+    """End everything in the process group `start` gave `process`.
+
+    The group gets SIGTERM, then SIGKILL for whatever still runs after `timeout`.
+    `process` is reaped last, so its group id names no other group meanwhile, and a
+    group already ended and reaped is left alone.
+    """
+    group = process.pid
+    if process.returncode is not None and not _group_runs(group):
+        return
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(group, signal.SIGTERM)
+    deadline = time.monotonic() + timeout
+    while _group_runs(group) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(group, signal.SIGKILL)
+    process.wait()
 
 
 def wait_for_unix_socket(path, process, timeout=10):

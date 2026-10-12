@@ -161,13 +161,7 @@ class LiveSessionBusTests(unittest.TestCase):
 
         def close():
             for process in reversed(processes):
-                if process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait()
+                sandbox.end(process)
 
         self.addCleanup(close)
         return box, processes
@@ -175,7 +169,7 @@ class LiveSessionBusTests(unittest.TestCase):
     def start_bus(self, box, processes):
         log = (box.state / 'dbus.log').open('wb')
         self.addCleanup(log.close)
-        process = subprocess.Popen(
+        process = sandbox.start(
             box.namespace + sandbox.dbus_daemon_command(box.bus_address),
             env=box.sandbox_env, stdout=log, stderr=log)
         processes.append(process)
@@ -215,7 +209,7 @@ class LiveSessionBusTests(unittest.TestCase):
         self.start_bus(box, processes)
         log_path = box.state / 'monitor.log'
         with log_path.open('wb') as log:
-            monitor = subprocess.Popen(
+            monitor = sandbox.start(
                 box.namespace + ['dbus-monitor', '--session'],
                 env=box.sandbox_env, stdout=log, stderr=subprocess.STDOUT)
         processes.append(monitor)
@@ -235,12 +229,21 @@ class LiveSessionBusTests(unittest.TestCase):
         self.assertEqual(reply.returncode, 0, reply.stderr)
         self.assertIn('string', reply.stdout)
 
+    def test_ending_the_box_ends_the_bus_bwrap_runs(self):
+        box, processes = self.start_box()
+        bus = self.start_bus(box, processes)
+        children = Path(f'/proc/{bus.pid}/task/{bus.pid}/children').read_text().split()
+        self.assertTrue(children, 'bwrap runs the bus daemon as its child')
+        sandbox.end(bus)
+        for child in children:
+            self.assertFalse(Path(f'/proc/{child}').exists(), f'process {child} outlived its box')
+
     def test_repeated_launch_expires_the_private_socket(self):
         sockets = []
         for _ in range(2):
             directory = tempfile.TemporaryDirectory(prefix='horizon-dbus-repeat-')
             box = sandbox.prepare(directory.name)
-            process = subprocess.Popen(
+            process = sandbox.start(
                 box.namespace + sandbox.dbus_daemon_command(box.bus_address),
                 env=box.sandbox_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             try:
@@ -252,13 +255,7 @@ class LiveSessionBusTests(unittest.TestCase):
                 sockets.append(box.host_socket)
                 self.assertTrue(box.host_socket.exists())
             finally:
-                if process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait()
+                sandbox.end(process)
                 directory.cleanup()
             self.assertFalse(sockets[-1].exists())
         self.assertEqual(len(sockets), 2)
@@ -298,7 +295,7 @@ class LiveSessionBusTests(unittest.TestCase):
     def test_gnome_calculator_uses_the_private_bus(self):
         box, processes = self.start_box()
         read_fd, write_fd = os.pipe()
-        xvfb = subprocess.Popen(
+        xvfb = sandbox.start(
             ['Xvfb', '-displayfd', str(write_fd), '-screen', '0', '800x600x24',
              '-nolisten', 'tcp', '-extension', 'MIT-SHM'],
             pass_fds=(write_fd,), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -318,7 +315,7 @@ class LiveSessionBusTests(unittest.TestCase):
         self.start_bus(box, processes)
         log_path = box.state / 'calculator.log'
         with log_path.open('wb') as log:
-            calculator = subprocess.Popen(
+            calculator = sandbox.start(
                 box.namespace + ['gnome-calculator'], env=box.sandbox_env,
                 stdout=log, stderr=subprocess.STDOUT)
         processes.append(calculator)
