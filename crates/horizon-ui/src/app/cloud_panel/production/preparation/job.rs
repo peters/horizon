@@ -232,21 +232,28 @@ mod tests {
             temp.path().join("config.yaml"),
         );
         store.save_runtime_state("session", &RuntimeState::default()).unwrap();
-        // The UI saves the board that names the cloud, then keeps saving while the worker
-        // is allocated.
+        // A named pipe holds the session index, so the writer waits in the save of the
+        // cloud board until the test answers it.
+        let index = store.home().session_index_path();
+        let saved_index = std::fs::read_to_string(&index).unwrap();
+        std::fs::remove_file(&index).unwrap();
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&index)
+                .status()
+                .unwrap()
+                .success()
+        );
         let generation = store.queue_runtime_state("session", board("cloud"));
         let durability = Durability::new(store.clone(), "session".into(), generation);
-        let ui = {
-            let store = store.clone();
-            std::thread::spawn(move || {
-                for step in 0..20 {
-                    let _ = store.queue_runtime_state("session", board(&format!("later-{step}")));
-                    std::thread::sleep(std::time::Duration::from_millis(2));
-                }
-            })
-        };
-        durability.sync().unwrap();
-        ui.join().unwrap();
+        let allocation = std::thread::spawn(move || durability.sync());
+        // The UI saves while the allocation waits for the board that names the cloud.
+        for step in 0..20 {
+            let _ = store.queue_runtime_state("session", board(&format!("later-{step}")));
+        }
+        assert!(!allocation.is_finished(), "the cloud board is not durable yet");
+        std::fs::write(&index, saved_index).unwrap();
+        allocation.join().unwrap().unwrap();
         assert!(store.flush_runtime_states(std::time::Duration::from_secs(30)));
         // Every save went through the writer, so what is on disk is whole and the newest.
         let saved = std::fs::read_to_string(store.home().session_runtime_path("session")).unwrap();
