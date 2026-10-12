@@ -511,8 +511,9 @@ impl Run {
             .map(|spec| (spec, self.status.preview_request))
     }
 
-    /// Shows the preview the status names as live on `port`, with no run behind it.
-    #[cfg(test)]
+    /// Shows the preview the status names as live on `port`, with no run behind it, for
+    /// the Unix tests of Use.
+    #[cfg(all(test, unix))]
     pub(super) fn show_live_preview(&mut self, port: u16) {
         self.status = parse(r#"{"steps":[],"preview":{"command":"./app"}}"#).unwrap_or_default();
         self.previewed_request = self.status.preview_request;

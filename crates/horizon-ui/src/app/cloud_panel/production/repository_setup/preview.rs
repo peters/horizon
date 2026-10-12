@@ -185,8 +185,9 @@ impl Preview {
         self.live_port().map(|port| format!("127.0.0.1:{port}"))
     }
 
-    /// A preview whose desktop is live on `port`, with no run behind it.
-    #[cfg(test)]
+    /// A preview whose desktop is live on `port`, with no run behind it, for the Unix
+    /// tests of Use.
+    #[cfg(all(test, unix))]
     pub(super) fn live(port: u16) -> Self {
         let (_, receiver) = mpsc::channel();
         Self {
