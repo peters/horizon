@@ -338,19 +338,17 @@ impl HorizonApp {
         // Closing the panel only hangs up: nothing is read until the agent and everything
         // in its process group are gone, killed if they ignore it, so no late write races
         // the check.
-        if let Some(agent) = run.agent_process {
-            if !agent.end() {
-                self.cloud_prototype.error =
-                    Some("The setup agent is still ending. Press Use this setup again in a moment.".into());
-                return;
-            }
-            run.agent_process = None;
+        if !run.agent_process.as_ref().is_none_or(super::agent::AgentProcess::end) {
+            self.cloud_prototype.error =
+                Some("The setup agent is still ending. Press Use this setup again in a moment.".into());
+            return;
         }
+        run.agent_process = None;
         // One reading of the setup: it must be the proved one, and it is what is committed,
         // so nothing written while the agent's process ends can slip in after the check.
         run.refresh_inputs_now();
         let setup = super::snapshot::Setup::read(&run.repository);
-        let proved = run.proof.as_ref().map(|proof| proof.inputs);
+        let proved = run.proof.as_ref().and_then(|proof| proof.inputs);
         let current = setup
             .as_ref()
             .ok()

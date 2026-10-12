@@ -81,14 +81,21 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_reso
 /// A name Docker accepts for the repository: its folder name and a short hash of its
 /// path, so two checkouts with the same folder name never share an image or a volume.
 fn slug(repository: &Path) -> String {
-    let hash = repository
-        .to_string_lossy()
-        .bytes()
-        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
-            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
-        });
+    // The path's own bytes, so two paths that only differ in bytes that are not UTF-8
+    // never share a name.
+    #[cfg(unix)]
+    let bytes = std::os::unix::ffi::OsStrExt::as_bytes(repository.as_os_str()).to_vec();
+    #[cfg(not(unix))]
+    let bytes = repository.to_string_lossy().into_owned().into_bytes();
+    let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
+    });
     format!("{}-{:06x}", folder_slug(repository), hash & 0xff_ffff)
 }
+
+/// The longest part of a name the folder gives; the path's hash tells folders apart,
+/// and Docker names stay well within their limits.
+const FOLDER_SLUG_LIMIT: usize = 32;
 
 fn folder_slug(repository: &Path) -> String {
     let name = repository
@@ -99,7 +106,8 @@ fn folder_slug(repository: &Path) -> String {
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
-    let slug = slug.trim_matches('-');
+    let slug: String = slug.trim_matches('-').chars().take(FOLDER_SLUG_LIMIT).collect();
+    let slug = slug.trim_end_matches('-');
     if slug.is_empty() {
         "repository".to_owned()
     } else {
@@ -115,6 +123,10 @@ mod tests {
     fn the_image_and_volume_take_a_name_docker_accepts() {
         assert_eq!(folder_slug(Path::new("/home/me/YouPay v2")), "youpay-v2");
         assert_eq!(folder_slug(Path::new("/")), "repository");
+        assert_eq!(
+            folder_slug(Path::new(&format!("/home/me/{}", "a".repeat(255)))).len(),
+            FOLDER_SLUG_LIMIT
+        );
         let (a, b) = (slug(Path::new("/home/a/app")), slug(Path::new("/home/b/app")));
         assert!(a.starts_with("app-") && b.starts_with("app-"));
         assert_ne!(a, b, "two checkouts named app keep their own image and volume");

@@ -231,11 +231,14 @@ pub(super) struct Outside {
     files: BTreeMap<Vec<u8>, Option<Stamp>>,
     /// The ignored files that exist, such as a local .env or files in an ignored
     /// folder. A change to one counts; a new one, such as fresh build output, does not.
+    /// A later check stats these same paths again, whatever else appeared.
     ignored: BTreeMap<Vec<u8>, Option<Stamp>>,
+    /// The repository the paths are in.
+    root: std::path::PathBuf,
 }
 
 /// The most ignored files a reading stamps, so a large dependency or build folder
-/// cannot hold up the dialog; git lists them in order, so each reading takes the same.
+/// cannot hold up the dialog. Ignored files past it, in git's order, are not compared.
 const IGNORED_LIMIT: usize = 100_000;
 
 /// What changes whenever a file is written, replaced or has its times set: on Unix the
@@ -301,6 +304,7 @@ pub(super) fn outside(repository: &Path) -> Outside {
         head,
         files: stamped(&listed, usize::MAX),
         ignored: stamped(&ignored, IGNORED_LIMIT),
+        root: repository.to_path_buf(),
     }
 }
 
@@ -327,11 +331,18 @@ pub(super) fn changed(before: &Outside, after: &Outside) -> Vec<String> {
         .map(|(path, _)| path)
         .chain(after.files.keys().filter(|path| !before.files.contains_key(*path)))
         // An ignored file that existed and changed or went counts; a new one does not.
+        // Each is stat'ed again by its path, so files that appeared since cannot push
+        // it out of the reading.
         .chain(
             before
                 .ignored
                 .iter()
-                .filter(|(path, stamp)| after.ignored.get(*path) != Some(stamp) && !after.files.contains_key(*path))
+                .filter(|(path, was)| {
+                    let now = std::fs::symlink_metadata(before.root.join(path_of(path)))
+                        .ok()
+                        .map(|metadata| stamp(&metadata));
+                    now != **was && !after.files.contains_key(*path)
+                })
                 .map(|(path, _)| path),
         )
         .collect();

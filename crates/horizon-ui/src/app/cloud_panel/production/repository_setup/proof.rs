@@ -156,6 +156,8 @@ impl Phase {
 
 enum Event {
     Line(String),
+    /// The fingerprint of the snapshot the proof read and tests.
+    Inputs([u8; 32]),
     Started(Phase),
     Finished(Phase, Result<(), String>),
 }
@@ -181,8 +183,9 @@ pub(super) struct Proof {
     pub(super) unreported: bool,
     /// The proof's container, so a stopped or replaced proof also stops its run.
     container: String,
-    /// The fingerprint of the setup and request this proof tests.
-    pub(super) inputs: [u8; 32],
+    /// The fingerprint of the setup and request this proof tests, once its worker read
+    /// the setup.
+    pub(super) inputs: Option<[u8; 32]>,
     /// The background run, so cleanup waits until it can create nothing more.
     worker: Option<std::thread::JoinHandle<()>>,
 }
@@ -202,10 +205,6 @@ impl Proof {
     ) -> Self {
         let (sender, receiver) = mpsc::sync_channel(EVENT_QUEUE);
         let cancel = Cancellation::default();
-        // One snapshot of the setup: the proof fingerprints it and builds from it alone.
-        // A setup Horizon refuses to read fails the build with the reason.
-        let setup = super::snapshot::Setup::read(repository);
-        let inputs = setup.as_ref().map_or([0; 32], |setup| setup.fingerprint(&spec));
         let (image, volume) = run_names(repository, run);
         let container = format!("{volume}-proof-{request}");
         let job = Job {
@@ -215,7 +214,7 @@ impl Proof {
             volume,
             container: container.clone(),
             host_restore,
-            setup,
+            setup: Err("the setup was not read yet".to_owned()),
             log_path: log_path.clone(),
             cancel: cancel.clone(),
             sender,
@@ -241,7 +240,7 @@ impl Proof {
             image,
             unreported: false,
             container,
-            inputs,
+            inputs: None,
             worker: Some(worker),
         }
     }
@@ -282,6 +281,7 @@ impl Proof {
                     }
                     self.log.push_back(line);
                 }
+                Event::Inputs(inputs) => self.inputs = Some(inputs),
                 Event::Started(phase) => self.phase_mut(phase).started = Some(Instant::now()),
                 Event::Finished(phase, result) => {
                     let state = self.phase_mut(phase);
@@ -371,7 +371,14 @@ impl Job {
             .filter(|head| !head.is_empty())
     }
 
-    fn run(self) {
+    fn run(mut self) {
+        // One snapshot of the setup, read here and not on the dialog's thread: the proof
+        // fingerprints it and builds from it alone. A setup Horizon refuses to read fails
+        // the build with the reason.
+        self.setup = super::snapshot::Setup::read(&self.repository);
+        if let Ok(setup) = &self.setup {
+            let _ = self.sender.send(Event::Inputs(setup.fingerprint(&self.spec)));
+        }
         // Without its log a failure could not tell the agent what to read: none runs.
         let mut log = match create_private(&self.log_path) {
             Ok(file) => Some(file),
