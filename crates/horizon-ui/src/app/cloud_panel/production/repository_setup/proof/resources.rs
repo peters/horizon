@@ -162,7 +162,10 @@ fn arguments<'a>(words: impl IntoIterator<Item = &'a str>) -> Vec<String> {
 /// Runs one docker command against `daemon` within [`COMMAND_TIMEOUT`], ended with
 /// what it started past that; its standard output when it succeeded in time. For a
 /// removal that must also run after a proof was stopped.
-pub(super) fn remove_now(daemon: &LocalDocker, args: &[&str]) -> Option<String> {
+pub(in crate::app::cloud_panel::production::repository_setup) fn remove_now(
+    daemon: &LocalDocker,
+    args: &[&str],
+) -> Option<String> {
     let cleanup = Cleanup {
         daemon,
         deadline: std::time::Instant::now() + COMMAND_TIMEOUT,
@@ -429,6 +432,26 @@ impl RunResources {
         remove_images.extend(images);
         let _ = docker(cleanup, &remove_images);
         let _ = docker(cleanup, &arguments(["volume", "rm", "--force", &self.volume]));
+        if self.network_left(cleanup).is_some_and(|left| left) {
+            let _ = docker(cleanup, &arguments(["network", "rm", &preview_network(&self.volume)]));
+        }
+    }
+
+    /// Whether the run's preview network is still there; none when the listing failed.
+    fn network_left(&self, cleanup: &Cleanup<'_>) -> Option<bool> {
+        let network = preview_network(&self.volume);
+        docker(
+            cleanup,
+            &arguments([
+                "network",
+                "ls",
+                "--format",
+                "{{.Name}}",
+                "--filter",
+                &format!("name={network}"),
+            ]),
+        )
+        .map(|output| output.lines().any(|name| name == network))
     }
 
     /// What is left of them, by Docker's own listings; none when a listing failed, so a
@@ -471,8 +494,17 @@ impl RunResources {
             &format!("name={}", self.volume),
         ]))?;
         left.extend(volumes.into_iter().filter(|name| *name == self.volume));
+        if self.network_left(cleanup)? {
+            left.push(preview_network(&self.volume));
+        }
         Some(left)
     }
+}
+
+/// The bridge network of a run's desktop previews, only theirs: a container on Docker's
+/// default bridge cannot reach a preview's desktop. The run's cleanup removes it.
+pub(in crate::app::cloud_panel::production::repository_setup) fn preview_network(volume: &str) -> String {
+    format!("{volume}-preview")
 }
 
 /// A name Docker accepts for the repository: its folder name and a short hash of its

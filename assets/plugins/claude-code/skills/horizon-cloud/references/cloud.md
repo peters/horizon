@@ -228,7 +228,9 @@ GitHub and chooses its repositories; agents cannot set it up.
 - A repository without `.horizon/cloud.yml` is set up in **New cloud** with **Set up
   from CI**: a setup agent writes `.horizon` from the repository's CI, Horizon proves
   the image on this computer (build, worker check, the CI jobs with localci, a fast
-  rerun) and **Use this setup** commits it. No MCP tool starts a setup: ask the person
+  rerun; a repository without GitHub Actions is proved with the commands its README or
+  build files give), shows a desktop app live in a Device panel when the agent names
+  one, and **Use this setup** commits it. No MCP tool starts a setup: ask the person
   to open **New cloud** for the repository.
 
 ## Development-only registry

@@ -15,12 +15,15 @@ mod needs;
 mod preflight;
 mod resources;
 mod session_env;
+pub(super) use session_env::arguments as session_environment;
 mod stream;
 use needs::distinct_builds;
 pub(super) use needs::uses_nuget;
 pub(super) use resources::{
-    Pinned, expect_removal, keep_unremoved, remove_run_resources, retry_unremoved, run_id, run_names,
+    LocalDocker, Pinned, expect_removal, keep_unremoved, preview_network, remove_now, remove_run_resources,
+    retry_unremoved, run_id, run_names,
 };
+pub(super) use stream::end_group;
 
 /// The step titles Horizon owns once the agent asks for a proof.
 pub(super) const BUILD: &str = "Build image";
@@ -56,112 +59,9 @@ pub(super) fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
     options.open(path)
 }
 
-/// What the agent asks Horizon to prove, from the status file's `proof`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Spec {
-    pub(super) workflow: String,
-    pub(super) jobs: Vec<String>,
-    pub(super) event: String,
-    /// Steps that throw caches away on purpose; a worker leaves them out.
-    pub(super) skip: Vec<String>,
-}
-
-/// A workflow file name in `.github/workflows`: no folder, no option, YAML.
-fn workflow_name(name: &str) -> bool {
-    let allowed = |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-');
-    let yaml = Path::new(name)
-        .extension()
-        .is_some_and(|extension| extension == "yml" || extension == "yaml");
-    !name.starts_with(['.', '-']) && yaml && name.bytes().all(allowed)
-}
-
-/// The most steps a proof may leave out.
-const SKIP_LIMIT: usize = 20;
-
-/// A step to leave out, which localci matches as a part of a step's name: never blank or
-/// so short that it matches nearly every step, so leaving steps out cannot empty a job.
-fn skip_name(step: &str) -> bool {
-    let length = step.trim().chars().count();
-    (3..=200).contains(&length)
-}
-
-/// A localci job: its id, `#N` for a matrix entry, never an option or a word localci
-/// reads as a command.
-fn job_name(name: &str) -> bool {
-    let allowed = |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'#' | b':');
-    !name.is_empty()
-        && !name.starts_with(['-', '.', '#'])
-        && !matches!(name, "help" | "version" | "list" | "plan" | "run" | "check")
-        && name.bytes().all(allowed)
-}
-
-impl Spec {
-    pub(super) fn parse(value: &serde_json::Value) -> Option<Self> {
-        let strings = |key: &str| {
-            value.get(key).and_then(serde_json::Value::as_array).map(|items| {
-                items
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>()
-            })
-        };
-        let workflow = value.get("workflow")?.as_str()?.trim().to_owned();
-        let jobs = strings("jobs").unwrap_or_default();
-        let event = value
-            .get("event")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("push")
-            .to_owned();
-        // The agent writes these and localci reads them as its arguments: a workflow is a
-        // file name in .github/workflows, a job and the event are names, never options.
-        let skip = strings("skip").unwrap_or_default();
-        let valid = workflow_name(&workflow)
-            && !jobs.is_empty()
-            && jobs.iter().all(|job| job_name(job))
-            && skip.len() <= SKIP_LIMIT
-            && skip.iter().all(|step| skip_name(step))
-            && !event.is_empty()
-            && event.bytes().all(|byte| byte.is_ascii_lowercase() || byte == b'_');
-        valid.then_some(Self {
-            workflow,
-            jobs,
-            event,
-            skip,
-        })
-    }
-
-    /// The localci arguments for this proof's JSON plan, which shows what would run.
-    fn plan_args(&self) -> Vec<String> {
-        let mut args = vec!["plan".to_owned(), "-w".to_owned(), self.workflow.clone()];
-        args.extend(self.jobs.iter().cloned());
-        args.extend(["--event".to_owned(), self.event.clone()]);
-        for step in &self.skip {
-            args.extend(["--skip".to_owned(), step.clone()]);
-        }
-        args.push("--json".to_owned());
-        args
-    }
-
-    /// The localci arguments for this proof; `fast` for the warm rerun, which compares
-    /// against `base`, the proved commit, since the clone's own default branch is
-    /// whatever this computer's checkout last fetched.
-    fn localci_args(&self, fast: bool, base: &str) -> Vec<String> {
-        let mut args = vec!["run".to_owned(), "-w".to_owned(), self.workflow.clone()];
-        args.extend(self.jobs.iter().cloned());
-        args.extend(["--event".to_owned(), self.event.clone()]);
-        for step in &self.skip {
-            args.extend(["--skip".to_owned(), step.clone()]);
-        }
-        if fast {
-            args.extend(["--fast".to_owned(), "--base".to_owned(), base.to_owned()]);
-        } else {
-            // The full run's report, which the proof checks after it.
-            args.extend(["--cache".to_owned(), "--json".to_owned()]);
-        }
-        args
-    }
-}
+mod spec;
+pub(super) use spec::Spec;
+use spec::commands_script;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Phase {
@@ -208,12 +108,16 @@ pub(super) struct PhaseState {
 /// One proof run in the background.
 pub(super) struct Proof {
     receiver: mpsc::Receiver<Event>,
+    /// What the CI phases ran, as the report names it: the CI jobs or the commands.
+    ran: &'static str,
     cancel: Cancellation,
     pub(super) log: VecDeque<String>,
     pub(super) phases: [(Phase, PhaseState); 3],
     /// Where the whole log is written, for the agent to read on a failure.
     pub(super) log_path: PathBuf,
     pub(super) image: String,
+    /// The volume with the checkout and its build output.
+    pub(super) volume: String,
     /// The proof ended, passed or not, and the agent has not been told yet.
     pub(super) unreported: bool,
     /// The proof's container, so a stopped or replaced proof also stops its run.
@@ -248,12 +152,17 @@ impl Proof {
         let pinned = Pinned::default();
         let (image, volume) = run_names(repository, run);
         let container = format!("{volume}-proof-{request}");
+        let ran = if spec.commands.is_empty() {
+            "CI jobs"
+        } else {
+            "proof commands"
+        };
         let job = Job {
             repository: repository.to_path_buf(),
             identity,
             spec,
             image: image.clone(),
-            volume,
+            volume: volume.clone(),
             container: container.clone(),
             host_restore,
             setup: Err("the setup was not read yet".to_owned()),
@@ -279,6 +188,7 @@ impl Proof {
         });
         Self {
             receiver,
+            ran,
             cancel,
             log: VecDeque::new(),
             phases: [
@@ -288,6 +198,7 @@ impl Proof {
             ],
             log_path,
             image,
+            volume,
             unreported: false,
             container,
             inputs: None,
@@ -385,9 +296,10 @@ impl Proof {
             );
         }
         format!(
-            "Horizon proof passed: image {} built and checked in {}, CI jobs passed in {}, fast rerun in {}. Use these times in your summary.",
+            "Horizon proof passed: image {} built and checked in {}, {} passed in {}, fast rerun in {}. Use these times in your summary. Horizon now starts the desktop preview named in the status file; without a GUI app, mark Desktop preview skipped.",
             self.image,
             time(Phase::Build),
+            self.ran,
             time(Phase::Ci),
             time(Phase::Fast)
         )
@@ -591,8 +503,14 @@ impl Job {
         }
         // The agents on the worker, and the proof's CI as they would, run the localci a
         // worker session finds: every image the setup builds must have one, as any
-        // profile with a build can be chosen in New cloud.
-        for (index, (build, _)) in builds.iter().enumerate() {
+        // profile with a build can be chosen in New cloud. A repository without GitHub
+        // Actions is proved with commands, and its images are asked for no localci.
+        let with_localci = if self.spec.commands.is_empty() {
+            &builds[..]
+        } else {
+            &[]
+        };
+        for (index, (build, _)) in with_localci.iter().enumerate() {
             let place = self
                 .session_localci(&tag(index), index)
                 .and_then(|found| found.ok_or_else(|| NO_LOCALCI.to_owned()))
@@ -815,14 +733,18 @@ impl Job {
     /// A container of the image as the worker account on the proof's volume, with the
     /// GPU, this computer's packages and Horizon's localci that the proof needs.
     fn ci_container(&self) -> Result<Command, String> {
-        let localci = self.trusted_localci()?;
         let mut command = self.docker();
         command
             .args(["run", "--rm", "--name", &self.container, "--user", "10001:10001", "-v"])
             .arg(format!("{}:/workspace", self.volume))
-            .arg("-v")
-            .arg(format!("{}:{}:ro", localci.display(), localci::MOUNTED))
             .args(["-w", "/workspace/checkout", "-e", "HOME=/workspace/home"]);
+        // A proof with plain commands runs them with the image's shell and needs no localci.
+        if self.spec.commands.is_empty() {
+            let localci = self.trusted_localci()?;
+            command
+                .arg("-v")
+                .arg(format!("{}:{}:ro", localci.display(), localci::MOUNTED));
+        }
         // A GPU profile is proved with a GPU or not at all: CI that passes without one
         // says nothing about the worker that has one.
         if self.wants_gpu() {
@@ -861,8 +783,20 @@ impl Job {
             self.restore_in_container(&session, log)?;
         }
         let mut command = self.ci_container()?;
+        command.args(&session);
+        if !self.spec.commands.is_empty() {
+            // Without GitHub Actions the commands themselves are the proof, run with the
+            // image's shell; a rerun on the warm volume shows what the caches save.
+            command.args([
+                "--entrypoint",
+                "bash",
+                &self.image,
+                "-c",
+                &commands_script(&self.spec.commands),
+            ]);
+            return self.stream_within(command, log, Some(CI_TIMEOUT));
+        }
         command
-            .args(&session)
             .arg("--entrypoint")
             .arg(
                 self.ci_localci
@@ -964,52 +898,6 @@ const TOOLS: &str = horizon_core::cloud_runtime::repository::launch::quick_start
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_proof_names_a_workflow_and_jobs() {
-        let spec = Spec::parse(&serde_json::json!({
-            "workflow": "dotnet-core.yml",
-            "jobs": ["setup", "test"],
-            "skip": ["Use isolated NuGet caches"]
-        }))
-        .unwrap();
-        assert_eq!(spec.event, "push", "push by default");
-        assert_eq!(
-            spec.localci_args(true, "abc123"),
-            [
-                "run",
-                "-w",
-                "dotnet-core.yml",
-                "setup",
-                "test",
-                "--event",
-                "push",
-                "--skip",
-                "Use isolated NuGet caches",
-                "--fast",
-                "--base",
-                "abc123"
-            ]
-        );
-        assert!(Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": []})).is_none());
-        assert!(Spec::parse(&serde_json::json!({"workflow": "../x.yml", "jobs": ["a"]})).is_none());
-        for job in ["--help", "help", "version", "-k"] {
-            assert!(
-                Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": [job]})).is_none(),
-                "{job} would end localci without a job"
-            );
-        }
-        for workflow in ["/etc/ci.yml", "sub/ci.yml", "-w.yml", "ci.txt"] {
-            assert!(Spec::parse(&serde_json::json!({"workflow": workflow, "jobs": ["a"]})).is_none());
-        }
-        assert!(Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": ["rust-test#2"]})).is_some());
-        for skip in ["", "   ", "t"] {
-            assert!(
-                Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": ["test"], "skip": [skip]})).is_none(),
-                "{skip:?} would leave out every step"
-            );
-        }
-    }
 
     // The script runs in Horizon's Ubuntu base, whose realpath takes -m; macOS's does not.
     #[cfg(target_os = "linux")]

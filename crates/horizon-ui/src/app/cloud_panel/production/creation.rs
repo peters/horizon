@@ -127,7 +127,7 @@ impl HorizonApp {
                 if preparing {
                     super::repository_setup::heading(ui, &self.cloud_prototype.production);
                 } else {
-                    heading(ui, provider::label(&self.cloud_prototype.production));
+                    heading(ui, &provider::compared(&self.cloud_prototype.production));
                 }
                 ui.add_space(16.0);
                 self.cloud_creation_columns(ui, width, body_height, &mut actions, refocus_repository);
@@ -485,17 +485,26 @@ fn navigation_key(key: ShortcutKey) -> ShortcutBinding {
     ShortcutBinding::new(ShortcutModifiers::NONE, key)
 }
 
-fn heading(ui: &mut Ui, provider: &str) {
+/// The title, and one chip per provider the dialog compares: its mark and its name.
+fn heading(ui: &mut Ui, providers: &[&'static horizon_core::cloud_runtime::provider::Description]) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("New cloud").size(26.0).strong().color(theme::FG()));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            Frame::new()
-                .fill(theme::PANEL_BG_ALT())
-                .corner_radius(8)
-                .inner_margin(egui::Margin::symmetric(12, 6))
-                .show(ui, |ui| {
-                    ui.label(RichText::new(provider).size(13.0).color(theme::FG_SOFT()));
-                });
+            for provider in providers.iter().rev() {
+                Frame::new()
+                    .fill(theme::PANEL_BG_ALT())
+                    .corner_radius(8)
+                    .inner_margin(egui::Margin::symmetric(10, 6))
+                    .show(ui, |ui| {
+                        // The heading lays out right to left, so the name goes first and
+                        // the mark lands on its left.
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            ui.label(RichText::new(provider.label).size(13.0).color(theme::FG_SOFT()));
+                            provider::mark(ui, provider, 15.0);
+                        });
+                    });
+            }
         });
     });
     ui.label(
@@ -536,6 +545,14 @@ fn title_field(ui: &mut Ui, form: &mut Production, submit: &mut bool) {
     );
     if title.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) && can_submit(form) {
         *submit = true;
+    }
+    // The hint sits with the field it asks for, not in the footer.
+    if form.title.trim().is_empty() && !checks::source_step(form) {
+        ui.label(
+            RichText::new("Name the cloud to start it.")
+                .size(12.5)
+                .color(theme::FG_SOFT()),
+        );
     }
 }
 
@@ -713,9 +730,9 @@ fn submit_reason_given(form: &Production, blocked: Option<&'static str>) -> Opti
     ) {
         (false, false) if blocked.is_none() && !form.tailnets.ready() => Some("Load tailnet settings before starting."),
         (false, false) => blocked,
-        (true, false) => Some("Enter a cloud title to start this cloud."),
-        (false, true) => Some("Read the repository profile before starting."),
-        (true, true) => Some("Enter a cloud title and read the repository profile."),
+        // A missing title is asked for under its field.
+        (true, false) => None,
+        (_, true) => Some("Read the repository profile before starting."),
     }
 }
 

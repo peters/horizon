@@ -52,7 +52,26 @@ setup** commits `.horizon` and reads it as the repository profile.
 
    Result: `git -C <home>/smoke/ci-app log --oneline` shows one commit.
 
-2. Start the candidate with the fixture configuration.
+2. Copy `<home>/smoke/ci-app` to `<home>/smoke/gui-app`. In the copy, add the
+   executable file `app.sh` with `#!/usr/bin/env bash` and
+   `exec xmessage -geometry 640x400 "gui-app fixture"`, and add the line "Start the
+   app with ./app.sh" to `README.md`. Then run
+   `git -C <home>/smoke/gui-app add -A` and
+   `git -C <home>/smoke/gui-app commit -q -m "Add the app"`.
+
+   Result: `git -C <home>/smoke/gui-app status --short` shows nothing, and
+   `git -C <home>/smoke/gui-app log --oneline -1` shows "Add the app". The proof
+   clones the committed tree, so an uncommitted change is not in it.
+
+3. Copy `<home>/smoke/ci-app` to `<home>/smoke/plain-app`. In the copy, run
+   `git -C <home>/smoke/plain-app rm -r -q .github`, add the line "Run the tests
+   with ./test.sh" to `README.md`, then run `git -C <home>/smoke/plain-app add -A`
+   and `git -C <home>/smoke/plain-app commit -q -m "Remove the workflows"`.
+
+   Result: `git -C <home>/smoke/plain-app status --short` shows nothing, and
+   `git -C <home>/smoke/plain-app ls-files .github` shows nothing.
+
+4. Start the candidate with the fixture configuration.
 
    Result: The Horizon window opens with no cloud.
 
@@ -78,8 +97,8 @@ setup** commits `.horizon` and reads it as the repository profile.
 
    Result: The dialog changes to **Set up ci-app** with the text "An agent prepares
    a worker image from your CI. Nothing is rented yet." The left column shows the
-   steps Read CI, Find tools, Write Dockerfile, Build image, Run CI in image
-   and Fast rerun. The right column shows the agent's terminal
+   steps Read CI, Find tools, Write Dockerfile, Build image, Run CI in image,
+   Fast rerun and Desktop preview. The right column shows the agent's terminal
    with "live · click to type to the agent". No panel appears on the canvas.
 
 2. If the agent asks a question, click its terminal and answer it.
@@ -181,9 +200,52 @@ setup** commits `.horizon` and reads it as the repository profile.
    Result: The setup uses the open local workspace. It never uses a remote
    workspace.
 
+### 6.10 S10 — A live desktop preview
+
+1. Open **New cloud** for `<home>/smoke/gui-app` and start the setup agent.
+
+   Result: The steps are Read CI, Find tools, Write Dockerfile, Build image, Run CI
+   in image, Fast rerun and Desktop preview.
+
+2. Wait for the proof to pass.
+
+   Result: Desktop preview shows "Horizon is starting the app". Then it shows the
+   window size and "live in Horizon", and **Show live preview** appears.
+
+3. Click **Show live preview**.
+
+   Result: A Device panel named "gui-app preview" shows the xmessage window with
+   the text "gui-app fixture". The address of the panel is on `127.0.0.1`.
+
+4. Click **Stop** in the dialog.
+
+   Result: The Device panel closes. Within one minute, `docker ps --all` lists no
+   container and `docker network ls` lists no network whose name starts with
+   `horizon-setup-gui-app-`.
+
+### 6.11 S11 — A proof with commands
+
+1. Open **New cloud** for `<home>/smoke/plain-app` and start the setup agent.
+
+   Result: The agent finds no GitHub Actions and asks Horizon to prove the image
+   with the commands from the README.
+
+2. Wait for the proof to end.
+
+   Result: Run CI in image and Fast rerun pass with their times, and the last
+   lines of the proof log show "fixture tests passed".
+
+### 6.12 S12 — The providers in the heading
+
+1. Open **New cloud** for `<home>/smoke/ci-app` after S04.
+
+   Result: The heading shows one chip for each provider that the dialog compares,
+   each with its mark and then its name. When the title is empty, the hint for the
+   title shows under the title field.
+
 ## 7. Pass criteria
 
-- S01 to S09 give the results above.
+- S01 to S12 give the results above.
 - The proof ran on this computer. Before you click **Use this setup** in S04,
   `docker images` lists `horizon-setup-ci-app-<hash>-<run>:candidate`. `<hash>` is
   six hexadecimal digits that Horizon derives from the repository's path. `<run>` is
@@ -194,20 +256,24 @@ setup** commits `.horizon` and reads it as the repository profile.
 
 ## 8. Cleanup
 
-> **CAUTION:** THE NEXT STEP REMOVES DOCKER IMAGES AND VOLUMES. Remove only the
-> names that start with `horizon-setup-ci-app-`.
+> **CAUTION:** THE NEXT STEP REMOVES DOCKER CONTAINERS, IMAGES, VOLUMES AND NETWORKS. Remove
+> only the names that start with `horizon-setup-ci-app-`, `horizon-setup-gui-app-`
+> or `horizon-setup-plain-app-`.
 
-1. Find the proof image and volume with
-   `docker images --format '{{.Repository}}' | grep '^horizon-setup-ci-app-'` and
-   `docker volume ls --format '{{.Name}}' | grep '^horizon-setup-ci-app-'`, then remove
-   each with `docker rmi <name>:candidate` and `docker volume rm <name>`.
+1. Find the proof containers, images, volumes and preview networks with
+   `docker ps --all --format '{{.Names}}' | grep -E '^horizon-setup-(ci|gui|plain)-app-'`,
+   `docker images --format '{{.Repository}}' | grep -E '^horizon-setup-(ci|gui|plain)-app-'` and
+   `docker volume ls --format '{{.Name}}' | grep -E '^horizon-setup-(ci|gui|plain)-app-'` and
+   `docker network ls --format '{{.Name}}' | grep -E '^horizon-setup-(ci|gui|plain)-app-'`,
+   then remove each with `docker rm --force <name>`, `docker rmi <name>:candidate`,
+   `docker volume rm <name>` and `docker network rm <name>`.
 
-   Result: The two commands no longer list them.
+   Result: The four commands no longer list them.
 
-> **CAUTION:** THE NEXT STEP DELETES A FOLDER. Make sure that the path is the
-> fixture copy `<home>/smoke/ci-app` and not a real repository.
+> **CAUTION:** THE NEXT STEP DELETES FOLDERS. Make sure that each path is a
+> fixture copy under `<home>/smoke` and not a real repository.
 
-2. Delete `<home>/smoke/ci-app`.
+2. Delete `<home>/smoke/ci-app`, `<home>/smoke/gui-app` and `<home>/smoke/plain-app`.
 
 ## 9. Record of results
 

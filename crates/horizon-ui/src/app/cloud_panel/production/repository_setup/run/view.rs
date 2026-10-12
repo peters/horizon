@@ -321,6 +321,9 @@ fn working_actions(ui: &mut Ui, run: &mut Run, working: bool, inline: bool) -> O
         if inline && ui.add(dialog_button(action_button("Show agent"))).clicked() {
             action = Some(Action::Show);
         }
+        if run.preview_panel.is_some() && ui.add(dialog_button(action_button("Show live preview"))).clicked() {
+            action = Some(Action::ShowPreview);
+        }
         let stop = if working { "Stop" } else { "Back to the choices" };
         // Use cannot be cancelled once it started, so Stop waits until it reported.
         if ui
@@ -354,6 +357,9 @@ fn finished_actions(ui: &mut Ui, run: &Run, inline: bool) -> Option<Action> {
                 if ui.add(dialog_button(action_button("Show agent"))).clicked() {
                     action = Some(Action::Show);
                 }
+            }
+            if run.preview_panel.is_some() && ui.add(dialog_button(action_button("Show live preview"))).clicked() {
+                action = Some(Action::ShowPreview);
             }
             // Use cannot be cancelled once it started, so Stop waits until it reported.
             if ui

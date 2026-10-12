@@ -82,6 +82,10 @@ impl super::Job {
     /// Checks with the trusted localci, before the CI runs, that the proof keeps a step
     /// that runs a command in every job it selects.
     pub(super) fn check_plan(&self) -> Result<(), String> {
+        // A proof with plain commands has no workflow to plan.
+        if !self.spec.commands.is_empty() {
+            return Ok(());
+        }
         let mut command = self.ci_container()?;
         command
             .args(["--entrypoint", super::localci::MOUNTED, &self.image])

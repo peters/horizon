@@ -491,7 +491,7 @@ The setup agent is a normal local agent session with its existing local login.
 Horizon does not export the API-key bindings of remote workers to it. Its panel is
 hidden: the dialog becomes a preparation view, **Set up REPOSITORY**, because
 nothing is rented yet. The left column shows the steps (Read CI, Find tools,
-Write Dockerfile, Build image, Run CI in image, Fast rerun), each
+Write Dockerfile, Build image, Run CI in image, Fast rerun, Desktop preview), each
 with a short detail and its elapsed time. The right column is the agent's own
 terminal without panel chrome. Click it to type to the agent, for example to
 answer a question or to change its plan. A question also shows above the steps.
@@ -544,7 +544,18 @@ logins, copies the packages that restore used into the proof's volume for the
 worker's account, and the container restores again from them, without any
 credential; the CI reads only those packages. A restore here or in the container
 that fails, fails the proof. It is off by default, because the restore runs the repository's
-build files on this computer. The agent asks before it uses a credential of yours, such as your
+build files on this computer. A
+repository without GitHub Actions is proved with the commands its README,
+`AGENTS.md` or build files give, run in order in the same container on the same
+checkout and restore; its images need no localci. For a
+desktop app the agent names the command that starts it, and after the proof
+passes Horizon starts the app in a container of the image on the proof's volume,
+with a virtual desktop on `:99` like the worker's. When a window appears, Horizon
+takes a screenshot (when the image has ImageMagick's `import`) and opens the
+desktop live in a Device panel beside the agent,
+on this computer's loopback, before anything is rented. A new proof or a new
+preview request replaces the live desktop, and **Stop** or **Use this setup**
+removes it. The agent asks before it uses a credential of yours, such as your
 GitHub token for a private package feed. It does not allocate compute, push
 images, commit or open a pull request.
 

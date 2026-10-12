@@ -72,12 +72,64 @@ pub(in crate::app::cloud_panel) fn sized(
     Ok(sized)
 }
 
-/// The provider's name for the dialog heading.
-pub(super) fn label(form: &Production) -> &'static str {
-    form.profiles
+/// The providers the dialog compares, for the heading: every configured provider the
+/// selected profile can use, or every configured provider before a profile is read.
+/// With none configured, the provider the profile names, as the heading named it before.
+pub(super) fn compared(form: &Production) -> Vec<&'static Description> {
+    let profile = form
+        .profiles
         .as_ref()
-        .and_then(|config| config.profiles.get(&form.selected_profile))
-        .map_or(provider::RUNPOD.label, |profile| current(form.provider, profile).label)
+        .and_then(|config| config.profiles.get(&form.selected_profile));
+    let providers = profile.map_or_else(|| configured(&form.prices), |profile| choices(&form.prices, profile));
+    if providers.is_empty() {
+        vec![profile.map_or(&provider::RUNPOD, |profile| current(form.provider, profile))]
+    } else {
+        providers
+    }
+}
+
+/// A provider's mark, `size` points square: its logo where Horizon has one, else a
+/// drawn mark, so listing a new provider needs one line here.
+pub(super) fn mark(ui: &mut egui::Ui, provider: &Description, size: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::hover());
+    match provider.kind {
+        provider::Kind::RunPod => {
+            if let Some(texture) = runpod_mark(ui.ctx()) {
+                let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+                ui.painter().image(texture.id(), rect, uv, crate::theme::FG());
+            }
+        }
+        provider::Kind::Hetzner => {
+            ui.painter()
+                .rect_filled(rect, 3.0, egui::Color32::from_rgb(0xD5, 0x0C, 0x2D));
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "H",
+                egui::FontId::proportional(size * 0.72),
+                egui::Color32::WHITE,
+            );
+        }
+    }
+}
+
+/// The `RunPod` hexagon, cut from the wordmark Horizon already ships.
+fn runpod_mark(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    let id = egui::Id::new("cloud-provider-mark-runpod");
+    if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
+        return Some(texture);
+    }
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../../../../../assets/runpod-logo.png")).ok()?;
+    let (width, height) = (icon.width as usize, icon.height as usize);
+    // The hexagon fills a square at the start of the wordmark; the name follows it.
+    let side = height.min(width);
+    let pixels: Vec<u8> = (0..height)
+        .flat_map(|row| icon.rgba[row * width * 4..(row * width + side) * 4].iter().copied())
+        .collect();
+    let image = egui::ColorImage::from_rgba_unmultiplied([side, height], &pixels);
+    let texture = ctx.load_texture("cloud-provider-mark-runpod", image, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
+    Some(texture)
 }
 
 /// Euros with cents, or four decimals below a cent.

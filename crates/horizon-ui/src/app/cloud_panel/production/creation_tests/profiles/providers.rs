@@ -316,7 +316,7 @@ fn an_expired_quote_blocks_global_ranking_but_keeps_native_provider_ranking() {
     assert!(!shown.complete && shown.picks.cheapest.is_none());
     let output = tall_frame(&ctx, &mut app);
     assert!(!painted(&output).contains("ECB rates dated"));
-    click(&ctx, &mut app, label_rect(&output, "Hetzner").center());
+    click(&ctx, &mut app, provider_filter(&output, "Hetzner").center());
     let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
     assert!(shown.complete && shown.picks.cheapest.is_some());
     assert_eq!(shown.currency, "EUR");
@@ -506,23 +506,13 @@ fn runpod_filter_can_rank_without_foreign_exchange_rates() {
     app.cloud_prototype.production.prices.exchange.refresh();
     let output = tall_frame(&ctx, &mut app);
     assert!(!selector::catalog(&app.cloud_prototype.production).unwrap().complete);
-    let provider_button = output
-        .shapes
-        .iter()
-        .filter_map(|shape| match &shape.shape {
-            Shape::Text(text) if text.galley.job.text == "RunPod" => {
-                Some(Rect::from_min_size(text.pos, text.galley.size()))
-            }
-            _ => None,
-        })
-        .nth(1)
-        .unwrap(); // The first RunPod label is the dialog heading.
+    let provider_button = provider_filter(&output, "RunPod");
     click(&ctx, &mut app, provider_button.center());
     let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
     assert!(shown.complete);
     assert_eq!(shown.offers[shown.picks.cheapest.unwrap()].provider, "RunPod");
     let output = tall_frame(&ctx, &mut app);
-    click(&ctx, &mut app, label_rect(&output, "Hetzner").center());
+    click(&ctx, &mut app, provider_filter(&output, "Hetzner").center());
     assert!(selector::catalog(&app.cloud_prototype.production).unwrap().complete);
     let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
     assert!(shown.picks.cheapest.is_some());
@@ -621,17 +611,7 @@ fn provider_filter_counts_only_its_own_matching_and_excluded_workers() {
     prepare(&mut app, &ctx, temp.path());
     hetzner_binding(&mut app);
     let output = tall_frame(&ctx, &mut app);
-    let filter = output
-        .shapes
-        .iter()
-        .filter_map(|shape| match &shape.shape {
-            Shape::Text(text) if text.galley.job.text == "Hetzner" => {
-                Some(Rect::from_min_size(text.pos, text.galley.size()))
-            }
-            _ => None,
-        })
-        .nth(1)
-        .unwrap(); // The first Hetzner label identifies the selected worker's provider.
+    let filter = provider_filter(&output, "Hetzner");
     click(&ctx, &mut app, filter.center());
     let output = tall_frame(&ctx, &mut app);
     let text = painted(&output);
@@ -674,4 +654,20 @@ fn hetzner_summary_owns_the_system_disk_editor_with_more_options_open() {
     assert!(text.contains("Committed base revision"), "{text}");
     assert_eq!(text.matches("System disk requirement").count(), 1, "{text}");
     assert!(!text.contains("Container disk"), "{text}");
+}
+
+/// The provider filter button named `label`. The heading has a chip per provider with
+/// the same name, so the filter is the last exact match.
+fn provider_filter(output: &egui::FullOutput, label: &str) -> Rect {
+    output
+        .shapes
+        .iter()
+        .rev()
+        .find_map(|shape| match &shape.shape {
+            Shape::Text(text) if text.galley.job.text == label => {
+                Some(Rect::from_min_size(text.pos, text.galley.size()))
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("Missing provider filter: {label}"))
 }
