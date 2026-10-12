@@ -18,6 +18,42 @@ pub(super) const FAST: &str = "Fast rerun";
 /// Lines of proof output the dialog keeps.
 const LOG_LINES: usize = 200;
 
+/// The longest output line Horizon keeps; the rest of a longer line is dropped.
+const LINE_LIMIT: usize = 16 * 1024;
+
+/// Output lines waiting between a command's pipes and the proof.
+const LINE_QUEUE: usize = 256;
+
+/// Events waiting for the dialog; output lines beyond it are dropped, phases wait.
+const EVENT_QUEUE: usize = 1024;
+
+/// The most a proof writes to its whole log.
+const LOG_FILE_LIMIT: u64 = 64 * 1024 * 1024;
+
+/// Reads one line of untrusted output into `line`, keeping at most [`LINE_LIMIT`]
+/// bytes of it, and returns how many bytes it consumed.
+fn read_bounded_line(reader: &mut impl BufRead, line: &mut Vec<u8>) -> std::io::Result<usize> {
+    let mut consumed = 0;
+    loop {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            return Ok(consumed);
+        }
+        let (chunk, done) = match buffer.iter().position(|byte| *byte == b'\n') {
+            Some(end) => (&buffer[..=end], true),
+            None => (buffer, false),
+        };
+        let room = LINE_LIMIT.saturating_sub(line.len());
+        line.extend_from_slice(&chunk[..chunk.len().min(room)]);
+        let used = chunk.len();
+        reader.consume(used);
+        consumed += used;
+        if done {
+            return Ok(consumed);
+        }
+    }
+}
+
 /// The longest an image build may take before the proof reports it hung.
 const BUILD_TIMEOUT: Duration = Duration::from_mins(45);
 
@@ -32,7 +68,7 @@ const CHECK_TIMEOUT: Duration = Duration::from_mins(5);
 /// records (kind, path, mode and content, each with its length), so no two setups read
 /// as the same bytes. A setup Horizon refuses to read has no fingerprint.
 pub(super) fn fingerprint(repository: &Path, spec: &Spec) -> Result<[u8; 32], String> {
-    use super::untrusted::{Entry, SETUP_FILE_LIMIT, read_regular, setup_entries};
+    use super::untrusted::{Entry, setup_entries};
     use sha2::{Digest as _, Sha256};
     let entries = setup_entries(repository)?;
     let mut hash = Sha256::new();
@@ -49,16 +85,15 @@ pub(super) fn fingerprint(repository: &Path, spec: &Spec) -> Result<[u8; 32], St
         .map(|output| output.stdout)
         .unwrap_or_default();
     record(b"head", &head);
-    for (relative, path, entry) in &entries {
+    for (relative, entry) in &entries {
         record(b"path", relative.as_bytes());
         // A link counts by its target's name, never followed: no loop, nothing outside.
         match entry {
             Entry::Folder => record(b"folder", b""),
             Entry::Link(target) => record(b"link", target.to_string_lossy().as_bytes()),
-            Entry::File { executable } => {
+            Entry::File { executable, content } => {
                 record(b"mode", if *executable { b"755" } else { b"644" });
-                let content = read_regular(path, SETUP_FILE_LIMIT).map_err(|error| format!("{relative}: {error}"))?;
-                record(b"file", &content);
+                record(b"file", content);
             }
         }
     }
@@ -232,7 +267,7 @@ impl Proof {
         host_restore: bool,
         (after, ctx): (Option<std::thread::JoinHandle<()>>, egui::Context),
     ) -> Self {
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::sync_channel(EVENT_QUEUE);
         let cancel = Arc::new(AtomicBool::new(false));
         // A setup Horizon refuses to read fails the build with the reason.
         let (inputs, refused) = match fingerprint(repository, &spec) {
@@ -252,6 +287,7 @@ impl Proof {
             log_path: log_path.clone(),
             cancel: cancel.clone(),
             sender,
+            logged: std::cell::Cell::new(0),
             ctx,
         };
         let worker = std::thread::spawn(move || {
@@ -377,7 +413,9 @@ struct Job {
     refused: Option<String>,
     log_path: PathBuf,
     cancel: Arc<AtomicBool>,
-    sender: mpsc::Sender<Event>,
+    sender: mpsc::SyncSender<Event>,
+    /// Bytes written to the whole log so far, against [`LOG_FILE_LIMIT`].
+    logged: std::cell::Cell<u64>,
     ctx: egui::Context,
 }
 
@@ -445,7 +483,7 @@ impl Job {
         let horizon_docker = horizon_core::HorizonHome::resolve().root().join("cloud").join("docker");
         let (docker_config, signed_in) = horizon_core::cloud_runtime::github::publish::build_config(&horizon_docker)
             .map_err(|error| error.to_string())?;
-        let _ = self.sender.send(Event::Line(if signed_in {
+        let _ = self.sender.try_send(Event::Line(if signed_in {
             "Pulling ghcr.io images with Horizon's GitHub login.".to_owned()
         } else {
             "No Horizon GitHub login for ghcr.io; images are pulled anonymously.".to_owned()
@@ -583,11 +621,14 @@ impl Job {
     /// Whether the default profile asks for a GPU and this computer has an NVIDIA one;
     /// Docker refuses `--gpus` without it, and that is no fault of the Dockerfile.
     fn gpu(&self) -> bool {
-        let wanted = std::fs::read_to_string(self.repository.join(".horizon/cloud.yml"))
-            .ok()
-            .and_then(|config| horizon_core::cloud_panel::CloudConfig::parse(&config).ok())
-            .and_then(|config| config.profiles.get(&config.default).map(|profile| profile.gpu))
-            .unwrap_or(false);
+        let wanted = super::untrusted::read_regular(
+            &self.repository.join(".horizon/cloud.yml"),
+            super::untrusted::SETUP_FILE_LIMIT,
+        )
+        .ok()
+        .and_then(|config| horizon_core::cloud_panel::CloudConfig::parse(&String::from_utf8_lossy(&config)).ok())
+        .and_then(|config| config.profiles.get(&config.default).map(|profile| profile.gpu))
+        .unwrap_or(false);
         wanted && Path::new("/dev/nvidiactl").exists()
     }
 
@@ -682,7 +723,8 @@ impl Job {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|error| format!("cannot start docker: {error}"))?;
-        let (lines, received) = mpsc::channel::<String>();
+        // Bounded, so output faster than Horizon writes it waits in the pipe instead.
+        let (lines, received) = mpsc::sync_channel::<String>(LINE_QUEUE);
         for pipe in [
             child
                 .stdout
@@ -701,9 +743,11 @@ impl Job {
                 let mut reader = BufReader::new(pipe);
                 let mut bytes = Vec::new();
                 // Bytes that are not UTF-8 become replacement characters, not the end of the log.
-                while reader.read_until(b'\n', &mut bytes).is_ok_and(|read| read > 0) {
+                while read_bounded_line(&mut reader, &mut bytes).is_ok_and(|read| read > 0) {
                     let line = String::from_utf8_lossy(&bytes);
-                    let _ = lines.send(line.trim_end_matches(['\n', '\r']).to_owned());
+                    if lines.send(line.trim_end_matches(['\n', '\r']).to_owned()).is_err() {
+                        break;
+                    }
                     bytes.clear();
                 }
             });
@@ -713,9 +757,17 @@ impl Job {
             match received.recv_timeout(Duration::from_millis(200)) {
                 Ok(line) => {
                     if let Some(file) = log.as_mut() {
-                        let _ = writeln!(file, "{line}");
+                        let logged = self.logged.get();
+                        if logged < LOG_FILE_LIMIT {
+                            let _ = writeln!(file, "{line}");
+                            self.logged.set(logged + line.len() as u64 + 1);
+                            if self.logged.get() >= LOG_FILE_LIMIT {
+                                let _ = writeln!(file, "[Horizon stopped writing this log at {LOG_FILE_LIMIT} bytes]");
+                            }
+                        }
                     }
-                    let _ = self.sender.send(Event::Line(line));
+                    // The dialog shows the last lines only; a full queue drops one.
+                    let _ = self.sender.try_send(Event::Line(line));
                     self.ctx.request_repaint();
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -805,10 +857,10 @@ fn committed_snapshot(root: &Path) -> Result<(tempfile::TempDir, PathBuf), Strin
 /// Copies the repository's `.horizon` into `tree` as Horizon read it: files through
 /// the untrusted reader, links as links, anything else refused.
 fn copy_setup(repository: &Path, tree: &Path) -> Result<(), String> {
-    use super::untrusted::{Entry, SETUP_FILE_LIMIT, read_regular, setup_entries};
+    use super::untrusted::{Entry, setup_entries};
     let entries = setup_entries(repository)?;
     std::fs::create_dir_all(tree.join(".horizon")).map_err(|error| error.to_string())?;
-    for (relative, path, entry) in entries {
+    for (relative, entry) in entries {
         let target = tree.join(&relative);
         match entry {
             Entry::Folder => std::fs::create_dir_all(&target).map_err(|error| error.to_string())?,
@@ -816,8 +868,7 @@ fn copy_setup(repository: &Path, tree: &Path) -> Result<(), String> {
             Entry::Link(link) => std::os::unix::fs::symlink(link, &target).map_err(|error| error.to_string())?,
             #[cfg(not(unix))]
             Entry::Link(_) => return Err(format!("{relative} is a link")),
-            Entry::File { executable } => {
-                let content = read_regular(&path, SETUP_FILE_LIMIT).map_err(|error| format!("{relative}: {error}"))?;
+            Entry::File { executable, content } => {
                 std::fs::write(&target, content).map_err(|error| error.to_string())?;
                 #[cfg(unix)]
                 if executable {
@@ -1088,6 +1139,17 @@ mod tests {
                 .unwrap_err()
                 .contains("leaves the repository")
         );
+    }
+
+    #[test]
+    fn an_endless_output_line_is_kept_short() {
+        let mut input = std::io::Cursor::new([vec![b'x'; LINE_LIMIT * 3], b"\nnext\n".to_vec()].concat());
+        let mut line = Vec::new();
+        assert_eq!(read_bounded_line(&mut input, &mut line).unwrap(), LINE_LIMIT * 3 + 1);
+        assert_eq!(line.len(), LINE_LIMIT, "the rest of the line is dropped");
+        line.clear();
+        read_bounded_line(&mut input, &mut line).unwrap();
+        assert_eq!(line, b"next\n", "the next line reads whole");
     }
 
     #[test]

@@ -2733,6 +2733,7 @@ dependencies = [
  "png",
  "profiling",
  "rusqlite",
+ "rustix 1.1.5",
  "serde_json",
  "serde_yaml",
  "sha2",

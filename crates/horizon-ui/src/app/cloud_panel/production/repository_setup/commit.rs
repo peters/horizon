@@ -15,10 +15,12 @@ const NO_HOOKS: &str = "NUL";
 const NO_HOOKS: &str = "/dev/null";
 
 /// A git command in the repository that runs no hook or file monitor the repository's
-/// configuration names. Every git command Horizon runs in a setup's repository is one.
+/// configuration names and reads no replace refs, so HEAD is the real commit. Every git
+/// command Horizon runs in a setup's repository is one.
 pub(super) fn git_command(repository: &Path) -> Command {
     let mut command = Command::new("git");
     command
+        .arg("--no-replace-objects")
         .arg("-C")
         .arg(repository)
         .args(["-c", &format!("core.hooksPath={NO_HOOKS}")])
@@ -53,9 +55,9 @@ fn git(repository: &Path, index: Option<&Path>, args: &[&str], input: Option<&[u
 /// The index entries for `.horizon` as it is on disk: mode, object and path. Files are
 /// stored without filters and links as links, the way the proof built them.
 fn entries(repository: &Path) -> Result<Vec<String>, String> {
-    use super::untrusted::{Entry, SETUP_FILE_LIMIT, read_regular, setup_entries};
+    use super::untrusted::{Entry, setup_entries};
     let mut entries = Vec::new();
-    for (relative, path, entry) in setup_entries(repository)? {
+    for (relative, entry) in setup_entries(repository)? {
         if relative.contains(['\n', '\t']) {
             return Err(format!("{relative:?} has a name git's index cannot take here"));
         }
@@ -63,10 +65,7 @@ fn entries(repository: &Path) -> Result<Vec<String>, String> {
         let (mode, content) = match entry {
             Entry::Folder => continue,
             Entry::Link(target) => ("120000", target.to_string_lossy().replace('\\', "/").into_bytes()),
-            Entry::File { executable } => (
-                if executable { "100755" } else { "100644" },
-                read_regular(&path, SETUP_FILE_LIMIT).map_err(|error| format!("{relative}: {error}"))?,
-            ),
+            Entry::File { executable, content } => (if executable { "100755" } else { "100644" }, content),
         };
         let object = git(
             repository,
@@ -333,6 +332,26 @@ mod tests {
         std::fs::write(path.join(".horizon/Dockerfile"), "FROM scratch\n").unwrap();
         assert_eq!(changes(path), ["Dockerfile new", "cloud.yml changed"]);
         assert!(!mark.exists(), "listing the changes runs no filter either");
+    }
+
+    #[test]
+    fn a_replace_ref_does_not_change_what_use_commits_on() {
+        let folder = repository();
+        let path = folder.path();
+        let real = run(path, &["rev-parse", "HEAD"]);
+        std::fs::write(path.join("README.md"), "planted\n").unwrap();
+        run(path, &["commit", "-q", "-am", "planted"]);
+        let planted = run(path, &["rev-parse", "HEAD"]);
+        run(path, &["reset", "-q", "--hard", &real]);
+        run(path, &["replace", &real, &planted]);
+        std::fs::write(path.join(".horizon/cloud.yml"), "version: 1\n").unwrap();
+        assert!(commit(path, "Add the cloud setup").unwrap());
+        assert_eq!(
+            run(path, &["--no-replace-objects", "show", "HEAD:README.md"]),
+            "readme",
+            "the commit builds on the real HEAD"
+        );
+        assert_eq!(run(path, &["--no-replace-objects", "rev-parse", "HEAD^"]), real);
     }
 
     #[test]
