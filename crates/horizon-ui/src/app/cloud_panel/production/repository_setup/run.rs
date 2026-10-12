@@ -175,6 +175,12 @@ pub(in crate::app::cloud_panel::production) struct Run {
     inputs: Option<(Instant, Option<[u8; 32]>)>,
     /// A fingerprint being read off the dialog's thread.
     inputs_job: Option<std::sync::mpsc::Receiver<Option<[u8; 32]>>>,
+    /// The statuses taken from the status file so far, and the one the current and the
+    /// pending fingerprint were read for: a fingerprint read for an older status says
+    /// nothing about a preview the newest one asks for.
+    status_revision: u64,
+    inputs_revision: u64,
+    inputs_job_revision: u64,
     /// The proof's containers, image and volume are already being removed.
     proof_released: bool,
     /// The files outside `.horizon` when the run started, to find what changed since.
@@ -283,6 +289,9 @@ impl Run {
             host_restore: false,
             inputs: None,
             inputs_job: None,
+            status_revision: 0,
+            inputs_revision: 0,
+            inputs_job_revision: 0,
             proof_released: false,
             outside: super::commit::Outside::default(),
             dotnet: false,
@@ -339,8 +348,8 @@ impl Run {
     pub(super) fn preview_wanted(&self) -> Option<(u64, preview::Spec, String, String, proof::Pinned)> {
         let proof = self.proof.as_ref()?;
         // Only the proof of the setup as it is now: never an image a newer request or a
-        // changed .horizon left behind.
-        let current = self.passed() && self.inputs_proved();
+        // changed .horizon left behind, measured after the newest status was taken.
+        let current = self.passed() && self.inputs_proved() && self.inputs_read_for_status();
         let request = self.status.preview_request;
         let changed = self.status.preview.is_some() && self.status.preview != self.previewed_spec;
         (current && (request > self.previewed_request || changed))
@@ -451,7 +460,6 @@ impl Run {
     /// Takes the newest status the status file's thread read. A file the agent is still
     /// writing, or one that does not parse, keeps the last good status.
     pub(super) fn poll(&mut self, ctx: &egui::Context) {
-        self.refresh_inputs(ctx);
         let feed = self.status_feed.get_or_insert_with(|| {
             watch_status(
                 self.status_path.clone(),
@@ -461,8 +469,16 @@ impl Run {
         });
         if let Some(status) = std::iter::from_fn(|| feed.try_recv().ok()).last() {
             self.status = status;
+            self.status_revision += 1;
             self.time_steps();
         }
+        // After the newest status, so a fingerprint started now measures it.
+        self.refresh_inputs(ctx);
+    }
+
+    /// The fingerprint was read for the newest status taken, not an older one.
+    fn inputs_read_for_status(&self) -> bool {
+        self.inputs.is_some() && self.inputs_revision == self.status_revision
     }
 
     /// The agent wrote its summary and Horizon proved this setup: the proof it asked for
@@ -593,14 +609,20 @@ impl Run {
     fn refresh_inputs(&mut self, ctx: &egui::Context) {
         if let Some(job) = &self.inputs_job {
             match job.try_recv() {
-                Ok(now) => self.inputs = Some((Instant::now(), now)),
+                Ok(now) => {
+                    self.inputs = Some((Instant::now(), now));
+                    self.inputs_revision = self.inputs_job_revision;
+                }
                 Err(std::sync::mpsc::TryRecvError::Empty) => return,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
             }
             self.inputs_job = None;
             return;
         }
-        if !self.passed() || self.inputs.is_some_and(|(at, _)| at.elapsed() < Duration::from_secs(1)) {
+        // A fingerprint stays for a second, unless a newer status came since it was read.
+        let fresh = self.inputs.is_some_and(|(at, _)| at.elapsed() < Duration::from_secs(1))
+            && self.inputs_revision == self.status_revision;
+        if !self.passed() || fresh {
             return;
         }
         let Some(spec) = self.status.proof.clone() else {
@@ -615,6 +637,7 @@ impl Run {
             wake.request_repaint();
         });
         self.inputs_job = Some(receiver);
+        self.inputs_job_revision = self.status_revision;
     }
 
     /// The agent wrote its summary without a proof request Horizon can run, and was not
@@ -1147,6 +1170,37 @@ mod tests {
         write(r#"{"steps":[],"preview":null}"#);
         assert!(preview_changed_in(&path, shown.as_ref()), "a withdrawn preview");
         assert!(!preview_changed_in(&path, None), "no preview, as before");
+    }
+
+    #[test]
+    fn a_fingerprint_counts_only_for_the_status_it_was_read_for() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("status.json");
+        let mut run = Run::new(
+            PanelId(1),
+            PanelKind::Codex,
+            PathBuf::from("."),
+            path.clone(),
+            Mode::New,
+        );
+        run.inputs = Some((Instant::now(), Some([1; 32])));
+        assert!(run.inputs_read_for_status(), "read for the status there was");
+        std::fs::write(
+            &path,
+            r#"{"steps":[],"preview":{"command":"./app"},"preview_request":2}"#,
+        )
+        .unwrap();
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while run.status_revision == 0 {
+            assert!(Instant::now() < deadline, "the status was taken in time");
+            run.poll(&ctx);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !run.inputs_read_for_status(),
+            "a fingerprint read before the newest status never starts its preview"
+        );
     }
 
     #[test]
