@@ -217,7 +217,15 @@ impl HorizonApp {
                         .into(),
                 );
             }
-            Ok(Durability::new(self.session_store.clone(), session.session_id.clone()))
+            let generation = self
+                .session_store
+                .queued_runtime_state(&session.session_id)
+                .ok_or_else(|| "Could not save this workspace before allocating a worker".to_string())?;
+            Ok(Durability::new(
+                self.session_store.clone(),
+                session.session_id.clone(),
+                generation,
+            ))
         })();
         result.map_err(|error| self.show_unsaved_cloud(id, error)).ok()
     }

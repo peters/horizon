@@ -63,6 +63,7 @@ fn count_change_during_viewport_stabilization_is_retried_afterward() {
             .expect("test clock supports a one-second lookback"),
     );
     app.flush_runtime_if_dirty();
+    crate::app::test_support::wait_for_session_saves(&app);
 
     let saved = RuntimeState::load(&runtime_path)
         .expect("load retried runtime")
@@ -274,6 +275,7 @@ fn non_modal_stabilization_can_save_user_changes() {
     assert!(!app.root_viewport_stabilization_blocks_interaction());
     assert!(app.auto_save_runtime_state());
 
+    crate::app::test_support::wait_for_session_saves(&app);
     let saved = RuntimeState::load(
         &temp
             .path()

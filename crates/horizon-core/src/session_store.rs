@@ -4,10 +4,13 @@ mod model;
 mod runtime_index;
 #[cfg(test)]
 mod tests;
+mod writer;
 
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
+use std::time::Duration;
 
 use uuid::Uuid;
 
@@ -31,12 +34,17 @@ const SESSION_META_VERSION: u32 = 1;
 const SESSION_LEASE_VERSION: u32 = 1;
 const LEASE_STALE_AFTER_MILLIS: i64 = 15_000;
 
+/// Held while the session index is read, changed and written, so the session writer and
+/// the UI never write over each other's change. Nothing syncs to disk while it is held.
+static INDEX_UPDATE: Mutex<()> = Mutex::new(());
+
 #[derive(Clone, Debug)]
 pub struct SessionStore {
     home: HorizonHome,
     config_path: PathBuf,
     profile_id: String,
     index: runtime_index::IndexCache,
+    writer: writer::Writer,
 }
 
 impl SessionStore {
@@ -48,6 +56,7 @@ impl SessionStore {
             config_path,
             profile_id,
             index: runtime_index::IndexCache::default(),
+            writer: writer::Writer::default(),
         }
     }
 
@@ -222,11 +231,11 @@ impl SessionStore {
                 }
             }
         }
+        // The writer first: a write that runs now opens the index again.
+        self.writer.forget(session_id);
         self.index.forget(session_id);
         remove_dir_if_exists(&self.home.session_dir(session_id))?;
-        let mut index = self.load_session_index()?;
-        index.remove_profile_session(&self.profile_id, session_id);
-        self.save_session_index(&index)?;
+        self.update_session_index(|index| index.remove_profile_session(&self.profile_id, session_id))?;
         Ok(())
     }
 
@@ -236,18 +245,73 @@ impl SessionStore {
     ///
     /// Returns an error if the runtime state or session metadata cannot be
     /// serialized or written to disk.
+    /// It replaces a board of the session that is queued and not written yet.
     pub fn save_runtime_state(&self, session_id: &str, runtime_state: &RuntimeState) -> Result<()> {
+        self.writer.supersede(session_id);
+        self.write_runtime_state(session_id, runtime_state, atomic_write)?;
+        self.update_session_index(|index| index.touch_profile_session(&self.profile_id, session_id))
+    }
+
+    /// Queues the board of `session_id` for a durable save on a worker thread and returns
+    /// its generation; the caller never waits for the disk. A read of the session returns
+    /// this board until it is written, and a later queue replaces it if it is not written.
+    #[must_use = "the generation tells when the board is durable"]
+    pub fn queue_runtime_state(&self, session_id: &str, runtime_state: RuntimeState) -> u64 {
+        self.writer.queue(self, session_id, runtime_state)
+    }
+
+    /// The generation of the newest board queued for `session_id`, written or not.
+    #[must_use]
+    pub fn queued_runtime_state(&self, session_id: &str) -> Option<u64> {
+        self.writer.newest(session_id)
+    }
+
+    /// Waits up to `timeout` until the board of `generation` of `session_id`, or a newer
+    /// one, is durable: its content and its name are on disk.
+    ///
+    /// # Errors
+    /// A save of that board or a newer one failed, with its reason; or the wait ran out
+    /// (`None`). The writer keeps trying a failed save.
+    pub fn wait_runtime_state_durable(
+        &self,
+        session_id: &str,
+        generation: u64,
+        timeout: Duration,
+    ) -> std::result::Result<(), Option<String>> {
+        self.writer.wait_written(session_id, generation, timeout)
+    }
+
+    /// Waits up to `timeout` until every queued board is durable, as before an exit.
+    #[must_use]
+    pub fn flush_runtime_states(&self, timeout: Duration) -> bool {
+        self.writer.flush(timeout)
+    }
+
+    /// As [`Self::save_runtime_state`], each file synced before and after its rename. Only
+    /// the session writer calls it, never the UI thread.
+    fn save_runtime_state_durably(&self, session_id: &str, runtime_state: &RuntimeState) -> Result<()> {
+        self.write_runtime_state(session_id, runtime_state, writer::durable_write)?;
+        // The folder of a new session is named in the sessions folder.
+        writer::sync_folder(&self.home.sessions_dir())?;
+        self.update_session_index(|index| index.touch_profile_session(&self.profile_id, session_id))?;
+        writer::sync_with_folder(&self.home.session_index_path())
+    }
+
+    /// Writes the board, the runtime index and the metadata of `session_id` with `write`.
+    fn write_runtime_state(
+        &self,
+        session_id: &str,
+        runtime_state: &RuntimeState,
+        write: fn(&Path, &[u8]) -> Result<()>,
+    ) -> Result<()> {
         let runtime_path = self.home.session_runtime_path(session_id);
         let meta_path = self.home.session_meta_path(session_id);
-
         if let Some(parent) = runtime_path.parent() {
             fs::create_dir_all(parent)?;
         }
-
         let runtime_yaml = runtime_state.to_yaml()?;
-        atomic_write(&runtime_path, runtime_yaml.as_bytes())?;
+        write(&runtime_path, runtime_yaml.as_bytes())?;
         self.index_runtime_state(session_id, runtime_state, &runtime_yaml);
-
         let existing_meta = self.load_session_meta(session_id).unwrap_or_else(|_| {
             SessionMeta::new(
                 session_id.to_string(),
@@ -259,36 +323,15 @@ impl SessionStore {
         });
         let meta = existing_meta.updated(runtime_state, current_unix_millis());
         let meta_yaml = serde_yaml::to_string(&meta).map_err(|error| Error::State(error.to_string()))?;
-        atomic_write(&meta_path, meta_yaml.as_bytes())?;
-
-        let mut index = self.load_session_index()?;
-        index.touch_profile_session(&self.profile_id, session_id);
-        self.save_session_index(&index)?;
-        Ok(())
+        write(&meta_path, meta_yaml.as_bytes())
     }
 
-    /// Make a saved session durable before allocating external resources for it.
-    ///
-    /// # Errors
-    /// Returns an error if contents or directory entries cannot be synced, or the platform
-    /// has no supported directory-durability mechanism. Ordinary local saves are unaffected.
-    pub fn sync_runtime_state(&self, session_id: &str) -> Result<()> {
-        require_directory_durability()?;
-        for path in [
-            self.home.session_runtime_path(session_id),
-            self.home.session_meta_path(session_id),
-            self.home.session_index_path(),
-        ] {
-            fs::File::open(&path)?.sync_all()?;
-            #[cfg(unix)]
-            if let Some(parent) = path.parent() {
-                fs::File::open(parent)?.sync_all()?;
-                if let Some(ancestor) = parent.parent() {
-                    fs::File::open(ancestor)?.sync_all()?;
-                }
-            }
-        }
-        Ok(())
+    /// Reads, changes and writes the session index under [`INDEX_UPDATE`].
+    fn update_session_index(&self, change: impl FnOnce(&mut SessionIndex)) -> Result<()> {
+        let _held = INDEX_UPDATE.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut index = self.load_session_index()?;
+        change(&mut index);
+        self.save_session_index(&index)
     }
 
     /// Persist a new session from an already prepared runtime state snapshot.
@@ -322,9 +365,7 @@ impl SessionStore {
         let meta_yaml = serde_yaml::to_string(&meta).map_err(|error| Error::State(error.to_string()))?;
         atomic_write(&self.home.session_meta_path(&session_id), meta_yaml.as_bytes())?;
 
-        let mut index = self.load_session_index()?;
-        index.touch_profile_session(&self.profile_id, &session_id);
-        self.save_session_index(&index)?;
+        self.update_session_index(|index| index.touch_profile_session(&self.profile_id, &session_id))?;
 
         Ok(ResolvedSession {
             session_id,

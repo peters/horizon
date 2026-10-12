@@ -83,13 +83,11 @@ impl HorizonApp {
             canvas_view,
             detached_workspaces,
         );
-        if let Err(error) = self
+        // The session writer saves it durably on its own thread; a failure is logged there
+        // and tried again with the newest board.
+        let _ = self
             .session_store
-            .save_runtime_state(&active_session.session_id, &runtime_state)
-        {
-            tracing::error!("failed to auto-save runtime state: {error}");
-            return false;
-        }
+            .queue_runtime_state(&active_session.session_id, runtime_state);
         true
     }
 

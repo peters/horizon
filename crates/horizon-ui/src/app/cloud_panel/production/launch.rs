@@ -300,6 +300,8 @@ mod tests {
         std::fs::remove_file(&runtime_path).unwrap();
         std::fs::create_dir(&runtime_path).unwrap();
         app.start_production_deployment(101, &ctx);
+        // The session writer reports the failed save to the preparation that waits for it.
+        app.finish_cloud_preparations(&ctx);
         assert!(!root.exists(), "persistence failure must not create a state directory");
         assert!(
             !app.cloud_prototype.groups.0[0]

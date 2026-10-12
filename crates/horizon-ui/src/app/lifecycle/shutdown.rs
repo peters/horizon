@@ -95,6 +95,7 @@ impl HorizonApp {
         // is known to be finished.
         let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();
+        self.flush_session_saves_for_exit();
         self.abandon_device_reveals("Horizon is exiting");
         #[cfg(target_os = "linux")]
         self.observed_keyboard_inputs.clear_native_transfer_files();
@@ -190,8 +191,17 @@ impl HorizonApp {
         }
         let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();
+        self.flush_session_saves_for_exit();
         self.git_watchers.clear();
         self.release_active_session_lease();
+    }
+
+    /// The session writer saves on its own thread; the last saves land before the exit,
+    /// within the shutdown limit.
+    fn flush_session_saves_for_exit(&self) {
+        if !self.session_store.flush_runtime_states(MAX_SHUTDOWN_WAIT) {
+            tracing::warn!("exiting before the session writer saved the newest board");
+        }
     }
 }
 

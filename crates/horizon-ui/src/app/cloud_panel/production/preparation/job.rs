@@ -9,68 +9,42 @@ use std::{
 };
 
 const MISSING_RECORD: &str = "Deployment record is missing; reconcile its worker before continuing";
-/// How often the session is synced again because a save replaced it meanwhile, before
-/// the preparation gives up; the UI saves at most every half second, so a few passes settle.
-const SYNC_PASSES: usize = 8;
+/// How long the preparation waits for the session save that names the cloud.
+const DURABLE_WITHIN: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// A saved session that a worker thread makes durable before anything is allocated for it.
+/// A session save that a worker thread waits for before anything is allocated for it.
 pub(in crate::app::cloud_panel::production) struct Durability {
     store: SessionStore,
     session_id: String,
+    /// The save that holds the cloud; the session writer makes it durable.
+    generation: u64,
 }
 
 impl Durability {
-    pub(super) fn new(store: SessionStore, session_id: String) -> Self {
-        Self { store, session_id }
-    }
-
-    fn sync(&self) -> Result<(), String> {
-        self.sync_until_unchanged(|| {})
-    }
-
-    /// Syncs until no save replaced a session file meanwhile. The UI may save the session
-    /// again while this runs, and a file it replaced after the sync opened the old one is
-    /// not durable; the snapshot reported durable must be the one on disk. A session that
-    /// keeps changing for [`SYNC_PASSES`] passes is refused, so the card says why instead
-    /// of preparing without end. `synced` runs after each pass.
-    fn sync_until_unchanged(&self, mut synced: impl FnMut()) -> Result<(), String> {
-        for _ in 0..SYNC_PASSES {
-            let before = self.identities();
-            self.store
-                .sync_runtime_state(&self.session_id)
-                .map_err(|error| error.to_string())?;
-            synced();
-            if self.identities() == before {
-                return Ok(());
-            }
+    pub(super) fn new(store: SessionStore, session_id: String, generation: u64) -> Self {
+        Self {
+            store,
+            session_id,
+            generation,
         }
-        Err("The workspace kept changing while Horizon saved it; try again".into())
     }
 
-    /// Which file each session path names. A save replaces a file with a new one, which
-    /// has another inode and change time.
-    fn identities(&self) -> [Option<(u64, u64, i64, i64)>; 3] {
-        let home = self.store.home();
-        [
-            home.session_runtime_path(&self.session_id),
-            home.session_meta_path(&self.session_id),
-            home.session_index_path(),
-        ]
-        .map(|path| identity(&path))
+    /// Waits until the session writer made that save, or a newer one, durable. Every save
+    /// the writer makes is durable, so a later save cannot replace it with one that is not.
+    fn sync(&self) -> Result<(), String> {
+        self.store
+            .wait_runtime_state_durable(&self.session_id, self.generation, DURABLE_WITHIN)
+            .map_err(|failure| {
+                failure.map_or_else(
+                    || "Horizon could not save this workspace in time; try again".into(),
+                    |error| {
+                        format!(
+                            "Could not save this workspace before allocating a worker: {error}; retry after fixing session storage"
+                        )
+                    },
+                )
+            })
     }
-}
-
-#[cfg(unix)]
-fn identity(path: &std::path::Path) -> Option<(u64, u64, i64, i64)> {
-    use std::os::unix::fs::MetadataExt;
-    let metadata = std::fs::metadata(path).ok()?;
-    Some((metadata.dev(), metadata.ino(), metadata.ctime(), metadata.ctime_nsec()))
-}
-
-/// Syncing a session refuses hosts other than Unix, so there is nothing to compare.
-#[cfg(not(unix))]
-fn identity(_: &std::path::Path) -> Option<(u64, u64, i64, i64)> {
-    None
 }
 
 /// What a preparation needs from the cloud as the UI holds it.
@@ -243,45 +217,67 @@ mod tests {
     use super::*;
     use horizon_core::{HorizonHome, RuntimeState};
 
-    #[test]
-    fn a_save_that_replaces_the_session_during_the_sync_is_synced_again() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = SessionStore::new(
-            HorizonHome::from_root(temp.path().join("home")),
-            temp.path().join("config.yaml"),
-        );
-        store.save_runtime_state("session", &RuntimeState::default()).unwrap();
-        let durability = Durability::new(store.clone(), "session".into());
-        let mut passes = 0;
-        durability
-            .sync_until_unchanged(|| {
-                passes += 1;
-                if passes == 1 {
-                    // The UI saves the session while the first sync runs.
-                    store.save_runtime_state("session", &RuntimeState::default()).unwrap();
-                }
-            })
-            .unwrap();
-        assert_eq!(passes, 2, "the replaced files are synced once more");
+    fn board(active: &str) -> RuntimeState {
+        RuntimeState {
+            active_workspace_local_id: Some(active.into()),
+            ..RuntimeState::default()
+        }
     }
 
     #[test]
-    fn a_session_that_keeps_changing_is_refused_after_a_few_passes() {
+    fn a_ui_save_that_races_the_allocation_is_durable_too() {
         let temp = tempfile::tempdir().unwrap();
         let store = SessionStore::new(
             HorizonHome::from_root(temp.path().join("home")),
             temp.path().join("config.yaml"),
         );
         store.save_runtime_state("session", &RuntimeState::default()).unwrap();
-        let durability = Durability::new(store.clone(), "session".into());
-        let mut passes = 0;
-        let refused = durability
-            .sync_until_unchanged(|| {
-                passes += 1;
-                store.save_runtime_state("session", &RuntimeState::default()).unwrap();
+        // The UI saves the board that names the cloud, then keeps saving while the worker
+        // is allocated.
+        let generation = store.queue_runtime_state("session", board("cloud"));
+        let durability = Durability::new(store.clone(), "session".into(), generation);
+        let ui = {
+            let store = store.clone();
+            std::thread::spawn(move || {
+                for step in 0..20 {
+                    let _ = store.queue_runtime_state("session", board(&format!("later-{step}")));
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
             })
-            .unwrap_err();
-        assert_eq!(passes, SYNC_PASSES);
-        assert!(refused.contains("try again"), "{refused}");
+        };
+        durability.sync().unwrap();
+        ui.join().unwrap();
+        assert!(store.flush_runtime_states(std::time::Duration::from_secs(30)));
+        // Every save went through the writer, so what is on disk is whole and the newest.
+        let saved = std::fs::read_to_string(store.home().session_runtime_path("session")).unwrap();
+        let saved: RuntimeState = serde_yaml::from_str(&saved).unwrap();
+        assert_eq!(saved.active_workspace_local_id.as_deref(), Some("later-19"));
+    }
+
+    #[test]
+    fn a_session_that_cannot_be_saved_is_refused_in_time() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(
+            HorizonHome::from_root(temp.path().join("home")),
+            temp.path().join("config.yaml"),
+        );
+        store.save_runtime_state("session", &RuntimeState::default()).unwrap();
+        // A folder where the board goes refuses the rename, even to root.
+        let runtime = store.home().session_runtime_path("session");
+        std::fs::remove_file(&runtime).unwrap();
+        std::fs::create_dir(&runtime).unwrap();
+        let generation = store.queue_runtime_state("session", board("cloud"));
+        let durable = store.wait_runtime_state_durable("session", generation, std::time::Duration::from_secs(30));
+        assert!(
+            matches!(durable, Err(Some(_))),
+            "a save that cannot be written ends the wait with its reason: {durable:?}"
+        );
+        std::fs::remove_dir(&runtime).unwrap();
+        // The failure stays known until a retry succeeds.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while store.wait_runtime_state_durable("session", generation, std::time::Duration::ZERO) != Ok(()) {
+            assert!(std::time::Instant::now() < deadline, "it is written once it can be");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 }

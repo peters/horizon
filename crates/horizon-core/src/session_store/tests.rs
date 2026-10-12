@@ -229,18 +229,16 @@ fn test_root(label: &str) -> tempfile::TempDir {
 }
 
 #[test]
-fn durable_cloud_gate_requires_supported_platform_and_saved_files() {
-    let root_dir = test_root("durable-cloud-gate");
+fn a_queued_save_is_durable_on_disk_even_after_its_file_was_removed() {
+    let root_dir = test_root("durable-queued-save");
     let home = HorizonHome::from_root(root_dir.path().into());
     let store = SessionStore::new(home.clone(), home.config_path());
     let created = store.create_new_session(&Config::default()).unwrap();
-    if cfg!(unix) {
-        store.sync_runtime_state(&created.session_id).unwrap();
-        std::fs::remove_file(&created.runtime_state_path).unwrap();
-        assert!(store.sync_runtime_state(&created.session_id).is_err());
-    } else {
-        assert!(store.sync_runtime_state(&created.session_id).is_err());
-        assert!(created.runtime_state_path.exists());
-        assert!(RuntimeState::load(&created.runtime_state_path).is_ok());
-    }
+    std::fs::remove_file(&created.runtime_state_path).unwrap();
+    let generation = store.queue_runtime_state(&created.session_id, RuntimeState::default());
+    assert_eq!(
+        store.wait_runtime_state_durable(&created.session_id, generation, std::time::Duration::from_secs(30)),
+        Ok(())
+    );
+    assert!(RuntimeState::load(&created.runtime_state_path).unwrap().is_some());
 }
