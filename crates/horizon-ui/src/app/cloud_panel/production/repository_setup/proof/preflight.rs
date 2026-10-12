@@ -89,7 +89,7 @@ impl super::Job {
         let plan = self.capture(command, super::STEP_TIMEOUT)?;
         let (planned, left_out) = super::localci::check_plan(&plan)?;
         if !left_out.is_empty() {
-            let line = format!("Not proved here, since their if: is false: {}", left_out.join(", "));
+            let line = format!("Not proved here: {}", left_out.join(", "));
             self.record(&mut None, line);
         }
         *self.planned.borrow_mut() = planned;

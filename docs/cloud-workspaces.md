@@ -516,8 +516,9 @@ in a container of the image as the worker account with the localci that a worker
 session finds first on its `PATH`, as the agents on the worker do, then once more
 with `--fast` to show the warm rerun, and tells the agent the result. A wrapper
 there that starts what the CI needs, such as a database, and then runs localci
-is allowed. A job whose `if:` is false on this computer, such as a publish job,
-is left out of the proof and named in its output. The
+is allowed. A job that runs no command here, because its `if:` is false on this
+computer, such as a publish job, or because the proof skips each step of it that
+runs one, is left out of the proof and named in its output. The
 dialog shows these steps as proved by Horizon, with their times. **Use this
 setup** is available only after the proof that the agent asked for passed and
 only while the `.horizon` files and the commit are the ones it tested. A build

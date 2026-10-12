@@ -260,7 +260,7 @@ pub(super) fn records(session: &[String]) -> Option<String> {
 /// Checks localci's JSON plan of the proof: every selected job keeps at least one step
 /// that runs a command, so leaving steps out never makes a job pass without CI.
 /// Returns the keys of the selected legs that run here, which the run's report must
-/// account for, and the legs left out because their `if:` is false here.
+/// account for, and the legs left out, each named with why it proves nothing here.
 pub(super) fn check_plan(plan: &[u8]) -> Result<(Vec<String>, Vec<String>), String> {
     let plan: serde_json::Value =
         serde_json::from_slice(plan).map_err(|error| format!("localci's plan does not read: {error}"))?;
@@ -274,28 +274,25 @@ pub(super) fn check_plan(plan: &[u8]) -> Result<(Vec<String>, Vec<String>), Stri
     let (mut keys, mut left_out) = (Vec::new(), Vec::new());
     for leg in legs {
         let job = leg["key"].as_str().or_else(|| leg["job"].as_str()).unwrap_or("a job");
-        // localci skips a whole job whose `if:` is false here and calls that a pass, so
-        // such a job proves nothing: it is left out, and named, as a job a target
-        // matched by its name only, such as a publish job named "Publish to test".
-        if leg["if_locally"] == false {
-            left_out.push(job.to_owned());
-            continue;
-        }
-        keys.push(job.to_owned());
+        // localci skips a whole job whose `if:` is false here and calls that a pass, and
+        // a job whose every command step is skipped passes without CI: such a job proves
+        // nothing, so it is left out of what the report must show and named instead.
         let runs = leg["steps"].as_array().is_some_and(|steps| {
             steps
                 .iter()
                 .any(|step| step["kind"] != "uses" && step["leave_out"].is_null())
         });
-        if !runs {
-            return Err(format!(
-                "the proof leaves out every step of {job} that runs a command, so it would prove nothing"
-            ));
+        if leg["if_locally"] == false {
+            left_out.push(format!("{job} (its if: is false here)"));
+        } else if !runs {
+            left_out.push(format!("{job} (every step that runs a command is skipped)"));
+        } else {
+            keys.push(job.to_owned());
         }
     }
     if keys.is_empty() {
         return Err(format!(
-            "no job the proof selects runs here: the if: of {} is false, so it would prove nothing",
+            "no job the proof selects runs a command here, so it would prove nothing: {}",
             left_out.join(", ")
         ));
     }
@@ -411,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn a_plan_must_keep_a_running_step_in_every_selected_job() {
+    fn a_job_without_a_running_step_is_left_out_and_a_plan_needs_one_that_runs() {
         let plan = |steps: serde_json::Value| {
             serde_json::to_vec(&serde_json::json!({"legs": [
                 {"key": "test", "selected": true, "steps": steps},
@@ -425,7 +422,8 @@ mod tests {
         assert!(
             check_plan(&plan(serde_json::json!([checkout, tests(serde_json::json!("--skip"))])))
                 .unwrap_err()
-                .contains("leaves out every step of test")
+                .contains("test (every step that runs a command is skipped)"),
+            "a plan whose only job runs nothing proves nothing"
         );
         let restore_and_test = serde_json::json!([{"kind": "setup", "leave_out": null}]);
         assert!(
@@ -440,17 +438,24 @@ mod tests {
         assert!(
             check_plan(&skipped_job)
                 .unwrap_err()
-                .contains("no job the proof selects runs here")
+                .contains("no job the proof selects runs a command here")
         );
-        let with_publish = serde_json::to_vec(&serde_json::json!({"legs": [
+        let with_publish_and_sync = serde_json::to_vec(&serde_json::json!({"legs": [
             {"key": "test", "selected": true, "steps": [{"kind": "run", "leave_out": null}]},
-            {"key": "publish#1", "selected": true, "if_locally": false, "steps": [{"kind": "run", "leave_out": null}]}
+            {"key": "publish#1", "selected": true, "if_locally": false, "steps": [{"kind": "run", "leave_out": null}]},
+            {"key": "vendor-sync", "selected": true, "steps": [checkout, tests(serde_json::json!("--skip"))]}
         ]}))
         .unwrap();
         assert_eq!(
-            check_plan(&with_publish).unwrap(),
-            (vec!["test".to_owned()], vec!["publish#1".to_owned()]),
-            "a job that does not run here is left out and named, not proved"
+            check_plan(&with_publish_and_sync).unwrap(),
+            (
+                vec!["test".to_owned()],
+                vec![
+                    "publish#1 (its if: is false here)".to_owned(),
+                    "vendor-sync (every step that runs a command is skipped)".to_owned()
+                ]
+            ),
+            "a job that runs nothing here is left out and named, not proved"
         );
     }
 }
