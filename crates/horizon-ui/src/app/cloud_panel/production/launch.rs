@@ -218,7 +218,10 @@ impl HorizonApp {
                         return;
                     }
                     if !form.launch.unconfigured {
-                        form.launch.read_error = Some(error.to_string());
+                        // Only settings an agent can repair in .horizon offer the fixing agent;
+                        // a missing folder, Git or a bad revision is shown as it is.
+                        form.launch.read_error =
+                            cloud_runtime::repository::launch::is_config_error(&error).then(|| error.to_string());
                         self.cloud_prototype.error = Some(error.to_string());
                     }
                 }

@@ -33,12 +33,17 @@ pub fn resolve_with_runner(repository: &Path, revision: &str, runner: &Runner<'_
     }
     let output = runner.run(
         "Resolve committed revision",
-        Command::new("git").arg("-C").arg(repository).args([
-            "rev-parse",
-            "--verify",
-            "--end-of-options",
-            &format!("{revision}^{{commit}}"),
-        ]),
+        // Replace refs could name other content for the same commit, so none are read.
+        Command::new("git")
+            .arg("--no-replace-objects")
+            .arg("-C")
+            .arg(repository)
+            .args([
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                &format!("{revision}^{{commit}}"),
+            ]),
         Duration::from_secs(30),
     )?;
     let sha = output.trim().to_owned();
@@ -103,6 +108,7 @@ pub fn snapshot(repository: &Path, revision: &str, root: &Path, runner: &Runner<
 fn archive_command(repository: &Path) -> Command {
     let mut command = Command::new("git");
     command
+        .arg("--no-replace-objects")
         .args(["-c", "core.autocrlf=false", "-c", "core.eol=lf", "-C"])
         .arg(repository)
         .args(["archive", "--format=tar", "--output"]);

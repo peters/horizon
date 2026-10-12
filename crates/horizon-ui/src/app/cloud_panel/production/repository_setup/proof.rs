@@ -2,12 +2,12 @@
 //! check and runs the CI jobs the agent named with localci in a container of the image,
 //! then once more with `--fast` on the same volume. The agent only reads the result.
 //! The timings are therefore the image's, not the agent's.
+use horizon_core::cloud_runtime::Cancellation;
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 /// The step titles Horizon owns once the agent asks for a proof.
@@ -62,9 +62,6 @@ const CI_TIMEOUT: Duration = Duration::from_mins(90);
 
 /// The longest one preparation step of the CI phase may take.
 const STEP_TIMEOUT: Duration = Duration::from_mins(30);
-
-/// The longest the worker check may take; it only reads the image.
-const CHECK_TIMEOUT: Duration = Duration::from_mins(5);
 
 /// Creates a file Horizon writes in the run's folder. The agent can write there too, so
 /// whatever is at the path goes first (a link itself, never its target) and the file
@@ -204,7 +201,7 @@ pub(super) struct PhaseState {
 /// One proof run in the background.
 pub(super) struct Proof {
     receiver: mpsc::Receiver<Event>,
-    cancel: Arc<AtomicBool>,
+    cancel: Cancellation,
     pub(super) log: VecDeque<String>,
     pub(super) phases: [(Phase, PhaseState); 3],
     /// Where the whole log is written, for the agent to read on a failure.
@@ -234,7 +231,7 @@ impl Proof {
         (after, ctx): (Option<std::thread::JoinHandle<()>>, egui::Context),
     ) -> Self {
         let (sender, receiver) = mpsc::sync_channel(EVENT_QUEUE);
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = Cancellation::default();
         // One snapshot of the setup: the proof fingerprints it and builds from it alone.
         // A setup Horizon refuses to read fails the build with the reason.
         let setup = super::snapshot::Setup::read(repository);
@@ -281,7 +278,7 @@ impl Proof {
 
     /// Stops the proof and hands back its run, to wait for before its resources go.
     pub(super) fn stop(&mut self) -> Option<std::thread::JoinHandle<()>> {
-        self.cancel.store(true, Ordering::Relaxed);
+        self.cancel.cancel();
         self.remove_container();
         self.worker.take()
     }
@@ -367,7 +364,7 @@ impl Proof {
 
 impl Drop for Proof {
     fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Relaxed);
+        self.cancel.cancel();
         self.remove_container();
     }
 }
@@ -382,7 +379,7 @@ struct Job {
     /// The setup this proof tests, read once at its start, or why Horizon refuses it.
     setup: Result<super::snapshot::Setup, String>,
     log_path: PathBuf,
-    cancel: Arc<AtomicBool>,
+    cancel: Cancellation,
     sender: mpsc::SyncSender<Event>,
     /// Bytes written to the whole log so far, against [`LOG_FILE_LIMIT`].
     logged: std::cell::Cell<u64>,
@@ -427,7 +424,7 @@ impl Job {
             let _ = Command::new("docker").args(["rm", "--force"]).args(&earlier).output();
         }
         for phase in [Phase::Build, Phase::Ci, Phase::Fast] {
-            if self.cancel.load(Ordering::Relaxed) {
+            if self.cancel.is_cancelled() {
                 return;
             }
             let _ = self.sender.send(Event::Started(phase));
@@ -479,17 +476,70 @@ impl Job {
         } else {
             "No Horizon GitHub login for ghcr.io; images are pulled anonymously.".to_owned()
         }));
-        // Every profile can be chosen in New cloud, so each distinct build is built and
-        // checked; the CI then runs in the default profile's image.
-        for (index, (build, arguments)) in builds.iter().enumerate() {
-            let tag = if index == 0 {
+        // Every profile can be chosen in New cloud, so each distinct build is built; the
+        // CI then runs in the default profile's image.
+        let tag = |index: usize| {
+            if index == 0 {
                 self.image.clone()
             } else {
                 format!("{}-build{index}:candidate", self.volume)
-            };
-            self.build_one(setup, (build, arguments), &tag, docker_config.path(), log)?;
+            }
+        };
+        for (index, (build, arguments)) in builds.iter().enumerate() {
+            self.build_one(setup, (build, arguments), &tag(index), docker_config.path(), log)?;
+        }
+        // Each profile's worker contract, checked the way deployment checks it: its
+        // capabilities go to horizon-worker-check and every marker it reports is validated.
+        for (number, (name, profile)) in config.profiles.iter().enumerate() {
+            let Some(build) = &profile.build else { continue };
+            let arguments = horizon_core::cloud_runtime::image::build_arguments(&profile.capabilities, &releases);
+            let index = builds
+                .iter()
+                .position(|(built, with)| built == build && *with == arguments)
+                .ok_or_else(|| format!("profile {name} has no proof image"))?;
+            self.check_contract((name, profile), &tag(index), number, docker_config.path(), log)?;
         }
         Ok(())
+    }
+
+    /// Validates `profile`'s worker contract on the image `tag` with deployment's own
+    /// check, which runs the image's horizon-worker-check with the profile's capabilities.
+    fn check_contract(
+        &self,
+        (name, profile): (&str, &horizon_core::cloud_panel::Profile),
+        tag: &str,
+        number: usize,
+        docker_config: &Path,
+        log: &mut Option<std::fs::File>,
+    ) -> Result<(), String> {
+        let cell = std::cell::RefCell::new(log.take());
+        let emit = |event: horizon_core::cloud_runtime::Event| {
+            if let horizon_core::cloud_runtime::Event::Output(line) = event {
+                self.record(&mut cell.borrow_mut(), line);
+            }
+        };
+        let runner = horizon_core::cloud_runtime::command::Runner {
+            cancel: &self.cancel,
+            emit: &emit,
+            secrets: Vec::new(),
+        };
+        let images = horizon_core::cloud_runtime::image::Images {
+            docker_host: None,
+            isolated_registry: true,
+            docker_config,
+            runner: &runner,
+            publisher: None,
+        };
+        let hash = self.container.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+        });
+        let operation = format!("horizon-setup-check-{:08x}-{number}", hash & 0xffff_ffff);
+        let result = images
+            .validate_contract(tag, &operation, profile, true)
+            .map(|_| ())
+            .map_err(|error| format!("the worker check of profile {name} failed: {error}"));
+        *log = cell.into_inner();
+        result
     }
 
     fn build_one(
@@ -517,20 +567,7 @@ impl Job {
             .arg("-t")
             .arg(tag)
             .arg(&context);
-        self.stream_within(command, log, Some(BUILD_TIMEOUT))?;
-        // Named, so a check that hangs goes with its container on the timeout.
-        let mut check = Command::new("docker");
-        check.args([
-            "run",
-            "--rm",
-            "--name",
-            &self.container,
-            "--network",
-            "none",
-            "--entrypoint",
-        ]);
-        check.arg("horizon-worker-check").arg(tag).arg("--git-auth");
-        self.stream_within(check, log, Some(CHECK_TIMEOUT))
+        self.stream_within(command, log, Some(BUILD_TIMEOUT))
     }
 
     /// Clones the committed repository into the proof volume, or brings the clone
@@ -673,6 +710,24 @@ impl Job {
             .output();
     }
 
+    /// Writes one output line to the whole log, up to [`LOG_FILE_LIMIT`], and passes it
+    /// to the dialog, which shows the last lines only, so a full queue drops one.
+    fn record(&self, log: &mut Option<std::fs::File>, line: String) {
+        use std::io::Write;
+        if let Some(file) = log.as_mut() {
+            let logged = self.logged.get();
+            if logged < LOG_FILE_LIMIT {
+                let _ = writeln!(file, "{line}");
+                self.logged.set(logged + line.len() as u64 + 1);
+                if self.logged.get() >= LOG_FILE_LIMIT {
+                    let _ = writeln!(file, "[Horizon stopped writing this log at {LOG_FILE_LIMIT} bytes]");
+                }
+            }
+        }
+        let _ = self.sender.try_send(Event::Line(line));
+        self.ctx.request_repaint();
+    }
+
     /// Runs `command`, sending each output line to the dialog and the log file: a
     /// preparation step (the bundle, the clone, a host restore) within
     /// [`STEP_TIMEOUT`], so a daemon or a feed that never answers cannot hold the proof.
@@ -687,7 +742,6 @@ impl Job {
         log: &mut Option<std::fs::File>,
         limit: Option<Duration>,
     ) -> Result<(), String> {
-        use std::io::Write;
         let started = Instant::now();
         let mut child = command
             .stdin(Stdio::null())
@@ -727,21 +781,7 @@ impl Job {
         drop(lines);
         loop {
             match received.recv_timeout(Duration::from_millis(200)) {
-                Ok(line) => {
-                    if let Some(file) = log.as_mut() {
-                        let logged = self.logged.get();
-                        if logged < LOG_FILE_LIMIT {
-                            let _ = writeln!(file, "{line}");
-                            self.logged.set(logged + line.len() as u64 + 1);
-                            if self.logged.get() >= LOG_FILE_LIMIT {
-                                let _ = writeln!(file, "[Horizon stopped writing this log at {LOG_FILE_LIMIT} bytes]");
-                            }
-                        }
-                    }
-                    // The dialog shows the last lines only; a full queue drops one.
-                    let _ = self.sender.try_send(Event::Line(line));
-                    self.ctx.request_repaint();
-                }
+                Ok(line) => self.record(log, line),
                 // A command that ended while something it started still holds its output.
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if matches!(child.try_wait(), Ok(Some(_))) {
@@ -757,7 +797,7 @@ impl Job {
                     std::thread::sleep(Duration::from_millis(200));
                 }
             }
-            if self.cancel.load(Ordering::Relaxed) {
+            if self.cancel.is_cancelled() {
                 let _ = child.kill();
                 let _ = child.wait();
                 self.remove_container();

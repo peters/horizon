@@ -505,9 +505,10 @@ fn lfs_paths(
     quiet.to_file(
         "List selected LFS paths",
         Command::new("git")
+            .arg("--no-replace-objects")
             .arg("-C")
             .arg(repository)
-            .args(["lfs", "ls-files", "--name-only"])
+            .args(["-c", "alias.lfs=", "lfs", "ls-files", "--name-only"])
             .args(filters)
             .arg(revision),
         &empty,

@@ -73,9 +73,12 @@ fn creatable(mut config: CloudConfig) -> super::Result<CloudConfig> {
             .is_some_and(|provider| provider.creatable && provider.supports(profile))
     });
     if !config.profiles.contains_key(&config.default) {
-        config.default = config.profiles.keys().next().cloned().ok_or(Error::Invalid(
-            "No profile in this repository's .horizon/cloud.yml can run on a provider Horizon creates clouds on.",
-        ))?;
+        config.default = config
+            .profiles
+            .keys()
+            .next()
+            .cloned()
+            .ok_or(Error::Invalid(NO_CREATABLE_PROFILE))?;
     }
     Ok(config)
 }
@@ -83,6 +86,17 @@ fn creatable(mut config: CloudConfig) -> super::Result<CloudConfig> {
 /// The answer for a commit without `.horizon/cloud.yml`. It is not a fault: New cloud
 /// shows it as guidance next to quick start and the setup agent.
 pub const MISSING_CONFIG: &str = "The selected commit has no readable .horizon/cloud.yml. Quick start on the public base image, let a setup agent prepare the repository, choose another revision, or use local image-only settings in More options.";
+
+/// The refusal of a configuration none of whose profiles Horizon can create a cloud for.
+pub(crate) const NO_CREATABLE_PROFILE: &str =
+    "No profile in this repository's .horizon/cloud.yml can run on a provider Horizon creates clouds on.";
+
+/// Whether `error` is about the committed `.horizon/cloud.yml` itself, which an agent can
+/// fix there, rather than about the folder, Git or the revision.
+#[must_use]
+pub fn is_config_error(error: &Error) -> bool {
+    matches!(error, Error::Invalid(message) if *message == INVALID_CONFIG || *message == NO_CREATABLE_PROFILE)
+}
 
 /// Whether `error` says only that the commit has no `.horizon/cloud.yml`.
 #[must_use]
@@ -224,6 +238,14 @@ fn ssh_ready_with_cancel(path: &Path, cancel: &super::super::Cancellation) -> bo
 mod tests {
     use super::*;
     pub(super) const CONFIG: &str = "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n";
+
+    #[test]
+    fn only_settings_errors_offer_the_fixing_agent() {
+        assert!(is_config_error(&Error::Invalid(INVALID_CONFIG)));
+        assert!(is_config_error(&Error::Invalid(NO_CREATABLE_PROFILE)));
+        assert!(!is_config_error(&Error::Invalid(MISSING_CONFIG)));
+        assert!(!is_config_error(&Error::Invalid("Select a committed Git revision")));
+    }
 
     pub(super) fn git(path: &Path, args: &[&str]) {
         assert!(
