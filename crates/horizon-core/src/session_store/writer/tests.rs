@@ -109,11 +109,72 @@ fn a_session_that_cannot_be_saved_does_not_hold_up_the_others() {
 fn a_save_outside_the_queue_replaces_the_queued_board() {
     let (_temp, store) = store();
     let _ = store.queue_runtime_state("session", board("queued"));
-    store.save_runtime_state("session", &board("direct")).unwrap();
+    // The writer may write the queued board just now.
+    while store.save_runtime_state("session", &board("direct")).is_err() {
+        std::thread::sleep(Duration::from_millis(5));
+    }
     assert!(store.flush_runtime_states(Duration::from_secs(30)));
     assert_eq!(on_disk(&store).as_deref(), Some("direct"));
     let read = store.load_runtime("session").unwrap().unwrap();
     assert_eq!(read.active_workspace_local_id.as_deref(), Some("direct"));
+}
+
+#[test]
+fn a_save_outside_the_queue_is_refused_while_park_records_of_the_session_are_written() {
+    let (_temp, store) = store();
+    store.writer.lock().writing_parks = Some("session".into());
+    assert!(store.save_runtime_state("session", &board("direct")).is_err());
+    assert!(store.save_runtime_state("other", &board("direct")).is_ok());
+    store.writer.lock().writing_parks = None;
+    assert!(store.save_runtime_state("session", &board("direct")).is_ok());
+}
+
+fn park(parked: bool, line: Option<&str>) -> Park {
+    Park {
+        local_id: "panel".into(),
+        parked,
+        status: line.map(|line| SessionStatus {
+            id: "agent".into(),
+            activity: crate::cloud_runtime::session_status::SessionActivity::Idle,
+            quiet_for: None,
+            lines: vec![line.into()],
+        }),
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn park_records_of_a_session_that_cannot_be_saved_do_not_pile_up() {
+    let (_temp, store) = store();
+    store.save_runtime_state("broken", &board("old")).unwrap();
+    let runtime = store.home().session_runtime_path("broken");
+    std::fs::remove_file(&runtime).unwrap();
+    std::fs::create_dir(&runtime).unwrap();
+    let broken = store.queue_runtime_state("broken", board("never"));
+    assert!(matches!(
+        store.wait_runtime_state_durable("broken", broken, Duration::from_secs(30)),
+        Err(Some(_))
+    ));
+    // The failed board stays queued, so its park records wait behind it.
+    store
+        .writer
+        .queue_parks(&store, "broken", vec![park(true, Some("first"))]);
+    for _ in 0..50 {
+        store.writer.queue_parks(&store, "broken", vec![park(false, None)]);
+    }
+    let state = store.writer.lock();
+    let parks = &state.parks["broken"];
+    assert_eq!(parks.len(), 1, "one record per panel waits");
+    assert!(!parks[0].parked, "the newest park state waits");
+    assert_eq!(
+        parks[0].status.as_ref().and_then(SessionStatus::last_line),
+        Some("first"),
+        "a record without a status keeps the queued status"
+    );
+    drop(state);
+    while store.writer.forget("broken").is_err() {
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 #[test]

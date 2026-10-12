@@ -143,10 +143,23 @@ impl Writer {
     }
 
     /// Queues park records of cloud panels of `session_id`; the worker writes them after
-    /// the boards of the session that wait. A record that cannot be written is dropped.
+    /// the boards of the session that wait. A newer record of a panel replaces a queued one,
+    /// which keeps its status if the newer one has none, so that the queue of a session that
+    /// cannot be saved does not grow. A record that cannot be written is dropped.
     pub(super) fn queue_parks(&self, store: &SessionStore, session_id: &str, parks: Vec<Park>) {
         let mut state = self.lock();
-        state.parks.entry(session_id.to_owned()).or_default().extend(parks);
+        let queued = state.parks.entry(session_id.to_owned()).or_default();
+        for park in parks {
+            match queued.iter_mut().find(|queued| queued.local_id == park.local_id) {
+                Some(queued) => {
+                    queued.parked = park.parked;
+                    if park.status.is_some() {
+                        queued.status = park.status;
+                    }
+                }
+                None => queued.push(park),
+            }
+        }
         self.start(&mut state, store);
         drop(state);
         self.shared.changed.notify_all();
@@ -245,7 +258,8 @@ impl Writer {
 
     /// Drops the queued board of `session_id`, which a save that does not use the queue
     /// replaces. A wait for the dropped board ends with a reason. It is refused while the
-    /// writer writes the session, so that the caller never waits for the disk.
+    /// writer writes a board or park records of the session, so that the caller never waits
+    /// for the disk and an older write never lands after the caller's.
     pub(super) fn supersede(&self, session_id: &str) -> StoreResult<()> {
         self.drop_session(
             session_id,
@@ -264,8 +278,7 @@ impl Writer {
     fn drop_session(&self, session_id: &str, reason: &str, deleted: bool) -> StoreResult<Option<RuntimeState>> {
         let mut state = self.lock();
         if state.writing.as_ref().is_some_and(|(writing, _)| writing == session_id)
-            // A park write may open the index again; a board save does not touch those rows.
-            || (deleted && state.writing_parks.as_deref() == Some(session_id))
+            || state.writing_parks.as_deref() == Some(session_id)
         {
             return Err(Error::State(format!(
                 "Horizon is still saving session {session_id}; try again in a moment"
