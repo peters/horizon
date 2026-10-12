@@ -11,6 +11,21 @@ const FOLDER: &str = "/etc/horizon-worker/session-env.d";
 const FILE_LIMIT: u64 = 16 * 1024;
 const FILES: usize = 64;
 
+/// The files PAM reads for an SSH session on Ubuntu (`pam_env` with `readenv`), in order.
+const PAM_FILES: [&str; 2] = ["/etc/environment", "/etc/default/locale"];
+
+/// What horizon-worker-run exports for every session before it starts the agent, with
+/// fixed stand-ins for the values that name the session; HOME the proof sets itself.
+pub(super) const WORKER_EXPORTS: [(&str, &str); 7] = [
+    ("DISPLAY", ":99"),
+    ("HORIZON_BROWSER_ROOT", "/workspace/home/.horizon"),
+    ("HORIZON_CLOUD_ACTOR", "cloud:proof"),
+    ("HORIZON_BROWSER_ACTOR", "horizon:cloud-proof"),
+    ("HORIZON_DEVICE_ACTOR", "horizon:cloud-proof"),
+    ("HORIZON_SESSION_DIR", "/workspace/session-data/proof"),
+    ("HORIZON_GPU_LOCK", "/workspace/locks/gpu.lock"),
+];
+
 /// The PATH sshd gives a session on Ubuntu when /etc/environment names none.
 const SSH_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games";
 
@@ -28,23 +43,43 @@ pub(super) fn arguments(image: &str, container: &str, run: Run<'_>) -> Result<Ve
     create.args(["create", "--name", container, image]);
     run(create).map_err(|error| format!("cannot read the image's session environment: {error}"))?;
     let folder = copied(container, FOLDER, run);
-    let environment = copied(container, "/etc/environment", run);
+    let pam_files = PAM_FILES.map(|file| (file, copied(container, file, run)));
     let mut remove = Command::new("docker");
     remove.args(["rm", "--force", container]);
     let _ = run(remove);
     let folder = folder.map_err(|error| format!("cannot read the image's session environment: {error}"))?;
-    let environment = environment.map_err(|error| format!("cannot read the image's session environment: {error}"))?;
-    let base = match environment {
-        None => SSH_PATH.to_owned(),
-        Some(archive) => environment_path(&archive)?,
-    };
+    // What PAM gives an SSH session from the image's files, in the order it reads them.
+    let mut pam: Vec<(String, String)> = Vec::new();
+    for (file, copied) in pam_files {
+        let copied = copied.map_err(|error| format!("cannot read the image's session environment: {error}"))?;
+        if let Some(archive) = copied {
+            for (key, value) in pam_file(&archive, file)? {
+                pam.retain(|(known, _)| *known != key);
+                pam.push((key, value));
+            }
+        }
+    }
+    let base = pam
+        .iter()
+        .find_map(|(key, value)| (key == "PATH").then(|| value.clone()))
+        .unwrap_or_else(|| SSH_PATH.to_owned());
     let files = match folder {
         Some(archive) => session_files(&archive).map_err(|error| format!("session environment refused: {error}"))?,
         None => Vec::new(),
     };
     let (variables, directives) = load(&files).map_err(|error| format!("session environment refused: {error}"))?;
-    let mut arguments: Vec<String> = variables
+    // PAM's variables first, then what horizon-worker-run exports for every session, with
+    // stand-ins for the per-session ones, then the image's session-env.d, which may not
+    // name the latter, and PATH as the worker builds it.
+    let mut arguments: Vec<String> = pam
         .into_iter()
+        .filter(|(key, _)| key != "PATH" && key != "HOME")
+        .chain(
+            WORKER_EXPORTS
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned())),
+        )
+        .chain(variables)
         .flat_map(|(key, value)| ["-e".to_owned(), format!("{key}={value}")])
         .collect();
     arguments.extend(["-e".to_owned(), format!("PATH={}", session_path(&base, &directives))]);
@@ -168,35 +203,37 @@ fn session_files(archive: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
     Ok(files)
 }
 
-/// The PATH an SSH session of the image starts from: the one its /etc/environment
-/// names, which PAM applies, or sshd's own default. The image's `ENV` lines do not
-/// reach a session, so they do not count here either.
-fn base_path(environment: &[u8]) -> Result<String, String> {
-    let text = std::str::from_utf8(environment).map_err(|_| "the image's /etc/environment is not UTF-8".to_owned())?;
-    Ok(text
-        .lines()
-        .find_map(|line| {
-            let value = line.trim().strip_prefix("PATH=")?;
-            Some(value.trim_matches('"').to_owned())
+/// The variables a PAM environment file such as /etc/environment gives a session: each
+/// `KEY=VALUE` line, quotes around the value removed; comments, blank lines and lines
+/// that name no variable are skipped, as `pam_env` skips them.
+fn pam_variables(text: &str) -> Vec<(String, String)> {
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let line = line.strip_prefix("export ").unwrap_or(line);
+            let (key, value) = line.split_once('=')?;
+            (!line.starts_with('#') && variable_name(key)).then(|| (key.to_owned(), value.trim_matches('"').to_owned()))
         })
-        .unwrap_or_else(|| SSH_PATH.to_owned()))
+        .collect()
 }
 
-/// The PATH of the image's `/etc/environment`, copied as `archive`. A worker session
-/// reads that file whatever it holds, so one the proof cannot read the same way, too
-/// large, not UTF-8 or not a regular file, refuses the image instead of the proof
-/// running with another PATH; only a file without PATH gives sshd's default.
-fn environment_path(archive: &[u8]) -> Result<String, String> {
-    let entries = unpack(archive).map_err(|error| format!("the image's /etc/environment is refused: {error}"))?;
+/// The variables of the image's PAM environment file `file`, copied as `archive`. A
+/// worker session reads that file whatever it holds, so one the proof cannot read the
+/// same way, too large, not UTF-8 or not a regular file, refuses the image instead of
+/// the proof running with another environment.
+fn pam_file(archive: &[u8], file: &str) -> Result<Vec<(String, String)>, String> {
+    let name = file.rsplit('/').next().unwrap_or(file);
+    let entries = unpack(archive).map_err(|error| format!("the image's {file} is refused: {error}"))?;
     match entries
         .into_iter()
-        .find_map(|(name, entry)| (name == "environment").then_some(entry))
+        .find_map(|(path, entry)| (path == name).then_some(entry))
     {
-        Some(Unpacked::File(bytes, _)) => base_path(&bytes),
-        _ => Err(
-            "the image's /etc/environment is not a regular file, and a worker session would read it all the same"
-                .to_owned(),
-        ),
+        Some(Unpacked::File(bytes, _)) => std::str::from_utf8(&bytes)
+            .map(pam_variables)
+            .map_err(|_| format!("the image's {file} is not UTF-8")),
+        _ => Err(format!(
+            "the image's {file} is not a regular file, and a worker session would read it all the same"
+        )),
     }
 }
 
@@ -376,17 +413,20 @@ mod tests {
     }
 
     #[test]
-    fn an_environment_file_the_proof_cannot_read_refuses_the_image() {
+    fn an_environment_file_gives_every_variable_or_refuses_the_image() {
         let file = |bytes: &[u8]| archive(&[("environment", Some(bytes))]);
+        let read = |bytes: &[u8]| pam_file(&file(bytes), "/etc/environment");
         assert_eq!(
-            environment_path(&file(b"PATH=\"/opt/x:/usr/bin\"\n")).unwrap(),
-            "/opt/x:/usr/bin"
+            read(b"PATH=\"/opt/x:/usr/bin\"\n# note\nJAVA_HOME=/opt/java\nnot a variable\n").unwrap(),
+            [
+                ("PATH".to_owned(), "/opt/x:/usr/bin".to_owned()),
+                ("JAVA_HOME".to_owned(), "/opt/java".to_owned())
+            ]
         );
-        assert_eq!(environment_path(&file(b"LANG=C.UTF-8\n")).unwrap(), SSH_PATH);
-        assert!(environment_path(&file(b"PATH=/opt/\xff\n")).is_err(), "not UTF-8");
-        assert!(environment_path(&file(&vec![b'#'; 32 * 1024])).is_err(), "too large");
+        assert!(read(b"PATH=/opt/\xff\n").is_err(), "not UTF-8");
+        assert!(read(&vec![b'#'; 32 * 1024]).is_err(), "too large");
         assert!(
-            environment_path(&archive(&[("environment", None)])).is_err(),
+            pam_file(&archive(&[("environment", None)]), "/etc/environment").is_err(),
             "a folder"
         );
     }
@@ -435,11 +475,13 @@ mod tests {
     }
 
     #[test]
-    fn the_base_path_is_the_one_ssh_gives_a_session() {
+    fn pam_skips_what_names_no_variable() {
         assert_eq!(
-            base_path(b"PATH=\"/usr/local/bin:/usr/bin\"\nLANG=C\n").unwrap(),
-            "/usr/local/bin:/usr/bin"
+            pam_variables("LANG=\"C.UTF-8\"\n\n#LANG=x\n1X=2\nexport LC_ALL=C\n"),
+            [
+                ("LANG".to_owned(), "C.UTF-8".to_owned()),
+                ("LC_ALL".to_owned(), "C".to_owned())
+            ]
         );
-        assert_eq!(base_path(b"LANG=C\n").unwrap(), SSH_PATH);
     }
 }

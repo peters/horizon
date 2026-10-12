@@ -140,12 +140,21 @@ impl HorizonApp {
         // Use again commits .horizon and leaves the rest.
         let changed = commit::changed(&run.outside, &outside);
         if !changed.is_empty() {
+            // Only a complete report lets the next press commit: without one, the baseline
+            // stays and the changes are named again.
             let report = run.status_path.with_file_name("outside-changes.txt");
             let listed = super::proof::create_private(&report)
-                .and_then(|mut file| std::io::Write::write_all(&mut file, (changed.join("\n") + "\n").as_bytes()))
-                .is_ok();
-            run.outside = outside;
-            self.cloud_prototype.error = Some(outside_changes_message(&changed, listed.then_some(report.as_path())));
+                .and_then(|mut file| std::io::Write::write_all(&mut file, (changed.join("\n") + "\n").as_bytes()));
+            self.cloud_prototype.error = Some(match listed {
+                Ok(()) => {
+                    run.outside = outside;
+                    outside_changes_message(&changed, &report)
+                }
+                Err(error) => format!(
+                    "Nothing was committed: files outside .horizon changed while the setup ran, and Horizon could not list them all in {} ({error}). Stop the setup and review the repository.",
+                    report.display()
+                ),
+            });
             return;
         }
         // Git works by path: the repository folder must still be the run's when it does.
@@ -185,9 +194,9 @@ const IGNORED_PARTIAL: &str = "This repository has more than 100,000 ignored fil
 
 /// What Use says when files outside `.horizon` changed while the setup ran: the first
 /// few, and where the report that lists every one is.
-fn outside_changes_message(changed: &[String], report: Option<&std::path::Path>) -> String {
+fn outside_changes_message(changed: &[String], report: &std::path::Path) -> String {
     let shown = changed.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
-    let listed = report.map_or_else(String::new, |report| format!(", all listed in {}", report.display()));
+    let listed = format!(", all listed in {}", report.display());
     let more = match changed.len().saturating_sub(5) {
         0 => listed,
         more => format!(" and {more} more{listed}"),
@@ -205,13 +214,12 @@ mod tests {
     fn every_changed_path_is_named_or_in_the_report() {
         let changed: Vec<String> = (1..=7).map(|index| format!("src/file{index}.rs")).collect();
         let report = std::path::Path::new("/run/outside-changes.txt");
-        let message = outside_changes_message(&changed, Some(report));
+        let message = outside_changes_message(&changed, report);
         assert!(
             message.contains("src/file5.rs and 2 more, all listed in /run/outside-changes.txt"),
             "{message}"
         );
-        let few = outside_changes_message(&changed[..2], Some(report));
+        let few = outside_changes_message(&changed[..2], report);
         assert!(few.contains("src/file2.rs, all listed in"), "{few}");
-        assert!(!outside_changes_message(&changed, None).contains("listed in"));
     }
 }

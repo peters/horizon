@@ -960,10 +960,13 @@ cd /workspace/checkout; git init -q; G='git -c core.hooksPath=/dev/null -c core.
 $G fetch -q /src.bundle HEAD; $G checkout -q --force --detach \"$HEAD_SHA\"; $G clean -q -ffdx; \
 chown -R 10001:10001 /workspace/checkout";
 
-/// Hands the volume to the worker's account. HOME stays between runs for its caches,
-/// but a link an earlier run left in its place goes, so nothing is made through it.
-const OWN: &str = "if [ -L /workspace/home ]; then rm -f /workspace/home; fi; mkdir -p /workspace/home; \
-chown 10001:10001 /workspace /workspace/home";
+/// Hands the volume to the worker's account, with the folders a worker session names:
+/// HOME, the session's data folder and the GPU lock's folder. They stay between runs for
+/// their caches, but a link an earlier run left in their place goes, so nothing is made
+/// through it.
+const OWN: &str = "for d in /workspace/home /workspace/session-data /workspace/session-data/proof /workspace/locks; do \
+if [ -L \"$d\" ]; then rm -f \"$d\"; fi; mkdir -p \"$d\"; done; \
+chown 10001:10001 /workspace /workspace/home /workspace/session-data /workspace/session-data/proof /workspace/locks";
 
 /// Forgets localci's step records when the volume last ran a proof in another image.
 /// It runs with Horizon's settings only, never the image's: the records' folder comes
@@ -1034,7 +1037,8 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
+    // The script runs in Horizon's Ubuntu base, whose realpath takes -m; macOS's does not.
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_new_image_forgets_the_step_records_an_older_one_left() {
         // The volume's /workspace is a folder here.

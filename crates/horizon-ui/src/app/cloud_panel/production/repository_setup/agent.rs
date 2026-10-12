@@ -44,6 +44,7 @@ impl Scope {
 
     /// The scope's cgroup folder; none while systemd has no such scope, which also
     /// means nothing runs in it.
+    #[cfg(unix)]
     fn cgroup(&self) -> Option<&std::path::Path> {
         if let Some(cgroup) = self.cgroup.get() {
             return Some(cgroup);
@@ -145,6 +146,7 @@ impl AgentProcess {
 }
 
 /// The cgroup folder of the systemd user scope `unit`.
+#[cfg(unix)]
 fn cgroup_of(unit: &str) -> Option<std::path::PathBuf> {
     let output = std::process::Command::new("systemctl")
         .args(["--user", "show", "--property=ControlGroup", "--value", unit])
