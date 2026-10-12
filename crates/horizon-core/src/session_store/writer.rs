@@ -275,21 +275,31 @@ impl Writer {
         }
     }
 
-    /// Drops the queued board of `session_id`, which `board`, saved outside the queue,
-    /// replaces. A wait for the dropped board ends with a reason. It is refused while the
-    /// writer writes a board or park records of the session, so that the caller never waits
-    /// for the disk and an older write never lands after the caller's. The worker leaves
-    /// the session alone until the returned [`Direct`] is dropped.
+    /// Reserves `session_id` for a save or a delete outside the queue: the worker leaves
+    /// the session alone until the returned [`Direct`] is dropped. It is refused while the
+    /// writer writes a board or park records of the session, or another reservation holds
+    /// it, so that the caller never waits for the disk and an older write never lands after
+    /// the caller's.
+    pub(super) fn reserve(&self, session_id: &str) -> StoreResult<Direct<'_>> {
+        let mut state = self.lock();
+        Self::reserve_locked(&mut state, session_id)?;
+        Ok(Direct {
+            writer: self,
+            session_id: session_id.to_owned(),
+        })
+    }
+
+    /// As [`Self::reserve`] for `board`, saved outside the queue, which replaces the queued
+    /// board of `session_id`. A wait for the dropped board ends with a reason.
     pub(super) fn supersede(&self, session_id: &str, board: &RuntimeState) -> StoreResult<Direct<'_>> {
         let mut state = self.lock();
-        Self::drop_locked(
+        Self::reserve_locked(&mut state, session_id)?;
+        Self::drop_queued(
             &mut state,
             session_id,
             "a later save that does not wait for the disk replaced it",
-            false,
-        )?;
+        );
         state.keep_parks_on(session_id, board);
-        state.direct.insert(session_id.to_owned());
         drop(state);
         self.shared.changed.notify_all();
         Ok(Direct {
@@ -298,22 +308,7 @@ impl Writer {
         })
     }
 
-    /// As [`Self::supersede`], before the session is deleted, so that nothing writes it
-    /// again; returns the board that was not written.
-    pub(super) fn forget(&self, session_id: &str) -> StoreResult<Option<RuntimeState>> {
-        let mut state = self.lock();
-        let board = Self::drop_locked(&mut state, session_id, "the session was deleted", true)?;
-        drop(state);
-        self.shared.changed.notify_all();
-        Ok(board)
-    }
-
-    fn drop_locked(
-        state: &mut State,
-        session_id: &str,
-        reason: &str,
-        deleted: bool,
-    ) -> StoreResult<Option<RuntimeState>> {
+    fn reserve_locked(state: &mut State, session_id: &str) -> StoreResult<()> {
         if state.writing.as_ref().is_some_and(|(writing, _)| writing == session_id)
             || state.writing_parks.as_deref() == Some(session_id)
             || state.direct.contains(session_id)
@@ -322,19 +317,19 @@ impl Writer {
                 "Horizon is still saving session {session_id}; try again in a moment"
             )));
         }
-        if deleted {
-            state.parks.remove(session_id);
+        state.direct.insert(session_id.to_owned());
+        Ok(())
+    }
+
+    fn drop_queued(state: &mut State, session_id: &str, reason: &str) {
+        if state.queued.remove(session_id).is_some() {
+            let failure = Failure {
+                generation: state.next,
+                reason: reason.to_owned(),
+                wait: FIRST_RETRY,
+            };
+            state.failed.insert(session_id.to_owned(), failure);
         }
-        let Some(queued) = state.queued.remove(session_id) else {
-            return Ok(None);
-        };
-        let failure = Failure {
-            generation: state.next,
-            reason: reason.to_owned(),
-            wait: FIRST_RETRY,
-        };
-        state.failed.insert(session_id.to_owned(), failure);
-        Ok(Some(queued.board))
     }
 
     fn run(&self, store: &SessionStore) {
@@ -446,6 +441,18 @@ impl Writer {
 pub(super) struct Direct<'a> {
     writer: &'a Writer,
     session_id: String,
+}
+
+impl Direct<'_> {
+    /// Drops the queued board and park records of the session, which is deleted, so that
+    /// nothing writes it again.
+    pub(super) fn forget(&self) {
+        let mut state = self.writer.lock();
+        state.parks.remove(&self.session_id);
+        Writer::drop_queued(&mut state, &self.session_id, "the session was deleted");
+        drop(state);
+        self.writer.shared.changed.notify_all();
+    }
 }
 
 impl Drop for Direct<'_> {

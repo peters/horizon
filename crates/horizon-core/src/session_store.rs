@@ -211,10 +211,9 @@ impl SessionStore {
                 "cannot delete live session {session_id} while it is still active"
             )));
         }
-
-        // Refused while the writer saves the session, so that no write recreates it.
-        let unwritten = self.writer.forget(session_id)?;
-        if let Some(runtime_state) = unwritten.map_or_else(|| self.load_runtime(session_id), |board| Ok(Some(board)))? {
+        // The writer leaves the session alone and keeps its board until the delete succeeds.
+        let direct = self.writer.reserve(session_id)?;
+        if let Some(runtime_state) = self.load_runtime(session_id)? {
             for workspace in &runtime_state.workspaces {
                 for panel in &workspace.panels {
                     if panel.kind == crate::panel::PanelKind::Browser {
@@ -236,6 +235,7 @@ impl SessionStore {
         self.index.forget(session_id);
         remove_dir_if_exists(&self.home.session_dir(session_id))?;
         self.update_session_index(|index| index.remove_profile_session(&self.profile_id, session_id))?;
+        direct.forget();
         Ok(())
     }
 

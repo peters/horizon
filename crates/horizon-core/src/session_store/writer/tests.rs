@@ -99,7 +99,7 @@ fn a_session_that_cannot_be_saved_does_not_hold_up_the_others() {
     );
     assert!(!store.runtime_states_pending(), "a failed board is not pending");
     // The writer may try the broken board again just now.
-    while store.writer.forget("broken").is_err() {
+    while store.writer.reserve("broken").map(|direct| direct.forget()).is_err() {
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(store.flush_runtime_states(Duration::ZERO));
@@ -140,7 +140,7 @@ fn the_writer_leaves_a_session_alone_while_a_save_outside_the_queue_writes_it() 
         "one direct save at a time"
     );
     assert!(
-        store.writer.forget("session").is_err(),
+        store.writer.reserve("session").is_err(),
         "a delete waits for the direct save"
     );
     let generation = store.queue_runtime_state("session", board("queued"));
@@ -219,7 +219,7 @@ fn park_records_of_a_session_that_cannot_be_saved_do_not_pile_up() {
         !store.writer.lock().parks.contains_key("broken"),
         "a record of a panel that left the board is dropped, so it cannot add the panel back"
     );
-    while store.writer.forget("broken").is_err() {
+    while store.writer.reserve("broken").map(|direct| direct.forget()).is_err() {
         std::thread::sleep(Duration::from_millis(5));
     }
 }

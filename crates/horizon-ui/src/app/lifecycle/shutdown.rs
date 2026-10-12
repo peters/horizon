@@ -274,4 +274,96 @@ mod tests {
             BrowserShutdownOutcome::ForcedCleanupFailed
         ));
     }
+
+    #[cfg(unix)]
+    mod session_saves {
+        use std::time::{Duration, Instant};
+
+        use horizon_core::{RuntimeState, StartupDecision};
+
+        use crate::app::HorizonApp;
+        use crate::app::test_support::{editor_workspace_state, test_app_with_startup};
+
+        fn persistent_app() -> (tempfile::TempDir, HorizonApp, String, std::path::PathBuf) {
+            let state = RuntimeState {
+                workspaces: vec![editor_workspace_state("workspace", [0.0, 0.0])],
+                ..RuntimeState::default()
+            };
+            let (temp, _ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+                runtime_state: Box::new(state.clone()),
+            });
+            let session = app.session_store.create_session_from_runtime(state).expect("session");
+            app.activate_persistent_session(&session);
+            app.root_viewport_stabilizer = None;
+            crate::app::test_support::wait_for_session_saves(&app);
+            (temp, app, session.session_id, session.runtime_state_path)
+        }
+
+        /// Calls the exit hook on each frame until it lets the exit go, and returns how long it held.
+        fn frames_until_exit(app: &mut HorizonApp) -> Duration {
+            let started = Instant::now();
+            while app.session_saves_hold_exit() {
+                assert!(started.elapsed() < Duration::from_secs(30), "the exit is never let go");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            started.elapsed()
+        }
+
+        #[test]
+        fn the_exit_queues_the_last_save_once_and_frames_do_not_wait_for_the_disk() {
+            let (_temp, mut app, session_id, _) = persistent_app();
+            // A named pipe at the session index holds the writer in the last save until the
+            // test answers it.
+            let index = app.session_store.home().session_index_path();
+            let saved_index = std::fs::read_to_string(&index).unwrap();
+            std::fs::remove_file(&index).unwrap();
+            assert!(
+                std::process::Command::new("mkfifo")
+                    .arg(&index)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            let before = app.session_store.queued_runtime_state(&session_id);
+            let started = Instant::now();
+            assert!(app.session_saves_hold_exit(), "the exit waits for the last save");
+            let last = app.session_store.queued_runtime_state(&session_id);
+            assert!(last > before, "the first exit frame queues the last save");
+            for _ in 0..20 {
+                assert!(app.session_saves_hold_exit());
+            }
+            assert_eq!(
+                app.session_store.queued_runtime_state(&session_id),
+                last,
+                "the last save is queued once"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "a frame never waits for the disk"
+            );
+            std::fs::write(&index, saved_index).unwrap();
+            frames_until_exit(&mut app);
+            assert!(
+                app.session_store.flush_runtime_states(Duration::ZERO),
+                "the last save is durable"
+            );
+        }
+
+        #[test]
+        fn the_exit_does_not_wait_for_a_last_save_that_fails() {
+            let (_temp, mut app, _, runtime) = persistent_app();
+            // A folder where the board goes refuses every save of the session.
+            std::fs::remove_file(&runtime).unwrap();
+            std::fs::create_dir(&runtime).unwrap();
+            let held = frames_until_exit(&mut app);
+            assert!(
+                held < super::super::MAX_SHUTDOWN_WAIT / 2,
+                "a failed save lets the exit go before the shutdown limit"
+            );
+            assert!(
+                !app.session_store.flush_runtime_states(Duration::ZERO),
+                "the save failed"
+            );
+        }
+    }
 }
