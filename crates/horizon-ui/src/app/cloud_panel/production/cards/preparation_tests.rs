@@ -180,3 +180,115 @@ fn the_desktop_viewer_waits_for_a_preparation() {
         Some("Wait until the cloud has saved its session and record")
     );
 }
+
+#[test]
+fn deletion_waits_for_the_operation_that_runs() {
+    let ctx = egui::Context::default();
+    crate::theme::apply(&ctx, horizon_core::AppearanceTheme::Dark);
+    let record: Deployment = serde_json::from_value(serde_json::json!({
+        "version":1,"cloud_id":"operating","repository":"/synthetic","revision":"a",
+        "profile":{"provider":"runpod","image":"example.invalid/team/worker","cpu":8,"memory_gb":32,"gpu":false},
+        "stage":"Provision","operation":{"state":"bound","worker_id":"worker1"},"spec":null,"worker":null,"sessions":[]
+    }))
+    .unwrap();
+    let shown = |runtime: &mut super::super::Runtime| -> Vec<String> {
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::Vec2::new(1200.0, 2000.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let _ = runtime_actions(ui, 1, runtime);
+            },
+        )
+        .discard_textures()
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+            _ => None,
+        })
+        .collect()
+    };
+    let (_sender, receiver) = std::sync::mpsc::channel();
+    let mut runtime = super::super::Runtime {
+        stage: Some(Stage::Provision),
+        state: Some(record),
+        receiver: Some(receiver),
+        ..Default::default()
+    };
+    let texts = shown(&mut runtime);
+    assert!(texts.iter().any(|text| text == "Cancel operation"), "{texts:?}");
+    assert!(
+        !texts.iter().any(|text| text == "Delete cloud resources…"),
+        "a reconnect that runs offers no deletion: {texts:?}"
+    );
+    // A resize that reported Ready before its result arrived still holds the cloud.
+    let (_sender, receiver) = std::sync::mpsc::channel();
+    runtime.receiver = Some(receiver);
+    runtime.stage = Some(Stage::Ready);
+    runtime.resize = super::super::resize::State::running_for_test();
+    let texts = shown(&mut runtime);
+    assert!(
+        !texts.iter().any(|text| text == "Delete cloud resources…"),
+        "a resize that runs offers no deletion: {texts:?}"
+    );
+    runtime.resize = super::super::resize::State::default();
+    runtime.receiver = None;
+    runtime.stage = Some(Stage::Provision);
+    let texts = shown(&mut runtime);
+    assert!(texts.iter().any(|text| text == "Delete cloud resources…"), "{texts:?}");
+}
+
+#[test]
+#[cfg(unix)]
+fn a_released_cloud_warns_that_a_session_is_not_recorded_and_offers_its_actions() {
+    let ctx = egui::Context::default();
+    crate::theme::apply(&ctx, horizon_core::AppearanceTheme::Dark);
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("released");
+    let record: Deployment = serde_json::from_value(serde_json::json!({
+        "version":1,"cloud_id":"released","repository":"/synthetic","revision":"a",
+        "profile":{"provider":"runpod","image":"example.invalid/team/worker","cpu":8,"memory_gb":32,"gpu":false},
+        "stage":"Stopped","operation":{"state":"bound","worker_id":"worker1"},"spec":null,"worker":null,"sessions":[]
+    }))
+    .unwrap();
+    let mut runtime = super::super::Runtime {
+        stage: Some(Stage::Stopped),
+        state: Some(record.clone()),
+        sessions: super::super::session_record::Sessions::released_for_test(&directory, record),
+        ..Default::default()
+    };
+    let output = ctx
+        .run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::Vec2::new(1200.0, 2000.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let _ = runtime_actions(ui, 1, &mut runtime);
+            },
+        )
+        .discard_textures();
+    super::super::session_record::Sessions::end_for_test(&directory);
+    let texts: Vec<String> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+            _ => None,
+        })
+        .collect();
+    let joined = texts.join(" ");
+    assert!(joined.contains("is not in this cloud's record yet"), "{texts:?}");
+    assert!(
+        texts.iter().any(|text| text == "Resume worker"),
+        "the actions are back: {texts:?}"
+    );
+}

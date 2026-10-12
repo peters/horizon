@@ -39,7 +39,7 @@ impl HorizonApp {
         self.git_watchers.clear();
         self.abandon_device_reveals("Horizon is exiting");
         self.panel_render_caches.device_ui_state.clear();
-        self.retire_pending_browser_closes_for_shutdown();
+        self.retire_browser_requests();
         let mut progress = self
             .pending_session_switch
             .take()
@@ -83,6 +83,11 @@ impl HorizonApp {
             };
         }
         if !shutdown_ready_to_exit(complete, timed_out, browser_outcome) {
+            return;
+        }
+        // Requests claimed and results queued are answered before the exit,
+        // within a bound, so no agent waits for a request Horizon took.
+        if self.browser_host_io_holds_exit() {
             return;
         }
         // Browser sessions publish their committed URL before resolving the
@@ -147,7 +152,11 @@ impl HorizonApp {
         self.wait_for_saved_session_deletion();
         #[cfg(target_os = "linux")]
         self.observed_keyboard_inputs.clear_native_transfer_files();
+        self.retire_browser_requests();
         self.exit_cleanup_complete = true;
+        // Outcomes that the flush applies can still change the board, so they
+        // land before the saves below.
+        self.flush_browser_host_io();
         let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();
         if let Some(progress) = self

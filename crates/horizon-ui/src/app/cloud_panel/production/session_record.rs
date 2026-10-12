@@ -1,13 +1,19 @@
 //! The sessions new cloud panels add to their cloud's record. A worker thread saves the
 //! record, so a slow disk never stalls a frame. While that save runs it holds the record's
 //! lock, so the record it saves is where the next panel looks and adds its session. A save
-//! that fails is retried until it holds every session, and the cloud stays busy until then:
-//! no operation saves a record that lacks the session of a running panel.
+//! that fails is retried, and the cloud stays busy: no operation saves a record that lacks
+//! the session of a running panel.
+//!
+//! A save that fails for [`RELEASE_AFTER`] releases the cloud, so the person can stop a
+//! worker that bills: it gives up the record's lock, the cloud is no longer busy, and the
+//! card warns that a panel's session is not in the record. Other operations, deletion
+//! among them, then save the record, and each later try adds the sessions the record
+//! lacks to the record it finds. A deleted cloud ends the save.
 //!
 //! A save belongs to its cloud, not to the runtime that started it: a session switch drops
 //! the runtimes but keeps the clouds, so a later runtime of the same cloud finds the save
-//! and joins or waits for it. A save ends only once it recorded every session; deleting
-//! the cloud locks the record, so it cannot start while a save runs.
+//! and joins or waits for it. A save ends once it recorded every session, or once its
+//! cloud's folder or record is gone.
 use super::{HorizonApp, Store, cloud_runtime};
 use cloud_runtime::state::Deployment;
 use std::{
@@ -15,13 +21,19 @@ use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, PoisonError},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// How long a failed save waits before it tries again; each failure doubles it up to
 /// [`LAST_RETRY`].
 const FIRST_RETRY: Duration = Duration::from_millis(250);
 const LAST_RETRY: Duration = Duration::from_secs(5);
+/// How long a save may fail before it gives up the record's lock: then the cloud is no
+/// longer busy, so the person can stop a worker that bills, and the save goes on trying.
+#[cfg(not(test))]
+const RELEASE_AFTER: Duration = Duration::from_secs(60);
+#[cfg(test)]
+const RELEASE_AFTER: Duration = Duration::from_secs(2);
 
 /// Every running save, by the cloud directory whose record it holds.
 static FLIGHTS: Mutex<BTreeMap<PathBuf, Arc<Mutex<Flight>>>> = Mutex::new(BTreeMap::new());
@@ -42,6 +54,10 @@ struct Flight {
     done: bool,
     /// Why the save failed, while it tries again.
     failure: Option<String>,
+    /// The save failed for [`RELEASE_AFTER`] and gave up the record's lock: the cloud is not
+    /// busy, other operations save the record, and each later try adds the missing
+    /// sessions to the record it then finds.
+    released: bool,
 }
 
 /// The save that runs for the cloud in `directory`, if any.
@@ -111,6 +127,22 @@ impl Sessions {
         if let Some(flight) = running(directory) {
             self.track(Arc::clone(&flight));
             let mut flight = flight.lock().unwrap_or_else(PoisonError::into_inner);
+            if !flight.done && flight.released {
+                // Other operations save the record since the save released it: change the
+                // record they saved, with the sessions the save still adds.
+                let store = Store::lock(directory)?;
+                let mut record = store
+                    .load()?
+                    .ok_or(cloud_runtime::Error::Invalid("Missing cloud deployment"))?;
+                drop(store);
+                add_missing_sessions(&mut record, &flight.record);
+                let (value, changed) = change(&mut record);
+                flight.record = record;
+                if changed {
+                    flight.generation += 1;
+                }
+                return Ok(value);
+            }
             if !flight.done {
                 let (value, changed) = change(&mut flight.record);
                 if changed {
@@ -130,6 +162,7 @@ impl Sessions {
                 generation: 0,
                 done: false,
                 failure: None,
+                released: false,
             }));
             self.track(Arc::clone(&flight));
             FLIGHTS
@@ -146,10 +179,19 @@ impl Sessions {
     /// try again. Operations that lock the record wait for it: the UI counts the cloud as
     /// busy, and work already started waits on its own thread through [`fence`].
     pub(super) fn saving(&self) -> bool {
-        self.flight
-            .borrow()
-            .as_ref()
-            .is_some_and(|flight| !flight.lock().unwrap_or_else(PoisonError::into_inner).done)
+        self.flight.borrow().as_ref().is_some_and(|flight| {
+            let flight = flight.lock().unwrap_or_else(PoisonError::into_inner);
+            !flight.done && !flight.released
+        })
+    }
+
+    /// A save that failed for so long that it released the cloud: a panel's session is
+    /// not in the record yet, so Stop, Resume or a rebuild would not restart that panel.
+    pub(super) fn unrecorded(&self) -> bool {
+        self.flight.borrow().as_ref().is_some_and(|flight| {
+            let flight = flight.lock().unwrap_or_else(PoisonError::into_inner);
+            !flight.done && flight.released
+        })
     }
 
     /// Why the save still fails, once for each runtime that holds it.
@@ -168,7 +210,7 @@ impl Sessions {
     #[cfg(all(test, unix))]
     pub(super) fn wait(&self) {
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
-        while self.saving() {
+        while self.saving() || self.unrecorded() {
             assert!(std::time::Instant::now() < deadline, "a session save did not finish");
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -182,12 +224,23 @@ impl Sessions {
             generation: 0,
             done: false,
             failure: None,
+            released: false,
         }));
         FLIGHTS
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(directory.to_path_buf(), Arc::clone(&flight));
         Self::of(directory)
+    }
+
+    /// A save that failed so long that it released the cloud, as [`Self::unrecorded`] says.
+    #[cfg(all(test, unix))]
+    pub(super) fn released_for_test(directory: &Path, record: Deployment) -> Self {
+        let sessions = Self::saving_for_test(directory, record);
+        if let Some(flight) = sessions.flight.borrow().as_ref() {
+            flight.lock().unwrap_or_else(PoisonError::into_inner).released = true;
+        }
+        sessions
     }
 
     /// Ends the save that [`Self::saving_for_test`] made, so it holds no later exit check.
@@ -203,7 +256,8 @@ impl Sessions {
     pub(super) fn saving_record(&self) -> Option<Deployment> {
         let flight = self.flight.borrow();
         let flight = flight.as_ref()?.lock().unwrap_or_else(PoisonError::into_inner);
-        (!flight.done).then(|| flight.record.clone())
+        // A released save's record is not the saved one: other operations save that.
+        (!flight.done && !flight.released).then(|| flight.record.clone())
     }
 }
 
@@ -235,10 +289,13 @@ pub(super) struct Fence(Option<Arc<Mutex<Flight>>>);
 
 impl Fence {
     /// Waits on this worker thread until that save recorded every session and released
-    /// the record's lock.
+    /// the record's lock, or gave the lock up after failing for too long.
     pub(super) fn wait(&self) {
         let Some(flight) = &self.0 else { return };
-        while !flight.lock().unwrap_or_else(PoisonError::into_inner).done {
+        while {
+            let flight = flight.lock().unwrap_or_else(PoisonError::into_inner);
+            !flight.done && !flight.released
+        } {
             std::thread::sleep(Duration::from_millis(5));
         }
     }
@@ -248,45 +305,141 @@ impl Fence {
 /// released before the flight says it is done, so a reader that sees it done can lock. A
 /// failed save is shown and tried again until it succeeds, unless the cloud's folder is
 /// gone: no session can be recorded there, and what reads the record next finds it missing.
+/// A save that fails for [`RELEASE_AFTER`] gives up the lock (see [`Flight::released`]).
 fn save(store: Store, directory: &Path, flight: &Arc<Mutex<Flight>>, repaint: Option<egui::Context>) {
+    let mut store = Some(store);
     let mut retry = FIRST_RETRY;
+    let mut failing = None;
     loop {
-        let (record, generation) = {
-            let flight = flight.lock().unwrap_or_else(PoisonError::into_inner);
-            (flight.record.clone(), flight.generation)
-        };
-        match store.save(&record) {
-            Ok(()) => {
-                let held = flight.lock().unwrap_or_else(PoisonError::into_inner);
-                if held.generation == generation {
-                    land(store, held, directory, flight, repaint);
-                    return;
-                }
-            }
-            // Only a folder that is really gone ends the save; an unreadable one is retried.
-            Err(error)
-                if std::fs::metadata(directory).is_err_and(|gone| gone.kind() == std::io::ErrorKind::NotFound) =>
-            {
-                tracing::warn!(directory = %directory.display(), %error, "a cloud's folder is gone; its sessions are not recorded");
-                let held = flight.lock().unwrap_or_else(PoisonError::into_inner);
-                land(store, held, directory, flight, repaint);
+        let error = match store.take().map_or_else(
+            || attempt_released(directory, flight),
+            |held| attempt_held(held, flight),
+        ) {
+            Attempt::Gone(held) => {
+                tracing::warn!(directory = %directory.display(), "a cloud's record is gone; its sessions are not recorded");
+                let flight_held = flight.lock().unwrap_or_else(PoisonError::into_inner);
+                land(held, flight_held, directory, flight, repaint);
                 return;
             }
-            Err(error) => {
-                let mut held = flight.lock().unwrap_or_else(PoisonError::into_inner);
-                if held.failure.is_none() {
-                    held.failure = Some(format!(
-                        "Could not record the session of a new cloud panel: {error}. Horizon tries again; \
-                         the cloud waits until it is recorded"
-                    ));
-                    if let Some(ctx) = &repaint {
-                        ctx.request_repaint();
-                    }
+            Attempt::Saved { held, generation, keep } => {
+                // Checked under the flight's lock that marks the save done, so no panel adds
+                // a session between this check and the end.
+                let flight_held = flight.lock().unwrap_or_else(PoisonError::into_inner);
+                if flight_held.generation == generation {
+                    land(held, flight_held, directory, flight, repaint);
+                    return;
                 }
-                drop(held);
-                std::thread::sleep(retry);
-                retry = (retry * 2).min(LAST_RETRY);
+                drop(flight_held);
+                store = if keep { held } else { None };
+                failing = None;
+                continue;
             }
+            Attempt::Failed(held, error) => {
+                store = held;
+                error
+            }
+        };
+        if std::fs::metadata(directory).is_err_and(|gone| gone.kind() == std::io::ErrorKind::NotFound) {
+            // Only a folder that is really gone ends the save; an unreadable one is retried.
+            tracing::warn!(directory = %directory.display(), %error, "a cloud's folder is gone; its sessions are not recorded");
+            let flight_held = flight.lock().unwrap_or_else(PoisonError::into_inner);
+            land(store, flight_held, directory, flight, repaint);
+            return;
+        }
+        let since = *failing.get_or_insert_with(Instant::now);
+        let mut held = flight.lock().unwrap_or_else(PoisonError::into_inner);
+        if held.failure.is_none() {
+            held.failure = Some(format!(
+                "Could not record the session of a new cloud panel: {error}. Horizon tries again, \
+                 and the cloud waits for it for up to a minute"
+            ));
+            if let Some(ctx) = &repaint {
+                ctx.request_repaint();
+            }
+        }
+        if store.is_some() && since.elapsed() >= RELEASE_AFTER {
+            // The cloud waited long enough: Stop and the other operations may lock the
+            // record again, and this save adds its sessions to the record it finds later.
+            store = None;
+            held.released = true;
+            tracing::warn!(directory = %directory.display(), "a cloud panel session is still not recorded; the cloud is released");
+            if let Some(ctx) = &repaint {
+                ctx.request_repaint();
+            }
+        }
+        drop(held);
+        std::thread::sleep(retry);
+        retry = (retry * 2).min(LAST_RETRY);
+    }
+}
+
+/// What one try to save the record did. `held` is the record's lock, while held.
+enum Attempt {
+    /// Saved the flight's record at `generation`; `keep` the lock for the next try if a
+    /// panel added a session meanwhile.
+    Saved {
+        held: Option<Store>,
+        generation: u64,
+        keep: bool,
+    },
+    /// The record is gone, so no session can be recorded.
+    Gone(Option<Store>),
+    Failed(Option<Store>, String),
+}
+
+/// Saves the flight's record under the lock the save holds.
+fn attempt_held(store: Store, flight: &Arc<Mutex<Flight>>) -> Attempt {
+    let (record, generation) = {
+        let flight = flight.lock().unwrap_or_else(PoisonError::into_inner);
+        (flight.record.clone(), flight.generation)
+    };
+    match store.save(&record) {
+        Ok(()) => Attempt::Saved {
+            held: Some(store),
+            generation,
+            keep: true,
+        },
+        Err(error) => Attempt::Failed(Some(store), error.to_string()),
+    }
+}
+
+/// After the save released the cloud: locks the record if nothing else holds it, adds the
+/// flight's sessions that the record lacks to the record as other operations saved it,
+/// and saves that. A cloud whose folder or record is gone ends the save, and its folder
+/// is not made again.
+fn attempt_released(directory: &Path, flight: &Arc<Mutex<Flight>>) -> Attempt {
+    let store = match Store::lock_existing(directory) {
+        Ok(store) => store,
+        Err(_) if std::fs::metadata(directory).is_err_and(|gone| gone.kind() == std::io::ErrorKind::NotFound) => {
+            return Attempt::Gone(None);
+        }
+        Err(error) => return Attempt::Failed(None, error.to_string()),
+    };
+    let mut record = match store.load() {
+        Ok(Some(record)) => record,
+        Ok(None) => return Attempt::Gone(Some(store)),
+        Err(error) => return Attempt::Failed(None, error.to_string()),
+    };
+    let generation = {
+        let flight = flight.lock().unwrap_or_else(PoisonError::into_inner);
+        add_missing_sessions(&mut record, &flight.record);
+        flight.generation
+    };
+    match store.save(&record) {
+        Ok(()) => Attempt::Saved {
+            held: Some(store),
+            generation,
+            keep: false,
+        },
+        Err(error) => Attempt::Failed(None, error.to_string()),
+    }
+}
+
+/// Adds to `record` each session of `from` that it lacks.
+fn add_missing_sessions(record: &mut Deployment, from: &Deployment) {
+    for session in &from.sessions {
+        if !record.sessions.iter().any(|saved| saved.panel_id == session.panel_id) {
+            record.sessions.push(session.clone());
         }
     }
 }
@@ -295,7 +448,7 @@ fn save(store: Store, directory: &Path, flight: &Arc<Mutex<Flight>>, repaint: Op
 /// `held` is the flight, locked since the save was found to hold every change, so no
 /// panel adds a session between that check and the end.
 fn land(
-    store: Store,
+    store: Option<Store>,
     mut held: std::sync::MutexGuard<'_, Flight>,
     directory: &Path,
     flight: &Arc<Mutex<Flight>>,
@@ -549,5 +702,71 @@ mod tests {
             ["panel"],
             "the session is recorded once the folder can be read"
         );
+    }
+
+    #[test]
+    fn a_save_that_keeps_failing_releases_the_cloud_and_keeps_what_others_saved() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("fixture");
+        let record: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"fixture","repository":"/synthetic","revision":"a".repeat(40),
+            "profile":{"provider":"runpod","image":"example/worker","cpu":4,"memory_gb":8},
+            "stage":"Ready","operation":{"state":"bound","worker_id":"worker"},"spec":null,"sessions":[]
+        }))
+        .unwrap();
+        Store::lock(&directory).unwrap().save(&record).unwrap();
+        let sessions = Sessions::default();
+        set_writable(&directory, false);
+        sessions
+            .with_record(&directory, None, |record| {
+                record.sessions.push(session("panel"));
+                ((), true)
+            })
+            .unwrap();
+        assert!(sessions.saving(), "the cloud waits for the save at first");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !sessions.unrecorded() {
+            assert!(Instant::now() < deadline, "the save did not release the cloud");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!sessions.saving(), "a released cloud is not busy");
+        assert!(
+            Sessions::of(&directory).saving_record().is_none(),
+            "a runtime a session switch rebuilds reads the record from disk, not the save's copy"
+        );
+        fence(&directory).wait();
+        // Stop takes the record's lock while the folder is still read-only, so the save
+        // cannot record its session first; a try of the save holds the lock only briefly.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let store = loop {
+            if let Ok(store) = Store::lock_existing(&directory) {
+                break store;
+            }
+            assert!(Instant::now() < deadline, "the save never gave up the record's lock");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        set_writable(&directory, true);
+        let mut stopped = store.load().unwrap().unwrap();
+        assert!(stopped.sessions.is_empty(), "the session was not recorded yet");
+        stopped.stage = cloud_runtime::Stage::Stopped;
+        store.save(&stopped).unwrap();
+        drop(store);
+        // A panel added now sees the record Stop saved, not the save's old copy.
+        let seen = sessions
+            .with_record(&directory, None, |record| {
+                record.sessions.push(session("later"));
+                (record.stage, true)
+            })
+            .unwrap();
+        assert_eq!(seen, cloud_runtime::Stage::Stopped, "a new panel reads what Stop saved");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while sessions.unrecorded() {
+            assert!(Instant::now() < deadline, "the session was never recorded");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let saved = Store::lock(&directory).unwrap().load().unwrap().unwrap();
+        assert_eq!(saved.stage, cloud_runtime::Stage::Stopped, "what Stop saved is kept");
+        let ids: Vec<_> = saved.sessions.iter().map(|session| session.panel_id.as_str()).collect();
+        assert_eq!(ids, ["panel", "later"], "both sessions are added to that record");
     }
 }

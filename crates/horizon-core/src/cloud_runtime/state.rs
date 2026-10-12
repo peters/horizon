@@ -155,6 +155,14 @@ impl Store {
     pub fn lock(root: &Path) -> Result<Self> {
         crate::session_store::require_directory_durability()?;
         std::fs::create_dir_all(root)?;
+        Self::lock_existing(root)
+    }
+    /// As [`Self::lock`] for a cloud whose folder exists: a removed folder is not made
+    /// again, and the lock fails with the folder's `NotFound` instead.
+    /// # Errors
+    /// As [`Self::lock`], and a missing folder.
+    pub fn lock_existing(root: &Path) -> Result<Self> {
+        crate::session_store::require_directory_durability()?;
         let file = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -167,6 +175,14 @@ impl Store {
             lock_file: file,
         })
     }
+
+    /// Whether this host keeps cloud records. Where it does not, no controller can lock
+    /// or operate on one.
+    #[must_use]
+    pub fn supported() -> bool {
+        crate::session_store::require_directory_durability().is_ok()
+    }
+
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
@@ -228,6 +244,22 @@ impl Drop for Store {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    // Cloud records need directory durability, which only Unix hosts have.
+    #[cfg(unix)]
+    fn a_lock_on_a_removed_folder_does_not_make_it_again() {
+        let temp = tempfile::tempdir().unwrap();
+        let removed = temp.path().join("removed");
+        assert!(super::Store::lock_existing(&removed).is_err());
+        assert!(!removed.exists(), "the folder is not made again");
+        let kept = super::Store::lock(&removed).unwrap();
+        drop(kept);
+        assert!(
+            super::Store::lock_existing(&removed).is_ok(),
+            "an existing folder locks"
+        );
+    }
+
     use super::*;
     #[test]
     fn only_a_bound_running_reachable_worker_with_its_source_is_ready() {

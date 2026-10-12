@@ -53,6 +53,22 @@ impl CloudPrototype {
 }
 
 impl HorizonApp {
+    /// Replaces the board with a saved cloud prototype board. As a session
+    /// switch does, it first retires the old board and lets the coordination
+    /// work asked for on it end, before the restored panels start, so a claim
+    /// of the old board takes no request of the new one.
+    pub(super) fn restore_cloud_prototype_board(
+        &mut self,
+        runtime: &horizon_core::RuntimeState,
+    ) -> horizon_core::Result<()> {
+        self.browser_create_host.io.replace_board();
+        self.finish_browser_host_io_before_replacement();
+        let board = Board::from_runtime_state_with_transcripts(runtime, self.transcript_root.as_deref())?;
+        self.reset_native_file_input();
+        self.board = board;
+        Ok(())
+    }
+
     pub(super) fn prepare_cloud_prototype(&mut self, ctx: &egui::Context) {
         if std::env::var_os("HORIZON_CLOUD_MOCK_DIR").is_none() {
             self.prepare_production_clouds(ctx);
@@ -75,13 +91,8 @@ impl HorizonApp {
                     let fresh = snapshot.is_none();
                     if let Some(mut snapshot) = snapshot {
                         snapshot.runtime.browser = self.template_config.browser.clone();
-                        match Board::from_runtime_state_with_transcripts(
-                            &snapshot.runtime,
-                            self.transcript_root.as_deref(),
-                        ) {
-                            Ok(board) => {
-                                self.reset_native_file_input();
-                                self.board = board;
+                        match self.restore_cloud_prototype_board(&snapshot.runtime) {
+                            Ok(()) => {
                                 self.cloud_prototype.groups = snapshot.groups;
                                 self.cloud_prototype.groups.restore_visibility(&mut self.board);
                                 if let Some(view) = snapshot.runtime.canvas_view {
