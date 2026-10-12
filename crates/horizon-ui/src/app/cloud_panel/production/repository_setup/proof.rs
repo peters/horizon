@@ -449,6 +449,14 @@ impl Job {
 
     fn build(&self, setup: &super::snapshot::Setup, log: &mut Option<std::fs::File>) -> Result<(), String> {
         let config = setup.config()?;
+        // Deployment layers each same-worker companion's recipe on the image and checks
+        // the layered result; this proof builds only the profiles' own images, so it
+        // does not call such a setup proved.
+        if let Some((name, _)) = config.same_worker_siblings().next() {
+            return Err(format!(
+                "the setup declares the same-worker companion {name}; Horizon cannot prove same-worker companions yet, so leave them out of this setup"
+            ));
+        }
         // The agent CLI releases deployment would pin, so every build gets its arguments.
         let releases =
             horizon_core::cloud_runtime::image::agents::latest(&horizon_core::cloud_runtime::Cancellation::default())

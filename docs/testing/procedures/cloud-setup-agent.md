@@ -3,7 +3,7 @@ procedure: cloud-setup-agent
 feature: Set up from CI in New cloud (setup agent and Horizon's proof)
 platforms: [linux]
 cost: none
-destructive: no
+destructive: yes
 secrets: [the local login of the agent (Codex or Claude)]
 owner: peters
 ---
@@ -178,12 +178,18 @@ setup** commits `.horizon` and reads it as the repository profile.
 
 ## 8. Cleanup
 
+> **CAUTION:** THE NEXT STEP REMOVES DOCKER IMAGES AND VOLUMES. Remove only the
+> names that start with `horizon-setup-ci-app-`.
+
 1. Find the proof image and volume with
    `docker images --format '{{.Repository}}' | grep '^horizon-setup-ci-app-'` and
    `docker volume ls --format '{{.Name}}' | grep '^horizon-setup-ci-app-'`, then remove
    each with `docker rmi <name>:candidate` and `docker volume rm <name>`.
 
    Result: The two commands no longer list them.
+
+> **CAUTION:** THE NEXT STEP DELETES A FOLDER. Make sure that the path is the
+> fixture copy `<home>/smoke/ci-app` and not a real repository.
 
 2. Delete `<home>/smoke/ci-app`.
 

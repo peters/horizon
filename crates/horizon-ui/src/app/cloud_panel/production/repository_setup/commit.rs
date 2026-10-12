@@ -69,7 +69,7 @@ fn entries_of(repository: &Path, read: &[(String, super::untrusted::Entry)]) -> 
         // Every object goes in through standard input: git opens nothing the agent wrote.
         let (mode, content) = match entry {
             Entry::Folder => continue,
-            Entry::Link(target) => ("120000", target.to_string_lossy().replace('\\', "/").into_bytes()),
+            Entry::Link(target) => ("120000", super::untrusted::link_bytes(target)),
             Entry::File { executable, content } => (if *executable { "100755" } else { "100644" }, content.clone()),
         };
         let object = git(

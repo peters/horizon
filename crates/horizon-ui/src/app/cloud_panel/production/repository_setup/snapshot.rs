@@ -62,7 +62,7 @@ impl Setup {
             // A link counts by its target's name, never followed: no loop, nothing outside.
             match entry {
                 Entry::Folder => record(b"folder", b""),
-                Entry::Link(target) => record(b"link", target.to_string_lossy().as_bytes()),
+                Entry::Link(target) => record(b"link", &super::untrusted::link_bytes(target)),
                 Entry::File { executable, content } => {
                     record(b"mode", if *executable { b"755" } else { b"644" });
                     record(b"file", content);
@@ -214,6 +214,29 @@ mod tests {
             fingerprint(repository.path(), &spec),
             "a link to elsewhere is a change"
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn link_targets_count_by_their_raw_bytes() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let spec = Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": ["test"]})).unwrap();
+        let read = |target: &[u8]| {
+            let repository = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(repository.path().join(".horizon")).unwrap();
+            std::os::unix::fs::symlink(
+                std::ffi::OsStr::from_bytes(target),
+                repository.path().join(".horizon/x"),
+            )
+            .unwrap();
+            fingerprint(repository.path(), &spec).unwrap()
+        };
+        assert_ne!(
+            read(b"a\xff"),
+            read(b"a\xfe"),
+            "two targets that are not UTF-8 stay apart"
+        );
+        assert_ne!(read(b"a\\b"), read(b"a/b"), "a backslash is its own byte");
     }
 
     #[test]

@@ -55,6 +55,20 @@ pub(super) enum Entry {
     Link(PathBuf),
 }
 
+/// A link's target as git stores it: the raw bytes on Unix, so no two targets read as
+/// one; elsewhere with `/` between parts.
+pub(super) fn link_bytes(target: &Path) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        target.as_os_str().as_bytes().to_vec()
+    }
+    #[cfg(not(unix))]
+    {
+        target.to_string_lossy().replace('\\', "/").into_bytes()
+    }
+}
+
 /// What the walk has read so far, against its limits.
 #[derive(Default)]
 struct Budget {
