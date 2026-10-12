@@ -1,8 +1,9 @@
 //! **Use this setup**. Closing the agent's panel only hangs up, so a thread first ends
 //! the agent and everything in its process group, killed if they ignore the hang-up,
 //! and reads the files outside `.horizon`. The same thread then reads the setup once
-//! more, checks it against the proof that passed, checks that a desktop preview the
-//! agent named is still the one its status names and still answers, and commits it.
+//! more, checks it against the proof that passed, checks that the status still asks for
+//! the proof and desktop preview that ran and that the preview still answers, and
+//! commits it.
 //! The dialog keeps drawing meanwhile and only applies what the thread reports.
 use super::agent::AgentProcess;
 use super::commit::{self, Outside};
@@ -52,9 +53,9 @@ struct Accepting {
     proved: Option<[u8; 32]>,
     spec: Option<super::proof::Spec>,
     message: &'static str,
-    /// The desktop preview the agent named, with its request, and the loopback port it
-    /// is live on.
-    preview: Option<(super::preview::Spec, u64)>,
+    /// The proof and the desktop preview the status asked for, and the loopback port the
+    /// preview is live on.
+    asked: super::run::Asked,
     preview_port: Option<u16>,
 }
 
@@ -110,7 +111,7 @@ impl HorizonApp {
             proved: run.proof.as_ref().and_then(|proof| proof.inputs),
             spec: run.proof_spec().cloned(),
             message: run.mode.commit_message(),
-            preview: run.named_preview(),
+            asked: run.asked(),
             preview_port: run.named_preview_port(),
         };
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -205,10 +206,10 @@ impl HorizonApp {
 /// setup is read once, must be the proved one, and is what is committed; files outside
 /// `.horizon` that changed are named first.
 fn accept(accepting: &Accepting, outside: Outside) -> Outcome {
-    // The status as the ended agent left it: a preview it named or changed just before
-    // Use ended it never ran, so the live one must still be the one it names.
-    if super::run::preview_changed_in(&accepting.status_path, accepting.preview.as_ref()) {
-        return Outcome::refused(PREVIEW_CHANGED);
+    // The status as the ended agent left it: a proof or preview it asked for just before
+    // Use ended it never ran, so it must still ask for the ones proved and shown.
+    if super::run::asked_otherwise_in(&accepting.status_path, &accepting.asked) {
+        return Outcome::refused(ASKED_OTHERWISE);
     }
     // The app of a live desktop preview can stop while Use runs.
     if accepting
@@ -291,8 +292,9 @@ fn accept(accepting: &Accepting, outside: Outside) -> Outcome {
 /// What Use says when the desktop preview the agent named is not live as it is pressed.
 const PREVIEW_NOT_LIVE: &str = "The desktop preview stopped, so nothing is committed. The agent hears why; Use this setup returns once the preview is live again.";
 
-/// What Use says when the agent changed its desktop preview just before Use ended it.
-const PREVIEW_CHANGED: &str = "The agent changed the desktop preview in its status file as Use ended it, so the preview it names never ran and nothing is committed. Start the setup again, or Stop.";
+/// What Use says when the agent changed its proof or desktop preview just before Use
+/// ended it.
+const ASKED_OTHERWISE: &str = "The agent changed the proof or the desktop preview in its status file as Use ended it, so what it asks for last was never proved or shown and nothing is committed. Start the setup again, or Stop.";
 
 /// What Use says when the desktop preview stopped answering while Use ran.
 const PREVIEW_STOPPED: &str =

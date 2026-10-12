@@ -80,17 +80,35 @@ fn watch_status(path: PathBuf, ctx: egui::Context, alive: std::sync::Weak<()>) -
     receiver
 }
 
-/// Whether the status file at `path` names a desktop preview other than `shown` now:
-/// another spec or request, one Horizon cannot start, or none. A file that cannot be
-/// read or parsed changes nothing, as for the dialog, which keeps the last good status.
-pub(super) fn preview_changed_in(path: &std::path::Path, shown: Option<&(preview::Spec, u64)>) -> bool {
-    let Some(status) = super::untrusted::read_regular(path, STATUS_LIMIT)
+/// What a status asks Horizon for, which Use reads again once the agent has ended: the
+/// proof and the desktop preview, each with its request, and whether the preview is one
+/// Horizon cannot start.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct Asked {
+    proof: Option<(proof::Spec, u64)>,
+    preview: Option<(preview::Spec, u64)>,
+    preview_invalid: bool,
+}
+
+impl Asked {
+    fn of(status: &Status) -> Self {
+        Self {
+            proof: status.proof.clone().map(|spec| (spec, status.proof_request)),
+            preview: status.preview.clone().map(|spec| (spec, status.preview_request)),
+            preview_invalid: status.preview_invalid,
+        }
+    }
+}
+
+/// Whether the status file at `path` asks for something other than `asked` now: another
+/// proof or preview, another request for either, a preview Horizon cannot start, or no
+/// proof or preview where there was one. A file that cannot be read or parsed changes
+/// nothing, as for the dialog, which keeps the last good status.
+pub(super) fn asked_otherwise_in(path: &std::path::Path, asked: &Asked) -> bool {
+    super::untrusted::read_regular(path, STATUS_LIMIT)
         .ok()
         .and_then(|bytes| parse(&String::from_utf8_lossy(&bytes)))
-    else {
-        return false;
-    };
-    status.preview_invalid || status.preview.map(|spec| (spec, status.preview_request)).as_ref() != shown
+        .is_some_and(|status| Asked::of(&status) != *asked)
 }
 
 /// `text` as one pasted message, so a terminal agent takes it whole even mid-turn.
@@ -519,12 +537,9 @@ impl Run {
         self.preview.as_ref()?.live_port()
     }
 
-    /// The desktop preview the status names, with its request, as the dialog last read it.
-    pub(super) fn named_preview(&self) -> Option<(preview::Spec, u64)> {
-        self.status
-            .preview
-            .clone()
-            .map(|spec| (spec, self.status.preview_request))
+    /// The proof and the desktop preview the status asks for, as the dialog last read it.
+    pub(super) fn asked(&self) -> Asked {
+        Asked::of(&self.status)
     }
 
     /// Shows the preview the status names as live on `port`, with no run behind it, for
@@ -1149,27 +1164,50 @@ mod tests {
     }
 
     #[test]
-    fn use_compares_the_preview_the_ended_agent_left_with_the_live_one() {
+    fn use_compares_what_the_ended_agent_asks_for_with_what_was_proved_and_shown() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("status.json");
-        let live = preview::Spec::parse(&serde_json::json!({"command": "./app"})).unwrap();
-        let shown = Some((live, 1));
+        let proved = r#""proof":{"workflow":"ci.yml","jobs":["test"]},"proof_request":1"#;
+        let asked = Asked::of(
+            &parse(&format!(
+                r#"{{"steps":[],{proved},"preview":{{"command":"./app"}},"preview_request":1}}"#
+            ))
+            .unwrap(),
+        );
         assert!(
-            !preview_changed_in(&path, shown.as_ref()),
+            !asked_otherwise_in(&path, &asked),
             "a status that cannot be read changes nothing"
         );
-        let write = |text: &str| std::fs::write(&path, text).unwrap();
-        write(r#"{"steps":[],"preview":{"command":"./app"},"preview_request":1}"#);
-        assert!(!preview_changed_in(&path, shown.as_ref()), "the live preview");
-        write(r#"{"steps":[],"preview":{"command":"./app"},"preview_request":2}"#);
-        assert!(preview_changed_in(&path, shown.as_ref()), "a newer request");
-        write(r#"{"steps":[],"preview":{"command":"./app --demo"},"preview_request":1}"#);
-        assert!(preview_changed_in(&path, shown.as_ref()), "another command");
-        write(r#"{"steps":[],"preview":{"command":""},"preview_request":1}"#);
-        assert!(preview_changed_in(&path, shown.as_ref()), "one Horizon cannot start");
-        write(r#"{"steps":[],"preview":null}"#);
-        assert!(preview_changed_in(&path, shown.as_ref()), "a withdrawn preview");
-        assert!(!preview_changed_in(&path, None), "no preview, as before");
+        let write = |text: String| std::fs::write(&path, text).unwrap();
+        write(format!(
+            r#"{{"steps":[],{proved},"preview":{{"command":"./app"}},"preview_request":1}}"#
+        ));
+        assert!(!asked_otherwise_in(&path, &asked), "what was proved and shown");
+        write(format!(
+            r#"{{"steps":[],{proved},"preview":{{"command":"./app"}},"preview_request":2}}"#
+        ));
+        assert!(asked_otherwise_in(&path, &asked), "a newer preview request");
+        write(format!(
+            r#"{{"steps":[],{proved},"preview":{{"command":"./app --demo"}},"preview_request":1}}"#
+        ));
+        assert!(asked_otherwise_in(&path, &asked), "another preview command");
+        write(format!(
+            r#"{{"steps":[],{proved},"preview":{{"command":""}},"preview_request":1}}"#
+        ));
+        assert!(asked_otherwise_in(&path, &asked), "a preview Horizon cannot start");
+        write(format!(r#"{{"steps":[],{proved},"preview":null}}"#));
+        assert!(asked_otherwise_in(&path, &asked), "a withdrawn preview");
+        let preview = r#""preview":{"command":"./app"},"preview_request":1"#;
+        write(format!(
+            r#"{{"steps":[],"proof":{{"workflow":"ci.yml","jobs":["test"]}},"proof_request":2,{preview}}}"#
+        ));
+        assert!(asked_otherwise_in(&path, &asked), "a newer proof request");
+        write(format!(
+            r#"{{"steps":[],"proof":{{"workflow":"ci.yml","jobs":["lint"]}},"proof_request":1,{preview}}}"#
+        ));
+        assert!(asked_otherwise_in(&path, &asked), "another proof");
+        write(format!(r#"{{"steps":[],{preview}}}"#));
+        assert!(asked_otherwise_in(&path, &asked), "no proof any more");
     }
 
     #[test]
