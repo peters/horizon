@@ -95,9 +95,9 @@ pub(in crate::app::cloud_panel::production) struct Run {
     pub(super) dotnet: bool,
     /// Set once the run's proof resources and folder are being removed.
     released: bool,
-    /// The agent's process, kept when Use closes its panel, so Use waits until it and
-    /// everything it started have ended before it reads and commits the setup.
-    pub(super) agent_process: Option<u32>,
+    /// The agent's process until it is known to have ended: Use, Stop and the end of
+    /// the run end it, with its process group, before the run's setup is read or let go.
+    pub(super) agent_process: Option<super::agent::AgentProcess>,
 }
 
 /// What the person did in the progress view.
@@ -335,24 +335,31 @@ impl Run {
         self.status.proof.as_ref()
     }
 
-    /// Stops the proof of a run that ended unfinished and removes its containers, image
-    /// and volume in the background. The run's folder stays for its view until Stop.
-    pub(super) fn abandon_proof(&mut self) {
+    /// Ends a run whose agent panel closed before it finished, in the background: the
+    /// agent's processes end, the proof stops and its containers, image and volume go.
+    /// The run's folder stays for its view until Stop.
+    pub(super) fn abandon(&mut self) {
+        if let Some(agent) = self.agent_process.take() {
+            std::thread::spawn(move || agent.end());
+        }
         if let Some(proof) = self.proof.as_mut() {
             let worker = proof.stop();
             proof::remove_run_resources(&self.repository, &proof::run_id(&self.status_path), worker, false);
         }
     }
 
-    /// Ends the run in the background: its proof stops, then the proof's containers,
-    /// image and volume and the run's folder go.
-    pub(super) fn discard(mut self) {
-        self.release(false);
+    /// Ends the run in the background: its agent's processes end, its proof stops, then
+    /// the proof's containers, image and volume and the run's folder go.
+    pub(super) fn discard(self) {
+        std::thread::spawn(move || drop(self));
     }
 
     fn release(&mut self, wait: bool) {
         if std::mem::replace(&mut self.released, true) {
             return;
+        }
+        if let Some(agent) = self.agent_process.take() {
+            agent.end();
         }
         if let Some(proof) = self.proof.as_mut() {
             let worker = proof.stop();

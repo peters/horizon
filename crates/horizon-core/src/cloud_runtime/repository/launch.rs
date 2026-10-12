@@ -121,11 +121,12 @@ pub fn committed_config(repository: &Path, revision: &str, runner: &Runner<'_>) 
     }
     .run(
         "Read committed cloud configuration",
-        Command::new("git").arg("-C").arg(repository).args([
-            "cat-file",
-            "blob",
-            &format!("{revision}:.horizon/cloud.yml"),
-        ]),
+        // Replace refs could put other settings under the same commit, so none are read.
+        Command::new("git")
+            .arg("--no-replace-objects")
+            .arg("-C")
+            .arg(repository)
+            .args(["cat-file", "blob", &format!("{revision}:.horizon/cloud.yml")]),
         Duration::from_secs(30),
     );
     runner.cancel.check()?;
@@ -238,6 +239,33 @@ fn ssh_ready_with_cancel(path: &Path, cancel: &super::super::Cancellation) -> bo
 mod tests {
     use super::*;
     pub(super) const CONFIG: &str = "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n";
+
+    #[test]
+    fn a_replace_ref_does_not_change_the_committed_settings() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path();
+        repository(path);
+        let output = |args: &[&str]| {
+            let output = Command::new("git").arg("-C").arg(path).args(args).output().unwrap();
+            assert!(output.status.success());
+            String::from_utf8_lossy(&output.stdout).trim().to_owned()
+        };
+        let real = output(&["rev-parse", "HEAD"]);
+        std::fs::write(path.join(".horizon/cloud.yml"), CONFIG.replace("cpu: 4", "cpu: 64")).unwrap();
+        let identity = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid"];
+        output(&[identity.as_slice(), &["commit", "-q", "-am", "planted"]].concat());
+        let planted = output(&["rev-parse", "HEAD"]);
+        output(&["reset", "-q", "--hard", &real]);
+        output(&["replace", &real, &planted]);
+        let cancel = crate::cloud_runtime::Cancellation::default();
+        let runner = Runner {
+            cancel: &cancel,
+            emit: &|_| {},
+            secrets: Vec::new(),
+        };
+        let config = committed_config(path, &real, &runner).unwrap().unwrap();
+        assert_eq!(config.profiles["dev"].cpu, 4, "the real commit's settings");
+    }
 
     #[test]
     fn only_settings_errors_offer_the_fixing_agent() {

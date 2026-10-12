@@ -106,6 +106,12 @@ impl HorizonApp {
                     created.transient = true;
                 }
                 let mut run = Run::new(panel, kind, repository, status, mode);
+                run.agent_process = self
+                    .board
+                    .panel(panel)
+                    .and_then(horizon_core::Panel::terminal)
+                    .and_then(horizon_core::Terminal::child_pid)
+                    .map(super::agent::AgentProcess::of);
                 run.agent.clone_from(&preset.name);
                 run.pending_prompt = pending_prompt;
                 run.outside = outside;
@@ -173,10 +179,11 @@ impl HorizonApp {
         });
         let Some(panel) = self.board.panel_mut(run.panel) else {
             // The agent's panel closed. A setup that had not finished ends here: its
-            // proof stops and gives back its containers, image and volume, as Stop does.
+            // agent's processes end and its proof gives back its containers, image and
+            // volume, as Stop does.
             if !run.finished() {
                 if !run.stopped {
-                    run.abandon_proof();
+                    run.abandon();
                 }
                 run.stopped = true;
             }
@@ -304,11 +311,11 @@ impl HorizonApp {
                 }
             }
             Action::Stop => {
-                if let Some(run) = self.cloud_prototype.production.setup_run.take() {
-                    run.discard();
-                }
                 if self.board.panel(panel).is_some() {
                     self.close_panel(panel);
+                }
+                if let Some(run) = self.cloud_prototype.production.setup_run.take() {
+                    run.discard();
                 }
             }
             Action::Use => self.use_cloud_repository_setup(ctx),
@@ -322,24 +329,22 @@ impl HorizonApp {
         let Some(panel) = self.cloud_prototype.production.setup_run.as_ref().map(|run| run.panel) else {
             return;
         };
-        let process = self
-            .board
-            .panel(panel)
-            .and_then(horizon_core::Panel::terminal)
-            .and_then(horizon_core::Terminal::child_pid);
         if self.board.panel(panel).is_some() {
             self.close_panel(panel);
         }
         let Some(run) = self.cloud_prototype.production.setup_run.as_mut() else {
             return;
         };
-        // Closing the panel only asks the agent to end: nothing is read until it and
-        // everything in its process group are gone, so no late write races the check.
-        run.agent_process = run.agent_process.or(process);
-        if run.agent_process.is_some_and(|process| !ended(process, AGENT_END_WAIT)) {
-            self.cloud_prototype.error =
-                Some("The setup agent is still ending. Press Use this setup again in a moment.".into());
-            return;
+        // Closing the panel only hangs up: nothing is read until the agent and everything
+        // in its process group are gone, killed if they ignore it, so no late write races
+        // the check.
+        if let Some(agent) = run.agent_process {
+            if !agent.end() {
+                self.cloud_prototype.error =
+                    Some("The setup agent is still ending. Press Use this setup again in a moment.".into());
+                return;
+            }
+            run.agent_process = None;
         }
         // One reading of the setup: it must be the proved one, and it is what is committed,
         // so nothing written while the agent's process ends can slip in after the check.
@@ -391,37 +396,6 @@ impl HorizonApp {
             ));
         }
     }
-}
-
-/// How long Use waits for the agent's processes to end after it closed their panel.
-const AGENT_END_WAIT: Duration = Duration::from_secs(3);
-
-/// Whether the process `leader` and every process in its group have ended, waiting up
-/// to `wait` for them. The terminal starts the agent as the leader of its own group.
-#[cfg(unix)]
-fn ended(leader: u32, wait: Duration) -> bool {
-    let Some(group) = i32::try_from(leader).ok().and_then(rustix::process::Pid::from_raw) else {
-        return true;
-    };
-    let deadline = Instant::now() + wait;
-    loop {
-        // A test signal only asks whether a process exists; none answering means all ended.
-        let alive = rustix::process::test_kill_process_group(group).is_ok()
-            || rustix::process::test_kill_process(group).is_ok();
-        if !alive {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-/// Elsewhere the panel's close is all Horizon can wait for.
-#[cfg(not(unix))]
-fn ended(_: u32, _: Duration) -> bool {
-    true
 }
 
 /// What Use says when files outside `.horizon` changed while the setup ran.
@@ -476,26 +450,4 @@ fn status_path() -> Result<PathBuf, String> {
 /// The `.horizon` files the agent changed, added or removed, as the finished card lists them.
 fn changed_files(repository: &Path) -> String {
     super::commit::changes(repository).join(" · ")
-}
-
-#[cfg(all(test, unix))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn use_waits_until_the_agent_and_its_group_have_ended() {
-        use std::os::unix::process::CommandExt as _;
-        let mut agent = std::process::Command::new("sleep")
-            .arg("30")
-            .process_group(0)
-            .spawn()
-            .unwrap();
-        assert!(
-            !ended(agent.id(), Duration::from_millis(200)),
-            "a running agent is not ended"
-        );
-        agent.kill().unwrap();
-        agent.wait().unwrap();
-        assert!(ended(agent.id(), Duration::from_secs(2)));
-    }
 }

@@ -31,6 +31,11 @@ pub(super) fn git_command(repository: &Path) -> Command {
 /// Runs one git command in the repository without configured programs, optionally on
 /// another index and with input, and returns its trimmed output.
 fn git(repository: &Path, index: Option<&Path>, args: &[&str], input: Option<&[u8]>) -> Result<String, String> {
+    git_raw(repository, index, args, input).map(|output| String::from_utf8_lossy(&output).trim().to_owned())
+}
+
+/// As [`git`], with the output's bytes exactly as git wrote them.
+fn git_raw(repository: &Path, index: Option<&Path>, args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>, String> {
     let mut command = git_command(repository);
     command
         .args(args)
@@ -46,7 +51,7 @@ fn git(repository: &Path, index: Option<&Path>, args: &[&str], input: Option<&[u
     }
     let output = child.wait_with_output().map_err(|error| error.to_string())?;
     if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        Ok(output.stdout)
     } else {
         Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
     }
@@ -219,7 +224,8 @@ pub(super) fn changes(repository: &Path) -> Vec<String> {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Outside {
     head: String,
-    files: BTreeMap<String, Option<Stamp>>,
+    /// Each path as git lists it, byte for byte, so no two names read as one.
+    files: BTreeMap<Vec<u8>, Option<Stamp>>,
 }
 
 /// What changes whenever a file is written, replaced or has its times set: on Unix the
@@ -254,7 +260,7 @@ fn stamp(metadata: &std::fs::Metadata) -> Stamp {
 /// quick in a large repository and nothing the agent left can make it wait.
 pub(super) fn outside(repository: &Path) -> Outside {
     let head = git(repository, None, &["rev-parse", "--verify", "HEAD"], None).unwrap_or_default();
-    let listed = git(
+    let listed = git_raw(
         repository,
         None,
         &["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
@@ -263,7 +269,7 @@ pub(super) fn outside(repository: &Path) -> Outside {
     .unwrap_or_default();
     // Ignored files count too, such as a local .env; ignored folders, such as build
     // output, do not, since restores and builds fill them.
-    let ignored = git(
+    let ignored = git_raw(
         repository,
         None,
         &[
@@ -278,37 +284,49 @@ pub(super) fn outside(repository: &Path) -> Outside {
     )
     .unwrap_or_default();
     let files = listed
-        .split('\0')
-        .chain(ignored.split('\0').filter(|path| !path.ends_with('/')))
-        .filter(|path| !path.is_empty() && *path != ".horizon" && !path.starts_with(".horizon/"))
+        .split(|byte| *byte == 0)
+        .chain(ignored.split(|byte| *byte == 0).filter(|path| !path.ends_with(b"/")))
+        .filter(|path| !path.is_empty() && *path != b".horizon" && !path.starts_with(b".horizon/"))
         .map(|path| {
-            let stamp = std::fs::symlink_metadata(repository.join(path))
+            let stamp = std::fs::symlink_metadata(repository.join(path_of(path)))
                 .ok()
                 .map(|metadata| stamp(&metadata));
-            (path.to_owned(), stamp)
+            (path.to_vec(), stamp)
         })
         .collect();
     Outside { head, files }
 }
 
+/// A path git listed, as this platform names files.
+fn path_of(bytes: &[u8]) -> std::path::PathBuf {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        std::ffi::OsStr::from_bytes(bytes).into()
+    }
+    #[cfg(not(unix))]
+    {
+        String::from_utf8_lossy(bytes).into_owned().into()
+    }
+}
+
 /// What changed between two readings: the paths added, removed or written, and HEAD
 /// when it moved.
 pub(super) fn changed(before: &Outside, after: &Outside) -> Vec<String> {
-    let mut paths: Vec<String> = before
+    let mut paths: Vec<&Vec<u8>> = before
         .files
         .iter()
         .filter(|(path, stamp)| after.files.get(*path) != Some(stamp))
-        .map(|(path, _)| path.clone())
-        .chain(
-            after
-                .files
-                .keys()
-                .filter(|path| !before.files.contains_key(*path))
-                .cloned(),
-        )
+        .map(|(path, _)| path)
+        .chain(after.files.keys().filter(|path| !before.files.contains_key(*path)))
         .collect();
     paths.sort();
     paths.dedup();
+    // Only the names shown are made readable; the comparison used the bytes.
+    let mut paths: Vec<String> = paths
+        .into_iter()
+        .map(|path| String::from_utf8_lossy(path).into_owned())
+        .collect();
     if before.head != after.head {
         paths.insert(0, "the commit HEAD names".to_owned());
     }
@@ -453,12 +471,31 @@ mod tests {
         assert_eq!(run(path, &["--no-replace-objects", "rev-parse", "HEAD^"]), real);
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn names_that_are_not_utf8_stay_apart() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let folder = repository();
+        let path = folder.path();
+        let first = path.join(std::ffi::OsStr::from_bytes(b"a\xff"));
+        let second = path.join(std::ffi::OsStr::from_bytes(b"a\xfe"));
+        std::fs::write(&first, "one\n").unwrap();
+        std::fs::write(&second, "two\n").unwrap();
+        let before = outside(path);
+        std::fs::write(&second, "changed, and longer\n").unwrap();
+        assert_eq!(
+            changed(&before, &outside(path)).len(),
+            1,
+            "one name changed, not neither"
+        );
+    }
+
     #[test]
     fn changes_outside_the_setup_are_named() {
         let folder = repository();
         let path = folder.path();
         let before = outside(path);
-        assert!(before.files.contains_key("README.md"));
+        assert!(before.files.contains_key(b"README.md".as_slice()));
         std::fs::write(path.join(".horizon/cloud.yml"), "version: 1\n").unwrap();
         assert!(
             changed(&before, &outside(path)).is_empty(),

@@ -40,6 +40,16 @@ fn read_bounded_line(reader: &mut impl BufRead, line: &mut Vec<u8>) -> std::io::
     }
 }
 
+/// Ends `child` and every process in its group, then reaps it.
+fn end_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    if let Some(group) = i32::try_from(child.id()).ok().and_then(rustix::process::Pid::from_raw) {
+        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 impl Job {
     /// Writes one output line to the whole log, up to [`LOG_FILE_LIMIT`], and passes it
     /// to the dialog, which shows the last lines only, so a full queue drops one.
@@ -74,6 +84,10 @@ impl Job {
         limit: Option<Duration>,
     ) -> Result<(), String> {
         let started = Instant::now();
+        // Its own process group, so Stop and the time limit end everything it started,
+        // such as the build processes of a host restore, not only the command itself.
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
         let mut child = command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -129,14 +143,12 @@ impl Job {
                 }
             }
             if self.cancel.is_cancelled() {
-                let _ = child.kill();
-                let _ = child.wait();
+                end_tree(&mut child);
                 self.remove_container();
                 return Err("stopped".to_owned());
             }
             if limit.is_some_and(|limit| started.elapsed() > limit) {
-                let _ = child.kill();
-                let _ = child.wait();
+                end_tree(&mut child);
                 // Killing the docker client leaves its container running.
                 self.remove_container();
                 return Err(format!(
