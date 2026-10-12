@@ -89,11 +89,19 @@ impl Job {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|error| format!("cannot start {}: {error}", command.get_program().to_string_lossy()))?;
+        // A reader that passes the limit says so, and the command ends at once instead
+        // of waiting, blocked, on a full pipe until its time runs out.
+        let overflow = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let read = |pipe: Option<Box<dyn std::io::Read + Send>>| {
+            let overflow = overflow.clone();
             std::thread::spawn(move || {
                 let mut bytes = Vec::new();
                 if let Some(pipe) = pipe {
-                    let _ = pipe.take(CAPTURE_LIMIT).read_to_end(&mut bytes);
+                    let _ = pipe.take(CAPTURE_LIMIT + 1).read_to_end(&mut bytes);
+                }
+                if bytes.len() as u64 > CAPTURE_LIMIT {
+                    overflow.store(true, std::sync::atomic::Ordering::Relaxed);
+                    bytes.truncate(usize::try_from(CAPTURE_LIMIT).unwrap_or(usize::MAX));
                 }
                 bytes
             })
@@ -119,6 +127,10 @@ impl Job {
                 end_tree(&mut child);
                 self.remove_container();
                 return Err("stopped".to_owned());
+            }
+            if overflow.load(std::sync::atomic::Ordering::Relaxed) {
+                end_tree(&mut child);
+                return Err(format!("wrote more than {CAPTURE_LIMIT} bytes; stopped"));
             }
             if started.elapsed() > limit {
                 end_tree(&mut child);

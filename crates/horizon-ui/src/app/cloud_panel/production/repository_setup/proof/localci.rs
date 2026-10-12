@@ -30,6 +30,62 @@ const ARCHIVE_LIMIT: u64 = 64 * 1024 * 1024;
 /// Where the trusted localci is in the proof's container.
 pub(super) const MOUNTED: &str = "/opt/horizon-proof/localci";
 
+/// Where the image keeps localci for the agents on the worker.
+const IN_IMAGE: &str = "/usr/local/bin/localci";
+
+/// The setup agent's instruction for installing the localci the proof checks for.
+pub(super) fn instruction() -> String {
+    let releases = RELEASES
+        .iter()
+        .map(|(platform, asset, sum)| {
+            format!(
+                "https://github.com/peters/localci/releases/download/{VERSION}/{asset} (SHA-256 {sum}) for {platform}"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", or ");
+    format!(
+        "The localci for step 4 is {VERSION}: {releases}. Install the localci binary from that archive at {IN_IMAGE}; Horizon checks that the image holds exactly this binary."
+    )
+}
+
+/// Checks that `image` keeps exactly the trusted localci at its place for the worker's
+/// agents, read with `docker cp` from a created container, never by running the image.
+pub(super) fn check_installed(
+    image: &str,
+    container: &str,
+    trusted: &Path,
+    run: super::session_env::Run<'_>,
+) -> Result<(), String> {
+    let mut create = Command::new("docker");
+    create.args(["create", "--name", container, image]);
+    run(create).map_err(|error| format!("cannot look at the image's localci: {error}"))?;
+    let copied = super::session_env::copied(container, IN_IMAGE, run);
+    let mut remove = Command::new("docker");
+    remove.args(["rm", "--force", container]);
+    let _ = run(remove);
+    let missing = || format!("the image has no localci {VERSION} at {IN_IMAGE}, which the agents on the worker use");
+    let archive = copied
+        .map_err(|error| format!("cannot look at the image's localci: {error}"))?
+        .ok_or_else(missing)?;
+    let installed = super::session_env::unpack_within(&archive, ARCHIVE_LIMIT, 1)
+        .map_err(|error| format!("cannot read the image's localci: {error}"))?
+        .into_iter()
+        .find_map(|(_, entry)| match entry {
+            super::session_env::Unpacked::File(bytes) => Some(bytes),
+            _ => None,
+        })
+        .ok_or_else(missing)?;
+    let trusted = std::fs::read(trusted).map_err(|error| error.to_string())?;
+    if Sha256::digest(&installed) == Sha256::digest(&trusted) {
+        Ok(())
+    } else {
+        Err(format!(
+            "the localci at {IN_IMAGE} in the image is not localci {VERSION}; install the release the setup names"
+        ))
+    }
+}
+
 /// The trusted localci for an image of `platform`, extracted from the verified release
 /// into a new private folder, which goes when the returned value is dropped.
 pub(super) fn trusted(platform: &str) -> Result<(tempfile::TempDir, PathBuf), String> {

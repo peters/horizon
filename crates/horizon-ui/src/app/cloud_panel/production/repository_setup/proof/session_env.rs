@@ -21,37 +21,37 @@ pub(super) type Run<'a> = &'a dyn Fn(Command) -> Result<Vec<u8>, String>;
 /// The `-e` arguments that give a container of `image` the environment a worker session
 /// gets; the image is created under the name `container` for the copy and removed
 /// again. Every docker command goes through `run`, so a daemon that hangs cannot hold
-/// the proof.
+/// the proof, and what docker copies out arrives as a tar stream that `run` stops at its
+/// limit, so an image cannot fill this computer's disk or memory with it.
 pub(super) fn arguments(image: &str, container: &str, run: Run<'_>) -> Result<Vec<String>, String> {
-    let folder = tempfile::Builder::new()
-        .prefix("horizon-proof-env-")
-        .tempdir()
-        .map_err(|error| error.to_string())?;
     let mut create = Command::new("docker");
     create.args(["create", "--name", container, image]);
     run(create).map_err(|error| format!("cannot read the image's session environment: {error}"))?;
-    let copy = |from: &str| {
-        let mut copy = Command::new("docker");
-        copy.arg("cp").arg(format!("{container}:{from}")).arg(folder.path());
-        run(copy)
-    };
-    let copied = copy(FOLDER);
-    let environment = copy("/etc/environment");
+    let folder = copied(container, FOLDER, run);
+    let environment = copied(container, "/etc/environment", run);
     let mut remove = Command::new("docker");
     remove.args(["rm", "--force", container]);
     let _ = run(remove);
-    // A missing folder or file means none; any other failure is one.
-    for result in [&copied, &environment] {
-        if let Err(error) = result
-            && !error.contains("Could not find the file")
-            && !error.contains("No such")
-        {
-            return Err(format!("cannot read the image's session environment: {error}"));
-        }
-    }
-    let base = base_path(&folder.path().join("environment"));
-    let (variables, directives) =
-        load(&folder.path().join("session-env.d")).map_err(|error| format!("session environment refused: {error}"))?;
+    let folder = folder.map_err(|error| format!("cannot read the image's session environment: {error}"))?;
+    let environment = environment.map_err(|error| format!("cannot read the image's session environment: {error}"))?;
+    let base = environment
+        .as_deref()
+        .and_then(|archive| unpack(archive).ok())
+        .and_then(|entries| {
+            entries
+                .into_iter()
+                .find_map(|(name, entry)| (name == "environment").then_some(entry))
+        })
+        .and_then(|entry| match entry {
+            Unpacked::File(bytes) => Some(base_path(&bytes)),
+            Unpacked::Folder | Unpacked::Other => None,
+        })
+        .unwrap_or_else(|| SSH_PATH.to_owned());
+    let files = match folder {
+        Some(archive) => session_files(&archive).map_err(|error| format!("session environment refused: {error}"))?,
+        None => Vec::new(),
+    };
+    let (variables, directives) = load(&files).map_err(|error| format!("session environment refused: {error}"))?;
     let mut arguments: Vec<String> = variables
         .into_iter()
         .flat_map(|(key, value)| ["-e".to_owned(), format!("{key}={value}")])
@@ -60,17 +60,102 @@ pub(super) fn arguments(image: &str, container: &str, run: Run<'_>) -> Result<Ve
     Ok(arguments)
 }
 
+/// The tar stream of `path` in the created container, or none when the image has no such
+/// path.
+pub(super) fn copied(container: &str, path: &str, run: Run<'_>) -> Result<Option<Vec<u8>>, String> {
+    let mut copy = Command::new("docker");
+    copy.arg("cp").arg(format!("{container}:{path}")).arg("-");
+    match run(copy) {
+        Ok(archive) => Ok(Some(archive)),
+        Err(error) if error.contains("Could not find the file") || error.contains("No such") => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// One entry of a copied tar stream.
+pub(super) enum Unpacked {
+    Folder,
+    File(Vec<u8>),
+    Other,
+}
+
+/// The entries of a copied tar stream by their paths, each file at most [`FILE_LIMIT`]
+/// bytes and no more than [`FILES`] + 1 entries, checked as they are read.
+pub(super) fn unpack(archive: &[u8]) -> Result<Vec<(String, Unpacked)>, String> {
+    unpack_within(archive, FILE_LIMIT, FILES + 1)
+}
+
+/// As [`unpack`], with the limits given.
+pub(super) fn unpack_within(
+    archive: &[u8],
+    file_limit: u64,
+    entry_limit: usize,
+) -> Result<Vec<(String, Unpacked)>, String> {
+    use std::io::Read as _;
+    let mut entries = Vec::new();
+    let mut tar = tar::Archive::new(archive);
+    for entry in tar.entries().map_err(|error| error.to_string())? {
+        let mut entry = entry.map_err(|error| error.to_string())?;
+        if entries.len() >= entry_limit {
+            return Err(format!("more than {entry_limit} entries"));
+        }
+        let path = entry
+            .path()
+            .map_err(|error| error.to_string())?
+            .to_string_lossy()
+            .trim_end_matches('/')
+            .to_owned();
+        let unpacked = match entry.header().entry_type() {
+            tar::EntryType::Directory => Unpacked::Folder,
+            tar::EntryType::Regular => {
+                let size = entry.header().size().map_err(|error| error.to_string())?;
+                if size > file_limit {
+                    return Err(format!("{path}: larger than {file_limit} bytes"));
+                }
+                let mut bytes = Vec::new();
+                entry
+                    .by_ref()
+                    .take(file_limit)
+                    .read_to_end(&mut bytes)
+                    .map_err(|error| error.to_string())?;
+                Unpacked::File(bytes)
+            }
+            _ => Unpacked::Other,
+        };
+        entries.push((path, unpacked));
+    }
+    Ok(entries)
+}
+
+/// The files of a copied session-env.d folder by name, refused the way the worker
+/// refuses them: the folder must be one, and each entry in it a regular file.
+fn session_files(archive: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let mut files = Vec::new();
+    for (path, entry) in unpack(archive)? {
+        let mut parts = path.split('/');
+        let (Some(_), name) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        match (name, entry) {
+            (None, Unpacked::Folder) => {}
+            (None, _) => return Err(format!("{FOLDER}: not a directory")),
+            (Some(name), Unpacked::File(bytes)) if parts.next().is_none() => files.push((name.to_owned(), bytes)),
+            (Some(name), _) => return Err(format!("{name}: not a regular file")),
+        }
+    }
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(files)
+}
+
 /// The PATH an SSH session of the image starts from: the one its /etc/environment
 /// names, which PAM applies, or sshd's own default. The image's `ENV` lines do not
 /// reach a session, so they do not count here either.
-fn base_path(environment: &std::path::Path) -> String {
-    super::super::untrusted::read_regular(environment, FILE_LIMIT)
-        .ok()
-        .and_then(|bytes| {
-            String::from_utf8_lossy(&bytes).lines().find_map(|line| {
-                let value = line.trim().strip_prefix("PATH=")?;
-                Some(value.trim_matches('"').to_owned())
-            })
+fn base_path(environment: &[u8]) -> String {
+    String::from_utf8_lossy(environment)
+        .lines()
+        .find_map(|line| {
+            let value = line.trim().strip_prefix("PATH=")?;
+            Some(value.trim_matches('"').to_owned())
         })
         .unwrap_or_else(|| SSH_PATH.to_owned())
 }
@@ -78,36 +163,22 @@ fn base_path(environment: &std::path::Path) -> String {
 /// Session variables, in order, and PATH directives: whether each prepends, and its folder.
 type Loaded = (Vec<(String, String)>, Vec<(bool, String)>);
 
-/// The variables and PATH directives of the session-env.d folder at `folder`, read with
-/// the worker's own rules (horizon-worker-session-env), so a file the worker would refuse
-/// fails the proof instead of passing it with another environment.
-fn load(folder: &std::path::Path) -> Result<Loaded, String> {
+/// The variables and PATH directives of session-env.d files, read with the worker's own
+/// rules (horizon-worker-session-env), so a file the worker would refuse fails the proof
+/// instead of passing it with another environment.
+fn load(files: &[(String, Vec<u8>)]) -> Result<Loaded, String> {
     let mut variables: Vec<(String, String)> = Vec::new();
     let mut directives = Vec::new();
-    let Ok(metadata) = std::fs::symlink_metadata(folder) else {
-        return Ok((variables, directives));
-    };
-    if !metadata.is_dir() {
-        return Err(format!("{FOLDER}: not a directory"));
-    }
-    let mut entries: Vec<(String, std::path::PathBuf)> = std::fs::read_dir(folder)
-        .map_err(|error| error.to_string())?
-        .flatten()
-        .map(|entry| (entry.file_name().to_string_lossy().into_owned(), entry.path()))
-        .collect();
-    entries.sort();
-    if entries.len() > FILES {
+    if files.len() > FILES {
         return Err(format!("{FOLDER}: more than {FILES} files"));
     }
-    for (name, path) in entries {
-        if !file_name(&name) {
+    for (name, bytes) in files {
+        if !file_name(name) {
             return Err(format!(
                 "{name}: name must be at most 100 letters, digits, \".\", \"_\" or \"-\" ending in .env"
             ));
         }
-        let bytes =
-            super::super::untrusted::read_regular(&path, FILE_LIMIT).map_err(|error| format!("{name}: {error}"))?;
-        let text = String::from_utf8(bytes).map_err(|_| format!("{name}: not UTF-8"))?;
+        let text = std::str::from_utf8(bytes).map_err(|_| format!("{name}: not UTF-8"))?;
         for (number, line) in text.split('\n').enumerate() {
             let at = format!("{name}:{}", number + 1);
             if line.chars().any(char::is_control) {
@@ -199,17 +270,35 @@ fn session_path(base: &str, directives: &[(bool, String)]) -> String {
 mod tests {
     use super::*;
 
-    fn folder(files: &[(&str, &str)]) -> tempfile::TempDir {
-        let folder = tempfile::tempdir().unwrap();
-        for (name, text) in files {
-            std::fs::write(folder.path().join(name), text).unwrap();
+    fn files(entries: &[(&str, &str)]) -> Vec<(String, Vec<u8>)> {
+        entries
+            .iter()
+            .map(|(name, text)| ((*name).to_owned(), text.as_bytes().to_vec()))
+            .collect()
+    }
+
+    fn archive(entries: &[(&str, Option<&[u8]>)]) -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+        for (path, content) in entries {
+            let mut header = tar::Header::new_gnu();
+            if let Some(bytes) = content {
+                header.set_entry_type(tar::EntryType::Regular);
+                header.set_size(bytes.len() as u64);
+                header.set_mode(0o644);
+                builder.append_data(&mut header, path, *bytes).unwrap();
+            } else {
+                header.set_entry_type(tar::EntryType::Directory);
+                header.set_size(0);
+                header.set_mode(0o755);
+                builder.append_data(&mut header, path, std::io::empty()).unwrap();
+            }
         }
-        folder
+        builder.into_inner().unwrap()
     }
 
     #[test]
     fn session_files_apply_the_way_the_worker_applies_them() {
-        let files = folder(&[
+        let (variables, directives) = load(&files(&[
             (
                 "20-tools.env",
                 "# tools\nDOTNET_ROOT=/opt/dotnet\nPATH_PREPEND=/opt/dotnet\n",
@@ -218,8 +307,8 @@ mod tests {
                 "30-more.env",
                 "PATH_APPEND=/opt/extra\nPATH_APPEND=/usr/bin\nDOTNET_ROOT=/opt/other\n",
             ),
-        ]);
-        let (variables, directives) = load(files.path()).unwrap();
+        ]))
+        .unwrap();
         assert_eq!(
             variables,
             [("DOTNET_ROOT".to_owned(), "/opt/other".to_owned())],
@@ -228,10 +317,6 @@ mod tests {
         assert_eq!(
             session_path("/usr/bin:/bin", &directives),
             "/opt/dotnet:/usr/bin:/bin:/opt/extra"
-        );
-        assert!(
-            load(&files.path().join("missing")).unwrap().0.is_empty(),
-            "no folder, no environment"
         );
     }
 
@@ -246,14 +331,37 @@ mod tests {
             ("20-x.env", "A=1\tB\n"),
             ("20-x.env", "no separator\n"),
         ] {
-            assert!(load(folder(&[(name, text)]).path()).is_err(), "{name}: {text:?}");
+            assert!(load(&files(&[(name, text)])).is_err(), "{name}: {text:?}");
         }
     }
 
     #[test]
+    fn a_copied_folder_is_read_within_its_limits() {
+        let good = archive(&[("session-env.d", None), ("session-env.d/20-x.env", Some(b"A=1\n"))]);
+        assert_eq!(
+            session_files(&good).unwrap(),
+            [("20-x.env".to_owned(), b"A=1\n".to_vec())]
+        );
+        let large = vec![b'x'; 20_000];
+        let too_large = archive(&[("session-env.d", None), ("session-env.d/20-x.env", Some(&large))]);
+        assert!(session_files(&too_large).unwrap_err().contains("larger than"));
+        let nested = archive(&[("session-env.d", None), ("session-env.d/sub", None)]);
+        assert!(session_files(&nested).unwrap_err().contains("not a regular file"));
+        let not_folder = archive(&[("session-env.d", Some(b"A=1\n"))]);
+        assert!(session_files(&not_folder).unwrap_err().contains("not a directory"));
+        let many: Vec<(String, Option<&[u8]>)> = (0..80)
+            .map(|index| (format!("session-env.d/{index:02}.env"), Some(&b""[..])))
+            .collect();
+        let many: Vec<(&str, Option<&[u8]>)> = many.iter().map(|(name, bytes)| (name.as_str(), *bytes)).collect();
+        assert!(session_files(&archive(&many)).unwrap_err().contains("entries"));
+    }
+
+    #[test]
     fn the_base_path_is_the_one_ssh_gives_a_session() {
-        let files = folder(&[("environment", "PATH=\"/usr/local/bin:/usr/bin\"\nLANG=C\n")]);
-        assert_eq!(base_path(&files.path().join("environment")), "/usr/local/bin:/usr/bin");
-        assert_eq!(base_path(&files.path().join("missing")), SSH_PATH);
+        assert_eq!(
+            base_path(b"PATH=\"/usr/local/bin:/usr/bin\"\nLANG=C\n"),
+            "/usr/local/bin:/usr/bin"
+        );
+        assert_eq!(base_path(b"LANG=C\n"), SSH_PATH);
     }
 }

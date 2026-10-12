@@ -504,6 +504,15 @@ impl Job {
         for (index, (build, arguments)) in builds.iter().enumerate() {
             self.build_one(setup, (build, arguments), &tag(index), docker_config.path(), log)?;
         }
+        // The proof runs Horizon's own localci, but the agents on the worker run the
+        // image's: it must be the same pinned release.
+        let run = |command| self.capture(command, STEP_TIMEOUT);
+        localci::check_installed(
+            &self.image,
+            &format!("{}-localci", self.container),
+            self.trusted_localci()?,
+            &run,
+        )?;
         // Each profile's worker contract, checked the way deployment checks it: its
         // capabilities go to horizon-worker-check and every marker it reports is validated.
         for (number, (name, profile)) in config.profiles.iter().enumerate() {
@@ -811,6 +820,11 @@ chown -R 10001:10001 /workspace/checkout";
 const FORGET_OLDER_IMAGE: &str = "marker=\"$HOME/.horizon-proof-image\"; \
 if [ \"$(cat \"$marker\" 2>/dev/null)\" != \"$HORIZON_PROOF_IMAGE\" ]; then \
 rm -rf \"${XDG_CACHE_HOME:-$HOME/.cache}/localci\"; printf '%s' \"$HORIZON_PROOF_IMAGE\" > \"$marker\"; fi;";
+
+/// The setup agent's instruction for the localci the image must hold.
+pub(super) fn localci_instruction() -> String {
+    localci::instruction()
+}
 
 /// The image that prepares the proof's volume: Horizon's pinned base, never the
 /// candidate the agent wrote.

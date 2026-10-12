@@ -48,6 +48,7 @@ profiling.workspace = true
 serde_yaml.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+tar.workspace = true
 libc.workspace = true
 toml_edit.workspace = true
 tempfile.workspace = true
