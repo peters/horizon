@@ -172,7 +172,14 @@ impl HorizonApp {
             std::mem::take(&mut proof.unreported).then(|| proof.report())
         });
         let Some(panel) = self.board.panel_mut(run.panel) else {
-            run.stopped = !run.finished();
+            // The agent's panel closed. A setup that had not finished ends here: its
+            // proof stops and gives back its containers, image and volume, as Stop does.
+            if !run.finished() {
+                if !run.stopped {
+                    run.abandon_proof();
+                }
+                run.stopped = true;
+            }
             return;
         };
         if run.sampled.is_none_or(|at| at.elapsed() >= run::OUTPUT_EVERY) {

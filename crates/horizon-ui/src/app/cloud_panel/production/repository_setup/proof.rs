@@ -4,11 +4,14 @@
 //! The timings are therefore the image's, not the agent's.
 use horizon_core::cloud_runtime::Cancellation;
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
+
+mod resources;
+mod stream;
+pub(super) use resources::{remove_run_resources, run_id, run_names};
 
 /// The step titles Horizon owns once the agent asks for a proof.
 pub(super) const BUILD: &str = "Build image";
@@ -18,41 +21,8 @@ pub(super) const FAST: &str = "Fast rerun";
 /// Lines of proof output the dialog keeps.
 const LOG_LINES: usize = 200;
 
-/// The longest output line Horizon keeps; the rest of a longer line is dropped.
-const LINE_LIMIT: usize = 16 * 1024;
-
-/// Output lines waiting between a command's pipes and the proof.
-const LINE_QUEUE: usize = 256;
-
 /// Events waiting for the dialog; output lines beyond it are dropped, phases wait.
 const EVENT_QUEUE: usize = 1024;
-
-/// The most a proof writes to its whole log.
-const LOG_FILE_LIMIT: u64 = 64 * 1024 * 1024;
-
-/// Reads one line of untrusted output into `line`, keeping at most [`LINE_LIMIT`]
-/// bytes of it, and returns how many bytes it consumed.
-fn read_bounded_line(reader: &mut impl BufRead, line: &mut Vec<u8>) -> std::io::Result<usize> {
-    let mut consumed = 0;
-    loop {
-        let buffer = reader.fill_buf()?;
-        if buffer.is_empty() {
-            return Ok(consumed);
-        }
-        let (chunk, done) = match buffer.iter().position(|byte| *byte == b'\n') {
-            Some(end) => (&buffer[..=end], true),
-            None => (buffer, false),
-        };
-        let room = LINE_LIMIT.saturating_sub(line.len());
-        line.extend_from_slice(&chunk[..chunk.len().min(room)]);
-        let used = chunk.len();
-        reader.consume(used);
-        consumed += used;
-        if done {
-            return Ok(consumed);
-        }
-    }
-}
 
 /// The longest an image build may take before the proof reports it hung.
 const BUILD_TIMEOUT: Duration = Duration::from_mins(45);
@@ -709,122 +679,6 @@ impl Job {
             .stderr(Stdio::null())
             .output();
     }
-
-    /// Writes one output line to the whole log, up to [`LOG_FILE_LIMIT`], and passes it
-    /// to the dialog, which shows the last lines only, so a full queue drops one.
-    fn record(&self, log: &mut Option<std::fs::File>, line: String) {
-        use std::io::Write;
-        if let Some(file) = log.as_mut() {
-            let logged = self.logged.get();
-            if logged < LOG_FILE_LIMIT {
-                let _ = writeln!(file, "{line}");
-                self.logged.set(logged + line.len() as u64 + 1);
-                if self.logged.get() >= LOG_FILE_LIMIT {
-                    let _ = writeln!(file, "[Horizon stopped writing this log at {LOG_FILE_LIMIT} bytes]");
-                }
-            }
-        }
-        let _ = self.sender.try_send(Event::Line(line));
-        self.ctx.request_repaint();
-    }
-
-    /// Runs `command`, sending each output line to the dialog and the log file: a
-    /// preparation step (the bundle, the clone, a host restore) within
-    /// [`STEP_TIMEOUT`], so a daemon or a feed that never answers cannot hold the proof.
-    fn stream(&self, command: Command, log: &mut Option<std::fs::File>) -> Result<(), String> {
-        self.stream_within(command, log, Some(STEP_TIMEOUT))
-    }
-
-    /// As [`Self::stream`], stopping the command once it has run for `limit`.
-    fn stream_within(
-        &self,
-        mut command: Command,
-        log: &mut Option<std::fs::File>,
-        limit: Option<Duration>,
-    ) -> Result<(), String> {
-        let started = Instant::now();
-        let mut child = command
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| format!("cannot start {}: {error}", command.get_program().to_string_lossy()))?;
-        // Bounded, so output faster than Horizon writes it waits in the pipe instead.
-        let (lines, received) = mpsc::sync_channel::<String>(LINE_QUEUE);
-        for pipe in [
-            child
-                .stdout
-                .take()
-                .map(|pipe| Box::new(pipe) as Box<dyn std::io::Read + Send>),
-            child
-                .stderr
-                .take()
-                .map(|pipe| Box::new(pipe) as Box<dyn std::io::Read + Send>),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            let lines = lines.clone();
-            std::thread::spawn(move || {
-                let mut reader = BufReader::new(pipe);
-                let mut bytes = Vec::new();
-                // Bytes that are not UTF-8 become replacement characters, not the end of the log.
-                while read_bounded_line(&mut reader, &mut bytes).is_ok_and(|read| read > 0) {
-                    let line = String::from_utf8_lossy(&bytes);
-                    if lines.send(line.trim_end_matches(['\n', '\r']).to_owned()).is_err() {
-                        break;
-                    }
-                    bytes.clear();
-                }
-            });
-        }
-        drop(lines);
-        loop {
-            match received.recv_timeout(Duration::from_millis(200)) {
-                Ok(line) => self.record(log, line),
-                // A command that ended while something it started still holds its output.
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if matches!(child.try_wait(), Ok(Some(_))) {
-                        break;
-                    }
-                }
-                // Output closed, but the command may still run: it stays watched, so
-                // Stop and the time limit still end it.
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    if !matches!(child.try_wait(), Ok(None)) {
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(200));
-                }
-            }
-            if self.cancel.is_cancelled() {
-                let _ = child.kill();
-                let _ = child.wait();
-                self.remove_container();
-                return Err("stopped".to_owned());
-            }
-            if limit.is_some_and(|limit| started.elapsed() > limit) {
-                let _ = child.kill();
-                let _ = child.wait();
-                // Killing the docker client leaves its container running.
-                self.remove_container();
-                return Err(format!(
-                    "still running after {} minutes; stopped",
-                    started.elapsed().as_secs() / 60
-                ));
-            }
-        }
-        let status = child.wait().map_err(|error| error.to_string())?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!(
-                "exit {} after {} s",
-                status.code().unwrap_or(-1),
-                started.elapsed().as_secs()
-            ))
-        }
-    }
 }
 
 /// Fetches the tested commit from its bundle into the volume's checkout and checks it
@@ -845,79 +699,6 @@ const SESSION_ENV: &str = "for f in /etc/horizon-worker/session-env.d/*.env; do 
 while IFS= read -r line || [ -n \"$line\" ]; do case \"$line\" in ''|'#'*) ;; \
 PATH_PREPEND=*) PATH=\"${line#PATH_PREPEND=}:$PATH\";; PATH_APPEND=*) PATH=\"$PATH:${line#PATH_APPEND=}\";; \
 *=*) export \"$line\";; esac; done < \"$f\"; done; export PATH;";
-
-/// The image and volume of one setup run's proofs: unique to the run, so two runs or
-/// two Horizon processes on the same checkout never share or remove each other's.
-pub(super) fn run_names(repository: &Path, run: &str) -> (String, String) {
-    let volume = format!("horizon-setup-{}-{run}", slug(repository));
-    (format!("{volume}:candidate"), volume)
-}
-
-/// A short name for the setup run whose status file is `status`.
-pub(super) fn run_id(status: &Path) -> String {
-    let folder = status.parent().unwrap_or(status).to_string_lossy();
-    let hash = folder.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
-        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
-    });
-    format!("{:08x}", hash & 0xffff_ffff)
-}
-
-/// Removes a finished run's containers, image and volume once `after`, the run's
-/// stopped proof, has ended and can create nothing more: in the background, or before
-/// returning with `wait`, as when Horizon exits.
-pub(super) fn remove_run_resources(
-    repository: &Path,
-    run: &str,
-    after: Option<std::thread::JoinHandle<()>>,
-    wait: bool,
-) {
-    let (image, volume) = run_names(repository, run);
-    let remove = move || {
-        if let Some(after) = after {
-            let _ = after.join();
-        }
-        let containers = Command::new("docker")
-            .args(["ps", "--all", "--quiet", "--filter"])
-            .arg(format!("name=^{volume}-"))
-            .output()
-            .map(|output| {
-                String::from_utf8_lossy(&output.stdout)
-                    .split_whitespace()
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        if !containers.is_empty() {
-            let _ = Command::new("docker")
-                .args(["rm", "--force"])
-                .args(&containers)
-                .output();
-        }
-        let images = Command::new("docker")
-            .args(["images", "--format", "{{.Repository}}:{{.Tag}}", "--filter"])
-            .arg(format!("reference={volume}-build*"))
-            .output()
-            .map(|output| {
-                String::from_utf8_lossy(&output.stdout)
-                    .split_whitespace()
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let _ = Command::new("docker")
-            .args(["rmi", "--force", &image])
-            .args(&images)
-            .output();
-        let _ = Command::new("docker")
-            .args(["volume", "rm", "--force", &volume])
-            .output();
-    };
-    if wait {
-        remove();
-    } else {
-        std::thread::spawn(remove);
-    }
-}
 
 /// The images deployment would build: each profile's build with the build arguments
 /// its capabilities give, the default profile's first, every other one that differs
@@ -981,35 +762,6 @@ pub(super) fn uses_nuget(repository: &Path) -> bool {
     false
 }
 
-/// A name Docker accepts for the repository: its folder name and a short hash of its
-/// path, so two checkouts with the same folder name never share an image or a volume.
-fn slug(repository: &Path) -> String {
-    let hash = repository
-        .to_string_lossy()
-        .bytes()
-        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
-            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
-        });
-    format!("{}-{:06x}", folder_slug(repository), hash & 0xff_ffff)
-}
-
-fn folder_slug(repository: &Path) -> String {
-    let name = repository
-        .file_name()
-        .map(|name| name.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
-    let slug: String = name
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
-    let slug = slug.trim_matches('-');
-    if slug.is_empty() {
-        "repository".to_owned()
-    } else {
-        slug.to_owned()
-    }
-}
-
 fn shell_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
@@ -1058,16 +810,6 @@ mod tests {
         assert!(Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": ["rust-test#2"]})).is_some());
     }
 
-    #[test]
-    fn the_image_and_volume_take_a_name_docker_accepts() {
-        assert_eq!(folder_slug(Path::new("/home/me/YouPay v2")), "youpay-v2");
-        assert_eq!(folder_slug(Path::new("/")), "repository");
-        let (a, b) = (slug(Path::new("/home/a/app")), slug(Path::new("/home/b/app")));
-        assert!(a.starts_with("app-") && b.starts_with("app-"));
-        assert_ne!(a, b, "two checkouts named app keep their own image and volume");
-        assert_eq!(a, slug(Path::new("/home/a/app")), "the same path keeps its volume");
-    }
-
     #[cfg(unix)]
     #[test]
     fn a_new_image_forgets_the_step_records_an_older_one_left() {
@@ -1103,17 +845,6 @@ mod tests {
         assert!(uses_nuget(repository.path()));
     }
 
-    #[test]
-    fn an_endless_output_line_is_kept_short() {
-        let mut input = std::io::Cursor::new([vec![b'x'; LINE_LIMIT * 3], b"\nnext\n".to_vec()].concat());
-        let mut line = Vec::new();
-        assert_eq!(read_bounded_line(&mut input, &mut line).unwrap(), LINE_LIMIT * 3 + 1);
-        assert_eq!(line.len(), LINE_LIMIT, "the rest of the line is dropped");
-        line.clear();
-        read_bounded_line(&mut input, &mut line).unwrap();
-        assert_eq!(line, b"next\n", "the next line reads whole");
-    }
-
     #[cfg(unix)]
     #[test]
     fn a_log_never_writes_through_a_link_the_agent_left() {
@@ -1143,23 +874,6 @@ mod tests {
         })
         .unwrap();
         assert_eq!(by_arguments.len(), 4, "other build arguments make another image");
-    }
-
-    #[test]
-    fn each_setup_run_names_its_own_image_and_volume() {
-        let repository = Path::new("/home/me/app");
-        let (first, second) = (
-            run_id(Path::new("/tmp/horizon-cloud-setup-1-10/status.json")),
-            run_id(Path::new("/tmp/horizon-cloud-setup-1-11/status.json")),
-        );
-        assert_ne!(first, second);
-        let (image, volume) = run_names(repository, &first);
-        assert_eq!(image, format!("{volume}:candidate"));
-        assert_ne!(
-            volume,
-            run_names(repository, &second).1,
-            "two runs never share a volume"
-        );
     }
 
     #[test]

@@ -331,6 +331,15 @@ impl Run {
         self.status.proof.as_ref()
     }
 
+    /// Stops the proof of a run that ended unfinished and removes its containers, image
+    /// and volume in the background. The run's folder stays for its view until Stop.
+    pub(super) fn abandon_proof(&mut self) {
+        if let Some(proof) = self.proof.as_mut() {
+            let worker = proof.stop();
+            proof::remove_run_resources(&self.repository, &proof::run_id(&self.status_path), worker, false);
+        }
+    }
+
     /// Ends the run in the background: its proof stops, then the proof's containers,
     /// image and volume and the run's folder go.
     pub(super) fn discard(mut self) {
