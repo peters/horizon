@@ -52,10 +52,9 @@ impl HorizonApp {
             .cloned()
             // A machine account's agent without a preset of its own still starts plainly.
             .or_else(|| {
-                self.cloud_prototype
-                    .production
-                    .setup_agent
-                    .map(|kind| horizon_core::PresetConfig {
+                // The kind the button names, Claude when none was chosen.
+                Some(self.cloud_prototype.production.setup_agent.unwrap_or(PanelKind::Claude)).map(|kind| {
+                    horizon_core::PresetConfig {
                         name: kind.display_name().to_owned(),
                         alias: None,
                         kind,
@@ -63,7 +62,8 @@ impl HorizonApp {
                         args: Vec::new(),
                         resume: horizon_core::PanelResume::default(),
                         ssh_connection: None,
-                    })
+                    }
+                })
             });
         let Some(preset) = preset else {
             return;

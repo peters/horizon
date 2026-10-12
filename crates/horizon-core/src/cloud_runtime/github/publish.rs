@@ -95,8 +95,10 @@ pub fn login(docker_config: &Path, image: &str, cloud_id: &str, runner: &Runner<
 /// A throwaway Docker configuration for building on this computer: only Horizon's own
 /// `ghcr.io` login, renewed without asking when it is close to expiry, so private
 /// `ghcr.io` bases pull without the machine's credential helpers. Without a stored login
-/// it holds none, and public images pull anonymously. The machine's Docker context and
-/// CLI plugins carry over, so `buildx` and the daemon are the ones Docker normally uses.
+/// it holds none, and public images pull anonymously. No registry login or credential
+/// helper of the machine's carries over. Its Docker context and CLI plugins do, so
+/// `buildx` and the daemon are the ones Docker normally uses; a remote context brings
+/// its own connection settings and TLS files with it, as Docker reads them anyway.
 /// Returns the directory, deleted on drop, and whether it carries the login.
 /// # Errors
 /// The directory or its file cannot be written.
@@ -136,7 +138,8 @@ fn build_config_with(docker_config: &Path, machine: Option<&Path>) -> Result<(te
         None => Config(serde_json::json!({ "auths": {} })),
     };
     if let Some(machine) = machine {
-        // Contexts and plugins, never auths or credential helpers.
+        // Contexts (with any TLS files a remote context keeps) and plugins: what Docker
+        // needs to reach its daemon. Never registry logins or credential helpers.
         let settings = std::fs::read(machine.join("config.json"))
             .ok()
             .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());

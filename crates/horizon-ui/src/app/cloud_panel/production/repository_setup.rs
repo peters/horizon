@@ -295,7 +295,11 @@ fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str) -> Choice {
         return Choice::None;
     }
     let presets = setup_choices(form);
-    let chosen = chosen_preset(form, &presets).map_or_else(|| "Claude Code".to_owned(), |preset| preset.name.clone());
+    // Without a preset the agent that starts is the chosen kind's, so the label names it.
+    let chosen = chosen_preset(form, &presets).map_or_else(
+        || form.setup_agent.unwrap_or(PanelKind::Claude).display_name().to_owned(),
+        |preset| preset.name.clone(),
+    );
     let mut open = false;
     ui.horizontal(|ui| {
         let label = format!("{verb} {chosen}");
