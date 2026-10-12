@@ -91,6 +91,10 @@ pub(in crate::app::cloud_panel::production) struct Run {
     inputs: Option<(Instant, Option<[u8; 32]>)>,
     /// The files outside `.horizon` when the run started, to find what changed since.
     pub(super) outside: super::commit::Outside,
+    /// Whether the repository restores .NET packages, read once when the run starts.
+    pub(super) dotnet: bool,
+    /// Set once the run's proof resources and folder are being removed.
+    released: bool,
 }
 
 /// What the person did in the progress view.
@@ -154,6 +158,8 @@ impl Run {
             host_restore: false,
             inputs: None,
             outside: super::commit::Outside::default(),
+            dotnet: false,
+            released: false,
         }
     }
 
@@ -296,6 +302,28 @@ impl Run {
         true
     }
 
+    /// The proof the agent asks for now.
+    pub(super) fn proof_spec(&self) -> Option<&proof::Spec> {
+        self.status.proof.as_ref()
+    }
+
+    /// Ends the run in the background: its proof stops, then the proof's containers,
+    /// image and volume and the run's folder go.
+    pub(super) fn discard(mut self) {
+        self.release(false);
+    }
+
+    fn release(&mut self, wait: bool) {
+        if std::mem::replace(&mut self.released, true) {
+            return;
+        }
+        if let Some(proof) = self.proof.as_mut() {
+            let worker = proof.stop();
+            proof::remove_run_resources(&self.repository, &proof::run_id(&self.status_path), worker, wait);
+        }
+        remove_run_folder(&self.status_path);
+    }
+
     /// The steps to draw: the agent's own, or the expected ones before its first report.
     fn steps(&self) -> Vec<Step> {
         if !self.status.steps.is_empty() {
@@ -343,6 +371,25 @@ impl Step {
             state: self.state,
             detail: self.detail.clone(),
         }
+    }
+}
+
+/// A run dropped without Stop or Use, as when Horizon exits, still leaves nothing
+/// behind: Horizon waits for its proof to stop and removes what it made.
+impl Drop for Run {
+    fn drop(&mut self) {
+        self.release(true);
+    }
+}
+
+/// Removes a finished run's folder: its status, proof logs and screenshots.
+pub(super) fn remove_run_folder(status: &std::path::Path) {
+    if let Some(folder) = status.parent().filter(|folder| {
+        folder
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with("horizon-cloud-setup-"))
+    }) {
+        let _ = std::fs::remove_dir_all(folder);
     }
 }
 

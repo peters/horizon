@@ -55,9 +55,14 @@ fn git(repository: &Path, index: Option<&Path>, args: &[&str], input: Option<&[u
 /// The index entries for `.horizon` as it is on disk: mode, object and path. Files are
 /// stored without filters and links as links, the way the proof built them.
 fn entries(repository: &Path) -> Result<Vec<String>, String> {
-    use super::untrusted::{Entry, setup_entries};
+    entries_of(repository, &super::untrusted::setup_entries(repository)?)
+}
+
+/// The index entries for `.horizon` as one reading of it holds them.
+fn entries_of(repository: &Path, read: &[(String, super::untrusted::Entry)]) -> Result<Vec<String>, String> {
+    use super::untrusted::Entry;
     let mut entries = Vec::new();
-    for (relative, entry) in setup_entries(repository)? {
+    for (relative, entry) in read {
         if relative.contains(['\n', '\t']) {
             return Err(format!("{relative:?} has a name git's index cannot take here"));
         }
@@ -65,7 +70,7 @@ fn entries(repository: &Path) -> Result<Vec<String>, String> {
         let (mode, content) = match entry {
             Entry::Folder => continue,
             Entry::Link(target) => ("120000", target.to_string_lossy().replace('\\', "/").into_bytes()),
-            Entry::File { executable, content } => (if executable { "100755" } else { "100644" }, content),
+            Entry::File { executable, content } => (if *executable { "100755" } else { "100644" }, content.clone()),
         };
         let object = git(
             repository,
@@ -106,12 +111,16 @@ fn stage(repository: &Path, index: Option<&Path>, entries: &[String]) -> Result<
     Ok(())
 }
 
-/// Commits `.horizon` exactly as it is on disk on top of HEAD, and stages the same in
-/// the person's index; other staged changes stay staged and out of the commit. Returns
-/// false when HEAD already holds this setup, so there was nothing to commit.
-pub(super) fn commit(repository: &Path, message: &str) -> Result<bool, String> {
+/// Commits `.horizon` exactly as `setup` read it on top of HEAD, and stages the same in
+/// the person's index; other staged changes stay staged and out of the commit. HEAD
+/// must still be the commit `setup` names. Returns false when HEAD already holds this
+/// setup, so there was nothing to commit.
+pub(super) fn commit(repository: &Path, message: &str, setup: &super::snapshot::Setup) -> Result<bool, String> {
     let head = git(repository, None, &["rev-parse", "--verify", "HEAD"], None)?;
-    let entries = entries(repository)?;
+    if head != setup.head {
+        return Err("HEAD moved after Horizon read the setup; start the setup again".to_owned());
+    }
+    let entries = entries_of(repository, &setup.entries)?;
     let index = git(
         repository,
         None,
@@ -294,6 +303,10 @@ mod tests {
         String::from_utf8_lossy(&output.stdout).trim().to_owned()
     }
 
+    fn setup(path: &Path) -> crate::app::cloud_panel::production::repository_setup::snapshot::Setup {
+        crate::app::cloud_panel::production::repository_setup::snapshot::Setup::read(path).unwrap()
+    }
+
     fn repository() -> tempfile::TempDir {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path();
@@ -351,7 +364,10 @@ mod tests {
             ],
         );
 
-        assert!(commit(path, "Add the cloud setup").unwrap(), "a changed setup commits");
+        assert!(
+            commit(path, "Add the cloud setup", &setup(path)).unwrap(),
+            "a changed setup commits"
+        );
         assert!(!mark.exists(), "no hook or filter ran");
         assert_eq!(run(path, &["log", "-1", "--format=%s"]), "Add the cloud setup");
         assert_eq!(
@@ -372,7 +388,7 @@ mod tests {
             "and stay staged"
         );
         assert!(
-            !commit(path, "Again").unwrap(),
+            !commit(path, "Again", &setup(path)).unwrap(),
             "an unchanged setup has nothing to commit"
         );
         assert!(changes(path).is_empty());
@@ -393,7 +409,7 @@ mod tests {
         run(path, &["reset", "-q", "--hard", &real]);
         run(path, &["replace", &real, &planted]);
         std::fs::write(path.join(".horizon/cloud.yml"), "version: 1\n").unwrap();
-        assert!(commit(path, "Add the cloud setup").unwrap());
+        assert!(commit(path, "Add the cloud setup", &setup(path)).unwrap());
         assert_eq!(
             run(path, &["--no-replace-objects", "show", "HEAD:README.md"]),
             "readme",

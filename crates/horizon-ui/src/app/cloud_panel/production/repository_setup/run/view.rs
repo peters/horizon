@@ -256,7 +256,7 @@ fn callout(ui: &mut Ui, question: &str) {
 /// The steering field with Send, then Show agent and Stop.
 fn working_actions(ui: &mut Ui, run: &mut Run, working: bool, inline: bool) -> Option<Action> {
     let mut action = None;
-    if working && super::super::proof::uses_nuget(&run.repository) {
+    if working && run.dotnet {
         ui.checkbox(
             &mut run.host_restore,
             RichText::new("Restore private NuGet packages on this computer for the proof").size(13.0),

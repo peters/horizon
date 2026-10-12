@@ -109,6 +109,7 @@ impl HorizonApp {
                 run.agent.clone_from(&preset.name);
                 run.pending_prompt = pending_prompt;
                 run.outside = outside;
+                run.dotnet = super::proof::uses_nuget(&run.repository);
                 self.cloud_prototype.production.setup_run = Some(run);
                 self.cloud_prototype.error = None;
                 ctx.request_repaint();
@@ -116,7 +117,7 @@ impl HorizonApp {
             Err(error) => {
                 // A retry after fixing the agent keeps the Update or Fix it was asked for.
                 self.cloud_prototype.production.setup_mode = chosen_mode;
-                remove_run_folder(&status);
+                run::remove_run_folder(&status);
                 self.cloud_prototype.error = Some(error.to_string());
             }
         }
@@ -294,15 +295,12 @@ impl HorizonApp {
                 }
             }
             Action::Stop => {
-                let path = run.status_path.clone();
-                let repository = run.repository.clone();
-                let worker = run.proof.as_mut().and_then(super::proof::Proof::stop);
-                self.cloud_prototype.production.setup_run = None;
+                if let Some(run) = self.cloud_prototype.production.setup_run.take() {
+                    run.discard();
+                }
                 if self.board.panel(panel).is_some() {
                     self.close_panel(panel);
                 }
-                remove_run_folder(&path);
-                super::proof::remove_run_resources(&repository, &super::proof::run_id(&path), worker);
             }
             Action::Use => self.use_cloud_repository_setup(ctx),
         }
@@ -321,15 +319,27 @@ impl HorizonApp {
         let Some(run) = self.cloud_prototype.production.setup_run.as_mut() else {
             return;
         };
+        // One reading of the setup: it must be the proved one, and it is what is committed,
+        // so nothing written while the agent's process ends can slip in after the check.
         run.refresh_inputs_now();
-        if !run.finished() {
-            run.stopped = true;
-            self.cloud_prototype.error = Some(
+        let setup = super::snapshot::Setup::read(&run.repository);
+        let proved = run.proof.as_ref().map(|proof| proof.inputs);
+        let current = setup
+            .as_ref()
+            .ok()
+            .zip(run.proof_spec())
+            .map(|(setup, spec)| setup.fingerprint(spec));
+        let setup = match setup {
+            Ok(setup) if run.finished() && current.is_some() && current == proved => setup,
+            _ => {
+                run.stopped = true;
+                self.cloud_prototype.error = Some(
                 "The .horizon files changed after Horizon's proof, so they are not committed. Start the setup again to prove them."
                     .into(),
             );
-            return;
-        }
+                return;
+            }
+        };
         // The agent may change only .horizon. Anything else that changed during the
         // setup is named once; pressing Use again commits .horizon and leaves the rest.
         let outside = super::commit::outside(&run.repository);
@@ -339,15 +349,13 @@ impl HorizonApp {
             self.cloud_prototype.error = Some(outside_changes_message(&changed));
             return;
         }
-        let committed = super::commit::commit(&run.repository, run.mode.commit_message());
+        let committed = super::commit::commit(&run.repository, run.mode.commit_message(), &setup);
         if let Err(error) = committed {
             self.cloud_prototype.error = Some(format!("Could not commit .horizon: {error}"));
             return;
         }
-        if let Some(mut run) = self.cloud_prototype.production.setup_run.take() {
-            let worker = run.proof.as_mut().and_then(super::proof::Proof::stop);
-            remove_run_folder(&run.status_path);
-            super::proof::remove_run_resources(&run.repository, &super::proof::run_id(&run.status_path), worker);
+        if let Some(run) = self.cloud_prototype.production.setup_run.take() {
+            run.discard();
         }
         // The setup was made and committed on HEAD, so the dialog reads HEAD again.
         self.cloud_prototype.production.revision.clear();
@@ -386,7 +394,7 @@ impl HorizonApp {
             .board
             .panels
             .iter()
-            .filter(|panel| !panel.visible && panel.title == PANEL_NAME && Some(panel.id) != current)
+            .filter(|panel| panel.transient && panel.title == PANEL_NAME && Some(panel.id) != current)
             .map(|panel| panel.id)
             .collect();
         for panel in orphans {
@@ -403,17 +411,6 @@ fn status_path() -> Result<PathBuf, String> {
         .tempdir()
         .map_err(|error| format!("Could not make a private folder for the setup: {error}"))?;
     Ok(folder.keep().join("status.json"))
-}
-
-/// Removes a finished run's folder: its status, proof logs and screenshots.
-fn remove_run_folder(status: &Path) {
-    if let Some(folder) = status.parent().filter(|folder| {
-        folder
-            .file_name()
-            .is_some_and(|name| name.to_string_lossy().starts_with("horizon-cloud-setup-"))
-    }) {
-        let _ = std::fs::remove_dir_all(folder);
-    }
 }
 
 /// The `.horizon` files the agent changed, added or removed, as the finished card lists them.

@@ -60,6 +60,9 @@ const BUILD_TIMEOUT: Duration = Duration::from_mins(45);
 /// The longest the CI jobs may run in the image before the proof reports them hung.
 const CI_TIMEOUT: Duration = Duration::from_mins(90);
 
+/// The longest one preparation step of the CI phase may take.
+const STEP_TIMEOUT: Duration = Duration::from_mins(30);
+
 /// The longest the worker check may take; it only reads the image.
 const CHECK_TIMEOUT: Duration = Duration::from_mins(5);
 
@@ -653,8 +656,10 @@ impl Job {
     }
 
     /// Runs `command`, sending each output line to the dialog and the log file.
+    /// Runs a preparation step (the bundle, the clone, a host restore) within
+    /// [`STEP_TIMEOUT`], so a daemon or a feed that never answers cannot hold the proof.
     fn stream(&self, command: Command, log: &mut Option<std::fs::File>) -> Result<(), String> {
-        self.stream_within(command, log, None)
+        self.stream_within(command, log, Some(STEP_TIMEOUT))
     }
 
     /// As [`Self::stream`], stopping the command once it has run for `limit`.
@@ -787,11 +792,17 @@ pub(super) fn run_id(status: &Path) -> String {
     format!("{:08x}", hash & 0xffff_ffff)
 }
 
-/// Removes a finished run's containers, image and volume, in the background, once
-/// `after`, the run's stopped proof, has ended and can create nothing more.
-pub(super) fn remove_run_resources(repository: &Path, run: &str, after: Option<std::thread::JoinHandle<()>>) {
+/// Removes a finished run's containers, image and volume once `after`, the run's
+/// stopped proof, has ended and can create nothing more: in the background, or before
+/// returning with `wait`, as when Horizon exits.
+pub(super) fn remove_run_resources(
+    repository: &Path,
+    run: &str,
+    after: Option<std::thread::JoinHandle<()>>,
+    wait: bool,
+) {
     let (image, volume) = run_names(repository, run);
-    std::thread::spawn(move || {
+    let remove = move || {
         if let Some(after) = after {
             let _ = after.join();
         }
@@ -830,7 +841,12 @@ pub(super) fn remove_run_resources(repository: &Path, run: &str, after: Option<s
         let _ = Command::new("docker")
             .args(["volume", "rm", "--force", &volume])
             .output();
-    });
+    };
+    if wait {
+        remove();
+    } else {
+        std::thread::spawn(remove);
+    }
 }
 
 /// The images deployment would build: each profile's build with the build arguments
@@ -860,11 +876,39 @@ fn distinct_builds(
     Ok(builds)
 }
 
-/// Whether the repository restores .NET packages, possibly from private feeds.
+/// Whether the repository restores .NET packages, possibly from private feeds: a package
+/// configuration, or a solution or project file near the top. A bounded walk that never
+/// follows links and skips hidden and build folders.
 pub(super) fn uses_nuget(repository: &Path) -> bool {
-    ["nuget.config", "NuGet.Config", "Directory.Packages.props"]
-        .iter()
-        .any(|file| repository.join(file).is_file())
+    const CONFIGS: [&str; 3] = ["nuget.config", "NuGet.Config", "Directory.Packages.props"];
+    const PROJECTS: [&str; 5] = ["sln", "slnx", "csproj", "fsproj", "vbproj"];
+    const SKIPPED: [&str; 5] = ["node_modules", "target", "bin", "obj", "vendor"];
+    let mut pending = vec![(repository.to_path_buf(), 0)];
+    let mut seen = 0;
+    while let Some((folder, depth)) = pending.pop() {
+        for entry in std::fs::read_dir(&folder).into_iter().flatten().flatten() {
+            seen += 1;
+            if seen > 5000 {
+                return false;
+            }
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let Ok(kind) = entry.file_type() else { continue };
+            if kind.is_dir() {
+                if depth < 3 && !name.starts_with('.') && !SKIPPED.contains(&name.as_ref()) {
+                    pending.push((entry.path(), depth + 1));
+                }
+            } else if kind.is_file()
+                && (CONFIGS.contains(&name.as_ref())
+                    || Path::new(name.as_ref())
+                        .extension()
+                        .is_some_and(|extension| PROJECTS.iter().any(|project| extension == *project)))
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// A name Docker accepts for the repository: its folder name and a short hash of its
@@ -975,6 +1019,18 @@ mod tests {
         assert!(!run("sha256:one"), "the first proof in a volume starts clean");
         assert!(run("sha256:one"), "the same image keeps its records");
         assert!(!run("sha256:two"), "a rebuilt image forgets them");
+    }
+
+    #[test]
+    fn a_dotnet_project_below_the_top_is_found_but_not_in_a_build_folder() {
+        let repository = tempfile::tempdir().unwrap();
+        assert!(!uses_nuget(repository.path()));
+        std::fs::create_dir_all(repository.path().join("node_modules/pkg")).unwrap();
+        std::fs::write(repository.path().join("node_modules/pkg/x.csproj"), "").unwrap();
+        assert!(!uses_nuget(repository.path()), "build folders are skipped");
+        std::fs::create_dir_all(repository.path().join("src/App")).unwrap();
+        std::fs::write(repository.path().join("src/App/App.csproj"), "").unwrap();
+        assert!(uses_nuget(repository.path()));
     }
 
     #[test]
