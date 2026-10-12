@@ -476,7 +476,9 @@ If the selected commit has no `.horizon/cloud.yml`, **New cloud** shows
 - **Quick start** starts the repository on the base image. See
   [Quick start](#quick-start).
 - **Set up from CI** starts a setup agent, Claude or Codex, that prepares the
-  settings of the repository.
+  settings of the repository. It runs on Linux and macOS. On Windows the dialog
+  does not offer it, because Horizon cannot end everything the agent starts there;
+  use **Quick start** or write `.horizon` yourself.
 
 The setup agent is a normal local agent session with its existing local login.
 Horizon does not export the API-key bindings of remote workers to it. Its panel is

@@ -84,7 +84,7 @@ impl HorizonApp {
             return;
         };
         run.refresh_inputs_now();
-        let setup = super::snapshot::Setup::read(&run.repository);
+        let setup = super::snapshot::Setup::read(&run.repository, run.identity);
         let proved = run.proof.as_ref().and_then(|proof| proof.inputs);
         let current = setup
             .as_ref()
@@ -108,6 +108,15 @@ impl HorizonApp {
         if !changed.is_empty() {
             run.outside = outside;
             self.cloud_prototype.error = Some(outside_changes_message(&changed));
+            return;
+        }
+        // Git works by path: the repository folder must still be the run's when it does.
+        if super::untrusted::identity(&run.repository) != run.identity {
+            run.stopped = true;
+            self.cloud_prototype.error = Some(format!(
+                "Nothing was committed: {}.",
+                super::untrusted::OTHER_REPOSITORY
+            ));
             return;
         }
         let committed = match commit::commit(&run.repository, run.mode.commit_message(), &setup) {

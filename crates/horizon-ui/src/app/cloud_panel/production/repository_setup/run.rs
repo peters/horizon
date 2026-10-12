@@ -71,6 +71,8 @@ pub(in crate::app::cloud_panel::production) struct Run {
     /// Instructions still to paste, for an agent that takes no starting prompt argument.
     pub(super) pending_prompt: Option<String>,
     pub(super) repository: PathBuf,
+    /// Which folder the repository was when the run started; reads check it.
+    pub(super) identity: super::untrusted::Identity,
     pub(super) status_path: PathBuf,
     pub(super) started: Instant,
     status: Status,
@@ -89,6 +91,8 @@ pub(in crate::app::cloud_panel::production) struct Run {
     pub(super) mode: Mode,
     /// The `.horizon` files changed or added, once the agent is done.
     pub(super) files: Option<String>,
+    /// The list of changed files being made on a thread.
+    pub(super) files_job: Option<std::sync::mpsc::Receiver<String>>,
     /// Horizon's own proof of the image, and the agent's request it answers.
     pub(super) proof: Option<Proof>,
     pub(super) proved_request: u64,
@@ -159,6 +163,7 @@ impl Run {
             panel,
             agent: kind.display_name().to_owned(),
             pending_prompt: None,
+            identity: super::untrusted::identity(&repository),
             repository,
             status_path,
             started: Instant::now(),
@@ -172,6 +177,7 @@ impl Run {
             sampled: None,
             mode,
             files: None,
+            files_job: None,
             proof: None,
             proved_request: 0,
             missing_proof_summary: None,
@@ -353,9 +359,10 @@ impl Run {
             return;
         };
         let repository = self.repository.clone();
+        let identity = self.identity;
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = sender.send(super::snapshot::fingerprint(&repository, &spec).ok());
+            let _ = sender.send(super::snapshot::fingerprint(&repository, &spec, identity).ok());
         });
         self.inputs_job = Some(receiver);
     }
@@ -365,7 +372,7 @@ impl Run {
         if let Some(spec) = self.status.proof.as_ref() {
             self.inputs = Some((
                 Instant::now(),
-                super::snapshot::fingerprint(&self.repository, spec).ok(),
+                super::snapshot::fingerprint(&self.repository, spec, self.identity).ok(),
             ));
         }
     }

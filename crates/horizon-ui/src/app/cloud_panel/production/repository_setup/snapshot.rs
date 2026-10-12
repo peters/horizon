@@ -14,8 +14,8 @@ pub(super) struct Setup {
 }
 
 impl Setup {
-    pub(super) fn read(repository: &Path) -> Result<Self, String> {
-        let entries = setup_entries(repository)?;
+    pub(super) fn read(repository: &Path, expected: super::untrusted::Identity) -> Result<Self, String> {
+        let entries = setup_entries(repository, expected)?;
         let head = super::commit::git_command(repository)
             .args(["rev-parse", "--verify", "HEAD"])
             .output()
@@ -158,8 +158,12 @@ impl Setup {
 }
 
 /// The fingerprint of the setup as it is now, to compare with the proof's.
-pub(super) fn fingerprint(repository: &Path, spec: &Spec) -> Result<[u8; 32], String> {
-    Ok(Setup::read(repository)?.fingerprint(spec))
+pub(super) fn fingerprint(
+    repository: &Path,
+    spec: &Spec,
+    expected: super::untrusted::Identity,
+) -> Result<[u8; 32], String> {
+    Ok(Setup::read(repository, expected)?.fingerprint(spec))
 }
 
 /// A build path the agent wrote, made relative to the repository without reading the
@@ -193,13 +197,17 @@ mod tests {
         std::fs::create_dir_all(repository.path().join(".horizon")).unwrap();
         std::fs::write(repository.path().join(".horizon/Dockerfile"), "FROM base\n").unwrap();
         let spec = Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": ["test"]})).unwrap();
-        let first = fingerprint(repository.path(), &spec);
-        assert_eq!(first, fingerprint(repository.path(), &spec), "stable");
+        let first = fingerprint(repository.path(), &spec, None);
+        assert_eq!(first, fingerprint(repository.path(), &spec, None), "stable");
         std::fs::write(repository.path().join(".horizon/Dockerfile"), "FROM base\nRUN true\n").unwrap();
-        let edited = fingerprint(repository.path(), &spec);
+        let edited = fingerprint(repository.path(), &spec, None);
         assert_ne!(first, edited, "an edited Dockerfile is not the proved one");
         let other = Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": ["lint"]})).unwrap();
-        assert_ne!(edited, fingerprint(repository.path(), &other), "nor another request");
+        assert_ne!(
+            edited,
+            fingerprint(repository.path(), &other, None),
+            "nor another request"
+        );
     }
 
     #[cfg(unix)]
@@ -214,12 +222,12 @@ mod tests {
         )
         .unwrap();
         let spec = Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": ["test"]})).unwrap();
-        let first = fingerprint(repository.path(), &spec);
+        let first = fingerprint(repository.path(), &spec, None);
         std::fs::remove_file(repository.path().join(".horizon/loop")).unwrap();
         std::os::unix::fs::symlink("/etc", repository.path().join(".horizon/loop")).unwrap();
         assert_ne!(
             first,
-            fingerprint(repository.path(), &spec),
+            fingerprint(repository.path(), &spec, None),
             "a link to elsewhere is a change"
         );
     }
@@ -237,7 +245,7 @@ mod tests {
                 repository.path().join(".horizon/x"),
             )
             .unwrap();
-            fingerprint(repository.path(), &spec).unwrap()
+            fingerprint(repository.path(), &spec, None).unwrap()
         };
         assert_ne!(
             read(b"a\xff"),
@@ -271,7 +279,7 @@ mod tests {
         std::fs::remove_file(path.join(".horizon")).unwrap();
         std::fs::create_dir(path.join(".horizon")).unwrap();
         std::fs::write(path.join(".horizon/Dockerfile"), "FROM scratch\n").unwrap();
-        let setup = Setup::read(path).unwrap();
+        let setup = Setup::read(path, None).unwrap();
         let build: horizon_core::cloud_panel::Build =
             serde_yaml::from_str("{context: ., dockerfile: .horizon/Dockerfile}").unwrap();
         let (_folder, context, dockerfile) = setup.context(path, &build).unwrap();
@@ -304,7 +312,7 @@ mod tests {
             for (name, content) in files {
                 std::fs::write(repository.path().join(".horizon").join(name), content).unwrap();
             }
-            (fingerprint(repository.path(), &spec), repository)
+            (fingerprint(repository.path(), &spec, None), repository)
         };
         let (one, _kept) = read(&[("a", "b")]);
         #[cfg_attr(not(unix), allow(unused_variables))]
@@ -316,7 +324,7 @@ mod tests {
             let file = repository.path().join(".horizon/ab");
             std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
             assert_ne!(
-                fingerprint(repository.path(), &spec),
+                fingerprint(repository.path(), &spec, None),
                 other,
                 "the executable bit counts"
             );

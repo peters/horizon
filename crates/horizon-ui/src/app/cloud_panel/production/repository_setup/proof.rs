@@ -227,7 +227,7 @@ impl Proof {
     /// restore private .NET packages on this computer, which the person allowed. It
     /// begins once `after`, the run of the proof it replaces, has ended.
     pub(super) fn start(
-        (repository, run): (&Path, &str),
+        (repository, run, identity): (&Path, &str, super::untrusted::Identity),
         (request, spec): (u64, Spec),
         log_path: PathBuf,
         host_restore: bool,
@@ -239,6 +239,7 @@ impl Proof {
         let container = format!("{volume}-proof-{request}");
         let job = Job {
             repository: repository.to_path_buf(),
+            identity,
             spec,
             image: image.clone(),
             volume,
@@ -378,6 +379,8 @@ impl Drop for Proof {
 
 struct Job {
     repository: PathBuf,
+    /// Which folder the repository was when the run started.
+    identity: super::untrusted::Identity,
     spec: Spec,
     image: String,
     volume: String,
@@ -409,7 +412,7 @@ impl Job {
         // One snapshot of the setup, read here and not on the dialog's thread: the proof
         // fingerprints it and builds from it alone. A setup Horizon refuses to read fails
         // the build with the reason.
-        self.setup = super::snapshot::Setup::read(&self.repository);
+        self.setup = super::snapshot::Setup::read(&self.repository, self.identity);
         if let Ok(setup) = &self.setup {
             let _ = self.sender.send(Event::Inputs(setup.fingerprint(&self.spec)));
         }

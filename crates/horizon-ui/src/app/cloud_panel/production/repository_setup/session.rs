@@ -245,8 +245,23 @@ impl HorizonApp {
             return;
         };
         run.poll();
+        // The finished card's list of changed files, made off the dialog's thread.
         if run.finished() && run.files.is_none() {
-            run.files = Some(changed_files(&run.repository));
+            if let Some(job) = &run.files_job {
+                if let Ok(files) = job.try_recv() {
+                    run.files = Some(files);
+                    run.files_job = None;
+                }
+            } else {
+                let (sender, receiver) = std::sync::mpsc::channel();
+                let repository = run.repository.clone();
+                let wake = ctx.clone();
+                std::thread::spawn(move || {
+                    let _ = sender.send(changed_files(&repository));
+                    wake.request_repaint();
+                });
+                run.files_job = Some(receiver);
+            }
         }
         // The agent asked for a (new) proof: Horizon builds and runs it itself.
         if let Some((request, spec)) = run.proof_wanted() {
@@ -255,12 +270,13 @@ impl HorizonApp {
             run.forget_inputs();
             // The finished card lists the files of the proof that passes, not an earlier one.
             run.files = None;
+            run.files_job = None;
             let log = run.status_path.with_extension(format!("proof-{request}.log"));
             let id = super::proof::run_id(&run.status_path);
             // The proof it replaces stops first, so the two never build the same image.
             let after = run.proof.as_mut().and_then(super::proof::Proof::stop);
             run.proof = Some(super::proof::Proof::start(
-                (&run.repository, &id),
+                (&run.repository, &id, run.identity),
                 (request, spec),
                 log,
                 run.host_restore,

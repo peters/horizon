@@ -90,20 +90,52 @@ impl Budget {
     }
 }
 
+/// Which folder a path names: its device and inode, read without following a link at
+/// its end. A run keeps its repository's, so a folder renamed and replaced, by a link or
+/// by another folder, is never taken for it; none where the platform has no such ids.
+pub(super) type Identity = Option<(u64, u64)>;
+
+/// The identity of the folder at `path`, never following a link at its end.
+pub(super) fn identity(path: &Path) -> Identity {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        std::fs::symlink_metadata(path)
+            .ok()
+            .map(|metadata| (metadata.dev(), metadata.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// What a read says when the repository folder is no longer the run's.
+pub(super) const OTHER_REPOSITORY: &str = "the repository folder is not the one the setup started in";
+
 /// The entries of the repository's `.horizon`, sorted by their path relative to the
-/// repository with `/` between parts. Links are listed, never followed.
+/// repository with `/` between parts. Links are listed, never followed. With an
+/// `expected` identity the repository folder must still be that folder.
 #[cfg(unix)]
-pub(super) fn setup_entries(repository: &Path) -> Result<Vec<(String, Entry)>, String> {
+pub(super) fn setup_entries(repository: &Path, expected: Identity) -> Result<Vec<(String, Entry)>, String> {
     use rustix::fs::{AtFlags, CWD, Dir, FileType, Mode, OFlags, openat, readlinkat, statat};
     use std::os::unix::ffi::OsStringExt as _;
     let folder_flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-    let repository_folder = openat(
-        CWD,
-        repository,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map_err(|error| format!("{}: {error}", repository.display()))?;
+    // The repository folder itself is opened without following a link at its end, and
+    // the walk then goes on from that handle, so it reads the folder it checked.
+    let repository_folder = openat(CWD, repository, folder_flags, Mode::empty())
+        .map_err(|error| format!("{}: {error}", repository.display()))?;
+    if let Some((device, inode)) = expected {
+        let stat =
+            rustix::fs::fstat(&repository_folder).map_err(|error| format!("{}: {error}", repository.display()))?;
+        // The fields are u64 on Linux but not on every Unix, such as macOS.
+        #[allow(clippy::useless_conversion)]
+        let found = (u64::try_from(stat.st_dev).ok(), u64::try_from(stat.st_ino).ok());
+        if found != (Some(device), Some(inode)) {
+            return Err(OTHER_REPOSITORY.to_owned());
+        }
+    }
     let root = openat(&repository_folder, ".horizon", folder_flags, Mode::empty()).map_err(|error| {
         if matches!(error, rustix::io::Errno::LOOP | rustix::io::Errno::NOTDIR) {
             ".horizon must be a folder, not a link or a file".to_owned()
@@ -166,7 +198,7 @@ pub(super) fn setup_entries(repository: &Path) -> Result<Vec<(String, Entry)>, S
 /// The entries of the repository's `.horizon`, by path; without folder handles this is
 /// only as safe as the platform's path checks.
 #[cfg(not(unix))]
-pub(super) fn setup_entries(repository: &Path) -> Result<Vec<(String, Entry)>, String> {
+pub(super) fn setup_entries(repository: &Path, _expected: Identity) -> Result<Vec<(String, Entry)>, String> {
     let root = repository.join(".horizon");
     let kind = std::fs::symlink_metadata(&root).map_err(|error| format!(".horizon: {error}"))?;
     if !kind.is_dir() {
@@ -235,15 +267,44 @@ mod tests {
     }
 
     #[test]
+    fn a_repository_folder_swapped_for_another_is_refused() {
+        let parent = tempfile::tempdir().unwrap();
+        let repository = parent.path().join("repository");
+        std::fs::create_dir_all(repository.join(".horizon")).unwrap();
+        let started = identity(&repository);
+        assert!(
+            setup_entries(&repository, started).is_ok(),
+            "the folder the run started in"
+        );
+        std::fs::rename(&repository, parent.path().join("moved")).unwrap();
+        std::fs::create_dir_all(repository.join(".horizon")).unwrap();
+        assert_eq!(
+            setup_entries(&repository, started).unwrap_err(),
+            OTHER_REPOSITORY,
+            "another folder"
+        );
+        std::fs::remove_dir_all(&repository).unwrap();
+        std::os::unix::fs::symlink(parent.path().join("moved"), &repository).unwrap();
+        assert!(
+            setup_entries(&repository, started).is_err(),
+            "a link in its place is not followed"
+        );
+    }
+
+    #[test]
     fn a_linked_setup_or_a_pipe_in_it_is_refused() {
         let repository = tempfile::tempdir().unwrap();
         let elsewhere = tempfile::tempdir().unwrap();
         std::os::unix::fs::symlink(elsewhere.path(), repository.path().join(".horizon")).unwrap();
-        assert!(setup_entries(repository.path()).unwrap_err().contains("not a link"));
+        assert!(
+            setup_entries(repository.path(), None)
+                .unwrap_err()
+                .contains("not a link")
+        );
         std::fs::remove_file(repository.path().join(".horizon")).unwrap();
         std::fs::create_dir_all(repository.path().join(".horizon/scripts")).unwrap();
         std::fs::write(repository.path().join(".horizon/cloud.yml"), "version: 1\n").unwrap();
-        let names: Vec<String> = setup_entries(repository.path())
+        let names: Vec<String> = setup_entries(repository.path(), None)
             .unwrap()
             .into_iter()
             .map(|(name, _)| name)
@@ -258,7 +319,7 @@ mod tests {
                 .success()
         );
         assert!(
-            setup_entries(repository.path())
+            setup_entries(repository.path(), None)
                 .unwrap_err()
                 .contains("not a file, folder or link")
         );

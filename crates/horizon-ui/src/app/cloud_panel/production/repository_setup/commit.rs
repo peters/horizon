@@ -60,31 +60,55 @@ fn git_raw(repository: &Path, index: Option<&Path>, args: &[&str], input: Option
 /// The index entries for `.horizon` as it is on disk: mode, object and path. Files are
 /// stored without filters and links as links, the way the proof built them.
 fn entries(repository: &Path) -> Result<Vec<String>, String> {
-    entries_of(repository, &super::untrusted::setup_entries(repository)?)
+    entries_of(repository, &super::untrusted::setup_entries(repository, None)?)
 }
 
-/// The index entries for `.horizon` as one reading of it holds them.
+/// The index entries for `.horizon` as one reading of it holds them. Each object's
+/// content goes into a private file of Horizon's own, and one `git hash-object` reads
+/// them all, so git opens nothing the agent wrote and a large setup costs one process.
 fn entries_of(repository: &Path, read: &[(String, super::untrusted::Entry)]) -> Result<Vec<String>, String> {
     use super::untrusted::Entry;
-    let mut entries = Vec::new();
-    for (relative, entry) in read {
+    let folder = tempfile::Builder::new()
+        .prefix("horizon-setup-objects-")
+        .tempdir()
+        .map_err(|error| error.to_string())?;
+    let mut named = Vec::new();
+    for (index, (relative, entry)) in read.iter().enumerate() {
         if relative.contains(['\n', '\t']) {
             return Err(format!("{relative:?} has a name git's index cannot take here"));
         }
-        // Every object goes in through standard input: git opens nothing the agent wrote.
         let (mode, content) = match entry {
             Entry::Folder => continue,
             Entry::Link(target) => ("120000", super::untrusted::link_bytes(target)),
             Entry::File { executable, content } => (if *executable { "100755" } else { "100644" }, content.clone()),
         };
-        let object = git(
-            repository,
-            None,
-            &["hash-object", "-w", "--no-filters", "--stdin"],
-            Some(&content),
-        )?;
-        entries.push(format!("{mode} {object}\t{relative}"));
+        let file = folder.path().join(index.to_string());
+        std::fs::write(&file, content).map_err(|error| error.to_string())?;
+        named.push((mode, relative, file));
     }
+    if named.is_empty() {
+        return Ok(Vec::new());
+    }
+    let paths = named.iter().fold(String::new(), |mut paths, (_, _, file)| {
+        paths.push_str(&file.display().to_string());
+        paths.push('\n');
+        paths
+    });
+    let objects = git(
+        repository,
+        None,
+        &["hash-object", "-w", "--no-filters", "--stdin-paths"],
+        Some(paths.as_bytes()),
+    )?;
+    let objects: Vec<&str> = objects.lines().collect();
+    if objects.len() != named.len() {
+        return Err("git did not name every object of the setup".to_owned());
+    }
+    let mut entries: Vec<String> = named
+        .iter()
+        .zip(objects)
+        .map(|((mode, relative, _), object)| format!("{mode} {object}\t{relative}"))
+        .collect();
     entries.sort();
     Ok(entries)
 }
@@ -481,7 +505,7 @@ mod tests {
     }
 
     fn setup(path: &Path) -> crate::app::cloud_panel::production::repository_setup::snapshot::Setup {
-        crate::app::cloud_panel::production::repository_setup::snapshot::Setup::read(path).unwrap()
+        crate::app::cloud_panel::production::repository_setup::snapshot::Setup::read(path, None).unwrap()
     }
 
     fn repository() -> tempfile::TempDir {
