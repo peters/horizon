@@ -322,7 +322,11 @@ fn working_actions(ui: &mut Ui, run: &mut Run, working: bool, inline: bool) -> O
             action = Some(Action::Show);
         }
         let stop = if working { "Stop" } else { "Back to the choices" };
-        if ui.add(dialog_button(danger_button(stop))).clicked() {
+        // Use cannot be cancelled once it started, so Stop waits until it reported.
+        if ui
+            .add_enabled(!run.ending(), dialog_button(danger_button(stop)))
+            .clicked()
+        {
             action = Some(Action::Stop);
         }
     });
@@ -351,7 +355,11 @@ fn finished_actions(ui: &mut Ui, run: &Run, inline: bool) -> Option<Action> {
                     action = Some(Action::Show);
                 }
             }
-            if ui.add(dialog_button(danger_button("Stop"))).clicked() {
+            // Use cannot be cancelled once it started, so Stop waits until it reported.
+            if ui
+                .add_enabled(!run.ending(), dialog_button(danger_button("Stop")))
+                .clicked()
+            {
                 action = Some(Action::Stop);
             }
         });

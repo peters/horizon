@@ -414,6 +414,14 @@ impl HorizonApp {
                     self.reveal_new_panel(ctx, workspace, panel);
                 }
             }
+            // Use cannot be cancelled once it started: Stop waits until it reported.
+            Action::Stop
+                if self
+                    .cloud_prototype
+                    .production
+                    .setup_run
+                    .as_ref()
+                    .is_some_and(Run::ending) => {}
             Action::Stop => {
                 if self.board.panel(panel).is_some() {
                     self.close_panel(panel);

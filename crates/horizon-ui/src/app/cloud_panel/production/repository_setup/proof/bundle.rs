@@ -1,21 +1,23 @@
 //! The bundle the proof's checkout is made from: the tested commit and its history, with
 //! the names a CI checkout has. `actions/checkout` puts a push build on its branch, and
 //! tools such as `GitVersion` read that branch and the tags in the history, so the bundle
-//! names the commit as its branch and carries the tags already in its history. A commit
-//! made or a branch moved after the proof started is never in it.
+//! names the commit as its branch, when it has one without doubt, and carries the tags
+//! already in its history. A commit made or a branch moved after the proof started is
+//! never in it.
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 impl super::Job {
     /// Makes the bundle in `folder` from a private repository that borrows this one's
     /// objects and names only `head`, its branch and the tags in its history. Returns the
-    /// bundle and the branch the checkout puts the commit on.
+    /// bundle and the branch the checkout puts the commit on: the branch checked out, or
+    /// for a detached checkout the one branch at `head`; none when that is not one.
     pub(super) fn bundle(
         &self,
         folder: &Path,
         head: &str,
         log: &mut Option<std::fs::File>,
-    ) -> Result<(PathBuf, String), String> {
+    ) -> Result<(PathBuf, Option<String>), String> {
         let git = |args: &[&str]| {
             let mut command = super::super::commit::git_command(&self.repository);
             command.args(args);
@@ -34,15 +36,39 @@ impl super::Job {
         std::fs::create_dir_all(&alternates)
             .and_then(|()| std::fs::write(alternates.join("alternates"), format!("{}\n", objects.display())))
             .map_err(|error| format!("cannot make the bundle: {error}"))?;
-        // The branch the setup is on, or the default branch a detached checkout came from.
+        // The branch the setup is on; for a detached checkout, the branch every local or
+        // origin branch at the commit names, when that is a single one.
         let branch = git(&["symbolic-ref", "--short", "-q", "HEAD"])
             .or_else(|| {
-                git(&["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"])
-                    .and_then(|remote| remote.split_once('/').map(|(_, name)| name.to_owned()))
+                let at_head = git(&[
+                    "for-each-ref",
+                    "--points-at",
+                    head,
+                    "--format=%(refname)",
+                    "refs/heads",
+                    "refs/remotes/origin",
+                ])?;
+                let mut names: Vec<&str> = at_head
+                    .lines()
+                    .filter_map(|name| {
+                        name.strip_prefix("refs/heads/")
+                            .or_else(|| name.strip_prefix("refs/remotes/origin/"))
+                    })
+                    .filter(|name| *name != "HEAD")
+                    .collect();
+                names.sort_unstable();
+                names.dedup();
+                match names.as_slice() {
+                    [name] => Some((*name).to_owned()),
+                    _ => None,
+                }
             })
-            .filter(|name| git(&["check-ref-format", "--branch", name]).is_some())
-            .unwrap_or_else(|| "main".to_owned());
-        let mut names = format!("update HEAD {head}\nupdate refs/heads/{branch} {head}\n");
+            .filter(|name| git(&["check-ref-format", "--branch", name]).is_some());
+        let mut names = format!("update HEAD {head}\n");
+        if let Some(branch) = &branch {
+            use std::fmt::Write as _;
+            let _ = writeln!(names, "update refs/heads/{branch} {head}");
+        }
         let tags = git(&[
             "for-each-ref",
             "--merged",

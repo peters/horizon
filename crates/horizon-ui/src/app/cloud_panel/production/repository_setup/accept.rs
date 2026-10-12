@@ -369,6 +369,12 @@ mod blocking_tests {
                 .is_some_and(Run::ending),
             "the dialog shows Use at work"
         );
+        // Stop cannot cancel Use once it started, so it does nothing until Use reported.
+        app.cloud_repository_setup_action(&ctx, super::super::run::Action::Stop);
+        assert!(
+            app.cloud_prototype.production.setup_run.is_some(),
+            "Stop leaves the run to Use"
+        );
         opener.join().unwrap();
         // Then it reports: this run has no proof that passed, so nothing is committed.
         let deadline = Instant::now() + std::time::Duration::from_secs(60);

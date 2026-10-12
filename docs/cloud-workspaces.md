@@ -518,7 +518,9 @@ with `--fast` to show the warm rerun, and tells the agent the result. A wrapper
 there that starts what the CI needs, such as a database, and then runs localci
 is allowed. A job that runs no command here, because its `if:` is false on this
 computer, such as a publish job, or because the proof skips each step of it that
-runs one, is left out of the proof and named in its output. The
+runs one, is left out of the proof and named in its output. The proof shows that
+the setup works, not that the image is honest: every program the CI runs comes
+from the image, its shell included. The
 dialog shows these steps as proved by Horizon, with their times. **Use this
 setup** is available only after the proof that the agent asked for passed and
 only while the `.horizon` files and the commit are the ones it tested. A build

@@ -744,7 +744,7 @@ impl Job {
             .arg("-e")
             .arg(format!("HEAD_SHA={head}"))
             .arg("-e")
-            .arg(format!("HEAD_BRANCH={branch}"))
+            .arg(format!("HEAD_BRANCH={}", branch.unwrap_or_default()))
             .args(["--entrypoint", "sh", TOOLS, "-c"])
             .arg(CLONE);
         let result = self.stream(clone, log);
@@ -850,6 +850,11 @@ impl Job {
     /// localci a worker session finds, with the image's session environment read
     /// beforehand, and Horizon's own when the image has none; the steps then run in the
     /// image as the worker would run them.
+    ///
+    /// The proof shows that the setup works; it is no defence against an image made to
+    /// lie. Every program the CI runs comes from the image, its shell included, so such
+    /// an image passes with any localci. Horizon's own checks the plan, which reads only
+    /// the repository's workflow.
     fn ci(&self, fast: bool, log: &mut Option<std::fs::File>) -> Result<(), String> {
         let head = self.head().unwrap_or_default();
         let run = |command| self.capture(command, STEP_TIMEOUT);
@@ -917,8 +922,8 @@ impl Job {
 const NO_LOCALCI: &str = "a worker session finds no localci on its PATH; install it for the agents on the worker, for example at /usr/local/bin/localci";
 
 /// Fetches the tested commit from its bundle into the volume's checkout and checks it
-/// out on its branch, as `actions/checkout` does for a push, then removes everything
-/// untracked. It runs as root in Horizon's base image, so
+/// out on its branch, as `actions/checkout` does for a push, or detached when it has no
+/// branch without doubt, then removes everything untracked. It runs as root in Horizon's base image, so
 /// it starts from a fresh git folder with no global settings and no hooks: an earlier
 /// proof's CI could have written to the checkout's .git and to HOME, and none of that
 /// may run here. Git LFS files stay pointers, as `actions/checkout` leaves them without
@@ -927,8 +932,9 @@ const NO_LOCALCI: &str = "a worker session finds no localci on its PATH; install
 const CLONE: &str = "set -e; export HOME=/tmp/horizon-clone GIT_CONFIG_GLOBAL=/dev/null GIT_LFS_SKIP_SMUDGE=1; mkdir -p \"$HOME\"; \
 git config --system --add safe.directory '*'; rm -rf /workspace/checkout; mkdir /workspace/checkout; \
 cd /workspace/checkout; git init -q; G='git -c core.hooksPath=/dev/null -c core.fsmonitor=false'; \
-$G fetch -q /src.bundle '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'; \
-$G checkout -q --force -B \"$HEAD_BRANCH\" \"$HEAD_SHA\"; $G clean -q -ffdx; \
+$G fetch -q /src.bundle HEAD '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'; \
+if [ -n \"$HEAD_BRANCH\" ]; then $G checkout -q --force -B \"$HEAD_BRANCH\" \"$HEAD_SHA\"; \
+else $G checkout -q --force --detach \"$HEAD_SHA\"; fi; $G clean -q -ffdx; \
 chown -R 10001:10001 /workspace/checkout";
 
 /// Hands the volume to the worker's account, with the folders a worker session names:
