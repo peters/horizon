@@ -214,13 +214,20 @@ setup** commits `.horizon` and reads it as the repository profile.
 
 3. Click **Show live preview**.
 
-   Result: A Device panel named "gui-app preview" shows the xmessage window with
-   the text "gui-app fixture". The address of the panel is on `127.0.0.1`.
+   Result: The dialog closes. A Device panel named "gui-app preview" shows the
+   xmessage window with the text "gui-app fixture". The address of the panel is on
+   `127.0.0.1`.
 
-4. Click **Stop** in the dialog.
+4. Open **New cloud** again.
 
-   Result: The Device panel closes. Within one minute, `docker ps --all` lists no
-   container and `docker network ls` lists no network whose name starts with
+   Result: The dialog shows the finished setup with **Use this setup**.
+
+5. Click **Use this setup**.
+
+   Result: The "gui-app preview" panel closes and the dialog reads the committed
+   profile. `git -C <home>/smoke/gui-app log --oneline -1` shows "Add the Horizon
+   cloud worker setup". Within one minute, `docker ps --all` lists no container and
+   `docker network ls` lists no network whose name starts with
    `horizon-setup-gui-app-`.
 
 ### 6.11 S11 — A proof with commands
@@ -243,9 +250,63 @@ setup** commits `.horizon` and reads it as the repository profile.
    each with its mark and then its name. When the title is empty, the hint for the
    title shows under the title field.
 
+### 6.13 S13 — Replace and withdraw a live preview
+
+> **CAUTION:** THE NEXT STEP REMOVES A COMMIT. Make sure that the path is the
+> fixture copy under `<home>/smoke` and not a real repository.
+
+1. Run `git -C <home>/smoke/gui-app reset -q --hard HEAD~1`.
+
+   Result: `git -C <home>/smoke/gui-app log --oneline -1` shows "Add the app".
+
+2. Open **New cloud** for `<home>/smoke/gui-app`, start the setup agent and wait
+   until Desktop preview shows "live in Horizon".
+
+   Result: A "gui-app preview" panel shows the xmessage window, and
+   `docker ps --format '{{.Names}}'` lists one name that ends in `-preview-1`.
+
+3. Click the agent's terminal in the dialog, type "Set preview_request to 2 in the
+   status file." and press Enter.
+
+   Result: Desktop preview shows "Horizon is starting the app" and the "gui-app
+   preview" panel closes. Then a new "gui-app preview" panel opens on
+   `127.0.0.1` with the xmessage window. `docker ps --format '{{.Names}}'` lists a
+   name that ends in `-preview-2` and none that ends in `-preview-1`.
+
+4. Type "Set preview to null in the status file and mark Desktop preview skipped."
+   and press Enter.
+
+   Result: The "gui-app preview" panel closes and Desktop preview shows skipped.
+   Within one minute, `docker ps --format '{{.Names}}'` lists no name that ends in
+   `-preview-2`.
+
+5. Click **Stop**.
+
+   Result: Within one minute, `docker ps --all`, `docker volume ls` and
+   `docker network ls` list no name that starts with `horizon-setup-gui-app-`.
+
+### 6.14 S14 — The app of a live preview stops
+
+1. Open **New cloud** for `<home>/smoke/gui-app`, start the setup agent and wait
+   until Desktop preview shows "live in Horizon".
+
+   Result: `docker ps --format '{{.Names}}'` lists one name that ends in
+   `-preview-1`.
+
+2. Run `docker kill <name>` with that name.
+
+   Result: Within 10 s, Desktop preview shows failed with "the app stopped while it
+   was live", the "gui-app preview" panel closes and **Use this setup** does not
+   show. The agent's terminal shows "Horizon desktop preview failed".
+
+3. Click **Stop**.
+
+   Result: Within one minute, `docker ps --all`, `docker volume ls` and
+   `docker network ls` list no name that starts with `horizon-setup-gui-app-`.
+
 ## 7. Pass criteria
 
-- S01 to S12 give the results above.
+- S01 to S14 give the results above.
 - The proof ran on this computer. Before you click **Use this setup** in S04,
   `docker images` lists `horizon-setup-ci-app-<hash>-<run>:candidate`. `<hash>` is
   six hexadecimal digits that Horizon derives from the repository's path. `<run>` is
