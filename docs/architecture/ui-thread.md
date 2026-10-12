@@ -172,9 +172,11 @@ not durable.
 - `poll_shutdown_progress` in
   [`lifecycle/shutdown.rs`](../../crates/horizon-ui/src/app/lifecycle/shutdown.rs)
   runs on the frames of the exit and does not wait for worker threads. Before the
-  exit, it saves the session file on the UI thread. The window shows
+  exit, it queues the last session save. The session writer thread makes it
+  durable, and the frames of the exit check for it. The window shows
   **Closing Horizon…**. The exit waits up to `MAX_SHUTDOWN_WAIT` (10 s)
-  for the panels and for each cloud session save (`cloud_sessions_recorded`).
+  for the panels, for each cloud session save (`cloud_sessions_recorded`) and
+  for the session writer.
   If the browsers did not stop in that time, it stops them by force, which
   can take 3 s more. Then it waits up to 2 s (`EXIT_FLUSH`) for the jobs of
   the browser coordination worker thread. The window paints during these waits.
@@ -279,11 +281,14 @@ This work still runs on the UI thread. Do not copy it into new code.
   [`browser_remote_create.rs`](../../crates/horizon-ui/src/app/browser_remote_create.rs)
   locks the keychain store mutex, which the credential worker thread can hold, and
   reads OS credentials. #1470 tracks it.
-- The session auto-save (`auto_save_runtime_state` in
-  [`persistence.rs`](../../crates/horizon-ui/src/app/persistence.rs)) writes
-  and renames the session file on the UI thread.
-  [#1448](https://github.com/peters/horizon/issues/1448) tracks a durable save
-  off the UI thread.
+- The save of a recovered startup board (`save_recovered_startup_runtime_state`
+  in [`persistence.rs`](../../crates/horizon-ui/src/app/persistence.rs)) writes
+  and renames the session file on the UI thread, without a sync. While the
+  session writer thread writes that session, the save is refused, and the
+  startup prompt offers to try again. The session
+  auto-save queues the board for the session writer thread
+  ([`writer.rs`](../../crates/horizon-core/src/session_store/writer.rs)) and
+  does not write.
 - `poll_config_reload`, which `prepare_frame` in
   [`app/lifecycle.rs`](../../crates/horizon-ui/src/app/lifecycle.rs) calls,
   reads the metadata of the config file at most every 2 s. When the file
@@ -313,5 +318,6 @@ This work still runs on the UI thread. Do not copy it into new code.
   companion access removals are saved. `run_exit_cleanup` joins the worker thread of
   a saved session deletion. The other synchronous waits in
   `run_exit_cleanup` have a time limit, for example 10 s for the casting
-  teardown on Linux and 2 s for the browser coordination worker thread. Each
+  teardown on Linux, 2 s for the browser coordination worker thread and 10 s
+  for the session writer thread. Each
   wait has its own limit, so together they can take longer.

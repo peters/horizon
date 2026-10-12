@@ -234,6 +234,10 @@ impl SessionStore {
     /// Returns an error if neither store has a readable board, or if the index is newer
     /// than this Horizon supports.
     pub(super) fn load_runtime(&self, session_id: &str) -> Result<Option<RuntimeState>> {
+        // A board the session writer has not written yet is newer than the one on disk.
+        if let Some(board) = self.writer.unwritten(session_id) {
+            return Ok(Some(board));
+        }
         let yaml = match fs::read_to_string(self.home.session_runtime_path(session_id)) {
             Ok(text) => Some(text),
             Err(error) if error.kind() == ErrorKind::NotFound => None,

@@ -88,6 +88,7 @@ fn persistent_session_switch_waits_for_viewport_before_finalizing_target() {
         );
         app.flush_runtime_if_dirty();
     }
+    crate::app::test_support::wait_for_session_saves(&app);
     let saved_target = RuntimeState::load(&target.runtime_state_path)
         .expect("load target runtime after switch")
         .expect("target runtime exists after switch");

@@ -109,3 +109,13 @@ pub(super) fn editor_workspace_state(local_id: &str, position: [f32; 2]) -> Work
         ..WorkspaceState::default()
     }
 }
+
+/// Waits until the session writer saved every queued board, so a test can read the session
+/// files on disk.
+pub(super) fn wait_for_session_saves(app: &HorizonApp) {
+    assert!(
+        app.session_store
+            .flush_runtime_states(std::time::Duration::from_secs(30)),
+        "the session writer did not save the board"
+    );
+}
