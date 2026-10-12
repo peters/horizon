@@ -39,12 +39,13 @@ impl HorizonApp {
             || self.browser_create_host.io.applying_stale()
     }
 
-    /// Answers what the board was asked for before an exit or a session
-    /// switch tears it down: pending closes and creates are refused with
-    /// `host_shutdown`, because nothing polls them afterwards.
+    /// Ends what the board was asked for before an exit or a session switch
+    /// tears it down: no change asked for earlier is published any more, and
+    /// pending closes and starting creates are refused with `host_shutdown`.
     pub(super) fn retire_browser_requests(&mut self) {
+        self.browser_create_host.io.retire_board();
         self.retire_pending_browser_closes_for_shutdown();
-        self.retire_pending_browser_creates();
+        self.retire_starting_browser_creates();
     }
 
     /// Claims the create, visibility and close requests of the agents on this
@@ -203,6 +204,19 @@ pub(super) fn launched_by_this_host(host_instance: Option<&str>) -> bool {
 pub(super) fn fail_create(io: &mut HostIo, request: &BrowserCreateRequest, code: &str, message: &str) {
     let result = BrowserCreateResult::failed(request, code, message);
     io.write(move || complete_result(&result));
+}
+
+pub(super) fn refuse_expired_create(io: &mut HostIo, request: &BrowserCreateRequest) -> bool {
+    if request.deadline_at_millis >= manifest::now_millis() {
+        return false;
+    }
+    fail_create(
+        io,
+        request,
+        "request_expired",
+        "browser create request expired before Horizon could accept it",
+    );
+    true
 }
 
 /// The requests of one queue that are `ours` and that this host claimed. A

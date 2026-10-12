@@ -225,20 +225,21 @@ pub fn sync_host_state(
     sync_host_state_at(
         &default_manifest_path(panel_local_id),
         panel_local_id,
-        visible,
+        Some(visible),
         workspace,
     )
 }
 
 /// Like [`sync_host_state`], addressing the manifest under `root` instead of
-/// the process default Horizon home.
+/// the process default Horizon home. A `visible` of `None` keeps the
+/// visibility the manifest has, read under the same lock as the write.
 ///
 /// # Errors
 /// Same as [`sync_host_state`].
 pub fn sync_host_state_in(
     root: &Path,
     panel_local_id: &str,
-    visible: bool,
+    visible: Option<bool>,
     workspace: &ManifestWorkspace,
 ) -> std::io::Result<HostStampOutcome> {
     sync_host_state_at(
@@ -252,10 +253,10 @@ pub fn sync_host_state_in(
 fn sync_host_state_at(
     path: &Path,
     panel_local_id: &str,
-    visible: bool,
+    visible: Option<bool>,
     workspace: &ManifestWorkspace,
 ) -> std::io::Result<HostStampOutcome> {
-    let hidden = !visible;
+    let hidden = |manifest: &BrowserManifest| visible.map_or(manifest.hidden, |visible| !visible);
     // Only an absent file is "not live"; a read or parse failure propagates
     // so callers that retry later do not mistake it for a missing panel.
     let current = try_read_at(path)?.ok_or_else(|| {
@@ -267,18 +268,103 @@ fn sync_host_state_at(
     if !driver_host_matches(&current, workspace) {
         return Ok(HostStampOutcome::NotOwned);
     }
-    if current.hidden == hidden && current.workspace.as_ref() == Some(workspace) {
+    if current.hidden == hidden(&current) && current.workspace.as_ref() == Some(workspace) {
         return Ok(HostStampOutcome::Unchanged);
     }
     let mut outcome = HostStampOutcome::NotOwned;
     mutate_at(path, panel_local_id, false, |manifest| {
         if driver_host_matches(manifest, workspace) {
-            stamp(manifest, hidden, workspace, now_millis());
+            stamp(manifest, hidden(manifest), workspace, now_millis());
             outcome = HostStampOutcome::Written;
             true
         } else {
             false
         }
+    })?;
+    Ok(outcome)
+}
+
+/// What [`sync_owned_host_state`] did to one manifest.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OwnedStampOutcome {
+    /// The requester held the live lease: what the stamp did, and whether the
+    /// panel was visible before it.
+    Stamped { stamp: HostStampOutcome, was_visible: bool },
+    /// Another agent, or none, holds the live lease; nothing was written.
+    OwnerChanged,
+}
+
+/// Stamp host-owned state for a request of `owner`. The same locked
+/// transaction checks that `owner` still holds the panel's live lease, so a
+/// lease that moves while the request runs is never crossed by its write.
+///
+/// # Errors
+/// Returns `NotFound` when the panel is not live, or another error when the
+/// locked manifest transaction fails.
+pub fn sync_owned_host_state(
+    panel_local_id: &str,
+    visible: bool,
+    workspace: &ManifestWorkspace,
+    owner: &str,
+) -> std::io::Result<OwnedStampOutcome> {
+    sync_owned_host_state_at(
+        &default_manifest_path(panel_local_id),
+        panel_local_id,
+        visible,
+        workspace,
+        owner,
+    )
+}
+
+/// Like [`sync_owned_host_state`], addressing the manifest under `root`
+/// instead of the process default Horizon home.
+///
+/// # Errors
+/// Same as [`sync_owned_host_state`].
+pub fn sync_owned_host_state_in(
+    root: &Path,
+    panel_local_id: &str,
+    visible: bool,
+    workspace: &ManifestWorkspace,
+    owner: &str,
+) -> std::io::Result<OwnedStampOutcome> {
+    sync_owned_host_state_at(
+        &manifest_path_for_root(root, panel_local_id),
+        panel_local_id,
+        visible,
+        workspace,
+        owner,
+    )
+}
+
+fn sync_owned_host_state_at(
+    path: &Path,
+    panel_local_id: &str,
+    visible: bool,
+    workspace: &ManifestWorkspace,
+    owner: &str,
+) -> std::io::Result<OwnedStampOutcome> {
+    let hidden = !visible;
+    let mut outcome = OwnedStampOutcome::OwnerChanged;
+    mutate_at(path, panel_local_id, false, |manifest| {
+        let now = now_millis();
+        if manifest.live_owner(now).is_none_or(|current| current.name != owner) {
+            return false;
+        }
+        let was_visible = !manifest.hidden;
+        let stamp_outcome = if !driver_host_matches(manifest, workspace) {
+            HostStampOutcome::NotOwned
+        } else if manifest.hidden == hidden && manifest.workspace.as_ref() == Some(workspace) {
+            HostStampOutcome::Unchanged
+        } else {
+            stamp(manifest, hidden, workspace, now);
+            HostStampOutcome::Written
+        };
+        outcome = OwnedStampOutcome::Stamped {
+            stamp: stamp_outcome,
+            was_visible,
+        };
+        stamp_outcome == HostStampOutcome::Written
     })?;
     Ok(outcome)
 }

@@ -108,7 +108,36 @@ crates/
 
 ## Development Workflow
 
-### Pre-push validation (all must pass)
+### Validation by changed inputs
+
+- During development, run the regression tests and checks that the change affects. Fix related findings together before another push.
+- Before the PR opens, run the full local matrix below once on the stable candidate, except for documentation-only changes.
+- For documentation-only changes, run the applicable repository and documentation checks. Rust tests, Clippy and UI smoke are unnecessary for prose-only edits.
+  Examine changed examples and commands separately. Test them when the edit changes their behavior.
+  A document that a build, test or application consumes is an executable input, even if its extension is `.md`.
+- After a candidate passes, rerun only the checks whose inputs change. Reuse the other results under the rules below.
+  Dependency, toolchain, build configuration and workflow changes can affect the full matrix. If the affected set is uncertain, run the full matrix.
+- Before each push, account for every applicable check with a new result or a valid reused result.
+  Before final readiness, the results together must cover the full applicable matrix for the current candidate.
+  GitHub checks and the independent PR review must still pass on the exact head, under the merge rules below.
+
+#### Reuse of local results
+
+- Record the checked commit, any uncommitted input changes, the command, its result and the log location.
+  Record the toolchain, dependency versions, flags and relevant environment. Do not record secrets.
+- Compare the candidate with the recorded inputs before reuse. Include untracked or generated files if the check consumes them.
+  Reuse a passing result only when all inputs to that check match. If evidence is missing or uncertain, rerun the check.
+- A message-only amendment or an empty commit does not require another local test run when these inputs match.
+  If a check consumes commit identity or other Git metadata, rerun that check when the metadata changes.
+- Preserve smoke evidence when the tested behavior and executable inputs match. A behavior change requires new evidence for the affected scenarios.
+- Run checks in the task checkout. After a branch split or base update, examine the resulting inputs again.
+  Do not transfer results from a combined change to a smaller branch without this comparison.
+- Report new, reused and non-applicable results separately. A cache flag alone does not prove reuse; examine the step report.
+
+#### Full local matrix
+
+The blocking and strict tiers must pass. The pedantic tier remains advisory, as defined under CI Tiers.
+Use `localci` for equivalent workflow steps, or run these commands directly. Do not run both for the same inputs.
 
 ```bash
 cargo fmt --all -- --check
@@ -124,8 +153,6 @@ cargo clippy --workspace --lib --bins --examples --features speech -- -D warning
 cargo clippy --workspace --all-targets --features speech -- -D warnings -W clippy::pedantic
 ```
 
-- Run the validation commands in the exact checkout you will push. If you split work across branches or `git worktree`s, rerun the blocking and strict clippy tiers in each final branch/worktree after applying the split, not only in the original combined checkout.
-
 ### Local CI with localci
 
 [localci](https://github.com/peters/localci) runs the jobs of
@@ -137,9 +164,10 @@ curl -fsSL https://raw.githubusercontent.com/peters/localci/main/install.sh | sh
 localci skill install
 ```
 
-- Before each push, run `localci run` in the exact checkout that you will push.
-  To run some jobs only, give their ids, for example `localci run clippy repo-checks`.
-  `localci list` shows all jobs.
+- Use `localci` for the checks selected under [Validation by changed inputs](#validation-by-changed-inputs).
+  `localci list` shows all jobs. Select affected jobs or steps during development, for example `localci run repo-checks`.
+  Use `localci plan --affected` to examine its selection before `localci run --fast`.
+  If a shell wrapper hides the inputs, select the affected steps explicitly. The fast mode does not replace a complete candidate result.
 - Each apt and video tool installer step has a condition with `!env.LOCALCI`,
   so localci does not run it. Install the packages that these steps name one
   time on your computer.
@@ -249,7 +277,8 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 - No assistant attribution anywhere in repository history: never add a `Co-authored-by` trailer, a session link or a similar tool or vendor identifier to a commit message, PR body or squash-merge message, and strip an inherited one when amending, rebasing or squashing someone else's work
 - Always squash-merge pull requests; do not use merge commits or rebase merges for PRs
 - PRs include: purpose, behavior impact, test evidence
-- Fix Clippy warnings introduced or worsened by the PR and any warnings that block required tiers before committing; a commit must leave the blocking and strict CI tiers green in the exact branch/worktree that will be pushed for review
+- Before a commit, fix Clippy warnings that the PR introduces or worsens, and warnings that block required tiers.
+  Use the validation and reuse rules above to establish passing results for the applicable blocking and strict tiers.
 
 ### Pull Request Scope
 
@@ -266,7 +295,9 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 ### Pull Request Review and Merge Strategy
 
 - For implementation work, create a focused branch in a separate worktree from fresh `origin/main` unless the user explicitly asks to use the current checkout. Keep unrelated files in the primary checkout untouched.
-- Run the full Horizon validation matrix in the exact worktree and commit that will be pushed. Complete applicable local UI smoke, including the PR GIF for UI changes described under [Isolated UI Testing Through Horizon Native VNC](#isolated-ui-testing-through-horizon-native-vnc), before opening the PR. Any required cross-machine smoke must finish on the current head before reporting the PR ready to merge.
+- Apply [Validation by changed inputs](#validation-by-changed-inputs) before the PR opens and after each change.
+  Complete applicable local UI smoke, including the PR GIF described under [Isolated UI Testing Through Horizon Native VNC](#isolated-ui-testing-through-horizon-native-vnc), before the PR opens.
+  Complete required cross-machine smoke before final readiness. Apply the same input comparison before reuse of smoke results.
 - Always review the full diff yourself before you open a PR. Then do the local review loop in the localci skill:
   1. Run the GitHub Copilot CLI review with the prompt in the skill. The prompt asks for concrete inputs and wrong results.
   2. Fix the findings.
@@ -274,6 +305,9 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
   4. Review again. Stop when a round finds nothing actionable.
 
   Do not start a separate review agent. The local Copilot review and the Copilot review on the PR are the independent reviews. If `copilot` is not installed, your own review is the local review. Fix actionable in-scope findings and record valid out-of-scope findings as follow-up candidates.
+- If two review rounds find related bugs, examine the affected design and transitions before another push.
+  Check related callers and failure paths within the PR scope. Fix the related findings together and run the affected checks.
+  This rule does not limit review rounds or permit unresolved findings. Keep independent outcomes outside the PR.
 - Before you open a PR, write its title and body, then run the readiness check:
 
   ```bash
@@ -334,10 +368,17 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
   Mind the asymmetry: the request must name `copilot-pull-request-reviewer[bot]`, but the timeline reports the reviewer as `Copilot`.
 - The Copilot review on the PR is the final gate, not the place to iterate. Request it only for a head whose files the local review loop found clean. Push all fixes of a round together.
 - A Copilot review is pinned to the commit it ran against, so re-request it after every push. Compare the review's `commit_id` with the current head (`gh api --paginate repos/<owner>/<repo>/pulls/<n>/reviews --jq '.[] | select(.user.login == "copilot-pull-request-reviewer[bot]") | .commit_id'`) before treating the review gate as met.
-- After the PR exists, end the commit message of each review fix with `[skip ci]`, but only after `localci` passed for the affected jobs. GitHub then starts no workflow for that head. Before you report the PR ready to merge, push a head without `[skip ci]`, and let all CI checks pass on that head.
+- For a candidate expected to finish review, use a normal commit message so CI and review run on the same head.
+  For intermediate review fixes, `[skip ci]` is optional after the affected local checks pass.
+  Before final readiness, push a head without that marker and wait for all required CI checks on that head.
+  A message-only change to remove the marker can reuse local results under the input comparison rules above.
 
   > **CAUTION:** DO NOT PUT `[skip ci]` IN A SQUASH MESSAGE OR QUOTE IT IN ANOTHER COMMIT MESSAGE. GitHub reads the full commit message, body included, and skips CI wherever the marker occurs. Write the squash message yourself, because the default squash message lists every commit message.
-- Wait for the requested Copilot review and all repository-mandated checks on the current head. A head with `[skip ci]` has no checks, so wait only for its Copilot review. Triage every actionable comment against the PR scope: fix in-scope findings on the same PR, explicitly disposition valid out-of-scope findings as follow-up candidates, and leave no actionable thread unresolved. Before every push, rerun the repository-mandated local validation for that exact head as defined by the pre-push section above. After the push, refresh the review and checks for the new head and rerun affected smoke lanes. A behavior-affecting push invalidates smoke evidence from an older head.
+- Wait for the requested Copilot review and all repository-mandated checks on the current head.
+  For an intermediate head with `[skip ci]`, wait only for its review. That head cannot be ready to merge.
+  Fix actionable in-scope findings on this PR. Record valid out-of-scope findings as follow-up candidates and leave no actionable thread unresolved.
+  Before each push, apply the validation and reuse rules above. After the push, refresh the review and checks for the new head.
+  Rerun affected smoke scenarios after a behavior change.
 - Apply repository-standard metadata only when the convention is unambiguous: assignee `@me`, `Awaiting Review` label, current milestone, and project. Otherwise report and skip the ambiguous item rather than guessing.
 - Every PR merge requires explicit final permission from `peters` in the current user conversation. This rule applies to every author, including `peters`.
 - First complete the review and applicable checks. Then report the PR number, exact head commit, results and remaining risks to `peters`.
