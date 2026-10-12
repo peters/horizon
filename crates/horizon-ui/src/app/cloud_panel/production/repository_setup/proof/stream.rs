@@ -60,7 +60,23 @@ fn end_group(leader: u32) {
 /// The most output Horizon keeps from a command whose output it reads, such as a plan.
 const CAPTURE_LIMIT: u64 = 4 * 1024 * 1024;
 
+/// How long the last lines of an ended command may take to arrive while something it
+/// started still holds its output open.
+const DRAIN_GRACE: Duration = Duration::from_secs(2);
+
 impl Job {
+    /// Records the lines still arriving from an ended command until its output closes
+    /// or `grace` passes.
+    fn drain(&self, received: &mpsc::Receiver<String>, log: &mut Option<std::fs::File>, grace: Duration) {
+        let deadline = Instant::now() + grace;
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            match received.recv_timeout(left) {
+                Ok(line) => self.record(log, line),
+                Err(_) => return,
+            }
+        }
+    }
+
     /// Runs `command` and returns what it wrote to standard output, at most
     /// [`CAPTURE_LIMIT`], within `limit`. Stop and the limit end its whole group.
     pub(super) fn capture(&self, mut command: Command, limit: Duration) -> Result<Vec<u8>, String> {
@@ -207,9 +223,11 @@ impl Job {
         loop {
             match received.recv_timeout(Duration::from_millis(200)) {
                 Ok(line) => self.record(log, line),
-                // A command that ended while something it started still holds its output.
+                // The command ended: its last lines, such as a build's final error, are
+                // still on their way; they are read before anything it left goes.
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if matches!(child.try_wait(), Ok(Some(_))) {
+                        self.drain(&received, log, DRAIN_GRACE);
                         break;
                     }
                 }
