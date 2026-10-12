@@ -86,6 +86,18 @@ impl HostIo {
         }));
     }
 
+    /// Like [`Self::write`], for work that writes the board's placement: a
+    /// board replaced before the work runs leaves the files to the board that
+    /// stands now, so nothing is written.
+    pub(super) fn write_for_board(&mut self, work: impl FnOnce() + Send + 'static) {
+        let board = self.board_fence();
+        self.write(move || {
+            if board.holds() {
+                work();
+            }
+        });
+    }
+
     /// Does `work` after every job asked for before it, then `apply` on the UI
     /// thread with its outcome, or with `None` when `work` panicked, so the UI
     /// always learns that the work ended. An outcome asked for on a board that

@@ -798,7 +798,7 @@ fn finish_ready_browser_create(
         // it or handing an uncontrollable panel back as ready.
         let (panel_local_id, visible) = (pending.panel_local_id.clone(), pending.request.visible);
         let request_id = pending.request.request_id.clone();
-        io.write(move || {
+        io.write_for_board(move || {
             if let Err(error) = publish_manifest_host_state(&panel_local_id, visible, &workspace) {
                 tracing::warn!(%request_id, %error, "could not stamp a moved browser panel");
             }
@@ -1575,6 +1575,43 @@ mod tests {
             "the old board's placement is not written"
         );
         assert!(app.browser_create_host.stamped_placement.is_none());
+    }
+
+    #[test]
+    fn a_placement_write_queued_before_a_session_switch_keeps_the_restored_panels_manifest() {
+        let (_temp, mut app) = test_app();
+        let root = app.host_manifest_root().to_path_buf();
+        let path = manifest::manifest_path_for_root(&root, "browser-1");
+        let target = app
+            .session_store
+            .create_session_from_runtime(horizon_core::RuntimeState::default())
+            .expect("target session");
+        // The worker is still busy when the switch ends its wait.
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        app.browser_create_host.io.write(move || {
+            let _ = released.recv();
+        });
+        let old = ManifestWorkspace::new(manifest::host_instance(), "old-workspace", Vec::new());
+        let stamped = root.clone();
+        app.browser_create_host.io.write_for_board(move || {
+            let _ = manifest::sync_host_state_in(&stamped, "browser-1", Some(false), &old);
+        });
+        app.activate_runtime_session(&egui::Context::default(), &target);
+        assert!(app.pending_session_switch.is_none(), "the switch completed");
+        // The restored board's panel with the same persisted id has its own manifest.
+        let restored = manifest::BrowserManifest {
+            host: Some(manifest::host_instance().to_string()),
+            ..manifest::BrowserManifest::default()
+        };
+        manifest::write_at(&path, &restored).expect("restored manifest");
+        let before = std::fs::read(&path).expect("manifest");
+        release.send(()).expect("the worker waits");
+        app.settle_browser_host_io();
+        assert_eq!(
+            std::fs::read(&path).expect("manifest"),
+            before,
+            "the old board's placement is not written"
+        );
     }
 
     #[test]
