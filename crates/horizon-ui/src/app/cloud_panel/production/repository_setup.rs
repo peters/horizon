@@ -264,8 +264,8 @@ fn option_card(ui: &mut egui::Ui, tint: Color32, add: impl FnOnce(&mut egui::Ui)
 }
 
 const QUICK_START_DETAIL: &str = "A 2 vCPU, 4 GB RunPod worker with Claude, Codex, Chromium and a desktop. It needs no registry login, no image build and no Docker on this computer.";
-const SETUP_DETAIL: &str = "An agent reads your CI, builds a worker image and runs your tests in it.";
-const CONTINUE_DETAIL: &str = "This folder has uncommitted files in .horizon. An agent continues from them, checks them against your CI and runs your tests.";
+const SETUP_DETAIL: &str = "An agent reads your CI and writes a worker setup; Horizon builds its image and runs your CI jobs in it to prove it.";
+const CONTINUE_DETAIL: &str = "This folder has uncommitted files in .horizon. An agent continues from them against your CI; Horizon builds the image and runs your CI jobs in it to prove them.";
 
 fn same_folder(a: &Path, b: &str) -> bool {
     let b = Path::new(b.trim());

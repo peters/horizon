@@ -34,19 +34,10 @@ pub(super) fn arguments(image: &str, container: &str, run: Run<'_>) -> Result<Ve
     let _ = run(remove);
     let folder = folder.map_err(|error| format!("cannot read the image's session environment: {error}"))?;
     let environment = environment.map_err(|error| format!("cannot read the image's session environment: {error}"))?;
-    let base = environment
-        .as_deref()
-        .and_then(|archive| unpack(archive).ok())
-        .and_then(|entries| {
-            entries
-                .into_iter()
-                .find_map(|(name, entry)| (name == "environment").then_some(entry))
-        })
-        .and_then(|entry| match entry {
-            Unpacked::File(bytes, _) => Some(base_path(&bytes)),
-            Unpacked::Folder | Unpacked::Other => None,
-        })
-        .unwrap_or_else(|| SSH_PATH.to_owned());
+    let base = match environment {
+        None => SSH_PATH.to_owned(),
+        Some(archive) => environment_path(&archive)?,
+    };
     let files = match folder {
         Some(archive) => session_files(&archive).map_err(|error| format!("session environment refused: {error}"))?,
         None => Vec::new(),
@@ -180,14 +171,33 @@ fn session_files(archive: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
 /// The PATH an SSH session of the image starts from: the one its /etc/environment
 /// names, which PAM applies, or sshd's own default. The image's `ENV` lines do not
 /// reach a session, so they do not count here either.
-fn base_path(environment: &[u8]) -> String {
-    String::from_utf8_lossy(environment)
+fn base_path(environment: &[u8]) -> Result<String, String> {
+    let text = std::str::from_utf8(environment).map_err(|_| "the image's /etc/environment is not UTF-8".to_owned())?;
+    Ok(text
         .lines()
         .find_map(|line| {
             let value = line.trim().strip_prefix("PATH=")?;
             Some(value.trim_matches('"').to_owned())
         })
-        .unwrap_or_else(|| SSH_PATH.to_owned())
+        .unwrap_or_else(|| SSH_PATH.to_owned()))
+}
+
+/// The PATH of the image's `/etc/environment`, copied as `archive`. A worker session
+/// reads that file whatever it holds, so one the proof cannot read the same way, too
+/// large, not UTF-8 or not a regular file, refuses the image instead of the proof
+/// running with another PATH; only a file without PATH gives sshd's default.
+fn environment_path(archive: &[u8]) -> Result<String, String> {
+    let entries = unpack(archive).map_err(|error| format!("the image's /etc/environment is refused: {error}"))?;
+    match entries
+        .into_iter()
+        .find_map(|(name, entry)| (name == "environment").then_some(entry))
+    {
+        Some(Unpacked::File(bytes, _)) => base_path(&bytes),
+        _ => Err(
+            "the image's /etc/environment is not a regular file, and a worker session would read it all the same"
+                .to_owned(),
+        ),
+    }
 }
 
 /// Session variables, in order, and PATH directives: whether each prepends, and its folder.
@@ -366,6 +376,22 @@ mod tests {
     }
 
     #[test]
+    fn an_environment_file_the_proof_cannot_read_refuses_the_image() {
+        let file = |bytes: &[u8]| archive(&[("environment", Some(bytes))]);
+        assert_eq!(
+            environment_path(&file(b"PATH=\"/opt/x:/usr/bin\"\n")).unwrap(),
+            "/opt/x:/usr/bin"
+        );
+        assert_eq!(environment_path(&file(b"LANG=C.UTF-8\n")).unwrap(), SSH_PATH);
+        assert!(environment_path(&file(b"PATH=/opt/\xff\n")).is_err(), "not UTF-8");
+        assert!(environment_path(&file(&vec![b'#'; 32 * 1024])).is_err(), "too large");
+        assert!(
+            environment_path(&archive(&[("environment", None)])).is_err(),
+            "a folder"
+        );
+    }
+
+    #[test]
     fn a_variable_only_the_image_sets_is_emptied() {
         let session = vec![
             "-e".to_owned(),
@@ -411,9 +437,9 @@ mod tests {
     #[test]
     fn the_base_path_is_the_one_ssh_gives_a_session() {
         assert_eq!(
-            base_path(b"PATH=\"/usr/local/bin:/usr/bin\"\nLANG=C\n"),
+            base_path(b"PATH=\"/usr/local/bin:/usr/bin\"\nLANG=C\n").unwrap(),
             "/usr/local/bin:/usr/bin"
         );
-        assert_eq!(base_path(b"LANG=C\n"), SSH_PATH);
+        assert_eq!(base_path(b"LANG=C\n").unwrap(), SSH_PATH);
     }
 }

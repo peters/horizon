@@ -163,21 +163,27 @@ fn read_verified(archive: &Path, sum: &str) -> Option<Vec<u8>> {
     (digest == sum).then_some(bytes)
 }
 
-/// Downloads the release `asset` to `target`, through a partial file beside it.
+/// Downloads the release `asset` to `target`, through a new file of its own beside it
+/// that takes the target's name in one step: proofs downloading at once never write into
+/// one file, and the last one in place wins with the same checked release.
 fn download(asset: &str, target: &Path, run: Bounded<'_>) -> Result<(), String> {
     let url = format!("https://github.com/peters/localci/releases/download/{VERSION}/{asset}");
-    let partial = target.with_extension("partial");
+    let folder = target.parent().ok_or("localci has no cache folder")?;
+    let partial = tempfile::Builder::new()
+        .prefix(".localci-download-")
+        .tempfile_in(folder)
+        .map_err(|error| format!("cannot download localci: {error}"))?;
     let mut curl = Command::new("curl");
     curl.args(["-fsSL", "--proto", "=https", "--max-time", "300", "--max-filesize"])
         .arg(ARCHIVE_LIMIT.to_string())
         .arg("-o")
-        .arg(&partial)
+        .arg(partial.path())
         .arg(&url);
-    if let Err(error) = run(curl, DOWNLOAD_TIMEOUT) {
-        let _ = std::fs::remove_file(&partial);
-        return Err(format!("cannot download localci {VERSION} from {url}: {error}"));
-    }
-    std::fs::rename(&partial, target).map_err(|error| error.to_string())
+    run(curl, DOWNLOAD_TIMEOUT).map_err(|error| format!("cannot download localci {VERSION} from {url}: {error}"))?;
+    partial
+        .persist(target)
+        .map(|_| ())
+        .map_err(|error| format!("cannot keep localci: {error}"))
 }
 
 /// Where localci keeps its step records in the CI container, from the session's

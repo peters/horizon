@@ -16,13 +16,7 @@ pub(super) struct Setup {
 impl Setup {
     pub(super) fn read(repository: &Path, expected: super::untrusted::Identity) -> Result<Self, String> {
         let entries = setup_entries(repository, expected)?;
-        let head = super::commit::git_command(repository)
-            .args(["rev-parse", "--verify", "HEAD"])
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-            .unwrap_or_default();
+        let head = head_of(repository, expected)?;
         Ok(Self { entries, head })
     }
 
@@ -164,6 +158,47 @@ impl Setup {
         }
         Ok(())
     }
+}
+
+/// The commit HEAD names in the folder `repository` names, empty without one. On Linux
+/// git starts in that very folder: a handle opened without following a link and checked
+/// against the run's identity, so a folder renamed and replaced after `.horizon` was read
+/// is never the one whose HEAD is read.
+fn head_of(repository: &Path, expected: super::untrusted::Identity) -> Result<String, String> {
+    #[cfg(target_os = "linux")]
+    let (folder, mut command) = {
+        use std::os::fd::AsRawFd as _;
+        use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+        let flags = rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::NOFOLLOW;
+        let folder = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(flags.bits().cast_signed())
+            .open(repository)
+            .map_err(|_| super::untrusted::OTHER_REPOSITORY.to_owned())?;
+        let metadata = folder.metadata().map_err(|error| error.to_string())?;
+        if expected.is_some_and(|expected| expected != (metadata.dev(), metadata.ino())) {
+            return Err(super::untrusted::OTHER_REPOSITORY.to_owned());
+        }
+        // The child starts in the folder the handle holds, whatever its name is by then.
+        let mut command = super::commit::git_command(Path::new("."));
+        command.current_dir(format!("/proc/self/fd/{}", folder.as_raw_fd()));
+        (folder, command)
+    };
+    #[cfg(not(target_os = "linux"))]
+    let mut command = {
+        let _ = expected;
+        super::commit::git_command(repository)
+    };
+    let head = command
+        .args(["rev-parse", "--verify", "HEAD"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .unwrap_or_default();
+    #[cfg(target_os = "linux")]
+    drop(folder);
+    Ok(head)
 }
 
 /// The fingerprint of the setup as it is now, to compare with the proof's.
@@ -316,6 +351,32 @@ mod tests {
         assert_eq!(mode(&dockerfile), 0o644, "git commits 0644");
         assert_eq!(mode(&context.join("scripts/setup.sh")), 0o755, "and 0755");
         assert!(!context.join("empty").exists(), "git commits no empty folder");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn head_is_read_in_the_folder_the_run_started_in() {
+        let repository = tempfile::tempdir().unwrap();
+        let path = repository.path();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(path)
+                .args(["-c", "user.name=Test", "-c", "user.email=test@example.invalid"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "git {args:?}");
+            String::from_utf8_lossy(&output.stdout).trim().to_owned()
+        };
+        git(&["init", "-q"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "first"]);
+        let identity = super::super::untrusted::identity(path);
+        assert_eq!(head_of(path, identity).unwrap(), git(&["rev-parse", "HEAD"]));
+        assert!(
+            head_of(path, Some((0, 0))).is_err(),
+            "another folder at the path is refused"
+        );
     }
 
     #[test]

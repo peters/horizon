@@ -951,8 +951,10 @@ impl Job {
 /// out, then removes everything untracked. It runs as root in Horizon's base image, so
 /// it starts from a fresh git folder with no global settings and no hooks: an earlier
 /// proof's CI could have written to the checkout's .git and to HOME, and none of that
-/// may run here.
-const CLONE: &str = "set -e; export HOME=/tmp/horizon-clone GIT_CONFIG_GLOBAL=/dev/null; mkdir -p \"$HOME\"; \
+/// may run here. Git LFS files stay pointers, as `actions/checkout` leaves them without
+/// `lfs: true`; the bundle has no LFS objects, and `hydrate` brings them when the commit
+/// has any.
+const CLONE: &str = "set -e; export HOME=/tmp/horizon-clone GIT_CONFIG_GLOBAL=/dev/null GIT_LFS_SKIP_SMUDGE=1; mkdir -p \"$HOME\"; \
 git config --system --add safe.directory '*'; rm -rf /workspace/checkout; mkdir /workspace/checkout; \
 cd /workspace/checkout; git init -q; G='git -c core.hooksPath=/dev/null -c core.fsmonitor=false'; \
 $G fetch -q /src.bundle HEAD; $G checkout -q --force --detach \"$HEAD_SHA\"; $G clean -q -ffdx; \
