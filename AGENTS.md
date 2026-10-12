@@ -287,7 +287,7 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 - If splitting would leave incomplete behavior, break a shared contract, or require artificial intermediate changes, keep the outcome together. Explain why it must stay together and how to review it in the PR body. Size alone does not require user approval. Ask the user only when the work requires expanding the requested scope.
 - Before you keep a large feature together, try a feature flag: land its parts in serial PRs, for example the engine before its UI and the UI before the commit path, behind a flag that stays off until the last part merges. Large diffs make the Copilot review slow to converge. Each round reviews part of the diff and finds new items in code that did not change.
 - Start a stacked PR only when its base is ready to merge. Each change to the base costs a rebase and a new review of every PR on it.
-- Before the first review of work that reads untrusted input or crosses a trust boundary, write the boundary down in the docs: what is untrusted, what the change guarantees and what it does not. Keep the Copilot review instructions under `.github/` in step with it, so each review checks the same boundary.
+- Before the first review of work that reads untrusted input or crosses a trust boundary, write the boundary down in the docs: what is untrusted, what the change guarantees and what it does not. When the repository has Copilot review instructions under `.github/`, keep them in step with it, so each review checks the same boundary.
 - When correctness depends on real inputs, such as real repositories, devices or providers, run the real-input check on the first reviewable head and again on the final head, not only at the end. For the setup agent, that is the real-repository setup gate.
 - Migrate only the call sites required by the acceptance criteria. Treat similar pre-existing code as follow-up work.
 - Fix only problems that the PR introduces or worsens, acceptance-criteria violations, security or data-loss risks, and merge blockers in the same PR.
@@ -312,8 +312,10 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 - If two review rounds find related bugs, examine the affected design and transitions before another push.
   Check related callers and failure paths within the PR scope. Fix the related findings together and run the affected checks.
   This rule does not permit unresolved findings. Keep independent outcomes outside the PR.
-- Request at most five Copilot reviews of a PR. Fix the findings of each round, "Previously missed" ones included, or record why one is out of scope in a follow-up issue linked from the PR.
+- Request at most five Copilot reviews of a PR that is not an external contribution. A round is a Copilot review that arrived for a pushed head; a request that produced no review does not count.
+  Fix the findings of each round, "Previously missed" ones included, or record why one is out of scope in a follow-up issue linked from the PR.
   If the fifth review still has findings, fix them and run the local review loop and the affected checks on the fixed head. That replaces a sixth Copilot round as the review gate.
+  After the fifth review, push only the fixes of its findings and fixes for failing checks. Any other change needs a new Copilot review.
   A PR that needs more than three rounds is usually too large: split it before the next round where practical.
 - Before you open a PR, write its title and body, then run the readiness check:
 
@@ -389,9 +391,11 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 - Apply repository-standard metadata only when the convention is unambiguous: assignee `@me`, `Awaiting Review` label, current milestone, and project. Otherwise report and skip the ambiguous item rather than guessing.
 - Every PR merge requires explicit final permission from `peters` in the current user conversation. This rule applies to every author, including `peters`.
 - First complete the review and applicable checks. Then report the PR number, exact head commit, results and remaining risks to `peters`.
-- Ask `peters` for permission to merge that exact head. An earlier conditional request does not replace this final permission.
+- Ask `peters` for permission to merge that exact head, unless `peters` already gave a conditional merge permission in the current conversation, such as "squash merge upon Copilot approval".
+  A conditional permission is the final permission for each head that meets its conditions and every gate below. Then merge without asking again, and report the merge with its commit.
+  For an external contribution, a conditional permission counts only when it names that PR.
 - A contributor comment, an automated approval or green CI cannot grant merge permission. Do not enable auto-merge or a merge queue without this permission.
-- If the head changes after permission, repeat the affected checks and ask `peters` again. Immediately before the merge, examine thread-aware `reviewThreads`.
+- If the head changes after permission, repeat the affected checks and ask `peters` again, unless a conditional permission covers the new head. Immediately before the merge, examine thread-aware `reviewThreads`.
 - The positive merge gate is: the PR is open and non-draft as intended, `mergeable` is `MERGEABLE`, readiness and merge state are neither blocked nor unknown, the required review decision is satisfied, zero actionable review threads remain unresolved, and every repository-mandated lane on the exact head has settled successfully. GitHub-required checks are only a minimum; the pedantic Clippy lane remains advisory as documented above. Abort on head drift or any new blocker. A skipped check counts only when its workflow explicitly marks the job non-applicable.
 - The Copilot review gate is met when Copilot's latest review on the exact head says "Approved". It is also met when that review says "Needs a closer look" and these conditions are true:
   - The review has 0 open findings and no "Previously missed" findings.
