@@ -10,6 +10,7 @@ use horizon_core::{
 };
 use std::path::Path;
 
+mod commit;
 mod prompt;
 mod proof;
 mod run;

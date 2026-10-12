@@ -96,6 +96,7 @@ impl HorizonApp {
                 let mut run = Run::new(panel, kind, repository, status, mode);
                 run.agent.clone_from(&preset.name);
                 run.pending_prompt = pending_prompt;
+                run.outside = super::commit::outside(&run.repository);
                 self.cloud_prototype.production.setup_run = Some(run);
                 self.cloud_prototype.error = None;
                 ctx.request_repaint();
@@ -314,40 +315,16 @@ impl HorizonApp {
             );
             return;
         }
-        let run = &*run;
-        let repository = run.repository.clone();
-        let message = run.mode.commit_message();
-        let git = |args: &[&str]| {
-            std::process::Command::new("git")
-                .arg("-C")
-                .arg(&repository)
-                .args(args)
-                .output()
-                .map_err(|error| error.to_string())
-                .and_then(|output| {
-                    if output.status.success() {
-                        Ok(())
-                    } else {
-                        Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
-                    }
-                })
-        };
-        // An update that changed nothing has nothing to commit; the committed setup is read.
-        let unchanged = || {
-            std::process::Command::new("git")
-                .arg("-C")
-                .arg(&repository)
-                .args(["diff", "--cached", "--quiet", "--", ".horizon"])
-                .status()
-                .is_ok_and(|status| status.success())
-        };
-        let committed = git(&["add", "--", ".horizon"]).and_then(|()| {
-            if unchanged() {
-                Ok(())
-            } else {
-                git(&["commit", "--quiet", "-m", message, "--", ".horizon"])
-            }
-        });
+        // The agent may change only .horizon. Anything else that changed during the
+        // setup is named once; pressing Use again commits .horizon and leaves the rest.
+        let outside = super::commit::outside(&run.repository);
+        let changed = super::commit::changed(&run.outside, &outside);
+        if !changed.is_empty() {
+            run.outside = outside;
+            self.cloud_prototype.error = Some(outside_changes_message(&changed));
+            return;
+        }
+        let committed = super::commit::commit(&run.repository, run.mode.commit_message());
         if let Err(error) = committed {
             self.cloud_prototype.error = Some(format!("Could not commit .horizon: {error}"));
             return;
@@ -356,13 +333,27 @@ impl HorizonApp {
             remove_run_folder(&run.status_path);
             super::proof::remove_run_resources(&run.repository, &super::proof::run_id(&run.status_path));
         }
+        // The setup was made and committed on HEAD, so the dialog reads HEAD again.
+        self.cloud_prototype.production.revision.clear();
         set_configuration(&mut self.cloud_prototype.production, Configuration::Committed);
         self.read_cloud_profiles(ctx);
     }
 }
 
+/// What Use says when files outside `.horizon` changed while the setup ran.
+fn outside_changes_message(changed: &[String]) -> String {
+    let shown = changed.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+    let more = match changed.len().saturating_sub(5) {
+        0 => String::new(),
+        more => format!(" and {more} more"),
+    };
+    format!(
+        "Files outside .horizon changed while the setup ran: {shown}{more}. Use this setup commits only .horizon and leaves them as they are. Review them, then press Use this setup again."
+    )
+}
+
 /// What the agent hears when it wrote a summary but no proof Horizon could run.
-const MISSING_PROOF: &str = "Horizon has no proof to run: put a valid proof in the status file (a workflow with at least one job, or commands) and set proof_request to 1. Use this setup waits for Horizon's proof.";
+const MISSING_PROOF: &str = "Horizon has no proof to run: put a valid proof in the status file (a workflow with at least one job) and set proof_request to 1. Use this setup waits for Horizon's proof.";
 
 /// What the agent hears when the setup changed after Horizon's proof passed.
 const STALE_PROOF: &str = "The .horizon files or the proof changed after Horizon's proof passed, so it no longer proves this setup. Increase proof_request by one so Horizon proves it again.";

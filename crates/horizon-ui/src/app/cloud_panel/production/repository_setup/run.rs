@@ -86,6 +86,8 @@ pub(in crate::app::cloud_panel::production) struct Run {
     pub(super) host_restore: bool,
     /// The current fingerprint of the setup and proof request, and when it was read.
     inputs: Option<(Instant, u64)>,
+    /// The files outside `.horizon` when the run started, to find what changed since.
+    pub(super) outside: super::commit::Outside,
 }
 
 /// What the person did in the progress view.
@@ -148,6 +150,7 @@ impl Run {
             proof_stale_reported: false,
             host_restore: false,
             inputs: None,
+            outside: super::commit::Outside::new(),
         }
     }
 

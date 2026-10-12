@@ -380,7 +380,13 @@ impl Job {
         let config = std::fs::read_to_string(self.repository.join(".horizon/cloud.yml"))
             .map_err(|error| format!("cannot read .horizon/cloud.yml: {error}"))?;
         let config = horizon_core::cloud_panel::CloudConfig::parse(&config).map_err(|error| error.to_string())?;
-        let builds = distinct_builds(&config)?;
+        // The agent CLI releases deployment would pin, so every build gets its arguments.
+        let releases =
+            horizon_core::cloud_runtime::image::agents::latest(&horizon_core::cloud_runtime::Cancellation::default())
+                .map_err(|error| format!("cannot look up the agent CLI releases: {error}"))?;
+        let builds = distinct_builds(&config, |profile| {
+            horizon_core::cloud_runtime::image::build_arguments(&profile.capabilities, &releases)
+        })?;
         // Only Horizon's own ghcr.io login, never this computer's credential helpers: a
         // private ghcr.io base pulls with it, and every other image anonymously.
         let horizon_docker = horizon_core::HorizonHome::resolve().root().join("cloud").join("docker");
@@ -393,20 +399,20 @@ impl Job {
         }));
         // Every profile can be chosen in New cloud, so each distinct build is built and
         // checked; the CI then runs in the default profile's image.
-        for (index, build) in builds.iter().enumerate() {
+        for (index, (build, arguments)) in builds.iter().enumerate() {
             let tag = if index == 0 {
                 self.image.clone()
             } else {
                 format!("{}-build{index}:candidate", self.volume)
             };
-            self.build_one(build, &tag, docker_config.path(), log)?;
+            self.build_one((build, arguments), &tag, docker_config.path(), log)?;
         }
         Ok(())
     }
 
     fn build_one(
         &self,
-        build: &horizon_core::cloud_panel::Build,
+        (build, arguments): (&horizon_core::cloud_panel::Build, &[String]),
         tag: &str,
         docker_config: &Path,
         log: &mut Option<std::fs::File>,
@@ -437,22 +443,25 @@ impl Job {
             .arg(docker_config)
             .args(["buildx", "build", "--load", "--progress", "plain", "--platform"])
             .arg(&build.platform)
+            .args(arguments)
             .arg("-f")
             .arg(&dockerfile)
             .arg("-t")
             .arg(tag)
             .arg(&context);
         self.stream_within(command, log, Some(BUILD_TIMEOUT))?;
+        // Named, so a check that hangs goes with its container on the timeout.
         let mut check = Command::new("docker");
         check.args([
             "run",
             "--rm",
+            "--name",
+            &self.container,
             "--network",
             "none",
             "--entrypoint",
-            "horizon-worker-check",
         ]);
-        check.arg(tag).arg("--git-auth");
+        check.arg("horizon-worker-check").arg(tag).arg("--git-auth");
         self.stream_within(check, log, Some(CHECK_TIMEOUT))
     }
 
@@ -698,7 +707,7 @@ impl Job {
 /// to the container's system file, not the shared home.
 const CLONE: &str = "set -e; git config --system --add safe.directory '*'; \
 mkdir -p /workspace/checkout; cd /workspace/checkout; [ -d .git ] || git init -q; \
-git fetch -q /src.bundle HEAD; git checkout -q --force --detach \"$HEAD_SHA\"; \
+git fetch -q /src.bundle HEAD; git checkout -q --force --detach \"$HEAD_SHA\"; git clean -q -ffdx; \
 chown -R 10001:10001 /workspace/checkout";
 
 /// Forgets localci's step records when the volume last ran a proof in another image.
@@ -738,6 +747,8 @@ fn committed_snapshot(root: &Path) -> Result<(tempfile::TempDir, PathBuf), Strin
     };
     let tree = horizon_core::cloud_runtime::repository::snapshot(root, "HEAD", folder.path(), &runner)
         .map_err(|error| format!("cannot make the committed tree: {error}"))?;
+    // The proposed .horizon replaces the committed one exactly: deletions and links too.
+    let _ = std::fs::remove_dir_all(tree.join(".horizon"));
     copy_tree(&root.join(".horizon"), &tree.join(".horizon")).map_err(|error| error.to_string())?;
     Ok((folder, tree))
 }
@@ -747,10 +758,14 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
         let kind = entry.file_type()?;
-        if kind.is_dir() {
-            copy_tree(&entry.path(), &to.join(entry.file_name()))?;
+        let target = to.join(entry.file_name());
+        if kind.is_symlink() {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(std::fs::read_link(entry.path())?, &target)?;
+        } else if kind.is_dir() {
+            copy_tree(&entry.path(), &target)?;
         } else if kind.is_file() {
-            std::fs::copy(entry.path(), to.join(entry.file_name()))?;
+            std::fs::copy(entry.path(), target)?;
         }
     }
     Ok(())
@@ -814,24 +829,28 @@ pub(super) fn remove_run_resources(repository: &Path, run: &str) {
     });
 }
 
-/// The default profile's build first, then each other profile's build that differs from
-/// all before it; a profile without a build section runs a published image.
+/// The images deployment would build: each profile's build with the build arguments
+/// its capabilities give, the default profile's first, every other one that differs
+/// from all before it. A profile without a build section runs a published image.
 fn distinct_builds(
     config: &horizon_core::cloud_panel::CloudConfig,
-) -> Result<Vec<horizon_core::cloud_panel::Build>, String> {
+    arguments: impl Fn(&horizon_core::cloud_panel::Profile) -> Vec<String>,
+) -> Result<Vec<(horizon_core::cloud_panel::Build, Vec<String>)>, String> {
     let default = config
         .profiles
         .get(&config.default)
-        .ok_or("the default profile is missing")?
+        .ok_or("the default profile is missing")?;
+    let build = default
         .build
         .clone()
         .ok_or("the default profile has no build section")?;
-    let mut builds = vec![default];
+    let mut builds = vec![(build, arguments(default))];
     for profile in config.profiles.values() {
-        if let Some(build) = &profile.build
-            && !builds.contains(build)
-        {
-            builds.push(build.clone());
+        if let Some(build) = &profile.build {
+            let candidate = (build.clone(), arguments(profile));
+            if !builds.contains(&candidate) {
+                builds.push(candidate);
+            }
         }
     }
     Ok(builds)
@@ -1001,9 +1020,16 @@ mod tests {
             "version: 1\ndefault: gpu\nprofiles:\n  cpu:\n    provider: runpod\n    image: ghcr.io/o/r-worker\n    cpu: 4\n    memory_gb: 8\n    build: {context: .horizon, dockerfile: .horizon/Dockerfile.cpu}\n  gpu:\n    provider: runpod\n    image: ghcr.io/o/r-worker\n    cpu: 4\n    memory_gb: 8\n    gpu: true\n    build: {context: .horizon, dockerfile: .horizon/Dockerfile}\n  gpu-big:\n    provider: runpod\n    image: ghcr.io/o/r-worker\n    cpu: 4\n    memory_gb: 8\n    gpu: true\n    build: {context: .horizon, dockerfile: .horizon/Dockerfile}\n",
         )
         .unwrap();
-        let builds = distinct_builds(&config).unwrap();
+        let builds = distinct_builds(&config, |_| Vec::new()).unwrap();
         assert_eq!(builds.len(), 2, "two profiles share one build");
-        assert_eq!(builds[0].dockerfile, ".horizon/Dockerfile", "the default first");
+        assert_eq!(builds[0].0.dockerfile, ".horizon/Dockerfile", "the default first");
+        let calls = std::cell::Cell::new(0);
+        let by_arguments = distinct_builds(&config, |_| {
+            calls.set(calls.get() + 1);
+            vec![format!("BASE={}", calls.get())]
+        })
+        .unwrap();
+        assert_eq!(by_arguments.len(), 4, "other build arguments make another image");
     }
 
     #[test]

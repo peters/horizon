@@ -86,12 +86,8 @@ fn located(ui: &mut Ui, form: &Production, profile: &Profile, provider: &str) {
             &format!("{}/mo", provider::euros(offer.stopped_monthly)),
             false,
         );
-        ui.label(
-            RichText::new("Excl. VAT · per started hour")
-                .size(11.5)
-                .color(theme::FG_DIM()),
-        )
-        .on_hover_text(
+        widgets::note(
+            ui,
             "Hetzner prices exclude VAT. Billed per started hour, with a monthly cap. Availability is advisory.",
         );
     } else {

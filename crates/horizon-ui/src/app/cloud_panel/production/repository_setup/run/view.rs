@@ -325,17 +325,21 @@ fn finished_actions(ui: &mut Ui, run: &Run, inline: bool) -> Option<Action> {
                 .size(12.5)
                 .color(theme::FG_SOFT()),
         );
-        if !inline {
-            return;
-        }
+        // Use this setup is in the footer beside the terminal; Stop ends a proved setup
+        // the person does not want, in both layouts.
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let primary = egui::Button::new(RichText::new("Use this setup").size(14.0).strong().color(theme::BG()))
-                .fill(theme::ACCENT());
-            if ui.add(dialog_button(primary)).clicked() {
-                action = Some(Action::Use);
+            if inline {
+                let primary = egui::Button::new(RichText::new("Use this setup").size(14.0).strong().color(theme::BG()))
+                    .fill(theme::ACCENT());
+                if ui.add(dialog_button(primary)).clicked() {
+                    action = Some(Action::Use);
+                }
+                if ui.add(dialog_button(action_button("Show agent"))).clicked() {
+                    action = Some(Action::Show);
+                }
             }
-            if ui.add(dialog_button(action_button("Show agent"))).clicked() {
-                action = Some(Action::Show);
+            if ui.add(dialog_button(danger_button("Stop"))).clicked() {
+                action = Some(Action::Stop);
             }
         });
     });

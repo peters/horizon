@@ -168,9 +168,12 @@ setup** commits `.horizon` and reads it as the repository profile.
 ## 7. Pass criteria
 
 - S01 to S08 give the results above.
-- The proof ran on this computer: `docker images` lists
-  `horizon-setup-ci-app-<hash>:candidate`, where `<hash>` is six hexadecimal digits
-  that Horizon derives from the repository's path.
+- The proof ran on this computer. Before you click **Use this setup** in S04,
+  `docker images` lists `horizon-setup-ci-app-<hash>-<run>:candidate`. `<hash>` is
+  six hexadecimal digits that Horizon derives from the repository's path. `<run>` is
+  eight hexadecimal digits for the setup run.
+- Within one minute after **Use this setup** or **Stop**, `docker images` and
+  `docker volume ls` no longer list the image and the volume of that run.
 - No cloud was started.
 
 ## 8. Cleanup
