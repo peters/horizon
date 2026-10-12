@@ -20,6 +20,10 @@ const KILL_WAIT: Duration = Duration::from_secs(2);
 /// How long Horizon waits before it ends processes that outlived a kill once more.
 const RETRY: Duration = Duration::from_secs(1);
 
+/// The most one command to the systemd user manager may take, so a manager that does
+/// not answer never holds Stop, Use, a new setup or Horizon's exit.
+const SYSTEMD_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// The agent's process: its id, which also names its process group because the terminal
 /// starts it as a group leader, and its start time, so a later process that reuses the
 /// id is never taken for it. Without a start time Horizon neither waits on nor signals it.
@@ -47,16 +51,36 @@ impl Scope {
         }
     }
 
-    /// The scope's cgroup folder; none while systemd has no such scope, which also
-    /// means nothing runs in it.
+    /// What systemd says of the scope now. Its cgroup folder, once found, is kept: one
+    /// that is gone means the scope ended.
     #[cfg(unix)]
-    fn cgroup(&self) -> Option<&std::path::Path> {
+    fn state(&self) -> ScopeState {
         if let Some(cgroup) = self.cgroup.get() {
-            return Some(cgroup);
+            return if cgroup.is_dir() {
+                ScopeState::Running(cgroup.clone())
+            } else {
+                ScopeState::Gone
+            };
         }
-        let found = cgroup_of(&self.unit)?;
-        Some(self.cgroup.get_or_init(|| found))
+        let state = scope_state(&self.unit);
+        if let ScopeState::Running(cgroup) = &state {
+            let _ = self.cgroup.set(cgroup.clone());
+        }
+        state
     }
+}
+
+/// What systemd says of a scope.
+#[cfg(unix)]
+#[derive(Debug)]
+enum ScopeState {
+    /// It runs, with this cgroup folder.
+    Running(std::path::PathBuf),
+    /// systemd has no such scope, or it ended: nothing runs in it.
+    Gone,
+    /// systemd did not answer, or the scope is still being made: counted as running,
+    /// so nothing is taken for ended that systemd has not shown ended.
+    Unknown,
 }
 
 impl AgentProcess {
@@ -119,10 +143,13 @@ impl AgentProcess {
 
     #[cfg(unix)]
     fn alive(&self) -> bool {
-        // The scope holds every descendant of the agent: it must be empty.
-        let in_scope = self.scope.as_ref().and_then(Scope::cgroup).is_some_and(|cgroup| {
-            std::fs::read_to_string(cgroup.join("cgroup.procs")).is_ok_and(|procs| !procs.trim().is_empty())
-        });
+        // The scope holds every descendant of the agent: systemd must show it empty.
+        let in_scope = match self.scope.as_ref().map(Scope::state) {
+            None | Some(ScopeState::Gone) => false,
+            Some(ScopeState::Unknown) => true,
+            Some(ScopeState::Running(cgroup)) => std::fs::read_to_string(cgroup.join("cgroup.procs"))
+                .map_or_else(|_| cgroup.is_dir(), |procs| !procs.trim().is_empty()),
+        };
         in_scope
             || self
                 .group()
@@ -137,9 +164,9 @@ impl AgentProcess {
     #[cfg(unix)]
     fn kill(&self) {
         if let Some(scope) = &self.scope {
-            let _ = std::process::Command::new("systemctl")
-                .args(["--user", "kill", "--signal=SIGKILL", &scope.unit])
-                .output();
+            let mut kill = std::process::Command::new("systemctl");
+            kill.args(["--user", "kill", "--signal=SIGKILL", &scope.unit]);
+            let _ = run_bounded(kill, SYSTEMD_TIMEOUT);
         }
         if let Some(group) = self.group() {
             let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
@@ -150,16 +177,84 @@ impl AgentProcess {
     fn kill(&self) {}
 }
 
-/// The cgroup folder of the systemd user scope `unit`.
+/// What systemd says of the user scope `unit`: running with its cgroup folder, gone when
+/// systemd does not know it or it ended, and unknown when systemd does not answer in time
+/// or the scope is still being made.
 #[cfg(unix)]
-fn cgroup_of(unit: &str) -> Option<std::path::PathBuf> {
-    let output = std::process::Command::new("systemctl")
-        .args(["--user", "show", "--property=ControlGroup", "--value", unit])
-        .output()
-        .ok()?;
-    let group = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+fn scope_state(unit: &str) -> ScopeState {
+    let mut show = std::process::Command::new("systemctl");
+    show.args(["--user", "show", "--property=LoadState,ActiveState,ControlGroup", unit]);
+    let Some(output) = run_bounded(show, SYSTEMD_TIMEOUT).filter(|output| output.status.success()) else {
+        return ScopeState::Unknown;
+    };
+    read_scope(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// The scope state in what `systemctl show` printed for it.
+#[cfg(unix)]
+fn read_scope(text: &str) -> ScopeState {
+    let value = |key: &str| {
+        text.lines()
+            .find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
+            .unwrap_or_default()
+            .trim()
+    };
+    if value("LoadState") == "not-found" || matches!(value("ActiveState"), "inactive" | "failed") {
+        return ScopeState::Gone;
+    }
+    let group = value("ControlGroup");
+    if group.is_empty() {
+        return ScopeState::Unknown;
+    }
     let cgroup = std::path::Path::new("/sys/fs/cgroup").join(group.trim_start_matches('/'));
-    (!group.is_empty() && cgroup.is_dir()).then_some(cgroup)
+    if cgroup.is_dir() {
+        ScopeState::Running(cgroup)
+    } else {
+        ScopeState::Gone
+    }
+}
+
+/// Runs `command` for at most `limit`: its exit status and standard output, or none when
+/// it could not start or did not end in time, ended then with what it started.
+fn run_bounded(mut command: std::process::Command, limit: Duration) -> Option<std::process::Output> {
+    use std::io::Read as _;
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    let mut child = command.spawn().ok()?;
+    let stdout = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(stdout) = stdout {
+            let _ = stdout.take(64 * 1024).read_to_end(&mut bytes);
+        }
+        bytes
+    });
+    let deadline = Instant::now() + limit;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return Some(std::process::Output {
+                    status,
+                    stdout: reader.join().unwrap_or_default(),
+                    stderr: Vec::new(),
+                });
+            }
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+            _ => {
+                #[cfg(unix)]
+                if let Some(group) = i32::try_from(child.id()).ok().and_then(rustix::process::Pid::from_raw) {
+                    let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
 }
 
 /// The command line that starts a program inside a new systemd user scope `unit`, or
@@ -169,13 +264,9 @@ pub(super) fn scope_launcher(unit: &str) -> Option<Vec<String>> {
     if !cfg!(target_os = "linux") {
         return None;
     }
-    let works = std::process::Command::new("systemd-run")
-        .args(["--user", "--scope", "--quiet", "--collect", "true"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success());
+    let mut probe = std::process::Command::new("systemd-run");
+    probe.args(["--user", "--scope", "--quiet", "--collect", "true"]);
+    let works = run_bounded(probe, SYSTEMD_TIMEOUT).is_some_and(|output| output.status.success());
     works.then(|| {
         ["systemd-run", "--user", "--scope", "--quiet", "--collect"]
             .into_iter()
@@ -200,10 +291,9 @@ fn start_time(id: u32) -> Option<String> {
     }
     #[cfg(all(unix, not(target_os = "linux")))]
     {
-        let output = std::process::Command::new("ps")
-            .args(["-o", "lstart=", "-p", &id.to_string()])
-            .output()
-            .ok()?;
+        let mut ps = std::process::Command::new("ps");
+        ps.args(["-o", "lstart=", "-p", &id.to_string()]);
+        let output = run_bounded(ps, SYSTEMD_TIMEOUT)?;
         let started = String::from_utf8_lossy(&output.stdout).trim().to_owned();
         (output.status.success() && !started.is_empty()).then_some(started)
     }
@@ -257,23 +347,48 @@ mod tests {
         let started = Instant::now();
         let process = loop {
             let process = AgentProcess::in_scope(agent.id(), &unit);
-            if process.scope.as_ref().and_then(Scope::cgroup).is_some() || started.elapsed() > Duration::from_secs(5) {
+            let running = matches!(process.scope.as_ref().map(Scope::state), Some(ScopeState::Running(_)));
+            if running || started.elapsed() > Duration::from_secs(5) {
                 break process;
             }
             std::thread::sleep(Duration::from_millis(50));
         };
-        let cgroup = process
-            .scope
-            .as_ref()
-            .and_then(Scope::cgroup)
-            .map(std::path::Path::to_path_buf)
-            .expect("the agent runs in its scope");
+        let Some(ScopeState::Running(cgroup)) = process.scope.as_ref().map(Scope::state) else {
+            panic!("the agent runs in its scope");
+        };
         std::thread::sleep(Duration::from_millis(300));
         let reaper = std::thread::spawn(move || agent.wait());
         assert!(process.end(), "everything in the scope is gone");
         reaper.join().unwrap().unwrap();
         let left = std::fs::read_to_string(cgroup.join("cgroup.procs")).unwrap_or_default();
         assert!(left.trim().is_empty(), "{left}");
+    }
+
+    #[test]
+    fn only_what_systemd_shows_ended_counts_as_gone() {
+        assert!(matches!(
+            read_scope("LoadState=not-found\nActiveState=inactive\nControlGroup=\n"),
+            ScopeState::Gone
+        ));
+        assert!(matches!(
+            read_scope("LoadState=loaded\nActiveState=failed\nControlGroup=\n"),
+            ScopeState::Gone
+        ));
+        assert!(
+            matches!(
+                read_scope("LoadState=loaded\nActiveState=activating\nControlGroup=\n"),
+                ScopeState::Unknown
+            ),
+            "a scope still being made is not taken for ended"
+        );
+        assert!(
+            matches!(read_scope(""), ScopeState::Unknown),
+            "nor an answer that names nothing"
+        );
+        assert!(matches!(
+            read_scope("LoadState=loaded\nActiveState=active\nControlGroup=/no/such/horizon/cgroup\n"),
+            ScopeState::Gone
+        ));
     }
 
     #[test]
