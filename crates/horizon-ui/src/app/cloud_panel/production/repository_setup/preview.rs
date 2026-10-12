@@ -562,24 +562,35 @@ fn vnc_answers(port: u16) -> Result<(), String> {
 }
 
 /// Whether the live desktop on the loopback `port` still answers: its VNC server greets
-/// within a few seconds. The app runs as the container's first process, so a stopped app
+/// within [`ANSWER_WAIT`], connection included. The app runs as the container's first process, so a stopped app
 /// takes the server with it. It waits on the network, so only a worker thread asks.
 pub(super) fn answers(port: u16) -> bool {
     greets(port, ANSWER_WAIT)
 }
 
-/// Whether the VNC server on the loopback `port` greets with `RFB ` within `wait`.
+/// Whether the VNC server on the loopback `port` greets with `RFB ` within `wait`, one
+/// deadline for the connection and every read, so a server that sends its greeting a
+/// byte at a time cannot stretch it.
 fn greets(port: u16, wait: Duration) -> bool {
     use std::io::Read as _;
+    let deadline = Instant::now() + wait;
     let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-    std::net::TcpStream::connect_timeout(&address, wait)
-        .and_then(|mut stream| {
-            stream.set_read_timeout(Some(wait))?;
-            let mut greeting = [0_u8; 4];
-            stream.read_exact(&mut greeting)?;
-            Ok(greeting)
-        })
-        .is_ok_and(|greeting| &greeting == b"RFB ")
+    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&address, wait) else {
+        return false;
+    };
+    let mut greeting = [0_u8; 4];
+    let mut read = 0;
+    while read < greeting.len() {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() || stream.set_read_timeout(Some(left)).is_err() {
+            return false;
+        }
+        match stream.read(&mut greeting[read..]) {
+            Ok(0) | Err(_) => return false,
+            Ok(count) => read += count,
+        }
+    }
+    &greeting == b"RFB "
 }
 
 /// Starts one docker command in its own process group, so a timeout or the end of its
@@ -780,6 +791,39 @@ mod tests {
         let tail = tail(&long);
         assert_eq!(tail.matches(" | ").count(), 5, "six lines");
         assert!(tail.len() < 6 * 240 + 6 * 3, "each line cut short");
+    }
+
+    #[test]
+    fn a_desktop_greets_within_one_deadline() {
+        use std::io::Write as _;
+        let serve = |bytes: &'static [u8], every: Duration| {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            std::thread::spawn(move || {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    for byte in bytes {
+                        std::thread::sleep(every);
+                        if stream.write_all(&[*byte]).is_err() {
+                            return;
+                        }
+                    }
+                    std::thread::sleep(Duration::from_secs(2));
+                }
+            });
+            port
+        };
+        assert!(greets(serve(b"RFB 003.008\n", Duration::ZERO), Duration::from_secs(5)));
+        assert!(!greets(serve(b"HTTP", Duration::ZERO), Duration::from_secs(5)));
+        let started = Instant::now();
+        assert!(
+            !greets(serve(b"RFB ", Duration::from_millis(300)), Duration::from_millis(700)),
+            "a greeting a byte at a time past the deadline"
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(1500),
+            "one deadline in all, not one per read: {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

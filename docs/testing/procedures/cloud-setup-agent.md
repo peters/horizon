@@ -242,6 +242,11 @@ setup** commits `.horizon` and reads it as the repository profile.
    Result: Run CI in image and Fast rerun pass with their times, and the last
    lines of the proof log show "fixture tests passed".
 
+3. Click **Stop**.
+
+   Result: Within one minute, `docker ps --all`, `docker volume ls` and
+   `docker network ls` list no name that starts with `horizon-setup-plain-app-`.
+
 ### 6.12 S12 — The providers in the heading
 
 1. Open **New cloud** for `<home>/smoke/ci-app` after S04.
