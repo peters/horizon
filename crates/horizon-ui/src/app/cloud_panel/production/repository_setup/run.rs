@@ -313,9 +313,12 @@ impl Run {
     }
 
     /// The agent wrote its summary without a proof request Horizon can run, and was not
-    /// told yet for this summary; a new summary without one is told again.
+    /// told yet for this summary; a new summary without one is told again. An earlier
+    /// proof does not count once the status no longer asks for it.
     pub(super) fn take_summary_without_proof(&mut self) -> bool {
-        let without = self.status.summary.is_some() && self.proof.is_none() && self.proof_wanted().is_none();
+        let ran_current =
+            self.proof.is_some() && self.status.proof.is_some() && self.status.proof_request == self.proved_request;
+        let without = self.status.summary.is_some() && self.proof_wanted().is_none() && !ran_current;
         if !without || self.missing_proof_summary == self.status.summary {
             return false;
         }
@@ -345,25 +348,37 @@ impl Run {
         remove_run_folder(&self.status_path);
     }
 
-    /// The steps to draw: the agent's own, or the expected ones before its first report.
+    /// The steps to draw: always the whole expected sequence, each with what the agent
+    /// last reported for it (pending until then; the first running before any report)
+    /// and Horizon's own state for the proof steps. Rows the agent added follow.
     fn steps(&self) -> Vec<Step> {
-        if !self.status.steps.is_empty() {
-            return self
-                .status
-                .steps
-                .iter()
-                .map(|step| self.proof_step(step).unwrap_or_else(|| step.clone_view()))
-                .collect();
-        }
-        STEPS
+        let reported = &self.status.steps;
+        let mut steps: Vec<Step> = STEPS
             .iter()
             .enumerate()
-            .map(|(index, title)| Step {
-                title: (*title).to_owned(),
-                state: if index == 0 { State::Running } else { State::Pending },
-                detail: String::new(),
+            .map(|(index, title)| {
+                let step = reported.iter().find(|step| step.title == *title).map_or_else(
+                    || Step {
+                        title: (*title).to_owned(),
+                        state: if index == 0 && reported.is_empty() {
+                            State::Running
+                        } else {
+                            State::Pending
+                        },
+                        detail: String::new(),
+                    },
+                    Step::clone_view,
+                );
+                self.proof_step(&step).unwrap_or(step)
             })
-            .collect()
+            .collect();
+        steps.extend(
+            reported
+                .iter()
+                .filter(|step| !STEPS.contains(&step.title.as_str()))
+                .map(Step::clone_view),
+        );
+        steps
     }
 }
 
@@ -528,6 +543,31 @@ mod tests {
         assert!(!run.agent_steps_done(), "a failed step is not a finished setup");
         run.status = parse(r#"{"steps":[{"title":"Read CI","state":"done"}]}"#).unwrap();
         assert!(!run.agent_steps_done(), "nor is a missing one");
+    }
+
+    #[test]
+    fn the_whole_sequence_shows_whatever_the_agent_reported() {
+        let mut run = Run::new(
+            PanelId(1),
+            PanelKind::Codex,
+            PathBuf::from("."),
+            PathBuf::from("missing.json"),
+            Mode::New,
+        );
+        run.status =
+            parse(r#"{"steps":[{"title":"Read CI","state":"running"},{"title":"Extra","state":"done"}]}"#).unwrap();
+        let titles: Vec<String> = run.steps().into_iter().map(|step| step.title).collect();
+        let mut expected: Vec<String> = STEPS.iter().map(|title| (*title).to_owned()).collect();
+        expected.push("Extra".to_owned());
+        assert_eq!(
+            titles, expected,
+            "the rows the agent left out still show, its own extra follows"
+        );
+        assert!(
+            run.steps()[1..STEPS.len()]
+                .iter()
+                .all(|step| step.state == State::Pending)
+        );
     }
 
     #[test]

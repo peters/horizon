@@ -287,12 +287,17 @@ impl Proof {
     }
 
     fn remove_container(&self) {
-        // Killing the docker client leaves its container running; the run goes too.
-        let _ = Command::new("docker")
-            .args(["rm", "--force", &self.container])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
+        // Killing the docker client leaves its container running; the run goes too. On
+        // a thread that waits for it, so the dialog never blocks and no process is left
+        // unreaped.
+        let container = self.container.clone();
+        std::thread::spawn(move || {
+            let _ = Command::new("docker")
+                .args(["rm", "--force", &container])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        });
     }
 
     /// Takes what the background run reported since the last frame.
@@ -584,17 +589,14 @@ impl Job {
         let _ = self.stream(restore, log);
     }
 
-    /// Whether the default profile asks for a GPU and this computer has an NVIDIA one;
-    /// Docker refuses `--gpus` without it, and that is no fault of the Dockerfile.
-    fn gpu(&self) -> bool {
-        let wanted = self
-            .setup
+    /// Whether the default profile, whose image the CI runs in, asks for a GPU.
+    fn wants_gpu(&self) -> bool {
+        self.setup
             .as_ref()
             .ok()
             .and_then(|setup| setup.config().ok())
             .and_then(|config| config.profiles.get(&config.default).map(|profile| profile.gpu))
-            .unwrap_or(false);
-        wanted && Path::new("/dev/nvidiactl").exists()
+            .unwrap_or(false)
     }
 
     fn ci(&self, fast: bool, log: &mut Option<std::fs::File>) -> Result<(), String> {
@@ -604,7 +606,15 @@ impl Job {
             .args(["run", "--rm", "--name", &self.container, "--user", "10001:10001", "-v"])
             .arg(format!("{}:/workspace", self.volume))
             .args(["-w", "/workspace/checkout", "-e", "HOME=/workspace/home"]);
-        if self.gpu() {
+        // A GPU profile is proved with a GPU or not at all: CI that passes without one
+        // says nothing about the worker that has one.
+        if self.wants_gpu() {
+            if !Path::new("/dev/nvidiactl").exists() {
+                return Err(
+                    "the default profile needs a GPU and this computer has no NVIDIA GPU, so Horizon cannot prove it here"
+                        .to_owned(),
+                );
+            }
             command.args(["--gpus", "all"]);
         }
         // Packages this computer already restored, private ones included, need no feed
@@ -663,8 +673,8 @@ impl Job {
             .output();
     }
 
-    /// Runs `command`, sending each output line to the dialog and the log file.
-    /// Runs a preparation step (the bundle, the clone, a host restore) within
+    /// Runs `command`, sending each output line to the dialog and the log file: a
+    /// preparation step (the bundle, the clone, a host restore) within
     /// [`STEP_TIMEOUT`], so a daemon or a feed that never answers cannot hold the proof.
     fn stream(&self, command: Command, log: &mut Option<std::fs::File>) -> Result<(), String> {
         self.stream_within(command, log, Some(STEP_TIMEOUT))
