@@ -26,6 +26,14 @@ pub(super) const WORKER_EXPORTS: [(&str, &str); 7] = [
     ("HORIZON_GPU_LOCK", "/workspace/locks/gpu.lock"),
 ];
 
+/// What sshd gives every session of the worker's account, `horizon-agent` with Bash,
+/// before PAM and the worker's own exports.
+pub(super) const LOGIN: [(&str, &str); 3] = [
+    ("USER", "horizon-agent"),
+    ("LOGNAME", "horizon-agent"),
+    ("SHELL", "/bin/bash"),
+];
+
 /// The PATH sshd gives a session on Ubuntu when /etc/environment names none.
 const SSH_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games";
 
@@ -69,12 +77,14 @@ pub(super) fn arguments(image: &str, container: &str, run: Run<'_>) -> Result<Ve
         None => Vec::new(),
     };
     let (variables, directives) = load(&files).map_err(|error| format!("session environment refused: {error}"))?;
-    // PAM's variables first, then what horizon-worker-run exports for every session, with
-    // stand-ins for the per-session ones, then the image's session-env.d, which may not
-    // name the latter, and PATH as the worker builds it.
-    let mut arguments: Vec<String> = pam
-        .into_iter()
-        .filter(|(key, _)| key != "PATH" && key != "HOME")
+    // The account's login variables first, then PAM's, then what horizon-worker-run
+    // exports for every session, with stand-ins for the per-session ones, then the
+    // image's session-env.d, which may not name the latter, and PATH as the worker
+    // builds it. Each one set here also overrides the image's ENV.
+    let mut arguments: Vec<String> = LOGIN
+        .iter()
+        .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+        .chain(pam.into_iter().filter(|(key, _)| key != "PATH" && key != "HOME"))
         .chain(
             WORKER_EXPORTS
                 .iter()
@@ -470,6 +480,14 @@ mod tests {
         ];
         let image_env = ["PATH=/usr/bin", "JAVA_HOME=/opt/java", "DOTNET_ROOT=/old", "HOME=/root"].map(str::to_owned);
         assert_eq!(image_only(&image_env, &session), ["-e", "JAVA_HOME="]);
+        // The account's login variables are the session's, never emptied for the image.
+        let login: Vec<String> = LOGIN
+            .iter()
+            .flat_map(|(key, value)| ["-e".to_owned(), format!("{key}={value}")])
+            .collect();
+        let image_env = ["USER=root", "SHELL=/bin/sh", "LOGNAME=root"].map(str::to_owned);
+        assert!(image_only(&image_env, &login).is_empty());
+        assert!(login.contains(&"USER=horizon-agent".to_owned()));
     }
 
     #[test]

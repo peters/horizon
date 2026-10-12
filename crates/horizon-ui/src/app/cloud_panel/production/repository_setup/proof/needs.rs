@@ -153,16 +153,34 @@ fn package_folder(path: &str) -> bool {
     matches!((parts.next(), parts.next(), parts.next()), (Some(id), Some(version), None) if plain(id) && plain(version))
 }
 
+/// The most entries the look for restore outputs reads.
+const WALK_LIMIT: usize = 50_000;
+
 /// The package folders the restores in `tree` used, from each project's
-/// `obj/project.assets.json`, sorted and once each.
-fn restored_packages(tree: &Path) -> Vec<String> {
+/// `obj/project.assets.json`, sorted and once each. The look reads at most
+/// [`WALK_LIMIT`] entries, skips hidden, dependency and build output folders, and ends
+/// once `stopped` says so.
+fn restored_packages(tree: &Path, stopped: &dyn Fn() -> bool) -> Result<Vec<String>, String> {
+    const SKIPPED: [&str; 4] = ["node_modules", "target", "bin", "vendor"];
     let mut packages = Vec::new();
     let mut pending = vec![(tree.to_path_buf(), 0)];
+    let mut seen = 0;
     while let Some((folder, depth)) = pending.pop() {
         for entry in std::fs::read_dir(&folder).into_iter().flatten().flatten() {
+            seen += 1;
+            if seen > WALK_LIMIT {
+                return Err(format!(
+                    "the restored commit has more than {WALK_LIMIT} files and folders where Horizon looks for the restore's output"
+                ));
+            }
+            if stopped() {
+                return Err("stopped".to_owned());
+            }
             let Ok(kind) = entry.file_type() else { continue };
             let path = entry.path();
-            if kind.is_dir() && depth < 6 && entry.file_name() != "node_modules" {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if kind.is_dir() && depth < 6 && !name.starts_with('.') && !SKIPPED.contains(&name.as_ref()) {
                 pending.push((path, depth + 1));
             } else if kind.is_file()
                 && entry.file_name() == "project.assets.json"
@@ -175,7 +193,7 @@ fn restored_packages(tree: &Path) -> Vec<String> {
     packages.sort();
     packages.dedup();
     packages.truncate(PACKAGE_LIMIT);
-    packages
+    Ok(packages)
 }
 
 /// The package folders one restore output names.
@@ -248,7 +266,8 @@ impl super::Job {
                 )
             })?;
         }
-        self.copy_packages(&restored_packages(&tree), log)
+        let packages = restored_packages(&tree, &|| self.cancel.is_cancelled())?;
+        self.copy_packages(&packages, log)
     }
 
     /// Copies the package folders the host restore used into the proof's volume with
@@ -338,7 +357,7 @@ mod tests {
         );
         std::fs::write(tree.path().join("project.assets.json"), "{}").unwrap();
         assert_eq!(
-            restored_packages(tree.path()),
+            restored_packages(tree.path(), &|| false).unwrap(),
             vec![
                 "newtonsoft.json/13.0.3".to_owned(),
                 "runtime.linux-x64.microsoft.dotnet.ilcompiler/11.0.0-rc.1".to_owned()
@@ -348,6 +367,7 @@ mod tests {
         for path in ["a/b/c", "a", "../a/1", ".a/1", "a/..", "A/1", "a/1 2", ""] {
             assert!(!package_folder(path), "{path:?}");
         }
+        assert_eq!(restored_packages(tree.path(), &|| true).unwrap_err(), "stopped");
     }
 
     #[test]

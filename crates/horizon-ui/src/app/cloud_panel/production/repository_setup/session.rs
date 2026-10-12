@@ -575,5 +575,46 @@ fn status_path() -> Result<PathBuf, String> {
 
 /// The `.horizon` files the agent changed, added or removed, as the finished card lists them.
 fn changed_files(repository: &Path) -> String {
-    super::commit::changes(repository).join(" · ")
+    files_summary(&super::commit::changes(repository))
+}
+
+/// The most changed files the finished card names, and the most characters of a name.
+const SHOWN_FILES: usize = 12;
+const SHOWN_NAME: usize = 120;
+
+/// The finished card's short list: the first few names, each cut short, and how many
+/// more there are, so a setup with thousands of long names cannot hold the dialog.
+fn files_summary(changes: &[String]) -> String {
+    let mut shown: Vec<String> = changes
+        .iter()
+        .take(SHOWN_FILES)
+        .map(|name| {
+            if name.chars().count() > SHOWN_NAME {
+                format!("{}…", name.chars().take(SHOWN_NAME).collect::<String>())
+            } else {
+                name.clone()
+            }
+        })
+        .collect();
+    if changes.len() > SHOWN_FILES {
+        shown.push(format!("and {} more", changes.len() - SHOWN_FILES));
+    }
+    shown.join(" · ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_finished_card_names_a_few_files_each_cut_short() {
+        let few = vec![".horizon/Dockerfile".to_owned(), ".horizon/cloud.yml".to_owned()];
+        assert_eq!(files_summary(&few), ".horizon/Dockerfile · .horizon/cloud.yml");
+        let many: Vec<String> = (0..5000)
+            .map(|number| format!(".horizon/{}{number}", "x".repeat(500)))
+            .collect();
+        let summary = files_summary(&many);
+        assert!(summary.ends_with("and 4988 more"), "{summary}");
+        assert!(summary.chars().count() < SHOWN_FILES * (SHOWN_NAME + 4) + 20);
+    }
 }
