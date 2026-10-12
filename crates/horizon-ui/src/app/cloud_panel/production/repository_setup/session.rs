@@ -481,6 +481,8 @@ impl HorizonApp {
         self.end_cloud_repository_setup();
         super::proof::retry_unremoved();
         run::wait_for_ended_runs();
+        // What Docker still would not remove is kept for Horizon's next run.
+        super::proof::keep_unremoved();
     }
 
     /// The process the agent's panel started, which leads its own process group.

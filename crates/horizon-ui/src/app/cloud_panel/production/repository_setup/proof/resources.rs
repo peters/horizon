@@ -224,15 +224,64 @@ struct RunResources {
 }
 
 /// Run resources a cleanup could not show gone, with the daemon they are on: the next
-/// setup and Horizon's exit try again.
+/// setup and Horizon's exit try again, and what is still left at exit is kept in
+/// [`leftovers_file`] for the next run of Horizon.
 static UNREMOVED: std::sync::Mutex<Vec<(RunResources, LocalDocker)>> = std::sync::Mutex::new(Vec::new());
 
-/// Tries again to remove what earlier cleanups could not, in the background; a new setup
-/// and Horizon's exit wait for it.
+/// Where Horizon keeps the run resources it could not remove before it exited.
+fn leftovers_file() -> std::path::PathBuf {
+    horizon_core::HorizonHome::resolve()
+        .root()
+        .join("cloud")
+        .join("setup-leftovers.json")
+}
+
+/// Tries again to remove what earlier cleanups could not, this run of Horizon's or one
+/// before it, in the background; a new setup and Horizon's exit wait for it.
 pub(in crate::app::cloud_panel::production::repository_setup) fn retry_unremoved() {
-    let pending = std::mem::take(&mut *UNREMOVED.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    let mut pending = std::mem::take(&mut *UNREMOVED.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    let file = leftovers_file();
+    if let Ok(bytes) = super::super::untrusted::read_regular(&file, 1024 * 1024) {
+        let _ = std::fs::remove_file(&file);
+        let kept: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap_or_default();
+        for entry in kept {
+            if let (Some(image), Some(volume)) = (entry["image"].as_str(), entry["volume"].as_str())
+                && !pending.iter().any(|(known, _)| known.volume == volume)
+            {
+                let daemon = LocalDocker {
+                    host: entry["host"].as_str().map(str::to_owned),
+                };
+                pending.push((RunResources::new(image.to_owned(), volume.to_owned()), daemon));
+            }
+        }
+    }
     for (resources, daemon) in pending {
         super::super::run::keep_ending(std::thread::spawn(move || resources.remove_or_keep(daemon)));
+    }
+}
+
+/// Keeps what is still not removed, as Horizon exits, for its next run to remove.
+pub(in crate::app::cloud_panel::production::repository_setup) fn keep_unremoved() {
+    let pending = UNREMOVED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if pending.is_empty() {
+        return;
+    }
+    let kept: Vec<serde_json::Value> = pending
+        .iter()
+        .map(|(resources, daemon)| {
+            serde_json::json!({"image": resources.image, "volume": resources.volume, "host": daemon.host})
+        })
+        .collect();
+    let file = leftovers_file();
+    let written = file.parent().is_some_and(|folder| {
+        std::fs::create_dir_all(folder).is_ok()
+            && tempfile::NamedTempFile::new_in(folder).is_ok_and(|mut partial| {
+                std::io::Write::write_all(&mut partial, &serde_json::to_vec(&kept).unwrap_or_default()).is_ok()
+                    && partial.persist(&file).is_ok()
+            })
+    });
+    if !written {
+        tracing::warn!(file = %file.display(), "could not keep the setup runs' leftover Docker resources for the next start");
     }
 }
 

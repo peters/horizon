@@ -401,6 +401,11 @@ pub(super) fn quick_start_note(ui: &mut egui::Ui, form: &mut Production) -> bool
         return false;
     }
     ui.add_space(4.0);
+    // The setup agent runs on Linux only, so elsewhere its note stands where the action would.
+    if !cfg!(target_os = "linux") {
+        ui.label(RichText::new(PLATFORM_NOTE).size(12.5).color(theme::FG_SOFT()));
+        return false;
+    }
     if busy_elsewhere(ui, form) {
         return false;
     }

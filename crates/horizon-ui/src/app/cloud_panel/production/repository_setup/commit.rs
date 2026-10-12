@@ -288,15 +288,24 @@ const CONTROL_LIMIT: usize = 1000;
 
 /// The control files of the repository's git folder that change what git does, and why
 /// the reading is not complete when a folder of them holds more than [`CONTROL_LIMIT`].
+/// A control file that is a link counts by the link and by what it leads to, so a change
+/// behind the link is named too.
 fn control(repository: &Path) -> (BTreeMap<String, Option<Stamp>>, Option<String>) {
     let git_path = |name: &str| {
         git(repository, None, &["rev-parse", "--git-path", name], None)
             .ok()
             .map(|path| repository.join(path))
     };
-    let stamp_at = |path: &Path| std::fs::symlink_metadata(path).ok().map(|metadata| stamp(&metadata));
     let mut control = BTreeMap::new();
     let mut incomplete = None;
+    let mut add = |name: String, path: &Path| {
+        let link = std::fs::symlink_metadata(path).ok();
+        if link.as_ref().is_some_and(|metadata| metadata.file_type().is_symlink()) {
+            let target = std::fs::metadata(path).ok().map(|metadata| stamp(&metadata));
+            control.insert(format!("{name} (what its link leads to)"), target);
+        }
+        control.insert(name, link.map(|metadata| stamp(&metadata)));
+    };
     for name in [
         "HEAD",
         "config",
@@ -306,28 +315,49 @@ fn control(repository: &Path) -> (BTreeMap<String, Option<Stamp>>, Option<String
         "packed-refs",
     ] {
         if let Some(path) = git_path(name) {
-            control.insert(format!(".git/{name}"), stamp_at(&path));
+            add(format!(".git/{name}"), &path);
         }
     }
-    // Hooks from the common git folder itself: Horizon's own git commands point
-    // core.hooksPath elsewhere, and a hooksPath the repository sets is in its config.
+    // Hooks from the common git folder, and from the folder the repository's own
+    // core.hooksPath names, which git runs from instead; Horizon's own git commands
+    // point it elsewhere.
     let common = git(repository, None, &["rev-parse", "--git-common-dir"], None)
         .ok()
         .map(|path| repository.join(path));
-    for folder in ["hooks", "refs/replace"] {
-        let Some(path) = common.as_ref().map(|common| common.join(folder)) else {
-            continue;
-        };
+    let mut folders: Vec<(String, std::path::PathBuf)> = ["hooks", "refs/replace"]
+        .into_iter()
+        .filter_map(|folder| Some((format!(".git/{folder}"), common.as_ref()?.join(folder))))
+        .collect();
+    if let Some(hooks) = hooks_path(repository) {
+        folders.push((format!("core.hooksPath {}", shown_name(hooks.as_os_str())), hooks));
+    }
+    for (label, path) in folders {
         let mut listing = std::fs::read_dir(&path).into_iter().flatten().flatten();
         for entry in listing.by_ref().take(CONTROL_LIMIT) {
-            let name = format!(".git/{folder}/{}", shown_name(&entry.file_name()));
-            control.insert(name, stamp_at(&entry.path()));
+            add(format!("{label}/{}", shown_name(&entry.file_name())), &entry.path());
         }
         if listing.next().is_some() {
-            incomplete = Some(format!(".git/{folder} holds more than {CONTROL_LIMIT} entries"));
+            incomplete = Some(format!("{label} holds more than {CONTROL_LIMIT} entries"));
         }
     }
     (control, incomplete)
+}
+
+/// The hooks folder the repository's own configuration names in `core.hooksPath`, read
+/// without Horizon's override; relative to the work tree, as git takes it.
+fn hooks_path(repository: &Path) -> Option<std::path::PathBuf> {
+    let output = Command::new("git")
+        .arg("--no-replace-objects")
+        .arg("-C")
+        .arg(repository)
+        .args(["config", "--path", "--get", "core.hooksPath"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (!path.is_empty()).then(|| repository.join(path))
 }
 
 /// The most ignored files a reading stamps, so a large dependency or build folder
@@ -631,6 +661,39 @@ mod tests {
             shown(b"two\nlines"),
             "two\\nlines",
             "a name never breaks the report's lines"
+        );
+    }
+
+    #[test]
+    fn a_change_behind_a_linked_control_file_or_in_the_hooks_path_is_named() {
+        let repository = repository();
+        let outside_folder = tempfile::tempdir().unwrap();
+        let excludes = outside_folder.path().join("excludes");
+        std::fs::write(&excludes, "*.log\n").unwrap();
+        let exclude = repository.path().join(".git/info/exclude");
+        std::fs::remove_file(&exclude).ok();
+        std::os::unix::fs::symlink(&excludes, &exclude).unwrap();
+        let hooks = outside_folder.path().join("hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        std::fs::write(hooks.join("pre-commit"), "#!/bin/sh\n").unwrap();
+        run(
+            repository.path(),
+            &["config", "core.hooksPath", &hooks.to_string_lossy()],
+        );
+        let before = outside(repository.path());
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&excludes, "*.log\n*.tmp\n").unwrap();
+        std::fs::write(hooks.join("pre-commit"), "#!/bin/sh\ncurl example.invalid\n").unwrap();
+        let changed = changed(&before, &outside(repository.path()));
+        assert!(
+            changed.contains(&".git/info/exclude (what its link leads to)".to_owned()),
+            "{changed:?}"
+        );
+        assert!(
+            changed
+                .iter()
+                .any(|name| name.starts_with("core.hooksPath ") && name.ends_with("/pre-commit")),
+            "{changed:?}"
         );
     }
 
