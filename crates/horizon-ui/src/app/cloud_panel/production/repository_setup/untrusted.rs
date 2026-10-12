@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 /// The largest file `.horizon` may hold; a Dockerfile or cloud.yml is a few kilobytes.
 pub(super) const SETUP_FILE_LIMIT: u64 = 16 * 1024 * 1024;
 
-/// The most `.horizon` may hold in all its files together.
+/// The most `.horizon` may hold in all its files, names and link targets together.
 const SETUP_TOTAL_LIMIT: u64 = 64 * 1024 * 1024;
 
 /// The most entries `.horizon` may hold.
@@ -74,6 +74,17 @@ pub(super) fn link_bytes(target: &Path) -> Vec<u8> {
 struct Budget {
     entries: usize,
     bytes: u64,
+}
+
+/// The bytes the walk keeps for `entry` at `relative`: its path and its content or link
+/// target, so long names and deep folders count against the limit as file contents do.
+fn retained(relative: &str, entry: &Entry) -> u64 {
+    let kept = match entry {
+        Entry::File { content, .. } => content.len(),
+        Entry::Link(target) => link_bytes(target).len(),
+        Entry::Folder => 0,
+    };
+    (relative.len() + kept) as u64
 }
 
 impl Budget {
@@ -183,11 +194,7 @@ pub(super) fn setup_entries(repository: &Path, expected: Identity) -> Result<Vec
                 }
                 _ => return Err(format!("{relative} is not a file, folder or link")),
             };
-            let size = match &entry {
-                Entry::File { content, .. } => content.len() as u64,
-                _ => 0,
-            };
-            budget.add(size)?;
+            budget.add(retained(&relative, &entry))?;
             entries.push((relative, entry));
         }
     }
@@ -229,11 +236,7 @@ pub(super) fn setup_entries(repository: &Path, _expected: Identity) -> Result<Ve
             } else {
                 return Err(format!("{relative} is not a file, folder or link"));
             };
-            let size = match &entry {
-                Entry::File { content, .. } => content.len() as u64,
-                _ => 0,
-            };
-            budget.add(size)?;
+            budget.add(retained(&relative, &entry))?;
             entries.push((relative, entry));
         }
     }
@@ -244,6 +247,23 @@ pub(super) fn setup_entries(repository: &Path, _expected: Identity) -> Result<Ve
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_and_link_targets_count_against_the_limit() {
+        let target = "t".repeat(4000);
+        assert_eq!(
+            retained(".horizon/link", &Entry::Link(PathBuf::from(&target))),
+            (".horizon/link".len() + target.len()) as u64
+        );
+        assert_eq!(retained(".horizon/deep", &Entry::Folder), ".horizon/deep".len() as u64);
+        let mut budget = Budget::default();
+        let long = format!(".horizon/{}", "d/".repeat(40_000));
+        let refused = (0..SETUP_ENTRY_LIMIT).find_map(|_| budget.add(retained(&long, &Entry::Folder)).err());
+        assert!(
+            refused.is_some_and(|error| error.contains("bytes")),
+            "deep long names hit the byte limit"
+        );
+    }
 
     #[test]
     fn a_pipe_a_link_or_a_large_file_is_refused_without_waiting() {

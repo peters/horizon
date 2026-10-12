@@ -120,12 +120,25 @@ impl HorizonApp {
                 return;
             }
         };
+        // A reading that stopped at a limit could not name every change, so nothing is
+        // committed on it.
+        if let Some(reason) = outside.incomplete().or(run.outside.incomplete()) {
+            self.cloud_prototype.error = Some(format!(
+                "Nothing was committed: Horizon cannot check every file outside .horizon, because {reason}. Commit .horizon yourself after reviewing it."
+            ));
+            return;
+        }
         // The agent may change only .horizon. Anything else that changed during the
-        // setup is named once; pressing Use again commits .horizon and leaves the rest.
+        // setup is named once, every path in a report beside the run's status; pressing
+        // Use again commits .horizon and leaves the rest.
         let changed = commit::changed(&run.outside, &outside);
         if !changed.is_empty() {
+            let report = run.status_path.with_file_name("outside-changes.txt");
+            let listed = super::proof::create_private(&report)
+                .and_then(|mut file| std::io::Write::write_all(&mut file, (changed.join("\n") + "\n").as_bytes()))
+                .is_ok();
             run.outside = outside;
-            self.cloud_prototype.error = Some(outside_changes_message(&changed));
+            self.cloud_prototype.error = Some(outside_changes_message(&changed, listed.then_some(report.as_path())));
             return;
         }
         // Git works by path: the repository folder must still be the run's when it does.
@@ -159,14 +172,35 @@ impl HorizonApp {
     }
 }
 
-/// What Use says when files outside `.horizon` changed while the setup ran.
-fn outside_changes_message(changed: &[String]) -> String {
+/// What Use says when files outside `.horizon` changed while the setup ran: the first
+/// few, and where the report that lists every one is.
+fn outside_changes_message(changed: &[String], report: Option<&std::path::Path>) -> String {
     let shown = changed.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+    let listed = report.map_or_else(String::new, |report| format!(", all listed in {}", report.display()));
     let more = match changed.len().saturating_sub(5) {
-        0 => String::new(),
-        more => format!(" and {more} more"),
+        0 => listed,
+        more => format!(" and {more} more{listed}"),
     };
     format!(
         "Changed outside .horizon while the setup ran: {shown}{more}. Use this setup commits only .horizon on the current HEAD and leaves the rest as it is. Review the changes, then press Use this setup again."
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_changed_path_is_named_or_in_the_report() {
+        let changed: Vec<String> = (1..=7).map(|index| format!("src/file{index}.rs")).collect();
+        let report = std::path::Path::new("/run/outside-changes.txt");
+        let message = outside_changes_message(&changed, Some(report));
+        assert!(
+            message.contains("src/file5.rs and 2 more, all listed in /run/outside-changes.txt"),
+            "{message}"
+        );
+        let few = outside_changes_message(&changed[..2], Some(report));
+        assert!(few.contains("src/file2.rs, all listed in"), "{few}");
+        assert!(!outside_changes_message(&changed, None).contains("listed in"));
+    }
 }

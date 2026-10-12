@@ -262,10 +262,25 @@ pub(super) struct Outside {
     control: BTreeMap<String, Option<Stamp>>,
     /// The repository the paths are in.
     root: std::path::PathBuf,
+    /// Why the reading does not cover every tracked file, new file and control file, when
+    /// it stopped at a limit: Use then commits nothing, since a change past the limit
+    /// could not be named.
+    incomplete: Option<String>,
 }
 
-/// The control files of the repository's git folder that change what git does.
-fn control(repository: &Path) -> BTreeMap<String, Option<Stamp>> {
+impl Outside {
+    /// Why this reading cannot be the check before a commit, when it is not complete.
+    pub(super) fn incomplete(&self) -> Option<&str> {
+        self.incomplete.as_deref()
+    }
+}
+
+/// The most entries a reading stamps in each of git's hooks and replace refs folders.
+const CONTROL_LIMIT: usize = 1000;
+
+/// The control files of the repository's git folder that change what git does, and why
+/// the reading is not complete when a folder of them holds more than [`CONTROL_LIMIT`].
+fn control(repository: &Path) -> (BTreeMap<String, Option<Stamp>>, Option<String>) {
     let git_path = |name: &str| {
         git(repository, None, &["rev-parse", "--git-path", name], None)
             .ok()
@@ -273,6 +288,7 @@ fn control(repository: &Path) -> BTreeMap<String, Option<Stamp>> {
     };
     let stamp_at = |path: &Path| std::fs::symlink_metadata(path).ok().map(|metadata| stamp(&metadata));
     let mut control = BTreeMap::new();
+    let mut incomplete = None;
     for name in [
         "config",
         "config.worktree",
@@ -293,20 +309,24 @@ fn control(repository: &Path) -> BTreeMap<String, Option<Stamp>> {
         let Some(path) = common.as_ref().map(|common| common.join(folder)) else {
             continue;
         };
-        for entry in std::fs::read_dir(&path).into_iter().flatten().flatten().take(1000) {
+        let mut listing = std::fs::read_dir(&path).into_iter().flatten().flatten();
+        for entry in listing.by_ref().take(CONTROL_LIMIT) {
             let name = format!(".git/{folder}/{}", entry.file_name().to_string_lossy());
             control.insert(name, stamp_at(&entry.path()));
         }
+        if listing.next().is_some() {
+            incomplete = Some(format!(".git/{folder} holds more than {CONTROL_LIMIT} entries"));
+        }
     }
-    control
+    (control, incomplete)
 }
 
 /// The most ignored files a reading stamps, so a large dependency or build folder
 /// cannot hold up the dialog. Ignored files past it, in git's order, are not compared.
 const IGNORED_LIMIT: usize = 100_000;
 
-/// The most tracked and new files a reading stamps; a repository with more is compared on
-/// these, in git's order.
+/// The most tracked and new files a reading stamps; a reading of a repository with more is
+/// not complete, and Use commits nothing.
 const FILES_LIMIT: usize = 1_000_000;
 
 /// What changes whenever a file is written, replaced or has its times set: on Unix the
@@ -365,7 +385,7 @@ pub(super) fn outside(repository: &Path) -> Outside {
     )
     .iter()
     .map(|path| stamp_of(path))
-    .collect();
+    .collect::<BTreeMap<_, _>>();
     let ignored = git_paths(
         repository,
         &[
@@ -383,12 +403,19 @@ pub(super) fn outside(repository: &Path) -> Outside {
     .iter()
     .map(|path| stamp_of(path))
     .collect();
+    let (control, mut incomplete) = control(repository);
+    if files.len() >= FILES_LIMIT {
+        incomplete = Some(format!(
+            "the repository holds {FILES_LIMIT} or more tracked and new files"
+        ));
+    }
     Outside {
         head,
         files,
         ignored,
-        control: control(repository),
+        control,
         root: repository.to_path_buf(),
+        incomplete,
     }
 }
 
@@ -538,6 +565,19 @@ mod tests {
         run(path, &["add", "."]);
         run(path, &["commit", "-q", "-m", "first"]);
         folder
+    }
+
+    #[test]
+    fn a_reading_past_a_control_folder_limit_is_not_complete() {
+        let repository = repository();
+        assert_eq!(outside(repository.path()).incomplete(), None);
+        let replace = repository.path().join(".git/refs/replace");
+        std::fs::create_dir_all(&replace).unwrap();
+        for index in 0..=CONTROL_LIMIT {
+            std::fs::write(replace.join(format!("{index:040x}")), "").unwrap();
+        }
+        let reason = outside(repository.path()).incomplete().map(str::to_owned);
+        assert!(reason.is_some_and(|reason| reason.contains(".git/refs/replace")));
     }
 
     // The hooks and the filter are shell scripts.

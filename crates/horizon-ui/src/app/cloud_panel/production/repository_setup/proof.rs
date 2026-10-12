@@ -42,7 +42,7 @@ const STEP_TIMEOUT: Duration = Duration::from_mins(30);
 /// Creates a file Horizon writes in the run's folder. The agent can write there too, so
 /// whatever is at the path goes first (a link itself, never its target) and the file
 /// is created new, never through a link someone put in its place.
-fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
+pub(super) fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
     if std::fs::symlink_metadata(path).is_ok() {
         std::fs::remove_file(path)?;
     }
