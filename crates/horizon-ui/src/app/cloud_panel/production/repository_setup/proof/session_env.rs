@@ -43,7 +43,7 @@ pub(super) fn arguments(image: &str, container: &str, run: Run<'_>) -> Result<Ve
     create.args(["create", "--name", container, image]);
     run(create).map_err(|error| format!("cannot read the image's session environment: {error}"))?;
     let folder = copied(container, FOLDER, run);
-    let pam_files = PAM_FILES.map(|file| (file, copied(container, file, run)));
+    let pam_files = PAM_FILES.map(|file| (file, copied_following(container, file, run)));
     let mut remove = Command::new("docker");
     remove.args(["rm", "--force", container]);
     let _ = run(remove);
@@ -117,8 +117,22 @@ fn image_only(image_env: &[String], session: &[String]) -> Vec<String> {
 /// The tar stream of `path` in the created container, or none when the image has no such
 /// path.
 pub(super) fn copied(container: &str, path: &str, run: Run<'_>) -> Result<Option<Vec<u8>>, String> {
+    copy_out(container, path, false, run)
+}
+
+/// As [`copied`], following a link at `path` inside the image the way a program that
+/// reads the file does; a link that leads nowhere counts as no file.
+fn copied_following(container: &str, path: &str, run: Run<'_>) -> Result<Option<Vec<u8>>, String> {
+    copy_out(container, path, true, run)
+}
+
+fn copy_out(container: &str, path: &str, follow: bool, run: Run<'_>) -> Result<Option<Vec<u8>>, String> {
     let mut copy = Command::new("docker");
-    copy.arg("cp").arg(format!("{container}:{path}")).arg("-");
+    copy.arg("cp");
+    if follow {
+        copy.arg("--follow-link");
+    }
+    copy.arg(format!("{container}:{path}")).arg("-");
     match run(copy) {
         Ok(archive) => Ok(Some(archive)),
         Err(error) if error.contains("Could not find the file") || error.contains("No such") => Ok(None),
@@ -222,12 +236,10 @@ fn pam_variables(text: &str) -> Vec<(String, String)> {
 /// same way, too large, not UTF-8 or not a regular file, refuses the image instead of
 /// the proof running with another environment.
 fn pam_file(archive: &[u8], file: &str) -> Result<Vec<(String, String)>, String> {
-    let name = file.rsplit('/').next().unwrap_or(file);
-    let entries = unpack(archive).map_err(|error| format!("the image's {file} is refused: {error}"))?;
-    match entries
-        .into_iter()
-        .find_map(|(path, entry)| (path == name).then_some(entry))
-    {
+    // Copied following a link, the one entry is named after the link's target.
+    let entries =
+        unpack_within(archive, FILE_LIMIT, 1).map_err(|error| format!("the image's {file} is refused: {error}"))?;
+    match entries.into_iter().next().map(|(_, entry)| entry) {
         Some(Unpacked::File(bytes, _)) => std::str::from_utf8(&bytes)
             .map(pam_variables)
             .map_err(|_| format!("the image's {file} is not UTF-8")),
@@ -422,6 +434,12 @@ mod tests {
                 ("PATH".to_owned(), "/opt/x:/usr/bin".to_owned()),
                 ("JAVA_HOME".to_owned(), "/opt/java".to_owned())
             ]
+        );
+        let through_link = archive(&[("locale.conf", Some(b"LANG=C.UTF-8\n"))]);
+        assert_eq!(
+            pam_file(&through_link, "/etc/default/locale").unwrap(),
+            [("LANG".to_owned(), "C.UTF-8".to_owned())],
+            "a link's target is read under its own name"
         );
         assert!(read(b"PATH=/opt/\xff\n").is_err(), "not UTF-8");
         assert!(read(&vec![b'#'; 32 * 1024]).is_err(), "too large");
