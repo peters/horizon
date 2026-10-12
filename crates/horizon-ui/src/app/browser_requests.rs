@@ -91,6 +91,8 @@ struct PendingBrowserCreate {
     /// means the user took the panel over before the first page committed.
     user_navigations_at_start: u32,
     stage: CreateStage,
+    /// The board it was asked on; a create of a replaced board is not one of a restored panel.
+    board: BoardFence,
 }
 
 /// Where a pending create stands. Only a starting create is judged each
@@ -450,6 +452,7 @@ impl HorizonApp {
             ready_since: None,
             user_navigations_at_start: 0,
             stage: CreateStage::Auditing,
+            board: self.browser_create_host.io.board_fence(),
         });
     }
 
@@ -518,23 +521,7 @@ impl HorizonApp {
         self.browser_create_host
             .pending
             .iter()
-            .any(|pending| pending.panel_local_id == panel.local_id)
-    }
-
-    /// Register a create as still pending, for tests of paths that must
-    /// refuse to touch a panel while its create has not returned.
-    #[cfg(test)]
-    pub(super) fn mark_browser_create_pending_for_tests(&mut self, probe: PendingBrowserCreateProbe) {
-        self.browser_create_host.pending.push(PendingBrowserCreate {
-            request: BrowserCreateRequest::for_tests(&probe.panel_local_id),
-            panel_local_id: probe.panel_local_id,
-            backend: BackendKind::default(),
-            startup_orientation: None,
-            started_at: Instant::now(),
-            ready_since: None,
-            user_navigations_at_start: 0,
-            stage: CreateStage::Starting,
-        });
+            .any(|pending| pending.panel_local_id == panel.local_id && pending.board.holds())
     }
 
     fn finish_pending_browser_creates(&mut self) -> bool {
@@ -1001,6 +988,24 @@ mod tests {
     use super::*;
     use crate::app::browser_request_claims::launched_by_this_host;
     use crate::app::test_support::test_app;
+
+    impl HorizonApp {
+        /// Register a create as still pending, for tests of paths that must
+        /// refuse to touch a panel while its create has not returned.
+        pub(in crate::app) fn mark_browser_create_pending_for_tests(&mut self, probe: PendingBrowserCreateProbe) {
+            self.browser_create_host.pending.push(PendingBrowserCreate {
+                request: BrowserCreateRequest::for_tests(&probe.panel_local_id),
+                panel_local_id: probe.panel_local_id,
+                backend: BackendKind::default(),
+                startup_orientation: None,
+                started_at: Instant::now(),
+                ready_since: None,
+                user_navigations_at_start: 0,
+                stage: CreateStage::Starting,
+                board: self.browser_create_host.io.board_fence(),
+            });
+        }
+    }
 
     fn agent_options() -> PanelOptions {
         let (command, args) = if cfg!(windows) {
@@ -1612,6 +1617,44 @@ mod tests {
             before,
             "the old board's placement is not written"
         );
+    }
+
+    #[test]
+    fn a_create_left_to_its_work_by_a_session_switch_is_not_one_of_the_restored_panel() {
+        let (_temp, mut app) = test_app();
+        let workspace = app.board.create_workspace("alpha");
+        let editor = PanelOptions {
+            kind: PanelKind::Editor,
+            ..PanelOptions::default()
+        };
+        let panel = app.board.create_panel(editor, workspace).expect("panel");
+        let local_id = app.board.panel(panel).expect("panel").local_id.clone();
+        let saved = horizon_core::RuntimeState::from_board(
+            &app.board,
+            horizon_core::WindowConfig::default(),
+            horizon_core::CanvasViewState::default(),
+        );
+        let target = app
+            .session_store
+            .create_session_from_runtime(saved)
+            .expect("target session");
+        app.mark_browser_create_pending_for_tests(PendingBrowserCreateProbe {
+            panel_local_id: local_id.clone(),
+        });
+        app.browser_create_host.pending[0].stage = CreateStage::Auditing;
+        assert!(app.browser_create_is_pending(panel));
+        // Its audit is still queued when the switch ends its bounded wait.
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        app.browser_create_host.io.write(move || {
+            let _ = released.recv();
+        });
+        app.activate_runtime_session(&egui::Context::default(), &target);
+        assert!(app.pending_session_switch.is_none(), "the switch completed");
+        assert_eq!(app.browser_create_host.pending.len(), 1, "its work still ends it");
+        let restored = app.board.panel_id_by_local_id(&local_id).expect("the restored panel");
+        assert!(!app.browser_create_is_pending(restored));
+        release.send(()).expect("the worker waits");
+        app.settle_browser_host_io();
     }
 
     #[test]
