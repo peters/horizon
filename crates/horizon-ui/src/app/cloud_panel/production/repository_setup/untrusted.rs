@@ -185,10 +185,17 @@ pub(super) fn setup_entries(repository: &Path, expected: Identity) -> Result<Vec
                 FileType::RegularFile => {
                     let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
                     let file = openat(&folder, name, flags, Mode::empty()).map_err(failed)?;
+                    // The mode of the file opened, so content and mode are of one file
+                    // even if another was swapped in after the look above.
+                    let opened = rustix::fs::fstat(&file).map_err(failed)?;
+                    if FileType::from_raw_mode(opened.st_mode) != FileType::RegularFile {
+                        return Err(format!("{relative} changed while Horizon read it"));
+                    }
                     let content = read_open(std::fs::File::from(file), SETUP_FILE_LIMIT)
                         .map_err(|error| format!("{relative}: {error}"))?;
                     Entry::File {
-                        executable: Mode::from_raw_mode(stat.st_mode).intersects(Mode::XUSR | Mode::XGRP | Mode::XOTH),
+                        executable: Mode::from_raw_mode(opened.st_mode)
+                            .intersects(Mode::XUSR | Mode::XGRP | Mode::XOTH),
                         content,
                     }
                 }
