@@ -250,6 +250,11 @@ impl Proof {
     pub(super) fn stop(&mut self) -> Option<std::thread::JoinHandle<()>> {
         self.cancel.cancel();
         self.remove_container();
+        // No one reads the proof's events any more: its receiver goes now, so a worker
+        // waiting to send into a full queue fails at once instead of holding up whoever
+        // waits for it to end.
+        let (_, closed) = mpsc::sync_channel(1);
+        drop(std::mem::replace(&mut self.receiver, closed));
         self.worker.take()
     }
 

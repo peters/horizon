@@ -102,7 +102,8 @@ pub(super) enum Committed {
 
 /// Replaces `.horizon` in an index with the entries: what is gone from disk goes.
 fn stage(repository: &Path, index: Option<&Path>, entries: &[String]) -> Result<(), String> {
-    let staged = git(
+    // The staged paths go back to git byte for byte, whatever their encoding.
+    let staged = git_raw(
         repository,
         index,
         &["ls-files", "-z", "--cached", "--", ".horizon"],
@@ -113,7 +114,7 @@ fn stage(repository: &Path, index: Option<&Path>, entries: &[String]) -> Result<
             repository,
             index,
             &["update-index", "-z", "--force-remove", "--stdin"],
-            Some(staged.as_bytes()),
+            Some(&staged),
         )?;
     }
     let mut info = entries.join("\n");
@@ -228,7 +229,14 @@ pub(super) struct Outside {
     head: String,
     /// Each path as git lists it, byte for byte, so no two names read as one.
     files: BTreeMap<Vec<u8>, Option<Stamp>>,
+    /// The ignored files that exist, such as a local .env or files in an ignored
+    /// folder. A change to one counts; a new one, such as fresh build output, does not.
+    ignored: BTreeMap<Vec<u8>, Option<Stamp>>,
 }
+
+/// The most ignored files a reading stamps, so a large dependency or build folder
+/// cannot hold up the dialog; git lists them in order, so each reading takes the same.
+const IGNORED_LIMIT: usize = 100_000;
 
 /// What changes whenever a file is written, replaced or has its times set: on Unix the
 /// inode change time, which no one can set back, with the inode, size and mode.
@@ -269,34 +277,31 @@ pub(super) fn outside(repository: &Path) -> Outside {
         None,
     )
     .unwrap_or_default();
-    // Ignored files count too, such as a local .env; ignored folders, such as build
-    // output, do not, since restores and builds fill them.
     let ignored = git_raw(
         repository,
         None,
-        &[
-            "ls-files",
-            "-z",
-            "--others",
-            "--ignored",
-            "--exclude-standard",
-            "--directory",
-        ],
+        &["ls-files", "-z", "--others", "--ignored", "--exclude-standard"],
         None,
     )
     .unwrap_or_default();
-    let files = listed
-        .split(|byte| *byte == 0)
-        .chain(ignored.split(|byte| *byte == 0).filter(|path| !path.ends_with(b"/")))
-        .filter(|path| !path.is_empty() && *path != b".horizon" && !path.starts_with(b".horizon/"))
-        .map(|path| {
-            let stamp = std::fs::symlink_metadata(repository.join(path_of(path)))
-                .ok()
-                .map(|metadata| stamp(&metadata));
-            (path.to_vec(), stamp)
-        })
-        .collect();
-    Outside { head, files }
+    let stamped = |listing: &[u8], limit: usize| {
+        listing
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty() && *path != b".horizon" && !path.starts_with(b".horizon/"))
+            .take(limit)
+            .map(|path| {
+                let stamp = std::fs::symlink_metadata(repository.join(path_of(path)))
+                    .ok()
+                    .map(|metadata| stamp(&metadata));
+                (path.to_vec(), stamp)
+            })
+            .collect()
+    };
+    Outside {
+        head,
+        files: stamped(&listed, usize::MAX),
+        ignored: stamped(&ignored, IGNORED_LIMIT),
+    }
 }
 
 /// A path git listed, as this platform names files.
@@ -321,6 +326,14 @@ pub(super) fn changed(before: &Outside, after: &Outside) -> Vec<String> {
         .filter(|(path, stamp)| after.files.get(*path) != Some(stamp))
         .map(|(path, _)| path)
         .chain(after.files.keys().filter(|path| !before.files.contains_key(*path)))
+        // An ignored file that existed and changed or went counts; a new one does not.
+        .chain(
+            before
+                .ignored
+                .iter()
+                .filter(|(path, stamp)| after.ignored.get(*path) != Some(stamp) && !after.files.contains_key(*path))
+                .map(|(path, _)| path),
+        )
         .collect();
     paths.sort();
     paths.dedup();
@@ -525,14 +538,26 @@ mod tests {
         std::fs::write(path.join("new.txt"), "new\n").unwrap();
         assert_eq!(changed(&before, &outside(path)), ["README.md", "new.txt"]);
         std::fs::write(path.join(".gitignore"), ".env\ntarget/\n").unwrap();
+        std::fs::write(path.join(".env"), "TOKEN=x\n").unwrap();
         let before = outside(path);
         std::fs::create_dir_all(path.join("target")).unwrap();
         std::fs::write(path.join("target/out"), "build\n").unwrap();
         assert!(
             changed(&before, &outside(path)).is_empty(),
-            "an ignored folder does not count"
+            "new build output does not count"
         );
-        std::fs::write(path.join(".env"), "TOKEN=x\n").unwrap();
-        assert_eq!(changed(&before, &outside(path)), [".env"], "an ignored file does");
+        std::fs::write(path.join(".env"), "TOKEN=changed by the agent\n").unwrap();
+        assert_eq!(
+            changed(&before, &outside(path)),
+            [".env"],
+            "a change to an ignored file does"
+        );
+        let before = outside(path);
+        std::fs::write(path.join("target/out"), "changed by the agent, longer\n").unwrap();
+        assert_eq!(
+            changed(&before, &outside(path)),
+            ["target/out"],
+            "also in an ignored folder"
+        );
     }
 }
