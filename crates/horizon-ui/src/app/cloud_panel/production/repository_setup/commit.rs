@@ -188,13 +188,46 @@ pub(super) fn changes(repository: &Path) -> Vec<String> {
     changes
 }
 
-/// When each file outside `.horizon` that git tracks or would track last changed.
-pub(super) type Outside = BTreeMap<String, Option<(u64, SystemTime)>>;
+/// The repository outside `.horizon` at one moment: HEAD, and each file git tracks or
+/// would track with a stamp of its last change.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct Outside {
+    head: String,
+    files: BTreeMap<String, Option<Stamp>>,
+}
 
-/// Reads the files outside `.horizon`: tracked ones and new ones git does not ignore,
-/// each with its size and modification time. Nothing is hashed, so it stays quick in a
-/// large repository.
+/// What changes whenever a file is written, replaced or has its times set: on Unix the
+/// inode change time, which no one can set back, with the inode, size and mode.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Stamp {
+    len: u64,
+    modified: Option<SystemTime>,
+    #[cfg(unix)]
+    changed: (i64, i64, u64, u64, u32),
+}
+
+fn stamp(metadata: &std::fs::Metadata) -> Stamp {
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt as _;
+    Stamp {
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+        #[cfg(unix)]
+        changed: (
+            metadata.ctime(),
+            metadata.ctime_nsec(),
+            metadata.ino(),
+            metadata.dev(),
+            metadata.mode(),
+        ),
+    }
+}
+
+/// Reads HEAD and the files outside `.horizon`: tracked ones and new ones git does not
+/// ignore, each stamped from its metadata. Nothing is opened or hashed, so it stays
+/// quick in a large repository and nothing the agent left can make it wait.
 pub(super) fn outside(repository: &Path) -> Outside {
+    let head = git(repository, None, &["rev-parse", "--verify", "HEAD"], None).unwrap_or_default();
     let listed = git(
         repository,
         None,
@@ -202,28 +235,40 @@ pub(super) fn outside(repository: &Path) -> Outside {
         None,
     )
     .unwrap_or_default();
-    listed
+    let files = listed
         .split('\0')
         .filter(|path| !path.is_empty() && *path != ".horizon" && !path.starts_with(".horizon/"))
         .map(|path| {
             let stamp = std::fs::symlink_metadata(repository.join(path))
                 .ok()
-                .and_then(|metadata| Some((metadata.len(), metadata.modified().ok()?)));
+                .map(|metadata| stamp(&metadata));
             (path.to_owned(), stamp)
         })
-        .collect()
+        .collect();
+    Outside { head, files }
 }
 
-/// The paths that were added, removed or written between two readings.
+/// What changed between two readings: the paths added, removed or written, and HEAD
+/// when it moved.
 pub(super) fn changed(before: &Outside, after: &Outside) -> Vec<String> {
     let mut paths: Vec<String> = before
+        .files
         .iter()
-        .filter(|(path, stamp)| after.get(*path) != Some(stamp))
+        .filter(|(path, stamp)| after.files.get(*path) != Some(stamp))
         .map(|(path, _)| path.clone())
-        .chain(after.keys().filter(|path| !before.contains_key(*path)).cloned())
+        .chain(
+            after
+                .files
+                .keys()
+                .filter(|path| !before.files.contains_key(*path))
+                .cloned(),
+        )
         .collect();
     paths.sort();
     paths.dedup();
+    if before.head != after.head {
+        paths.insert(0, "the commit HEAD names".to_owned());
+    }
     paths
 }
 
@@ -359,12 +404,24 @@ mod tests {
         let folder = repository();
         let path = folder.path();
         let before = outside(path);
-        assert!(before.contains_key("README.md"));
+        assert!(before.files.contains_key("README.md"));
         std::fs::write(path.join(".horizon/cloud.yml"), "version: 1\n").unwrap();
         assert!(
             changed(&before, &outside(path)).is_empty(),
             "the setup itself does not count"
         );
+        // The same size with the time set back still counts: the change time moves.
+        let readme = path.join("README.md");
+        let before_time = std::fs::metadata(&readme).unwrap().modified().unwrap();
+        std::fs::write(&readme, "README\n").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&readme)
+            .unwrap()
+            .set_modified(before_time)
+            .unwrap();
+        #[cfg(unix)]
+        assert_eq!(changed(&before, &outside(path)), ["README.md"]);
         std::fs::write(path.join("README.md"), "changed by the agent, longer\n").unwrap();
         std::fs::write(path.join("new.txt"), "new\n").unwrap();
         assert_eq!(changed(&before, &outside(path)), ["README.md", "new.txt"]);

@@ -63,43 +63,6 @@ const CI_TIMEOUT: Duration = Duration::from_mins(90);
 /// The longest the worker check may take; it only reads the image.
 const CHECK_TIMEOUT: Duration = Duration::from_mins(5);
 
-/// What a proof tests: every file in `.horizon`, the commit and the proof request, so
-/// a passed proof says nothing about a setup that changed after it. SHA-256 over framed
-/// records (kind, path, mode and content, each with its length), so no two setups read
-/// as the same bytes. A setup Horizon refuses to read has no fingerprint.
-pub(super) fn fingerprint(repository: &Path, spec: &Spec) -> Result<[u8; 32], String> {
-    use super::untrusted::{Entry, setup_entries};
-    use sha2::{Digest as _, Sha256};
-    let entries = setup_entries(repository)?;
-    let mut hash = Sha256::new();
-    let mut record = |kind: &[u8], bytes: &[u8]| {
-        hash.update(kind);
-        hash.update((bytes.len() as u64).to_le_bytes());
-        hash.update(bytes);
-    };
-    record(b"spec", format!("{spec:?}").as_bytes());
-    // The commit too: a context outside .horizon builds from the committed tree.
-    let head = super::commit::git_command(repository)
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .map(|output| output.stdout)
-        .unwrap_or_default();
-    record(b"head", &head);
-    for (relative, entry) in &entries {
-        record(b"path", relative.as_bytes());
-        // A link counts by its target's name, never followed: no loop, nothing outside.
-        match entry {
-            Entry::Folder => record(b"folder", b""),
-            Entry::Link(target) => record(b"link", target.to_string_lossy().as_bytes()),
-            Entry::File { executable, content } => {
-                record(b"mode", if *executable { b"755" } else { b"644" });
-                record(b"file", content);
-            }
-        }
-    }
-    Ok(hash.finalize().into())
-}
-
 /// Creates a file Horizon writes in the run's folder. The agent can write there too, so
 /// whatever is at the path goes first (a link itself, never its target) and the file
 /// is created new, never through a link someone put in its place.
@@ -269,11 +232,10 @@ impl Proof {
     ) -> Self {
         let (sender, receiver) = mpsc::sync_channel(EVENT_QUEUE);
         let cancel = Arc::new(AtomicBool::new(false));
+        // One snapshot of the setup: the proof fingerprints it and builds from it alone.
         // A setup Horizon refuses to read fails the build with the reason.
-        let (inputs, refused) = match fingerprint(repository, &spec) {
-            Ok(inputs) => (inputs, None),
-            Err(reason) => ([0; 32], Some(reason)),
-        };
+        let setup = super::snapshot::Setup::read(repository);
+        let inputs = setup.as_ref().map_or([0; 32], |setup| setup.fingerprint(&spec));
         let (image, volume) = run_names(repository, run);
         let container = format!("{volume}-proof-{request}");
         let job = Job {
@@ -283,7 +245,7 @@ impl Proof {
             volume,
             container: container.clone(),
             host_restore,
-            refused,
+            setup,
             log_path: log_path.clone(),
             cancel: cancel.clone(),
             sender,
@@ -409,8 +371,8 @@ struct Job {
     volume: String,
     container: String,
     host_restore: bool,
-    /// Why Horizon refuses to read this setup, if it does.
-    refused: Option<String>,
+    /// The setup this proof tests, read once at its start, or why Horizon refuses it.
+    setup: Result<super::snapshot::Setup, String>,
     log_path: PathBuf,
     cancel: Arc<AtomicBool>,
     sender: mpsc::SyncSender<Event>,
@@ -420,6 +382,15 @@ struct Job {
 }
 
 impl Job {
+    /// The commit the proof's snapshot names: the proof clones and tests that one.
+    fn head(&self) -> Option<&str> {
+        self.setup
+            .as_ref()
+            .ok()
+            .map(|setup| setup.head.as_str())
+            .filter(|head| !head.is_empty())
+    }
+
     fn run(self) {
         let mut log = create_private(&self.log_path).ok();
         // An earlier proof of this repository may still be stopping: its container goes.
@@ -444,9 +415,9 @@ impl Job {
             let _ = self.sender.send(Event::Started(phase));
             self.ctx.request_repaint();
             let result = match phase {
-                Phase::Build => match &self.refused {
-                    Some(reason) => Err(format!("Horizon does not read this setup: {reason}")),
-                    None => self.build(&mut log),
+                Phase::Build => match &self.setup {
+                    Err(reason) => Err(format!("Horizon does not read this setup: {reason}")),
+                    Ok(setup) => self.build(setup, &mut log),
                 },
                 Phase::Ci => self.prepare(&mut log).and_then(|()| {
                     self.warm_packages(&mut log);
@@ -463,14 +434,8 @@ impl Job {
         }
     }
 
-    fn build(&self, log: &mut Option<std::fs::File>) -> Result<(), String> {
-        let config = super::untrusted::read_regular(
-            &self.repository.join(".horizon/cloud.yml"),
-            super::untrusted::SETUP_FILE_LIMIT,
-        )
-        .map_err(|error| format!("cannot read .horizon/cloud.yml: {error}"))?;
-        let config = horizon_core::cloud_panel::CloudConfig::parse(&String::from_utf8_lossy(&config))
-            .map_err(|error| error.to_string())?;
+    fn build(&self, setup: &super::snapshot::Setup, log: &mut Option<std::fs::File>) -> Result<(), String> {
+        let config = setup.config()?;
         // The agent CLI releases deployment would pin, so every build gets its arguments.
         let releases =
             horizon_core::cloud_runtime::image::agents::latest(&horizon_core::cloud_runtime::Cancellation::default())
@@ -496,39 +461,25 @@ impl Job {
             } else {
                 format!("{}-build{index}:candidate", self.volume)
             };
-            self.build_one((build, arguments), &tag, docker_config.path(), log)?;
+            self.build_one(setup, (build, arguments), &tag, docker_config.path(), log)?;
         }
         Ok(())
     }
 
     fn build_one(
         &self,
+        setup: &super::snapshot::Setup,
         (build, arguments): (&horizon_core::cloud_panel::Build, &[String]),
         tag: &str,
         docker_config: &Path,
         log: &mut Option<std::fs::File>,
     ) -> Result<(), String> {
         // The agent wrote these paths: both stay inside the repository, as deployment
-        // demands. A context outside .horizon builds from the committed tree with the
-        // proposed .horizon laid over it, the image that deployment will build.
-        let root = std::fs::canonicalize(&self.repository).map_err(|error| error.to_string())?;
-        let context = inside(&root, &build.context, "build.context")?;
-        let dockerfile = inside(&root, &build.dockerfile, "build.dockerfile")?;
-        let snapshot = if context.starts_with(root.join(".horizon")) {
-            None
-        } else {
-            Some(committed_snapshot(&root)?)
-        };
-        let (context, dockerfile) = match &snapshot {
-            Some((_, tree)) => {
-                let moved = |path: &Path| tree.join(path.strip_prefix(&root).unwrap_or(path));
-                (moved(&context), moved(&dockerfile))
-            }
-            None => (context, dockerfile),
-        };
+        // demands, and the build reads the proof's snapshot, never the live folder.
+        let (folder, context, dockerfile) = setup.context(&self.repository, build)?;
         let mut command = Command::new("docker");
         command
-            .current_dir(&self.repository)
+            .current_dir(folder.path())
             .env_remove("DOCKER_AUTH_CONFIG")
             .arg("--config")
             .arg(docker_config)
@@ -561,13 +512,7 @@ impl Job {
     fn prepare(&self, log: &mut Option<std::fs::File>) -> Result<(), String> {
         // The image the agent wrote gets the tested commit and its history only, as a
         // bundle made here, never this computer's git folder with its other branches.
-        let head = super::commit::git_command(&self.repository)
-            .args(["rev-parse", "HEAD"])
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-            .ok_or("the repository has no commit")?;
+        let head = self.head().ok_or("the repository has no commit")?;
         // In a new private folder with a random name, never beside the agent's files.
         let folder = tempfile::Builder::new()
             .prefix("horizon-setup-bundle-")
@@ -621,24 +566,18 @@ impl Job {
     /// Whether the default profile asks for a GPU and this computer has an NVIDIA one;
     /// Docker refuses `--gpus` without it, and that is no fault of the Dockerfile.
     fn gpu(&self) -> bool {
-        let wanted = super::untrusted::read_regular(
-            &self.repository.join(".horizon/cloud.yml"),
-            super::untrusted::SETUP_FILE_LIMIT,
-        )
-        .ok()
-        .and_then(|config| horizon_core::cloud_panel::CloudConfig::parse(&String::from_utf8_lossy(&config)).ok())
-        .and_then(|config| config.profiles.get(&config.default).map(|profile| profile.gpu))
-        .unwrap_or(false);
+        let wanted = self
+            .setup
+            .as_ref()
+            .ok()
+            .and_then(|setup| setup.config().ok())
+            .and_then(|config| config.profiles.get(&config.default).map(|profile| profile.gpu))
+            .unwrap_or(false);
         wanted && Path::new("/dev/nvidiactl").exists()
     }
 
     fn ci(&self, fast: bool, log: &mut Option<std::fs::File>) -> Result<(), String> {
-        let head = super::commit::git_command(&self.repository)
-            .args(["rev-parse", "HEAD"])
-            .output()
-            .ok()
-            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-            .unwrap_or_default();
+        let head = self.head().unwrap_or_default();
         let mut command = Command::new("docker");
         command
             .args(["run", "--rm", "--name", &self.container, "--user", "10001:10001", "-v"])
@@ -673,7 +612,7 @@ impl Job {
         let script = format!(
             "{SESSION_ENV} {forget} exec localci {}",
             self.spec
-                .localci_args(fast, &head)
+                .localci_args(fast, head)
                 .iter()
                 .map(|arg| shell_quote(arg))
                 .collect::<Vec<_>>()
@@ -821,68 +760,6 @@ const SESSION_ENV: &str = "for f in /etc/horizon-worker/session-env.d/*.env; do 
 while IFS= read -r line || [ -n \"$line\" ]; do case \"$line\" in ''|'#'*) ;; \
 PATH_PREPEND=*) PATH=\"${line#PATH_PREPEND=}:$PATH\";; PATH_APPEND=*) PATH=\"$PATH:${line#PATH_APPEND=}\";; \
 *=*) export \"$line\";; esac; done < \"$f\"; done; export PATH;";
-
-/// `path` of the repository at `root`, refused when it leaves the repository.
-fn inside(root: &Path, path: &str, field: &str) -> Result<PathBuf, String> {
-    let resolved = std::fs::canonicalize(root.join(path)).map_err(|error| format!("{field} {path}: {error}"))?;
-    if resolved.starts_with(root) {
-        Ok(resolved)
-    } else {
-        Err(format!("{field} {path} leaves the repository"))
-    }
-}
-
-/// The committed tree of the repository at `root`, made the way deployment makes it
-/// (Git LFS files and submodules included), with its working `.horizon` laid over it.
-/// The folder is private and deleted on drop; the second value is the tree inside it.
-fn committed_snapshot(root: &Path) -> Result<(tempfile::TempDir, PathBuf), String> {
-    let folder = tempfile::Builder::new()
-        .prefix("horizon-setup-context-")
-        .tempdir()
-        .map_err(|error| error.to_string())?;
-    let cancel = horizon_core::cloud_runtime::Cancellation::default();
-    let runner = horizon_core::cloud_runtime::command::Runner {
-        cancel: &cancel,
-        emit: &|_| {},
-        secrets: Vec::new(),
-    };
-    let tree = horizon_core::cloud_runtime::repository::snapshot(root, "HEAD", folder.path(), &runner)
-        .map_err(|error| format!("cannot make the committed tree: {error}"))?;
-    // The proposed .horizon replaces the committed one exactly: deletions and links too.
-    let _ = std::fs::remove_dir_all(tree.join(".horizon"));
-    copy_setup(root, &tree)?;
-    Ok((folder, tree))
-}
-
-/// Copies the repository's `.horizon` into `tree` as Horizon read it: files through
-/// the untrusted reader, links as links, anything else refused.
-fn copy_setup(repository: &Path, tree: &Path) -> Result<(), String> {
-    use super::untrusted::{Entry, setup_entries};
-    let entries = setup_entries(repository)?;
-    std::fs::create_dir_all(tree.join(".horizon")).map_err(|error| error.to_string())?;
-    for (relative, entry) in entries {
-        let target = tree.join(&relative);
-        match entry {
-            Entry::Folder => std::fs::create_dir_all(&target).map_err(|error| error.to_string())?,
-            #[cfg(unix)]
-            Entry::Link(link) => std::os::unix::fs::symlink(link, &target).map_err(|error| error.to_string())?,
-            #[cfg(not(unix))]
-            Entry::Link(_) => return Err(format!("{relative} is a link")),
-            Entry::File { executable, content } => {
-                std::fs::write(&target, content).map_err(|error| error.to_string())?;
-                #[cfg(unix)]
-                if executable {
-                    use std::os::unix::fs::PermissionsExt as _;
-                    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))
-                        .map_err(|error| error.to_string())?;
-                }
-                #[cfg(not(unix))]
-                let _ = executable;
-            }
-        }
-    }
-    Ok(())
-}
 
 /// The image and volume of one setup run's proofs: unique to the run, so two runs or
 /// two Horizon processes on the same checkout never share or remove each other's.
@@ -1067,43 +944,6 @@ mod tests {
         assert_eq!(a, slug(Path::new("/home/a/app")), "the same path keeps its volume");
     }
 
-    #[test]
-    fn a_proof_fingerprint_follows_the_setup_and_the_request() {
-        let repository = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(repository.path().join(".horizon")).unwrap();
-        std::fs::write(repository.path().join(".horizon/Dockerfile"), "FROM base\n").unwrap();
-        let spec = Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": ["test"]})).unwrap();
-        let first = fingerprint(repository.path(), &spec);
-        assert_eq!(first, fingerprint(repository.path(), &spec), "stable");
-        std::fs::write(repository.path().join(".horizon/Dockerfile"), "FROM base\nRUN true\n").unwrap();
-        let edited = fingerprint(repository.path(), &spec);
-        assert_ne!(first, edited, "an edited Dockerfile is not the proved one");
-        let other = Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": ["lint"]})).unwrap();
-        assert_ne!(edited, fingerprint(repository.path(), &other), "nor another request");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_link_in_the_setup_counts_by_its_target_and_is_never_followed() {
-        let repository = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(repository.path().join(".horizon")).unwrap();
-        std::fs::write(repository.path().join(".horizon/Dockerfile"), "FROM base\n").unwrap();
-        std::os::unix::fs::symlink(
-            repository.path().join(".horizon"),
-            repository.path().join(".horizon/loop"),
-        )
-        .unwrap();
-        let spec = Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": ["test"]})).unwrap();
-        let first = fingerprint(repository.path(), &spec);
-        std::fs::remove_file(repository.path().join(".horizon/loop")).unwrap();
-        std::os::unix::fs::symlink("/etc", repository.path().join(".horizon/loop")).unwrap();
-        assert_ne!(
-            first,
-            fingerprint(repository.path(), &spec),
-            "a link to elsewhere is a change"
-        );
-    }
-
     #[cfg(unix)]
     #[test]
     fn a_new_image_forgets_the_step_records_an_older_one_left() {
@@ -1128,20 +968,6 @@ mod tests {
     }
 
     #[test]
-    fn a_context_outside_the_setup_must_stay_in_the_repository() {
-        let repository = tempfile::tempdir().unwrap();
-        let root = std::fs::canonicalize(repository.path()).unwrap();
-        std::fs::create_dir_all(root.join(".horizon")).unwrap();
-        assert!(inside(&root, ".horizon", "build.context").is_ok());
-        assert!(inside(&root, ".", "build.context").is_ok());
-        assert!(
-            inside(&root, "..", "build.context")
-                .unwrap_err()
-                .contains("leaves the repository")
-        );
-    }
-
-    #[test]
     fn an_endless_output_line_is_kept_short() {
         let mut input = std::io::Cursor::new([vec![b'x'; LINE_LIMIT * 3], b"\nnext\n".to_vec()].concat());
         let mut line = Vec::new();
@@ -1150,33 +976,6 @@ mod tests {
         line.clear();
         read_bounded_line(&mut input, &mut line).unwrap();
         assert_eq!(line, b"next\n", "the next line reads whole");
-    }
-
-    #[test]
-    fn the_fingerprint_frames_each_file() {
-        let spec = Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": ["test"]})).unwrap();
-        let read = |files: &[(&str, &str)]| {
-            let repository = tempfile::tempdir().unwrap();
-            std::fs::create_dir_all(repository.path().join(".horizon")).unwrap();
-            for (name, content) in files {
-                std::fs::write(repository.path().join(".horizon").join(name), content).unwrap();
-            }
-            (fingerprint(repository.path(), &spec), repository)
-        };
-        let (one, _kept) = read(&[("a", "b")]);
-        let (other, repository) = read(&[("ab", "")]);
-        assert_ne!(one, other, "a path and its content never run together");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let file = repository.path().join(".horizon/ab");
-            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
-            assert_ne!(
-                fingerprint(repository.path(), &spec),
-                other,
-                "the executable bit counts"
-            );
-        }
     }
 
     #[cfg(unix)]

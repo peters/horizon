@@ -153,7 +153,7 @@ impl Run {
             proof_stale_reported: false,
             host_restore: false,
             inputs: None,
-            outside: super::commit::Outside::new(),
+            outside: super::commit::Outside::default(),
         }
     }
 
@@ -278,7 +278,10 @@ impl Run {
     /// Reads the setup's fingerprint again now, as Use does before it commits.
     pub(super) fn refresh_inputs_now(&mut self) {
         if let Some(spec) = self.status.proof.as_ref() {
-            self.inputs = Some((Instant::now(), proof::fingerprint(&self.repository, spec).ok()));
+            self.inputs = Some((
+                Instant::now(),
+                super::snapshot::fingerprint(&self.repository, spec).ok(),
+            ));
         }
     }
 

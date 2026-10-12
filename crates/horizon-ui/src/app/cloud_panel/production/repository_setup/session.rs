@@ -99,6 +99,10 @@ impl HorizonApp {
         );
         match result {
             Ok(panel) => {
+                // Never saved, so a restart cannot run the setup again unseen.
+                if let Some(created) = self.board.panel_mut(panel) {
+                    created.transient = true;
+                }
                 let mut run = Run::new(panel, kind, repository, status, mode);
                 run.agent.clone_from(&preset.name);
                 run.pending_prompt = pending_prompt;
@@ -358,7 +362,7 @@ fn outside_changes_message(changed: &[String]) -> String {
         more => format!(" and {more} more"),
     };
     format!(
-        "Files outside .horizon changed while the setup ran: {shown}{more}. Use this setup commits only .horizon and leaves them as they are. Review them, then press Use this setup again."
+        "Changed outside .horizon while the setup ran: {shown}{more}. Use this setup commits only .horizon on the current HEAD and leaves the rest as it is. Review the changes, then press Use this setup again."
     )
 }
 
@@ -372,8 +376,8 @@ const STALE_PROOF: &str = "The .horizon files or the proof changed after Horizon
 const PANEL_NAME: &str = "Cloud repository setup";
 
 impl HorizonApp {
-    /// Closes hidden setup panels that no run follows, such as one restored after a
-    /// restart: its saved arguments hold the prompt, so it would set up again unseen.
+    /// Closes hidden setup panels that no run follows. Setup panels are transient and
+    /// never saved; this closes one an older Horizon saved before that.
     fn close_orphaned_setup_panels(&mut self) {
         let current = self.cloud_prototype.production.setup_run.as_ref().map(|run| run.panel);
         let orphans: Vec<_> = self

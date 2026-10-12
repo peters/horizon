@@ -239,6 +239,9 @@ pub struct Panel {
     pub work_resume: ResumePolicy,
     pub layout: PanelLayout,
     pub visible: bool,
+    /// Horizon neither saves nor restores this panel, such as a setup agent's hidden
+    /// panel whose arguments hold its task: a restart must not run it again unseen.
+    pub transient: bool,
     pub workspace_id: WorkspaceId,
     pub content: PanelContent,
     /// Preserve browser identity while an inert restore placeholder awaits its remote worker.
@@ -422,6 +425,7 @@ impl Panel {
             visible: true,
             workspace_id,
             content,
+            transient: false,
             disconnected_browser_profile: None,
             disconnected_device_identity: None,
             cloud_wait: None,
@@ -824,6 +828,7 @@ mod tests {
             visible: true,
             workspace_id: WorkspaceId(1),
             content: PanelContent::Usage(UsageDashboard::new()),
+            transient: false,
             disconnected_browser_profile: None,
             disconnected_device_identity: None,
             cloud_wait: None,

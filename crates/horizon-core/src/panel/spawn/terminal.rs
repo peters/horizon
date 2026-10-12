@@ -474,6 +474,7 @@ fn build_terminal_panel(
         visible: true,
         workspace_id,
         content: PanelContent::Terminal(terminal),
+        transient: false,
         disconnected_browser_profile: None,
         disconnected_device_identity: None,
         cloud_wait: None,

@@ -112,6 +112,7 @@ impl StaticPanelSeed {
             visible: true,
             workspace_id: self.workspace_id,
             content,
+            transient: false,
             disconnected_browser_profile: None,
             disconnected_device_identity: None,
             cloud_wait: None,
