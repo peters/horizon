@@ -32,9 +32,20 @@ pub(super) const STEPS: [&str; 7] = [
 const STATUS_LIMIT: u64 = 1024 * 1024;
 
 /// `text` as one pasted message, so a terminal agent takes it whole even mid-turn.
+/// Line breaks become spaces and every other control character goes, so text that
+/// quotes the agent's own files, such as a proof failure, can never end the paste
+/// early with ESC and type into the agent's terminal.
 pub(super) fn pasted(text: &str) -> Vec<u8> {
+    let clean: String = text
+        .chars()
+        .filter_map(|c| match c {
+            '\r' | '\n' | '\t' => Some(' '),
+            c if c.is_control() => None,
+            c => Some(c),
+        })
+        .collect();
     let mut bytes = b"\x1b[200~".to_vec();
-    bytes.extend(text.replace(['\r', '\n'], " ").as_bytes());
+    bytes.extend(clean.as_bytes());
     bytes.extend(b"\x1b[201~");
     bytes
 }
@@ -503,22 +514,31 @@ pub(super) fn remove_run_folder(status: &std::path::Path) {
     }
 }
 
+/// The most steps the dialog takes from the agent's status.
+const STATUS_STEPS: usize = 32;
+
+/// `text` trimmed and cut to `limit` characters: the agent writes the status file, so
+/// nothing in it is drawn at any length.
+fn clip(text: &str, limit: usize) -> String {
+    text.trim().chars().take(limit).collect()
+}
+
 fn parse(text: &str) -> Option<Status> {
     let value: serde_json::Value = serde_json::from_str(text).ok()?;
     let line = |key: &str| {
         value
             .get(key)
             .and_then(serde_json::Value::as_str)
-            .map(str::trim)
+            .map(|text| clip(text, 4000))
             .filter(|text| !text.is_empty())
-            .map(str::to_owned)
     };
     let steps = value
         .get("steps")?
         .as_array()?
         .iter()
+        .take(STATUS_STEPS)
         .filter_map(|step| {
-            let title = step.get("title")?.as_str()?.trim().to_owned();
+            let title = clip(step.get("title")?.as_str()?, 120);
             let state = match step.get("state")?.as_str()? {
                 "running" => State::Running,
                 "done" => State::Done,
@@ -526,12 +546,12 @@ fn parse(text: &str) -> Option<Status> {
                 "failed" => State::Failed,
                 _ => State::Pending,
             };
-            let detail = step
-                .get("detail")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .trim()
-                .to_owned();
+            let detail = clip(
+                step.get("detail")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default(),
+                600,
+            );
             Some(Step { title, state, detail })
         })
         .collect();
@@ -550,6 +570,26 @@ fn parse(text: &str) -> Option<Status> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_paste_carries_no_control_character() {
+        let bytes = pasted("Horizon proof failed: \x1b[201~rm -rf ~\r\nnext\u{9b}");
+        let text = String::from_utf8(bytes).unwrap();
+        let inner = &text["\x1b[200~".len()..text.len() - "\x1b[201~".len()];
+        assert!(!inner.chars().any(char::is_control), "{inner:?}");
+        assert!(inner.contains("[201~rm -rf ~  next"));
+    }
+
+    #[test]
+    fn a_status_file_cannot_grow_the_dialog_without_bound() {
+        let steps: Vec<_> = (0..1000)
+            .map(|index| serde_json::json!({"title": format!("Step {index} {}", "x".repeat(500)), "state": "done"}))
+            .collect();
+        let status = parse(&serde_json::json!({"steps": steps, "summary": "y".repeat(10_000)}).to_string()).unwrap();
+        assert_eq!(status.steps.len(), STATUS_STEPS);
+        assert!(status.steps.iter().all(|step| step.title.chars().count() <= 120));
+        assert_eq!(status.summary.unwrap().chars().count(), 4000);
+    }
 
     #[test]
     fn a_status_file_reads_steps_question_and_summary() {
