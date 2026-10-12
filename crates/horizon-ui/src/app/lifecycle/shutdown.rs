@@ -98,6 +98,7 @@ impl HorizonApp {
         self.observed_keyboard_inputs.clear_native_transfer_files();
         self.exit_cleanup_complete = true;
         self.release_active_session_lease();
+        self.end_cloud_repository_setup_for_exit();
         if browser_outcome == BrowserShutdownOutcome::ForcedCleanupFailed {
             tracing::error!("forced browser cleanup failed; exiting after the bounded shutdown deadline");
             crate::plugin_install::exit_after_releasing_plugins(1);
@@ -191,6 +192,8 @@ impl HorizonApp {
         self.flush_session_saves_for_exit();
         self.git_watchers.clear();
         self.release_active_session_lease();
+        // After the terminals shut down, so a setup agent has had its hang-up.
+        self.end_cloud_repository_setup_for_exit();
     }
 
     /// Queues the last save once, then holds the exit on each frame until the session

@@ -295,13 +295,13 @@ impl Proof {
         // a thread that waits for it, so the dialog never blocks and no process is left
         // unreaped.
         let container = self.container.clone();
-        std::thread::spawn(move || {
+        super::run::keep_ending(std::thread::spawn(move || {
             let _ = Command::new("docker")
                 .args(["rm", "--force", &container])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status();
-        });
+        }));
     }
 
     /// Takes what the background run reported since the last frame.
@@ -469,6 +469,7 @@ impl Job {
     }
 
     fn build(&self, setup: &super::snapshot::Setup, log: &mut Option<std::fs::File>) -> Result<(), String> {
+        resources::local_docker()?;
         let config = setup.config()?;
         // Deployment layers each same-worker companion's recipe on the image and checks
         // the layered result; this proof builds only the profiles' own images, so it

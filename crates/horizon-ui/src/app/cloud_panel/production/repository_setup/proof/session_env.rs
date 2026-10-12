@@ -43,7 +43,7 @@ pub(super) fn arguments(image: &str, container: &str, run: Run<'_>) -> Result<Ve
                 .find_map(|(name, entry)| (name == "environment").then_some(entry))
         })
         .and_then(|entry| match entry {
-            Unpacked::File(bytes) => Some(base_path(&bytes)),
+            Unpacked::File(bytes, _) => Some(base_path(&bytes)),
             Unpacked::Folder | Unpacked::Other => None,
         })
         .unwrap_or_else(|| SSH_PATH.to_owned());
@@ -75,7 +75,8 @@ pub(super) fn copied(container: &str, path: &str, run: Run<'_>) -> Result<Option
 /// One entry of a copied tar stream.
 pub(super) enum Unpacked {
     Folder,
-    File(Vec<u8>),
+    /// A regular file: its bytes and its permission bits.
+    File(Vec<u8>, u32),
     Other,
 }
 
@@ -118,7 +119,8 @@ pub(super) fn unpack_within(
                     .take(file_limit)
                     .read_to_end(&mut bytes)
                     .map_err(|error| error.to_string())?;
-                Unpacked::File(bytes)
+                let mode = entry.header().mode().map_err(|error| error.to_string())?;
+                Unpacked::File(bytes, mode)
             }
             _ => Unpacked::Other,
         };
@@ -139,7 +141,7 @@ fn session_files(archive: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
         match (name, entry) {
             (None, Unpacked::Folder) => {}
             (None, _) => return Err(format!("{FOLDER}: not a directory")),
-            (Some(name), Unpacked::File(bytes)) if parts.next().is_none() => files.push((name.to_owned(), bytes)),
+            (Some(name), Unpacked::File(bytes, _)) if parts.next().is_none() => files.push((name.to_owned(), bytes)),
             (Some(name), _) => return Err(format!("{name}: not a regular file")),
         }
     }
@@ -333,6 +335,16 @@ mod tests {
         ] {
             assert!(load(&files(&[(name, text)])).is_err(), "{name}: {text:?}");
         }
+    }
+
+    #[test]
+    fn a_copied_file_keeps_its_permission_bits() {
+        let copied = archive(&[("localci", Some(b"binary"))]);
+        let unpacked = unpack(&copied).unwrap();
+        assert!(
+            matches!(&unpacked[..], [(path, Unpacked::File(bytes, 0o644))] if path == "localci" && bytes == b"binary"),
+            "the mode a check of the file reads is the one the image has"
+        );
     }
 
     #[test]

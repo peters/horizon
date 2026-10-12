@@ -10,8 +10,23 @@ use horizon_core::cloud_runtime::repository::launch::Configuration;
 use std::time::Duration;
 
 /// What the thread of Use reports: whether the agent's processes ended, the process
-/// again when they did not, and the files outside `.horizon` once they did.
-pub(super) type Ending = (bool, Option<AgentProcess>, Option<Outside>);
+/// again, and the files outside `.horizon` once they ended.
+type Ending = (bool, Option<AgentProcess>, Option<Outside>);
+
+/// The thread of Use and what it reports. It holds the agent's process while it runs,
+/// so whatever lets the run go waits for it first.
+pub(super) struct Using {
+    report: std::sync::mpsc::Receiver<Ending>,
+    thread: std::thread::JoinHandle<()>,
+}
+
+impl Using {
+    /// Waits for the thread to end; the agent's process it held, when it had one.
+    pub(super) fn wait(self) -> Option<AgentProcess> {
+        let _ = self.thread.join();
+        self.report.try_recv().ok().and_then(|(_, agent, _)| agent)
+    }
+}
 
 impl HorizonApp {
     /// Starts Use: closes the agent's panel and leaves the waiting to a thread.
@@ -32,14 +47,17 @@ impl HorizonApp {
         let repository = run.repository.clone();
         let (sender, receiver) = std::sync::mpsc::channel();
         let wake = ctx.clone();
-        std::thread::spawn(move || {
+        let thread = std::thread::spawn(move || {
             let ended = agent.as_ref().is_none_or(AgentProcess::end);
             // Read only once nothing of the agent's runs, so no late write races it.
             let outside = ended.then(|| commit::outside(&repository));
             let _ = sender.send((ended, agent, outside));
             wake.request_repaint();
         });
-        run.ending = Some(receiver);
+        run.ending = Some(Using {
+            report: receiver,
+            thread,
+        });
         self.cloud_prototype.error = None;
     }
 
@@ -52,7 +70,7 @@ impl HorizonApp {
         let Some(ending) = &run.ending else {
             return false;
         };
-        match ending.try_recv() {
+        match ending.report.try_recv() {
             Ok((true, _, Some(outside))) => {
                 run.ending = None;
                 self.finish_using_cloud_repository_setup(ctx, outside);

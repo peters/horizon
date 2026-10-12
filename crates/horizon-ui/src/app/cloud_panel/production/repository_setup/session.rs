@@ -461,6 +461,14 @@ impl HorizonApp {
         }
     }
 
+    /// Ends the setup run as Horizon exits and waits until its agent and proof have
+    /// ended and what they made is removed, with every run already ending: the process
+    /// exits right after, and a thread still ending would be cut off.
+    pub(in crate::app) fn end_cloud_repository_setup_for_exit(&mut self) {
+        self.end_cloud_repository_setup();
+        run::wait_for_ended_runs();
+    }
+
     /// The process the agent's panel started, which leads its own process group.
     fn agent_process_of(&self, panel: horizon_core::PanelId, unit: Option<&str>) -> Option<super::agent::AgentProcess> {
         let id = self

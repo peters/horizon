@@ -143,8 +143,24 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_reso
     if wait {
         remove();
     } else {
-        std::thread::spawn(remove);
+        super::super::run::keep_ending(std::thread::spawn(remove));
     }
+}
+
+/// Refuses a Docker daemon on another machine. The proof mounts files of this computer
+/// into its containers, the repository's bundle and snapshot and Horizon's localci, and a
+/// daemon elsewhere would look for those paths on its own machine.
+pub(super) fn local_docker() -> Result<(), String> {
+    use horizon_core::cloud_runtime::docker_daemon::{Endpoint, Target};
+    let Some(Endpoint::Remote(host)) = Target::default().daemon() else {
+        return Ok(());
+    };
+    if Endpoint::parse(&host).is_local() {
+        return Ok(());
+    }
+    Err(format!(
+        "Docker here uses the daemon at {host}, on another machine. Horizon's proof mounts files from this computer, so it needs Docker running on this computer: switch to a local Docker context (docker context use default) or unset DOCKER_HOST, then start the setup again."
+    ))
 }
 
 /// A name Docker accepts for the repository: its folder name and a short hash of its

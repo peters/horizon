@@ -45,7 +45,7 @@ pub(super) fn instruction() -> String {
         .collect::<Vec<_>>()
         .join(", or ");
     format!(
-        "The localci for step 4 is {VERSION}: {releases}. Install the localci binary from that archive at {IN_IMAGE}; Horizon checks that the image holds exactly this binary."
+        "The localci for step 4 is {VERSION}: {releases}. Install the localci binary from that archive at {IN_IMAGE} with mode 755; Horizon checks that the image holds exactly this binary, executable for every user."
     )
 }
 
@@ -68,22 +68,27 @@ pub(super) fn check_installed(
     let archive = copied
         .map_err(|error| format!("cannot look at the image's localci: {error}"))?
         .ok_or_else(missing)?;
-    let installed = super::session_env::unpack_within(&archive, ARCHIVE_LIMIT, 1)
+    let (installed, mode) = super::session_env::unpack_within(&archive, ARCHIVE_LIMIT, 1)
         .map_err(|error| format!("cannot read the image's localci: {error}"))?
         .into_iter()
         .find_map(|(_, entry)| match entry {
-            super::session_env::Unpacked::File(bytes) => Some(bytes),
+            super::session_env::Unpacked::File(bytes, mode) => Some((bytes, mode)),
             _ => None,
         })
         .ok_or_else(missing)?;
     let trusted = std::fs::read(trusted).map_err(|error| error.to_string())?;
-    if Sha256::digest(&installed) == Sha256::digest(&trusted) {
-        Ok(())
-    } else {
-        Err(format!(
+    if Sha256::digest(&installed) != Sha256::digest(&trusted) {
+        return Err(format!(
             "the localci at {IN_IMAGE} in the image is not localci {VERSION}; install the release the setup names"
-        ))
+        ));
     }
+    // The worker's agents run it as any user the image's sessions have.
+    if mode & 0o111 != 0o111 {
+        return Err(format!(
+            "the localci at {IN_IMAGE} in the image is not executable for everyone (mode {mode:o}); install it with mode 755"
+        ));
+    }
+    Ok(())
 }
 
 /// The trusted localci for an image of `platform`, extracted from the verified release
@@ -124,6 +129,10 @@ pub(super) fn trusted(platform: &str) -> Result<(tempfile::TempDir, PathBuf), St
     if !status.success() || !binary.is_file() {
         return Err(format!("cannot unpack localci {VERSION}"));
     }
+    // The proof's container runs it as the image's user, whatever mode tar gave it.
+    #[cfg(unix)]
+    std::fs::set_permissions(&binary, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .map_err(|error| format!("cannot make localci executable: {error}"))?;
     Ok((folder, binary))
 }
 

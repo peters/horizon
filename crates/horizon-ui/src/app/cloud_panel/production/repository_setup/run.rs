@@ -117,9 +117,9 @@ pub(in crate::app::cloud_panel::production) struct Run {
     /// The agent's process until it is known to have ended: Use, Stop and the end of
     /// the run end it, with its process group, before the run's setup is read or let go.
     pub(super) agent_process: Option<super::agent::AgentProcess>,
-    /// The agent's processes ending on a thread for Use: whether they ended, and the
-    /// process again when they did not.
-    pub(super) ending: Option<std::sync::mpsc::Receiver<super::accept::Ending>>,
+    /// Use's thread, ending the agent's processes: it holds the agent meanwhile, so the
+    /// run waits for it before it lets go.
+    pub(super) ending: Option<super::accept::Using>,
 }
 
 /// What the person did in the progress view.
@@ -406,12 +406,9 @@ impl Run {
     /// The run's folder stays for its view until Stop.
     pub(super) fn abandon(&mut self) {
         if let Some(agent) = self.agent_process.take() {
-            let ending = std::thread::spawn(move || {
+            keep_ending(std::thread::spawn(move || {
                 agent.end();
-            });
-            if let Ok(mut runs) = ENDING.lock() {
-                runs.push(ending);
-            }
+            }));
         }
         self.release_proof(false);
     }
@@ -432,15 +429,18 @@ impl Run {
     /// the proof's containers, image and volume and the run's folder go. A new setup
     /// waits for that, so two setups never run at once.
     pub(super) fn discard(self) {
-        let ending = std::thread::spawn(move || drop(self));
-        if let Ok(mut runs) = ENDING.lock() {
-            runs.push(ending);
-        }
+        keep_ending(std::thread::spawn(move || drop(self)));
     }
 
     fn release(&mut self, wait: bool) {
         if std::mem::replace(&mut self.released, true) {
             return;
+        }
+        // Use may still be ending the agent on its thread: that ends first, and an agent
+        // it could not end is ended here.
+        if let Some(using) = self.ending.take() {
+            let agent = using.wait();
+            self.agent_process = self.agent_process.take().or(agent);
         }
         if let Some(agent) = self.agent_process.take() {
             agent.end();
@@ -511,18 +511,39 @@ impl Step {
     }
 }
 
-/// Runs and agents being ended in the background.
+/// Runs, agents and proof resources being ended in the background.
 static ENDING: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>> = std::sync::Mutex::new(Vec::new());
 
-/// Waits until every run or agent being ended in the background has ended: a new setup
-/// starts only then.
-pub(super) fn wait_for_ended_runs() {
-    let ending = ENDING
+/// Keeps `ending`, a thread that ends a run, an agent or what a proof made, so a new
+/// setup and Horizon's exit wait for it.
+pub(in crate::app::cloud_panel::production::repository_setup) fn keep_ending(ending: std::thread::JoinHandle<()>) {
+    ENDING
         .lock()
-        .map(|mut runs| std::mem::take(&mut *runs))
-        .unwrap_or_default();
-    for run in ending {
-        let _ = run.join();
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(ending);
+}
+
+/// Waits until every run, agent and proof resource being ended in the background has
+/// ended, with what their ending started in turn: a new setup starts only then, and
+/// Horizon exits only then. A thread is let go only once it has finished, so two that
+/// wait at once, such as a setup starting while Horizon exits, both wait for all.
+pub(super) fn wait_for_ended_runs() {
+    loop {
+        let finished = {
+            let mut ending = ENDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let (finished, running): (Vec<_>, Vec<_>) = std::mem::take(&mut *ending)
+                .into_iter()
+                .partition(std::thread::JoinHandle::is_finished);
+            *ending = running;
+            if finished.is_empty() && ending.is_empty() {
+                return;
+            }
+            finished
+        };
+        for run in finished {
+            let _ = run.join();
+        }
+        std::thread::sleep(Duration::from_millis(25));
     }
 }
 
