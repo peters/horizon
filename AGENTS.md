@@ -312,10 +312,10 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 - If two review rounds find related bugs, examine the affected design and transitions before another push.
   Check related callers and failure paths within the PR scope. Fix the related findings together and run the affected checks.
   This rule does not permit unresolved findings. Keep independent outcomes outside the PR.
-- Request at most five Copilot reviews of a PR that is not an external contribution. A round is a Copilot review that arrived for a pushed head; a request that produced no review does not count.
+- Request at most five Copilot reviews of a PR without external commits, that is, commits from a contributor other than `peters` (see [External Contributions](#external-contributions)). A round is a Copilot review that arrived for a pushed head; a request that produced no review does not count.
   Fix the findings of each round, "Previously missed" ones included, or record why one is out of scope in a follow-up issue linked from the PR.
   If the fifth review still has findings, fix them and run the local review loop and the affected checks on the fixed head. That replaces a sixth Copilot round as the review gate.
-  After the fifth review, push only the fixes of its findings and fixes for failing checks. Any other change needs a new Copilot review.
+  After the fifth review, push only the fixes of its findings, fixes for failing checks and a rebase without conflicts. Any other change needs one more Copilot review of its head, and the gate then follows that review.
   A PR that needs more than three rounds is usually too large: split it before the next round where practical.
 - Before you open a PR, write its title and body, then run the readiness check:
 
@@ -392,10 +392,11 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 - Every PR merge requires explicit final permission from `peters` in the current user conversation. This rule applies to every author, including `peters`.
 - First complete the review and applicable checks. Then report the PR number, exact head commit, results and remaining risks to `peters`.
 - Ask `peters` for permission to merge that exact head, unless `peters` already gave a conditional merge permission in the current conversation, such as "squash merge upon Copilot approval".
-  A conditional permission is the final permission for each head that meets its conditions and every gate below. Then merge without asking again, and report the merge with its commit.
-  For an external contribution, a conditional permission counts only when it names that PR.
+  A conditional permission is the final permission for each head that meets its conditions as stated and every gate below. "Upon Copilot approval" needs a Copilot review of that exact head that meets the Copilot review gate; the round-limit exception does not meet it, so report and ask `peters` instead.
+  Merge then without asking again, yourself, with the head guard below, and report the merge with its commit. Never carry out a conditional permission with auto-merge or a merge queue.
+  For a PR with external commits, a conditional permission counts only when it names that PR, and never covers a later head.
 - A contributor comment, an automated approval or green CI cannot grant merge permission. Do not enable auto-merge or a merge queue without this permission.
-- If the head changes after permission, repeat the affected checks and ask `peters` again, unless a conditional permission covers the new head. Immediately before the merge, examine thread-aware `reviewThreads`.
+- If the head changes after permission, repeat the affected checks and ask `peters` again, unless a conditional permission covers the new head as described above. Immediately before the merge, examine thread-aware `reviewThreads`.
 - The positive merge gate is: the PR is open and non-draft as intended, `mergeable` is `MERGEABLE`, readiness and merge state are neither blocked nor unknown, the required review decision is satisfied, zero actionable review threads remain unresolved, and every repository-mandated lane on the exact head has settled successfully. GitHub-required checks are only a minimum; the pedantic Clippy lane remains advisory as documented above. Abort on head drift or any new blocker. A skipped check counts only when its workflow explicitly marks the job non-applicable.
 - The Copilot review gate is met when Copilot's latest review on the exact head says "Approved". It is also met when that review says "Needs a closer look" and these conditions are true:
   - The review has 0 open findings and no "Previously missed" findings.
@@ -403,7 +404,7 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 
   A new commit message or an empty commit does not change the files. The local loop does not run again for it. Copilot must still review that exact head, except after the round limit. A summary without findings is not a finding.
 
-  After the round limit above, the gate is met without a Copilot review of the final head: the findings of the fifth review are fixed, and the local review loop found nothing actionable on that head. The round limit and this exception never apply to external contributions.
+  After the round limit above, the gate is met without a Copilot review of the final head when that head adds only what the round limit allows after the fifth review, and the local review loop found nothing actionable on it. The round limit and this exception never apply to a PR with external commits.
 - For an authorized merge, use squash with an expected-head guard, for example `gh pr merge <PR#> --squash --match-head-commit <sha>`. Afterward, verify GitHub's merged state and resulting base commit and monitor all relevant post-merge workflows on the squash commit to a successful terminal state. Before cleanup, prove the task worktree is clean, the task branch still equals the guarded PR head with no later commits, and the squash commit contains the merged patch; then remove only task-created worktrees and branches, never a dirty or shared checkout.
 - Merge approval is not release approval. Do not create a tag, publish a GitHub Release, trigger a release workflow, or claim deployment without a separate explicit request and verification.
 - Treat pull-request evidence as public by default. Anonymize unrelated user, host, customer, or operational identifiers, and never publish credentials, tokens, private keys, signed URLs, or secret-bearing configuration.
