@@ -114,13 +114,19 @@ pub(super) fn check_plan(plan: &[u8]) -> Result<(), String> {
         return Err("the proof selects no job that runs on Linux".to_owned());
     }
     for leg in legs {
+        let job = leg["key"].as_str().or_else(|| leg["job"].as_str()).unwrap_or("a job");
+        // localci skips a whole job whose `if:` is false here, and calls that a pass.
+        if leg["if_locally"] == false {
+            return Err(format!(
+                "{job} does not run here: its if: is false, so it would prove nothing"
+            ));
+        }
         let runs = leg["steps"].as_array().is_some_and(|steps| {
             steps
                 .iter()
                 .any(|step| step["kind"] != "uses" && step["leave_out"].is_null())
         });
         if !runs {
-            let job = leg["key"].as_str().or_else(|| leg["job"].as_str()).unwrap_or("a job");
             return Err(format!(
                 "the proof leaves out every step of {job} that runs a command, so it would prove nothing"
             ));
@@ -156,5 +162,10 @@ mod tests {
             "a step localci calls setup still runs commands"
         );
         assert!(check_plan(br#"{"legs": []}"#).is_err());
+        let skipped_job = serde_json::to_vec(&serde_json::json!({"legs": [
+            {"key": "test", "selected": true, "if_locally": false, "steps": [{"kind": "run", "leave_out": null}]}
+        ]}))
+        .unwrap();
+        assert!(check_plan(&skipped_job).unwrap_err().contains("does not run here"));
     }
 }

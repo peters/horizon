@@ -112,6 +112,8 @@ impl HorizonApp {
         );
         let launcher_unit = unit.clone();
         std::thread::spawn(move || {
+            // One setup at a time: an earlier run still ending, as after Stop, ends first.
+            run::wait_for_ended_runs();
             let outside = super::commit::outside(&scan);
             let dotnet = super::proof::uses_nuget(&scan);
             let _ = sender.send((outside, dotnet, super::agent::scope_launcher(&launcher_unit)));

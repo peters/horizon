@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 mod localci;
 mod resources;
+mod session_env;
 mod stream;
 pub(super) use resources::{remove_run_resources, run_id, run_names};
 
@@ -617,10 +618,12 @@ impl Job {
         let mut create = super::commit::git_command(&self.repository);
         create.args(["bundle", "create", "--quiet"]).arg(&bundle).arg("HEAD");
         self.stream(create, log)?;
+        // Horizon's pinned base image, not the candidate, prepares the volume: what the
+        // CI later runs on is the bundled commit, whatever the candidate's tools do.
         let mut own = Command::new("docker");
         own.args(["run", "--rm", "--name", &self.container, "-v"])
             .arg(format!("{}:/workspace", self.volume))
-            .args(["--entrypoint", "sh", &self.image, "-c"])
+            .args(["--entrypoint", "sh", TOOLS, "-c"])
             .arg("mkdir -p /workspace/home && chown 10001:10001 /workspace /workspace/home");
         self.stream(own, log)?;
         // As root, so the checkout can be handed to the worker's account after.
@@ -632,7 +635,7 @@ impl Job {
             .arg(format!("{}:/src.bundle:ro", bundle.display()))
             .args(["-e", "HOME=/workspace/home", "-e"])
             .arg(format!("HEAD_SHA={head}"))
-            .args(["--entrypoint", "sh", &self.image, "-c"])
+            .args(["--entrypoint", "sh", TOOLS, "-c"])
             .arg(CLONE);
         let result = self.stream(clone, log);
         drop(folder);
@@ -738,31 +741,37 @@ impl Job {
         Ok(command)
     }
 
+    /// Runs the CI jobs: the container starts Horizon's localci itself, with the
+    /// image's session environment read beforehand, so no program of the candidate runs
+    /// before it; the steps then run in the image as the worker would run them.
     fn ci(&self, fast: bool, log: &mut Option<std::fs::File>) -> Result<(), String> {
         let head = self.head().unwrap_or_default();
+        let session = session_env::arguments(&self.image, &format!("{}-env", self.container))?;
+        if !fast {
+            self.forget_older_records(&session, log)?;
+        }
         let mut command = self.ci_container()?;
-        // localci's step records do not know the image: after a rebuild the full run
-        // forgets them, so no job passes on a record an older image left.
-        let forget = if fast {
-            ""
-        } else {
-            command
-                .arg("-e")
-                .arg(format!("HORIZON_PROOF_IMAGE={}", self.image_id()));
-            FORGET_OLDER_IMAGE
-        };
-        let script = format!(
-            "{SESSION_ENV} {forget} exec {} {}",
-            localci::MOUNTED,
-            self.spec
-                .localci_args(fast, head)
-                .iter()
-                .map(|arg| shell_quote(arg))
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
-        command.args(["--entrypoint", "bash", &self.image, "-c", &script]);
+        command
+            .args(&session)
+            .args(["--entrypoint", localci::MOUNTED, &self.image])
+            .args(self.spec.localci_args(fast, head));
         self.stream_within(command, log, Some(CI_TIMEOUT))
+    }
+
+    /// localci's step records do not know the image: before a full run after a rebuild
+    /// Horizon's base image removes them from the volume, so no job passes on a record
+    /// an older image left.
+    fn forget_older_records(&self, session: &[String], log: &mut Option<std::fs::File>) -> Result<(), String> {
+        let mut forget = Command::new("docker");
+        forget
+            .args(["run", "--rm", "--name", &self.container, "--user", "10001:10001", "-v"])
+            .arg(format!("{}:/workspace", self.volume))
+            .args(["-e", "HOME=/workspace/home"])
+            .args(session)
+            .arg("-e")
+            .arg(format!("HORIZON_PROOF_IMAGE={}", self.image_id()))
+            .args(["--entrypoint", "sh", TOOLS, "-c", FORGET_OLDER_IMAGE]);
+        self.stream(forget, log)
     }
 
     /// The built image's ID, or its tag when Docker cannot say.
@@ -799,11 +808,9 @@ const FORGET_OLDER_IMAGE: &str = "marker=\"$HOME/.horizon-proof-image\"; \
 if [ \"$(cat \"$marker\" 2>/dev/null)\" != \"$HORIZON_PROOF_IMAGE\" ]; then \
 rm -rf \"${XDG_CACHE_HOME:-$HOME/.cache}/localci\"; printf '%s' \"$HORIZON_PROOF_IMAGE\" > \"$marker\"; fi;";
 
-/// Applies the image's session environment, as a worker session gets it.
-const SESSION_ENV: &str = "for f in /etc/horizon-worker/session-env.d/*.env; do [ -f \"$f\" ] || continue; \
-while IFS= read -r line || [ -n \"$line\" ]; do case \"$line\" in ''|'#'*) ;; \
-PATH_PREPEND=*) PATH=\"${line#PATH_PREPEND=}:$PATH\";; PATH_APPEND=*) PATH=\"$PATH:${line#PATH_APPEND=}\";; \
-*=*) export \"$line\";; esac; done < \"$f\"; done; export PATH;";
+/// The image that prepares the proof's volume: Horizon's pinned base, never the
+/// candidate the agent wrote.
+const TOOLS: &str = horizon_core::cloud_runtime::repository::launch::quick_start::IMAGE;
 
 /// The images deployment would build: each profile's build with the build arguments
 /// its capabilities give, the default profile's first, every other one that differs
@@ -865,10 +872,6 @@ pub(super) fn uses_nuget(repository: &Path) -> bool {
         }
     }
     false
-}
-
-fn shell_quote(text: &str) -> String {
-    format!("'{}'", text.replace('\'', "'\\''"))
 }
 
 #[cfg(test)]
@@ -985,11 +988,5 @@ mod tests {
         })
         .unwrap();
         assert_eq!(by_arguments.len(), 4, "other build arguments make another image");
-    }
-
-    #[test]
-    fn quoted_arguments_survive_the_shell() {
-        assert_eq!(shell_quote("Use isolated NuGet caches"), "'Use isolated NuGet caches'");
-        assert_eq!(shell_quote("it's"), "'it'\\''s'");
     }
 }

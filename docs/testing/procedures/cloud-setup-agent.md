@@ -165,9 +165,25 @@ setup** commits `.horizon` and reads it as the repository profile.
    Result: When the agent changed nothing, no new commit is made and the dialog
    reads the committed profile, with no error.
 
+### 6.9 S09 — Start the setup from a cloud workspace
+
+1. Make a cloud workspace the active workspace. Open **New cloud**, select a
+   local repository that has no `.horizon/cloud.yml` and click **Set up with**
+   an agent.
+
+   Result: The hidden panel of the setup agent is in an ordinary local
+   workspace and not in the cloud workspace. Its working folder is the selected
+   repository. No compute is rented and no remote credential is used.
+
+2. Open a local workspace, make the cloud workspace active again and do step 1
+   again.
+
+   Result: The setup uses the open local workspace. It never uses a remote
+   workspace.
+
 ## 7. Pass criteria
 
-- S01 to S08 give the results above.
+- S01 to S09 give the results above.
 - The proof ran on this computer. Before you click **Use this setup** in S04,
   `docker images` lists `horizon-setup-ci-app-<hash>-<run>:candidate`. `<hash>` is
   six hexadecimal digits that Horizon derives from the repository's path. `<run>` is

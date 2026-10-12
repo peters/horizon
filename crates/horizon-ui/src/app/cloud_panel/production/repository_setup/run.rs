@@ -399,7 +399,12 @@ impl Run {
     /// The run's folder stays for its view until Stop.
     pub(super) fn abandon(&mut self) {
         if let Some(agent) = self.agent_process.take() {
-            std::thread::spawn(move || agent.end());
+            let ending = std::thread::spawn(move || {
+                agent.end();
+            });
+            if let Ok(mut runs) = ENDING.lock() {
+                runs.push(ending);
+            }
         }
         self.release_proof(false);
     }
@@ -417,9 +422,13 @@ impl Run {
     }
 
     /// Ends the run in the background: its agent's processes end, its proof stops, then
-    /// the proof's containers, image and volume and the run's folder go.
+    /// the proof's containers, image and volume and the run's folder go. A new setup
+    /// waits for that, so two setups never run at once.
     pub(super) fn discard(self) {
-        std::thread::spawn(move || drop(self));
+        let ending = std::thread::spawn(move || drop(self));
+        if let Ok(mut runs) = ENDING.lock() {
+            runs.push(ending);
+        }
     }
 
     fn release(&mut self, wait: bool) {
@@ -492,6 +501,21 @@ impl Step {
             state: self.state,
             detail: self.detail.clone(),
         }
+    }
+}
+
+/// Runs and agents being ended in the background.
+static ENDING: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>> = std::sync::Mutex::new(Vec::new());
+
+/// Waits until every run or agent being ended in the background has ended: a new setup
+/// starts only then.
+pub(super) fn wait_for_ended_runs() {
+    let ending = ENDING
+        .lock()
+        .map(|mut runs| std::mem::take(&mut *runs))
+        .unwrap_or_default();
+    for run in ending {
+        let _ = run.join();
     }
 }
 
