@@ -39,14 +39,19 @@ const SSH_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:
 
 /// A docker command run within the proof's time limit and cancellation, returning what
 /// it wrote to standard output.
-pub(super) type Run<'a> = &'a dyn Fn(Command) -> Result<Vec<u8>, String>;
+pub(in crate::app::cloud_panel::production::repository_setup) type Run<'a> =
+    &'a dyn Fn(Command) -> Result<Vec<u8>, String>;
 
 /// The `-e` arguments that give a container of `image` the environment a worker session
 /// gets; the image is created under the name `container` for the copy and removed
 /// again. Every docker command goes through `run`, so a daemon that hangs cannot hold
 /// the proof, and what docker copies out arrives as a tar stream that `run` stops at its
 /// limit, so an image cannot fill this computer's disk or memory with it.
-pub(super) fn arguments(image: &str, container: &str, run: Run<'_>) -> Result<Vec<String>, String> {
+pub(in crate::app::cloud_panel::production::repository_setup) fn arguments(
+    image: &str,
+    container: &str,
+    run: Run<'_>,
+) -> Result<Vec<String>, String> {
     let mut create = Command::new("docker");
     create.args(["create", "--name", container, image]);
     run(create).map_err(|error| format!("cannot read the image's session environment: {error}"))?;

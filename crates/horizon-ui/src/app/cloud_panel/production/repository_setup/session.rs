@@ -264,8 +264,11 @@ impl HorizonApp {
             run.files_job = None;
             let log = run.status_path.with_extension(format!("proof-{request}.log"));
             let id = super::proof::run_id(&run.status_path);
-            // The proof it replaces stops first, so the two never build the same image.
-            let after = run.proof.as_mut().and_then(super::proof::Proof::stop);
+            // The proof and the preview it replaces stop first: the two never build the same
+            // image, and no preview runs on the volume the new proof uses. The preview
+            // starts again once the new proof passed.
+            let after = run.stop_all();
+            run.previewed_request = 0;
             run.proof = Some(super::proof::Proof::start(
                 (&run.repository, &id, run.identity),
                 (request, spec),
@@ -281,16 +284,11 @@ impl HorizonApp {
             }
             std::mem::take(&mut proof.unreported).then(|| proof.report())
         });
+        let preview_report = run.sync_preview(ctx);
         let Some(panel) = self.board.panel_mut(run.panel) else {
-            // The agent's panel closed. A setup that had not finished ends here: its
-            // agent's processes end and its proof gives back its containers, image and
-            // volume, as Stop does.
-            if !run.finished() {
-                if !run.stopped {
-                    run.abandon();
-                }
-                run.stopped = true;
-            }
+            run.agent_panel_closed();
+            // A live preview still opens, for example after a refused Use closed the agent.
+            self.open_cloud_setup_preview();
             return;
         };
         if run.sampled.is_none_or(|at| at.elapsed() >= run::OUTPUT_EVERY) {
@@ -307,7 +305,12 @@ impl HorizonApp {
         // A summary without a proof request, or over a setup that changed after its proof,
         // gets one reminder: Use needs Horizon's proof of the files as they are.
         let report = report
+            .or(preview_report)
             .or_else(|| run.take_summary_without_proof().then(|| MISSING_PROOF.to_owned()))
+            .or_else(|| {
+                run.take_summary_with_invalid_preview()
+                    .then(|| INVALID_PREVIEW.to_owned())
+            })
             .or_else(|| {
                 (run.summary_over_stale_proof() && !std::mem::replace(&mut run.proof_stale_reported, true))
                     .then(|| STALE_PROOF.to_owned())
@@ -332,6 +335,74 @@ impl HorizonApp {
             } else {
                 ctx.request_repaint_after(at - now);
             }
+        }
+        self.open_cloud_setup_preview();
+    }
+
+    /// Opens each live preview once, as a Device panel beside the setup agent. A panel
+    /// that shows a desktop which ended, or was replaced, closes.
+    fn open_cloud_setup_preview(&mut self) {
+        let Some(run) = self.cloud_prototype.production.setup_run.as_mut() else {
+            return;
+        };
+        // A panel the person closed stays closed for this desktop.
+        if run.preview_panel.is_some_and(|panel| self.board.panel(panel).is_none()) {
+            run.preview_panel = None;
+        }
+        let endpoint = run.preview.as_ref().and_then(super::preview::Preview::endpoint);
+        if run.preview_shown == endpoint {
+            return;
+        }
+        if let Some(old) = run.preview_panel.take()
+            && self.board.panel(old).is_some()
+        {
+            self.close_panel(old);
+        }
+        // The desktop counts as shown once its panel exists, so a failed creation is
+        // tried again on the next frame.
+        let Some(endpoint) = endpoint else {
+            if let Some(run) = self.cloud_prototype.production.setup_run.as_mut() {
+                run.preview_shown = None;
+            }
+            return;
+        };
+        let Some(run) = self.cloud_prototype.production.setup_run.as_ref() else {
+            return;
+        };
+        // Beside the agent, or where the person works when the agent is gone.
+        let Some(workspace) = self
+            .board
+            .panel(run.panel)
+            .map(|panel| panel.workspace_id)
+            .or(self.board.active_workspace)
+        else {
+            return;
+        };
+        let name = run
+            .repository
+            .file_name()
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+        let created = self.board.create_panel(
+            PanelOptions {
+                name: Some(format!("{name} preview")),
+                name_is_custom: Some(true),
+                kind: PanelKind::Device,
+                command: Some(endpoint.clone()),
+                // Large enough to see the app beside the connection details.
+                size: Some(PREVIEW_PANEL_SIZE),
+                ..PanelOptions::default()
+            },
+            workspace,
+        );
+        if let Ok(panel) = created
+            && let Some(run) = self.cloud_prototype.production.setup_run.as_mut()
+        {
+            // Never saved: after a restart its desktop is gone.
+            if let Some(created) = self.board.panel_mut(panel) {
+                created.transient = true;
+            }
+            run.preview_panel = Some(panel);
+            run.preview_shown = Some(endpoint);
         }
     }
 
@@ -415,14 +486,23 @@ impl HorizonApp {
                 }
             }
             // Use cannot be cancelled once it started: Stop waits until it reported.
-            Action::Stop
-                if self
-                    .cloud_prototype
-                    .production
-                    .setup_run
-                    .as_ref()
-                    .is_some_and(Run::ending) => {}
+            Action::Stop if run.ending() => {}
+            Action::ShowPreview => {
+                if let Some(preview) = run.preview_panel {
+                    let workspace = self.board.panel(preview).map(|panel| panel.workspace_id);
+                    self.close_cloud_creation();
+                    if let Some(workspace) = workspace {
+                        self.reveal_new_panel(ctx, workspace, preview);
+                    }
+                }
+            }
             Action::Stop => {
+                let preview = run.preview_panel.take();
+                if let Some(preview) = preview
+                    && self.board.panel(preview).is_some()
+                {
+                    self.close_panel(preview);
+                }
                 if self.board.panel(panel).is_some() {
                     self.close_panel(panel);
                 }
@@ -435,8 +515,11 @@ impl HorizonApp {
     }
 }
 
+/// What the agent hears when it wrote a summary over a preview Horizon cannot start.
+const INVALID_PREVIEW: &str = "Horizon cannot start the preview in the status file: it needs \"command\", one shell command of at most 4096 characters, and optionally \"size\" such as \"1280x800\". Fix it, or set preview to null when there is no GUI app, and increase preview_request by one. Use this setup waits for it.";
+
 /// What the agent hears when it wrote a summary but no proof Horizon could run.
-const MISSING_PROOF: &str = "Horizon has no proof to run: put a valid proof in the status file (a workflow with at least one job) and set proof_request to 1. Use this setup waits for Horizon's proof.";
+const MISSING_PROOF: &str = "Horizon has no proof to run: put a valid proof in the status file (a workflow with at least one job, or commands) and set proof_request to 1. Use this setup waits for Horizon's proof.";
 
 /// What the agent hears when the setup changed after Horizon's proof passed.
 const STALE_PROOF: &str = "The .horizon files or the proof changed after Horizon's proof passed, so it no longer proves this setup. Increase proof_request by one so Horizon proves it again.";
@@ -446,6 +529,9 @@ const NO_SCOPE: &str = "The setup agent needs a systemd user session (systemd-ru
 
 /// The longest Horizon's exit waits for setup runs to end; the window does not draw meanwhile.
 const EXIT_WAIT: Duration = Duration::from_secs(20);
+
+/// The size of the Device panel that shows a live preview.
+const PREVIEW_PANEL_SIZE: [f32; 2] = [1040.0, 960.0];
 
 /// The name of a setup agent's hidden panel.
 const PANEL_NAME: &str = "Cloud repository setup";

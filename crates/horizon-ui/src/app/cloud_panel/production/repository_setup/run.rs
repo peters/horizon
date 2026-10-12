@@ -2,6 +2,7 @@
 //! progress. The agent keeps a small status file current; the person reads the steps
 //! here and steers the agent by typing into its terminal from the dialog.
 use super::Mode;
+use super::preview::{self, Preview};
 use super::proof::{self, Phase, Proof};
 use horizon_core::{PanelId, PanelKind};
 use std::collections::HashMap;
@@ -16,16 +17,35 @@ pub(super) const OUTPUT_EVERY: Duration = Duration::from_millis(400);
 /// Rows of the agent's screen the output well keeps.
 pub(super) const OUTPUT_ROWS: usize = 60;
 
+/// The step a live preview owns.
+const DESKTOP_PREVIEW: &str = "Desktop preview";
+
 /// The steps the prompt asks the agent to report, in order. They show as pending
-/// before the agent writes its first status.
-pub(super) const STEPS: [&str; 6] = [
+/// before the agent writes its first status. The preview starts once the whole proof,
+/// fast rerun included, passed.
+pub(super) const STEPS: [&str; 7] = [
     "Read CI",
     "Find tools",
     "Write Dockerfile",
     "Build image",
     "Run CI in image",
     "Fast rerun",
+    "Desktop preview",
 ];
+
+/// One run that ends after both `first` and `second`.
+pub(super) fn joined(
+    first: Option<std::thread::JoinHandle<()>>,
+    second: Option<std::thread::JoinHandle<()>>,
+) -> Option<std::thread::JoinHandle<()>> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(std::thread::spawn(move || {
+            let _ = first.join();
+            let _ = second.join();
+        })),
+        (first, second) => first.or(second),
+    }
+}
 
 /// The largest status file Horizon reads.
 const STATUS_LIMIT: u64 = 1024 * 1024;
@@ -58,6 +78,37 @@ fn watch_status(path: PathBuf, ctx: egui::Context, alive: std::sync::Weak<()>) -
         }
     });
     receiver
+}
+
+/// What a status asks Horizon for, which Use reads again once the agent has ended: the
+/// proof and the desktop preview, each with its request, and whether the preview is one
+/// Horizon cannot start.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct Asked {
+    proof: Option<(proof::Spec, u64)>,
+    preview: Option<(preview::Spec, u64)>,
+    preview_invalid: bool,
+}
+
+impl Asked {
+    fn of(status: &Status) -> Self {
+        Self {
+            proof: status.proof.clone().map(|spec| (spec, status.proof_request)),
+            preview: status.preview.clone().map(|spec| (spec, status.preview_request)),
+            preview_invalid: status.preview_invalid,
+        }
+    }
+}
+
+/// Whether the status file at `path` asks for something other than `asked` now: another
+/// proof or preview, another request for either, a preview Horizon cannot start, or no
+/// proof or preview where there was one. A file that cannot be read or parsed changes
+/// nothing, as for the dialog, which keeps the last good status.
+pub(super) fn asked_otherwise_in(path: &std::path::Path, asked: &Asked) -> bool {
+    super::untrusted::read_regular(path, STATUS_LIMIT)
+        .ok()
+        .and_then(|bytes| parse(&String::from_utf8_lossy(&bytes)))
+        .is_some_and(|status| Asked::of(&status) != *asked)
 }
 
 /// `text` as one pasted message, so a terminal agent takes it whole even mid-turn.
@@ -132,6 +183,8 @@ pub(in crate::app::cloud_panel::production) struct Run {
     pub(super) proved_request: u64,
     /// The summary the agent was last told needs a proof Horizon can run.
     pub(super) missing_proof_summary: Option<String>,
+    /// The summary the agent was last told that its preview cannot start for.
+    invalid_preview_summary: Option<String>,
     /// The setup changed after its proof passed, and the agent was told once.
     pub(super) proof_stale_reported: bool,
     /// The person allowed restoring private .NET packages on this computer for the proof.
@@ -140,6 +193,12 @@ pub(in crate::app::cloud_panel::production) struct Run {
     inputs: Option<(Instant, Option<[u8; 32]>)>,
     /// A fingerprint being read off the dialog's thread.
     inputs_job: Option<std::sync::mpsc::Receiver<Option<[u8; 32]>>>,
+    /// The statuses taken from the status file so far, and the one the current and the
+    /// pending fingerprint were read for: a fingerprint read for an older status says
+    /// nothing about a preview the newest one asks for.
+    status_revision: u64,
+    inputs_revision: u64,
+    inputs_job_revision: u64,
     /// The proof's containers, image and volume are already being removed.
     proof_released: bool,
     /// The files outside `.horizon` when the run started, to find what changed since.
@@ -156,6 +215,22 @@ pub(in crate::app::cloud_panel::production) struct Run {
     pub(super) ending: Option<super::accept::Using>,
     /// Use already said that ignored files past the reading's limit were not compared.
     pub(super) ignored_partial_told: bool,
+    /// The live preview of a desktop app, the request it answers, and its Device panel.
+    pub(super) preview: Option<Preview>,
+    pub(super) previewed_request: u64,
+    /// The preview spec Horizon started last, so a changed one starts again.
+    previewed_spec: Option<preview::Spec>,
+    pub(super) preview_panel: Option<PanelId>,
+    /// A withdrawn preview still being removed, so what waits for the preview waits
+    /// for it too.
+    preview_stopping: Option<std::thread::JoinHandle<()>>,
+    /// The preview request the agent was told needs a new proof first.
+    stale_preview_reported: u64,
+    /// The live desktop the preview panel shows, so a new one replaces it.
+    pub(super) preview_shown: Option<String>,
+    /// The agent's panel closed; whether the run was finished then decided its end, so a
+    /// preview that stops later never discards a setup Use can still commit.
+    pub(super) agent_closed: bool,
 }
 
 /// What the person did in the progress view.
@@ -163,6 +238,8 @@ pub(in crate::app::cloud_panel::production) struct Run {
 pub(in crate::app::cloud_panel::production) enum Action {
     Steer(String),
     Show,
+    /// Open the live preview of the desktop app.
+    ShowPreview,
     Stop,
     Use,
 }
@@ -175,6 +252,11 @@ struct Status {
     /// What the agent asks Horizon to prove, and how often it asked.
     proof: Option<proof::Spec>,
     proof_request: u64,
+    /// What the agent asks Horizon to start live, and how often it asked.
+    preview: Option<preview::Spec>,
+    preview_request: u64,
+    /// The agent wrote a preview Horizon cannot start; it is told, and Use waits.
+    preview_invalid: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -220,10 +302,14 @@ impl Run {
             proof: None,
             proved_request: 0,
             missing_proof_summary: None,
+            invalid_preview_summary: None,
             proof_stale_reported: false,
             host_restore: false,
             inputs: None,
             inputs_job: None,
+            status_revision: 0,
+            inputs_revision: 0,
+            inputs_job_revision: 0,
             proof_released: false,
             outside: super::commit::Outside::default(),
             dotnet: false,
@@ -231,6 +317,14 @@ impl Run {
             agent_process: None,
             ending: None,
             ignored_partial_told: false,
+            preview: None,
+            previewed_request: 0,
+            previewed_spec: None,
+            preview_panel: None,
+            preview_stopping: None,
+            stale_preview_reported: 0,
+            preview_shown: None,
+            agent_closed: false,
         }
     }
 
@@ -267,6 +361,87 @@ impl Run {
             .map(|spec| (request, spec))
     }
 
+    /// A preview to start: the proof passed, the agent named one, and it is newer than
+    /// the last one started or differs from it.
+    pub(super) fn preview_wanted(&self) -> Option<(u64, preview::Spec, String, String, proof::Pinned)> {
+        let proof = self.proof.as_ref()?;
+        // Only the proof of the setup as it is now: never an image a newer request or a
+        // changed .horizon left behind, measured after the newest status was taken.
+        let current = self.passed() && self.inputs_proved() && self.inputs_read_for_status();
+        let request = self.status.preview_request;
+        let changed = self.status.preview.is_some() && self.status.preview != self.previewed_spec;
+        (current && (request > self.previewed_request || changed))
+            .then(|| self.status.preview.clone())
+            .flatten()
+            .map(|spec| (request, spec, proof.image.clone(), proof.volume.clone(), proof.daemon()))
+    }
+
+    /// After a passed proof, starts the desktop app the agent named, live, takes what the
+    /// preview reported, and returns the message for the agent when it ended.
+    pub(super) fn sync_preview(&mut self, ctx: &egui::Context) -> Option<String> {
+        self.stop_withdrawn_preview();
+        if let Some((request, spec, image, volume, pinned)) = self.preview_wanted() {
+            self.previewed_request = request;
+            self.previewed_spec = Some(spec.clone());
+            let screenshot = super::preview::screenshot_path(&self.status_path);
+            let after = joined(
+                self.preview.as_mut().map(super::preview::Preview::stop),
+                self.preview_stopping.take(),
+            );
+            self.preview = Some(super::preview::Preview::start(
+                (&image, &volume, pinned),
+                (request, spec),
+                screenshot,
+                (after, ctx.clone()),
+            ));
+        }
+        if let Some(message) = self.take_preview_over_changed_setup() {
+            return Some(message);
+        }
+        self.preview.as_mut().and_then(|preview| {
+            preview.poll();
+            if preview.ended.is_none() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+            }
+            std::mem::take(&mut preview.unreported).then(|| preview.report())
+        })
+    }
+
+    /// A newer preview request over a setup that changed after its proof passed waits
+    /// for a new proof: the image would not have the change. The agent is told once.
+    fn take_preview_over_changed_setup(&mut self) -> Option<String> {
+        let request = self.status.preview_request;
+        let changed =
+            matches!((&self.proof, self.inputs), (Some(proof), Some((_, Some(now)))) if Some(now) != proof.inputs);
+        let waiting = self.status.preview.is_some() && request > self.previewed_request && self.passed() && changed;
+        (waiting && std::mem::replace(&mut self.stale_preview_reported, request) != request).then(|| {
+            "The .horizon files changed after Horizon's proof passed, so the preview would run an image without the change. Increase proof_request by one; Horizon starts the preview again once that proof passed.".to_owned()
+        })
+    }
+
+    /// The agent took its preview back (`preview` is null now) or wrote one Horizon cannot
+    /// start: the live one stops and its panel closes. A preview named again starts once
+    /// it differs from the last one or has a higher request.
+    pub(super) fn stop_withdrawn_preview(&mut self) {
+        if self.status.preview.is_none() && self.preview.is_some() {
+            if let Some(mut preview) = self.preview.take() {
+                let stopping = joined(self.preview_stopping.take(), Some(preview.stop()));
+                self.preview_stopping = stopping;
+            }
+            self.previewed_request = self.status.preview_request;
+            self.previewed_spec = None;
+        }
+    }
+
+    /// Stops the proof and the preview, and hands back one run that ends after both:
+    /// their containers and volume go only then.
+    pub(super) fn stop_all(&mut self) -> Option<std::thread::JoinHandle<()>> {
+        let proof = self.proof.as_mut().and_then(Proof::stop);
+        // The preview goes with its desktop, so nothing shows it as live any more.
+        let preview = self.preview.take().map(|mut preview| preview.stop());
+        joined(joined(proof, preview), self.preview_stopping.take())
+    }
+
     /// The step Horizon owns for `title`, once a proof exists.
     fn proof_phase(&self, title: &str) -> Option<&proof::PhaseState> {
         let proof = self.proof.as_ref()?;
@@ -277,6 +452,16 @@ impl Run {
     }
 
     fn elapsed(&self, title: &str) -> Option<Duration> {
+        if title == DESKTOP_PREVIEW
+            && let Some(preview) = &self.preview
+        {
+            return Some(
+                preview
+                    .ended
+                    .unwrap_or_else(Instant::now)
+                    .saturating_duration_since(preview.started),
+            );
+        }
         if let Some(phase) = self.proof_phase(title) {
             let start = phase.started?;
             return Some(
@@ -293,7 +478,6 @@ impl Run {
     /// Takes the newest status the status file's thread read. A file the agent is still
     /// writing, or one that does not parse, keeps the last good status.
     pub(super) fn poll(&mut self, ctx: &egui::Context) {
-        self.refresh_inputs(ctx);
         let feed = self.status_feed.get_or_insert_with(|| {
             watch_status(
                 self.status_path.clone(),
@@ -303,15 +487,27 @@ impl Run {
         });
         if let Some(status) = std::iter::from_fn(|| feed.try_recv().ok()).last() {
             self.status = status;
+            self.status_revision += 1;
             self.time_steps();
         }
+        // After the newest status, so a fingerprint started now measures it.
+        self.refresh_inputs(ctx);
+    }
+
+    /// The fingerprint was read for the newest status taken, not an older one.
+    fn inputs_read_for_status(&self) -> bool {
+        self.inputs.is_some() && self.inputs_revision == self.status_revision
     }
 
     /// The agent wrote its summary and Horizon proved this setup: the proof it asked for
     /// last ran, passed, and tested the files as they are now. An agent that cannot wait
-    /// may write a summary first.
+    /// may write a summary first. A desktop preview the agent named is live.
     pub(super) fn finished(&self) -> bool {
-        self.status.summary.is_some() && self.passed() && self.inputs_proved() && self.agent_steps_done()
+        self.status.summary.is_some()
+            && self.passed()
+            && self.inputs_proved()
+            && self.agent_steps_done()
+            && self.preview_shown_or_none()
     }
 
     /// The setup as last read is the one the proof that passed tested.
@@ -326,10 +522,57 @@ impl Run {
         self.inputs_job = None;
     }
 
+    /// Takes the preview's queued outcomes, then says whether the agent named no preview
+    /// or the one it named last is live: the latest outcome counts, not the one last drawn.
+    pub(super) fn preview_live_or_none(&mut self) -> bool {
+        if let Some(preview) = self.preview.as_mut() {
+            preview.poll();
+        }
+        self.preview_shown_or_none()
+    }
+
+    /// The loopback port of the live desktop the agent named, which Use checks again.
+    pub(super) fn named_preview_port(&self) -> Option<u16> {
+        self.status.preview.as_ref()?;
+        self.preview.as_ref()?.live_port()
+    }
+
+    /// The proof and the desktop preview the status asks for, as the dialog last read it.
+    pub(super) fn asked(&self) -> Asked {
+        Asked::of(&self.status)
+    }
+
+    /// Shows the preview the status names as live on `port`, with no run behind it, for
+    /// the Unix tests of Use.
+    #[cfg(all(test, unix))]
+    pub(super) fn show_live_preview(&mut self, port: u16) {
+        self.status = parse(r#"{"steps":[],"preview":{"command":"./app"}}"#).unwrap_or_default();
+        self.previewed_request = self.status.preview_request;
+        self.previewed_spec.clone_from(&self.status.preview);
+        self.preview = Some(Preview::live(port));
+    }
+
+    /// The agent named no desktop preview, or Horizon showed the one it named last.
+    fn preview_shown_or_none(&self) -> bool {
+        !self.status.preview_invalid
+            && (self.status.preview.is_none()
+                || (self.previewed_request == self.status.preview_request
+                    && self.previewed_spec == self.status.preview
+                    && self
+                        .preview
+                        .as_ref()
+                        .is_some_and(|preview| matches!(preview.outcome, preview::Outcome::Live { .. }))))
+    }
+
     /// Every step the agent owns is reported done or skipped, and no step failed; the
     /// proof's own steps are Horizon's to judge.
     fn agent_steps_done(&self) -> bool {
-        let horizons = [proof::BUILD, proof::CI, proof::FAST];
+        // Horizon runs a desktop preview the agent named; without one, Desktop preview is
+        // the agent's step and must be marked skipped like any other.
+        let mut horizons = vec![proof::BUILD, proof::CI, proof::FAST];
+        if self.status.preview.is_some() {
+            horizons.push(DESKTOP_PREVIEW);
+        }
         let ended = |title: &str| {
             self.status
                 .steps
@@ -381,14 +624,20 @@ impl Run {
     fn refresh_inputs(&mut self, ctx: &egui::Context) {
         if let Some(job) = &self.inputs_job {
             match job.try_recv() {
-                Ok(now) => self.inputs = Some((Instant::now(), now)),
+                Ok(now) => {
+                    self.inputs = Some((Instant::now(), now));
+                    self.inputs_revision = self.inputs_job_revision;
+                }
                 Err(std::sync::mpsc::TryRecvError::Empty) => return,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
             }
             self.inputs_job = None;
             return;
         }
-        if !self.passed() || self.inputs.is_some_and(|(at, _)| at.elapsed() < Duration::from_secs(1)) {
+        // A fingerprint stays for a second, unless a newer status came since it was read.
+        let fresh = self.inputs.is_some_and(|(at, _)| at.elapsed() < Duration::from_secs(1))
+            && self.inputs_revision == self.status_revision;
+        if !self.passed() || fresh {
             return;
         }
         let Some(spec) = self.status.proof.clone() else {
@@ -403,6 +652,7 @@ impl Run {
             wake.request_repaint();
         });
         self.inputs_job = Some(receiver);
+        self.inputs_job_revision = self.status_revision;
     }
 
     /// The agent wrote its summary without a proof request Horizon can run, and was not
@@ -424,14 +674,39 @@ impl Run {
         self.ending.is_some()
     }
 
+    /// The agent wrote its summary over a preview Horizon cannot start, and was not told
+    /// yet for this summary.
+    pub(super) fn take_summary_with_invalid_preview(&mut self) -> bool {
+        let invalid = self.status.summary.is_some() && self.status.preview_invalid;
+        if !invalid || self.invalid_preview_summary == self.status.summary {
+            return false;
+        }
+        self.invalid_preview_summary.clone_from(&self.status.summary);
+        true
+    }
+
     /// The proof the agent asks for now.
     pub(super) fn proof_spec(&self) -> Option<&proof::Spec> {
         self.status.proof.as_ref()
     }
 
+    /// The agent's panel closed. A setup that had not finished then ends: its agent's
+    /// processes end, and its proof and preview stop and give back their containers,
+    /// image and volume, as Stop does. Only the moment of closing decides, so a preview
+    /// that stops later never discards a setup Use can still commit.
+    pub(super) fn agent_panel_closed(&mut self) {
+        let just_closed = !std::mem::replace(&mut self.agent_closed, true);
+        if !self.finished() {
+            if just_closed && !self.stopped {
+                self.abandon();
+            }
+            self.stopped = true;
+        }
+    }
+
     /// Ends a run whose agent panel closed before it finished, in the background: the
-    /// agent's processes end, the proof stops and its containers, image and volume go.
-    /// The run's folder stays for its view until Stop.
+    /// agent's processes end, the proof and the preview on its volume stop, and their
+    /// containers, image and volume go. The run's folder stays for its view until Stop.
     pub(super) fn abandon(&mut self) {
         let agent = self
             .agent_process
@@ -451,17 +726,10 @@ impl Run {
             }
             return;
         }
-        let (worker, pinned) = self
-            .proof
-            .as_mut()
-            .map_or((None, None), |proof| (proof.stop(), Some(proof.daemon())));
-        let after = match (before, worker) {
-            (Some(before), Some(worker)) => Some(std::thread::spawn(move || {
-                let _ = before.join();
-                let _ = worker.join();
-            })),
-            (before, worker) => before.or(worker),
-        };
+        // The preview's container runs on the proof's volume: both stop before it goes.
+        let pinned = self.proof.as_ref().map(Proof::daemon);
+        let worker = self.stop_all();
+        let after = joined(before, worker);
         proof::remove_run_resources(&self.repository, &proof::run_id(&self.status_path), after, pinned, wait);
     }
 
@@ -528,6 +796,23 @@ impl Run {
 impl Run {
     /// Horizon's own state of a step it owns, in place of what the agent wrote.
     fn proof_step(&self, step: &Step) -> Option<Step> {
+        if step.title == DESKTOP_PREVIEW
+            && let Some(preview) = &self.preview
+        {
+            let (state, detail) = match &preview.outcome {
+                preview::Outcome::Starting => (State::Running, "Horizon is starting the app".to_owned()),
+                preview::Outcome::Live { window, after, .. } => (
+                    State::Done,
+                    format!("{window} window after {} s · live in Horizon", after.as_secs()),
+                ),
+                preview::Outcome::Failed(reason) => (State::Failed, reason.clone()),
+            };
+            return Some(Step {
+                title: step.title.clone(),
+                state,
+                detail,
+            });
+        }
         let phase = self.proof_phase(&step.title)?;
         let (state, detail) = match (phase.started, phase.ended, phase.failure.as_deref()) {
             (_, Some(_), Some(failure)) => (State::Failed, failure.to_owned()),
@@ -629,6 +914,7 @@ fn clip(text: &str, limit: usize) -> String {
 
 fn parse(text: &str) -> Option<Status> {
     let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    let preview_value = value.get("preview").filter(|preview| !preview.is_null());
     let line = |key: &str| {
         value
             .get(key)
@@ -668,6 +954,13 @@ fn parse(text: &str) -> Option<Status> {
             .get("proof_request")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or_default(),
+        preview: preview_value.and_then(preview::Spec::parse),
+        preview_invalid: preview_value.is_some_and(|preview| preview::Spec::parse(preview).is_none()),
+        // The first preview is request 1, also when the agent wrote 0.
+        preview_request: value
+            .get("preview_request")
+            .and_then(serde_json::Value::as_u64)
+            .map_or(1, |request| request.max(1)),
     })
 }
 
@@ -725,6 +1018,19 @@ mod tests {
     }
 
     #[test]
+    fn a_joined_run_ends_after_both() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let slow = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            sender.send(()).unwrap();
+        });
+        let quick = std::thread::spawn(|| {});
+        joined(Some(quick), Some(slow)).unwrap().join().unwrap();
+        assert!(receiver.try_recv().is_ok(), "the slower run had ended");
+        assert!(joined(None, None).is_none());
+    }
+
+    #[test]
     fn a_status_file_reads_steps_question_and_summary() {
         let status = parse(
             r#"{"steps":[{"title":"Read CI","state":"done","detail":"dotnet-core.yml"},
@@ -779,14 +1085,28 @@ mod tests {
             PathBuf::from("missing.json"),
             Mode::New,
         );
-        let steps = |dockerfile: &str| {
+        let steps = |preview: &str| {
             format!(
-                r#"{{"steps":[{{"title":"Read CI","state":"done"}},{{"title":"Find tools","state":"done"}},{{"title":"Write Dockerfile","state":"{dockerfile}"}},{{"title":"Build image","state":"running"}}]}}"#
+                r#"{{"steps":[{{"title":"Read CI","state":"done"}},{{"title":"Find tools","state":"done"}},{{"title":"Write Dockerfile","state":"done"}},{{"title":"Build image","state":"running"}},{{"title":"Desktop preview","state":"{preview}"}}]}}"#
             )
         };
-        run.status = parse(&steps("done")).unwrap();
+        run.status = parse(&steps("skipped")).unwrap();
         assert!(run.agent_steps_done(), "Horizon's own steps are not the agent's to end");
-        run.status = parse(&steps("failed")).unwrap();
+        run.status = parse(&steps("failed").replacen('{', r#"{"preview":{"command":"./app"},"#, 1)).unwrap();
+        assert!(
+            run.agent_steps_done(),
+            "Horizon owns a named preview and reports it itself"
+        );
+        run.status = parse(&steps("pending")).unwrap();
+        assert!(
+            !run.agent_steps_done(),
+            "without a preview the agent marks the step skipped"
+        );
+        run.status = parse(&steps("skipped").replace(
+            r#""Write Dockerfile","state":"done""#,
+            r#""Write Dockerfile","state":"failed""#,
+        ))
+        .unwrap();
         assert!(!run.agent_steps_done(), "a failed step is not a finished setup");
         run.status = parse(r#"{"steps":[{"title":"Read CI","state":"done"}]}"#).unwrap();
         assert!(!run.agent_steps_done(), "nor is a missing one");
@@ -841,6 +1161,117 @@ mod tests {
             run.take_summary_without_proof(),
             "a new summary without one is told again"
         );
+    }
+
+    #[test]
+    fn use_compares_what_the_ended_agent_asks_for_with_what_was_proved_and_shown() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("status.json");
+        let proved = r#""proof":{"workflow":"ci.yml","jobs":["test"]},"proof_request":1"#;
+        let asked = Asked::of(
+            &parse(&format!(
+                r#"{{"steps":[],{proved},"preview":{{"command":"./app"}},"preview_request":1}}"#
+            ))
+            .unwrap(),
+        );
+        assert!(
+            !asked_otherwise_in(&path, &asked),
+            "a status that cannot be read changes nothing"
+        );
+        let write = |text: String| std::fs::write(&path, text).unwrap();
+        write(format!(
+            r#"{{"steps":[],{proved},"preview":{{"command":"./app"}},"preview_request":1}}"#
+        ));
+        assert!(!asked_otherwise_in(&path, &asked), "what was proved and shown");
+        write(format!(
+            r#"{{"steps":[],{proved},"preview":{{"command":"./app"}},"preview_request":2}}"#
+        ));
+        assert!(asked_otherwise_in(&path, &asked), "a newer preview request");
+        write(format!(
+            r#"{{"steps":[],{proved},"preview":{{"command":"./app --demo"}},"preview_request":1}}"#
+        ));
+        assert!(asked_otherwise_in(&path, &asked), "another preview command");
+        write(format!(
+            r#"{{"steps":[],{proved},"preview":{{"command":""}},"preview_request":1}}"#
+        ));
+        assert!(asked_otherwise_in(&path, &asked), "a preview Horizon cannot start");
+        write(format!(r#"{{"steps":[],{proved},"preview":null}}"#));
+        assert!(asked_otherwise_in(&path, &asked), "a withdrawn preview");
+        let preview = r#""preview":{"command":"./app"},"preview_request":1"#;
+        write(format!(
+            r#"{{"steps":[],"proof":{{"workflow":"ci.yml","jobs":["test"]}},"proof_request":2,{preview}}}"#
+        ));
+        assert!(asked_otherwise_in(&path, &asked), "a newer proof request");
+        write(format!(
+            r#"{{"steps":[],"proof":{{"workflow":"ci.yml","jobs":["lint"]}},"proof_request":1,{preview}}}"#
+        ));
+        assert!(asked_otherwise_in(&path, &asked), "another proof");
+        write(format!(r#"{{"steps":[],{preview}}}"#));
+        assert!(asked_otherwise_in(&path, &asked), "no proof any more");
+    }
+
+    #[test]
+    fn a_fingerprint_counts_only_for_the_status_it_was_read_for() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("status.json");
+        let mut run = Run::new(
+            PanelId(1),
+            PanelKind::Codex,
+            PathBuf::from("."),
+            path.clone(),
+            Mode::New,
+        );
+        run.inputs = Some((Instant::now(), Some([1; 32])));
+        assert!(run.inputs_read_for_status(), "read for the status there was");
+        std::fs::write(
+            &path,
+            r#"{"steps":[],"preview":{"command":"./app"},"preview_request":2}"#,
+        )
+        .unwrap();
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while run.status_revision == 0 {
+            assert!(Instant::now() < deadline, "the status was taken in time");
+            run.poll(&ctx);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !run.inputs_read_for_status(),
+            "a fingerprint read before the newest status never starts its preview"
+        );
+    }
+
+    #[test]
+    fn a_named_preview_must_be_live_and_its_step_belongs_to_horizon() {
+        let mut run = Run::new(
+            PanelId(1),
+            PanelKind::Codex,
+            PathBuf::from("."),
+            PathBuf::from("missing.json"),
+            Mode::New,
+        );
+        run.status = parse(r#"{"steps":[]}"#).unwrap();
+        assert!(run.preview_shown_or_none(), "no preview named");
+        run.status = parse(r#"{"steps":[],"preview":{"command":"./app"}}"#).unwrap();
+        assert!(!run.preview_shown_or_none(), "a named preview that never ran");
+        run.status = parse(r#"{"steps":[],"summary":"done","preview":{"command":""}}"#).unwrap();
+        assert!(
+            !run.preview_shown_or_none(),
+            "a preview Horizon cannot start is not none"
+        );
+        assert!(run.take_summary_with_invalid_preview(), "the agent is told");
+        assert!(!run.take_summary_with_invalid_preview(), "once per summary");
+        let agent_steps = STEPS
+            .iter()
+            .filter(|title| ![proof::BUILD, proof::CI, proof::FAST, DESKTOP_PREVIEW].contains(title))
+            .map(|title| format!(r#"{{"title":"{title}","state":"done"}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        run.status = parse(&format!(
+            r#"{{"steps":[{agent_steps}],"preview":{{"command":"./app"}}}}"#
+        ))
+        .unwrap();
+        assert!(run.agent_steps_done(), "a named preview is not the agent's to finish");
     }
 
     #[test]

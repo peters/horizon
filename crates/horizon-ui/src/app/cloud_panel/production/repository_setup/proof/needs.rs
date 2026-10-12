@@ -153,8 +153,9 @@ fn package_folder(path: &str) -> bool {
     matches!((parts.next(), parts.next(), parts.next()), (Some(id), Some(version), None) if plain(id) && plain(version))
 }
 
-/// The most entries the look for restore outputs reads.
-const WALK_LIMIT: usize = 50_000;
+/// The most entries the look for restore outputs reads: a .NET repository can keep a
+/// large data set beside its projects, and the look still ends on Stop.
+const WALK_LIMIT: usize = 1_000_000;
 
 /// The package folders the restores in `tree` used, from each project's
 /// `obj/project.assets.json`, sorted and once each. The look reads at most
@@ -230,6 +231,11 @@ impl super::Job {
         let Some(head) = self.head().filter(|_| self.host_restore) else {
             return Ok(());
         };
+        // Nothing of .NET near the top: no snapshot to make, which for a repository with
+        // a large Git LFS data set takes minutes.
+        if !uses_nuget(&self.repository) {
+            return Ok(());
+        }
         let folder = tempfile::Builder::new()
             .prefix("horizon-proof-restore-")
             .tempdir()
@@ -245,6 +251,9 @@ impl super::Job {
                 Err(error) => return Err(format!("Horizon cannot restore packages on this computer: {error}")),
             };
         let targets = restore_targets(&tree);
+        if targets.is_empty() {
+            return Ok(());
+        }
         *self.restored.borrow_mut() = targets
             .iter()
             .filter_map(|target| target.strip_prefix(&tree).ok())

@@ -48,7 +48,7 @@ fn end_tree(child: &mut std::process::Child) {
 }
 
 /// Kills every process in the group the command `leader` started.
-fn end_group(leader: u32) {
+pub(in crate::app::cloud_panel::production::repository_setup) fn end_group(leader: u32) {
     #[cfg(unix)]
     if let Some(group) = i32::try_from(leader).ok().and_then(rustix::process::Pid::from_raw) {
         let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);

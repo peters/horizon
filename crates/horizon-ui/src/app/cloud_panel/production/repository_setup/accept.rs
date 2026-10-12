@@ -1,8 +1,10 @@
 //! **Use this setup**. Closing the agent's panel only hangs up, so a thread first ends
 //! the agent and everything in its process group, killed if they ignore the hang-up,
 //! and reads the files outside `.horizon`. The same thread then reads the setup once
-//! more, checks it against the proof that passed and commits it. The dialog keeps
-//! drawing meanwhile and only applies what the thread reports.
+//! more, checks it against the proof that passed, checks that the status still asks for
+//! the proof and desktop preview that ran and that the preview still answers, and
+//! commits it.
+//! The dialog keeps drawing meanwhile and only applies what the thread reports.
 use super::agent::AgentProcess;
 use super::commit::{self, Outside};
 use super::set_configuration;
@@ -51,6 +53,10 @@ struct Accepting {
     proved: Option<[u8; 32]>,
     spec: Option<super::proof::Spec>,
     message: &'static str,
+    /// The proof and the desktop preview the status asked for, and the loopback port the
+    /// preview is live on.
+    asked: super::run::Asked,
+    preview_port: Option<u16>,
 }
 
 /// The thread of Use and what it reports. It holds the agent's process while it runs,
@@ -75,18 +81,25 @@ impl Using {
 impl HorizonApp {
     /// Starts Use: closes the agent's panel and leaves the rest to a thread.
     pub(super) fn use_cloud_repository_setup(&mut self, ctx: &egui::Context) {
-        let Some(panel) = self.cloud_prototype.production.setup_run.as_ref().map(|run| run.panel) else {
-            return;
-        };
-        if self.board.panel(panel).is_some() {
-            self.close_panel(panel);
-        }
         let Some(run) = self.cloud_prototype.production.setup_run.as_mut() else {
             return;
         };
         if run.ending() {
             return;
         }
+        // A desktop preview that stopped since the dialog drew is not committed as live,
+        // and its agent keeps running, so it hears why and can start it again.
+        if !run.preview_live_or_none() {
+            self.cloud_prototype.error = Some(PREVIEW_NOT_LIVE.into());
+            return;
+        }
+        let panel = run.panel;
+        if self.board.panel(panel).is_some() {
+            self.close_panel(panel);
+        }
+        let Some(run) = self.cloud_prototype.production.setup_run.as_mut() else {
+            return;
+        };
         let agent = run.agent_process.take();
         let accepting = Accepting {
             repository: run.repository.clone(),
@@ -98,6 +111,8 @@ impl HorizonApp {
             proved: run.proof.as_ref().and_then(|proof| proof.inputs),
             spec: run.proof_spec().cloned(),
             message: run.mode.commit_message(),
+            asked: run.asked(),
+            preview_port: run.named_preview_port(),
         };
         let (sender, receiver) = std::sync::mpsc::channel();
         let wake = ctx.clone();
@@ -163,7 +178,13 @@ impl HorizonApp {
                 true
             }
             Outcome::Committed(committed) => {
-                if let Some(run) = self.cloud_prototype.production.setup_run.take() {
+                if let Some(mut run) = self.cloud_prototype.production.setup_run.take() {
+                    // The live desktop goes with the run, and its panel with it.
+                    if let Some(preview) = run.preview_panel.take()
+                        && self.board.panel(preview).is_some()
+                    {
+                        self.close_panel(preview);
+                    }
                     run.discard();
                 }
                 // The setup was made and committed on HEAD, so the dialog reads HEAD again.
@@ -185,6 +206,18 @@ impl HorizonApp {
 /// setup is read once, must be the proved one, and is what is committed; files outside
 /// `.horizon` that changed are named first.
 fn accept(accepting: &Accepting, outside: Outside) -> Outcome {
+    // The status as the ended agent left it: a proof or preview it asked for just before
+    // Use ended it never ran, so it must still ask for the ones proved and shown.
+    if super::run::asked_otherwise_in(&accepting.status_path, &accepting.asked) {
+        return Outcome::refused(ASKED_OTHERWISE);
+    }
+    // The app of a live desktop preview can stop while Use runs.
+    if accepting
+        .preview_port
+        .is_some_and(|port| !super::preview::answers(port))
+    {
+        return Outcome::refused(PREVIEW_STOPPED);
+    }
     let setup = super::snapshot::Setup::read(&accepting.repository, accepting.identity);
     let current = setup
         .as_ref()
@@ -255,6 +288,17 @@ fn accept(accepting: &Accepting, outside: Outside) -> Outcome {
         Err(error) => Outcome::refused(format!("Could not commit .horizon: {error}")),
     }
 }
+
+/// What Use says when the desktop preview the agent named is not live as it is pressed.
+const PREVIEW_NOT_LIVE: &str = "The desktop preview stopped, so nothing is committed. The agent hears why; Use this setup returns once the preview is live again.";
+
+/// What Use says when the agent changed its proof or desktop preview just before Use
+/// ended it.
+const ASKED_OTHERWISE: &str = "The agent changed the proof or the desktop preview in its status file as Use ended it, so what it asks for last was never proved or shown and nothing is committed. Start the setup again, or Stop.";
+
+/// What Use says when the desktop preview stopped answering while Use ran.
+const PREVIEW_STOPPED: &str =
+    "The desktop preview stopped answering while Use ran, so nothing is committed. Start the setup again, or Stop.";
 
 /// What Use says before it commits when the repository has more ignored files than a
 /// reading compares.
@@ -388,5 +432,56 @@ mod blocking_tests {
                 .as_deref()
                 .is_some_and(|error| error.contains("not committed"))
         );
+    }
+
+    #[test]
+    fn use_returns_at_once_while_the_preview_desktop_does_not_answer() {
+        let (_temp, ctx, mut app) =
+            crate::app::test_support::test_app_with_startup(horizon_core::StartupDecision::Ephemeral {
+                runtime_state: Box::default(),
+            });
+        let repository = tempfile::tempdir().unwrap();
+        let status = tempfile::tempdir().unwrap();
+        // A desktop that takes the connection but never greets: a check of it waits.
+        let desktop = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = desktop.local_addr().unwrap().port();
+        let mut run = Run::new(
+            horizon_core::PanelId(1),
+            horizon_core::PanelKind::Usage,
+            repository.path().to_path_buf(),
+            status.path().join("status.json"),
+            Mode::New,
+        );
+        run.show_live_preview(port);
+        app.cloud_prototype.production.setup_run = Some(run);
+        let (signal, signalled) = std::sync::mpsc::channel::<()>();
+        let closer = std::thread::spawn(move || {
+            let _ = signalled.recv_timeout(std::time::Duration::from_secs(10));
+            // The desktop goes, and the connection waiting for its greeting with it.
+            drop(desktop);
+        });
+        let started = Instant::now();
+        app.use_cloud_repository_setup(&ctx);
+        let finished = app.poll_cloud_setup_use(&ctx);
+        let took = started.elapsed();
+        let _ = signal.send(());
+        assert!(took < std::time::Duration::from_secs(2), "the frame waited {took:?}");
+        assert!(!finished, "Use has not reported yet");
+        assert!(
+            app.cloud_prototype
+                .production
+                .setup_run
+                .as_ref()
+                .is_some_and(Run::ending),
+            "the dialog shows Use at work"
+        );
+        closer.join().unwrap();
+        // Then it reports: the desktop did not answer, so nothing is committed.
+        let deadline = Instant::now() + std::time::Duration::from_secs(60);
+        while !app.poll_cloud_setup_use(&ctx) {
+            assert!(Instant::now() < deadline, "Use reported in time");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(app.cloud_prototype.error.as_deref(), Some(super::PREVIEW_STOPPED));
     }
 }

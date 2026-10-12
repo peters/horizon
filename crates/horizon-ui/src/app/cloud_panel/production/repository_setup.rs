@@ -14,6 +14,7 @@ mod accept;
 mod agent;
 mod bounded;
 mod commit;
+mod preview;
 mod prompt;
 mod proof;
 mod run;
