@@ -128,6 +128,13 @@ impl HorizonApp {
             ));
             return;
         }
+        // Ignored files past their limit are not compared: named once, as changes are,
+        // and committed only when the person presses Use again knowing that.
+        if (run.outside.ignored_partial() || outside.ignored_partial()) && !run.ignored_partial_told {
+            run.ignored_partial_told = true;
+            self.cloud_prototype.error = Some(IGNORED_PARTIAL.into());
+            return;
+        }
         // The agent may change only .horizon. Anything else that changed during the
         // setup is named once, every path in a report beside the run's status; pressing
         // Use again commits .horizon and leaves the rest.
@@ -171,6 +178,10 @@ impl HorizonApp {
         }
     }
 }
+
+/// What Use says before it commits when the repository has more ignored files than a
+/// reading compares.
+const IGNORED_PARTIAL: &str = "This repository has more than 100,000 ignored files, such as build output or dependencies, and Horizon compared only the first 100,000 for changes during the setup. Review the others yourself if the agent could have changed them, then press Use this setup again to commit .horizon.";
 
 /// What Use says when files outside `.horizon` changed while the setup ran: the first
 /// few, and where the report that lists every one is.

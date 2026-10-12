@@ -7,6 +7,22 @@ use std::time::Duration;
 const PREFLIGHT_TIMEOUT: Duration = Duration::from_mins(2);
 
 impl super::Job {
+    /// The run's throwaway Docker configuration, made once: only Horizon's own ghcr.io
+    /// login, never this computer's credential helpers, so a private ghcr.io base pulls
+    /// with it and every other image anonymously. Also whether it holds that login.
+    pub(super) fn docker_config(&self) -> Result<(&std::path::Path, bool), String> {
+        if self.docker_config.get().is_none() {
+            let horizon_docker = horizon_core::HorizonHome::resolve().root().join("cloud").join("docker");
+            let made = horizon_core::cloud_runtime::github::publish::build_config(&horizon_docker)
+                .map_err(|error| error.to_string())?;
+            let _ = self.docker_config.set(made);
+        }
+        self.docker_config
+            .get()
+            .map(|(config, signed_in)| (config.path(), *signed_in))
+            .ok_or_else(|| "Horizon has no Docker configuration for the proof".to_owned())
+    }
+
     /// Checks that the daemon mounts this computer's files: a private folder made here
     /// holds a random token, and a container of Horizon's base reads it back. A daemon
     /// on another machine behind a forwarded port or socket mounts its own path of that

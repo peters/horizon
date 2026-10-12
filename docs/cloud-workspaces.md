@@ -516,7 +516,10 @@ context outside `.horizon` is built from the committed tree with the proposed
 `.horizon` files over it, which is the image that deployment builds, and a build
 path that leaves the repository is refused. Each profile's distinct build is
 built and checked, and the CI runs in the default profile's image; a default
-profile that runs a published image is pulled and checked instead of built. A
+profile that runs a published image is pulled and checked instead of built. Each
+image the setup builds must hold the pinned localci; a published image runs as it
+is published, so its workers have localci only when the image does. The CI runs
+with the session environment a worker gives, not the image's `ENV`. A
 setup with a GPU profile is proved only on a computer with an NVIDIA GPU, and the
 CI uses that GPU when the default profile asks for one. The proof
 gets the tested commit and its history as a bundle, never this computer's git

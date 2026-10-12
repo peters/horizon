@@ -12,6 +12,9 @@ const GRACE: Duration = Duration::from_millis(1500);
 /// How long Horizon waits for the processes it killed to go.
 const KILL_WAIT: Duration = Duration::from_secs(2);
 
+/// How long Horizon waits before it ends processes that outlived a kill once more.
+const RETRY: Duration = Duration::from_secs(1);
+
 /// The agent's process: its id, which also names its process group because the terminal
 /// starts it as a group leader, and its start time, so a later process that reuses the
 /// id is never taken for it. Without a start time Horizon neither waits on nor signals it.
@@ -68,6 +71,16 @@ impl AgentProcess {
         }
         self.kill();
         self.ended_within(KILL_WAIT)
+    }
+
+    /// Ends the agent and everything it started, trying again until all of them have
+    /// gone: a process killed while it waits on a device or a file system goes once that
+    /// wait ends, and until then the run that holds it, a new setup and Horizon's exit
+    /// wait for it.
+    pub(super) fn end_completely(&self) {
+        while !self.end() {
+            std::thread::sleep(RETRY);
+        }
     }
 
     /// Whether the agent and its group have ended, waiting up to `wait`.

@@ -57,7 +57,35 @@ pub(super) fn arguments(image: &str, container: &str, run: Run<'_>) -> Result<Ve
         .flat_map(|(key, value)| ["-e".to_owned(), format!("{key}={value}")])
         .collect();
     arguments.extend(["-e".to_owned(), format!("PATH={}", session_path(&base, &directives))]);
-    Ok(arguments)
+    // A worker session does not inherit the image's ENV, but a container of it does:
+    // each variable only the image sets is emptied, read from the image's metadata.
+    let mut inspect = Command::new("docker");
+    inspect.args(["image", "inspect", "--format", "{{json .Config.Env}}", image]);
+    let listed = run(inspect).map_err(|error| format!("cannot read the image's environment: {error}"))?;
+    let image_env: Vec<String> = serde_json::from_slice::<Option<Vec<String>>>(&listed)
+        .map_err(|error| format!("cannot read the image's environment: {error}"))?
+        .unwrap_or_default();
+    let mut emptied = image_only(&image_env, &arguments);
+    emptied.extend(arguments);
+    Ok(emptied)
+}
+
+/// The `-e KEY=` arguments that empty each variable the image's ENV sets and the session
+/// does not, apart from HOME, which the proof sets itself.
+fn image_only(image_env: &[String], session: &[String]) -> Vec<String> {
+    let set: Vec<&str> = session
+        .chunks(2)
+        .filter_map(|pair| pair.get(1)?.split_once('=').map(|(key, _)| key))
+        .collect();
+    let mut keys: Vec<&str> = image_env
+        .iter()
+        .filter_map(|entry| entry.split_once('=').map(|(key, _)| key))
+        .filter(|key| !key.is_empty() && *key != "HOME" && !set.contains(key))
+        .collect();
+    keys.dedup();
+    keys.into_iter()
+        .flat_map(|key| ["-e".to_owned(), format!("{key}=")])
+        .collect()
 }
 
 /// The tar stream of `path` in the created container, or none when the image has no such
@@ -335,6 +363,18 @@ mod tests {
         ] {
             assert!(load(&files(&[(name, text)])).is_err(), "{name}: {text:?}");
         }
+    }
+
+    #[test]
+    fn a_variable_only_the_image_sets_is_emptied() {
+        let session = vec![
+            "-e".to_owned(),
+            "DOTNET_ROOT=/opt/dotnet".to_owned(),
+            "-e".to_owned(),
+            "PATH=/opt/dotnet:/usr/bin".to_owned(),
+        ];
+        let image_env = ["PATH=/usr/bin", "JAVA_HOME=/opt/java", "DOTNET_ROOT=/old", "HOME=/root"].map(str::to_owned);
+        assert_eq!(image_only(&image_env, &session), ["-e", "JAVA_HOME="]);
     }
 
     #[test]

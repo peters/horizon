@@ -266,12 +266,20 @@ pub(super) struct Outside {
     /// it stopped at a limit: Use then commits nothing, since a change past the limit
     /// could not be named.
     incomplete: Option<String>,
+    /// The ignored files stopped at [`IGNORED_LIMIT`], so changes to the others cannot
+    /// be named: Use says so and commits only when pressed again.
+    ignored_partial: bool,
 }
 
 impl Outside {
     /// Why this reading cannot be the check before a commit, when it is not complete.
     pub(super) fn incomplete(&self) -> Option<&str> {
         self.incomplete.as_deref()
+    }
+
+    /// Whether the ignored files of this reading stopped at their limit.
+    pub(super) fn ignored_partial(&self) -> bool {
+        self.ignored_partial
     }
 }
 
@@ -290,6 +298,7 @@ fn control(repository: &Path) -> (BTreeMap<String, Option<Stamp>>, Option<String
     let mut control = BTreeMap::new();
     let mut incomplete = None;
     for name in [
+        "HEAD",
         "config",
         "config.worktree",
         "info/attributes",
@@ -322,7 +331,8 @@ fn control(repository: &Path) -> (BTreeMap<String, Option<Stamp>>, Option<String
 }
 
 /// The most ignored files a reading stamps, so a large dependency or build folder
-/// cannot hold up the dialog. Ignored files past it, in git's order, are not compared.
+/// cannot hold up the dialog. Ignored files past it, in git's order, are not compared,
+/// and Use says so before it commits.
 const IGNORED_LIMIT: usize = 100_000;
 
 /// The most tracked and new files a reading stamps; a reading of a repository with more is
@@ -402,7 +412,8 @@ pub(super) fn outside(repository: &Path) -> Outside {
     )
     .iter()
     .map(|path| stamp_of(path))
-    .collect();
+    .collect::<BTreeMap<_, _>>();
+    let ignored_partial = ignored.len() >= IGNORED_LIMIT;
     let (control, mut incomplete) = control(repository);
     if files.len() >= FILES_LIMIT {
         incomplete = Some(format!(
@@ -416,6 +427,7 @@ pub(super) fn outside(repository: &Path) -> Outside {
         control,
         root: repository.to_path_buf(),
         incomplete,
+        ignored_partial,
     }
 }
 
@@ -565,6 +577,15 @@ mod tests {
         run(path, &["add", "."]);
         run(path, &["commit", "-q", "-m", "first"]);
         folder
+    }
+
+    #[test]
+    fn a_branch_switch_at_the_same_commit_is_named() {
+        let repository = repository();
+        let before = outside(repository.path());
+        run(repository.path(), &["checkout", "-q", "-b", "elsewhere"]);
+        let after = outside(repository.path());
+        assert!(changed(&before, &after).contains(&".git/HEAD".to_owned()));
     }
 
     #[test]

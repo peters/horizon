@@ -120,6 +120,8 @@ pub(in crate::app::cloud_panel::production) struct Run {
     /// Use's thread, ending the agent's processes: it holds the agent meanwhile, so the
     /// run waits for it before it lets go.
     pub(super) ending: Option<super::accept::Using>,
+    /// Use already said that ignored files past the reading's limit were not compared.
+    pub(super) ignored_partial_told: bool,
 }
 
 /// What the person did in the progress view.
@@ -191,6 +193,7 @@ impl Run {
             released: false,
             agent_process: None,
             ending: None,
+            ignored_partial_told: false,
         }
     }
 
@@ -405,11 +408,10 @@ impl Run {
     /// agent's processes end, the proof stops and its containers, image and volume go.
     /// The run's folder stays for its view until Stop.
     pub(super) fn abandon(&mut self) {
-        let agent = self.agent_process.take().map(|agent| {
-            std::thread::spawn(move || {
-                agent.end();
-            })
-        });
+        let agent = self
+            .agent_process
+            .take()
+            .map(|agent| std::thread::spawn(move || agent.end_completely()));
         self.release_proof(agent, false);
     }
 
@@ -456,7 +458,7 @@ impl Run {
             self.agent_process = self.agent_process.take().or(agent);
         }
         if let Some(agent) = self.agent_process.take() {
-            agent.end();
+            agent.end_completely();
         }
         self.release_proof(None, wait);
         remove_run_folder(&self.status_path);

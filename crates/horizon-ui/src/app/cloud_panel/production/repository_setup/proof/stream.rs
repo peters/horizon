@@ -83,7 +83,7 @@ impl Job {
         use std::io::Read as _;
         // Docker commands built elsewhere, as for the image checks, go to the run's daemon too.
         if command.get_program() == "docker" {
-            self.daemon.pin(&mut command);
+            self.pin(&mut command);
         }
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(&mut command, 0);
@@ -134,6 +134,7 @@ impl Job {
             }
             if overflow.load(std::sync::atomic::Ordering::Relaxed) {
                 end_tree(&mut child);
+                self.remove_container();
                 return Err(format!("wrote more than {CAPTURE_LIMIT} bytes; stopped"));
             }
             if started.elapsed() > limit {
@@ -196,7 +197,7 @@ impl Job {
         limit: Option<Duration>,
     ) -> Result<(), String> {
         if command.get_program() == "docker" {
-            self.daemon.pin(&mut command);
+            self.pin(&mut command);
         }
         let started = Instant::now();
         // Its own process group, so Stop and the time limit end everything it started,

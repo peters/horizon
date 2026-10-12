@@ -260,6 +260,7 @@ impl Proof {
             localci: std::cell::RefCell::new(Vec::new()),
             daemon: resources::LocalDocker::default(),
             pinned: pinned.clone(),
+            docker_config: std::cell::OnceCell::new(),
             ctx,
         };
         let worker = std::thread::spawn(move || {
@@ -419,13 +420,29 @@ struct Job {
     /// before the first one, and shared with the proof for its Stop and cleanup.
     daemon: resources::LocalDocker,
     pinned: Pinned,
+    /// The throwaway Docker configuration every docker command of the run uses, made
+    /// before the first one that can pull, and whether it holds Horizon's login.
+    docker_config: std::cell::OnceCell<(tempfile::TempDir, bool)>,
     ctx: egui::Context,
 }
 
 impl Job {
     /// A docker command for the run's daemon.
     fn docker(&self) -> Command {
-        self.daemon.command()
+        let mut command = Command::new("docker");
+        self.pin(&mut command);
+        command
+    }
+
+    /// Points `command`, a docker command, at the run's daemon and Docker configuration
+    /// only: no login or credential helper of this computer's is asked for anything.
+    fn pin(&self, command: &mut Command) {
+        self.daemon.pin(command);
+        if let Some((config, _)) = self.docker_config.get() {
+            command
+                .env("DOCKER_CONFIG", config.path())
+                .env_remove("DOCKER_AUTH_CONFIG");
+        }
     }
 
     /// The commit the proof's snapshot names: the proof clones and tests that one.
@@ -505,6 +522,8 @@ impl Job {
     }
 
     fn build(&self, setup: &super::snapshot::Setup, log: &mut Option<std::fs::File>) -> Result<(), String> {
+        // Made before the mount check, the first command that can pull an image.
+        let (docker_config, signed_in) = self.docker_config()?;
         self.check_mounts()?;
         let config = setup.config()?;
         // Deployment layers each same-worker companion's recipe on the image and checks
@@ -536,11 +555,6 @@ impl Job {
         let builds = distinct_builds(&config, |profile| {
             horizon_core::cloud_runtime::image::build_arguments(&profile.capabilities, &releases)
         })?;
-        // Only Horizon's own ghcr.io login, never this computer's credential helpers: a
-        // private ghcr.io base pulls with it, and every other image anonymously.
-        let horizon_docker = horizon_core::HorizonHome::resolve().root().join("cloud").join("docker");
-        let (docker_config, signed_in) = horizon_core::cloud_runtime::github::publish::build_config(&horizon_docker)
-            .map_err(|error| error.to_string())?;
         let _ = self.sender.try_send(Event::Line(if signed_in {
             "Pulling ghcr.io images with Horizon's GitHub login.".to_owned()
         } else {
@@ -556,7 +570,7 @@ impl Job {
             }
         };
         for (index, (build, arguments)) in builds.iter().enumerate() {
-            self.build_one(setup, (build, arguments), &tag(index), docker_config.path(), log)?;
+            self.build_one(setup, (build, arguments), &tag(index), docker_config, log)?;
         }
         // The proof runs Horizon's own localci, but the agents on the worker run the
         // image's: every image the setup builds must hold the same pinned release, as
@@ -597,11 +611,11 @@ impl Job {
                     let mut pull = self.docker();
                     pull.env_remove("DOCKER_AUTH_CONFIG")
                         .arg("--config")
-                        .arg(docker_config.path())
+                        .arg(docker_config)
                         .args(["pull", "--platform", "linux/amd64", &profile.image]);
                     self.stream_within(pull, log, Some(BUILD_TIMEOUT))?;
                 }
-                self.check_contract((name, profile), &profile.image, number, docker_config.path(), log)?;
+                self.check_contract((name, profile), &profile.image, number, docker_config, log)?;
                 if default {
                     let mut retag = self.docker();
                     retag.args(["tag", &profile.image, &self.image]);
@@ -614,7 +628,7 @@ impl Job {
                 .iter()
                 .position(|(built, with)| built == build && *with == arguments)
                 .ok_or_else(|| format!("profile {name} has no proof image"))?;
-            self.check_contract((name, profile), &tag(index), number, docker_config.path(), log)?;
+            self.check_contract((name, profile), &tag(index), number, docker_config, log)?;
         }
         Ok(())
     }
