@@ -320,7 +320,7 @@ fn control(repository: &Path) -> (BTreeMap<String, Option<Stamp>>, Option<String
         };
         let mut listing = std::fs::read_dir(&path).into_iter().flatten().flatten();
         for entry in listing.by_ref().take(CONTROL_LIMIT) {
-            let name = format!(".git/{folder}/{}", entry.file_name().to_string_lossy());
+            let name = format!(".git/{folder}/{}", shown_name(&entry.file_name()));
             control.insert(name, stamp_at(&entry.path()));
         }
         if listing.next().is_some() {
@@ -431,6 +431,43 @@ pub(super) fn outside(repository: &Path) -> Outside {
     }
 }
 
+/// A path as the dialog and the report name it, one-to-one with its bytes: a byte that is
+/// not UTF-8 is `\xNN`, a backslash `\\` and a control character escaped, so two paths
+/// never read alike and a name never breaks the report's lines.
+fn shown(path: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut text = String::new();
+    for chunk in path.utf8_chunks() {
+        for character in chunk.valid().chars() {
+            match character {
+                '\\' => text.push_str("\\\\"),
+                '\n' => text.push_str("\\n"),
+                '\t' => text.push_str("\\t"),
+                control if control.is_control() => {
+                    let _ = write!(text, "\\u{{{:x}}}", u32::from(control));
+                }
+                other => text.push(other),
+            }
+        }
+        for byte in chunk.invalid() {
+            let _ = write!(text, "\\x{byte:02x}");
+        }
+    }
+    text
+}
+
+/// A file name as [`shown`] gives it, from its own bytes where the platform has them.
+fn shown_name(name: &std::ffi::OsStr) -> String {
+    #[cfg(unix)]
+    {
+        shown(std::os::unix::ffi::OsStrExt::as_bytes(name))
+    }
+    #[cfg(not(unix))]
+    {
+        shown(name.to_string_lossy().as_bytes())
+    }
+}
+
 /// A listed path that is not in `.horizon`.
 fn outside_setup(path: &[u8]) -> bool {
     !path.is_empty() && path != b".horizon" && !path.starts_with(b".horizon/")
@@ -514,10 +551,7 @@ pub(super) fn changed(before: &Outside, after: &Outside) -> Vec<String> {
     paths.sort();
     paths.dedup();
     // Only the names shown are made readable; the comparison used the bytes.
-    let mut paths: Vec<String> = paths
-        .into_iter()
-        .map(|path| String::from_utf8_lossy(path).into_owned())
-        .collect();
+    let mut paths: Vec<String> = paths.into_iter().map(|path| shown(path)).collect();
     // Git's control files, added, changed or removed.
     let mut control: Vec<String> = before
         .control
@@ -577,6 +611,27 @@ mod tests {
         run(path, &["add", "."]);
         run(path, &["commit", "-q", "-m", "first"]);
         folder
+    }
+
+    #[test]
+    fn every_changed_path_is_named_by_its_own_bytes() {
+        assert_eq!(shown(b"src/main.rs"), "src/main.rs");
+        assert_ne!(
+            shown(b"a\xff"),
+            shown(b"a\xfe"),
+            "two paths that are not UTF-8 stay apart"
+        );
+        assert_eq!(shown(b"a\xff"), "a\\xff");
+        assert_ne!(
+            shown(b"a\\xff"),
+            shown(b"a\xff"),
+            "a backslash is never taken for an escape"
+        );
+        assert_eq!(
+            shown(b"two\nlines"),
+            "two\\nlines",
+            "a name never breaks the report's lines"
+        );
     }
 
     #[test]

@@ -192,10 +192,32 @@ impl Job {
     /// As [`Self::stream`], stopping the command once it has run for `limit`.
     pub(super) fn stream_within(
         &self,
-        mut command: Command,
+        command: Command,
         log: &mut Option<std::fs::File>,
         limit: Option<Duration>,
     ) -> Result<(), String> {
+        self.stream_inner(command, log, limit, false).map(|_| ())
+    }
+
+    /// As [`Self::stream_within`] for a command that writes a report on standard output:
+    /// its standard error is the log, and its standard output, at most [`CAPTURE_LIMIT`]
+    /// bytes, is returned once it succeeded.
+    pub(super) fn stream_reporting(
+        &self,
+        command: Command,
+        log: &mut Option<std::fs::File>,
+        limit: Option<Duration>,
+    ) -> Result<Vec<u8>, String> {
+        self.stream_inner(command, log, limit, true)
+    }
+
+    fn stream_inner(
+        &self,
+        mut command: Command,
+        log: &mut Option<std::fs::File>,
+        limit: Option<Duration>,
+        report: bool,
+    ) -> Result<Vec<u8>, String> {
         if command.get_program() == "docker" {
             self.pin(&mut command);
         }
@@ -212,6 +234,15 @@ impl Job {
             .map_err(|error| format!("cannot start {}: {error}", command.get_program().to_string_lossy()))?;
         // Bounded, so output faster than Horizon writes it waits in the pipe instead.
         let (lines, received) = mpsc::sync_channel::<String>(LINE_QUEUE);
+        // A report is collected whole, one byte past its limit at most, never logged.
+        let collected = report.then(|| child.stdout.take()).flatten().map(|pipe| {
+            std::thread::spawn(move || {
+                use std::io::Read as _;
+                let mut bytes = Vec::new();
+                let _ = pipe.take(CAPTURE_LIMIT + 1).read_to_end(&mut bytes);
+                bytes
+            })
+        });
         for pipe in [
             child
                 .stdout
@@ -280,7 +311,13 @@ impl Job {
         end_group(child.id());
         let status = child.wait().map_err(|error| error.to_string())?;
         if status.success() {
-            Ok(())
+            let report = collected
+                .map(|reader| reader.join().unwrap_or_default())
+                .unwrap_or_default();
+            if report.len() as u64 > CAPTURE_LIMIT {
+                return Err(format!("its report is larger than {CAPTURE_LIMIT} bytes"));
+            }
+            Ok(report)
         } else {
             Err(format!(
                 "exit {} after {} s",

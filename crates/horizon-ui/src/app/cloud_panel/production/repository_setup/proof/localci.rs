@@ -219,7 +219,8 @@ pub(super) fn records(session: &[String]) -> Option<String> {
 
 /// Checks localci's JSON plan of the proof: every selected job keeps at least one step
 /// that runs a command, so leaving steps out never makes a job pass without CI.
-pub(super) fn check_plan(plan: &[u8]) -> Result<(), String> {
+/// Returns the keys of the selected legs, which the run's report must account for.
+pub(super) fn check_plan(plan: &[u8]) -> Result<Vec<String>, String> {
     let plan: serde_json::Value =
         serde_json::from_slice(plan).map_err(|error| format!("localci's plan does not read: {error}"))?;
     let legs: Vec<&serde_json::Value> = plan["legs"]
@@ -229,8 +230,10 @@ pub(super) fn check_plan(plan: &[u8]) -> Result<(), String> {
     if legs.is_empty() {
         return Err("the proof selects no job that runs on Linux".to_owned());
     }
+    let mut keys = Vec::new();
     for leg in legs {
         let job = leg["key"].as_str().or_else(|| leg["job"].as_str()).unwrap_or("a job");
+        keys.push(job.to_owned());
         // localci skips a whole job whose `if:` is false here, and calls that a pass.
         if leg["if_locally"] == false {
             return Err(format!(
@@ -246,6 +249,34 @@ pub(super) fn check_plan(plan: &[u8]) -> Result<(), String> {
             return Err(format!(
                 "the proof leaves out every step of {job} that runs a command, so it would prove nothing"
             ));
+        }
+    }
+    Ok(keys)
+}
+
+/// Checks localci's run report against the legs the plan selected: each one passed and
+/// ran at least one step that runs a command. A condition the plan cannot decide, such
+/// as one on `needs` or `steps`, can still skip a job or its steps while localci calls the
+/// run a pass, so the plan alone proves nothing. A step localci reused, because it passed
+/// before on the same inputs in this image, counts as run.
+pub(super) fn check_report(report: &[u8], planned: &[String]) -> Result<(), String> {
+    let report: serde_json::Value =
+        serde_json::from_slice(report).map_err(|error| format!("localci's report does not read: {error}"))?;
+    let legs = report["legs"].as_array().map(Vec::as_slice).unwrap_or_default();
+    for key in planned {
+        let leg = legs
+            .iter()
+            .find(|leg| leg["key"].as_str() == Some(key))
+            .ok_or_else(|| format!("{key} did not run: localci reports no result for it"))?;
+        let result = leg["result"].as_str().unwrap_or("no result");
+        if result != "success" {
+            return Err(format!("{key} did not pass: localci reports {result}"));
+        }
+        let ran = leg["steps"]
+            .as_array()
+            .is_some_and(|steps| steps.iter().any(|step| step["outcome"] == "success"));
+        if !ran {
+            return Err(format!("{key} ran no step that runs a command, so it proves nothing"));
         }
     }
     Ok(())
@@ -272,6 +303,33 @@ mod tests {
         assert_eq!(records(&session("/tmp/cache")), None, "gone with the container");
         assert_eq!(records(&session("relative")), None);
         assert_eq!(records(&session("/workspace")), None, "never the whole volume");
+    }
+
+    #[test]
+    fn every_planned_job_must_have_passed_a_step_it_ran() {
+        let report = |legs: serde_json::Value| serde_json::to_vec(&serde_json::json!({"legs": legs})).unwrap();
+        let planned = ["test".to_owned()];
+        let checkout = serde_json::json!({"outcome": "skipped", "reason": "uses: actions do not run locally"});
+        let ran = serde_json::json!({"outcome": "success"});
+        let reused = serde_json::json!({"outcome": "success", "reason": "cached: passed before on the same inputs"});
+        let leg = |result: &str, steps: serde_json::Value| serde_json::json!([{"key": "test", "result": result, "steps": steps}]);
+        assert!(check_report(&report(leg("success", serde_json::json!([checkout, ran]))), &planned).is_ok());
+        assert!(check_report(&report(leg("success", serde_json::json!([checkout, reused]))), &planned).is_ok());
+        assert!(
+            check_report(&report(leg("success", serde_json::json!([checkout]))), &planned)
+                .unwrap_err()
+                .contains("ran no step")
+        );
+        assert!(
+            check_report(&report(leg("skipped", serde_json::json!([]))), &planned)
+                .unwrap_err()
+                .contains("did not pass")
+        );
+        assert!(
+            check_report(&report(serde_json::json!([])), &planned)
+                .unwrap_err()
+                .contains("did not run")
+        );
     }
 
     #[test]

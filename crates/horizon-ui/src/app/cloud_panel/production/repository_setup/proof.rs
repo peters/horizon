@@ -153,7 +153,8 @@ impl Spec {
         if fast {
             args.extend(["--fast".to_owned(), "--base".to_owned(), base.to_owned()]);
         } else {
-            args.push("--cache".to_owned());
+            // The full run's report, which the proof checks after it.
+            args.extend(["--cache".to_owned(), "--json".to_owned()]);
         }
         args
     }
@@ -260,6 +261,7 @@ impl Proof {
             localci: std::cell::RefCell::new(Vec::new()),
             daemon: resources::LocalDocker::default(),
             pinned: pinned.clone(),
+            planned: std::cell::RefCell::new(Vec::new()),
             docker_config: std::cell::OnceCell::new(),
             ctx,
         };
@@ -420,6 +422,8 @@ struct Job {
     /// before the first one, and shared with the proof for its Stop and cleanup.
     daemon: resources::LocalDocker,
     pinned: Pinned,
+    /// The legs localci's plan selected, which the full run's report must account for.
+    planned: std::cell::RefCell<Vec<String>>,
     /// The throwaway Docker configuration every docker command of the run uses, made
     /// before the first one that can pull, and whether it holds Horizon's login.
     docker_config: std::cell::OnceCell<(tempfile::TempDir, bool)>,
@@ -852,7 +856,9 @@ impl Job {
             .args(["--entrypoint", localci::MOUNTED, &self.image])
             .args(self.spec.plan_args());
         let plan = self.capture(command, STEP_TIMEOUT)?;
-        localci::check_plan(&plan)
+        let planned = localci::check_plan(&plan)?;
+        *self.planned.borrow_mut() = planned;
+        Ok(())
     }
 
     /// A container of the image as the worker account on the proof's volume, with the
@@ -908,7 +914,11 @@ impl Job {
             .args(&session)
             .args(["--entrypoint", localci::MOUNTED, &self.image])
             .args(self.spec.localci_args(fast, head));
-        self.stream_within(command, log, Some(CI_TIMEOUT))
+        if fast {
+            return self.stream_within(command, log, Some(CI_TIMEOUT));
+        }
+        let report = self.stream_reporting(command, log, Some(CI_TIMEOUT))?;
+        localci::check_report(&report, &self.planned.borrow())
     }
 
     /// localci's step records do not know the image: before a full run after a rebuild
