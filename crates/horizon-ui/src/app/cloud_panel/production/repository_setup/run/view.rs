@@ -337,6 +337,24 @@ fn working_actions(ui: &mut Ui, run: &mut Run, working: bool, inline: bool) -> O
         );
         ui.add_space(6.0);
     }
+    if working && !run.crates.locked.is_empty() {
+        let names = run.crates.locked.join(", ");
+        let changed = ui
+            .checkbox(
+                &mut run.crates.allowed,
+                RichText::new("Fetch private Rust git dependencies on this computer for the proof").size(13.0),
+            )
+            .on_hover_text(
+                "Clones the GitHub repositories named below here with this computer's Git login before the next proof, and no other. The container reads each clone read-only, without any credential, and the proof's CI can read all of it. Clearing it stops clones a running proof has not begun.",
+            )
+            .changed();
+        if changed && !run.crates.allowed {
+            // A proof that is building now clones nothing more.
+            run.crates.live.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+        ui.label(RichText::new(names).size(12.0).color(theme::FG_SOFT()));
+        ui.add_space(6.0);
+    }
     if working && inline {
         let mut send = false;
         ui.horizontal(|ui| {

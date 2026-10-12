@@ -71,10 +71,10 @@ fn snapshot() -> Snapshot {
     }
 }
 
-#[test]
-#[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
-fn agents_reach_only_the_clouds_of_their_own_workspace() {
-    let (_temp, mut app) = crate::app::test_support::test_app();
+/// An app with an agent panel in workspace `agents`, whose cloud `source` declares the
+/// companion `consumer`: the app's temporary folder, the app, the workspace and the agent.
+fn agent_app() -> (tempfile::TempDir, crate::app::HorizonApp, String, String) {
+    let (temp, mut app) = crate::app::test_support::test_app();
     let workspace = app.board.create_workspace("agents");
     let local = app.board.workspace(workspace).unwrap().local_id.clone();
     let (command, args) = if cfg!(windows) {
@@ -99,6 +99,13 @@ fn agents_reach_only_the_clouds_of_their_own_workspace() {
     let state = &mut app.cloud_prototype.production.companions;
     state.sync(Some("session"), &app.cloud_prototype.groups);
     state.entries.get_mut("source").unwrap().snapshot = Some(snapshot());
+    (temp, app, local, actor)
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
+fn agents_reach_only_the_clouds_of_their_own_workspace() {
+    let (_temp, mut app, local, actor) = agent_app();
     let listing = app.companion_listing(&local);
     assert_eq!(listing["clouds"].as_array().unwrap().len(), 1);
     assert_eq!(listing["clouds"][0]["cloud"], "source");
@@ -126,6 +133,70 @@ fn agents_reach_only_the_clouds_of_their_own_workspace() {
     // Nothing was held or started for a refused request.
     let agent = &app.cloud_prototype.production.companions.agent;
     assert!(!agent.holds("source") && !agent.holds("elsewhere"));
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
+fn an_uncheck_is_saved_before_the_card_queues_it() {
+    let (_temp, mut app, _local, actor) = agent_app();
+    let ctx = egui::Context::default();
+    let uncheck: UsageRequest = serde_json::from_value(json!({
+        "request_id": "uncheck", "actor": actor, "host_instance": manifest::host_instance(),
+        "deadline_at_millis": i64::MAX, "claimed": true,
+        "cloud_companion": {"action": "uncheck", "cloud": "source", "alias": "consumer"}
+    }))
+    .unwrap();
+    // A checked companion's deselection is saved first, while no refresh runs; the card
+    // queues its removal and the agent hears of it only then.
+    let state = tempfile::tempdir().unwrap();
+    app.cloud_prototype.root = Some(state.path().to_path_buf());
+    app.start_companion_request(&uncheck, &ctx).unwrap();
+    let companions = &app.cloud_prototype.production.companions;
+    assert!(
+        companions.entries["source"].clearing.is_empty(),
+        "nothing is queued before the save"
+    );
+    assert!(companions.agent.holds("source"), "no refresh starts during the save");
+    assert!(
+        app.start_companion_request(&uncheck, &ctx)
+            .unwrap_err()
+            .starts_with("cloud_companion_busy"),
+        "a second uncheck waits for the first"
+    );
+    let waited = std::time::Instant::now();
+    while app.cloud_prototype.production.companions.agent.holds("source") {
+        assert!(
+            waited.elapsed() < std::time::Duration::from_secs(20),
+            "the save answers"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        app.poll_cloud_companion_requests(&ctx);
+    }
+    // Saved, so the card queues the removal as its own box would.
+    assert!(
+        app.cloud_prototype.production.companions.entries["source"]
+            .clearing
+            .contains("consumer")
+    );
+    app.cloud_prototype
+        .production
+        .companions
+        .entries
+        .get_mut("source")
+        .unwrap()
+        .clearing
+        .clear();
+
+    // Without the cloud state directory the card never runs a change, so an uncheck
+    // is refused rather than acknowledged and left queued.
+    app.cloud_prototype.root = None;
+    let error = app.start_companion_request(&uncheck, &ctx).unwrap_err();
+    assert!(error.starts_with("cloud_companion_unavailable"), "{error}");
+    assert!(
+        app.cloud_prototype.production.companions.entries["source"]
+            .clearing
+            .is_empty()
+    );
 }
 
 #[test]
@@ -303,4 +374,19 @@ fn an_expired_ensure_ready_or_stop_is_refused_but_a_poll_is_answered() {
         assert!(expired(&request(action, i64::MAX)).is_ok());
     }
     assert!(expired(&request("status", past)).is_ok());
+    // An uncheck carries no operation, and a late one changes nothing either.
+    let uncheck = |deadline: i64| -> UsageRequest {
+        serde_json::from_value(json!({
+            "request_id": "companion", "actor": "horizon:agent", "host_instance": "host",
+            "deadline_at_millis": deadline, "claimed": true,
+            "cloud_companion": {"action": "uncheck", "cloud": "source", "alias": "consumer"}
+        }))
+        .unwrap()
+    };
+    assert!(
+        expired(&uncheck(past))
+            .unwrap_err()
+            .starts_with("cloud_companion_expired")
+    );
+    assert!(expired(&uncheck(i64::MAX)).is_ok());
 }

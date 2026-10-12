@@ -25,7 +25,8 @@ pub(in crate::app::cloud_panel::production) struct Starting {
 
 /// What the thread that prepares a run read and made: the repository, its folder's
 /// identity and the files outside `.horizon` before the agent starts, the run's status
-/// file, the agent's instructions and the scope it starts in.
+/// file, the agent's instructions, the scope it starts in and the Rust git repositories
+/// the clone box may name.
 struct Prepared {
     repository: PathBuf,
     identity: super::untrusted::Identity,
@@ -36,6 +37,7 @@ struct Prepared {
     outside: super::commit::Outside,
     dotnet: bool,
     launcher: Option<Vec<String>>,
+    git_crates: Vec<String>,
 }
 
 impl HorizonApp {
@@ -145,6 +147,7 @@ impl HorizonApp {
             outside,
             dotnet,
             launcher,
+            git_crates: crates,
         } = prepared;
         let kind = preset.kind;
         // Claude and Codex take the instructions as their starting prompt; other agents get
@@ -195,6 +198,7 @@ impl HorizonApp {
                 run.identity = identity;
                 run.entered = entered;
                 run.agent_process = self.agent_process_of(panel, &unit);
+                run.crates.locked = crates;
                 run.agent.clone_from(&preset.name);
                 run.pending_prompt = pending_prompt;
                 run.outside = outside;
@@ -265,7 +269,7 @@ impl HorizonApp {
             run.files_job = None;
             run.fixer = None;
             let log = run.status_path.with_extension(format!("proof-{request}.log"));
-            let id = super::proof::run_id(&run.status_path);
+            let (id, access) = (super::proof::run_id(&run.status_path), run.crate_access());
             // The proof and the preview it replaces stop first: the two never build the same
             // image, and no preview runs on the volume the new proof uses. The preview
             // starts again once the new proof passed.
@@ -275,7 +279,7 @@ impl HorizonApp {
                 (&run.repository, &id, run.identity),
                 (request, spec),
                 log,
-                (run.host_restore, run.root_dirty.clone()),
+                (run.host_restore, run.root_dirty.clone(), access),
                 (after, ctx.clone()),
             ));
         }
@@ -754,6 +758,8 @@ fn prepare(
         outside: super::commit::outside(&repository),
         dotnet: super::proof::uses_nuget(&repository),
         launcher: super::agent::scope_launcher(&unit),
+        // Read from the commit, as the proof reads the lock files.
+        git_crates: super::proof::crates::locked_repositories(&repository, "HEAD"),
         repository,
         status,
         mode,

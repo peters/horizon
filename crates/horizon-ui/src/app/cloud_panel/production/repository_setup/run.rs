@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
 
+mod crates;
 mod view;
 pub(super) use view::{readable_rows, render};
 
@@ -193,6 +194,8 @@ pub(in crate::app::cloud_panel::production) struct Run {
     /// A preview of this run ran as root (rootless KVM), so the run's volume may hold
     /// files the worker cannot write; kept here, never on the volume the app can change.
     pub(super) root_dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The private Rust git dependencies the proof may clone on this computer.
+    pub(super) crates: crates::Crates,
     /// The current fingerprint of the setup and proof request, and when it was read.
     inputs: Option<(Instant, Option<[u8; 32]>)>,
     /// A fingerprint being read off the dialog's thread.
@@ -319,6 +322,7 @@ impl Run {
             proof_stale_reported: false,
             host_restore: false,
             root_dirty: std::sync::Arc::default(),
+            crates: crates::Crates::default(),
             inputs: None,
             inputs_job: None,
             status_revision: 0,
@@ -529,7 +533,7 @@ impl Run {
     /// The setup as last read is the one the proof that passed tested.
     fn inputs_proved(&self) -> bool {
         matches!((&self.proof, self.inputs), (Some(proof), Some((_, Some(now))))
-            if Some(now) == proof.inputs && proof.host_restore == self.host_restore)
+            if Some(now) == proof.inputs && self.same_access(proof))
     }
 
     /// A new proof starts: the fingerprint read for the earlier one says nothing about it.
@@ -633,7 +637,7 @@ impl Run {
     pub(super) fn changed_since_proof(&self) -> bool {
         match (&self.proof, self.inputs) {
             (Some(proof), Some((_, now))) => {
-                proof.host_restore != self.host_restore || (proof.inputs.is_some() && now != proof.inputs)
+                !self.same_access(proof) || (proof.inputs.is_some() && now != proof.inputs)
             }
             _ => false,
         }
@@ -1082,6 +1086,58 @@ mod tests {
     fn the_output_well_drops_blank_rows_and_rules() {
         let rows = readable_rows("● Reading CI\n\n────────────\n  dotnet-core.yml   \n│ │\n");
         assert_eq!(rows, ["● Reading CI", "  dotnet-core.yml"]);
+    }
+
+    #[test]
+    fn a_withdrawn_clone_approval_forgets_the_volume_until_a_proof_proves_it() {
+        let mut run = Run::new(
+            PanelId(1),
+            PanelKind::Claude,
+            PathBuf::from("."),
+            PathBuf::from("missing.json"),
+            Mode::New,
+        );
+        run.crates.locked = vec!["peters/tools".to_owned()];
+        assert!(!run.crate_access().forget_volume, "nothing was cloned yet");
+        run.crates.allowed = true;
+        let access = run.crate_access();
+        assert_eq!(access.repositories, ["peters/tools"]);
+        assert!(!access.forget_volume);
+        assert!(!run.crate_access().forget_volume, "the same approval keeps the volume");
+        run.crates.allowed = false;
+        let access = run.crate_access();
+        assert!(access.repositories.is_empty());
+        assert!(
+            access.forget_volume,
+            "the cloned repository must not stay in the volume's cache"
+        );
+        // That proof never got its CI phase through, so the next one forgets it again.
+        assert!(run.crate_access().forget_volume);
+    }
+
+    // Proof::failed_on exists where the setup agent is offered: on Linux.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_changed_clone_approval_needs_a_new_proof() {
+        let mut run = Run::new(
+            PanelId(1),
+            PanelKind::Claude,
+            PathBuf::from("."),
+            PathBuf::from("missing.json"),
+            Mode::New,
+        );
+        run.crates.locked = vec!["peters/tools".to_owned()];
+        let mut proof = crate::app::cloud_panel::production::repository_setup::proof::Proof::failed_on(
+            crate::app::cloud_panel::production::repository_setup::access::Fix::GrantOrganization {
+                organization: "acme".into(),
+            },
+        );
+        proof.inputs = Some([7; 32]);
+        run.proof = Some(proof);
+        run.inputs = Some((Instant::now(), Some([7; 32])));
+        assert!(!run.changed_since_proof(), "the proof ran with the box as it is");
+        run.crates.allowed = true;
+        assert!(run.changed_since_proof(), "cloning other repositories is another proof");
     }
 
     #[test]

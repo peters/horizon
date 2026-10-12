@@ -360,6 +360,32 @@ also makes sure that agents can start and stop a companion cloud through MCP.
 
     Result: The answer gives the same operation. No second worker starts.
 
+> **CAUTION:** STEPS 18 TO 21 REMOVE AND THEN GIVE BACK THE ACCESS OF `smoke-a` TO
+> `smoke-lib`. Do them only on the test clouds of this procedure.
+
+18. Call `cloud_companion_uncheck` with the source cloud and the alias.
+
+    ```json
+    {"cloud":"<smoke-a cloud ID>","alias":"lib"}
+    ```
+
+    Result: The answer has `"changed": true` and `"queued": true`. The checkbox of
+    `lib` on the card of `smoke-a` is clear. `smoke-lib` does not stop.
+
+19. Call `cloud_companions` every 10 seconds until the row of `lib` shows
+    `status: unselected`.
+
+    Result: The row shows `status: unselected` within two minutes. Before that it can
+    show `selected: false` with another status, such as `revocation_pending`.
+
+20. Call `cloud_companion_uncheck` again with the same arguments.
+
+    Result: The answer has `"changed": false`. No MCP tool checks a companion.
+
+21. Select `lib` again on the card of `smoke-a`, as in G03.
+
+    Result: The row shows **Ready · SSH verified**.
+
 ### 6.8 G08 — Refuse a companion that never started
 
 1. Clear the checkbox of `lib` on the card of `smoke-a`.
@@ -630,6 +656,8 @@ also makes sure that agents can start and stop a companion cloud through MCP.
   the resume.
 - The MCP tools and the run plan start and stop the companion, and a repeated
   request starts no second worker.
+- An agent can clear a companion with `cloud_companion_uncheck`, and only the
+  owner can check it again.
 - A companion cloud that never started gives `confirmation_required`.
 - A Ready observation on the worker expires after 60 seconds while the candidate
   is paused.

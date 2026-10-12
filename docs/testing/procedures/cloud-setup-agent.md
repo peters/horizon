@@ -71,7 +71,17 @@ setup** commits `.horizon` and reads it as the repository profile.
    Result: `git -C <home>/smoke/plain-app status --short` shows nothing, and
    `git -C <home>/smoke/plain-app ls-files .github` shows nothing.
 
-4. Start the candidate with the fixture configuration.
+4. Make the fixture repository `<home>/smoke/rust-app` with one commit: a Rust
+   binary crate whose `Cargo.toml` names one git dependency by `rev`, its
+   `Cargo.lock`, and `.github/workflows/ci.yml` with one job `test` that runs
+   `cargo test --locked`. Add `rust-toolchain.toml` with `channel = "1.90.0"`. The
+   git dependency must be a private GitHub repository: your Git login on this
+   computer can clone it, and `git ls-remote` of it without credentials fails.
+
+   Result: `git -C <home>/smoke/rust-app show HEAD:Cargo.lock` has one line that
+   starts with `source = "git+`.
+
+5. Start the candidate with the fixture configuration.
 
    Result: The Horizon window opens with no cloud.
 
@@ -405,9 +415,93 @@ The result of step 2 depends on whether the host has `/dev/kvm`.
    device exists but a container cannot open it (rootless Docker without access
    for your account), the step shows as skipped with that reason instead.
 
+### 6.17 S17 — The toolchain pins
+
+1. Open **New cloud** for `<home>/smoke/rust-app` and start the setup agent.
+
+   Result: The agent writes `.horizon/Dockerfile` with `ARG RUST_VERSION=1.90.0`
+   and `.horizon/pins.json` with an entry for `rust-toolchain.toml`. It does not
+   change `.github`. Horizon writes `.horizon/verify-pins.py`. The first lines of
+   Build image show "Horizon pins match: RUST_VERSION=1.90.0". The summary of the
+   agent names the CI step `python3 -I .horizon/verify-pins.py`.
+
+2. Change `channel` in `rust-toolchain.toml` to `1.91.0` and commit that change.
+   Tell the agent to prove the setup again without a change to the pins.
+
+   Result: Build image fails in seconds. The proof log shows
+   "pins 1.90.0, rust-toolchain.toml says 1.91.0".
+
+3. Put back `channel = "1.90.0"` and commit it. In `.horizon/pins.json`, set `file`
+   of the entry to the absolute path of a file outside the repository, and tell the
+   agent to prove again.
+
+   Result: Build image fails, and the proof log says that the file "is outside the
+   repository". The log does not show the content of that file.
+
+### 6.18 S18 — Private Rust git dependencies
+
+> **CAUTION:** USE A FIXTURE WHOSE GIT DEPENDENCY YOU MAY SHARE. Horizon clones each
+> repository that the box names with your Git login, and the proof's CI can read it.
+
+1. In the run of S17, put back the `file` of the pin entry that step 3 of S17
+   changed, so that `.horizon/pins.json` names `rust-toolchain.toml` again. Then
+   find the box **Fetch private Rust git dependencies on this
+   computer for the proof**.
+
+   Result: The box shows because the committed `Cargo.lock` names a GitHub git
+   source. The line under the box names that repository as `OWNER/NAME`. For
+   `<home>/smoke/ci-app` the box does not show.
+
+2. Check the box, then tell the agent to prove the setup again.
+
+   Result: Before Run CI in image, Horizon clones the named repository. The CI job
+   builds with the git dependency and does not ask for a credential. `docker
+   inspect` of the CI container shows one read-only mount below
+   `/opt/host-cargo-git` for each named repository, and no other mount of a Git or
+   Cargo folder of this computer. After the proof ends,
+   `~/.horizon/cloud/setup-fetch` has no `crates-*` folder.
+
+3. Add a second git dependency to `Cargo.toml`, commit `Cargo.toml` and
+   `Cargo.lock`, and tell the agent to prove the setup again.
+
+   Result: Horizon clones only the repository that the box named when the run
+   started. The new dependency is not cloned.
+
+4. Clear the box, then tell the agent to prove the setup again.
+
+   Result: Nothing is cloned, and the proof log says why for each repository. Run CI
+   in image starts on a new volume: the proof log shows no step that a record of an
+   earlier proof skipped.
+
+### 6.19 S19 — An agent unchecks a companion
+
+> **CAUTION:** USE A TEST CLOUD. An uncheck queues the removal of the source cloud's
+> access to the companion worker. The access is gone only when `cloud_companions`
+> shows `status: unselected`.
+
+Precondition: a source cloud whose repository declares a companion that its owner
+checked on the cloud card, and an agent panel in the same workspace.
+
+1. From the agent, call `cloud_companion_uncheck` with the source cloud's ID and
+   the companion's alias.
+
+   Result: The answer has `"changed": true` and `"queued": true`. The box of the
+   companion on the source cloud's card is clear. No cloud was started, stopped or
+   deleted.
+
+2. Call `cloud_companions` every 10 seconds until the companion's row shows
+   `status: unselected`.
+
+   Result: The row shows `status: unselected` within two minutes.
+
+3. Call `cloud_companion_uncheck` again with the same arguments.
+
+   Result: The answer has `"changed": false`. No tool checks a companion: only the
+   owner can check the box again, on the card.
+
 ## 7. Pass criteria
 
-- S01 to S16 give the results above.
+- S01 to S19 give the results above.
 - The proof ran on this computer. Before you click **Use this setup** in S04,
   `docker images` lists `horizon-setup-ci-app-<hash>-<run>:candidate`. `<hash>` is
   six hexadecimal digits that Horizon derives from the repository's path. `<run>` is
@@ -420,13 +514,13 @@ The result of step 2 depends on whether the host has `/dev/kvm`.
 
 > **CAUTION:** THE NEXT STEP REMOVES DOCKER CONTAINERS, IMAGES, VOLUMES AND NETWORKS. Remove
 > only the names that start with `horizon-setup-ci-app-`, `horizon-setup-gui-app-`,
-> `horizon-setup-plain-app-` or `horizon-setup-org-app-`.
+> `horizon-setup-plain-app-`, `horizon-setup-org-app-` or `horizon-setup-rust-app-`.
 
 1. Find the proof containers, images, volumes and preview networks with
-   `docker ps --all --format '{{.Names}}' | grep -E '^horizon-setup-(ci|gui|plain|org)-app-'`,
-   `docker images --format '{{.Repository}}' | grep -E '^horizon-setup-(ci|gui|plain|org)-app-'` and
-   `docker volume ls --format '{{.Name}}' | grep -E '^horizon-setup-(ci|gui|plain|org)-app-'` and
-   `docker network ls --format '{{.Name}}' | grep -E '^horizon-setup-(ci|gui|plain|org)-app-'`,
+   `docker ps --all --format '{{.Names}}' | grep -E '^horizon-setup-(ci|gui|plain|org|rust)-app-'`,
+   `docker images --format '{{.Repository}}' | grep -E '^horizon-setup-(ci|gui|plain|org|rust)-app-'` and
+   `docker volume ls --format '{{.Name}}' | grep -E '^horizon-setup-(ci|gui|plain|org|rust)-app-'` and
+   `docker network ls --format '{{.Name}}' | grep -E '^horizon-setup-(ci|gui|plain|org|rust)-app-'`,
    then remove each with `docker rm --force <name>`, `docker rmi <name>:candidate`,
    `docker volume rm <name>` and `docker network rm <name>`.
 
@@ -435,8 +529,9 @@ The result of step 2 depends on whether the host has `/dev/kvm`.
 > **CAUTION:** THE NEXT STEP DELETES FOLDERS. Make sure that each path is a
 > fixture copy under `<home>/smoke` and not a real repository.
 
-2. Delete `<home>/smoke/ci-app`, `<home>/smoke/gui-app`, `<home>/smoke/plain-app`
-   and `<home>/smoke/org-app`, and the `docker` test double of S15.
+2. Delete `<home>/smoke/ci-app`, `<home>/smoke/gui-app`, `<home>/smoke/plain-app`,
+   `<home>/smoke/org-app` and `<home>/smoke/rust-app`, and the `docker` test double
+   of S15.
 
 ## 9. Record of results
 
