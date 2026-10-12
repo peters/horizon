@@ -144,6 +144,33 @@ impl Client {
         }
     }
 
+    /// Whether the organization `owner` keeps `token` from its container package `name`
+    /// because it limits OAuth apps; GitHub's packages API says so in a refusal. Only
+    /// organizations limit OAuth apps, so a personal account's package is never limited.
+    /// # Errors
+    /// An invalid owner or name, transport failures, a revoked token, or an answer that
+    /// says neither (such as a rate limit or a server error).
+    pub fn oauth_restricted(&self, token: &Secret, owner: &str, name: &str) -> Result<bool> {
+        if !valid_login(owner) || !valid_package(name) {
+            return Err(Error::InvalidResponse);
+        }
+        let path = format!("/orgs/{owner}/packages/container/{}", name.replace('/', "%2F"));
+        let answer = read(
+            self.agent
+                .get(format!("{}{path}", self.api))
+                .header("Accept", "application/vnd.github+json")
+                .header("Authorization", bearer(token).as_str())
+                .call(),
+        )?;
+        match answer.status {
+            401 => Err(Error::Revoked),
+            403 if String::from_utf8_lossy(&answer.body).contains(OAUTH_RESTRICTED) => Ok(true),
+            // The package is readable, or not one this login may see: no restriction says so.
+            200..=299 | 403 | 404 => Ok(false),
+            status => Err(Error::Refused(format!("HTTP {status}"))),
+        }
+    }
+
     fn get<T: serde::de::DeserializeOwned>(&self, token: &Secret, path: &str) -> Result<T> {
         self.request(Some(token), path)
     }
@@ -153,10 +180,9 @@ impl Client {
             .agent
             .get(format!("{}{path}", self.api))
             .header("Accept", "application/vnd.github+json");
-        let mut auth = Zeroizing::new(String::new());
+        let auth;
         if let Some(token) = token {
-            auth.reserve(token.expose().len() + 7);
-            let _ = write!(auth, "Bearer {}", token.expose());
+            auth = bearer(token);
             request = request.header("Authorization", auth.as_str());
         }
         let response = request.call();
@@ -167,6 +193,30 @@ impl Client {
             status => Err(Error::Refused(format!("HTTP {status}"))),
         }
     }
+}
+
+/// What GitHub writes when an organization's OAuth app restrictions refuse a token.
+const OAUTH_RESTRICTED: &str = "organization has enabled OAuth App access restrictions";
+
+/// The `Authorization` value for `token`, in a buffer that is wiped on drop and never
+/// moves while it holds the token.
+fn bearer(token: &Secret) -> Zeroizing<String> {
+    let mut auth = Zeroizing::new(String::with_capacity(token.expose().len() + 7));
+    let _ = write!(auth, "Bearer {}", token.expose());
+    auth
+}
+
+/// A container package name as `ghcr.io` accepts it, nested names included.
+fn valid_package(name: &str) -> bool {
+    (1..=200).contains(&name.len())
+        && name.split('/').all(|part| {
+            !part.is_empty()
+                && part != "."
+                && part != ".."
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-_.".contains(&b))
+        })
 }
 
 fn valid_login(login: &str) -> bool {

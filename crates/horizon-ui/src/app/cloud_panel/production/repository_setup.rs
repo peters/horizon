@@ -11,6 +11,7 @@ use horizon_core::{
 use std::path::Path;
 
 mod accept;
+mod access;
 mod agent;
 mod bounded;
 mod commit;
@@ -605,5 +606,79 @@ mod tests {
         let workspace = panel.workspace_id;
         app.board.active_workspace = Some(cloud);
         assert_eq!(app.board.ensure_local_workspace("Cloud setup"), workspace);
+    }
+
+    // The setup agent is offered on Linux only.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_agent_fixes_an_account_problem_in_a_browser_panel_beside_it() {
+        let (temp, ctx, mut app) =
+            crate::app::test_support::test_app_with_startup(horizon_core::StartupDecision::Ephemeral {
+                runtime_state: Box::default(),
+            });
+        app.cloud_prototype.production.repository = temp.path().display().to_string();
+        app.cloud_prototype.production.setup_agent = Some(PanelKind::Usage);
+        app.start_cloud_repository_setup(&ctx);
+        // The agent starts once its run's baseline was read on a thread.
+        let started = std::time::Instant::now();
+        while app.cloud_prototype.production.setup_starting.is_some() {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(20),
+                "the baseline was read"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            app.sync_cloud_repository_setup(&ctx);
+        }
+        let fix = access::Fix::GrantOrganization {
+            organization: "fintermobilityas".into(),
+        };
+        let run = app.cloud_prototype.production.setup_run.as_mut().unwrap();
+        run.proof = Some(proof::Proof::failed_on(fix.clone()));
+        let agent = run.panel;
+        let browsers = |app: &crate::app::HorizonApp| {
+            app.board
+                .panels
+                .iter()
+                .filter(|panel| panel.kind == PanelKind::Browser && panel.title == "GitHub access")
+                .map(|panel| (panel.id, panel.workspace_id))
+                .collect::<Vec<_>>()
+        };
+        app.cloud_repository_setup_action(&ctx, run::Action::Fix(access::Fixer::Agent));
+        let opened = browsers(&app);
+        assert_eq!(opened.len(), 1);
+        let workspace = app.board.panel(agent).unwrap().workspace_id;
+        assert_eq!(opened[0].1, workspace, "the agent's browser tools reach it");
+        let run = app.cloud_prototype.production.setup_run.as_ref().unwrap();
+        assert_eq!(run.fix_panel, Some(opened[0].0));
+        assert!(
+            app.board.panel(opened[0].0).unwrap().transient,
+            "never saved with the board"
+        );
+        assert_eq!(run.fixer, Some(access::Fixer::Agent));
+        assert!(run.submit_at.is_some(), "the task went to the agent");
+        app.cloud_repository_setup_action(&ctx, run::Action::Fix(access::Fixer::Person));
+        assert_eq!(browsers(&app), opened, "a second try keeps the panel and its sign-in");
+        app.close_panel(opened[0].0);
+        app.cloud_repository_setup_action(&ctx, run::Action::ShowFix);
+        let reopened = browsers(&app);
+        assert_eq!(reopened.len(), 1, "a closed panel opens again");
+        assert_ne!(reopened[0].0, opened[0].0);
+        assert_eq!(
+            app.cloud_prototype.production.setup_run.as_ref().unwrap().fix_panel,
+            Some(reopened[0].0)
+        );
+        app.close_panel(agent);
+        app.sync_cloud_repository_setup(&ctx);
+        assert!(
+            browsers(&app).is_empty(),
+            "the panel goes when the agent's panel closes"
+        );
+        assert_eq!(
+            app.cloud_prototype.production.setup_run.as_ref().unwrap().fix_panel,
+            None
+        );
+        app.cloud_repository_setup_action(&ctx, run::Action::Stop);
+        assert!(browsers(&app).is_empty(), "the panel goes with the run");
+        assert_eq!(fix.url(), horizon_core::cloud_runtime::github::publish::APP_PAGE);
     }
 }

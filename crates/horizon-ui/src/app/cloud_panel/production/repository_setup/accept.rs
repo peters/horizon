@@ -179,11 +179,11 @@ impl HorizonApp {
             }
             Outcome::Committed(committed) => {
                 if let Some(mut run) = self.cloud_prototype.production.setup_run.take() {
-                    // The live desktop goes with the run, and its panel with it.
-                    if let Some(preview) = run.preview_panel.take()
-                        && self.board.panel(preview).is_some()
-                    {
-                        self.close_panel(preview);
+                    // The live desktop and the GitHub access panel go with the run.
+                    for helper in [run.preview_panel.take(), run.fix_panel.take()].into_iter().flatten() {
+                        if self.board.panel(helper).is_some() {
+                            self.close_panel(helper);
+                        }
                     }
                     run.discard();
                 }

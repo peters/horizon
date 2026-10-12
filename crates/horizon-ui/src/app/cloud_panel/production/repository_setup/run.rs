@@ -2,6 +2,7 @@
 //! progress. The agent keeps a small status file current; the person reads the steps
 //! here and steers the agent by typing into its terminal from the dialog.
 use super::Mode;
+use super::access::Fixer;
 use super::preview::{self, Preview};
 use super::proof::{self, Phase, Proof};
 use horizon_core::{PanelId, PanelKind};
@@ -189,6 +190,9 @@ pub(in crate::app::cloud_panel::production) struct Run {
     pub(super) proof_stale_reported: bool,
     /// The person allowed restoring private .NET packages on this computer for the proof.
     pub(super) host_restore: bool,
+    /// A preview of this run ran as root (rootless KVM), so the run's volume may hold
+    /// files the worker cannot write; kept here, never on the volume the app can change.
+    pub(super) root_dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// The current fingerprint of the setup and proof request, and when it was read.
     inputs: Option<(Instant, Option<[u8; 32]>)>,
     /// A fingerprint being read off the dialog's thread.
@@ -231,6 +235,9 @@ pub(in crate::app::cloud_panel::production) struct Run {
     /// The agent's panel closed; whether the run was finished then decided its end, so a
     /// preview that stops later never discards a setup Use can still commit.
     pub(super) agent_closed: bool,
+    /// The browser panel for a fix on GitHub, and who works in it for the current proof.
+    pub(super) fix_panel: Option<PanelId>,
+    pub(super) fixer: Option<Fixer>,
 }
 
 /// What the person did in the progress view.
@@ -240,6 +247,12 @@ pub(in crate::app::cloud_panel::production) enum Action {
     Show,
     /// Open the live preview of the desktop app.
     ShowPreview,
+    /// Fix the account problem the proof met, in a browser panel.
+    Fix(Fixer),
+    /// Open the browser panel of the fix.
+    ShowFix,
+    /// The person fixed it themselves; prove again.
+    ProveAgain,
     Stop,
     Use,
 }
@@ -305,6 +318,7 @@ impl Run {
             invalid_preview_summary: None,
             proof_stale_reported: false,
             host_restore: false,
+            root_dirty: std::sync::Arc::default(),
             inputs: None,
             inputs_job: None,
             status_revision: 0,
@@ -325,6 +339,8 @@ impl Run {
             stale_preview_reported: 0,
             preview_shown: None,
             agent_closed: false,
+            fix_panel: None,
+            fixer: None,
         }
     }
 
@@ -389,7 +405,7 @@ impl Run {
                 self.preview_stopping.take(),
             );
             self.preview = Some(super::preview::Preview::start(
-                (&image, &volume, pinned),
+                (&image, &volume, pinned, self.proved_gpu(), self.root_dirty.clone()),
                 (request, spec),
                 screenshot,
                 (after, ctx.clone()),
@@ -522,8 +538,9 @@ impl Run {
         self.inputs_job = None;
     }
 
-    /// Takes the preview's queued outcomes, then says whether the agent named no preview
-    /// or the one it named last is live: the latest outcome counts, not the one last drawn.
+    /// Takes the preview's queued outcomes, then says whether the agent named no preview,
+    /// the one it named last is live, or it was skipped for missing hardware: the latest
+    /// outcome counts, not the one last drawn.
     pub(super) fn preview_live_or_none(&mut self) -> bool {
         if let Some(preview) = self.preview.as_mut() {
             preview.poll();
@@ -552,16 +569,25 @@ impl Run {
         self.preview = Some(Preview::live(port));
     }
 
-    /// The agent named no desktop preview, or Horizon showed the one it named last.
+    /// The proved setup asks for a GPU; the preview of its image gets this computer's.
+    pub(super) fn proved_gpu(&self) -> bool {
+        self.proof.as_ref().is_some_and(|proof| proof.gpu)
+    }
+
+    /// The agent named no desktop preview, or Horizon showed the one it named last, or
+    /// skipped it because this computer lacks the hardware it needs: `true` does not
+    /// always mean a live desktop.
     fn preview_shown_or_none(&self) -> bool {
         !self.status.preview_invalid
             && (self.status.preview.is_none()
                 || (self.previewed_request == self.status.preview_request
                     && self.previewed_spec == self.status.preview
-                    && self
-                        .preview
-                        .as_ref()
-                        .is_some_and(|preview| matches!(preview.outcome, preview::Outcome::Live { .. }))))
+                    && self.preview.as_ref().is_some_and(|preview| {
+                        matches!(
+                            preview.outcome,
+                            preview::Outcome::Live { .. } | preview::Outcome::Unavailable(_)
+                        )
+                    })))
     }
 
     /// Every step the agent owns is reported done or skipped, and no step failed; the
@@ -806,6 +832,7 @@ impl Run {
                     format!("{window} window after {} s · live in Horizon", after.as_secs()),
                 ),
                 preview::Outcome::Failed(reason) => (State::Failed, reason.clone()),
+                preview::Outcome::Unavailable(reason) => (State::Skipped, reason.clone()),
             };
             return Some(Step {
                 title: step.title.clone(),
@@ -1261,6 +1288,22 @@ mod tests {
         );
         assert!(run.take_summary_with_invalid_preview(), "the agent is told");
         assert!(!run.take_summary_with_invalid_preview(), "once per summary");
+        // A preview this computer cannot run (no /dev/kvm) is accepted, skipped, not retried.
+        run.status = parse(r#"{"steps":[],"preview":{"command":"./emulator","kvm":true}}"#).unwrap();
+        run.previewed_request = run.status.preview_request;
+        run.previewed_spec.clone_from(&run.status.preview);
+        run.preview = Some(super::preview::Preview::unavailable("the app needs /dev/kvm"));
+        assert!(
+            run.preview_shown_or_none(),
+            "an unavailable preview does not hold Use back"
+        );
+        let step = run
+            .steps()
+            .into_iter()
+            .find(|step| step.title == DESKTOP_PREVIEW)
+            .and_then(|step| run.proof_step(&step))
+            .unwrap();
+        assert_eq!(step.state, State::Skipped, "and its step shows as skipped");
         let agent_steps = STEPS
             .iter()
             .filter(|title| ![proof::BUILD, proof::CI, proof::FAST, DESKTOP_PREVIEW].contains(title))

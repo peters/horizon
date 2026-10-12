@@ -10,6 +10,9 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 mod bundle;
+// Its only user, a UI test, runs where the setup agent is offered: on Linux.
+#[cfg(all(test, target_os = "linux"))]
+mod failed;
 mod localci;
 mod needs;
 mod preflight;
@@ -93,7 +96,11 @@ enum Event {
     Line(String),
     /// The fingerprint of the snapshot the proof read and tests.
     Inputs([u8; 32]),
+    /// The setup the worker read asks for a GPU; the preview of its image gets it too.
+    Gpu(bool),
     Started(Phase),
+    /// The failed build met an account problem; it comes before the build's `Finished`.
+    Fix(super::access::Fix),
     Finished(Phase, Result<(), String>),
 }
 
@@ -128,10 +135,14 @@ pub(super) struct Proof {
     /// Whether this proof restores private .NET packages on this computer: part of
     /// what it proves, so changing the choice afterwards needs a new proof.
     pub(super) host_restore: bool,
+    /// The proved setup's default profile asks for a GPU; its preview gets it too.
+    pub(super) gpu: bool,
     /// The background run, so cleanup waits until it can create nothing more.
     worker: Option<std::thread::JoinHandle<()>>,
     /// The daemon the run checked and uses, for Stop and the run's cleanup.
     pinned: Pinned,
+    /// An account problem the build met that the person fixes on GitHub.
+    pub(super) fix: Option<super::access::Fix>,
 }
 
 impl Proof {
@@ -144,7 +155,7 @@ impl Proof {
         (repository, run, identity): (&Path, &str, super::untrusted::Identity),
         (request, spec): (u64, Spec),
         log_path: PathBuf,
-        host_restore: bool,
+        (host_restore, root_dirty): (bool, std::sync::Arc<std::sync::atomic::AtomicBool>),
         (after, ctx): (Option<std::thread::JoinHandle<()>>, egui::Context),
     ) -> Self {
         let (sender, receiver) = mpsc::sync_channel(EVENT_QUEUE);
@@ -165,7 +176,9 @@ impl Proof {
             volume: volume.clone(),
             container: container.clone(),
             host_restore,
+            root_dirty,
             setup: Err("the setup was not read yet".to_owned()),
+            tail: std::cell::RefCell::default(),
             log_path: log_path.clone(),
             cancel: cancel.clone(),
             sender,
@@ -203,8 +216,10 @@ impl Proof {
             container,
             inputs: None,
             host_restore,
+            gpu: false,
             worker: Some(worker),
             pinned,
+            fix: None,
         }
     }
 
@@ -251,7 +266,9 @@ impl Proof {
                     self.log.push_back(line);
                 }
                 Event::Inputs(inputs) => self.inputs = Some(inputs),
+                Event::Gpu(gpu) => self.gpu = gpu,
                 Event::Started(phase) => self.phase_mut(phase).started = Some(Instant::now()),
+                Event::Fix(fix) => self.fix = Some(fix),
                 Event::Finished(phase, result) => {
                     let state = self.phase_mut(phase);
                     state.ended = Some(Instant::now());
@@ -287,6 +304,9 @@ impl Proof {
                 _ => "not run".to_owned(),
             }
         };
+        if let Some(fix) = &self.fix {
+            return fix.report();
+        }
         if let Some((phase, state)) = self.phases.iter().find(|(_, state)| state.failure.is_some()) {
             return format!(
                 "Horizon proof: {} failed: {}. The whole log is in {}. Fix the Dockerfile or the proof, then increase proof_request by one.",
@@ -325,8 +345,13 @@ struct Job {
     volume: String,
     container: String,
     host_restore: bool,
+    /// A preview of the run ran as root, so the volume's folders are taken back first.
+    root_dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// The setup this proof tests, read once at its start, or why Horizon refuses it.
     setup: Result<super::snapshot::Setup, String>,
+    /// The newest lines of the current phase, kept here so a diagnosis never reads the
+    /// log file back from the run folder, where the agent can write.
+    tail: std::cell::RefCell<super::access::Tail>,
     log_path: PathBuf,
     cancel: Cancellation,
     sender: mpsc::SyncSender<Event>,
@@ -389,6 +414,7 @@ impl Job {
         self.setup = super::snapshot::Setup::read(&self.repository, self.identity);
         if let Ok(setup) = &self.setup {
             let _ = self.sender.send(Event::Inputs(setup.fingerprint(&self.spec)));
+            let _ = self.sender.send(Event::Gpu(default_wants_gpu(setup)));
         }
         // Without its log a failure could not tell the agent what to read: none runs.
         let mut log = match create_private(&self.log_path) {
@@ -427,6 +453,7 @@ impl Job {
             if self.cancel.is_cancelled() {
                 return;
             }
+            self.tail.borrow_mut().clear();
             let _ = self.sender.send(Event::Started(phase));
             self.ctx.request_repaint();
             let result = match phase {
@@ -442,6 +469,17 @@ impl Job {
                 Phase::Fast => self.ci(true, &mut log),
             };
             let failed = result.is_err();
+            // A stopped or replaced proof asks GitHub nothing and offers no fix.
+            if phase == Phase::Build
+                && failed
+                && !self.cancel.is_cancelled()
+                && let Some(fix) = self
+                    .tail
+                    .borrow()
+                    .diagnose(&horizon_docker(), &|| self.cancel.is_cancelled())
+            {
+                let _ = self.sender.send(Event::Fix(fix));
+            }
             let _ = self.sender.send(Event::Finished(phase, result));
             self.ctx.request_repaint();
             if failed {
@@ -622,6 +660,8 @@ impl Job {
         // The agent wrote these paths: both stay inside the repository, as deployment
         // demands, and the build reads the proof's snapshot, never the live folder.
         let (folder, context, dockerfile) = setup.context(&self.repository, build)?;
+        // buildx numbers its steps per build, so a diagnosis reads this build's output only.
+        self.tail.borrow_mut().clear();
         let mut command = self.docker();
         command
             .current_dir(folder.path())
@@ -656,9 +696,17 @@ impl Job {
         let mut own = self.docker();
         own.args(["run", "--rm", "--name", &self.container, "-v"])
             .arg(format!("{}:/workspace", self.volume))
-            .args(["--entrypoint", "sh", TOOLS, "-c"])
-            .arg(OWN);
+            .args(["--entrypoint", "sh", TOOLS, "-c"]);
+        let take_back = self.root_dirty.load(std::sync::atomic::Ordering::SeqCst);
+        own.arg(if take_back {
+            format!("{OWN}; {TAKE_BACK}")
+        } else {
+            OWN.to_owned()
+        });
         self.stream(own, log)?;
+        if take_back {
+            self.root_dirty.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
         // As root, so the checkout can be handed to the worker's account after.
         let mut clone = self.docker();
         clone
@@ -725,12 +773,7 @@ impl Job {
 
     /// Whether the default profile, whose image the CI runs in, asks for a GPU.
     fn wants_gpu(&self) -> bool {
-        self.setup
-            .as_ref()
-            .ok()
-            .and_then(|setup| setup.config().ok())
-            .and_then(|config| config.profiles.get(&config.default).map(|profile| profile.gpu))
-            .unwrap_or(false)
+        self.setup.as_ref().is_ok_and(default_wants_gpu)
     }
 
     /// A container of the image as the worker account on the proof's volume, with the
@@ -879,6 +922,12 @@ const OWN: &str = "for d in /workspace/home /workspace/session-data /workspace/s
 if [ -L \"$d\" ]; then rm -f \"$d\"; fi; mkdir -p \"$d\"; done; \
 chown 10001:10001 /workspace /workspace/home /workspace/session-data /workspace/session-data/proof /workspace/locks";
 
+/// Gives the worker's account back what a preview of the run that ran as root left in
+/// those folders (links themselves, never followed). It runs only when Horizon knows
+/// such a preview ran; nothing on the volume decides it.
+const TAKE_BACK: &str =
+    "find /workspace/home /workspace/session-data /workspace/locks ! -user 10001 -exec chown -h 10001:10001 {} +";
+
 /// Forgets localci's step records when the volume last ran a proof in another image.
 /// It runs with Horizon's settings only, never the image's: the records' folder comes
 /// from [`localci::records`], is resolved through any link first, and is never inside
@@ -896,7 +945,22 @@ pub(super) fn localci_instruction() -> String {
 
 /// The image that prepares the proof's volume: Horizon's pinned base, never the
 /// candidate the agent wrote.
-const TOOLS: &str = horizon_core::cloud_runtime::repository::launch::quick_start::IMAGE;
+pub(super) const TOOLS: &str = horizon_core::cloud_runtime::repository::launch::quick_start::IMAGE;
+
+/// Horizon's own Docker configuration directory, where its `ghcr.io` login is kept.
+fn horizon_docker() -> PathBuf {
+    horizon_core::HorizonHome::resolve().root().join("cloud").join("docker")
+}
+
+/// Whether the setup's default profile asks for a GPU. Its proof and preview then get
+/// this computer's GPU, or fail without one; they never run without it unseen.
+fn default_wants_gpu(setup: &super::snapshot::Setup) -> bool {
+    setup
+        .config()
+        .ok()
+        .and_then(|config| config.profiles.get(&config.default).map(|profile| profile.gpu))
+        .unwrap_or(false)
+}
 
 #[cfg(test)]
 mod tests {
