@@ -5,8 +5,9 @@ use std::path::Path;
 use std::process::Command;
 
 /// The images deployment would build: each profile's build with the build arguments
-/// its capabilities give, the default profile's first, every other one that differs
-/// from all before it. A profile without a build section runs a published image.
+/// its capabilities give, the default profile's first when it has one, every other one
+/// that differs from all before it. A profile without a build section runs a published
+/// image.
 pub(super) fn distinct_builds(
     config: &horizon_core::cloud_panel::CloudConfig,
     arguments: impl Fn(&horizon_core::cloud_panel::Profile) -> Vec<String>,
@@ -15,11 +16,12 @@ pub(super) fn distinct_builds(
         .profiles
         .get(&config.default)
         .ok_or("the default profile is missing")?;
-    let build = default
+    let mut builds: Vec<_> = default
         .build
         .clone()
-        .ok_or("the default profile has no build section")?;
-    let mut builds = vec![(build, arguments(default))];
+        .map(|build| (build, arguments(default)))
+        .into_iter()
+        .collect();
     for profile in config.profiles.values() {
         if let Some(build) = &profile.build {
             let candidate = (build.clone(), arguments(profile));

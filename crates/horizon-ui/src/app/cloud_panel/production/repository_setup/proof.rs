@@ -526,6 +526,21 @@ impl Job {
                 "the setup declares the same-worker companion {name}; Horizon cannot prove same-worker companions yet, so leave them out of this setup"
             ));
         }
+        // A GPU profile is proved on a computer with an NVIDIA GPU or not at all; the CI
+        // runs with it in the default profile's image.
+        if let Some((name, _)) = config.profiles.iter().find(|(_, profile)| profile.gpu)
+            && !Path::new("/dev/nvidiactl").exists()
+        {
+            return Err(format!(
+                "profile {name} needs a GPU and this computer has no NVIDIA GPU, so Horizon cannot prove this setup here"
+            ));
+        }
+        let default_builds = config
+            .profiles
+            .get(&config.default)
+            .ok_or("the default profile is missing")?
+            .build
+            .is_some();
         // The agent CLI releases deployment would pin, so every build gets its arguments.
         let releases =
             horizon_core::cloud_runtime::image::agents::latest(&horizon_core::cloud_runtime::Cancellation::default())
@@ -546,7 +561,7 @@ impl Job {
         // Every profile can be chosen in New cloud, so each distinct build is built; the
         // CI then runs in the default profile's image.
         let tag = |index: usize| {
-            if index == 0 {
+            if index == 0 && default_builds {
                 self.image.clone()
             } else {
                 format!("{}-build{index}:candidate", self.volume)
@@ -588,7 +603,9 @@ impl Job {
                     &profile.capabilities,
                 )
                 .is_some();
-                if !trusted {
+                // The default profile's image is the one the CI runs in, so it must be here.
+                let default = *name == config.default;
+                if !trusted || default {
                     let mut pull = self.docker();
                     pull.env_remove("DOCKER_AUTH_CONFIG")
                         .arg("--config")
@@ -597,6 +614,11 @@ impl Job {
                     self.stream_within(pull, log, Some(BUILD_TIMEOUT))?;
                 }
                 self.check_contract((name, profile), &profile.image, number, docker_config.path(), log)?;
+                if default {
+                    let mut retag = self.docker();
+                    retag.args(["tag", &profile.image, &self.image]);
+                    self.stream(retag, log)?;
+                }
                 continue;
             };
             let arguments = horizon_core::cloud_runtime::image::build_arguments(&profile.capabilities, &releases);
@@ -688,7 +710,24 @@ impl Job {
             .tempdir()
             .map_err(|error| format!("cannot make a private folder for the bundle: {error}"))?;
         let bundle = folder.path().join("head.bundle");
-        let mut create = super::commit::git_command(&self.repository);
+        // From a private repository that borrows this one's objects and names only the
+        // captured commit, so a commit made or a branch moved since is never in it.
+        let borrowed = folder.path().join("borrowed.git");
+        let mut init = Command::new("git");
+        init.args(["init", "--bare", "--quiet", "--template="]).arg(&borrowed);
+        self.stream(init, log)?;
+        let mut objects = super::commit::git_command(&self.repository);
+        objects.args(["rev-parse", "--git-path", "objects"]);
+        let objects = self.capture(objects, STEP_TIMEOUT)?;
+        let objects = self.repository.join(String::from_utf8_lossy(&objects).trim());
+        let alternates = borrowed.join("objects").join("info");
+        std::fs::create_dir_all(&alternates)
+            .and_then(|()| std::fs::write(alternates.join("alternates"), format!("{}\n", objects.display())))
+            .map_err(|error| format!("cannot make the bundle: {error}"))?;
+        let mut name = super::commit::git_command(&borrowed);
+        name.args(["update-ref", "--no-deref", "HEAD", head]);
+        self.stream(name, log)?;
+        let mut create = super::commit::git_command(&borrowed);
         create.args(["bundle", "create", "--quiet"]).arg(&bundle).arg("HEAD");
         self.stream(create, log)?;
         // Horizon's pinned base image, not the candidate, prepares the volume: what the
@@ -1051,5 +1090,11 @@ mod tests {
         })
         .unwrap();
         assert_eq!(by_arguments.len(), 4, "other build arguments make another image");
+        let published = horizon_core::cloud_panel::CloudConfig::parse(
+            "version: 1\ndefault: base\nprofiles:\n  base:\n    provider: runpod\n    image: ghcr.io/o/base\n    cpu: 4\n    memory_gb: 8\n  built:\n    provider: runpod\n    image: ghcr.io/o/r-worker\n    cpu: 4\n    memory_gb: 8\n    build: {context: .horizon, dockerfile: .horizon/Dockerfile}\n",
+        )
+        .unwrap();
+        let builds = distinct_builds(&published, |_| Vec::new()).unwrap();
+        assert_eq!(builds.len(), 1, "a published default image is pulled, not built");
     }
 }

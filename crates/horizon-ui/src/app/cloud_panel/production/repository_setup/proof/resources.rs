@@ -35,8 +35,8 @@ pub(super) fn check_operations(volume: &str) -> String {
 /// switched meanwhile never sends one to another machine.
 #[derive(Clone, Debug, Default)]
 pub(in crate::app::cloud_panel::production::repository_setup) struct LocalDocker {
-    /// The daemon's address; none when the Docker CLI could not say which it uses, and
-    /// then its own commands fail with the reason.
+    /// The daemon's address; none only before a proof's run has checked it, when the run
+    /// sends no docker command.
     host: Option<String>,
 }
 
@@ -52,7 +52,10 @@ impl LocalDocker {
     /// paths on its own machine.
     pub(in crate::app::cloud_panel::production::repository_setup) fn resolve() -> Result<Self, String> {
         match horizon_core::cloud_runtime::docker_daemon::Target::default().daemon() {
-            None => Ok(Self::default()),
+            None => Err(
+                "Horizon cannot tell which Docker daemon Docker uses here (docker context inspect names none), so it runs no proof: check that Docker is installed and its context works, then start the setup again."
+                    .to_owned(),
+            ),
             Some(endpoint) if endpoint.is_local() => Ok(Self {
                 host: Some(endpoint.address()),
             }),

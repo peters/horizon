@@ -431,7 +431,8 @@ For a detailed check of the refresh, use the
 
    Result: **Profile** lists the profiles that area B committed.
 
-4. Examine **Tailnet** in the New cloud dialog.
+4. Open **More options** in the New cloud dialog if it is closed, then examine
+   **Tailnet**.
 
    Result: The chooser shows **None** and the name of each saved tailnet.
 

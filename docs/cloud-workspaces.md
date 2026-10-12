@@ -491,9 +491,11 @@ answer a question or to change its plan. A question also shows above the steps.
 **Stop** closes the agent. **Close** keeps it working, and **New cloud** shows it
 again for the same repository.
 
-The agent reads the CI of the repository first, for example `.github/workflows`:
-the Linux jobs that restore, build and test, the tool versions they use and where
-those versions come from. For GitHub Actions it uses
+The agent reads the CI of the repository first, the GitHub Actions workflows in
+`.github/workflows`: the Linux jobs that restore, build and test, the tool versions
+they use and where those versions come from. Horizon proves GitHub Actions jobs
+only, so a repository without a GitHub Actions workflow that builds or tests on
+Linux cannot finish the setup yet; the agent says so. It uses
 [localci](https://github.com/peters/localci) when it is installed: `localci plan`
 resolves the jobs, and each `uses:` step that localci skips is a tool that the
 image must supply. Then it reads `AGENTS.md`, the README and existing Dockerfiles.
@@ -511,7 +513,10 @@ only while the `.horizon` files and the commit are the ones it tested. A build
 context outside `.horizon` is built from the committed tree with the proposed
 `.horizon` files over it, which is the image that deployment builds, and a build
 path that leaves the repository is refused. Each profile's distinct build is
-built and checked, and the CI runs in the default profile's image. The proof
+built and checked, and the CI runs in the default profile's image; a default
+profile that runs a published image is pulled and checked instead of built. A
+setup with a GPU profile is proved only on a computer with an NVIDIA GPU, and the
+CI uses that GPU when the default profile asks for one. The proof
 gets the tested commit and its history as a bundle, never this computer's git
 folder, and each setup run has its own image and volume, removed when it ends. For a .NET repository
 with private feeds, check **Restore private NuGet packages on this computer for

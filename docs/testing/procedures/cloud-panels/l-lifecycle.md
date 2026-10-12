@@ -360,7 +360,7 @@ Use `smoke-r`. It is a RunPod CPU cloud.
 
    Result: The summary shows a Hetzner worker.
 
-7. In **Tailnet**, select **None**.
+7. Open **More options** if it is closed. In **Tailnet**, select **None**.
 
    Result: **None** is selected.
 
