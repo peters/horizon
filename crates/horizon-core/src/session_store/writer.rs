@@ -7,9 +7,8 @@
 //! read of a session that is queued or being written returns the queued board, so a reader
 //! never sees an older one. A save that fails is kept and tried again later, while the
 //! saves of other sessions go on.
-use super::{ParkedPanel, SessionStore};
+use super::SessionStore;
 use crate::RuntimeState;
-use crate::cloud_runtime::session_status::SessionStatus;
 use crate::error::{Error, Result as StoreResult};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -59,11 +58,19 @@ struct State {
     direct: BTreeSet<String>,
 }
 
-/// The park state of a cloud panel, as [`ParkedPanel`] without its borrows.
+/// The status of a cloud panel; a Horizon without clouds has none.
+#[cfg(feature = "cloud-workspaces")]
+type Status = crate::cloud_runtime::session_status::SessionStatus;
+#[cfg(not(feature = "cloud-workspaces"))]
+type Status = std::convert::Infallible;
+
+/// The park state of a cloud panel, as `ParkedPanel` without its borrows. Only a Horizon
+/// with clouds queues it.
+#[cfg_attr(not(feature = "cloud-workspaces"), allow(dead_code))]
 pub(super) struct Park {
     pub(super) local_id: String,
     pub(super) parked: bool,
-    pub(super) status: Option<SessionStatus>,
+    pub(super) status: Option<Status>,
 }
 
 enum Job {
@@ -165,6 +172,7 @@ impl Writer {
     /// the boards of the session that wait. A newer record of a panel replaces a queued one,
     /// which keeps its status if the newer one has none, so that the queue of a session that
     /// cannot be saved does not grow. A record that cannot be written is dropped.
+    #[cfg_attr(not(feature = "cloud-workspaces"), allow(dead_code))]
     pub(super) fn queue_parks(&self, store: &SessionStore, session_id: &str, parks: Vec<Park>) {
         let mut state = self.lock();
         let queued = state.parks.entry(session_id.to_owned()).or_default();
@@ -378,16 +386,21 @@ impl Writer {
     }
 
     fn write_parks(&self, store: &SessionStore, session_id: &str, parks: &[Park]) {
-        let panels: Vec<ParkedPanel<'_>> = (parks.iter())
-            .map(|park| ParkedPanel {
-                local_id: &park.local_id,
-                parked: park.parked,
-                status: park.status.as_ref(),
-            })
-            .collect();
-        if let Err(error) = store.record_cloud_panels(session_id, &panels) {
-            tracing::warn!(%session_id, %error, "could not record the park state of a cloud");
+        #[cfg(feature = "cloud-workspaces")]
+        {
+            let panels: Vec<super::ParkedPanel<'_>> = (parks.iter())
+                .map(|park| super::ParkedPanel {
+                    local_id: &park.local_id,
+                    parked: park.parked,
+                    status: park.status.as_ref(),
+                })
+                .collect();
+            if let Err(error) = store.record_cloud_panels(session_id, &panels) {
+                tracing::warn!(%session_id, %error, "could not record the park state of a cloud");
+            }
         }
+        #[cfg(not(feature = "cloud-workspaces"))]
+        let _ = (store, session_id, parks);
         self.lock().writing_parks = None;
         self.shared.changed.notify_all();
     }

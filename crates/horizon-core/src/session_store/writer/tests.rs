@@ -157,12 +157,12 @@ fn the_writer_leaves_a_session_alone_while_a_save_outside_the_queue_writes_it() 
     assert_eq!(on_disk(&store).as_deref(), Some("queued"));
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "cloud-workspaces"))]
 fn park(parked: bool, line: Option<&str>) -> Park {
     Park {
         local_id: "panel".into(),
         parked,
-        status: line.map(|line| SessionStatus {
+        status: line.map(|line| crate::cloud_runtime::session_status::SessionStatus {
             id: "agent".into(),
             activity: crate::cloud_runtime::session_status::SessionActivity::Idle,
             quiet_for: None,
@@ -172,7 +172,7 @@ fn park(parked: bool, line: Option<&str>) -> Park {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(all(unix, feature = "cloud-workspaces"))]
 fn park_records_of_a_session_that_cannot_be_saved_do_not_pile_up() {
     let (_temp, store) = store();
     store.save_runtime_state("broken", &board("old")).unwrap();
@@ -196,7 +196,7 @@ fn park_records_of_a_session_that_cannot_be_saved_do_not_pile_up() {
     assert_eq!(parks.len(), 1, "one record per panel waits");
     assert!(!parks[0].parked, "the newest park state waits");
     assert_eq!(
-        parks[0].status.as_ref().and_then(SessionStatus::last_line),
+        parks[0].status.as_ref().and_then(|status| status.last_line()),
         Some("first"),
         "a record without a status keeps the queued status"
     );
