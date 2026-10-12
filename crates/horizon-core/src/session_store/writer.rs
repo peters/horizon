@@ -366,7 +366,8 @@ pub(super) fn durable_write(path: &Path, bytes: &[u8]) -> StoreResult<()> {
 pub(super) fn sync_with_folder(path: &Path) -> StoreResult<()> {
     const PASSES: usize = 8;
     for _ in 0..PASSES {
-        let file = fs::File::open(path)?;
+        // Windows syncs only a file that is open for writing.
+        let file = fs::OpenOptions::new().write(true).open(path)?;
         file.sync_all()?;
         path.parent().map_or(Ok(()), sync_folder)?;
         if same_file(&file.metadata()?, &fs::metadata(path)?) {
