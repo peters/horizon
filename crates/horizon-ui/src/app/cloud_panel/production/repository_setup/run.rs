@@ -80,6 +80,19 @@ fn watch_status(path: PathBuf, ctx: egui::Context, alive: std::sync::Weak<()>) -
     receiver
 }
 
+/// Whether the status file at `path` names a desktop preview other than `shown` now:
+/// another spec or request, one Horizon cannot start, or none. A file that cannot be
+/// read or parsed changes nothing, as for the dialog, which keeps the last good status.
+pub(super) fn preview_changed_in(path: &std::path::Path, shown: Option<&(preview::Spec, u64)>) -> bool {
+    let Some(status) = super::untrusted::read_regular(path, STATUS_LIMIT)
+        .ok()
+        .and_then(|bytes| parse(&String::from_utf8_lossy(&bytes)))
+    else {
+        return false;
+    };
+    status.preview_invalid || status.preview.map(|spec| (spec, status.preview_request)).as_ref() != shown
+}
+
 /// `text` as one pasted message, so a terminal agent takes it whole even mid-turn.
 /// Line breaks become spaces and every other control character goes, so text that
 /// quotes the agent's own files, such as a proof failure, can never end the paste
@@ -488,6 +501,14 @@ impl Run {
     pub(super) fn named_preview_port(&self) -> Option<u16> {
         self.status.preview.as_ref()?;
         self.preview.as_ref()?.live_port()
+    }
+
+    /// The desktop preview the status names, with its request, as the dialog last read it.
+    pub(super) fn named_preview(&self) -> Option<(preview::Spec, u64)> {
+        self.status
+            .preview
+            .clone()
+            .map(|spec| (spec, self.status.preview_request))
     }
 
     /// Shows the preview the status names as live on `port`, with no run behind it.
@@ -1101,6 +1122,30 @@ mod tests {
             run.take_summary_without_proof(),
             "a new summary without one is told again"
         );
+    }
+
+    #[test]
+    fn use_compares_the_preview_the_ended_agent_left_with_the_live_one() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("status.json");
+        let live = preview::Spec::parse(&serde_json::json!({"command": "./app"})).unwrap();
+        let shown = Some((live, 1));
+        assert!(
+            !preview_changed_in(&path, shown.as_ref()),
+            "a status that cannot be read changes nothing"
+        );
+        let write = |text: &str| std::fs::write(&path, text).unwrap();
+        write(r#"{"steps":[],"preview":{"command":"./app"},"preview_request":1}"#);
+        assert!(!preview_changed_in(&path, shown.as_ref()), "the live preview");
+        write(r#"{"steps":[],"preview":{"command":"./app"},"preview_request":2}"#);
+        assert!(preview_changed_in(&path, shown.as_ref()), "a newer request");
+        write(r#"{"steps":[],"preview":{"command":"./app --demo"},"preview_request":1}"#);
+        assert!(preview_changed_in(&path, shown.as_ref()), "another command");
+        write(r#"{"steps":[],"preview":{"command":""},"preview_request":1}"#);
+        assert!(preview_changed_in(&path, shown.as_ref()), "one Horizon cannot start");
+        write(r#"{"steps":[],"preview":null}"#);
+        assert!(preview_changed_in(&path, shown.as_ref()), "a withdrawn preview");
+        assert!(!preview_changed_in(&path, None), "no preview, as before");
     }
 
     #[test]

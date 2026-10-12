@@ -554,8 +554,11 @@ impl Job {
                     let mut retag = self.docker();
                     retag.args(["tag", &profile.image, &self.image]);
                     self.stream(retag, log)?;
-                    // Without a localci of its own, its CI runs Horizon's.
-                    *self.ci_localci.borrow_mut() = self.session_localci(&self.image, builds.len())?;
+                    // Without a localci of its own, its CI runs Horizon's; a proof with commands
+                    // runs no localci, so it does not look for one.
+                    if self.spec.commands.is_empty() {
+                        *self.ci_localci.borrow_mut() = self.session_localci(&self.image, builds.len())?;
+                    }
                 }
                 continue;
             };
