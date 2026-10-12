@@ -284,6 +284,14 @@ This work still runs on the UI thread. Do not copy it into new code.
   and renames the session file on the UI thread.
   [#1448](https://github.com/peters/horizon/issues/1448) tracks a durable save
   off the UI thread.
+- `poll_config_reload`, which `prepare_frame` in
+  [`app/lifecycle.rs`](../../crates/horizon-ui/src/app/lifecycle.rs) calls,
+  reads the metadata of the config file at most every 2 s. When the file
+  changed, it also reads and parses the config on the UI thread.
+- `refresh_active_session_lease`, which `finalize_frame` calls, writes and
+  renames the lease file of a saved session at most every 2 s
+  (`refresh_lease` in
+  [`lease.rs`](../../crates/horizon-core/src/session_store/lease.rs)).
 - `Choices::set` writes and renames its file on the UI thread. On Windows, it
   also calls `sync_all` there. On Unix, a worker thread makes the file durable
   ([#1491](https://github.com/peters/horizon/pull/1491)). With **Keep my choice
