@@ -15,7 +15,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | Device panel | A Horizon panel that shows a VNC desktop. Agents can only read it. | native viewer, Device viewer, VNC viewer |
 | live view | A Device panel that shows the isolated desktop with frames that advance. | — |
 | lane | One platform or provider path through a procedure, for example "Hetzner lane". | track, leg |
-| run | One execution of a procedure on one candidate. | pass (as a noun), session |
+| run | One execution of a procedure on one candidate. | pass (as a noun for a run), session |
 | evidence | Screenshots, recordings, logs and hashes from a run. Keep private evidence out of the repository. | proof |
 | persistent launcher | A task-owned copy of the fixture that keeps its saved session. It runs the candidate without `--ephemeral`. | persistent fixture |
 | restart marker | The file `restart-request` in the state directory of the persistent launcher. When the candidate stops, the launcher finds the file and starts the candidate again. | restart flag |
@@ -137,6 +137,17 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | cross-origin frame | A child frame whose origin differs from its parent document. | — |
 | HTTP fixture | A task-owned loopback server and synthetic pages for a browser test. | — |
 | document reference | A short-lived browser node reference tied to one document. | — |
+
+## UI code
+
+| Name | Meaning | Do not use |
+|---|---|---|
+| UI thread | The thread that runs the Horizon window and calls `App::ui`. It is the main thread of the process. | render thread, GUI thread |
+| frame | One call of `Context::run_ui` that lays out and paints the window. It runs one or more passes and paints only the last one. | tick (for a frame) |
+| pass | One run of `App::ui` in a frame. A frame usually has one pass. egui runs one more pass, up to `Options::max_passes`, when code calls `request_discard`. | frame (for a pass) |
+| worker thread | A thread that does blocking work for the UI and sends the result back. | background task |
+| generation | A number that the UI increases when a request starts or its context changes. A result with an older generation is dropped. | epoch, version |
+| fence | A value that tells a worker thread to wait for earlier work, or to write nothing when its board was replaced. | barrier |
 
 ## Technical verbs
 

@@ -60,19 +60,44 @@ class ReadinessTests(unittest.TestCase):
         self.commit()
         self.assertEqual(self.run_check()[0], 0)
 
-    def test_scope_needs_approval(self):
+    def test_large_file_count_gives_advisory_note(self):
         for i in range(11):
             self.write(f"crates/horizon-core/src/m{i}.rs")
         self.commit()
         code, out = self.run_check()
-        self.assertEqual(code, 1)
-        self.assertIn("error scope:", out)
-        self.assertEqual(self.run_check("--scope-approved")[0], 0)
+        self.assertEqual(code, 0)
+        self.assertIn("note  scope: 11 source or test files and 11 changed lines", out)
+        self.assertIn("explain why and how to review it in the PR body", out)
+        self.assertNotIn("error scope:", out)
+        legacy_code, legacy_out = self.run_check("--scope-approved")
+        self.assertEqual(legacy_code, 0)
+        self.assertIn("note  scope:", legacy_out)
 
     def test_scope_counts_lines(self):
         self.write("crates/horizon-core/src/big.rs", "x\n" * 1501)
         self.commit()
-        self.assertIn("error scope:", self.run_check()[1])
+        code, out = self.run_check()
+        self.assertEqual(code, 0)
+        self.assertIn("note  scope: 1 source or test files and 1501 changed lines", out)
+
+    def test_exact_size_thresholds_do_not_give_a_note(self):
+        for i in range(10):
+            self.write(f"crates/horizon-core/src/m{i}.rs", "x\n" * 150)
+        self.commit()
+        code, out = self.run_check()
+        self.assertEqual(code, 0)
+        self.assertNotIn("scope:", out)
+
+    def test_size_note_does_not_bypass_other_errors(self):
+        self.write("crates/horizon-ui/src/app/panel.rs", "x\n" * 1501)
+        self.commit()
+        for args in [(), ("--scope-approved",)]:
+            with self.subTest(args=args):
+                code, out = self.run_check(*args, body="Change the panel.\n")
+                self.assertEqual(code, 1)
+                self.assertIn("note  scope:", out)
+                self.assertIn("error ui-procedure:", out)
+                self.assertIn("error ui-gif:", out)
 
     def test_pure_rename_does_not_count_toward_scope(self):
         self.write("crates/horizon-core/src/big.rs", "".join(f"line {i}\n" for i in range(1600)))
@@ -80,7 +105,9 @@ class ReadinessTests(unittest.TestCase):
         self.base = self.git("rev-parse", "HEAD").strip()
         self.git("mv", "crates/horizon-core/src/big.rs", "crates/horizon-core/src/moved.rs")
         self.commit()
-        self.assertEqual(self.run_check()[0], 0)
+        code, out = self.run_check()
+        self.assertEqual(code, 0)
+        self.assertNotIn("scope:", out)
 
     def test_many_pure_renames_do_not_count_toward_scope(self):
         for i in range(11):
@@ -90,7 +117,9 @@ class ReadinessTests(unittest.TestCase):
         for i in range(11):
             self.git("mv", f"crates/horizon-core/src/a{i}.rs", f"crates/horizon-core/src/b{i}.rs")
         self.commit()
-        self.assertEqual(self.run_check()[0], 0)
+        code, out = self.run_check()
+        self.assertEqual(code, 0)
+        self.assertNotIn("scope:", out)
 
     def test_renaming_a_procedure_is_not_an_update(self):
         self.write("docs/testing/procedures/a.md", "Steps.\n")
@@ -110,7 +139,9 @@ class ReadinessTests(unittest.TestCase):
         for i in range(11):
             self.write(f"docs/testing/procedures/p{i}.md")
         self.commit()
-        self.assertEqual(self.run_check()[0], 0)
+        code, out = self.run_check()
+        self.assertEqual(code, 0)
+        self.assertNotIn("scope:", out)
 
     def test_ui_change_needs_procedure_and_gif(self):
         self.write("crates/horizon-ui/src/app/panel.rs")
