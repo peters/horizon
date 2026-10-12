@@ -31,8 +31,9 @@ DEFAULT_LANES = 2
 DEFAULT_MIN_FREE_GB = 100
 # A heavy entry counts as this many other entries when the runner balances the lanes.
 HEAVY_WEIGHT = 3
-# How long a lane may run for each entry: the gate's proof and preview limits, and cleanup.
-ENTRY_LIMIT_SECONDS = 150 * 60
+# How long a lane may run for each entry: above the gate's own limits for one proof (6 hours)
+# and its preview (10 minutes), with time for the cleanup.
+ENTRY_LIMIT_SECONDS = 7 * 60 * 60
 # Above this load average, tests with time limits inside repositories failed for no real reason.
 HIGH_LOAD = 30
 ENTRY_KEYS = {"repo", "label", "path", "spec", "preview", "heavy", "leave_out"}
@@ -235,7 +236,10 @@ def session_pids(session):
 
 def stop_session(process, grace=5):
     """Stops every process of the lane that `process` leads, also those its children
-    left behind, by their exact PIDs."""
+    left behind, by their exact PIDs, then reaps `process`. Until then `process` is at
+    least a zombie, so no other process can have its PID, which is the session ID."""
+    if process.returncode is not None:
+        return
     for sig in (signal.SIGTERM, signal.SIGKILL):
         pids = session_pids(process.pid)
         if not pids:
@@ -247,7 +251,6 @@ def stop_session(process, grace=5):
                 pass
         deadline = time.monotonic() + grace
         while time.monotonic() < deadline and session_pids(process.pid):
-            process.poll()
             time.sleep(0.2)
     try:
         process.wait(timeout=grace)
@@ -404,17 +407,23 @@ class Lane:
         self.begun = time.monotonic()
 
     def running(self):
-        return self.process is not None and self.process.poll() is None
+        """Whether the lane's process runs. This does not reap it, so its session ID stays
+        its own until stop_session sweeps the session."""
+        if self.process is None or self.process.returncode is not None:
+            return False
+        try:
+            return os.waitid(os.P_PID, self.process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is None
+        except ChildProcessError:
+            return False
 
     def overdue(self):
         return time.monotonic() - self.begun > ENTRY_LIMIT_SECONDS * len(self.entries)
 
     def stop(self, reason):
-        if self.process is None:
-            return
         if self.running():
             self.reason = self.reason or reason
-        stop_session(self.process)
+        if self.process is not None:
+            stop_session(self.process)
 
     def why(self):
         """Why the lane ended before all its entries did."""

@@ -86,6 +86,10 @@ not find.
 
 ### 6.1 G01: Run the gate
 
+> **CAUTION:** THE GATE USES THE GIT LOGIN AND THE NUGET CREDENTIALS OF THIS COMPUTER.
+> It clones the private Rust git dependencies that the lock files pin, and it restores
+> private .NET packages. The CI of the proof can read them.
+
 1. In the worktree of the candidate, run this command. Use the options in
    [10.2](#102-runner-options) to change the defaults.
 
@@ -131,8 +135,9 @@ not find.
 1. While a proof runs, press Ctrl-C in the terminal of the runner.
 
    Result: The runner prints "SIGINT: stopping the lanes and removing this run's
-   resources". The summary shows "no result: stopped by SIGINT" for each entry that did
-   not end. Lines that start with "Removed for an entry that did not end" name the
+   resources". The summary shows "no result: stopped by SIGINT" for each entry that
+   started and did not end, and "not started: stopped by SIGINT" for each entry that did
+   not start. Lines that start with "Removed for an entry that did not end" name the
    Docker resources and temporary folders that the runner removed. The exit code is 130.
 
 2. Find the six hexadecimal digits at the end of the run folder name. Run
@@ -204,6 +209,10 @@ that is not a folder or a `leave_out` job that `spec.jobs` does not name.
 The runner puts each other entry in the gate lane with the smallest load. A heavy entry
 counts as three entries.
 
+The gate stops a proof after 6 hours, far above the limits of each proof phase, so that
+it stops only a proof that hangs. It stops a preview that shows no window after 10
+minutes. The runner stops a gate lane after 7 hours for each of its entries.
+
 ### 10.3 Summary
 
 | Column | Meaning |
@@ -244,4 +253,5 @@ Each gate lane runs one process of the ignored test
 `crates/horizon-ui/src/app/cloud_panel/production/repository_setup/proof/gate.rs`.
 The runner gives it `GATE_LIST`, `GATE_OUT`, `GATE_PREFIX` and a `TMPDIR` of its own.
 Each process is in a new session, so the runner stops each process of the gate lane by
-its exact PID. The run names have the form `gate-<digits>-<lane>-<index>`.
+its exact PID. The run names have the form `gate-<token>-<lane>-<index>`. `<token>` is
+the six hexadecimal digits at the end of the run folder name.

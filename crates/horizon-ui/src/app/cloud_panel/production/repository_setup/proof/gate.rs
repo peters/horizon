@@ -14,8 +14,10 @@ use std::io::Write as _;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-/// The longest one proof may take before the gate stops it and fails the entry.
-const PROOF_LIMIT: Duration = Duration::from_mins(120);
+/// The longest one proof may take before the gate stops it and fails the entry: far
+/// above the proof's own limits for each phase, so it ends only a proof that hangs and
+/// never fails one that the dialog would pass.
+const PROOF_LIMIT: Duration = Duration::from_hours(6);
 
 /// The longest the desktop preview may take to show a window.
 const PREVIEW_LIMIT: Duration = Duration::from_mins(10);
@@ -165,7 +167,7 @@ fn prove(entry: &Entry, out: &Path) -> serde_json::Value {
         "log": log,
     });
     if !ended {
-        result["error"] = "the proof did not end within 120 minutes".into();
+        result["error"] = format!("the proof did not end within {} minutes", PROOF_LIMIT.as_secs() / 60).into();
     }
     result
 }
@@ -195,8 +197,12 @@ fn show_preview(
         (None, egui::Context::default()),
     );
     let begun = Instant::now();
-    while matches!(preview.outcome, preview::Outcome::Starting) && begun.elapsed() < PREVIEW_LIMIT {
+    // The last look comes after the last pause, so a window that drew in it counts.
+    loop {
         preview.poll();
+        if !matches!(preview.outcome, preview::Outcome::Starting) || begun.elapsed() >= PREVIEW_LIMIT {
+            break;
+        }
         std::thread::sleep(POLL);
     }
     let outcome = match &preview.outcome {
@@ -214,7 +220,8 @@ fn show_preview(
         preview::Outcome::Unavailable(reason) => serde_json::json!({"outcome": "unavailable", "detail": reason}),
         preview::Outcome::Failed(reason) => serde_json::json!({"outcome": "failed", "detail": reason}),
         preview::Outcome::Starting => {
-            serde_json::json!({"outcome": "failed", "detail": "no window within 10 minutes"})
+            let detail = format!("no window within {} minutes", PREVIEW_LIMIT.as_secs() / 60);
+            serde_json::json!({"outcome": "failed", "detail": detail})
         }
     };
     // The preview's container goes before the run's resources do.
