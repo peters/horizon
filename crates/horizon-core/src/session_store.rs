@@ -301,8 +301,8 @@ impl SessionStore {
     /// the session writer calls it, never the UI thread.
     fn save_runtime_state_durably(&self, session_id: &str, runtime_state: &RuntimeState) -> Result<()> {
         self.write_runtime_state(session_id, runtime_state, writer::durable_write)?;
-        // The folder of a new session is named in the sessions folder.
-        writer::sync_folder(&self.home.sessions_dir())?;
+        // A new session folder is named in the sessions folder, a new one of those in the root.
+        writer::sync_folder_and_parent(&self.home.sessions_dir())?;
         self.update_session_index(|index| index.touch_profile_session(&self.profile_id, session_id))?;
         writer::sync_with_folder(&self.home.session_index_path())
     }

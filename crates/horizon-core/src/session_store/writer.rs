@@ -373,7 +373,13 @@ pub(super) fn sync_with_folder(path: &Path) -> StoreResult<()> {
     path.parent().map_or(Ok(()), sync_folder)
 }
 
-pub(super) fn sync_folder(folder: &Path) -> StoreResult<()> {
+/// Syncs `folder` and the folder that names it.
+pub(super) fn sync_folder_and_parent(folder: &Path) -> StoreResult<()> {
+    sync_folder(folder)?;
+    folder.parent().map_or(Ok(()), sync_folder)
+}
+
+fn sync_folder(folder: &Path) -> StoreResult<()> {
     #[cfg(unix)]
     fs::File::open(folder)?.sync_all()?;
     #[cfg(not(unix))]
