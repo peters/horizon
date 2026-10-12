@@ -84,6 +84,17 @@ fn entries_of(repository: &Path, read: &[(String, super::untrusted::Entry)]) -> 
     Ok(entries)
 }
 
+/// What [`commit`] did.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Committed {
+    /// HEAD already held the setup.
+    Unchanged,
+    /// HEAD moved to a new commit with the setup, and the index has it too.
+    New,
+    /// HEAD moved to the new commit, but the index could not be updated.
+    IndexBehind(String),
+}
+
 /// Replaces `.horizon` in an index with the entries: what is gone from disk goes.
 fn stage(repository: &Path, index: Option<&Path>, entries: &[String]) -> Result<(), String> {
     let staged = git(
@@ -115,7 +126,7 @@ fn stage(repository: &Path, index: Option<&Path>, entries: &[String]) -> Result<
 /// the person's index; other staged changes stay staged and out of the commit. HEAD
 /// must still be the commit `setup` names. Returns false when HEAD already holds this
 /// setup, so there was nothing to commit.
-pub(super) fn commit(repository: &Path, message: &str, setup: &super::snapshot::Setup) -> Result<bool, String> {
+pub(super) fn commit(repository: &Path, message: &str, setup: &super::snapshot::Setup) -> Result<Committed, String> {
     let head = git(repository, None, &["rev-parse", "--verify", "HEAD"], None)?;
     if head != setup.head {
         return Err("HEAD moved after Horizon read the setup; start the setup again".to_owned());
@@ -138,7 +149,7 @@ pub(super) fn commit(repository: &Path, message: &str, setup: &super::snapshot::
         // Nothing to commit, but the person's index still gets the setup as it is, so a
         // staged deletion or an earlier failed staging does not stay behind.
         stage(repository, None, &entries)?;
-        return Ok(false);
+        return Ok(Committed::Unchanged);
     }
     let commit = git(
         repository,
@@ -153,8 +164,11 @@ pub(super) fn commit(repository: &Path, message: &str, setup: &super::snapshot::
         &["update-ref", "-m", &reason, "HEAD", &commit, &head],
         None,
     )?;
-    stage(repository, None, &entries)?;
-    Ok(true)
+    // The commit is made; an index another git process holds only stays behind.
+    Ok(match stage(repository, None, &entries) {
+        Ok(()) => Committed::New,
+        Err(error) => Committed::IndexBehind(error),
+    })
 }
 
 /// The `.horizon` files that differ from HEAD, as the finished card lists them: each
@@ -247,8 +261,25 @@ pub(super) fn outside(repository: &Path) -> Outside {
         None,
     )
     .unwrap_or_default();
+    // Ignored files count too, such as a local .env; ignored folders, such as build
+    // output, do not, since restores and builds fill them.
+    let ignored = git(
+        repository,
+        None,
+        &[
+            "ls-files",
+            "-z",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+        ],
+        None,
+    )
+    .unwrap_or_default();
     let files = listed
         .split('\0')
+        .chain(ignored.split('\0').filter(|path| !path.ends_with('/')))
         .filter(|path| !path.is_empty() && *path != ".horizon" && !path.starts_with(".horizon/"))
         .map(|path| {
             let stamp = std::fs::symlink_metadata(repository.join(path))
@@ -364,8 +395,9 @@ mod tests {
             ],
         );
 
-        assert!(
+        assert_eq!(
             commit(path, "Add the cloud setup", &setup(path)).unwrap(),
+            Committed::New,
             "a changed setup commits"
         );
         assert!(!mark.exists(), "no hook or filter ran");
@@ -388,7 +420,7 @@ mod tests {
             "and stay staged"
         );
         assert!(
-            !commit(path, "Again", &setup(path)).unwrap(),
+            commit(path, "Again", &setup(path)).unwrap() == Committed::Unchanged,
             "an unchanged setup has nothing to commit"
         );
         assert!(changes(path).is_empty());
@@ -409,7 +441,10 @@ mod tests {
         run(path, &["reset", "-q", "--hard", &real]);
         run(path, &["replace", &real, &planted]);
         std::fs::write(path.join(".horizon/cloud.yml"), "version: 1\n").unwrap();
-        assert!(commit(path, "Add the cloud setup", &setup(path)).unwrap());
+        assert_eq!(
+            commit(path, "Add the cloud setup", &setup(path)).unwrap(),
+            Committed::New
+        );
         assert_eq!(
             run(path, &["--no-replace-objects", "show", "HEAD:README.md"]),
             "readme",
@@ -444,5 +479,15 @@ mod tests {
         std::fs::write(path.join("README.md"), "changed by the agent, longer\n").unwrap();
         std::fs::write(path.join("new.txt"), "new\n").unwrap();
         assert_eq!(changed(&before, &outside(path)), ["README.md", "new.txt"]);
+        std::fs::write(path.join(".gitignore"), ".env\ntarget/\n").unwrap();
+        let before = outside(path);
+        std::fs::create_dir_all(path.join("target")).unwrap();
+        std::fs::write(path.join("target/out"), "build\n").unwrap();
+        assert!(
+            changed(&before, &outside(path)).is_empty(),
+            "an ignored folder does not count"
+        );
+        std::fs::write(path.join(".env"), "TOKEN=x\n").unwrap();
+        assert_eq!(changed(&before, &outside(path)), [".env"], "an ignored file does");
     }
 }

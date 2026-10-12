@@ -732,8 +732,20 @@ impl Job {
                     let _ = self.sender.try_send(Event::Line(line));
                     self.ctx.request_repaint();
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                // A command that ended while something it started still holds its output.
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if matches!(child.try_wait(), Ok(Some(_))) {
+                        break;
+                    }
+                }
+                // Output closed, but the command may still run: it stays watched, so
+                // Stop and the time limit still end it.
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    if !matches!(child.try_wait(), Ok(None)) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                }
             }
             if self.cancel.load(Ordering::Relaxed) {
                 let _ = child.kill();

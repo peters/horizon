@@ -150,6 +150,8 @@ impl HorizonApp {
         if let Some((request, spec)) = run.proof_wanted() {
             run.proved_request = request;
             run.proof_stale_reported = false;
+            // The finished card lists the files of the proof that passes, not an earlier one.
+            run.files = None;
             let log = run.status_path.with_extension(format!("proof-{request}.log"));
             let id = super::proof::run_id(&run.status_path);
             // The proof it replaces stops first, so the two never build the same image.
@@ -349,11 +351,13 @@ impl HorizonApp {
             self.cloud_prototype.error = Some(outside_changes_message(&changed));
             return;
         }
-        let committed = super::commit::commit(&run.repository, run.mode.commit_message(), &setup);
-        if let Err(error) = committed {
-            self.cloud_prototype.error = Some(format!("Could not commit .horizon: {error}"));
-            return;
-        }
+        let committed = match super::commit::commit(&run.repository, run.mode.commit_message(), &setup) {
+            Ok(committed) => committed,
+            Err(error) => {
+                self.cloud_prototype.error = Some(format!("Could not commit .horizon: {error}"));
+                return;
+            }
+        };
         if let Some(run) = self.cloud_prototype.production.setup_run.take() {
             run.discard();
         }
@@ -361,6 +365,11 @@ impl HorizonApp {
         self.cloud_prototype.production.revision.clear();
         set_configuration(&mut self.cloud_prototype.production, Configuration::Committed);
         self.read_cloud_profiles(ctx);
+        if let super::commit::Committed::IndexBehind(error) = committed {
+            self.cloud_prototype.error = Some(format!(
+                "Committed .horizon, but your git index was not updated ({error}). Run `git reset -q -- .horizon` in the repository to refresh it."
+            ));
+        }
     }
 }
 

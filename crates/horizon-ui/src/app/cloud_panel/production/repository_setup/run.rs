@@ -28,10 +28,10 @@ pub(super) const STEPS: [&str; 7] = [
     "Fast rerun",
 ];
 
-/// `text` as one pasted message, so a terminal agent takes it whole even mid-turn.
 /// The largest status file Horizon reads.
 const STATUS_LIMIT: u64 = 1024 * 1024;
 
+/// `text` as one pasted message, so a terminal agent takes it whole even mid-turn.
 pub(super) fn pasted(text: &str) -> Vec<u8> {
     let mut bytes = b"\x1b[200~".to_vec();
     bytes.extend(text.replace(['\r', '\n'], " ").as_bytes());
@@ -244,7 +244,28 @@ impl Run {
     /// last ran, passed, and tested the files as they are now. An agent that cannot wait
     /// may write a summary first.
     pub(super) fn finished(&self) -> bool {
-        self.status.summary.is_some() && self.passed() && !self.changed_since_proof()
+        self.status.summary.is_some() && self.passed() && !self.changed_since_proof() && self.agent_steps_done()
+    }
+
+    /// Every step the agent owns is reported done or skipped, and no step failed; the
+    /// proof's own steps are Horizon's to judge.
+    fn agent_steps_done(&self) -> bool {
+        let horizons = [proof::BUILD, proof::CI, proof::FAST];
+        let ended = |title: &str| {
+            self.status
+                .steps
+                .iter()
+                .any(|step| step.title == title && matches!(step.state, State::Done | State::Skipped))
+        };
+        !self
+            .status
+            .steps
+            .iter()
+            .any(|step| step.state == State::Failed && !horizons.contains(&step.title.as_str()))
+            && STEPS
+                .iter()
+                .filter(|title| !horizons.contains(title))
+                .all(|title| ended(title))
     }
 
     /// The last proof the agent asked for ran and passed: its current request is valid
@@ -485,6 +506,28 @@ mod tests {
         assert_eq!(Some(start), run.times["Read CI"].1, "it starts where Read CI ended");
         assert!(end.is_some());
         assert_eq!(run.elapsed("Write Dockerfile"), None, "pending steps have no time");
+    }
+
+    #[test]
+    fn a_failed_or_missing_agent_step_keeps_the_run_from_being_ready() {
+        let mut run = Run::new(
+            PanelId(1),
+            PanelKind::Codex,
+            PathBuf::from("."),
+            PathBuf::from("missing.json"),
+            Mode::New,
+        );
+        let steps = |preview: &str| {
+            format!(
+                r#"{{"steps":[{{"title":"Read CI","state":"done"}},{{"title":"Find tools","state":"done"}},{{"title":"Write Dockerfile","state":"done"}},{{"title":"Build image","state":"running"}},{{"title":"Desktop preview","state":"{preview}"}}]}}"#
+            )
+        };
+        run.status = parse(&steps("skipped")).unwrap();
+        assert!(run.agent_steps_done(), "Horizon's own steps are not the agent's to end");
+        run.status = parse(&steps("failed")).unwrap();
+        assert!(!run.agent_steps_done(), "a failed step is not a finished setup");
+        run.status = parse(r#"{"steps":[{"title":"Read CI","state":"done"}]}"#).unwrap();
+        assert!(!run.agent_steps_done(), "nor is a missing one");
     }
 
     #[test]
