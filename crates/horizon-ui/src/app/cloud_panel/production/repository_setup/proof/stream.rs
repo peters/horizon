@@ -57,7 +57,80 @@ fn end_group(leader: u32) {
     let _ = leader;
 }
 
+/// The most output Horizon keeps from a command whose output it reads, such as a plan.
+const CAPTURE_LIMIT: u64 = 4 * 1024 * 1024;
+
 impl Job {
+    /// Runs `command` and returns what it wrote to standard output, at most
+    /// [`CAPTURE_LIMIT`], within `limit`. Stop and the limit end its whole group.
+    pub(super) fn capture(&self, mut command: Command, limit: Duration) -> Result<Vec<u8>, String> {
+        use std::io::Read as _;
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
+        let mut child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| format!("cannot start {}: {error}", command.get_program().to_string_lossy()))?;
+        let read = |pipe: Option<Box<dyn std::io::Read + Send>>| {
+            std::thread::spawn(move || {
+                let mut bytes = Vec::new();
+                if let Some(pipe) = pipe {
+                    let _ = pipe.take(CAPTURE_LIMIT).read_to_end(&mut bytes);
+                }
+                bytes
+            })
+        };
+        let stdout = read(
+            child
+                .stdout
+                .take()
+                .map(|pipe| Box::new(pipe) as Box<dyn std::io::Read + Send>),
+        );
+        let stderr = read(
+            child
+                .stderr
+                .take()
+                .map(|pipe| Box::new(pipe) as Box<dyn std::io::Read + Send>),
+        );
+        let started = Instant::now();
+        let status = loop {
+            if let Ok(Some(status)) = child.try_wait() {
+                break status;
+            }
+            if self.cancel.is_cancelled() {
+                end_tree(&mut child);
+                self.remove_container();
+                return Err("stopped".to_owned());
+            }
+            if started.elapsed() > limit {
+                end_tree(&mut child);
+                self.remove_container();
+                return Err(format!("still running after {} minutes; stopped", limit.as_secs() / 60));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        end_group(child.id());
+        let stdout = stdout.join().unwrap_or_default();
+        let stderr = stderr.join().unwrap_or_default();
+        if status.success() {
+            Ok(stdout)
+        } else {
+            let stderr = String::from_utf8_lossy(&stderr);
+            let tail: String = stderr
+                .trim()
+                .chars()
+                .rev()
+                .take(400)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            Err(format!("exit {}: {tail}", status.code().unwrap_or(-1)))
+        }
+    }
+
     /// Writes one output line to the whole log, up to [`LOG_FILE_LIMIT`], and passes it
     /// to the dialog, which shows the last lines only, so a full queue drops one.
     pub(super) fn record(&self, log: &mut Option<std::fs::File>, line: String) {

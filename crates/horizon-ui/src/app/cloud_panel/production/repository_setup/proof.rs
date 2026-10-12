@@ -9,6 +9,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+mod localci;
 mod resources;
 mod stream;
 pub(super) use resources::{remove_run_resources, run_id, run_names};
@@ -122,6 +123,18 @@ impl Spec {
         })
     }
 
+    /// The localci arguments for this proof's JSON plan, which shows what would run.
+    fn plan_args(&self) -> Vec<String> {
+        let mut args = vec!["plan".to_owned(), "-w".to_owned(), self.workflow.clone()];
+        args.extend(self.jobs.iter().cloned());
+        args.extend(["--event".to_owned(), self.event.clone()]);
+        for step in &self.skip {
+            args.extend(["--skip".to_owned(), step.clone()]);
+        }
+        args.push("--json".to_owned());
+        args
+    }
+
     /// The localci arguments for this proof; `fast` for the warm rerun, which compares
     /// against `base`, the proved commit, since the clone's own default branch is
     /// whatever this computer's checkout last fetched.
@@ -199,6 +212,9 @@ pub(super) struct Proof {
     /// The fingerprint of the setup and request this proof tests, once its worker read
     /// the setup.
     pub(super) inputs: Option<[u8; 32]>,
+    /// Whether this proof restores private .NET packages on this computer: part of
+    /// what it proves, so changing the choice afterwards needs a new proof.
+    pub(super) host_restore: bool,
     /// The background run, so cleanup waits until it can create nothing more.
     worker: Option<std::thread::JoinHandle<()>>,
 }
@@ -232,6 +248,7 @@ impl Proof {
             cancel: cancel.clone(),
             sender,
             logged: std::cell::Cell::new(0),
+            localci: std::cell::OnceCell::new(),
             ctx,
         };
         let worker = std::thread::spawn(move || {
@@ -254,6 +271,7 @@ impl Proof {
             unreported: false,
             container,
             inputs: None,
+            host_restore,
             worker: Some(worker),
         }
     }
@@ -371,6 +389,8 @@ struct Job {
     sender: mpsc::SyncSender<Event>,
     /// Bytes written to the whole log so far, against [`LOG_FILE_LIMIT`].
     logged: std::cell::Cell<u64>,
+    /// Horizon's own localci for the CI, fetched once per proof.
+    localci: std::cell::OnceCell<Result<(tempfile::TempDir, PathBuf), String>>,
     ctx: egui::Context,
 }
 
@@ -429,7 +449,7 @@ impl Job {
                     Err(reason) => Err(format!("Horizon does not read this setup: {reason}")),
                     Ok(setup) => self.build(setup, &mut log),
                 },
-                Phase::Ci => self.prepare(&mut log).and_then(|()| {
+                Phase::Ci => self.prepare(&mut log).and_then(|()| self.check_plan()).and_then(|()| {
                     self.warm_packages(&mut log);
                     self.ci(false, &mut log)
                 }),
@@ -630,12 +650,48 @@ impl Job {
             .unwrap_or(false)
     }
 
-    fn ci(&self, fast: bool, log: &mut Option<std::fs::File>) -> Result<(), String> {
-        let head = self.head().unwrap_or_default();
+    /// Horizon's own localci for the image's platform, fetched and checked once.
+    fn trusted_localci(&self) -> Result<&Path, String> {
+        self.localci
+            .get_or_init(|| {
+                let platform = self
+                    .setup
+                    .as_ref()
+                    .ok()
+                    .and_then(|setup| setup.config().ok())
+                    .and_then(|config| {
+                        let build = config.profiles.get(&config.default)?.build.as_ref()?;
+                        Some(build.platform.clone())
+                    })
+                    .unwrap_or_else(|| "linux/amd64".to_owned());
+                localci::trusted(&platform)
+            })
+            .as_ref()
+            .map(|(_, binary)| binary.as_path())
+            .map_err(Clone::clone)
+    }
+
+    /// Checks with the trusted localci, before the CI runs, that the proof keeps a step
+    /// that runs a command in every job it selects.
+    fn check_plan(&self) -> Result<(), String> {
+        let mut command = self.ci_container()?;
+        command
+            .args(["--entrypoint", localci::MOUNTED, &self.image])
+            .args(self.spec.plan_args());
+        let plan = self.capture(command, STEP_TIMEOUT)?;
+        localci::check_plan(&plan)
+    }
+
+    /// A container of the image as the worker account on the proof's volume, with the
+    /// GPU, this computer's packages and Horizon's localci that the proof needs.
+    fn ci_container(&self) -> Result<Command, String> {
+        let localci = self.trusted_localci()?;
         let mut command = Command::new("docker");
         command
             .args(["run", "--rm", "--name", &self.container, "--user", "10001:10001", "-v"])
             .arg(format!("{}:/workspace", self.volume))
+            .arg("-v")
+            .arg(format!("{}:{}:ro", localci.display(), localci::MOUNTED))
             .args(["-w", "/workspace/checkout", "-e", "HOME=/workspace/home"]);
         // A GPU profile is proved with a GPU or not at all: CI that passes without one
         // says nothing about the worker that has one.
@@ -661,6 +717,12 @@ impl Job {
                 .arg(format!("{}:/opt/host-nuget:ro", packages.display()))
                 .args(["-e", "RestoreAdditionalProjectFallbackFolders=/opt/host-nuget"]);
         }
+        Ok(command)
+    }
+
+    fn ci(&self, fast: bool, log: &mut Option<std::fs::File>) -> Result<(), String> {
+        let head = self.head().unwrap_or_default();
+        let mut command = self.ci_container()?;
         // localci's step records do not know the image: after a rebuild the full run
         // forgets them, so no job passes on a record an older image left.
         let forget = if fast {
@@ -672,7 +734,8 @@ impl Job {
             FORGET_OLDER_IMAGE
         };
         let script = format!(
-            "{SESSION_ENV} {forget} exec localci {}",
+            "{SESSION_ENV} {forget} exec {} {}",
+            localci::MOUNTED,
             self.spec
                 .localci_args(fast, head)
                 .iter()

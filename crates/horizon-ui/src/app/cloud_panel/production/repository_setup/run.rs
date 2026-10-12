@@ -263,7 +263,8 @@ impl Run {
 
     /// The setup as last read is the one the proof that passed tested.
     fn inputs_proved(&self) -> bool {
-        matches!((&self.proof, self.inputs), (Some(proof), Some((_, Some(now)))) if Some(now) == proof.inputs)
+        matches!((&self.proof, self.inputs), (Some(proof), Some((_, Some(now))))
+            if Some(now) == proof.inputs && proof.host_restore == self.host_restore)
     }
 
     /// A new proof starts: the fingerprint read for the earlier one says nothing about it.
@@ -309,7 +310,9 @@ impl Run {
     /// The `.horizon` files or the proof request changed after the proof that passed.
     pub(super) fn changed_since_proof(&self) -> bool {
         match (&self.proof, self.inputs) {
-            (Some(proof), Some((_, now))) => proof.inputs.is_some() && now != proof.inputs,
+            (Some(proof), Some((_, now))) => {
+                proof.host_restore != self.host_restore || (proof.inputs.is_some() && now != proof.inputs)
+            }
             _ => false,
         }
     }

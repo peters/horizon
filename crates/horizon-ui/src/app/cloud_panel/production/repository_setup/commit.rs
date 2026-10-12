@@ -280,32 +280,75 @@ pub(super) fn outside(repository: &Path) -> Outside {
         None,
     )
     .unwrap_or_default();
-    let ignored = git_raw(
-        repository,
-        None,
-        &["ls-files", "-z", "--others", "--ignored", "--exclude-standard"],
-        None,
-    )
-    .unwrap_or_default();
-    let stamped = |listing: &[u8], limit: usize| {
-        listing
-            .split(|byte| *byte == 0)
-            .filter(|path| !path.is_empty() && *path != b".horizon" && !path.starts_with(b".horizon/"))
-            .take(limit)
-            .map(|path| {
-                let stamp = std::fs::symlink_metadata(repository.join(path_of(path)))
-                    .ok()
-                    .map(|metadata| stamp(&metadata));
-                (path.to_vec(), stamp)
-            })
-            .collect()
+    let stamp_of = |path: &[u8]| {
+        let stamp = std::fs::symlink_metadata(repository.join(path_of(path)))
+            .ok()
+            .map(|metadata| stamp(&metadata));
+        (path.to_vec(), stamp)
     };
+    let files = listed
+        .split(|byte| *byte == 0)
+        .filter(|path| outside_setup(path))
+        .map(stamp_of)
+        .collect();
+    // Read as git lists them and stopped at the limit, so a huge ignored folder is
+    // never held in memory.
+    let ignored = git_paths(
+        repository,
+        &["ls-files", "-z", "--others", "--ignored", "--exclude-standard"],
+        IGNORED_LIMIT,
+    )
+    .iter()
+    .map(|path| stamp_of(path))
+    .collect();
     Outside {
         head,
-        files: stamped(&listed, usize::MAX),
-        ignored: stamped(&ignored, IGNORED_LIMIT),
+        files,
+        ignored,
         root: repository.to_path_buf(),
     }
+}
+
+/// A listed path that is not in `.horizon`.
+fn outside_setup(path: &[u8]) -> bool {
+    !path.is_empty() && path != b".horizon" && !path.starts_with(b".horizon/")
+}
+
+/// The first `limit` paths outside `.horizon` that git lists NUL-separated for `args`,
+/// read as git writes them; git is stopped once the limit is reached.
+fn git_paths(repository: &Path, args: &[&str], limit: usize) -> Vec<Vec<u8>> {
+    use std::io::BufRead as _;
+    let Ok(mut child) = git_command(repository)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return Vec::new();
+    };
+    let mut paths = Vec::new();
+    if let Some(stdout) = child.stdout.take() {
+        let mut reader = std::io::BufReader::new(stdout);
+        let mut path = Vec::new();
+        while paths.len() < limit {
+            path.clear();
+            match reader.read_until(0, &mut path) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    if path.last() == Some(&0) {
+                        path.pop();
+                    }
+                    if outside_setup(&path) {
+                        paths.push(path.clone());
+                    }
+                }
+            }
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    paths
 }
 
 /// A path git listed, as this platform names files.
