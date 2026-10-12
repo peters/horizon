@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use horizon_core::ForcedBrowserShutdownStatus;
 
@@ -90,12 +90,9 @@ impl HorizonApp {
         if self.browser_host_io_holds_exit() {
             return;
         }
-        // Browser sessions publish their committed URL before resolving the
-        // teardown signal. Persist that final state only after every driver
-        // is known to be finished.
-        let _ = self.drain_panel_output();
-        let _ = self.auto_save_runtime_state();
-        self.flush_session_saves_for_exit();
+        if self.session_saves_hold_exit() {
+            return;
+        }
         self.abandon_device_reveals("Horizon is exiting");
         #[cfg(target_os = "linux")]
         self.observed_keyboard_inputs.clear_native_transfer_files();
@@ -196,8 +193,32 @@ impl HorizonApp {
         self.release_active_session_lease();
     }
 
+    /// Queues the last save once, then holds the exit on each frame until the session
+    /// writer made every save durable, for at most [`MAX_SHUTDOWN_WAIT`]. The frames do
+    /// not wait for the writer.
+    fn session_saves_hold_exit(&mut self) -> bool {
+        let deadline = if let Some(deadline) = self.exit_save_deadline {
+            deadline
+        } else {
+            // Browser sessions publish their committed URL before resolving the
+            // teardown signal. Persist that final state only after every driver
+            // is known to be finished.
+            let _ = self.drain_panel_output();
+            let _ = self.auto_save_runtime_state();
+            *self.exit_save_deadline.insert(Instant::now() + MAX_SHUTDOWN_WAIT)
+        };
+        if self.session_store.flush_runtime_states(Duration::ZERO) {
+            return false;
+        }
+        if Instant::now() < deadline {
+            return true;
+        }
+        tracing::warn!("exiting before the session writer saved the newest board");
+        false
+    }
+
     /// The session writer saves on its own thread; the last saves land before the exit,
-    /// within the shutdown limit.
+    /// within the shutdown limit. The exit that runs without further frames uses it.
     fn flush_session_saves_for_exit(&self) {
         if !self.session_store.flush_runtime_states(MAX_SHUTDOWN_WAIT) {
             tracing::warn!("exiting before the session writer saved the newest board");

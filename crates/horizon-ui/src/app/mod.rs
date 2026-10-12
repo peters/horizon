@@ -342,6 +342,8 @@ pub struct HorizonApp {
     shutdown_progress: Option<ShutdownProgress>,
     pending_session_switch: Option<PendingSessionSwitch>,
     exit_cleanup_complete: bool,
+    /// When the exit stops waiting for the session writer.
+    exit_save_deadline: Option<Instant>,
 }
 
 fn resolve_shortcuts(config: &Config) -> AppShortcuts {
