@@ -61,18 +61,21 @@ time, or uses a lot of CPU.
 ### Incidents
 
 On 2026-10-10, a writeback stall on the full machine froze the Horizon window
-for seconds at a time. One `fsync` took 0.2 to 2.8 s. The UI thread called
-`fsync`, took file locks and wrote manifests for these operations:
+for seconds at a time, during the stop and resume of a Hetzner cloud. On
+2026-10-11, the same stall froze the window for 5 to 10 s when a new RunPod
+cloud started. That day, one `fsync` took 0.2 to 2.8 s. In the two
+incidents, the UI thread called `fsync` for the preparation of a cloud
+deployment and the save of cloud panel sessions.
+[#1436](https://github.com/peters/horizon/pull/1436) moved them to worker
+threads.
 
-- The preparation of a cloud deployment and the save of cloud panel sessions.
-  [#1436](https://github.com/peters/horizon/pull/1436) moved them to worker
-  threads.
-- The coordination files of browser MCP requests: claims, manifest stamps,
-  audits and results.
-  [#1469](https://github.com/peters/horizon/pull/1469) moved the claims to
-  one ordered worker. The open PR
-  [#1489](https://github.com/peters/horizon/pull/1489) moves the stamps,
-  audits and results to the same worker.
+The coordination files of browser MCP requests are the same type of work. The
+claims, manifest stamps, audits and results take file locks, write manifests
+and call `fsync`.
+[#1469](https://github.com/peters/horizon/pull/1469) moved the claims to one
+ordered worker. The open PR
+[#1489](https://github.com/peters/horizon/pull/1489) moves the stamps, audits
+and results to the same worker.
 
 ## Patterns
 
@@ -167,7 +170,9 @@ not wait for an unknown time.
   exit, it saves the session file on the UI thread. The window shows
   **Closing Horizon…**. The exit waits up to `MAX_SHUTDOWN_WAIT` (10 s)
   for the panels and for each cloud session save (`cloud_sessions_recorded`).
-  After that time, it stops the browsers by force, which can take 3 s more.
+  If the browsers did not stop in that time, it stops them by force, which
+  can take 3 s more. Then it waits up to 2 s (`EXIT_FLUSH`) for the jobs of
+  the browser coordination worker. The window paints during these waits.
 - Before that wait, the exit waits for companion access removals and saved
   session deletions, with no time limit. The window still paints.
 - A synchronous wait at exit, for example in `run_exit_cleanup`, must also
@@ -283,7 +288,15 @@ This work still runs on the UI thread. Do not copy it into new code.
 - Some cloud card paths read the cloud record from disk under a lock that
   they take with `try_lock`. They do not wait for the lock, but the read
   itself is file I/O.
+- A session switch and the restore of a cloud prototype board wait on the
+  UI thread for up to 2 s (`EXIT_FLUSH`) until the jobs of the browser
+  coordination worker end (`finish_browser_host_io_before_replacement` in
+  [`browser_host_io.rs`](../../crates/horizon-ui/src/app/browser_host_io.rs)).
+  The window does not paint during this wait.
 - Two synchronous waits at exit have no time limit. `on_exit` in
   [`app/mod.rs`](../../crates/horizon-ui/src/app/mod.rs) waits until the
   companion access removals are saved. `run_exit_cleanup` joins the worker of
-  a saved session deletion. The other waits at exit have a limit of 10 s.
+  a saved session deletion. The other synchronous waits in
+  `run_exit_cleanup` have a time limit: 10 s for the casting teardown on
+  Linux, 2 s for the browser coordination worker, and 10 s for each wait for
+  the panels of a session switch.
