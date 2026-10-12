@@ -392,7 +392,17 @@ impl Job {
     }
 
     fn run(self) {
-        let mut log = create_private(&self.log_path).ok();
+        // Without its log a failure could not tell the agent what to read: none runs.
+        let mut log = match create_private(&self.log_path) {
+            Ok(file) => Some(file),
+            Err(error) => {
+                let _ = self.sender.send(Event::Started(Phase::Build));
+                let reason = format!("cannot write the proof log {}: {error}", self.log_path.display());
+                let _ = self.sender.send(Event::Finished(Phase::Build, Err(reason)));
+                self.ctx.request_repaint();
+                return;
+            }
+        };
         // An earlier proof of this repository may still be stopping: its container goes.
         let earlier = Command::new("docker")
             .args(["ps", "--all", "--quiet", "--filter"])
@@ -661,7 +671,7 @@ impl Job {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|error| format!("cannot start docker: {error}"))?;
+            .map_err(|error| format!("cannot start {}: {error}", command.get_program().to_string_lossy()))?;
         // Bounded, so output faster than Horizon writes it waits in the pipe instead.
         let (lines, received) = mpsc::sync_channel::<String>(LINE_QUEUE);
         for pipe in [

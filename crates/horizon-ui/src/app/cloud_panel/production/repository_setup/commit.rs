@@ -126,6 +126,9 @@ pub(super) fn commit(repository: &Path, message: &str) -> Result<bool, String> {
     let _ = std::fs::remove_file(&index);
     let tree = tree?;
     if tree == git(repository, None, &["rev-parse", &format!("{head}^{{tree}}")], None)? {
+        // Nothing to commit, but the person's index still gets the setup as it is, so a
+        // staged deletion or an earlier failed staging does not stay behind.
+        stage(repository, None, &entries)?;
         return Ok(false);
     }
     let commit = git(

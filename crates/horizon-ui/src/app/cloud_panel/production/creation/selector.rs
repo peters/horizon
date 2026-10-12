@@ -401,10 +401,15 @@ pub(super) fn section(ui: &mut Ui, form: &mut Production) {
 fn filters(ui: &mut Ui, form: &mut Production, catalog: &Catalog, profile: &Profile) {
     ui.horizontal_wrapped(|ui| {
         ui.label("Compare for");
+        let unit = if form.launch.selector.hours <= 1.0 {
+            " hour"
+        } else {
+            " hours"
+        };
         ui.add(
             egui::DragValue::new(&mut form.launch.selector.hours)
                 .range(1.0..=8760.0)
-                .suffix(" hours"),
+                .suffix(unit),
         );
         ui.selectable_value(&mut form.launch.selector.provider_filter, None, "All providers");
         for provider in super::provider::choices(&form.prices, profile) {

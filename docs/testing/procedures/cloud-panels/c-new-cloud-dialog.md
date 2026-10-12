@@ -264,7 +264,7 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
    Result: The summary shows compute per hour, the storage, the estimated run,
    **Running all month** and **Stopped**.
 
-4. Open **All machines and filters**, then set **Compare for** back to `1 hours`.
+4. Open **All machines and filters**, then set **Compare for** back to `1 hour`.
 
    Result: The totals show the value for one hour again.
 

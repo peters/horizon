@@ -97,37 +97,52 @@ fn unconfigured(ui: &mut egui::Ui, form: &mut Production) -> Choice {
             .color(theme::FG()),
     );
     ui.add_space(6.0);
-    ui.columns(2, |columns| {
-        option_card(&mut columns[0], theme::FG_DIM(), |ui| {
-            ui.label(RichText::new("Quick start").size(15.0).strong().color(theme::FG()));
-            ui.label(RichText::new(QUICK_START_DETAIL).size(12.5).color(theme::FG_SOFT()));
-            ui.add_space(8.0);
-            if ui
-                .add(
-                    action_button("Start on the base image")
-                        .min_size(Vec2::new(120.0, 40.0))
-                        .corner_radius(10),
-                )
-                .clicked()
-            {
-                choice = Choice::QuickStart;
-            }
+    // Side by side when both cards fit with their buttons; stacked in a narrow dialog.
+    if ui.available_width() >= 520.0 {
+        ui.columns(2, |columns| {
+            quick_start_card(&mut columns[0], &mut choice);
+            setup_card(&mut columns[1], form, &mut choice);
         });
-        // Files an earlier setup left uncommitted are where the agent continues.
-        let earlier = prompt::has_setup_files(Path::new(form.repository.trim()));
-        option_card(&mut columns[1], theme::ACCENT(), |ui| {
-            ui.label(RichText::new("Set up from CI").size(15.0).strong().color(theme::FG()));
-            let detail = if earlier { CONTINUE_DETAIL } else { SETUP_DETAIL };
-            ui.label(RichText::new(detail).size(12.5).color(theme::FG_SOFT()));
-            ui.add_space(8.0);
-            let verb = if earlier { "Continue with" } else { "Set up with" };
-            if setup_agent(ui, form, verb) == Choice::SetupAgent {
-                form.setup_mode = Mode::New;
-                choice = Choice::SetupAgent;
-            }
-        });
-    });
+    } else {
+        quick_start_card(ui, &mut choice);
+        ui.add_space(8.0);
+        setup_card(ui, form, &mut choice);
+    }
     choice
+}
+
+fn quick_start_card(ui: &mut egui::Ui, choice: &mut Choice) {
+    option_card(ui, theme::FG_DIM(), |ui| {
+        ui.label(RichText::new("Quick start").size(15.0).strong().color(theme::FG()));
+        ui.label(RichText::new(QUICK_START_DETAIL).size(12.5).color(theme::FG_SOFT()));
+        ui.add_space(8.0);
+        if ui
+            .add(
+                action_button("Start on the base image")
+                    .min_size(Vec2::new(120.0, 40.0))
+                    .corner_radius(10),
+            )
+            .clicked()
+        {
+            *choice = Choice::QuickStart;
+        }
+    });
+}
+
+fn setup_card(ui: &mut egui::Ui, form: &mut Production, choice: &mut Choice) {
+    // Files an earlier setup left uncommitted are where the agent continues.
+    let earlier = prompt::has_setup_files(Path::new(form.repository.trim()));
+    option_card(ui, theme::ACCENT(), |ui| {
+        ui.label(RichText::new("Set up from CI").size(15.0).strong().color(theme::FG()));
+        let detail = if earlier { CONTINUE_DETAIL } else { SETUP_DETAIL };
+        ui.label(RichText::new(detail).size(12.5).color(theme::FG_SOFT()));
+        ui.add_space(8.0);
+        let verb = if earlier { "Continue with" } else { "Set up with" };
+        if setup_agent(ui, form, verb) == Choice::SetupAgent {
+            form.setup_mode = Mode::New;
+            *choice = Choice::SetupAgent;
+        }
+    });
 }
 
 /// The preparation view's heading: no provider yet, because nothing is rented.

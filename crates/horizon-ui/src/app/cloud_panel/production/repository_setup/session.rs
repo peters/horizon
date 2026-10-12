@@ -79,6 +79,8 @@ impl HorizonApp {
         } else {
             pending_prompt = Some(instructions);
         }
+        // Read before the agent starts, so nothing it changes becomes the baseline.
+        let outside = super::commit::outside(&repository);
         let workspace = self.board.ensure_local_workspace("Cloud setup");
         // Deliberately local: config preparation must not inherit a focused cloud.
         let result = self.board.create_panel(
@@ -106,7 +108,7 @@ impl HorizonApp {
                 let mut run = Run::new(panel, kind, repository, status, mode);
                 run.agent.clone_from(&preset.name);
                 run.pending_prompt = pending_prompt;
-                run.outside = super::commit::outside(&run.repository);
+                run.outside = outside;
                 self.cloud_prototype.production.setup_run = Some(run);
                 self.cloud_prototype.error = None;
                 ctx.request_repaint();
