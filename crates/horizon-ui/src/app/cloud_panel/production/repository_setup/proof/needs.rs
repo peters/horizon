@@ -139,7 +139,13 @@ impl super::Job {
                     return;
                 }
             };
-        for target in restore_targets(&tree) {
+        let targets = restore_targets(&tree);
+        *self.restored.borrow_mut() = targets
+            .iter()
+            .filter_map(|target| target.strip_prefix(&tree).ok())
+            .map(|target| target.to_string_lossy().into_owned())
+            .collect();
+        for target in targets {
             let mut restore = Command::new("dotnet");
             restore
                 .current_dir(&tree)
@@ -150,6 +156,27 @@ impl super::Job {
                 .env("DOTNET_NOLOGO", "1");
             let _ = self.stream(restore, log);
         }
+    }
+
+    /// Restores in the CI's container what the host restored, from the read-only folder
+    /// of this computer's packages and without a credential, so the checkout has the
+    /// restore's output that a CI step left out for its credentials would have made.
+    /// Best effort: the CI's own steps decide whether the proof passes.
+    pub(super) fn restore_in_container(&self, session: &[String], log: &mut Option<std::fs::File>) {
+        let targets = self.restored.borrow().clone();
+        if targets.is_empty() {
+            return;
+        }
+        let Ok(mut command) = self.ci_container() else {
+            return;
+        };
+        command
+            .args(session)
+            .args(["--entrypoint", "sh", &self.image, "-c"])
+            .arg("for target; do dotnet restore \"$target\" --nologo -v quiet || exit 1; done")
+            .arg("sh")
+            .args(&targets);
+        let _ = self.stream(command, log);
     }
 }
 

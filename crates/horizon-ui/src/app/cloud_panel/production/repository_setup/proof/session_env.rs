@@ -97,6 +97,15 @@ pub(super) fn arguments(image: &str, container: &str, run: Run<'_>) -> Result<Ve
     Ok(emptied)
 }
 
+/// The PATH a worker session of `image` gets, read as [`arguments`] reads it.
+pub(super) fn session_path_of(image: &str, container: &str, run: Run<'_>) -> Result<String, String> {
+    arguments(image, container, run)?
+        .iter()
+        .rev()
+        .find_map(|argument| argument.strip_prefix("PATH=").map(str::to_owned))
+        .ok_or_else(|| "the session environment names no PATH".to_owned())
+}
+
 /// The `-e KEY=` arguments that empty each variable the image's ENV sets and the session
 /// does not, apart from HOME, which the proof sets itself.
 fn image_only(image_env: &[String], session: &[String]) -> Vec<String> {
@@ -123,7 +132,7 @@ pub(super) fn copied(container: &str, path: &str, run: Run<'_>) -> Result<Option
 
 /// As [`copied`], following a link at `path` inside the image the way a program that
 /// reads the file does; a link that leads nowhere counts as no file.
-fn copied_following(container: &str, path: &str, run: Run<'_>) -> Result<Option<Vec<u8>>, String> {
+pub(super) fn copied_following(container: &str, path: &str, run: Run<'_>) -> Result<Option<Vec<u8>>, String> {
     copy_out(container, path, true, run)
 }
 

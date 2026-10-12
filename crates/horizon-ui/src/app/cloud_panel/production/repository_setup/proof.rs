@@ -9,6 +9,7 @@ use std::process::Command;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+mod bundle;
 mod localci;
 mod needs;
 mod preflight;
@@ -264,6 +265,8 @@ impl Proof {
             daemon: resources::LocalDocker::default(),
             pinned: pinned.clone(),
             planned: std::cell::RefCell::new(Vec::new()),
+            ci_localci: std::cell::RefCell::new(None),
+            restored: std::cell::RefCell::new(Vec::new()),
             docker_config: std::cell::OnceCell::new(),
             ctx,
         };
@@ -423,6 +426,11 @@ struct Job {
     /// before the first one, and shared with the proof for its Stop and cleanup.
     daemon: resources::LocalDocker,
     pinned: Pinned,
+    /// The .NET solutions or projects the host restored, by their path in the checkout.
+    restored: std::cell::RefCell<Vec<String>>,
+    /// The localci a worker session of the CI's image runs, which the CI runs too; none
+    /// when the image has none, and then Horizon's own runs.
+    ci_localci: std::cell::RefCell<Option<String>>,
     /// The legs localci's plan selected, which the full run's report must account for.
     planned: std::cell::RefCell<Vec<String>>,
     /// The throwaway Docker configuration every docker command of the run uses, made
@@ -577,27 +585,26 @@ impl Job {
         for (index, (build, arguments)) in builds.iter().enumerate() {
             self.build_one(setup, (build, arguments), &tag(index), docker_config, log)?;
         }
-        // The proof runs Horizon's own localci, but the agents on the worker run the
-        // image's: every image the setup builds must hold the same pinned release, as
-        // any profile with a build can be chosen in New cloud.
-        let run = |command| self.capture(command, STEP_TIMEOUT);
+        // The agents on the worker, and the proof's CI as they would, run the localci a
+        // worker session finds: every image the setup builds must have one, as any
+        // profile with a build can be chosen in New cloud.
         for (index, (build, _)) in builds.iter().enumerate() {
-            localci::check_installed(
-                &tag(index),
-                &format!("{}-localci{index}", self.container),
-                &self.trusted_localci_for(&build.platform)?,
-                &run,
-            )
-            .map_err(|error| {
-                let profiles = config
-                    .profiles
-                    .iter()
-                    .filter(|(_, profile)| profile.build.as_ref() == Some(build))
-                    .map(|(name, _)| name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{error} (the image of profile {profiles})")
-            })?;
+            let place = self
+                .session_localci(&tag(index), index)
+                .and_then(|found| found.ok_or_else(|| NO_LOCALCI.to_owned()))
+                .map_err(|error| {
+                    let profiles = config
+                        .profiles
+                        .iter()
+                        .filter(|(_, profile)| profile.build.as_ref() == Some(build))
+                        .map(|(name, _)| name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{error} (the image of profile {profiles})")
+                })?;
+            if tag(index) == self.image {
+                *self.ci_localci.borrow_mut() = Some(place);
+            }
         }
         // Each profile's worker contract, checked the way deployment checks it: its
         // capabilities go to horizon-worker-check and every marker it reports is validated.
@@ -625,6 +632,8 @@ impl Job {
                     let mut retag = self.docker();
                     retag.args(["tag", &profile.image, &self.image]);
                     self.stream(retag, log)?;
+                    // Without a localci of its own, its CI runs Horizon's.
+                    *self.ci_localci.borrow_mut() = self.session_localci(&self.image, builds.len())?;
                 }
                 continue;
             };
@@ -716,27 +725,7 @@ impl Job {
             .prefix("horizon-setup-bundle-")
             .tempdir()
             .map_err(|error| format!("cannot make a private folder for the bundle: {error}"))?;
-        let bundle = folder.path().join("head.bundle");
-        // From a private repository that borrows this one's objects and names only the
-        // captured commit, so a commit made or a branch moved since is never in it.
-        let borrowed = folder.path().join("borrowed.git");
-        let mut init = Command::new("git");
-        init.args(["init", "--bare", "--quiet", "--template="]).arg(&borrowed);
-        self.stream(init, log)?;
-        let mut objects = super::commit::git_command(&self.repository);
-        objects.args(["rev-parse", "--git-path", "objects"]);
-        let objects = self.capture(objects, STEP_TIMEOUT)?;
-        let objects = self.repository.join(String::from_utf8_lossy(&objects).trim());
-        let alternates = borrowed.join("objects").join("info");
-        std::fs::create_dir_all(&alternates)
-            .and_then(|()| std::fs::write(alternates.join("alternates"), format!("{}\n", objects.display())))
-            .map_err(|error| format!("cannot make the bundle: {error}"))?;
-        let mut name = super::commit::git_command(&borrowed);
-        name.args(["update-ref", "--no-deref", "HEAD", head]);
-        self.stream(name, log)?;
-        let mut create = super::commit::git_command(&borrowed);
-        create.args(["bundle", "create", "--quiet"]).arg(&bundle).arg("HEAD");
-        self.stream(create, log)?;
+        let (bundle, branch) = self.bundle(folder.path(), head, log)?;
         // Horizon's pinned base image, not the candidate, prepares the volume: what the
         // CI later runs on is the bundled commit, whatever the candidate's tools do.
         let mut own = self.docker();
@@ -754,6 +743,8 @@ impl Job {
             .arg(format!("{}:/src.bundle:ro", bundle.display()))
             .arg("-e")
             .arg(format!("HEAD_SHA={head}"))
+            .arg("-e")
+            .arg(format!("HEAD_BRANCH={branch}"))
             .args(["--entrypoint", "sh", TOOLS, "-c"])
             .arg(CLONE);
         let result = self.stream(clone, log);
@@ -817,49 +808,6 @@ impl Job {
             .unwrap_or(false)
     }
 
-    /// Horizon's own localci for the image's platform, fetched and checked once.
-    fn trusted_localci(&self) -> Result<PathBuf, String> {
-        let platform = self
-            .setup
-            .as_ref()
-            .ok()
-            .and_then(|setup| setup.config().ok())
-            .and_then(|config| {
-                let build = config.profiles.get(&config.default)?.build.as_ref()?;
-                Some(build.platform.clone())
-            })
-            .unwrap_or_else(|| "linux/amd64".to_owned());
-        self.trusted_localci_for(&platform)
-    }
-
-    /// Horizon's own localci for images of `platform`, fetched and checked once.
-    fn trusted_localci_for(&self, platform: &str) -> Result<PathBuf, String> {
-        let mut known = self.localci.borrow_mut();
-        let index = known.iter().position(|(name, _)| name == platform).unwrap_or_else(|| {
-            let run = |command, limit| self.capture(command, limit);
-            known.push((platform.to_owned(), localci::trusted(platform, &run)));
-            known.len() - 1
-        });
-        known[index]
-            .1
-            .as_ref()
-            .map(|(_, binary)| binary.clone())
-            .map_err(Clone::clone)
-    }
-
-    /// Checks with the trusted localci, before the CI runs, that the proof keeps a step
-    /// that runs a command in every job it selects.
-    fn check_plan(&self) -> Result<(), String> {
-        let mut command = self.ci_container()?;
-        command
-            .args(["--entrypoint", localci::MOUNTED, &self.image])
-            .args(self.spec.plan_args());
-        let plan = self.capture(command, STEP_TIMEOUT)?;
-        let planned = localci::check_plan(&plan)?;
-        *self.planned.borrow_mut() = planned;
-        Ok(())
-    }
-
     /// A container of the image as the worker account on the proof's volume, with the
     /// GPU, this computer's packages and Horizon's localci that the proof needs.
     fn ci_container(&self) -> Result<Command, String> {
@@ -898,20 +846,29 @@ impl Job {
         Ok(command)
     }
 
-    /// Runs the CI jobs: the container starts Horizon's localci itself, with the
-    /// image's session environment read beforehand, so no program of the candidate runs
-    /// before it; the steps then run in the image as the worker would run them.
+    /// Runs the CI jobs the way the agents on the worker do: the container starts the
+    /// localci a worker session finds, with the image's session environment read
+    /// beforehand, and Horizon's own when the image has none; the steps then run in the
+    /// image as the worker would run them.
     fn ci(&self, fast: bool, log: &mut Option<std::fs::File>) -> Result<(), String> {
         let head = self.head().unwrap_or_default();
         let run = |command| self.capture(command, STEP_TIMEOUT);
         let session = session_env::arguments(&self.image, &format!("{}-env", self.container), &run)?;
         if !fast {
             self.forget_older_records(&session, log)?;
+            self.restore_in_container(&session, log);
         }
         let mut command = self.ci_container()?;
         command
             .args(&session)
-            .args(["--entrypoint", localci::MOUNTED, &self.image])
+            .arg("--entrypoint")
+            .arg(
+                self.ci_localci
+                    .borrow()
+                    .clone()
+                    .unwrap_or_else(|| localci::MOUNTED.to_owned()),
+            )
+            .arg(&self.image)
             .args(self.spec.localci_args(fast, head));
         if fast {
             return self.stream_within(command, log, Some(CI_TIMEOUT));
@@ -956,8 +913,12 @@ impl Job {
     }
 }
 
+/// Why a built image fails the proof when a worker session finds no localci.
+const NO_LOCALCI: &str = "a worker session finds no localci on its PATH; install it for the agents on the worker, for example at /usr/local/bin/localci";
+
 /// Fetches the tested commit from its bundle into the volume's checkout and checks it
-/// out, then removes everything untracked. It runs as root in Horizon's base image, so
+/// out on its branch, as `actions/checkout` does for a push, then removes everything
+/// untracked. It runs as root in Horizon's base image, so
 /// it starts from a fresh git folder with no global settings and no hooks: an earlier
 /// proof's CI could have written to the checkout's .git and to HOME, and none of that
 /// may run here. Git LFS files stay pointers, as `actions/checkout` leaves them without
@@ -966,7 +927,8 @@ impl Job {
 const CLONE: &str = "set -e; export HOME=/tmp/horizon-clone GIT_CONFIG_GLOBAL=/dev/null GIT_LFS_SKIP_SMUDGE=1; mkdir -p \"$HOME\"; \
 git config --system --add safe.directory '*'; rm -rf /workspace/checkout; mkdir /workspace/checkout; \
 cd /workspace/checkout; git init -q; G='git -c core.hooksPath=/dev/null -c core.fsmonitor=false'; \
-$G fetch -q /src.bundle HEAD; $G checkout -q --force --detach \"$HEAD_SHA\"; $G clean -q -ffdx; \
+$G fetch -q /src.bundle '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'; \
+$G checkout -q --force -B \"$HEAD_BRANCH\" \"$HEAD_SHA\"; $G clean -q -ffdx; \
 chown -R 10001:10001 /workspace/checkout";
 
 /// Hands the volume to the worker's account, with the folders a worker session names:

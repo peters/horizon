@@ -30,7 +30,7 @@ const ARCHIVE_LIMIT: u64 = 64 * 1024 * 1024;
 /// Where the trusted localci is in the proof's container.
 pub(super) const MOUNTED: &str = "/opt/horizon-proof/localci";
 
-/// Where the image keeps localci for the agents on the worker.
+/// Where the setup agent is told to install localci for the agents on the worker.
 const IN_IMAGE: &str = "/usr/local/bin/localci";
 
 /// The setup agent's instruction for installing the localci the proof checks for.
@@ -45,52 +45,92 @@ pub(super) fn instruction() -> String {
         .collect::<Vec<_>>()
         .join(", or ");
     format!(
-        "The localci for step 4 is {VERSION}: {releases}. Install the localci binary from that archive at {IN_IMAGE} with mode 755; Horizon checks that the image holds exactly this binary, executable for every user."
+        "The localci for step 4 is {VERSION}: {releases}. Install the localci binary from that archive on the PATH of a worker session, for example at {IN_IMAGE}, with mode 755. Horizon runs the CI with the localci a worker session finds first, as the agents on the worker do; a wrapper there that starts what the CI needs and then runs localci works too."
     )
 }
 
-/// Checks that `image` keeps exactly the trusted localci at its place for the worker's
-/// agents, read with `docker cp` from a created container, never by running the image.
-pub(super) fn check_installed(
-    image: &str,
-    container: &str,
-    trusted: &Path,
-    run: super::session_env::Run<'_>,
-) -> Result<(), String> {
-    let mut create = Command::new("docker");
-    create.args(["create", "--name", container, image]);
-    run(create).map_err(|error| format!("cannot look at the image's localci: {error}"))?;
-    let copied = super::session_env::copied(container, IN_IMAGE, run);
-    let mut remove = Command::new("docker");
-    remove.args(["rm", "--force", "--volumes", container]);
-    let _ = run(remove);
-    let missing = || format!("the image has no localci {VERSION} at {IN_IMAGE}, which the agents on the worker use");
-    let archive = copied
-        .map_err(|error| format!("cannot look at the image's localci: {error}"))?
-        .ok_or_else(missing)?;
-    let (installed, mode) = super::session_env::unpack_within(&archive, ARCHIVE_LIMIT, 1)
-        .map_err(|error| format!("cannot read the image's localci: {error}"))?
-        .into_iter()
-        .find_map(|(_, entry)| match entry {
-            super::session_env::Unpacked::File(bytes, mode) => Some((bytes, mode)),
-            _ => None,
-        })
-        .ok_or_else(missing)?;
-    let trusted = std::fs::read(trusted).map_err(|error| error.to_string())?;
-    if Sha256::digest(&installed) != Sha256::digest(&trusted) {
-        return Err(format!(
-            "the localci at {IN_IMAGE} in the image is not localci {VERSION}; install the release the setup names"
-        ));
+impl super::Job {
+    /// The localci a worker session of `image` runs: the first `localci` on the session's
+    /// PATH, read with `docker cp` from a created container, following a link as the
+    /// session would, never by running the image; none when the session finds none. A
+    /// wrapper that starts what the CI needs and then runs localci is one too. It must
+    /// have mode 755, so no session user can change it and it runs with no more rights
+    /// than the user who starts it. `number` names the containers this look creates.
+    pub(super) fn session_localci(&self, image: &str, number: usize) -> Result<Option<String>, String> {
+        let run = |command| self.capture(command, super::STEP_TIMEOUT);
+        let path = super::session_env::session_path_of(image, &format!("{}-env{number}", self.container), &run)?;
+        let container = format!("{}-localci{number}", self.container);
+        let mut create = Command::new("docker");
+        create.args(["create", "--name", &container, image]);
+        run(create).map_err(|error| format!("cannot look at the image's localci: {error}"))?;
+        let mut found = Ok(None);
+        for folder in path.split(':').filter(|folder| folder.starts_with('/')) {
+            let place = format!("{}/localci", folder.trim_end_matches('/'));
+            match super::session_env::copied_following(&container, &place, &run) {
+                Ok(Some(archive)) => {
+                    found = Ok(Some((place, archive)));
+                    break;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    found = Err(error);
+                    break;
+                }
+            }
+        }
+        let mut remove = Command::new("docker");
+        remove.args(["rm", "--force", "--volumes", &container]);
+        let _ = run(remove);
+        let Some((place, archive)) = found.map_err(|error| format!("cannot look at the image's localci: {error}"))?
+        else {
+            return Ok(None);
+        };
+        let mode = super::session_env::unpack_within(&archive, ARCHIVE_LIMIT, 1)
+            .map_err(|error| format!("cannot read the image's localci at {place}: {error}"))?
+            .into_iter()
+            .find_map(|(_, entry)| match entry {
+                super::session_env::Unpacked::File(_, mode) => Some(mode),
+                _ => None,
+            })
+            .ok_or_else(|| format!("the localci a worker session finds, {place}, is not a file"))?;
+        if mode & 0o7777 != 0o755 {
+            return Err(format!(
+                "the localci a worker session finds, {place}, has mode {:o}; install it with mode 755",
+                mode & 0o7777
+            ));
+        }
+        Ok(Some(place))
     }
-    // The worker's agents run it as any user the image's sessions have; none of them
-    // may change it, and it runs with no more rights than the user who starts it.
-    if mode & 0o7777 != 0o755 {
-        return Err(format!(
-            "the localci at {IN_IMAGE} in the image has mode {:o}; install it with mode 755",
-            mode & 0o7777
-        ));
+
+    /// Horizon's own localci for the image's platform, fetched and checked once.
+    pub(super) fn trusted_localci(&self) -> Result<PathBuf, String> {
+        let platform = self
+            .setup
+            .as_ref()
+            .ok()
+            .and_then(|setup| setup.config().ok())
+            .and_then(|config| {
+                let build = config.profiles.get(&config.default)?.build.as_ref()?;
+                Some(build.platform.clone())
+            })
+            .unwrap_or_else(|| "linux/amd64".to_owned());
+        self.trusted_localci_for(&platform)
     }
-    Ok(())
+
+    /// Horizon's own localci for images of `platform`, fetched and checked once.
+    pub(super) fn trusted_localci_for(&self, platform: &str) -> Result<PathBuf, String> {
+        let mut known = self.localci.borrow_mut();
+        let index = known.iter().position(|(name, _)| name == platform).unwrap_or_else(|| {
+            let run = |command, limit| self.capture(command, limit);
+            known.push((platform.to_owned(), trusted(platform, &run)));
+            known.len() - 1
+        });
+        known[index]
+            .1
+            .as_ref()
+            .map(|(_, binary)| binary.clone())
+            .map_err(Clone::clone)
+    }
 }
 
 /// A command run within the proof's cancellation and the time limit given, returning
@@ -219,8 +259,9 @@ pub(super) fn records(session: &[String]) -> Option<String> {
 
 /// Checks localci's JSON plan of the proof: every selected job keeps at least one step
 /// that runs a command, so leaving steps out never makes a job pass without CI.
-/// Returns the keys of the selected legs, which the run's report must account for.
-pub(super) fn check_plan(plan: &[u8]) -> Result<Vec<String>, String> {
+/// Returns the keys of the selected legs that run here, which the run's report must
+/// account for, and the legs left out because their `if:` is false here.
+pub(super) fn check_plan(plan: &[u8]) -> Result<(Vec<String>, Vec<String>), String> {
     let plan: serde_json::Value =
         serde_json::from_slice(plan).map_err(|error| format!("localci's plan does not read: {error}"))?;
     let legs: Vec<&serde_json::Value> = plan["legs"]
@@ -230,16 +271,17 @@ pub(super) fn check_plan(plan: &[u8]) -> Result<Vec<String>, String> {
     if legs.is_empty() {
         return Err("the proof selects no job that runs on Linux".to_owned());
     }
-    let mut keys = Vec::new();
+    let (mut keys, mut left_out) = (Vec::new(), Vec::new());
     for leg in legs {
         let job = leg["key"].as_str().or_else(|| leg["job"].as_str()).unwrap_or("a job");
-        keys.push(job.to_owned());
-        // localci skips a whole job whose `if:` is false here, and calls that a pass.
+        // localci skips a whole job whose `if:` is false here and calls that a pass, so
+        // such a job proves nothing: it is left out, and named, as a job a target
+        // matched by its name only, such as a publish job named "Publish to test".
         if leg["if_locally"] == false {
-            return Err(format!(
-                "{job} does not run here: its if: is false, so it would prove nothing"
-            ));
+            left_out.push(job.to_owned());
+            continue;
         }
+        keys.push(job.to_owned());
         let runs = leg["steps"].as_array().is_some_and(|steps| {
             steps
                 .iter()
@@ -251,7 +293,37 @@ pub(super) fn check_plan(plan: &[u8]) -> Result<Vec<String>, String> {
             ));
         }
     }
-    Ok(keys)
+    if keys.is_empty() {
+        return Err(format!(
+            "no job the proof selects runs here: the if: of {} is false, so it would prove nothing",
+            left_out.join(", ")
+        ));
+    }
+    Ok((keys, left_out))
+}
+
+/// localci's JSON report in what the session's localci wrote on standard output: the
+/// last document there that starts a line and reads to the end, since a wrapper may
+/// print first, as a database it starts does.
+fn report_of(output: &[u8]) -> Result<serde_json::Value, String> {
+    let starts: Vec<usize> = std::iter::once(0)
+        .chain(
+            output
+                .windows(2)
+                .enumerate()
+                .filter(|(_, pair)| *pair == b"\n{")
+                .map(|(index, _)| index + 1),
+        )
+        .collect();
+    starts
+        .into_iter()
+        .rev()
+        .find_map(|start| {
+            serde_json::from_slice::<serde_json::Value>(&output[start..])
+                .ok()
+                .filter(|report| report.get("legs").is_some())
+        })
+        .ok_or_else(|| "localci's report does not read: its output ends with no JSON report".to_owned())
 }
 
 /// Checks localci's run report against the legs the plan selected: each one passed and
@@ -260,8 +332,7 @@ pub(super) fn check_plan(plan: &[u8]) -> Result<Vec<String>, String> {
 /// run a pass, so the plan alone proves nothing. A step localci reused, because it passed
 /// before on the same inputs in this image, counts as run.
 pub(super) fn check_report(report: &[u8], planned: &[String]) -> Result<(), String> {
-    let report: serde_json::Value =
-        serde_json::from_slice(report).map_err(|error| format!("localci's report does not read: {error}"))?;
+    let report = report_of(report)?;
     let legs = report["legs"].as_array().map(Vec::as_slice).unwrap_or_default();
     for key in planned {
         let leg = legs
@@ -303,6 +374,13 @@ mod tests {
         assert_eq!(records(&session("/tmp/cache")), None, "gone with the container");
         assert_eq!(records(&session("relative")), None);
         assert_eq!(records(&session("/workspace")), None, "never the whole volume");
+    }
+
+    #[test]
+    fn the_report_is_read_after_what_a_wrapper_printed() {
+        let output = b"about to fork child process, waiting until server is ready for connections.\nforked process: 42\n{\n  \"legs\": [{\"key\": \"build\", \"result\": \"success\", \"steps\": [{\"outcome\": \"success\"}]}]\n}\n";
+        assert!(check_report(output, &["build".to_owned()]).is_ok());
+        assert!(check_report(b"no report at all\n", &["build".to_owned()]).is_err());
     }
 
     #[test]
@@ -359,6 +437,20 @@ mod tests {
             {"key": "test", "selected": true, "if_locally": false, "steps": [{"kind": "run", "leave_out": null}]}
         ]}))
         .unwrap();
-        assert!(check_plan(&skipped_job).unwrap_err().contains("does not run here"));
+        assert!(
+            check_plan(&skipped_job)
+                .unwrap_err()
+                .contains("no job the proof selects runs here")
+        );
+        let with_publish = serde_json::to_vec(&serde_json::json!({"legs": [
+            {"key": "test", "selected": true, "steps": [{"kind": "run", "leave_out": null}]},
+            {"key": "publish#1", "selected": true, "if_locally": false, "steps": [{"kind": "run", "leave_out": null}]}
+        ]}))
+        .unwrap();
+        assert_eq!(
+            check_plan(&with_publish).unwrap(),
+            (vec!["test".to_owned()], vec!["publish#1".to_owned()]),
+            "a job that does not run here is left out and named, not proved"
+        );
     }
 }

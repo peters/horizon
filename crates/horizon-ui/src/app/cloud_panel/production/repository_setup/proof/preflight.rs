@@ -78,4 +78,21 @@ impl super::Job {
             .map(|_| ())
             .map_err(|error| format!("Docker does not remove the containers of earlier proofs: {error}"))
     }
+
+    /// Checks with the trusted localci, before the CI runs, that the proof keeps a step
+    /// that runs a command in every job it selects.
+    pub(super) fn check_plan(&self) -> Result<(), String> {
+        let mut command = self.ci_container()?;
+        command
+            .args(["--entrypoint", super::localci::MOUNTED, &self.image])
+            .args(self.spec.plan_args());
+        let plan = self.capture(command, super::STEP_TIMEOUT)?;
+        let (planned, left_out) = super::localci::check_plan(&plan)?;
+        if !left_out.is_empty() {
+            let line = format!("Not proved here, since their if: is false: {}", left_out.join(", "));
+            self.record(&mut None, line);
+        }
+        *self.planned.borrow_mut() = planned;
+        Ok(())
+    }
 }
