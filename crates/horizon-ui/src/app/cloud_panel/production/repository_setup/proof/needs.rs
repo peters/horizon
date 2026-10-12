@@ -113,6 +113,16 @@ fn restore_targets(tree: &Path) -> Vec<std::path::PathBuf> {
     targets
 }
 
+/// `relative`, a path in the checkout, as the Linux container names it: with `/`
+/// between its parts on every computer.
+fn in_container(relative: &Path) -> String {
+    relative
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// The most packages the proof copies into its volume.
 const PACKAGE_LIMIT: usize = 5000;
 
@@ -220,7 +230,7 @@ impl super::Job {
         *self.restored.borrow_mut() = targets
             .iter()
             .filter_map(|target| target.strip_prefix(&tree).ok())
-            .map(|target| target.to_string_lossy().into_owned())
+            .map(in_container)
             .collect();
         for target in &targets {
             let mut restore = Command::new("dotnet");
@@ -354,7 +364,7 @@ mod tests {
         let names = |targets: Vec<std::path::PathBuf>| {
             targets
                 .iter()
-                .map(|target| target.strip_prefix(tree.path()).unwrap().to_string_lossy().into_owned())
+                .map(|target| in_container(target.strip_prefix(tree.path()).unwrap()))
                 .collect::<Vec<_>>()
         };
         assert_eq!(
