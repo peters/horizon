@@ -319,7 +319,7 @@ impl Proof {
         };
         let container = self.container.clone();
         super::run::keep_ending(std::thread::spawn(move || {
-            let _ = resources::remove_now(&daemon, &["rm", "--force", &container]);
+            let _ = resources::remove_now(&daemon, &["rm", "--force", "--volumes", &container]);
         }));
     }
 
@@ -953,7 +953,7 @@ impl Job {
     }
 
     fn remove_container(&self) {
-        let _ = resources::remove_now(&self.daemon, &["rm", "--force", &self.container]);
+        let _ = resources::remove_now(&self.daemon, &["rm", "--force", "--volumes", &self.container]);
     }
 }
 

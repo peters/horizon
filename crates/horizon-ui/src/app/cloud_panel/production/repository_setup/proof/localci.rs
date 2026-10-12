@@ -62,7 +62,7 @@ pub(super) fn check_installed(
     run(create).map_err(|error| format!("cannot look at the image's localci: {error}"))?;
     let copied = super::session_env::copied(container, IN_IMAGE, run);
     let mut remove = Command::new("docker");
-    remove.args(["rm", "--force", container]);
+    remove.args(["rm", "--force", "--volumes", container]);
     let _ = run(remove);
     let missing = || format!("the image has no localci {VERSION} at {IN_IMAGE}, which the agents on the worker use");
     let archive = copied

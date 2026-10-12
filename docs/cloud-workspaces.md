@@ -478,9 +478,14 @@ If the selected commit has no `.horizon/cloud.yml`, **New cloud** shows
 - **Set up from CI** starts a setup agent, Claude or Codex, that prepares the
   settings of the repository. It runs on Linux with a systemd user session:
   Horizon starts the agent in a systemd user scope, which holds every process the
-  agent starts, so it can end them all before it commits. On macOS and Windows the
-  dialog does not offer it, and on Linux without a systemd user session the agent
-  does not start; use **Quick start** or write `.horizon` yourself.
+  agent starts as its descendant, so it can end them all before it commits. The
+  scope is not a sandbox: the agent runs as you, and a program it hands to another
+  service of yours, such as Docker or your systemd user manager, runs outside it,
+  as any program you start does. What **Use this setup** commits does not rest on
+  the scope: it is the setup Horizon proved, read after the agent ended, with every
+  other change named first. On macOS and Windows the dialog does not offer it, and
+  on Linux without a systemd user session the agent does not start; use
+  **Quick start** or write `.horizon` yourself.
 
 The setup agent is a normal local agent session with its existing local login.
 Horizon does not export the API-key bindings of remote workers to it. Its panel is

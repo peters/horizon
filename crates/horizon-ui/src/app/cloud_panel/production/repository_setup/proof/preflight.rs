@@ -73,7 +73,7 @@ impl super::Job {
             return Ok(());
         }
         let mut remove = self.docker();
-        remove.args(["rm", "--force"]).args(&earlier);
+        remove.args(["rm", "--force", "--volumes"]).args(&earlier);
         self.capture(remove, PREFLIGHT_TIMEOUT)
             .map(|_| ())
             .map_err(|error| format!("Docker does not remove the containers of earlier proofs: {error}"))

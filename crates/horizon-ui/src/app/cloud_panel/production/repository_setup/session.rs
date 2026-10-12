@@ -178,7 +178,7 @@ impl HorizonApp {
             receiver: _,
         } = starting;
         let kind = preset.kind;
-        // An agent starts only inside a scope that holds everything it starts: without
+        // An agent starts only inside a scope that holds all its descendants: without
         // one, a process it started could leave its group and keep writing while Use
         // reads and commits.
         let Some(launcher) = launcher.or_else(|| (!kind.is_agent()).then(Vec::new)) else {
@@ -201,7 +201,7 @@ impl HorizonApp {
                 visible: false,
                 rows: 48,
                 cols: 160,
-                // Started inside a scope of its own, which holds everything it starts.
+                // Started inside a scope of its own, which holds all its descendants.
                 launch_wrapper: launcher,
                 ..PanelOptions::default()
             },

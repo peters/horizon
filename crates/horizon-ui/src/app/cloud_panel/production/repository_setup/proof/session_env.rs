@@ -45,7 +45,8 @@ pub(super) fn arguments(image: &str, container: &str, run: Run<'_>) -> Result<Ve
     let folder = copied(container, FOLDER, run);
     let pam_files = PAM_FILES.map(|file| (file, copied_following(container, file, run)));
     let mut remove = Command::new("docker");
-    remove.args(["rm", "--force", container]);
+    // With the anonymous volumes the image's VOLUME lines made at create.
+    remove.args(["rm", "--force", "--volumes", container]);
     let _ = run(remove);
     let folder = folder.map_err(|error| format!("cannot read the image's session environment: {error}"))?;
     // What PAM gives an SSH session from the image's files, in the order it reads them.

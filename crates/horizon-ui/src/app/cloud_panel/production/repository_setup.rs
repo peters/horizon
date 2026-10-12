@@ -274,9 +274,9 @@ fn same_folder(a: &Path, b: &str) -> bool {
 
 /// The start button, `verb` and the agent's name, with the agent chooser beside it.
 /// Why the setup agent is offered on Linux only: there Horizon starts it in a systemd
-/// user scope, which holds every process it starts, so Use can end them all before it
-/// commits. Elsewhere a process the agent started could leave and keep writing.
-pub(super) const PLATFORM_NOTE: &str = "Set up from CI runs on Linux, where Horizon holds everything the agent starts. Elsewhere, use Quick start or write .horizon yourself.";
+/// user scope, which holds every process it starts as its descendant, so Use can end
+/// them all before it commits. Elsewhere such a process could leave and keep writing.
+pub(super) const PLATFORM_NOTE: &str = "Set up from CI runs on Linux, where Horizon can end every process the agent starts. Elsewhere, use Quick start or write .horizon yourself.";
 
 fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str) -> Choice {
     if !cfg!(target_os = "linux") {

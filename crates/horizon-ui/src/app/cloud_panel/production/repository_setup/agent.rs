@@ -2,8 +2,13 @@
 //! it, with everything it started, before it reads a setup for Use or lets a run go:
 //! closing a terminal only hangs up, and an agent or a command it started may ignore
 //! that and keep writing to the repository. The agent starts in a systemd user scope of
-//! its own, a cgroup that holds every process it starts, even one that leaves its process
-//! group; Horizon starts no setup agent where it cannot make one.
+//! its own, a cgroup that holds every process it starts as its descendant, even one that
+//! leaves its process group; Horizon starts no setup agent where it cannot make one. The
+//! scope is not a sandbox: the agent runs as the person, and a program it deliberately
+//! hands to another service of theirs, such as Docker or their systemd user manager, runs
+//! outside it, as any program they start does. What Use commits does not rest on the
+//! scope: it is the setup Horizon proved, read after the agent ended, with every other
+//! change named first.
 use std::time::{Duration, Instant};
 
 /// How long the agent may take to end on its own once its panel closed.
@@ -114,7 +119,7 @@ impl AgentProcess {
 
     #[cfg(unix)]
     fn alive(&self) -> bool {
-        // The scope holds everything the agent started: it must be empty.
+        // The scope holds every descendant of the agent: it must be empty.
         let in_scope = self.scope.as_ref().and_then(Scope::cgroup).is_some_and(|cgroup| {
             std::fs::read_to_string(cgroup.join("cgroup.procs")).is_ok_and(|procs| !procs.trim().is_empty())
         });
