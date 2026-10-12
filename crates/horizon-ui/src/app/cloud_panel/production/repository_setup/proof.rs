@@ -905,8 +905,11 @@ impl Job {
         forget
             .args(["run", "--rm", "--name", &self.container, "--user", "10001:10001", "-v"])
             .arg(format!("{}:/workspace", self.volume))
-            .args(["-e", "HOME=/workspace/home"])
-            .args(session)
+            .args(["-e", "HOME=/workspace/home", "-e"])
+            .arg(format!(
+                "HORIZON_LOCALCI_RECORDS={}",
+                localci::records(session).unwrap_or_default()
+            ))
             .arg("-e")
             .arg(format!("HORIZON_PROOF_IMAGE={}", self.image_id()))
             .args(["--entrypoint", "sh", TOOLS, "-c", FORGET_OLDER_IMAGE]);
@@ -947,9 +950,14 @@ const OWN: &str = "if [ -L /workspace/home ]; then rm -f /workspace/home; fi; mk
 chown 10001:10001 /workspace /workspace/home";
 
 /// Forgets localci's step records when the volume last ran a proof in another image.
+/// It runs with Horizon's settings only, never the image's: the records' folder comes
+/// from [`localci::records`], is resolved through any link first, and is never inside
+/// the checkout, and a link at the marker's place is replaced, not written through.
 const FORGET_OLDER_IMAGE: &str = "marker=\"$HOME/.horizon-proof-image\"; \
 if [ \"$(cat \"$marker\" 2>/dev/null)\" != \"$HORIZON_PROOF_IMAGE\" ]; then \
-rm -rf \"${XDG_CACHE_HOME:-$HOME/.cache}/localci\"; printf '%s' \"$HORIZON_PROOF_IMAGE\" > \"$marker\"; fi;";
+if [ -n \"$HORIZON_LOCALCI_RECORDS\" ]; then records=$(realpath -m \"$HORIZON_LOCALCI_RECORDS\"); \
+case \"$records\" in /workspace/checkout|/workspace/checkout/*) ;; /workspace/?*) rm -rf \"$records\";; esac; fi; \
+rm -f \"$marker\"; printf '%s' \"$HORIZON_PROOF_IMAGE\" > \"$marker\"; fi;";
 
 /// The setup agent's instruction for the localci the image must hold.
 pub(super) fn localci_instruction() -> String {
@@ -1013,24 +1021,35 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_new_image_forgets_the_step_records_an_older_one_left() {
-        let home = tempfile::tempdir().unwrap();
-        let records = home.path().join(".cache/localci");
-        let run = |image: &str| {
-            std::fs::create_dir_all(&records).unwrap();
+        // The volume's /workspace is a folder here.
+        let volume = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(volume.path()).unwrap();
+        let script = FORGET_OLDER_IMAGE.replace("/workspace", &root.to_string_lossy());
+        let home = root.join("home");
+        let run = |records: &std::path::Path, image: &str| {
+            std::fs::create_dir_all(records).unwrap();
             std::fs::write(records.join("record"), "passed").unwrap();
             let status = Command::new("bash")
-                .args(["-c", FORGET_OLDER_IMAGE])
-                .env("HOME", home.path())
-                .env_remove("XDG_CACHE_HOME")
+                .args(["-c", &script])
+                .env("HOME", &home)
+                .env("HORIZON_LOCALCI_RECORDS", records)
                 .env("HORIZON_PROOF_IMAGE", image)
                 .status()
                 .unwrap();
             assert!(status.success());
             records.join("record").exists()
         };
-        assert!(!run("sha256:one"), "the first proof in a volume starts clean");
-        assert!(run("sha256:one"), "the same image keeps its records");
-        assert!(!run("sha256:two"), "a rebuilt image forgets them");
+        let records = home.join(".cache/localci");
+        assert!(!run(&records, "sha256:one"), "the first proof in a volume starts clean");
+        assert!(run(&records, "sha256:one"), "the same image keeps its records");
+        assert!(!run(&records, "sha256:two"), "a rebuilt image forgets them");
+        // A link an earlier CI left that leads into the checkout is never followed there.
+        let tracked = root.join("checkout/localci");
+        std::fs::create_dir_all(&tracked).unwrap();
+        std::fs::remove_dir_all(home.join(".cache")).unwrap();
+        std::os::unix::fs::symlink(root.join("checkout"), home.join(".cache")).unwrap();
+        assert!(run(&records, "sha256:three"), "the checkout's localci folder stays");
+        assert!(tracked.join("record").exists());
     }
 
     #[test]

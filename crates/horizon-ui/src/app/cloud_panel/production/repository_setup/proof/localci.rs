@@ -180,6 +180,37 @@ fn download(asset: &str, target: &Path, run: Bounded<'_>) -> Result<(), String> 
     std::fs::rename(&partial, target).map_err(|error| error.to_string())
 }
 
+/// Where localci keeps its step records in the CI container, from the session's
+/// `XDG_CACHE_HOME` or else HOME's `.cache`, when that folder outlives the container: on
+/// the volume, and not in the checkout, which every proof makes again. The session's
+/// `-e` arguments come from the image, so the path is taken apart here, never by a shell
+/// that runs with them.
+pub(super) fn records(session: &[String]) -> Option<String> {
+    let cache = session
+        .chunks(2)
+        .filter_map(|pair| match pair {
+            [flag, value] if flag == "-e" => value.strip_prefix("XDG_CACHE_HOME="),
+            _ => None,
+        })
+        .next_back()
+        .unwrap_or("/workspace/home/.cache");
+    let mut parts: Vec<&str> = Vec::new();
+    if !cache.starts_with('/') {
+        return None;
+    }
+    for part in cache.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            part => parts.push(part),
+        }
+    }
+    let kept = matches!(parts.as_slice(), ["workspace", rest, ..] if *rest != "checkout");
+    kept.then(|| format!("/{}/localci", parts.join("/")))
+}
+
 /// Checks localci's JSON plan of the proof: every selected job keeps at least one step
 /// that runs a command, so leaving steps out never makes a job pass without CI.
 pub(super) fn check_plan(plan: &[u8]) -> Result<(), String> {
@@ -217,6 +248,25 @@ pub(super) fn check_plan(plan: &[u8]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_records_to_forget_are_on_the_volume_and_never_in_the_checkout() {
+        let session = |cache: &str| vec!["-e".to_owned(), format!("XDG_CACHE_HOME={cache}")];
+        assert_eq!(records(&[]).as_deref(), Some("/workspace/home/.cache/localci"));
+        assert_eq!(
+            records(&session("/workspace/cache")).as_deref(),
+            Some("/workspace/cache/localci")
+        );
+        assert_eq!(
+            records(&session("/workspace/checkout")),
+            None,
+            "the checkout is the tested tree"
+        );
+        assert_eq!(records(&session("/workspace/home/../checkout/x")), None);
+        assert_eq!(records(&session("/tmp/cache")), None, "gone with the container");
+        assert_eq!(records(&session("relative")), None);
+        assert_eq!(records(&session("/workspace")), None, "never the whole volume");
+    }
 
     #[test]
     fn a_plan_must_keep_a_running_step_in_every_selected_job() {

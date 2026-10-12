@@ -25,8 +25,8 @@ impl super::Job {
             .into_owned();
         std::fs::write(folder.path().join("token"), &token).map_err(|error| error.to_string())?;
         let mut read = self.docker();
-        read.args(["run", "--rm", "--network", "none", "--name"])
-            .arg(format!("{}-mounts", self.volume))
+        // The proof's own container name, so Stop and the next proof's cleanup remove it.
+        read.args(["run", "--rm", "--network", "none", "--name", &self.container])
             .arg("-v")
             .arg(format!("{}:/horizon-mounts:ro", folder.path().display()))
             .args(["--entrypoint", "cat", super::TOOLS, "/horizon-mounts/token"]);
