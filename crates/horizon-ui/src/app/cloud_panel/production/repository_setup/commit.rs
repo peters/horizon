@@ -233,8 +233,48 @@ pub(super) struct Outside {
     /// folder. A change to one counts; a new one, such as fresh build output, does not.
     /// A later check stats these same paths again, whatever else appeared.
     ignored: BTreeMap<Vec<u8>, Option<Stamp>>,
+    /// Git's own control files outside the work tree, such as its configuration, hooks
+    /// and replace refs, which later git commands of the person would follow.
+    control: BTreeMap<String, Option<Stamp>>,
     /// The repository the paths are in.
     root: std::path::PathBuf,
+}
+
+/// The control files of the repository's git folder that change what git does.
+fn control(repository: &Path) -> BTreeMap<String, Option<Stamp>> {
+    let git_path = |name: &str| {
+        git(repository, None, &["rev-parse", "--git-path", name], None)
+            .ok()
+            .map(|path| repository.join(path))
+    };
+    let stamp_at = |path: &Path| std::fs::symlink_metadata(path).ok().map(|metadata| stamp(&metadata));
+    let mut control = BTreeMap::new();
+    for name in [
+        "config",
+        "config.worktree",
+        "info/attributes",
+        "info/exclude",
+        "packed-refs",
+    ] {
+        if let Some(path) = git_path(name) {
+            control.insert(format!(".git/{name}"), stamp_at(&path));
+        }
+    }
+    // Hooks from the common git folder itself: Horizon's own git commands point
+    // core.hooksPath elsewhere, and a hooksPath the repository sets is in its config.
+    let common = git(repository, None, &["rev-parse", "--git-common-dir"], None)
+        .ok()
+        .map(|path| repository.join(path));
+    for folder in ["hooks", "refs/replace"] {
+        let Some(path) = common.as_ref().map(|common| common.join(folder)) else {
+            continue;
+        };
+        for entry in std::fs::read_dir(&path).into_iter().flatten().flatten().take(1000) {
+            let name = format!(".git/{folder}/{}", entry.file_name().to_string_lossy());
+            control.insert(name, stamp_at(&entry.path()));
+        }
+    }
+    control
 }
 
 /// The most ignored files a reading stamps, so a large dependency or build folder
@@ -305,6 +345,7 @@ pub(super) fn outside(repository: &Path) -> Outside {
         head,
         files,
         ignored,
+        control: control(repository),
         root: repository.to_path_buf(),
     }
 }
@@ -396,6 +437,23 @@ pub(super) fn changed(before: &Outside, after: &Outside) -> Vec<String> {
         .into_iter()
         .map(|path| String::from_utf8_lossy(path).into_owned())
         .collect();
+    // Git's control files, added, changed or removed.
+    let mut control: Vec<String> = before
+        .control
+        .iter()
+        .filter(|(name, stamp)| after.control.get(*name) != Some(stamp))
+        .map(|(name, _)| name.clone())
+        .chain(
+            after
+                .control
+                .keys()
+                .filter(|name| !before.control.contains_key(*name))
+                .cloned(),
+        )
+        .collect();
+    control.sort();
+    control.dedup();
+    paths.splice(0..0, control);
     if before.head != after.head {
         paths.insert(0, "the commit HEAD names".to_owned());
     }
@@ -591,6 +649,15 @@ mod tests {
         std::fs::write(path.join("README.md"), "changed by the agent, longer\n").unwrap();
         std::fs::write(path.join("new.txt"), "new\n").unwrap();
         assert_eq!(changed(&before, &outside(path)), ["README.md", "new.txt"]);
+        let before = outside(path);
+        run(path, &["config", "core.sshCommand", "touch /tmp/never-run"]);
+        std::fs::create_dir_all(path.join(".git/hooks")).unwrap();
+        std::fs::write(path.join(".git/hooks/post-checkout"), "#!/bin/sh\n").unwrap();
+        assert_eq!(
+            changed(&before, &outside(path)),
+            [".git/config", ".git/hooks/post-checkout"],
+            "git's own configuration and hooks count too"
+        );
         std::fs::write(path.join(".gitignore"), ".env\ntarget/\n").unwrap();
         std::fs::write(path.join(".env"), "TOKEN=x\n").unwrap();
         let before = outside(path);

@@ -1,7 +1,9 @@
 //! The setup agent's process. Horizon records it when the agent's panel starts and ends
-//! it, with everything in its process group, before it reads a setup for Use or lets a
-//! run go: closing a terminal only hangs up, and an agent or a command it started may
-//! ignore that and keep writing to the repository.
+//! it, with everything it started, before it reads a setup for Use or lets a run go:
+//! closing a terminal only hangs up, and an agent or a command it started may ignore
+//! that and keep writing to the repository. On Linux with a systemd user manager the
+//! agent goes into a scope of its own, a cgroup that holds every process it starts, even
+//! one that leaves its process group; elsewhere its process group is what Horizon ends.
 use std::time::{Duration, Instant};
 
 /// How long the agent may take to end on its own once its panel closed.
@@ -17,14 +19,16 @@ const KILL_WAIT: Duration = Duration::from_secs(2);
 pub(super) struct AgentProcess {
     id: u32,
     started: Option<String>,
+    /// The agent's scope and its cgroup folder, when Horizon could make one.
+    scope: Option<(String, std::path::PathBuf)>,
 }
 
 impl AgentProcess {
     pub(super) fn of(id: u32) -> Self {
-        Self {
-            id,
-            started: start_time(id),
-        }
+        let started = start_time(id);
+        // Only the process Horizon just started goes into the scope, checked by its start.
+        let scope = started.is_some().then(|| contain(id)).flatten();
+        Self { id, started, scope }
     }
 
     /// Ends the agent and its group: they get a short grace after the hang-up of the
@@ -67,8 +71,14 @@ impl AgentProcess {
 
     #[cfg(unix)]
     fn alive(&self) -> bool {
-        self.group()
-            .is_some_and(|group| rustix::process::test_kill_process_group(group).is_ok())
+        // The scope holds everything the agent started: it must be empty.
+        let in_scope = self.scope.as_ref().is_some_and(|(_, cgroup)| {
+            std::fs::read_to_string(cgroup.join("cgroup.procs")).is_ok_and(|procs| !procs.trim().is_empty())
+        });
+        in_scope
+            || self
+                .group()
+                .is_some_and(|group| rustix::process::test_kill_process_group(group).is_ok())
     }
 
     #[cfg(not(unix))]
@@ -78,6 +88,11 @@ impl AgentProcess {
 
     #[cfg(unix)]
     fn kill(&self) {
+        if let Some((unit, _)) = &self.scope {
+            let _ = std::process::Command::new("systemctl")
+                .args(["--user", "kill", "--signal=SIGKILL", unit])
+                .output();
+        }
         if let Some(group) = self.group() {
             let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
         }
@@ -85,6 +100,46 @@ impl AgentProcess {
 
     #[cfg(not(unix))]
     fn kill(&self) {}
+}
+
+/// Moves the process `id` into a new transient scope of the systemd user manager, so
+/// every process it starts from now on stays in that cgroup; the scope and its cgroup
+/// folder, or none without a user manager or off Linux.
+fn contain(id: u32) -> Option<(String, std::path::PathBuf)> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let unit = format!("horizon-setup-agent-{id}-{}.scope", std::process::id());
+    let created = std::process::Command::new("busctl")
+        .args([
+            "--user",
+            "call",
+            "org.freedesktop.systemd1",
+            "/org/freedesktop/systemd1",
+            "org.freedesktop.systemd1.Manager",
+            "StartTransientUnit",
+            "ssa(sv)a(sa(sv))",
+            &unit,
+            "fail",
+            "1",
+            "PIDs",
+            "au",
+            "1",
+            &id.to_string(),
+            "0",
+        ])
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !created {
+        return None;
+    }
+    let output = std::process::Command::new("systemctl")
+        .args(["--user", "show", "--property=ControlGroup", "--value", &unit])
+        .output()
+        .ok()?;
+    let group = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let cgroup = std::path::Path::new("/sys/fs/cgroup").join(group.trim_start_matches('/'));
+    (!group.is_empty() && cgroup.is_dir()).then_some((unit, cgroup))
 }
 
 /// When the process `id` started, or none when no process has the id: on Linux its
@@ -136,6 +191,28 @@ mod tests {
     }
 
     #[test]
+    fn a_process_that_leaves_the_group_still_ends_with_the_agent() {
+        // The shell starts a sleep in a session of its own, outside its process group.
+        let mut agent = std::process::Command::new("sh")
+            .args(["-c", "setsid sleep 30 & sleep 30"])
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let process = AgentProcess::of(agent.id());
+        let Some((_, cgroup)) = process.scope.clone() else {
+            agent.kill().unwrap();
+            agent.wait().unwrap();
+            return; // No systemd user manager here: only the process group can be ended.
+        };
+        std::thread::sleep(Duration::from_millis(300));
+        let reaper = std::thread::spawn(move || agent.wait());
+        assert!(process.end(), "the agent and the sleep that left its group are gone");
+        reaper.join().unwrap().unwrap();
+        let left = std::fs::read_to_string(cgroup.join("cgroup.procs")).unwrap_or_default();
+        assert!(left.trim().is_empty(), "nothing is left in the scope: {left}");
+    }
+
+    #[test]
     fn an_id_a_newer_process_took_is_never_signalled() {
         let mut other = std::process::Command::new("sleep")
             .arg("30")
@@ -145,6 +222,7 @@ mod tests {
         let reused = AgentProcess {
             id: other.id(),
             started: Some("an earlier start".to_owned()),
+            scope: None,
         };
         assert!(
             reused.end(),

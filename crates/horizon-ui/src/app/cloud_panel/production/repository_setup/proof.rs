@@ -506,7 +506,25 @@ impl Job {
         // Each profile's worker contract, checked the way deployment checks it: its
         // capabilities go to horizon-worker-check and every marker it reports is validated.
         for (number, (name, profile)) in config.profiles.iter().enumerate() {
-            let Some(build) = &profile.build else { continue };
+            let Some(build) = &profile.build else {
+                // A published image runs as it is, and deployment checks its contract, so
+                // the proof does too: pulled first unless it is Horizon's own known base.
+                let trusted = horizon_core::cloud_runtime::repository::launch::quick_start::trusted_contract(
+                    &profile.image,
+                    &profile.capabilities,
+                )
+                .is_some();
+                if !trusted {
+                    let mut pull = Command::new("docker");
+                    pull.env_remove("DOCKER_AUTH_CONFIG")
+                        .arg("--config")
+                        .arg(docker_config.path())
+                        .args(["pull", "--platform", "linux/amd64", &profile.image]);
+                    self.stream_within(pull, log, Some(BUILD_TIMEOUT))?;
+                }
+                self.check_contract((name, profile), &profile.image, number, docker_config.path(), log)?;
+                continue;
+            };
             let arguments = horizon_core::cloud_runtime::image::build_arguments(&profile.capabilities, &releases);
             let index = builds
                 .iter()
