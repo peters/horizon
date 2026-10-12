@@ -172,6 +172,9 @@ PY
     fi
     if [ "$approvals" = auto ]; then
         claude_args+=(--dangerously-skip-permissions)
+    else
+        # A saved user setting or resumed session must not keep a previous bypass mode.
+        claude_args+=(--permission-mode default)
     fi
     env -- "${session_env_assignments[@]}" claude "${claude_args[@]}" --mcp-config /workspace/agent-mcp.json
 elif [ "$agent" = grok ]; then

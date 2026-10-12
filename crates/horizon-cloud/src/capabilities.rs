@@ -38,9 +38,10 @@ impl BrowserEngine {
     }
 }
 
-/// Whether agent sessions on the worker ask before they run a command or edit a file.
-/// Auto mode is the default: a cloud worker is a disposable container whose agent runs
-/// unprivileged, so the container is the boundary. `ask` keeps each agent's own prompts.
+/// The approval preset for agent sessions on the worker.
+/// Auto mode is the default: the unprivileged agent uses the disposable container as its
+/// boundary. `ask` selects interactive approval, including on-request approval with a
+/// workspace-write sandbox where supported; it does not prompt before every command or edit.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentApprovals {

@@ -84,14 +84,16 @@ if sys.argv[1:] == ['--help']:
         child = self.launch()
         self.assertEqual(child['args'][0], '--session-id')
         self.assertEqual(len(child['args'][1]), 36)
-        self.assertEqual(child['args'][2:], ['--mcp-config', str(self.workspace / 'agent-mcp.json')])
+        self.assertEqual(child['args'][2:], ['--permission-mode', 'default',
+                                            '--mcp-config', str(self.workspace / 'agent-mcp.json')])
         again = self.launch()
         self.assertEqual(again['args'], child['args'])
         project = self.workspace / 'home/.claude/projects/repo'
         project.mkdir(parents=True)
         (project / f"{child['args'][1]}.jsonl").write_text('{}\n')
         resumed = self.launch()
-        self.assertEqual(resumed['args'], ['--resume', child['args'][1], '--mcp-config', str(self.workspace / 'agent-mcp.json')])
+        self.assertEqual(resumed['args'], ['--resume', child['args'][1], '--permission-mode', 'default',
+                                           '--mcp-config', str(self.workspace / 'agent-mcp.json')])
         self.assertEqual(child['env'], {
             'DISABLE_AUTOUPDATER': '1', 'HOME': str(self.workspace / 'home'),
             'HORIZON': None, 'HORIZON_BROWSER_ACTOR': 'horizon:cloud-test-panel',
@@ -320,6 +322,29 @@ if sys.argv[1:] == ['--help']:
                 child = self.launch()
                 self.assertNotIn('--dangerously-skip-permissions', child['args'])
                 self.assertNotIn('bypassPermissionsModeAccepted', self.claude_config())
+
+    def test_claude_ask_overrides_a_persisted_bypass_mode_after_an_auto_session(self):
+        self.as_uid(10001)
+        self.select()
+        auto = self.launch()
+        self.assertIn('--dangerously-skip-permissions', auto['args'])
+        settings = self.workspace / 'home/.claude/settings.json'
+        settings.parent.mkdir(exist_ok=True)
+        saved = json.dumps({'permissions': {'defaultMode': 'bypassPermissions'}})
+        settings.write_text(saved)
+        self.select(agent_approvals='ask')
+        for resume in [False, True]:
+            with self.subTest(resume=resume):
+                if resume:
+                    project = settings.parent / 'projects/repo'
+                    project.mkdir(parents=True)
+                    (project / f"{auto['args'][1]}.jsonl").write_text('{}\n')
+                child = self.launch()
+                self.assertEqual(child['args'][0], '--resume' if resume else '--session-id')
+                mode = child['args'].index('--permission-mode')
+                self.assertEqual(child['args'][mode + 1], 'default')
+                self.assertNotIn('--dangerously-skip-permissions', child['args'])
+                self.assertEqual(settings.read_text(), saved)
 
     def test_auto_mode_codex_skips_prompts_and_the_sandbox_and_trusts_its_folder(self):
         self.as_uid(10001)

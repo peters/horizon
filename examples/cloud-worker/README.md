@@ -633,6 +633,10 @@ capabilities:
   it but cannot change or replace it. A missing or invalid policy keeps the prompts.
   Readiness compares this protected value with the requested profile.
 
+In `ask` mode, Claude Code starts with `--permission-mode default`, the manual interactive
+mode. This overrides a saved bypass mode for a new or resumed session without rewriting
+user settings.
+
 In auto mode, Claude Code starts with `--dangerously-skip-permissions`, and the launcher
 records in `~/.claude.json` that the one-time warning for this mode is accepted. Codex starts
 with `--dangerously-bypass-approvals-and-sandbox`. Only in auto mode does the launcher

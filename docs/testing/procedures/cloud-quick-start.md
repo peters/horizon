@@ -444,6 +444,7 @@ and sends no agent prompt.
    changes. Missing or invalid protected policy data keeps the prompts. Readiness
    refuses a different protected policy. A repository with bypass settings gets
    explicit CLI approval and sandbox options, including after an auto-mode session.
+   New and resumed Claude Code sessions override a saved bypass mode.
 
 2. On a disposable Linux test runner with root access, run the same tests as root.
 

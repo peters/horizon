@@ -51,7 +51,9 @@ The launcher reads the root-owned `/run/horizon-worker/agent-approvals` policy.
 Changes to `/workspace/capabilities.json` do not change that policy. Missing or
 invalid policy data, or a root agent process, keeps the prompts.
 
-In `ask` mode the launcher does not add folder trust for Codex. It sets the
+In `ask` mode Claude Code starts with `--permission-mode default`, which overrides
+a saved bypass mode for new and resumed sessions. The launcher does not add folder
+trust for Codex. It sets the
 approval policy to `on-request` and the sandbox to `workspace-write` through CLI
 options, which override repository and user settings, including stricter defaults.
 This preset permits sandboxed workspace edits without a prompt. Providers that block user namespaces
