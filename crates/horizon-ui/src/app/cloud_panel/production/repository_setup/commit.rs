@@ -14,15 +14,23 @@ const NO_HOOKS: &str = "NUL";
 #[cfg(not(windows))]
 const NO_HOOKS: &str = "/dev/null";
 
-/// Runs one git command in the repository without configured programs, optionally on
-/// another index and with input, and returns its trimmed output.
-fn git(repository: &Path, index: Option<&Path>, args: &[&str], input: Option<&[u8]>) -> Result<String, String> {
+/// A git command in the repository that runs no hook or file monitor the repository's
+/// configuration names. Every git command Horizon runs in a setup's repository is one.
+pub(super) fn git_command(repository: &Path) -> Command {
     let mut command = Command::new("git");
     command
         .arg("-C")
         .arg(repository)
         .args(["-c", &format!("core.hooksPath={NO_HOOKS}")])
-        .args(["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false"])
+        .args(["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false"]);
+    command
+}
+
+/// Runs one git command in the repository without configured programs, optionally on
+/// another index and with input, and returns its trimmed output.
+fn git(repository: &Path, index: Option<&Path>, args: &[&str], input: Option<&[u8]>) -> Result<String, String> {
+    let mut command = git_command(repository);
+    command
         .args(args)
         .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
@@ -171,6 +179,49 @@ pub(super) fn commit(repository: &Path, message: &str) -> Result<bool, String> {
     Ok(true)
 }
 
+/// The `.horizon` files that differ from HEAD, as the finished card lists them: each
+/// name with "new", "changed" or "removed". Compared by object, so no filter runs.
+pub(super) fn changes(repository: &Path) -> Vec<String> {
+    let committed: BTreeMap<String, String> = git(
+        repository,
+        None,
+        &["ls-tree", "-r", "-z", "HEAD", "--", ".horizon"],
+        None,
+    )
+    .unwrap_or_default()
+    .split('\0')
+    .filter_map(|line| {
+        let (meta, path) = line.split_once('\t')?;
+        Some((path.to_owned(), meta.to_owned()))
+    })
+    .collect();
+    let current: BTreeMap<String, String> = entries(repository)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|line| {
+            let (meta, path) = line.split_once('\t')?;
+            let (mode, object) = meta.split_once(' ')?;
+            Some((path.to_owned(), format!("{mode} blob {object}")))
+        })
+        .collect();
+    let name = |path: &str| path.trim_start_matches(".horizon/").to_owned();
+    let mut changes: Vec<String> = current
+        .iter()
+        .filter_map(|(path, meta)| match committed.get(path) {
+            None => Some(format!("{} new", name(path))),
+            Some(before) if before != meta => Some(format!("{} changed", name(path))),
+            Some(_) => None,
+        })
+        .collect();
+    changes.extend(
+        committed
+            .keys()
+            .filter(|path| !current.contains_key(*path))
+            .map(|path| format!("{} removed", name(path))),
+    );
+    changes
+}
+
 /// When each file outside `.horizon` that git tracks or would track last changed.
 pub(super) type Outside = BTreeMap<String, Option<(u64, SystemTime)>>;
 
@@ -310,6 +361,11 @@ mod tests {
             !commit(path, "Again").unwrap(),
             "an unchanged setup has nothing to commit"
         );
+        assert!(changes(path).is_empty());
+        std::fs::write(path.join(".horizon/cloud.yml"), "version: 2\n").unwrap();
+        std::fs::write(path.join(".horizon/Dockerfile"), "FROM scratch\n").unwrap();
+        assert_eq!(changes(path), ["Dockerfile new", "cloud.yml changed"]);
+        assert!(!mark.exists(), "listing the changes runs no filter either");
     }
 
     #[test]

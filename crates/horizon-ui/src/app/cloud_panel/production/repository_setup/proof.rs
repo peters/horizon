@@ -59,9 +59,7 @@ pub(super) fn fingerprint(repository: &Path, spec: &Spec) -> [u8; 32] {
     };
     record(b"spec", format!("{spec:?}").as_bytes());
     // The commit too: a context outside .horizon builds from the committed tree.
-    let head = Command::new("git")
-        .arg("-C")
-        .arg(repository)
+    let head = super::commit::git_command(repository)
         .args(["rev-parse", "HEAD"])
         .output()
         .map(|output| output.stdout)
@@ -517,9 +515,7 @@ impl Job {
     fn prepare(&self, log: &mut Option<std::fs::File>) -> Result<(), String> {
         // The image the agent wrote gets the tested commit and its history only, as a
         // bundle made here, never this computer's git folder with its other branches.
-        let head = Command::new("git")
-            .arg("-C")
-            .arg(&self.repository)
+        let head = super::commit::git_command(&self.repository)
             .args(["rev-parse", "HEAD"])
             .output()
             .ok()
@@ -532,13 +528,8 @@ impl Job {
             .tempdir()
             .map_err(|error| format!("cannot make a private folder for the bundle: {error}"))?;
         let bundle = folder.path().join("head.bundle");
-        let mut create = Command::new("git");
-        create
-            .arg("-C")
-            .arg(&self.repository)
-            .args(["bundle", "create", "--quiet"])
-            .arg(&bundle)
-            .arg("HEAD");
+        let mut create = super::commit::git_command(&self.repository);
+        create.args(["bundle", "create", "--quiet"]).arg(&bundle).arg("HEAD");
         self.stream(create, log)?;
         let mut own = Command::new("docker");
         own.args(["run", "--rm", "--name", &self.container, "-v"])
@@ -593,9 +584,7 @@ impl Job {
     }
 
     fn ci(&self, fast: bool, log: &mut Option<std::fs::File>) -> Result<(), String> {
-        let head = Command::new("git")
-            .arg("-C")
-            .arg(&self.repository)
+        let head = super::commit::git_command(&self.repository)
             .args(["rev-parse", "HEAD"])
             .output()
             .ok()

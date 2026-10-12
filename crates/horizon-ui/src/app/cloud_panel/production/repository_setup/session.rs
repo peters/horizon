@@ -410,27 +410,7 @@ fn remove_run_folder(status: &Path) {
     }
 }
 
-/// The `.horizon` files the agent changed or added, as the finished card lists them.
+/// The `.horizon` files the agent changed, added or removed, as the finished card lists them.
 fn changed_files(repository: &Path) -> String {
-    let Ok(output) = std::process::Command::new("git")
-        .arg("-C")
-        .arg(repository)
-        .args(["status", "--porcelain", "--untracked-files=all", "--", ".horizon"])
-        .output()
-    else {
-        return String::new();
-    };
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| {
-            let (state, path) = line.split_at_checked(3)?;
-            let name = path.trim().trim_start_matches(".horizon/");
-            Some(if state.trim() == "??" {
-                format!("{name} new")
-            } else {
-                format!("{name} changed")
-            })
-        })
-        .collect::<Vec<_>>()
-        .join(" · ")
+    super::commit::changes(repository).join(" · ")
 }
