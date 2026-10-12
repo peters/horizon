@@ -53,64 +53,31 @@ fn git(repository: &Path, index: Option<&Path>, args: &[&str], input: Option<&[u
 /// The index entries for `.horizon` as it is on disk: mode, object and path. Files are
 /// stored without filters and links as links, the way the proof built them.
 fn entries(repository: &Path) -> Result<Vec<String>, String> {
+    use super::untrusted::{Entry, SETUP_FILE_LIMIT, read_regular, setup_entries};
     let mut entries = Vec::new();
-    let mut pending = vec![repository.join(".horizon")];
-    while let Some(folder) = pending.pop() {
-        for entry in std::fs::read_dir(&folder).map_err(|error| error.to_string())? {
-            let entry = entry.map_err(|error| error.to_string())?;
-            let path = entry.path();
-            let relative = path
-                .strip_prefix(repository)
-                .map_err(|error| error.to_string())?
-                .components()
-                .map(|part| part.as_os_str().to_string_lossy())
-                .collect::<Vec<_>>()
-                .join("/");
-            if relative.contains(['\n', '\t']) {
-                return Err(format!("{relative:?} has a name git's index cannot take here"));
-            }
-            let kind = entry.file_type().map_err(|error| error.to_string())?;
-            let (mode, object) = if kind.is_symlink() {
-                let target = std::fs::read_link(&path).map_err(|error| error.to_string())?;
-                let target = target.to_string_lossy().replace('\\', "/");
-                let object = git(
-                    repository,
-                    None,
-                    &["hash-object", "-w", "--no-filters", "--stdin"],
-                    Some(target.as_bytes()),
-                )?;
-                ("120000", object)
-            } else if kind.is_dir() {
-                pending.push(path);
-                continue;
-            } else {
-                let path = path.to_string_lossy();
-                let object = git(
-                    repository,
-                    None,
-                    &["hash-object", "-w", "--no-filters", "--", &path],
-                    None,
-                )?;
-                (if executable(&entry) { "100755" } else { "100644" }, object)
-            };
-            entries.push(format!("{mode} {object}\t{relative}"));
+    for (relative, path, entry) in setup_entries(repository)? {
+        if relative.contains(['\n', '\t']) {
+            return Err(format!("{relative:?} has a name git's index cannot take here"));
         }
+        // Every object goes in through standard input: git opens nothing the agent wrote.
+        let (mode, content) = match entry {
+            Entry::Folder => continue,
+            Entry::Link(target) => ("120000", target.to_string_lossy().replace('\\', "/").into_bytes()),
+            Entry::File { executable } => (
+                if executable { "100755" } else { "100644" },
+                read_regular(&path, SETUP_FILE_LIMIT).map_err(|error| format!("{relative}: {error}"))?,
+            ),
+        };
+        let object = git(
+            repository,
+            None,
+            &["hash-object", "-w", "--no-filters", "--stdin"],
+            Some(&content),
+        )?;
+        entries.push(format!("{mode} {object}\t{relative}"));
     }
     entries.sort();
     Ok(entries)
-}
-
-#[cfg(unix)]
-fn executable(entry: &std::fs::DirEntry) -> bool {
-    use std::os::unix::fs::PermissionsExt as _;
-    entry
-        .metadata()
-        .is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn executable(_: &std::fs::DirEntry) -> bool {
-    false
 }
 
 /// Replaces `.horizon` in an index with the entries: what is gone from disk goes.

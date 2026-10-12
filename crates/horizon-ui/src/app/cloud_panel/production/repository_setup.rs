@@ -15,6 +15,7 @@ mod prompt;
 mod proof;
 mod run;
 mod session;
+mod untrusted;
 pub(super) use prompt::Mode;
 #[cfg(test)]
 use prompt::prompt;

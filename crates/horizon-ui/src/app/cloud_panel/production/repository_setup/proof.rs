@@ -30,27 +30,11 @@ const CHECK_TIMEOUT: Duration = Duration::from_mins(5);
 /// What a proof tests: every file in `.horizon`, the commit and the proof request, so
 /// a passed proof says nothing about a setup that changed after it. SHA-256 over framed
 /// records (kind, path, mode and content, each with its length), so no two setups read
-/// as the same bytes.
-pub(super) fn fingerprint(repository: &Path, spec: &Spec) -> [u8; 32] {
+/// as the same bytes. A setup Horizon refuses to read has no fingerprint.
+pub(super) fn fingerprint(repository: &Path, spec: &Spec) -> Result<[u8; 32], String> {
+    use super::untrusted::{Entry, SETUP_FILE_LIMIT, read_regular, setup_entries};
     use sha2::{Digest as _, Sha256};
-    let mut entries: Vec<(String, std::fs::DirEntry)> = Vec::new();
-    let mut pending = vec![repository.join(".horizon")];
-    while let Some(folder) = pending.pop() {
-        for entry in std::fs::read_dir(&folder).into_iter().flatten().flatten() {
-            let path = entry.path();
-            if entry.file_type().is_ok_and(|kind| kind.is_dir() && !kind.is_symlink()) {
-                pending.push(path);
-                continue;
-            }
-            let relative = path
-                .strip_prefix(repository)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .into_owned();
-            entries.push((relative, entry));
-        }
-    }
-    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let entries = setup_entries(repository)?;
     let mut hash = Sha256::new();
     let mut record = |kind: &[u8], bytes: &[u8]| {
         hash.update(kind);
@@ -65,34 +49,20 @@ pub(super) fn fingerprint(repository: &Path, spec: &Spec) -> [u8; 32] {
         .map(|output| output.stdout)
         .unwrap_or_default();
     record(b"head", &head);
-    for (relative, entry) in &entries {
+    for (relative, path, entry) in &entries {
         record(b"path", relative.as_bytes());
         // A link counts by its target's name, never followed: no loop, nothing outside.
-        match entry.file_type() {
-            Ok(kind) if kind.is_symlink() => {
-                let target = std::fs::read_link(entry.path()).unwrap_or_default();
-                record(b"link", target.to_string_lossy().as_bytes());
-            }
-            _ => {
-                record(b"mode", if executable(entry) { b"755" } else { b"644" });
-                record(b"file", &std::fs::read(entry.path()).unwrap_or_default());
+        match entry {
+            Entry::Folder => record(b"folder", b""),
+            Entry::Link(target) => record(b"link", target.to_string_lossy().as_bytes()),
+            Entry::File { executable } => {
+                record(b"mode", if *executable { b"755" } else { b"644" });
+                let content = read_regular(path, SETUP_FILE_LIMIT).map_err(|error| format!("{relative}: {error}"))?;
+                record(b"file", &content);
             }
         }
     }
-    hash.finalize().into()
-}
-
-#[cfg(unix)]
-fn executable(entry: &std::fs::DirEntry) -> bool {
-    use std::os::unix::fs::PermissionsExt as _;
-    entry
-        .metadata()
-        .is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn executable(_: &std::fs::DirEntry) -> bool {
-    false
+    Ok(hash.finalize().into())
 }
 
 /// Creates a file Horizon writes in the run's folder. The agent can write there too, so
@@ -119,6 +89,25 @@ pub(super) struct Spec {
     pub(super) skip: Vec<String>,
 }
 
+/// A workflow file name in `.github/workflows`: no folder, no option, YAML.
+fn workflow_name(name: &str) -> bool {
+    let allowed = |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-');
+    let yaml = Path::new(name)
+        .extension()
+        .is_some_and(|extension| extension == "yml" || extension == "yaml");
+    !name.starts_with(['.', '-']) && yaml && name.bytes().all(allowed)
+}
+
+/// A localci job: its id, `#N` for a matrix entry, never an option or a word localci
+/// reads as a command.
+fn job_name(name: &str) -> bool {
+    let allowed = |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'#' | b':');
+    !name.is_empty()
+        && !name.starts_with(['-', '.', '#'])
+        && !matches!(name, "help" | "version" | "list" | "plan" | "run" | "check")
+        && name.bytes().all(allowed)
+}
+
 impl Spec {
     pub(super) fn parse(value: &serde_json::Value) -> Option<Self> {
         let strings = |key: &str| {
@@ -132,17 +121,22 @@ impl Spec {
         };
         let workflow = value.get("workflow")?.as_str()?.trim().to_owned();
         let jobs = strings("jobs").unwrap_or_default();
-        if workflow.is_empty() || workflow.contains("..") || jobs.is_empty() {
-            return None;
-        }
-        Some(Self {
+        let event = value
+            .get("event")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("push")
+            .to_owned();
+        // The agent writes these and localci reads them as its arguments: a workflow is a
+        // file name in .github/workflows, a job and the event are names, never options.
+        let valid = workflow_name(&workflow)
+            && !jobs.is_empty()
+            && jobs.iter().all(|job| job_name(job))
+            && !event.is_empty()
+            && event.bytes().all(|byte| byte.is_ascii_lowercase() || byte == b'_');
+        valid.then(|| Self {
             workflow,
             jobs,
-            event: value
-                .get("event")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("push")
-                .to_owned(),
+            event,
             skip: strings("skip").unwrap_or_default(),
         })
     }
@@ -240,7 +234,11 @@ impl Proof {
     ) -> Self {
         let (sender, receiver) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
-        let inputs = fingerprint(repository, &spec);
+        // A setup Horizon refuses to read fails the build with the reason.
+        let (inputs, refused) = match fingerprint(repository, &spec) {
+            Ok(inputs) => (inputs, None),
+            Err(reason) => ([0; 32], Some(reason)),
+        };
         let (image, volume) = run_names(repository, run);
         let container = format!("{volume}-proof-{request}");
         let job = Job {
@@ -250,6 +248,7 @@ impl Proof {
             volume,
             container: container.clone(),
             host_restore,
+            refused,
             log_path: log_path.clone(),
             cancel: cancel.clone(),
             sender,
@@ -374,6 +373,8 @@ struct Job {
     volume: String,
     container: String,
     host_restore: bool,
+    /// Why Horizon refuses to read this setup, if it does.
+    refused: Option<String>,
     log_path: PathBuf,
     cancel: Arc<AtomicBool>,
     sender: mpsc::Sender<Event>,
@@ -405,7 +406,10 @@ impl Job {
             let _ = self.sender.send(Event::Started(phase));
             self.ctx.request_repaint();
             let result = match phase {
-                Phase::Build => self.build(&mut log),
+                Phase::Build => match &self.refused {
+                    Some(reason) => Err(format!("Horizon does not read this setup: {reason}")),
+                    None => self.build(&mut log),
+                },
                 Phase::Ci => self.prepare(&mut log).and_then(|()| {
                     self.warm_packages(&mut log);
                     self.ci(false, &mut log)
@@ -422,9 +426,13 @@ impl Job {
     }
 
     fn build(&self, log: &mut Option<std::fs::File>) -> Result<(), String> {
-        let config = std::fs::read_to_string(self.repository.join(".horizon/cloud.yml"))
-            .map_err(|error| format!("cannot read .horizon/cloud.yml: {error}"))?;
-        let config = horizon_core::cloud_panel::CloudConfig::parse(&config).map_err(|error| error.to_string())?;
+        let config = super::untrusted::read_regular(
+            &self.repository.join(".horizon/cloud.yml"),
+            super::untrusted::SETUP_FILE_LIMIT,
+        )
+        .map_err(|error| format!("cannot read .horizon/cloud.yml: {error}"))?;
+        let config = horizon_core::cloud_panel::CloudConfig::parse(&String::from_utf8_lossy(&config))
+            .map_err(|error| error.to_string())?;
         // The agent CLI releases deployment would pin, so every build gets its arguments.
         let releases =
             horizon_core::cloud_runtime::image::agents::latest(&horizon_core::cloud_runtime::Cancellation::default())
@@ -790,23 +798,36 @@ fn committed_snapshot(root: &Path) -> Result<(tempfile::TempDir, PathBuf), Strin
         .map_err(|error| format!("cannot make the committed tree: {error}"))?;
     // The proposed .horizon replaces the committed one exactly: deletions and links too.
     let _ = std::fs::remove_dir_all(tree.join(".horizon"));
-    copy_tree(&root.join(".horizon"), &tree.join(".horizon")).map_err(|error| error.to_string())?;
+    copy_setup(root, &tree)?;
     Ok((folder, tree))
 }
 
-fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(to)?;
-    for entry in std::fs::read_dir(from)? {
-        let entry = entry?;
-        let kind = entry.file_type()?;
-        let target = to.join(entry.file_name());
-        if kind.is_symlink() {
+/// Copies the repository's `.horizon` into `tree` as Horizon read it: files through
+/// the untrusted reader, links as links, anything else refused.
+fn copy_setup(repository: &Path, tree: &Path) -> Result<(), String> {
+    use super::untrusted::{Entry, SETUP_FILE_LIMIT, read_regular, setup_entries};
+    let entries = setup_entries(repository)?;
+    std::fs::create_dir_all(tree.join(".horizon")).map_err(|error| error.to_string())?;
+    for (relative, path, entry) in entries {
+        let target = tree.join(&relative);
+        match entry {
+            Entry::Folder => std::fs::create_dir_all(&target).map_err(|error| error.to_string())?,
             #[cfg(unix)]
-            std::os::unix::fs::symlink(std::fs::read_link(entry.path())?, &target)?;
-        } else if kind.is_dir() {
-            copy_tree(&entry.path(), &target)?;
-        } else if kind.is_file() {
-            std::fs::copy(entry.path(), target)?;
+            Entry::Link(link) => std::os::unix::fs::symlink(link, &target).map_err(|error| error.to_string())?,
+            #[cfg(not(unix))]
+            Entry::Link(_) => return Err(format!("{relative} is a link")),
+            Entry::File { executable } => {
+                let content = read_regular(&path, SETUP_FILE_LIMIT).map_err(|error| format!("{relative}: {error}"))?;
+                std::fs::write(&target, content).map_err(|error| error.to_string())?;
+                #[cfg(unix)]
+                if executable {
+                    use std::os::unix::fs::PermissionsExt as _;
+                    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))
+                        .map_err(|error| error.to_string())?;
+                }
+                #[cfg(not(unix))]
+                let _ = executable;
+            }
         }
     }
     Ok(())
@@ -973,6 +994,16 @@ mod tests {
         );
         assert!(Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": []})).is_none());
         assert!(Spec::parse(&serde_json::json!({"workflow": "../x.yml", "jobs": ["a"]})).is_none());
+        for job in ["--help", "help", "version", "-k"] {
+            assert!(
+                Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": [job]})).is_none(),
+                "{job} would end localci without a job"
+            );
+        }
+        for workflow in ["/etc/ci.yml", "sub/ci.yml", "-w.yml", "ci.txt"] {
+            assert!(Spec::parse(&serde_json::json!({"workflow": workflow, "jobs": ["a"]})).is_none());
+        }
+        assert!(Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": ["rust-test#2"]})).is_some());
     }
 
     #[test]

@@ -2729,6 +2729,7 @@ dependencies = [
  "horizon-core",
  "horizon-cursor",
  "horizon-wayland",
+ "libc",
  "png",
  "profiling",
  "rusqlite",

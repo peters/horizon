@@ -29,6 +29,9 @@ pub(super) const STEPS: [&str; 7] = [
 ];
 
 /// `text` as one pasted message, so a terminal agent takes it whole even mid-turn.
+/// The largest status file Horizon reads.
+const STATUS_LIMIT: u64 = 1024 * 1024;
+
 pub(super) fn pasted(text: &str) -> Vec<u8> {
     let mut bytes = b"\x1b[200~".to_vec();
     bytes.extend(text.replace(['\r', '\n'], " ").as_bytes());
@@ -85,7 +88,7 @@ pub(in crate::app::cloud_panel::production) struct Run {
     /// The person allowed restoring private .NET packages on this computer for the proof.
     pub(super) host_restore: bool,
     /// The current fingerprint of the setup and proof request, and when it was read.
-    inputs: Option<(Instant, [u8; 32])>,
+    inputs: Option<(Instant, Option<[u8; 32]>)>,
     /// The files outside `.horizon` when the run started, to find what changed since.
     pub(super) outside: super::commit::Outside,
 }
@@ -220,9 +223,10 @@ impl Run {
         if self.modified == Some(modified) {
             return;
         }
-        if let Some(status) = std::fs::read_to_string(&self.status_path)
+        // The agent writes this file, so it is read as untrusted: no link, no pipe, small.
+        if let Some(status) = super::untrusted::read_regular(&self.status_path, STATUS_LIMIT)
             .ok()
-            .and_then(|text| parse(&text))
+            .and_then(|bytes| parse(&String::from_utf8_lossy(&bytes)))
         {
             self.status = status;
             self.modified = Some(modified);
@@ -253,7 +257,7 @@ impl Run {
     /// The `.horizon` files or the proof request changed after the proof that passed.
     pub(super) fn changed_since_proof(&self) -> bool {
         match (&self.proof, self.inputs) {
-            (Some(proof), Some((_, now))) => proof.inputs != now,
+            (Some(proof), Some((_, now))) => now != Some(proof.inputs),
             _ => false,
         }
     }
@@ -274,7 +278,7 @@ impl Run {
     /// Reads the setup's fingerprint again now, as Use does before it commits.
     pub(super) fn refresh_inputs_now(&mut self) {
         if let Some(spec) = self.status.proof.as_ref() {
-            self.inputs = Some((Instant::now(), proof::fingerprint(&self.repository, spec)));
+            self.inputs = Some((Instant::now(), proof::fingerprint(&self.repository, spec).ok()));
         }
     }
 

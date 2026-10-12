@@ -326,7 +326,12 @@ fn media_directory(repository: &Path, runner: &Runner<'_>) -> Result<PathBuf> {
     };
     let output = quiet.run(
         "Locate local LFS objects",
-        Command::new("git").arg("-C").arg(repository).args(["lfs", "env"]),
+        // An empty alias, so a repository's own `alias.lfs` never runs when git-lfs is
+        // missing: a setup agent can write the repository's configuration.
+        Command::new("git")
+            .arg("-C")
+            .arg(repository)
+            .args(["-c", "alias.lfs=", "lfs", "env"]),
         Duration::from_secs(30),
     )?;
     output
