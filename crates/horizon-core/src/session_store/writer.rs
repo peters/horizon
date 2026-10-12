@@ -7,8 +7,9 @@
 //! read of a session that is queued or being written returns the queued board, so a reader
 //! never sees an older one. A save that fails is kept and tried again later, while the
 //! saves of other sessions go on.
-use super::SessionStore;
+use super::{ParkedPanel, SessionStore};
 use crate::RuntimeState;
+use crate::cloud_runtime::session_status::SessionStatus;
 use crate::error::{Error, Result as StoreResult};
 use std::{
     collections::BTreeMap,
@@ -49,6 +50,23 @@ struct State {
     running: bool,
     /// The last failed save of each session, until a save of that session succeeds.
     failed: BTreeMap<String, Failure>,
+    /// Park records of cloud panels by session, in order. A board write removes the records
+    /// of panels it does not have, so they are written once no board of the session waits.
+    parks: BTreeMap<String, Vec<Park>>,
+    /// The session whose park records the worker writes now.
+    writing_parks: Option<String>,
+}
+
+/// The park state of a cloud panel, as [`ParkedPanel`] without its borrows.
+pub(super) struct Park {
+    pub(super) local_id: String,
+    pub(super) parked: bool,
+    pub(super) status: Option<SessionStatus>,
+}
+
+enum Job {
+    Board(String, Box<Queued>),
+    Parks(String, Vec<Park>),
 }
 
 struct Failure {
@@ -61,7 +79,13 @@ struct Failure {
 
 impl State {
     fn pending(&self) -> bool {
-        self.writing.is_some() || self.queued.values().any(|queued| queued.retry.is_none())
+        self.writing.is_some()
+            || self.writing_parks.is_some()
+            || self.queued.values().any(|queued| queued.retry.is_none())
+            || self
+                .parks
+                .keys()
+                .any(|session_id| !self.queued.contains_key(session_id))
     }
 }
 
@@ -116,6 +140,16 @@ impl Writer {
             let (writer, store) = (self.clone(), store.clone());
             std::thread::spawn(move || writer.run(&store));
         }
+    }
+
+    /// Queues park records of cloud panels of `session_id`; the worker writes them after
+    /// the boards of the session that wait. A record that cannot be written is dropped.
+    pub(super) fn queue_parks(&self, store: &SessionStore, session_id: &str, parks: Vec<Park>) {
+        let mut state = self.lock();
+        state.parks.entry(session_id.to_owned()).or_default().extend(parks);
+        self.start(&mut state, store);
+        drop(state);
+        self.shared.changed.notify_all();
     }
 
     /// The newest board queued for `session_id` that is not on disk yet.
@@ -195,7 +229,7 @@ impl Writer {
         let mut state = self.lock();
         loop {
             if !state.pending() {
-                return state.queued.is_empty();
+                return state.queued.is_empty() && state.parks.is_empty();
             }
             let Some(left) = deadline.checked_duration_since(Instant::now()) else {
                 return false;
@@ -213,22 +247,31 @@ impl Writer {
     /// replaces. A wait for the dropped board ends with a reason. It is refused while the
     /// writer writes the session, so that the caller never waits for the disk.
     pub(super) fn supersede(&self, session_id: &str) -> StoreResult<()> {
-        self.drop_session(session_id, "a later save that does not wait for the disk replaced it")
-            .map(drop)
+        self.drop_session(
+            session_id,
+            "a later save that does not wait for the disk replaced it",
+            false,
+        )
+        .map(drop)
     }
 
     /// As [`Self::supersede`], before the session is deleted, so that nothing writes it
     /// again; returns the board that was not written.
     pub(super) fn forget(&self, session_id: &str) -> StoreResult<Option<RuntimeState>> {
-        self.drop_session(session_id, "the session was deleted")
+        self.drop_session(session_id, "the session was deleted", true)
     }
 
-    fn drop_session(&self, session_id: &str, reason: &str) -> StoreResult<Option<RuntimeState>> {
+    fn drop_session(&self, session_id: &str, reason: &str, deleted: bool) -> StoreResult<Option<RuntimeState>> {
         let mut state = self.lock();
-        if state.writing.as_ref().is_some_and(|(writing, _)| writing == session_id) {
+        if state.writing.as_ref().is_some_and(|(writing, _)| writing == session_id)
+            || state.writing_parks.as_deref() == Some(session_id)
+        {
             return Err(Error::State(format!(
                 "Horizon is still saving session {session_id}; try again in a moment"
             )));
+        }
+        if deleted {
+            state.parks.remove(session_id);
         }
         let Some(queued) = state.queued.remove(session_id) else {
             return Ok(None);
@@ -247,8 +290,13 @@ impl Writer {
     fn run(&self, store: &SessionStore) {
         let _panic = PanicGuard { writer: self, store };
         loop {
-            let Some((session_id, queued)) = self.next_board() else {
-                return;
+            let (session_id, queued) = match self.next_job() {
+                None => return,
+                Some(Job::Board(session_id, queued)) => (session_id, *queued),
+                Some(Job::Parks(session_id, parks)) => {
+                    self.write_parks(store, &session_id, &parks);
+                    continue;
+                }
             };
             let saved = store.save_runtime_state_durably(&session_id, &queued.board);
             let mut state = self.lock();
@@ -284,9 +332,24 @@ impl Writer {
         }
     }
 
-    /// Takes the oldest board that is due, so every session is written in turn; `None`
-    /// ends an idle worker.
-    fn next_board(&self) -> Option<(String, Queued)> {
+    fn write_parks(&self, store: &SessionStore, session_id: &str, parks: &[Park]) {
+        let panels: Vec<ParkedPanel<'_>> = (parks.iter())
+            .map(|park| ParkedPanel {
+                local_id: &park.local_id,
+                parked: park.parked,
+                status: park.status.as_ref(),
+            })
+            .collect();
+        if let Err(error) = store.record_cloud_panels(session_id, &panels) {
+            tracing::warn!(%session_id, %error, "could not record the park state of a cloud");
+        }
+        self.lock().writing_parks = None;
+        self.shared.changed.notify_all();
+    }
+
+    /// Takes the oldest board that is due, so every session is written in turn, else the
+    /// park records of a session that has no board waiting; `None` ends an idle worker.
+    fn next_job(&self) -> Option<Job> {
         let mut state = self.lock();
         loop {
             let now = Instant::now();
@@ -298,7 +361,16 @@ impl Writer {
                 && let Some(queued) = state.queued.remove(&session_id)
             {
                 state.writing = Some((session_id.clone(), queued.clone()));
-                return Some((session_id, queued));
+                return Some(Job::Board(session_id, Box::new(queued)));
+            }
+            let parked = (state.parks.keys())
+                .find(|session_id| !state.queued.contains_key(*session_id))
+                .cloned();
+            if let Some(session_id) = parked
+                && let Some(parks) = state.parks.remove(&session_id)
+            {
+                state.writing_parks = Some(session_id.clone());
+                return Some(Job::Parks(session_id, parks));
             }
             let wait = (state.queued.values())
                 .filter_map(|queued| queued.retry.map(|at| at.saturating_duration_since(now)))
@@ -310,7 +382,7 @@ impl Writer {
                 .wait_timeout(state, wait)
                 .unwrap_or_else(PoisonError::into_inner);
             state = next;
-            if timeout.timed_out() && state.queued.is_empty() {
+            if timeout.timed_out() && state.queued.is_empty() && state.parks.is_empty() {
                 state.running = false;
                 return None;
             }
@@ -339,8 +411,9 @@ impl Drop for PanicGuard<'_> {
             };
             state.failed.insert(session_id, failure);
         }
+        state.writing_parks = None;
         state.running = false;
-        if !state.queued.is_empty() {
+        if !state.queued.is_empty() || !state.parks.is_empty() {
             self.writer.start(&mut state, self.store);
         }
         drop(state);
@@ -407,135 +480,4 @@ fn sync_folder(folder: &Path) -> StoreResult<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::HorizonHome;
-
-    fn store() -> (tempfile::TempDir, SessionStore) {
-        let temp = tempfile::tempdir().unwrap();
-        let store = SessionStore::new(
-            HorizonHome::from_root(temp.path().join("home")),
-            temp.path().join("config.yaml"),
-        );
-        (temp, store)
-    }
-
-    fn board(active: &str) -> RuntimeState {
-        RuntimeState {
-            active_workspace_local_id: Some(active.into()),
-            ..RuntimeState::default()
-        }
-    }
-
-    fn on_disk(store: &SessionStore) -> Option<String> {
-        let text = std::fs::read_to_string(store.home().session_runtime_path("session")).ok()?;
-        serde_yaml::from_str::<RuntimeState>(&text)
-            .unwrap()
-            .active_workspace_local_id
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn a_queued_board_is_read_back_before_it_is_written_and_then_is_durable_on_disk() {
-        let (_temp, store) = store();
-        store.save_runtime_state("session", &board("first")).unwrap();
-        let generation = store.queue_runtime_state("session", board("second"));
-        // Whatever the worker did yet, a reader never gets the older board.
-        let read = store.load_runtime("session").unwrap().unwrap();
-        assert_eq!(read.active_workspace_local_id.as_deref(), Some("second"));
-        assert_eq!(
-            store.wait_runtime_state_durable("session", generation, Duration::from_secs(30)),
-            Ok(())
-        );
-        assert_eq!(on_disk(&store).as_deref(), Some("second"));
-        assert!(store.writer.unwritten("session").is_none(), "nothing is left queued");
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn a_newer_board_replaces_one_that_is_not_written_yet() {
-        let (_temp, store) = store();
-        let boards: Vec<u64> = (0..20)
-            .map(|step| store.queue_runtime_state("session", board(&format!("step-{step}"))))
-            .collect();
-        let newest = *boards.last().unwrap();
-        assert_eq!(store.queued_runtime_state("session"), Some(newest));
-        assert!(store.flush_runtime_states(Duration::from_secs(30)));
-        assert_eq!(
-            on_disk(&store).as_deref(),
-            Some("step-19"),
-            "the newest board is on disk"
-        );
-        // An older generation counts as written once a newer board of the session is.
-        assert_eq!(
-            store.wait_runtime_state_durable("session", boards[0], Duration::from_secs(1)),
-            Ok(())
-        );
-    }
-
-    #[test]
-    fn a_session_switch_reads_the_board_the_writer_still_holds() {
-        let (_temp, store) = store();
-        store.save_runtime_state("session", &board("old")).unwrap();
-        let _ = store.queue_runtime_state("session", board("new"));
-        let resumed = store.resume_session("session").unwrap();
-        assert_eq!(resumed.runtime_state.active_workspace_local_id.as_deref(), Some("new"));
-        assert!(store.flush_runtime_states(Duration::from_secs(30)));
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn a_session_that_cannot_be_saved_does_not_hold_up_the_others() {
-        let (_temp, store) = store();
-        store.save_runtime_state("broken", &board("old")).unwrap();
-        // A folder where the board goes refuses every save of this session.
-        let runtime = store.home().session_runtime_path("broken");
-        std::fs::remove_file(&runtime).unwrap();
-        std::fs::create_dir(&runtime).unwrap();
-        let broken = store.queue_runtime_state("broken", board("never"));
-        assert!(matches!(
-            store.wait_runtime_state_durable("broken", broken, Duration::from_secs(30)),
-            Err(Some(_))
-        ));
-        let healthy = store.queue_runtime_state("session", board("saved"));
-        assert_eq!(
-            store.wait_runtime_state_durable("session", healthy, Duration::from_secs(30)),
-            Ok(())
-        );
-        assert_eq!(on_disk(&store).as_deref(), Some("saved"));
-        assert!(
-            !store.flush_runtime_states(Duration::from_secs(30)),
-            "the exit does not wait for a session that keeps failing"
-        );
-        assert!(!store.runtime_states_pending(), "a failed board is not pending");
-        // The writer may try the broken board again just now.
-        while store.writer.forget("broken").is_err() {
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        assert!(store.flush_runtime_states(Duration::ZERO));
-    }
-
-    #[test]
-    fn a_save_outside_the_queue_replaces_the_queued_board() {
-        let (_temp, store) = store();
-        let _ = store.queue_runtime_state("session", board("queued"));
-        store.save_runtime_state("session", &board("direct")).unwrap();
-        assert!(store.flush_runtime_states(Duration::from_secs(30)));
-        assert_eq!(on_disk(&store).as_deref(), Some("direct"));
-        let read = store.load_runtime("session").unwrap().unwrap();
-        assert_eq!(read.active_workspace_local_id.as_deref(), Some("direct"));
-    }
-
-    #[test]
-    #[cfg(not(unix))]
-    fn a_durable_save_is_refused_where_folders_cannot_be_synced() {
-        let (_temp, store) = store();
-        let generation = store.queue_runtime_state("session", board("queued"));
-        assert!(matches!(
-            store.wait_runtime_state_durable("session", generation, Duration::from_secs(30)),
-            Err(Some(_))
-        ));
-        assert!(store.flush_runtime_states(Duration::from_secs(30)));
-        assert_eq!(on_disk(&store).as_deref(), Some("queued"), "the save itself still runs");
-    }
-}
+mod tests;

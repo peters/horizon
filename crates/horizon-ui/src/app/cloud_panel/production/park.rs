@@ -278,9 +278,7 @@ impl HorizonApp {
         if panels.is_empty() {
             return;
         }
-        if let Err(error) = self.session_store.record_cloud_panels(&session.session_id, &panels) {
-            tracing::warn!("could not record the park state of a cloud: {error}");
-        }
+        self.session_store.queue_cloud_panels(&session.session_id, &panels);
     }
 
     fn drop_pending_terminal_attachments(&mut self, index: usize) {
