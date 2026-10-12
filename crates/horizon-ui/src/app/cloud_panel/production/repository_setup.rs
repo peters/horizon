@@ -15,6 +15,7 @@ mod access;
 mod agent;
 mod bounded;
 mod commit;
+mod pins;
 mod preview;
 mod prompt;
 mod proof;

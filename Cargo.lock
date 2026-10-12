@@ -2722,6 +2722,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui_commonmark",
+ "git2",
  "horizon-app-host",
  "horizon-browser",
  "horizon-browser-mcp",

@@ -32,6 +32,7 @@ impl Proof {
             container: String::new(),
             inputs: None,
             host_restore: false,
+            host_crates: Vec::new(),
             gpu: false,
             worker: None,
             pinned: Pinned::default(),

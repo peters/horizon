@@ -62,6 +62,8 @@ pub(super) fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
     options.open(path)
 }
 
+pub(super) mod crates;
+mod host;
 mod spec;
 pub(super) use spec::Spec;
 use spec::commands_script;
@@ -135,6 +137,8 @@ pub(super) struct Proof {
     /// Whether this proof restores private .NET packages on this computer: part of
     /// what it proves, so changing the choice afterwards needs a new proof.
     pub(super) host_restore: bool,
+    /// The Rust git repositories it may clone here: part of what it proves, as above.
+    pub(super) host_crates: Vec<String>,
     /// The proved setup's default profile asks for a GPU; its preview gets it too.
     pub(super) gpu: bool,
     /// The background run, so cleanup waits until it can create nothing more.
@@ -155,9 +159,10 @@ impl Proof {
         (repository, run, identity): (&Path, &str, super::untrusted::Identity),
         (request, spec): (u64, Spec),
         log_path: PathBuf,
-        (host_restore, root_dirty): (bool, std::sync::Arc<std::sync::atomic::AtomicBool>),
+        (host_restore, root_dirty, host_crates): (bool, std::sync::Arc<std::sync::atomic::AtomicBool>, crates::Access),
         (after, ctx): (Option<std::thread::JoinHandle<()>>, egui::Context),
     ) -> Self {
+        let approved = host_crates.repositories.clone();
         let (sender, receiver) = mpsc::sync_channel(EVENT_QUEUE);
         let cancel = Cancellation::default();
         let pinned = Pinned::default();
@@ -179,6 +184,8 @@ impl Proof {
             root_dirty,
             setup: Err("the setup was not read yet".to_owned()),
             tail: std::cell::RefCell::default(),
+            host_crates,
+            mirrors: std::cell::RefCell::default(),
             log_path: log_path.clone(),
             cancel: cancel.clone(),
             sender,
@@ -216,6 +223,7 @@ impl Proof {
             container,
             inputs: None,
             host_restore,
+            host_crates: approved,
             gpu: false,
             worker: Some(worker),
             pinned,
@@ -352,6 +360,8 @@ struct Job {
     /// The newest lines of the current phase, kept here so a diagnosis never reads the
     /// log file back from the run folder, where the agent can write.
     tail: std::cell::RefCell<super::access::Tail>,
+    host_crates: crates::Access,
+    mirrors: std::cell::RefCell<Option<crates::Mirrors>>,
     log_path: PathBuf,
     cancel: Cancellation,
     sender: mpsc::SyncSender<Event>,
@@ -411,7 +421,7 @@ impl Job {
         // One snapshot of the setup, read here and not on the dialog's thread: the proof
         // fingerprints it and builds from it alone. A setup Horizon refuses to read fails
         // the build with the reason.
-        self.setup = super::snapshot::Setup::read(&self.repository, self.identity);
+        self.setup = self.read_setup();
         if let Ok(setup) = &self.setup {
             let _ = self.sender.send(Event::Inputs(setup.fingerprint(&self.spec)));
             let _ = self.sender.send(Event::Gpu(default_wants_gpu(setup)));
@@ -461,11 +471,7 @@ impl Job {
                     Err(reason) => Err(format!("Horizon does not read this setup: {reason}")),
                     Ok(setup) => self.build(setup, &mut log),
                 },
-                Phase::Ci => self
-                    .prepare(&mut log)
-                    .and_then(|()| self.check_plan())
-                    .and_then(|()| self.warm_packages(&mut log))
-                    .and_then(|()| self.ci(false, &mut log)),
+                Phase::Ci => self.prepare_ci(&mut log).and_then(|()| self.ci(false, &mut log)),
                 Phase::Fast => self.ci(true, &mut log),
             };
             let failed = result.is_err();
@@ -489,6 +495,8 @@ impl Job {
     }
 
     fn build(&self, setup: &super::snapshot::Setup, log: &mut Option<std::fs::File>) -> Result<(), String> {
+        // The pins first: no Docker, so a moved toolchain fails before any pull.
+        self.check_pins(setup, log)?;
         // Made before the mount check, the first command that can pull an image.
         let (docker_config, signed_in) = self.docker_config()?;
         self.check_mounts()?;
@@ -808,6 +816,7 @@ impl Job {
         if let Some(packages) = self.package_folder() {
             command.args(["-e", &format!("RestoreAdditionalProjectFallbackFolders={packages}")]);
         }
+        self.mount_crates(&mut command);
         Ok(command)
     }
 

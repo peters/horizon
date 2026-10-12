@@ -87,6 +87,17 @@ pub fn persist_deselections(root: &std::path::Path, owner: &Owner, aliases: &[St
     journal.save(&state)
 }
 
+/// Whether `alias` is not selected in the journal of `owner`: also when the journal has
+/// no grant for it or belongs to another owner, since nothing is selected for `owner`
+/// there. Read back after `persist_deselections` reports an error, which can come after
+/// the new journal is already in place.
+/// # Errors
+/// Refuses a journal it cannot read or that another job holds.
+pub fn deselected(root: &std::path::Path, owner: &Owner, alias: &str) -> Result<bool> {
+    let state = journal::Store::open(root, owner)?.load()?;
+    Ok(state.owner != *owner || state.grants.get(alias).is_none_or(|grant| !grant.selected))
+}
+
 /// # Errors
 /// Refuses malformed ownership, conflicting controllers and corrupt journals before SSH changes.
 pub fn refresh(request: &Request, cancel: &Cancellation) -> Result<Snapshot> {

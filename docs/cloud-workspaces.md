@@ -544,7 +544,17 @@ logins, copies the packages that restore used into the proof's volume for the
 worker's account, and the container restores again from them, without any
 credential; the CI reads only those packages. A restore here or in the container
 that fails, fails the proof. It is off by default, because the restore runs the repository's
-build files on this computer. A
+build files on this computer. For a Rust repository whose committed `Cargo.lock` pins git
+dependencies on GitHub, the dialog names those repositories under **Fetch private
+Rust git dependencies on this computer for the proof**. When you check it, Horizon
+clones each named repository with plain `git clone --mirror` and this computer's
+Git login into a private folder in its own home, and the container reads each clone
+read-only in place of its GitHub address. Horizon runs no Cargo, rustup or
+repository configuration on this computer for this, and clones nothing that the box
+does not name. The clones of one proof may hold at most 4 GiB on this computer; past
+that the proof stops. It is off by default, because the proof's CI can read every
+repository that the box names. When you clear the box after a proof that cloned,
+the next proof starts on a new volume, so no copy stays in its caches. A
 repository without GitHub Actions is proved with the commands its README,
 `AGENTS.md` or build files give, run in order in the same container on the same
 checkout and restore; its images need no localci. For a
@@ -564,6 +574,31 @@ account needs access to it), Horizon skips that preview, says why, and accepts t
 setup without it. The agent asks before it uses a credential of yours, such as your
 GitHub token for a private package feed. It does not allocate compute, push
 images, commit or open a pull request.
+
+The agent pins each toolchain version in `.horizon/Dockerfile` as an `ARG`
+and writes `.horizon/pins.json`, which names the repository file that each
+version comes from, for example `global.json` for the .NET SDK. Horizon writes
+`.horizon/verify-pins.py` beside it, the same file in every repository, and
+checks the pins at the start of each proof with its own copy of that file. The
+agent does not change the CI: its summary gives the one step to add to the main
+CI job after the checkout, `python3 -I .horizon/verify-pins.py`. With that step, a
+later pull request that moves a toolchain, such as a new SDK in `global.json`,
+fails in its own CI until the setup moves with it.
+
+The agent also declares the repository's [companions](#companion-declarations).
+It finds them in `AGENTS.md` and in the product map that `AGENTS.md` points to,
+such as `../company/docs/products.json`, whose edges point from the consumer to
+the provider and say whether the two sides must be checked together. The agent
+declares no `same_worker` sibling, because the proof does not build sibling layers
+yet: where `AGENTS.md` requires another repository's tests for this repository's
+changes, such as a native library and the app that consumes its packages, the
+summary names that repository instead. A runtime contract that must be checked
+together, such as a REST API, a message queue or a shared key, gets a
+separate-cloud companion in the repository that consumes it, and in the provider
+only when its `AGENTS.md` says its changes are checked against that consumer. A package that a repository only uses is
+not a companion: a library that the app uses does not declare the app. Each
+repository stays usable on its own, because a declaration only offers the
+companion in **New cloud**.
 
 Some build failures are account problems, not Dockerfile problems. Horizon
 pulls private `ghcr.io` bases with its own GitHub login. If an organization
@@ -1503,6 +1538,11 @@ checked on the source cloud's card, through the browser MCP server:
 - `cloud_companion_stop` stops the companion's worker and keeps its workspace
   storage and worktrees. It stays stopped until an explicit Ensure Ready:
   checking its box or restarting Horizon does not start it.
+- `cloud_companion_uncheck` unchecks a companion as the box on the card does,
+  when the task no longer needs it: the source's access goes, and the target's
+  grant once both workers confirm. It never starts, stops or deletes a cloud.
+  Agents can uncheck but never check, because checking is the owner's
+  authorization.
 - `cloud_companion_operation` reads an operation's phase from the original
   request's `cloud` and `alias` and its `operation_id`, without changing
   anything: polling never starts or continues an operation.
