@@ -339,6 +339,17 @@ if sys.argv[1:] == ['--help']:
         self.assertEqual(self.launch('codex', cwd=folder)['args'], [])
         self.assertEqual(self.codex_config().read_text(), saved)
 
+    def test_the_launch_never_imports_modules_from_the_repository(self):
+        folder = self.checkout()
+        marker = self.root / 'imported'
+        for name in ['json', 'tomllib', 'fcntl', 'os']:
+            (folder / f'{name}.py').write_text(f'open({str(marker)!r}, "a").write("{name}\\n")\n')
+        self.launch('codex', cwd=folder)
+        self.launch('claude', cwd=folder)
+        self.assertFalse(marker.exists(), marker.read_text() if marker.exists() else '')
+        config = tomllib.loads(self.codex_config().read_text())
+        self.assertEqual(config['projects'][str(folder.resolve())], {'trust_level': 'trusted'})
+
     def test_codex_folder_trust_is_added_once_and_a_broken_config_is_left_alone(self):
         folder = self.checkout()
         self.codex_config().parent.mkdir(parents=True)

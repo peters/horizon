@@ -85,7 +85,9 @@ if [ "$agent" = claude ]; then
     # here: skip the first-run dialogs (theme, the API key, trusting the folder) rather than
     # leave every new panel asking them. Failing to seed only brings the dialogs back. In
     # auto mode, it also accepts the one-time warning that Claude shows for skipped prompts.
-    SEED_BYPASS="$([ "$approvals" = auto ] && echo 1)" python3 - <<'PY' || true
+    # Isolated mode: the current folder is the repository, and none of its files may be
+    # imported here.
+    SEED_BYPASS="$([ "$approvals" = auto ] && echo 1)" python3 -I - <<'PY' || true
 import fcntl, json, os
 home = os.environ['HOME']
 bypass = os.environ.get('SEED_BYPASS') == '1'
@@ -190,20 +192,13 @@ elif [ "$agent" = codex ]; then
     # Codex asks once per repository folder whether to trust it, and only an entry for that
     # exact folder answers it; one for /workspace does not. This session's folder is trusted
     # like Claude's. An existing decision for it is kept, and failing to write only brings the
-    # question back. The session environment can name another CODEX_HOME.
-    env -- "${session_env_assignments[@]}" python3 - <<'PY' || true
+    # question back. The session environment can name another CODEX_HOME. Isolated mode: the
+    # current folder is the repository, and none of its files may be imported here.
+    env -- "${session_env_assignments[@]}" python3 -I - <<'PY' || true
 import fcntl, json, os, tomllib
 home = os.environ.get('CODEX_HOME') or os.path.join(os.environ['HOME'], '.codex')
 path = os.path.join(home, 'config.toml')
 folder = os.path.realpath(os.getcwd())
-
-
-def current():
-    try:
-        with open(path, 'rb') as saved:
-            return saved.read()
-    except FileNotFoundError:
-        return b''
 
 
 def addition(raw):
@@ -227,14 +222,15 @@ os.makedirs(home, mode=0o700, exist_ok=True)
 with open(path + '.horizon-lock', 'a') as lock:
     # Launchers serialize on this lock, so two sessions never add the same entry. Codex saves
     # the file without it, so the entry is appended and the file is never replaced: a save
-    # by a running Codex is never lost. If Codex replaces the file at the same moment, only
-    # the entry can be lost, and the question then comes back once.
+    # by a running Codex is never lost. The check and the append use one open file, so a
+    # replacement by Codex at the same moment can only detach the entry from config.toml,
+    # and the question then comes back once.
     fcntl.flock(lock, fcntl.LOCK_EX)
-    entry = addition(current())
-    if entry is not None:
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-        with os.fdopen(descriptor, 'w') as out:
-            out.write(entry)
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(descriptor, 'r+b') as saved:
+        entry = addition(saved.read())
+        if entry is not None:
+            saved.write(entry.encode())
 PY
     if [ "$approvals" = auto ]; then
         # Bypasses the sandbox too: where the container denies user namespaces, as RunPod's
