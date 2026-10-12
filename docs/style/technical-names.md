@@ -28,6 +28,11 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | test tailnet | A tailnet that only tests use. | — |
 | contract marker | A line, for example `horizon-tailnet-contract=1`, that a worker image reports to show a function. | — |
 | nonce | A random value that a run makes one time. A reply that contains it is current. | token |
+| proof | The image build, worker check, CI run and fast rerun that Horizon does for a `.horizon` setup that the setup agent wrote. | - |
+| setup gate | The tool `scripts/setup-gate.py`. It runs the proof and the desktop preview on a list of real repositories. | real-repository harness |
+| gate list | The JSON file that names the repositories of the setup gate, one entry for each repository. | - |
+| gate lane | One process of the setup gate. It proves its entries one after another. | shard |
+| run name | The name of the setup run of one gate entry, for example `gate-3fa9c1-1-0000`. Horizon makes the names of the Docker resources of the entry from it. | run ID |
 
 ## Horizon objects
 

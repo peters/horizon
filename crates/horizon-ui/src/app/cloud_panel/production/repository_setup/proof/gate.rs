@@ -1,0 +1,223 @@
+//! The setup gate: Horizon's proof, and the desktop preview after a passed proof, run on
+//! each repository of a list the way the New cloud dialog runs them. It runs only when
+//! asked for, with `--ignored` and a list in `GATE_LIST`; `scripts/setup-gate.py` starts
+//! it in parallel lanes and docs/testing/procedures/cloud-setup-gate.md tells how.
+//!
+//! - `GATE_LIST`: a JSON array of entries, each `{"repo", "path", "spec", "preview"?,
+//!   "label"?, "run"?}`; `spec` and `preview` are what the agent writes in its status file.
+//! - `GATE_OUT`: the folder for `started.jsonl`, `results.jsonl`, the proof logs and the
+//!   preview screenshots.
+//! - `GATE_PREFIX`: the start of the run names of entries without a `run`.
+use super::super::preview;
+use super::*;
+use std::io::Write as _;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+
+/// The longest one proof may take before the gate stops it and fails the entry.
+const PROOF_LIMIT: Duration = Duration::from_mins(120);
+
+/// The longest the desktop preview may take to show a window.
+const PREVIEW_LIMIT: Duration = Duration::from_mins(10);
+
+/// How often the gate takes what the proof or the preview reported.
+const POLL: Duration = Duration::from_millis(500);
+
+/// One repository of the list, as the gate proves it.
+struct Entry {
+    label: String,
+    repository: PathBuf,
+    spec: serde_json::Value,
+    preview: Option<serde_json::Value>,
+    /// The run name, from which Horizon names the entry's Docker resources.
+    run: String,
+}
+
+impl Entry {
+    fn read(value: &serde_json::Value, prefix: &str, index: usize) -> Self {
+        let repo = value["repo"].as_str().expect("an entry names its repo");
+        let path = value["path"].as_str().expect("an entry names its path");
+        Self {
+            label: value["label"].as_str().unwrap_or(repo).to_owned(),
+            repository: std::fs::canonicalize(path).expect("the entry's path is a folder"),
+            spec: value["spec"].clone(),
+            preview: value.get("preview").filter(|preview| !preview.is_null()).cloned(),
+            run: value["run"]
+                .as_str()
+                .map_or_else(|| format!("{prefix}{index:04}"), str::to_owned),
+        }
+    }
+
+    /// The names of the Docker resources the entry's proof and preview can make, for the
+    /// runner to remove when it stops a lane in the middle of this entry.
+    fn names(&self) -> serde_json::Value {
+        let (image, volume) = run_names(&self.repository, &self.run);
+        serde_json::json!({
+            "entry": self.label,
+            "run": self.run,
+            "image": image,
+            "volume": volume,
+            "checks": format!("horizon-contract-{}-", resources::check_operations(&volume)),
+            "network": preview_network(&volume),
+        })
+    }
+}
+
+/// Appends `value` as one line to `file` in `out`, with one write, so the lanes that share
+/// the file never mix their lines.
+fn append(out: &Path, file: &str, value: &serde_json::Value) {
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(out.join(file))
+        .unwrap();
+    file.write_all(format!("{value}\n").as_bytes()).unwrap();
+}
+
+#[test]
+#[ignore = "proves real repositories; scripts/setup-gate.py starts it"]
+fn proves_each_listed_repository() {
+    let Ok(list) = std::env::var("GATE_LIST") else {
+        eprintln!("GATE_LIST names no list, so the gate proves nothing");
+        return;
+    };
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(&std::fs::read(list).unwrap()).unwrap();
+    let out = PathBuf::from(std::env::var("GATE_OUT").expect("GATE_OUT names the output folder"));
+    let prefix = std::env::var("GATE_PREFIX").unwrap_or_else(|_| "gate".to_owned());
+    std::fs::create_dir_all(out.join("logs")).unwrap();
+    for (index, value) in entries.iter().enumerate() {
+        let entry = Entry::read(value, &prefix, index);
+        append(&out, "started.jsonl", &entry.names());
+        let started = Instant::now();
+        let mut result = prove(&entry, &out);
+        result["entry"] = entry.label.clone().into();
+        result["run"] = entry.run.clone().into();
+        result["seconds"] = started.elapsed().as_secs().into();
+        append(&out, "results.jsonl", &result);
+    }
+}
+
+/// Proves the entry, starts its preview after a passed proof and removes all the entry's
+/// Docker resources; the entry's result.
+fn prove(entry: &Entry, out: &Path) -> serde_json::Value {
+    let Some(spec) = Spec::parse(&entry.spec) else {
+        return serde_json::json!({"passed": false, "error": "the spec does not parse"});
+    };
+    let log = out.join("logs").join(format!("{}.log", entry.label));
+    let identity = super::super::untrusted::identity(&entry.repository);
+    // The person allows the clones of the private Rust git repositories the locks pin,
+    // and the restore of private .NET packages on this computer.
+    let access = crates::Access {
+        repositories: crates::locked_repositories(&entry.repository, "HEAD"),
+        forget_volume: false,
+        allowed: Arc::new(AtomicBool::new(true)),
+    };
+    let root_dirty = Arc::new(AtomicBool::new(false));
+    let mut proof = Proof::start(
+        (&entry.repository, &entry.run, identity),
+        (1, spec),
+        log.clone(),
+        (true, root_dirty.clone(), access),
+        (None, egui::Context::default()),
+    );
+    let begun = Instant::now();
+    let ended = loop {
+        proof.poll();
+        let ended = proof.phases.iter().all(|(_, state)| state.ended.is_some())
+            || proof.phases.iter().any(|(_, state)| state.failure.is_some());
+        if ended || begun.elapsed() > PROOF_LIMIT {
+            break ended;
+        }
+        std::thread::sleep(POLL);
+    };
+    let phases: Vec<serde_json::Value> = proof
+        .phases
+        .iter()
+        .map(|(phase, state)| {
+            serde_json::json!({
+                "phase": phase.title(),
+                "seconds": state.ended.zip(state.started).map(|(end, start)| (end - start).as_secs()),
+                "failure": state.failure,
+            })
+        })
+        .collect();
+    let proved = proof
+        .phases
+        .iter()
+        .all(|(_, state)| state.ended.is_some() && state.failure.is_none());
+    let pinned = proof.daemon();
+    let preview = match (&entry.preview, proved) {
+        (Some(value), true) => {
+            let screenshot = out.join("logs").join(format!("{}.preview.png", entry.label));
+            show_preview(&proof, &pinned, &root_dirty, value, screenshot)
+        }
+        _ => serde_json::Value::Null,
+    };
+    // A preview that could not run here, such as one that needs /dev/kvm, does not fail
+    // the entry, as the dialog accepts such a setup.
+    let passed = proved && preview["outcome"] != "failed";
+    let worker = proof.stop();
+    remove_run_resources(&entry.repository, &entry.run, worker, Some(pinned), true);
+    let mut result = serde_json::json!({
+        "passed": passed,
+        "phases": phases,
+        "preview": preview,
+        "log": log,
+    });
+    if !ended {
+        result["error"] = "the proof did not end within 120 minutes".into();
+    }
+    result
+}
+
+/// Starts the desktop preview of the proved image as the dialog does, waits for a window
+/// and stops the preview again; what it reached.
+fn show_preview(
+    proof: &Proof,
+    pinned: &Pinned,
+    root_dirty: &Arc<AtomicBool>,
+    value: &serde_json::Value,
+    screenshot: PathBuf,
+) -> serde_json::Value {
+    let Some(spec) = preview::Spec::parse(value) else {
+        return serde_json::json!({"outcome": "failed", "detail": "the preview spec does not parse"});
+    };
+    let mut preview = preview::Preview::start(
+        (
+            &proof.image,
+            &proof.volume,
+            pinned.clone(),
+            proof.gpu,
+            root_dirty.clone(),
+        ),
+        (1, spec),
+        screenshot,
+        (None, egui::Context::default()),
+    );
+    let begun = Instant::now();
+    while matches!(preview.outcome, preview::Outcome::Starting) && begun.elapsed() < PREVIEW_LIMIT {
+        preview.poll();
+        std::thread::sleep(POLL);
+    }
+    let outcome = match &preview.outcome {
+        preview::Outcome::Live {
+            window,
+            after,
+            screenshot,
+            ..
+        } => serde_json::json!({
+            "outcome": "live",
+            "window": window,
+            "seconds": after.as_secs(),
+            "screenshot": screenshot,
+        }),
+        preview::Outcome::Unavailable(reason) => serde_json::json!({"outcome": "unavailable", "detail": reason}),
+        preview::Outcome::Failed(reason) => serde_json::json!({"outcome": "failed", "detail": reason}),
+        preview::Outcome::Starting => {
+            serde_json::json!({"outcome": "failed", "detail": "no window within 10 minutes"})
+        }
+    };
+    // The preview's container goes before the run's resources do.
+    let _ = preview.stop().join();
+    outcome
+}
