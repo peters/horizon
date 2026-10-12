@@ -491,7 +491,7 @@ The setup agent is a normal local agent session with its existing local login.
 Horizon does not export the API-key bindings of remote workers to it. Its panel is
 hidden: the dialog becomes a preparation view, **Set up REPOSITORY**, because
 nothing is rented yet. The left column shows the steps (Read CI, Find tools,
-Write Dockerfile, Build image, Run CI in image, Desktop preview, Fast rerun), each
+Write Dockerfile, Build image, Run CI in image, Fast rerun), each
 with a short detail and its elapsed time. The right column is the agent's own
 terminal without panel chrome. Click it to type to the agent, for example to
 answer a question or to change its plan. A question also shows above the steps.
@@ -533,9 +533,7 @@ with private feeds, check **Restore private NuGet packages on this computer for
 the proof**: Horizon then runs `dotnet restore` here, with this computer's feed
 logins, and the container reads the packages from a read-only folder without any
 credential. It is off by default, because the restore runs the repository's
-build files on this computer. For a
-desktop app the agent starts the app on the worker desktop in the image, `:99`,
-which the cloud panel shows, and checks that a window drew. It asks before it uses a credential of yours, such as your
+build files on this computer. The agent asks before it uses a credential of yours, such as your
 GitHub token for a private package feed. It does not allocate compute, push
 images, commit or open a pull request.
 

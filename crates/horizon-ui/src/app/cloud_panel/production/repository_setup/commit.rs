@@ -3,7 +3,6 @@
 //! hooks, filters, file monitors or signing programs: plumbing only, those settings
 //! overridden, and every file hashed as it is on disk.
 use std::collections::BTreeMap;
-use std::io::Write as _;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::SystemTime;
@@ -37,19 +36,13 @@ fn git(repository: &Path, index: Option<&Path>, args: &[&str], input: Option<&[u
 /// As [`git`], with the output's bytes exactly as git wrote them.
 fn git_raw(repository: &Path, index: Option<&Path>, args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>, String> {
     let mut command = git_command(repository);
-    command
-        .args(args)
-        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    command.args(args);
     if let Some(index) = index {
         command.env("GIT_INDEX_FILE", index);
     }
-    let mut child = command.spawn().map_err(|error| error.to_string())?;
-    if let (Some(bytes), Some(mut stdin)) = (input, child.stdin.take()) {
-        stdin.write_all(bytes).map_err(|error| error.to_string())?;
-    }
-    let output = child.wait_with_output().map_err(|error| error.to_string())?;
+    // Within its time: the repository's configuration, which git reads first, is the
+    // agent's to write.
+    let output = super::bounded::output(command, input.map(<[u8]>::to_vec), super::bounded::GIT)?;
     if output.status.success() {
         Ok(output.stdout)
     } else {
@@ -328,8 +321,10 @@ fn control(repository: &Path) -> (BTreeMap<String, Option<Stamp>>, Option<String
         .into_iter()
         .filter_map(|folder| Some((format!(".git/{folder}"), common.as_ref()?.join(folder))))
         .collect();
-    if let Some(hooks) = hooks_path(repository) {
-        folders.push((format!("core.hooksPath {}", shown_name(hooks.as_os_str())), hooks));
+    match hooks_path(repository) {
+        Ok(Some(hooks)) => folders.push((format!("core.hooksPath {}", shown_name(hooks.as_os_str())), hooks)),
+        Ok(None) => {}
+        Err(error) => incomplete = Some(error),
     }
     for (label, path) in folders {
         let mut listing = std::fs::read_dir(&path).into_iter().flatten().flatten();
@@ -345,19 +340,26 @@ fn control(repository: &Path) -> (BTreeMap<String, Option<Stamp>>, Option<String
 
 /// The hooks folder the repository's own configuration names in `core.hooksPath`, read
 /// without Horizon's override; relative to the work tree, as git takes it.
-fn hooks_path(repository: &Path) -> Option<std::path::PathBuf> {
-    let output = Command::new("git")
+fn hooks_path(repository: &Path) -> Result<Option<std::path::PathBuf>, String> {
+    let mut command = Command::new("git");
+    command
         .arg("--no-replace-objects")
         .arg("-C")
         .arg(repository)
-        .args(["config", "--path", "--get", "core.hooksPath"])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()
-        .filter(|output| output.status.success())?;
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    (!path.is_empty()).then(|| repository.join(path))
+        .args(["config", "--path", "--get", "core.hooksPath"]);
+    let output = super::bounded::output(command, None, super::bounded::GIT)?;
+    match output.status.code() {
+        Some(0) => {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            Ok((!path.is_empty()).then(|| repository.join(path)))
+        }
+        // git config exits 1 for a key that is not set.
+        Some(1) => Ok(None),
+        _ => Err(format!(
+            "git cannot read core.hooksPath: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )),
+    }
 }
 
 /// The most ignored files a reading stamps, so a large dependency or build folder
@@ -422,10 +424,16 @@ pub(super) fn outside(repository: &Path) -> Outside {
             ":(exclude).horizon",
         ],
         FILES_LIMIT,
-    )
-    .iter()
-    .map(|path| stamp_of(path))
-    .collect::<BTreeMap<_, _>>();
+    );
+    let mut failed = None;
+    let files = files
+        .unwrap_or_else(|error| {
+            failed = Some(error);
+            Vec::new()
+        })
+        .iter()
+        .map(|path| stamp_of(path))
+        .collect::<BTreeMap<_, _>>();
     let ignored = git_paths(
         repository,
         &[
@@ -439,12 +447,21 @@ pub(super) fn outside(repository: &Path) -> Outside {
             ":(exclude).horizon",
         ],
         IGNORED_LIMIT,
-    )
-    .iter()
-    .map(|path| stamp_of(path))
-    .collect::<BTreeMap<_, _>>();
+    );
+    let ignored = ignored
+        .unwrap_or_else(|error| {
+            failed = Some(error);
+            Vec::new()
+        })
+        .iter()
+        .map(|path| stamp_of(path))
+        .collect::<BTreeMap<_, _>>();
     let ignored_partial = ignored.len() >= IGNORED_LIMIT;
     let (control, mut incomplete) = control(repository);
+    // A listing git could not give names nothing, so the reading cannot be the check.
+    if failed.is_some() {
+        incomplete = failed;
+    }
     if files.len() >= FILES_LIMIT {
         incomplete = Some(format!(
             "the repository holds {FILES_LIMIT} or more tracked and new files"
@@ -505,17 +522,20 @@ fn outside_setup(path: &[u8]) -> bool {
 
 /// The first `limit` paths outside `.horizon` that git lists NUL-separated for `args`,
 /// read as git writes them; git is stopped once the limit is reached.
-fn git_paths(repository: &Path, args: &[&str], limit: usize) -> Vec<Vec<u8>> {
+fn git_paths(repository: &Path, args: &[&str], limit: usize) -> Result<Vec<Vec<u8>>, String> {
     use std::io::BufRead as _;
-    let Ok(mut child) = git_command(repository)
+    let mut command = git_command(repository);
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    else {
-        return Vec::new();
-    };
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    let mut child = command.spawn().map_err(|error| format!("cannot start git: {error}"))?;
+    // Within its time: the repository's configuration, which git reads first, is the
+    // agent's to write.
+    let watch = super::bounded::watch(&child, super::bounded::LISTING);
     let mut paths = Vec::new();
     if let Some(stdout) = child.stdout.take() {
         let mut reader = std::io::BufReader::new(stdout);
@@ -535,9 +555,23 @@ fn git_paths(repository: &Path, args: &[&str], limit: usize) -> Vec<Vec<u8>> {
             }
         }
     }
-    let _ = child.kill();
-    let _ = child.wait();
-    paths
+    let expired = watch.finish();
+    if paths.len() >= limit {
+        // The caller counts a listing that reached its limit.
+        super::bounded::end(&mut child);
+        return Ok(paths);
+    }
+    let listed = child.wait().is_ok_and(|status| status.success());
+    if expired {
+        Err(format!(
+            "git did not list the repository's files within {} s",
+            super::bounded::LISTING.as_secs()
+        ))
+    } else if listed {
+        Ok(paths)
+    } else {
+        Err("git could not list the repository's files".to_owned())
+    }
 }
 
 /// A path git listed, as this platform names files.

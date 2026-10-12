@@ -128,8 +128,21 @@ fn progress_bar(ui: &mut Ui, steps: &[Step], tint: Color32) {
 fn step_row(ui: &mut Ui, step: &Step, elapsed: Option<Duration>) {
     ui.horizontal(|ui| {
         ui.set_min_height(28.0);
-        let (icon, _) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
+        let (icon, response) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
         step_icon(ui, icon, step.state);
+        // The painted icon tells a screen reader the step's state, as the deployment's do.
+        let state = match step.state {
+            State::Pending => "pending",
+            State::Running => "running",
+            State::Done => "done",
+            State::Skipped => "skipped",
+            State::Failed => "failed",
+        };
+        let spoken = match elapsed {
+            Some(elapsed) => format!("{}: {state}, {} s", step.title, elapsed.as_secs()),
+            None => format!("{}: {state}", step.title),
+        };
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, spoken.clone()));
         ui.add_space(6.0);
         let color = match step.state {
             State::Running => theme::FG(),

@@ -189,16 +189,18 @@ fn head_of(repository: &Path, expected: super::untrusted::Identity) -> Result<St
         let _ = expected;
         super::commit::git_command(repository)
     };
-    let head = command
-        .args(["rev-parse", "--verify", "HEAD"])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-        .unwrap_or_default();
+    command.args(["rev-parse", "--verify", "HEAD"]);
+    // Within its time: the repository's configuration, which git reads first, is the
+    // agent's to write. A repository without a commit has no HEAD to name.
+    let output = super::bounded::output(command, None, super::bounded::GIT);
     #[cfg(target_os = "linux")]
     drop(folder);
-    Ok(head)
+    let output = output?;
+    Ok(if output.status.success() {
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    } else {
+        String::new()
+    })
 }
 
 /// The fingerprint of the setup as it is now, to compare with the proof's.

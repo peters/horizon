@@ -78,8 +78,8 @@ setup** commits `.horizon` and reads it as the repository profile.
 
    Result: The dialog changes to **Set up ci-app** with the text "An agent prepares
    a worker image from your CI. Nothing is rented yet." The left column shows the
-   steps Read CI, Find tools, Write Dockerfile, Build image, Run CI in image,
-   Desktop preview and Fast rerun. The right column shows the agent's terminal
+   steps Read CI, Find tools, Write Dockerfile, Build image, Run CI in image
+   and Fast rerun. The right column shows the agent's terminal
    with "live · click to type to the agent". No panel appears on the canvas.
 
 2. If the agent asks a question, click its terminal and answer it.

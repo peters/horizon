@@ -18,13 +18,12 @@ pub(super) const OUTPUT_ROWS: usize = 60;
 
 /// The steps the prompt asks the agent to report, in order. They show as pending
 /// before the agent writes its first status.
-pub(super) const STEPS: [&str; 7] = [
+pub(super) const STEPS: [&str; 6] = [
     "Read CI",
     "Find tools",
     "Write Dockerfile",
     "Build image",
     "Run CI in image",
-    "Desktop preview",
     "Fast rerun",
 ];
 
@@ -736,12 +735,12 @@ mod tests {
             PathBuf::from("missing.json"),
             Mode::New,
         );
-        let steps = |preview: &str| {
+        let steps = |dockerfile: &str| {
             format!(
-                r#"{{"steps":[{{"title":"Read CI","state":"done"}},{{"title":"Find tools","state":"done"}},{{"title":"Write Dockerfile","state":"done"}},{{"title":"Build image","state":"running"}},{{"title":"Desktop preview","state":"{preview}"}}]}}"#
+                r#"{{"steps":[{{"title":"Read CI","state":"done"}},{{"title":"Find tools","state":"done"}},{{"title":"Write Dockerfile","state":"{dockerfile}"}},{{"title":"Build image","state":"running"}}]}}"#
             )
         };
-        run.status = parse(&steps("skipped")).unwrap();
+        run.status = parse(&steps("done")).unwrap();
         assert!(run.agent_steps_done(), "Horizon's own steps are not the agent's to end");
         run.status = parse(&steps("failed")).unwrap();
         assert!(!run.agent_steps_done(), "a failed step is not a finished setup");

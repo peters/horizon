@@ -12,6 +12,7 @@ use std::path::Path;
 
 mod accept;
 mod agent;
+mod bounded;
 mod commit;
 mod prompt;
 mod proof;

@@ -5,7 +5,7 @@
 use horizon_core::cloud_runtime::Cancellation;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -379,12 +379,11 @@ impl Proof {
             );
         }
         format!(
-            "Horizon proof passed: image {} built and checked in {}, CI jobs passed in {}, fast rerun in {}. Use these times in your summary. Now do Desktop preview with image {}.",
+            "Horizon proof passed: image {} built and checked in {}, CI jobs passed in {}, fast rerun in {}. Use these times in your summary.",
             self.image,
             time(Phase::Build),
             time(Phase::Ci),
-            time(Phase::Fast),
-            self.image
+            time(Phase::Fast)
         )
     }
 }
@@ -765,13 +764,11 @@ impl Job {
     /// deployment does: when the commit has submodules or LFS files, deployment's own
     /// snapshot of it, made on this computer, goes over the checkout in the volume.
     fn hydrate(&self, head: &str, log: &mut Option<std::fs::File>) -> Result<(), String> {
+        // Within the proof's limits and Stop: the repository's configuration is the agent's.
         let git = |args: &[&str]| {
-            super::commit::git_command(&self.repository)
-                .args(args)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .is_ok_and(|status| status.success())
+            let mut command = super::commit::git_command(&self.repository);
+            command.args(args);
+            self.capture(command, STEP_TIMEOUT).is_ok()
         };
         let modules = git(&["cat-file", "-e", &format!("{head}:.gitmodules")]);
         let lfs = git(&[

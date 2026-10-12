@@ -69,14 +69,11 @@ pub(super) fn has_setup_files(repository: &Path) -> bool {
         .any(|file| repository.join(file).is_file())
 }
 
-pub(super) fn prompt(agents: &[Agent], (repository, status): (&Path, &Path), mode: &Mode) -> String {
+pub(super) fn prompt(agents: &[Agent], (_repository, status): (&Path, &Path), mode: &Mode) -> String {
     let base = quick_start::IMAGE;
     let progress = PROGRESS.replace("STATUS_FILE", &status.display().to_string());
-    // The run's own name for the preview container: Stop and the end of the run remove
-    // every container of the run, so this one goes with them even after the agent ended.
-    let (_, volume) = super::proof::run_names(repository, &super::proof::run_id(status));
     let mut text = format!(
-        "{PROMPT}\n{progress}\nName the Desktop preview container {volume}-preview (docker run --rm --name {volume}-preview ...), so Horizon removes it when the setup stops or ends.\nThe worker base for step 4 is {base}.\n{}",
+        "{PROMPT}\n{progress}\nThe worker base for step 4 is {base}.\n{}",
         super::proof::localci_instruction()
     );
     if let Some(instruction) = mode.instruction() {
@@ -95,7 +92,7 @@ pub(super) fn prompt(agents: &[Agent], (repository, status): (&Path, &Path), mod
 const PRESERVE: &str = "Preserve existing repository profile choices unless I explicitly ask to change them.";
 
 /// How the agent reports progress to the dialog and takes the person's messages.
-const PROGRESS: &str = "Horizon shows your progress in its New cloud dialog. After each step, rewrite the JSON file STATUS_FILE (write a temporary file beside it, then rename it), for example {\"steps\": [{\"title\": \"Read CI\", \"state\": \"done\", \"detail\": \"dotnet-core.yml, check-translations.yml\"}], \"question\": null, \"summary\": null}. Keep the proof and proof_request entries when you rewrite the file. Use these step titles in this order: Read CI, Find tools, Write Dockerfile, Build image, Run CI in image, Desktop preview, Fast rerun. A state is pending, running, done, skipped or failed. A detail is one short line of at most 70 characters that a person reads at a glance, such as the tools and versions found or how many tests passed. Desktop preview, after Horizon reports that the CI passed: when the repository builds a desktop or other GUI app, prove it opens on the worker desktop that the cloud panel shows: in a container of the image, start Xvfb on :99, run the app from its build output with DISPLAY=:99 for about 20 seconds, take a screenshot with import -window root, and check that a window drew. Add the X11, GL and font libraries it needs, reusing the repository's own Dockerfiles, and put the screenshot path and window size in the detail. Mark the step skipped when there is no GUI app. Never read or pass my credentials, for example gh auth token, without asking me first through question. Never open an interactive question menu: when you need my answer, ask in plain text, put the same short sentence in question, and set it back to null when I answer. My messages can arrive while you work; follow them. Work fast: ask for Horizon's proof as soon as the Dockerfile and cloud.yml are written, write the Dockerfile so Docker layer and package caches are reused, and keep explanations short. Never build the image or run the CI yourself; Horizon does. At the end, set summary to one line such as \"1,463 tests passed in the image · 4 vCPU · 16 GB\".";
+const PROGRESS: &str = "Horizon shows your progress in its New cloud dialog. After each step, rewrite the JSON file STATUS_FILE (write a temporary file beside it, then rename it), for example {\"steps\": [{\"title\": \"Read CI\", \"state\": \"done\", \"detail\": \"dotnet-core.yml, check-translations.yml\"}], \"question\": null, \"summary\": null}. Keep the proof and proof_request entries when you rewrite the file. Use these step titles in this order: Read CI, Find tools, Write Dockerfile, Build image, Run CI in image, Fast rerun. A state is pending, running, done, skipped or failed. A detail is one short line of at most 70 characters that a person reads at a glance, such as the tools and versions found or how many tests passed. Never read or pass my credentials, for example gh auth token, without asking me first through question. Never open an interactive question menu: when you need my answer, ask in plain text, put the same short sentence in question, and set it back to null when I answer. My messages can arrive while you work; follow them. Work fast: ask for Horizon's proof as soon as the Dockerfile and cloud.yml are written, write the Dockerfile so Docker layer and package caches are reused, and keep explanations short. Never build the image or run the CI yourself; Horizon does. At the end, set summary to one line such as \"1,463 tests passed in the image · 4 vCPU · 16 GB\".";
 
 /// The setup agent derives the worker image from the repository's own CI first:
 /// CI is the tested recipe that turns a clean Linux machine into one that builds.

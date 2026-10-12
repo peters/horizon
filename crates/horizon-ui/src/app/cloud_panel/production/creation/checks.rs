@@ -316,9 +316,10 @@ fn show(ui: &mut Ui, form: &mut Production, root: Option<&Path>) {
     }
     let rows = rows(form);
     let failed = rows.iter().any(|row| matches!(row, Row::Fail(_)));
-    // Every check passed: one line that opens to the checks, by mouse or keyboard.
+    // Every check passed: one line that opens to the checks, by mouse or keyboard. It
+    // speaks of the checks only, since Start may still wait for a title.
     if rows.iter().all(|row| matches!(row, Row::Pass(_))) {
-        egui::CollapsingHeader::new(RichText::new("Ready to start").size(13.0).color(theme::PALETTE_GREEN()))
+        egui::CollapsingHeader::new(RichText::new("Checks passed").size(13.0).color(theme::PALETTE_GREEN()))
             .id_salt("cloud-checks-ready")
             .show(ui, |ui| {
                 for row in &rows {
