@@ -651,7 +651,55 @@ impl Job {
             .arg(CLONE);
         let result = self.stream(clone, log);
         drop(folder);
-        result
+        result?;
+        self.hydrate(head, log)
+    }
+
+    /// Fills the checkout's submodules and Git LFS files as `actions/checkout` would and
+    /// deployment does: when the commit has submodules or LFS files, deployment's own
+    /// snapshot of it, made on this computer, goes over the checkout in the volume.
+    fn hydrate(&self, head: &str, log: &mut Option<std::fs::File>) -> Result<(), String> {
+        let git = |args: &[&str]| {
+            super::commit::git_command(&self.repository)
+                .args(args)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+        };
+        let modules = git(&["cat-file", "-e", &format!("{head}:.gitmodules")]);
+        let lfs = git(&[
+            "grep",
+            "-q",
+            "filter=lfs",
+            head,
+            "--",
+            ":(glob)**/.gitattributes",
+            ".gitattributes",
+        ]);
+        if !modules && !lfs {
+            return Ok(());
+        }
+        let folder = tempfile::Builder::new()
+            .prefix("horizon-proof-checkout-")
+            .tempdir()
+            .map_err(|error| error.to_string())?;
+        let runner = horizon_core::cloud_runtime::command::Runner {
+            cancel: &self.cancel,
+            emit: &|_| {},
+            secrets: Vec::new(),
+        };
+        let tree = horizon_core::cloud_runtime::repository::snapshot(&self.repository, head, folder.path(), &runner)
+            .map_err(|error| format!("cannot make the committed tree with its submodules and LFS files: {error}"))?;
+        let mut overlay = Command::new("docker");
+        overlay
+            .args(["run", "--rm", "--name", &self.container, "-v"])
+            .arg(format!("{}:/workspace", self.volume))
+            .arg("-v")
+            .arg(format!("{}:/snapshot:ro", tree.display()))
+            .args(["--entrypoint", "sh", TOOLS, "-c"])
+            .arg("cp -a /snapshot/. /workspace/checkout/ && chown -R 10001:10001 /workspace/checkout");
+        self.stream(overlay, log)
     }
 
     /// Restores a .NET repository's packages on this computer first, with its own feed

@@ -305,6 +305,10 @@ fn control(repository: &Path) -> BTreeMap<String, Option<Stamp>> {
 /// cannot hold up the dialog. Ignored files past it, in git's order, are not compared.
 const IGNORED_LIMIT: usize = 100_000;
 
+/// The most tracked and new files a reading stamps; a repository with more is compared on
+/// these, in git's order.
+const FILES_LIMIT: usize = 1_000_000;
+
 /// What changes whenever a file is written, replaced or has its times set: on Unix the
 /// inode change time, which no one can set back, with the inode, size and mode.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -337,29 +341,43 @@ fn stamp(metadata: &std::fs::Metadata) -> Stamp {
 /// quick in a large repository and nothing the agent left can make it wait.
 pub(super) fn outside(repository: &Path) -> Outside {
     let head = git(repository, None, &["rev-parse", "--verify", "HEAD"], None).unwrap_or_default();
-    let listed = git_raw(
-        repository,
-        None,
-        &["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-        None,
-    )
-    .unwrap_or_default();
     let stamp_of = |path: &[u8]| {
         let stamp = std::fs::symlink_metadata(repository.join(path_of(path)))
             .ok()
             .map(|metadata| stamp(&metadata));
         (path.to_vec(), stamp)
     };
-    let files = listed
-        .split(|byte| *byte == 0)
-        .filter(|path| outside_setup(path))
-        .map(stamp_of)
-        .collect();
-    // Read as git lists them and stopped at the limit, so a huge ignored folder is
-    // never held in memory.
+    // Both listings leave .horizon out in git's own pathspec, are read as git writes
+    // them and stop at their limit, so no listing is ever held whole in memory.
+    let files = git_paths(
+        repository,
+        &[
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            ".",
+            ":(exclude).horizon",
+        ],
+        FILES_LIMIT,
+    )
+    .iter()
+    .map(|path| stamp_of(path))
+    .collect();
     let ignored = git_paths(
         repository,
-        &["ls-files", "-z", "--others", "--ignored", "--exclude-standard"],
+        &[
+            "ls-files",
+            "-z",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--",
+            ".",
+            ":(exclude).horizon",
+        ],
         IGNORED_LIMIT,
     )
     .iter()

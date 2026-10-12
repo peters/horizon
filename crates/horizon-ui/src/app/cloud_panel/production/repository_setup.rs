@@ -505,7 +505,7 @@ mod tests {
     fn selected_agent_preference_is_passed_without_machine_bindings() {
         let text = prompt(
             &[horizon_core::cloud_runtime::setup::Agent::Claude],
-            Path::new("/status.json"),
+            (Path::new("/repo"), Path::new("/status.json")),
             &Mode::New,
         );
         assert!(text.contains("agents [claude]"));
@@ -518,7 +518,7 @@ mod tests {
     fn the_setup_agent_starts_from_ci_and_builds_on_the_pinned_base() {
         let text = prompt(
             &[horizon_core::cloud_runtime::setup::Agent::Claude],
-            Path::new("/status.json"),
+            (Path::new("/repo"), Path::new("/status.json")),
             &Mode::New,
         );
         let ci = text.find(".github/workflows").unwrap();
@@ -546,7 +546,7 @@ mod tests {
 
     #[test]
     fn no_machine_account_states_no_agent_preference() {
-        let text = prompt(&[], Path::new("/status.json"), &Mode::New);
+        let text = prompt(&[], (Path::new("/repo"), Path::new("/status.json")), &Mode::New);
         assert!(!text.contains("agents []"), "{text}");
         assert!(!text.contains("Machine account preference"));
     }

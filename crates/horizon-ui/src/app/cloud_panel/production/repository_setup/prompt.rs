@@ -69,11 +69,14 @@ pub(super) fn has_setup_files(repository: &Path) -> bool {
         .any(|file| repository.join(file).is_file())
 }
 
-pub(super) fn prompt(agents: &[Agent], status: &Path, mode: &Mode) -> String {
+pub(super) fn prompt(agents: &[Agent], (repository, status): (&Path, &Path), mode: &Mode) -> String {
     let base = quick_start::IMAGE;
     let progress = PROGRESS.replace("STATUS_FILE", &status.display().to_string());
+    // The run's own name for the preview container: Stop and the end of the run remove
+    // every container of the run, so this one goes with them even after the agent ended.
+    let (_, volume) = super::proof::run_names(repository, &super::proof::run_id(status));
     let mut text = format!(
-        "{PROMPT}\n{progress}\nThe worker base for step 4 is {base}.\n{}",
+        "{PROMPT}\n{progress}\nName the Desktop preview container {volume}-preview (docker run --rm --name {volume}-preview ...), so Horizon removes it when the setup stops or ends.\nThe worker base for step 4 is {base}.\n{}",
         super::proof::localci_instruction()
     );
     if let Some(instruction) = mode.instruction() {
@@ -112,12 +115,16 @@ mod tests {
     #[test]
     fn every_mode_keeps_the_profile_choices_and_says_where_it_starts() {
         let status = Path::new("/status.json");
-        let new = prompt(&[], status, &Mode::New);
+        let new = prompt(&[], (Path::new("/repo"), status), &Mode::New);
         assert!(new.contains(PRESERVE), "even without an agent preference");
         assert!(!new.contains(".horizon from an earlier setup"));
-        assert!(prompt(&[], status, &Mode::Continue).contains("uncommitted files in .horizon"));
-        assert!(prompt(&[], status, &Mode::Update).contains("Update them in place"));
-        let fix = prompt(&[], status, &Mode::Fix("profiles.cpu: unknown field `cpus`".into()));
+        assert!(prompt(&[], (Path::new("/repo"), status), &Mode::Continue).contains("uncommitted files in .horizon"));
+        assert!(prompt(&[], (Path::new("/repo"), status), &Mode::Update).contains("Update them in place"));
+        let fix = prompt(
+            &[],
+            (Path::new("/repo"), status),
+            &Mode::Fix("profiles.cpu: unknown field `cpus`".into()),
+        );
         assert!(fix.contains("Horizon reports: profiles.cpu: unknown field `cpus`."));
     }
 

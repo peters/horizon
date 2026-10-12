@@ -85,7 +85,11 @@ impl HorizonApp {
         };
         let chosen_mode = std::mem::take(&mut self.cloud_prototype.production.setup_mode);
         let mode = chosen_mode.clone().resolve(&repository);
-        let instructions = prompt(&self.cloud_prototype.production.setup_agents, &status, &mode);
+        let instructions = prompt(
+            &self.cloud_prototype.production.setup_agents,
+            (&repository, &status),
+            &mode,
+        );
         // Claude and Codex take the instructions as their starting prompt; other agents get
         // them pasted once their session settles.
         let takes_prompt = matches!(kind, PanelKind::Claude | PanelKind::Codex);

@@ -316,22 +316,17 @@ fn show(ui: &mut Ui, form: &mut Production, root: Option<&Path>) {
     }
     let rows = rows(form);
     let failed = rows.iter().any(|row| matches!(row, Row::Fail(_)));
-    // Every check passed: one line, with the checks on hover.
+    // Every check passed: one line that opens to the checks, by mouse or keyboard.
     if rows.iter().all(|row| matches!(row, Row::Pass(_))) {
-        let checks = rows
-            .iter()
-            .filter_map(|row| match row {
-                Row::Pass(text) => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        ui.horizontal(|ui| {
-            let (dot, _) = ui.allocate_exact_size(Vec2::splat(10.0), Sense::hover());
-            ui.painter().circle_filled(dot.center(), 4.0, theme::PALETTE_GREEN());
-            ui.label(RichText::new("Ready to start").size(13.0).color(theme::FG_SOFT()))
-                .on_hover_text(checks);
-        });
+        egui::CollapsingHeader::new(RichText::new("Ready to start").size(13.0).color(theme::PALETTE_GREEN()))
+            .id_salt("cloud-checks-ready")
+            .show(ui, |ui| {
+                for row in &rows {
+                    if let Row::Pass(text) = row {
+                        ui.label(RichText::new(text).size(12.5).color(theme::FG_SOFT()));
+                    }
+                }
+            });
         if needs_account(form) {
             account::form(ui, &mut form.checks.account, &settings_root(root));
         }
