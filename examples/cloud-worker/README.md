@@ -615,8 +615,8 @@ Codex also runs without that sandbox.
 > commands. Those commands can push to the repositories that the worker has access to, use
 > API credit, or read the credentials on the worker.
 
-To keep the prompts of each agent, set `agent_approvals: ask` in the capabilities of the
-profile:
+To select the interactive approval preset, set `agent_approvals: ask` in the
+profile capabilities:
 
 ```yaml
 capabilities:
@@ -628,13 +628,23 @@ capabilities:
 
 - The agent runs as an account that is not root. An image without agent isolation runs its
   agents as root, and Claude Code refuses to skip its prompts as root.
-- `/workspace/capabilities.json` can be read and does not set `agent_approvals: ask`.
+- `/run/horizon-worker/agent-approvals` contains `auto`. Root publishes this policy at
+  startup with mode `0644` in a root-owned directory with mode `0755`. The agent can read
+  it but cannot change or replace it. A missing or invalid policy keeps the prompts.
+  Readiness compares this protected value with the requested profile.
 
 In auto mode, Claude Code starts with `--dangerously-skip-permissions`, and the launcher
 records in `~/.claude.json` that the one-time warning for this mode is accepted. Codex starts
-with `--dangerously-bypass-approvals-and-sandbox`. In both modes, the launcher records in
-the Codex `config.toml` that the folder of the session is trusted, because Codex asks this
-question for each repository folder. An existing decision for that folder is kept.
+with `--dangerously-bypass-approvals-and-sandbox`. Only in auto mode does the launcher
+record in the Codex `config.toml` that the session folder is trusted. An existing decision
+for that folder is kept. In `ask` mode, it leaves folder trust unchanged and sets
+`approval_policy="on-request"` and `--sandbox workspace-write` on the command line.
+These overrides prevent project configuration, including a folder trusted in an earlier
+auto-mode session, from disabling approvals or selecting an unrestricted sandbox.
+This preset overrides user approval and sandbox settings too, including stricter user
+defaults. It permits sandboxed workspace edits; it does not ask before every action.
+On a provider that blocks user namespaces, this sandbox can still require approval to
+run a command outside the sandbox.
 
 `horizon-worker-check` reports `horizon-agent-approvals-contract=1` for images that support
 this setting. Horizon refuses to deploy a profile with `agent_approvals: ask` to other

@@ -40,7 +40,7 @@ items:
 
 ## 3. Safety
 
-> **CAUTION:** TASKS Q04 TO Q06 RENT A RUNPOD WORKER AND A NETWORK VOLUME. The
+> **CAUTION:** TASKS Q04 TO Q07 AND Q09 USE A PAID WORKER AND A NETWORK VOLUME. The
 > provider bills the worker while it runs and the volume until you delete it.
 
 > **CAUTION:** DELETE ONLY THE CLOUD THAT THIS RUN MADE. If you delete other
@@ -429,6 +429,66 @@ key file.
 
    Result: The owner of each file is `horizon-agent`.
 
+### 6.8 Q08 — Approval policy regressions without a cloud
+
+This task uses synthetic worker files and child executables. It allocates no cloud
+and sends no agent prompt.
+
+1. Run these tests from `examples/cloud-worker`:
+
+   ```bash
+   python3 -B -m unittest test_agent_runtime test_capabilities
+   ```
+
+   Result: The tests pass. The launcher keeps `ask` after the workspace selection
+   changes. Missing or invalid protected policy data keeps the prompts. Readiness
+   refuses a different protected policy. A repository with bypass settings gets
+   explicit CLI approval and sandbox options, including after an auto-mode session.
+
+2. On a disposable Linux test runner with root access, run the same tests as root.
+
+   Result: The two-user test runs. UID 10001 reads the policy that root publishes
+   with a restrictive startup umask. It cannot write, delete or replace the policy
+   or rename its parent. The root-only tests report no skip.
+
+3. Run the worker-contract regression from the repository root:
+
+   ```bash
+   cargo test -p horizon-core --lib keeping_agent_prompts_requires_its_exact_marker_and_auto_mode_needs_none
+   ```
+
+   Result: A requested `ask` mode requires the exact approval contract marker.
+   An image without the marker is refused. Auto mode accepts older images.
+
+### 6.9 Q09 — Interactive approval preset on a worker
+
+This task requires a separate authorized repository cloud with
+`capabilities.agent_approvals: ask` and the candidate worker image. Use the
+repository-profile deployment procedure in [cloud deployment](cloud-panels/d-deployment.md).
+Record that cloud and its volume in the resource ledger. Do not change Q04's cloud.
+
+1. Open a Codex panel in the repository cloud.
+
+   Result: A new folder is not automatically trusted. After you accept folder
+   trust, the session reports the `on-request` approval policy and the
+   `workspace-write` sandbox. A stricter user default is also overridden by this
+   explicit profile preset.
+
+2. Request a harmless command that requires access outside the sandbox. On a
+   provider without user namespaces, request `uname -sr`.
+
+   Result: The agent requests approval before it runs outside the sandbox.
+   Decline the request. The command does not run outside the sandbox.
+
+3. Open a Claude Code panel and request a shell command that its default policy
+   requires you to approve. Decline that request.
+
+   Result: The panel shows an approval prompt. The declined command does not run.
+
+4. Delete the repository cloud and its volume. Check both through the provider.
+
+   Result: Neither resource remains. Record the cleanup result in the ledger.
+
 ## 7. Pass criteria
 
 - Q01 shows the guidance section and no red error.
@@ -451,6 +511,10 @@ key file.
   in Q06 can start Docker.
 - In Q07, Claude Code and Codex each run a command and write a file as
   `horizon-agent`, with no prompt and no sandbox error.
+- Q08 passes the approval regressions and the exact contract-marker test. The
+  root-only permission tests run on a disposable test runner.
+- Q09 shows interactive approval in both agents. A declined request does not run
+  outside the sandbox. Its separate cloud and volume are deleted.
 - Cleanup removes the pod and the network volume of this run.
 
 ## 8. Cleanup

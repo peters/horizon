@@ -260,11 +260,13 @@ if sys.argv[1:] == ['--help']:
 
     def test_codex_starts_without_the_background_server(self):
         child = self.launch('codex', CODEX_DAEMON='1')
-        self.assertEqual(child['args'], ['--no-daemon'])
+        self.assertEqual(child['args'], ['--no-daemon', '--config', 'approval_policy="on-request"',
+                                         '--sandbox', 'workspace-write'])
         self.assertEqual(child['env']['HOME'], str(self.workspace / 'home'))
 
-    def test_codex_without_the_server_option_starts_with_no_arguments(self):
-        self.assertEqual(self.launch('codex')['args'], [])
+    def test_codex_without_the_server_option_starts_with_only_approval_arguments(self):
+        self.assertEqual(self.launch('codex')['args'],
+                         ['--config', 'approval_policy="on-request"', '--sandbox', 'workspace-write'])
 
     def test_codex_option_probe_uses_the_session_path(self):
         layer = self.root / 'layer-bin'
@@ -275,12 +277,13 @@ if sys.argv[1:] == ['--help']:
         self.fragments.mkdir()
         (self.fragments / '20-codex.env').write_text(f'PATH_PREPEND={layer}\n')
         child = self.launch('codex')
-        self.assertEqual(child['args'], ['--no-daemon'])
+        self.assertEqual(child['args'], ['--no-daemon', '--config', 'approval_policy="on-request"',
+                                         '--sandbox', 'workspace-write'])
         self.assertTrue(child['path'].startswith(f'{layer}:'), child['path'])
 
     def select(self, **settings):
         """The worker's selection for this cloud, as horizon-worker-check --write-runtime keeps it."""
-        (self.workspace / 'capabilities.json').write_text(json.dumps({'agents': ['claude', 'codex'], **settings}))
+        (self.run_dir / 'agent-approvals').write_text(settings.get('agent_approvals', 'auto') + '\n')
 
     def as_uid(self, uid):
         # The launcher decides on root by `id -u`; this stands in for it so the test does not
@@ -306,11 +309,9 @@ if sys.argv[1:] == ['--help']:
         self.assertIs(self.claude_config()['bypassPermissionsModeAccepted'], True)
 
     def test_ask_an_unreadable_selection_or_root_keeps_claude_prompts(self):
-        selection = self.workspace / 'capabilities.json'
-        for uid, text in [(10001, json.dumps({'agent_approvals': 'ask'})), (10001, None),
-                          (10001, '{not json'), (10001, json.dumps({'agent_approvals': None})),
-                          (10001, json.dumps({'agent_approvals': 'never'})), (10001, json.dumps([])),
-                          (0, json.dumps({}))]:
+        selection = self.run_dir / 'agent-approvals'
+        for uid, text in [(10001, 'ask\n'), (10001, None), (10001, ''),
+                          (10001, 'never\n'), (10001, 'auto'), (10001, '{}'), (0, 'auto\n')]:
             with self.subTest(uid=uid, selection=text):
                 self.as_uid(uid)
                 selection.unlink(missing_ok=True)
@@ -336,10 +337,42 @@ if sys.argv[1:] == ['--help']:
         self.codex_config().parent.mkdir(parents=True)
         saved = f'model = "saved"\n\n[projects.{json.dumps(str(folder.resolve()))}]\ntrust_level = "untrusted"\n'
         self.codex_config().write_text(saved)
-        self.assertEqual(self.launch('codex', cwd=folder)['args'], [])
+        self.assertEqual(self.launch('codex', cwd=folder)['args'],
+                         ['--config', 'approval_policy="on-request"', '--sandbox', 'workspace-write'])
         self.assertEqual(self.codex_config().read_text(), saved)
 
+    def test_ask_does_not_trust_a_checkout_with_bypass_configuration(self):
+        self.as_uid(10001)
+        self.select(agent_approvals='ask')
+        folder = self.checkout()
+        (folder / '.codex').mkdir()
+        (folder / '.codex/config.toml').write_text(
+            'approval_policy = "never"\nsandbox_mode = "danger-full-access"\n')
+        child = self.launch('codex', cwd=folder)
+        self.assertFalse(self.codex_config().exists())
+        self.assertEqual(child['args'],
+                         ['--config', 'approval_policy="on-request"', '--sandbox', 'workspace-write'])
+        # A previous auto-mode session may already have trusted this same checkout.
+        self.select()
+        self.launch('codex', cwd=folder)
+        saved = self.codex_config().read_text()
+        self.select(agent_approvals='ask')
+        self.assertEqual(self.launch('codex', cwd=folder)['args'], child['args'])
+        self.assertEqual(self.codex_config().read_text(), saved)
+
+    def test_workspace_selection_cannot_override_the_protected_approval_policy(self):
+        self.as_uid(10001)
+        self.select(agent_approvals='ask')
+        (self.workspace / 'capabilities.json').write_text('{}')
+        self.assertNotIn('--dangerously-skip-permissions', self.launch()['args'])
+        self.assertNotIn('--dangerously-bypass-approvals-and-sandbox', self.launch('codex')['args'])
+        (self.run_dir / 'agent-approvals').unlink()
+        self.assertNotIn('--dangerously-skip-permissions', self.launch()['args'])
+        self.assertNotIn('--dangerously-bypass-approvals-and-sandbox', self.launch('codex')['args'])
+
     def test_the_launch_never_imports_modules_from_the_repository(self):
+        self.as_uid(10001)
+        self.select()
         folder = self.checkout()
         marker = self.root / 'imported'
         for name in ['json', 'tomllib', 'fcntl', 'os']:
@@ -351,6 +384,8 @@ if sys.argv[1:] == ['--help']:
         self.assertEqual(config['projects'][str(folder.resolve())], {'trust_level': 'trusted'})
 
     def test_codex_folder_trust_is_added_once_and_a_broken_config_is_left_alone(self):
+        self.as_uid(10001)
+        self.select()
         folder = self.checkout()
         self.codex_config().parent.mkdir(parents=True)
         self.codex_config().write_text('model = "saved"')

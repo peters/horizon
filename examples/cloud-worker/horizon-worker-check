@@ -33,7 +33,7 @@ def capabilities(value):
         raise ValueError('Invalid desktop capability')
     result = {'agents': value.get('agents', []), 'browsers': value.get('browsers', []), 'desktop': value.get('desktop', False)}
     # Auto mode is the default and is never written, so a profile in auto mode compares
-    # equal to one that leaves the field out. horizon-worker-run reads `ask` from here.
+    # equal to one that leaves the field out.
     approvals = value.get('agent_approvals', 'auto')
     if approvals not in ('auto', 'ask'):
         raise ValueError('Invalid agent approvals setting')
@@ -196,6 +196,7 @@ try:
     available = capabilities(json.loads(Path('/etc/horizon-worker/capabilities.json').read_text()))
     raw = args.capabilities_json or os.environ.get('HORIZON_WORKER_CAPABILITIES')
     runtime = Path('/workspace/capabilities.json')
+    approval_policy = Path('/run/horizon-worker/agent-approvals')
     selected = capabilities(json.loads(raw)) if raw else capabilities(json.loads(runtime.read_text())) if runtime.exists() else available
     if any(not set(selected[k]) <= set(available[k]) for k in ['agents', 'browsers']) or (selected['desktop'] and not available['desktop']):
         raise ValueError('Worker image does not contain the requested capabilities')
@@ -280,6 +281,8 @@ try:
         active = capabilities(json.loads(runtime.read_text()))
         if active != selected:
             raise ValueError('Active worker capabilities differ from this cloud profile')
+        if approval_policy.read_text() != selected.get('agent_approvals', 'auto') + '\n':
+            raise ValueError('Active agent approval policy differs from this cloud profile')
         services_ready(selected)
         started = container_started()
         if started is not None:
@@ -292,6 +295,16 @@ try:
         if stopped is not None:
             print('horizon-last-self-stop=' + json.dumps(stopped, separators=(',', ':')))
     if args.write_runtime:
+        # /workspace is agent-owned state. The launcher and readiness use this root-owned
+        # copy instead, in a directory that the isolation handoff never gives to the agent.
+        if os.geteuid() != 0:
+            raise ValueError('Only root can publish the agent approval policy')
+        approval_policy.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        approval_policy.parent.chmod(0o755)
+        with tempfile.NamedTemporaryFile(dir=approval_policy.parent, delete=False) as pending_policy:
+            pending_policy.write((selected.get('agent_approvals', 'auto') + '\n').encode())
+            os.fchmod(pending_policy.fileno(), 0o644)
+        os.replace(pending_policy.name, approval_policy)
         runtime.parent.mkdir(parents=True, exist_ok=True)
         pending = runtime.with_suffix('.new')
         pending.write_text(json.dumps(selected)); pending.chmod(0o600); pending.replace(runtime)

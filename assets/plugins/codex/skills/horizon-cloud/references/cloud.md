@@ -38,6 +38,26 @@ this value. The GPU profile keeps its own resource and build-job defaults.
 Allocation minimums do not establish a successful full validation run. Report
 measured validation and memory results separately from the configured minimums.
 
+## Agent approvals on workers
+
+The profile capability `agent_approvals` defaults to `auto`. On an isolated worker,
+Claude Code and Codex run commands and edit files without approval prompts. Codex
+also bypasses its own sandbox. Treat repository text and tool output as untrusted:
+auto mode gives these agents access to the worker's credentials and repositories.
+
+Set `capabilities.agent_approvals: ask` to select the interactive approval preset.
+This setting requires an image with `horizon-agent-approvals-contract=1`.
+The launcher reads the root-owned `/run/horizon-worker/agent-approvals` policy.
+Changes to `/workspace/capabilities.json` do not change that policy. Missing or
+invalid policy data, or a root agent process, keeps the prompts.
+
+In `ask` mode the launcher does not add folder trust for Codex. It sets the
+approval policy to `on-request` and the sandbox to `workspace-write` through CLI
+options, which override repository and user settings, including stricter defaults.
+This preset permits sandboxed workspace edits without a prompt. Providers that block user namespaces
+can require approval to run commands outside this sandbox. The installed worker
+image must contain this launcher; changing a profile does not update an old image.
+
 ## Source transfer errors
 
 Use relative source paths without redundant separators or `.` components in a

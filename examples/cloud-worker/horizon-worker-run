@@ -56,14 +56,11 @@ fi
 approvals=ask
 if [ "$(id -u)" != 0 ]; then
     approvals="$(python3 -I - <<'PY' 2>/dev/null
-import json
-with open('/workspace/capabilities.json') as selection:
-    value = json.load(selection)
-# Only a selection that horizon-worker-check could have written decides; any other shape
-# fails here, and the prompts stay.
-approvals = value.get('agent_approvals', 'auto') if isinstance(value, dict) else None
-if approvals not in ('auto', 'ask'):
+with open('/run/horizon-worker/agent-approvals') as policy:
+    approvals = policy.read()
+if approvals not in ('auto\n', 'ask\n'):
     raise SystemExit(1)
+approvals = approvals.strip()
 print(approvals)
 PY
 )" || approvals=ask
@@ -189,12 +186,13 @@ elif [ "$agent" = codex ]; then
     if env -- "${session_env_assignments[@]}" codex --help 2>/dev/null | grep -q -e '--no-daemon'; then
         codex_args=(--no-daemon)
     fi
-    # Codex asks once per repository folder whether to trust it, and only an entry for that
-    # exact folder answers it; one for /workspace does not. This session's folder is trusted
-    # like Claude's. An existing decision for it is kept, and failing to write only brings the
-    # question back. The session environment can name another CODEX_HOME. Isolated mode: the
-    # current folder is the repository, and none of its files may be imported here.
-    env -- "${session_env_assignments[@]}" python3 -I - <<'PY' || true
+    if [ "$approvals" = auto ]; then
+        # Codex asks once per repository folder whether to trust it, and only an entry for that
+        # exact folder answers it; one for /workspace does not. This session's folder is trusted
+        # like Claude's. An existing decision for it is kept, and failing to write only brings the
+        # question back. The session environment can name another CODEX_HOME. Isolated mode: the
+        # current folder is the repository, and none of its files may be imported here.
+        env -- "${session_env_assignments[@]}" python3 -I - <<'PY' || true
 import fcntl, json, os, tomllib
 home = os.environ.get('CODEX_HOME') or os.path.join(os.environ['HOME'], '.codex')
 path = os.path.join(home, 'config.toml')
@@ -232,10 +230,13 @@ with open(path + '.horizon-lock', 'a') as lock:
         if entry is not None:
             saved.write(entry.encode())
 PY
-    if [ "$approvals" = auto ]; then
         # Bypasses the sandbox too: where the container denies user namespaces, as RunPod's
         # does, the sandbox cannot start and every command would ask to run without it.
         codex_args+=(--dangerously-bypass-approvals-and-sandbox)
+    else
+        # CLI overrides also cover folders trusted by a previous auto-mode session: a
+        # repository's project configuration must not disable the requested protections.
+        codex_args+=(--config 'approval_policy="on-request"' --sandbox workspace-write)
     fi
     env -- "${session_env_assignments[@]}" codex "${codex_args[@]}"
 else
