@@ -142,6 +142,25 @@ class NamespaceTests(unittest.TestCase):
         self.assertIn('--nofork', command)
 
 
+@unittest.skipUnless(sys.platform.startswith('linux'), 'Linux /proc required')
+class ProcessGroupTests(unittest.TestCase):
+    def test_a_process_name_that_is_not_utf8_does_not_stop_the_scan(self):
+        # PR_SET_NAME gives the child a name that is not UTF-8 before it sleeps.
+        named = sandbox.start(
+            [sys.executable, '-c',
+             'import ctypes, time; ctypes.CDLL(None).prctl(15, b"\\xff\\xfebox", 0, 0, 0); time.sleep(30)'])
+        self.addCleanup(sandbox.end, named)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if Path(f'/proc/{named.pid}/comm').read_bytes().startswith(b'\xff'):
+                break
+            time.sleep(0.05)
+        self.assertTrue(Path(f'/proc/{named.pid}/comm').read_bytes().startswith(b'\xff'))
+        self.assertTrue(sandbox._group_runs(named.pid))
+        sandbox.end(named)
+        self.assertFalse(sandbox._group_runs(named.pid))
+
+
 @unittest.skipUnless(
     sys.platform.startswith('linux')
     and shutil.which('bwrap')
@@ -161,13 +180,7 @@ class LiveSessionBusTests(unittest.TestCase):
 
         def close():
             for process in reversed(processes):
-                if process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait()
+                sandbox.end(process)
 
         self.addCleanup(close)
         return box, processes
@@ -175,7 +188,7 @@ class LiveSessionBusTests(unittest.TestCase):
     def start_bus(self, box, processes):
         log = (box.state / 'dbus.log').open('wb')
         self.addCleanup(log.close)
-        process = subprocess.Popen(
+        process = sandbox.start(
             box.namespace + sandbox.dbus_daemon_command(box.bus_address),
             env=box.sandbox_env, stdout=log, stderr=log)
         processes.append(process)
@@ -215,7 +228,7 @@ class LiveSessionBusTests(unittest.TestCase):
         self.start_bus(box, processes)
         log_path = box.state / 'monitor.log'
         with log_path.open('wb') as log:
-            monitor = subprocess.Popen(
+            monitor = sandbox.start(
                 box.namespace + ['dbus-monitor', '--session'],
                 env=box.sandbox_env, stdout=log, stderr=subprocess.STDOUT)
         processes.append(monitor)
@@ -235,12 +248,23 @@ class LiveSessionBusTests(unittest.TestCase):
         self.assertEqual(reply.returncode, 0, reply.stderr)
         self.assertIn('string', reply.stdout)
 
+    def test_ending_the_box_ends_the_bus_bwrap_runs(self):
+        box, processes = self.start_box()
+        bus = self.start_bus(box, processes)
+        children = Path(f'/proc/{bus.pid}/task/{bus.pid}/children').read_text().split()
+        self.assertTrue(children, 'bwrap runs the bus daemon as its child')
+        sandbox.end(bus)
+        for child in children:
+            # Gone, or a zombie its new parent has not reaped yet: either way it ended.
+            state = sandbox.process_state(child)
+            self.assertTrue(state is None or state[0] == b'Z', f'process {child} outlived its box')
+
     def test_repeated_launch_expires_the_private_socket(self):
         sockets = []
         for _ in range(2):
             directory = tempfile.TemporaryDirectory(prefix='horizon-dbus-repeat-')
             box = sandbox.prepare(directory.name)
-            process = subprocess.Popen(
+            process = sandbox.start(
                 box.namespace + sandbox.dbus_daemon_command(box.bus_address),
                 env=box.sandbox_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             try:
@@ -252,13 +276,7 @@ class LiveSessionBusTests(unittest.TestCase):
                 sockets.append(box.host_socket)
                 self.assertTrue(box.host_socket.exists())
             finally:
-                if process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait()
+                sandbox.end(process)
                 directory.cleanup()
             self.assertFalse(sockets[-1].exists())
         self.assertEqual(len(sockets), 2)
@@ -298,7 +316,7 @@ class LiveSessionBusTests(unittest.TestCase):
     def test_gnome_calculator_uses_the_private_bus(self):
         box, processes = self.start_box()
         read_fd, write_fd = os.pipe()
-        xvfb = subprocess.Popen(
+        xvfb = sandbox.start(
             ['Xvfb', '-displayfd', str(write_fd), '-screen', '0', '800x600x24',
              '-nolisten', 'tcp', '-extension', 'MIT-SHM'],
             pass_fds=(write_fd,), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -318,7 +336,7 @@ class LiveSessionBusTests(unittest.TestCase):
         self.start_bus(box, processes)
         log_path = box.state / 'calculator.log'
         with log_path.open('wb') as log:
-            calculator = subprocess.Popen(
+            calculator = sandbox.start(
                 box.namespace + ['gnome-calculator'], env=box.sandbox_env,
                 stdout=log, stderr=subprocess.STDOUT)
         processes.append(calculator)
