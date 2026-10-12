@@ -84,14 +84,30 @@ impl LocalDocker {
 }
 
 /// The most one cleanup command may take before Horizon gives up on it and goes on with
-/// the next, so a daemon that does not answer never holds an exit or a new setup.
+/// the next.
+const COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// The most a whole cleanup may take, all its commands together, so a daemon that does
+/// not answer holds an exit or a new setup for this long at most.
 const CLEANUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// Where a cleanup's docker commands go and when it gives up on the rest of them.
+struct Cleanup<'a> {
+    daemon: &'a LocalDocker,
+    deadline: std::time::Instant,
+}
+
 /// Runs a docker cleanup command; its standard output when it succeeded in time. One
-/// that runs past [`CLEANUP_TIMEOUT`] is ended with everything it started.
-fn docker(daemon: &LocalDocker, args: &[String]) -> Option<String> {
+/// that runs past [`COMMAND_TIMEOUT`] or the cleanup's deadline is ended with everything
+/// it started, and none starts once the deadline has passed.
+fn docker(cleanup: &Cleanup<'_>, args: &[String]) -> Option<String> {
     use std::io::Read as _;
-    let mut command = daemon.command();
+    let now = std::time::Instant::now();
+    if now >= cleanup.deadline {
+        return None;
+    }
+    let deadline = cleanup.deadline.min(now + COMMAND_TIMEOUT);
+    let mut command = cleanup.daemon.command();
     command
         .args(args)
         .stdin(std::process::Stdio::null())
@@ -108,7 +124,6 @@ fn docker(daemon: &LocalDocker, args: &[String]) -> Option<String> {
         }
         output
     });
-    let deadline = std::time::Instant::now() + CLEANUP_TIMEOUT;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return reader.join().ok().filter(|_| status.success()),
@@ -134,9 +149,9 @@ fn arguments<'a>(words: impl IntoIterator<Item = &'a str>) -> Vec<String> {
 }
 
 /// The containers whose names match `pattern`, a Docker name filter.
-fn containers(daemon: &LocalDocker, pattern: &str) -> Vec<String> {
+fn containers(cleanup: &Cleanup<'_>, pattern: &str) -> Vec<String> {
     docker(
-        daemon,
+        cleanup,
         &arguments(["ps", "--all", "--quiet", "--filter", &format!("name={pattern}")]),
     )
     .map(|output| output.split_whitespace().map(str::to_owned).collect())
@@ -147,7 +162,7 @@ fn containers(daemon: &LocalDocker, pattern: &str) -> Vec<String> {
 /// stopped proof and agent, has ended and can create nothing more: in the background, or
 /// before returning with `wait`, as when Horizon exits. A run without a proof still has
 /// them removed, such as the agent's preview container. The commands go to the daemon
-/// `pinned` names, and each has a time limit.
+/// `pinned` names, each has a time limit and all of them together one more.
 pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_resources(
     repository: &Path,
     run: &str,
@@ -166,7 +181,10 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_reso
         let Some(daemon) = pinned.or_else(|| LocalDocker::resolve().ok()) else {
             return;
         };
-        let daemon = &daemon;
+        let cleanup = &Cleanup {
+            daemon: &daemon,
+            deadline: std::time::Instant::now() + CLEANUP_TIMEOUT,
+        };
         // The proof's own containers and the worker-check containers of its profiles.
         // A check stopped mid-way can still have its container appear a moment later,
         // so the search runs once more after a pause.
@@ -175,27 +193,27 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_reso
             if pass > 0 {
                 std::thread::sleep(std::time::Duration::from_secs(2));
             }
-            let found: Vec<String> = containers(daemon, &format!("^/{volume}-"))
+            let found: Vec<String> = containers(cleanup, &format!("^/{volume}-"))
                 .into_iter()
-                .chain(containers(daemon, &checks))
+                .chain(containers(cleanup, &checks))
                 .collect();
             if !found.is_empty() {
                 let mut remove = arguments(["rm", "--force", "--volumes"]);
                 remove.extend(found);
-                let _ = docker(daemon, &remove);
+                let _ = docker(cleanup, &remove);
             }
         }
         let filter = format!("reference={volume}-build*");
         let images: Vec<String> = docker(
-            daemon,
+            cleanup,
             &arguments(["images", "--format", "{{.Repository}}:{{.Tag}}", "--filter", &filter]),
         )
         .map(|output| output.split_whitespace().map(str::to_owned).collect())
         .unwrap_or_default();
         let mut remove_images = arguments(["rmi", "--force", &image]);
         remove_images.extend(images);
-        let _ = docker(daemon, &remove_images);
-        let _ = docker(daemon, &arguments(["volume", "rm", "--force", &volume]));
+        let _ = docker(cleanup, &remove_images);
+        let _ = docker(cleanup, &arguments(["volume", "rm", "--force", &volume]));
     };
     if wait {
         remove();

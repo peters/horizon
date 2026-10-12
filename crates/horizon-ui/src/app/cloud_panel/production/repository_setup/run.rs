@@ -538,23 +538,17 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn keep_ending(end
 
 /// Waits until every run, agent and proof resource being ended in the background has
 /// ended, with what their ending started in turn: a new setup starts only then, and
-/// Horizon exits only then. A thread is let go only once it has finished, so two that
-/// wait at once, such as a setup starting while Horizon exits, both wait for all.
+/// Horizon exits only then. No waiter takes a handle out before its thread has
+/// finished, so every waiter sees each running one: a thread leaves the list only once
+/// its work has returned, and any ending it started by then is in the list already.
 pub(super) fn wait_for_ended_runs() {
     loop {
-        let finished = {
+        {
             let mut ending = ENDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            let (finished, running): (Vec<_>, Vec<_>) = std::mem::take(&mut *ending)
-                .into_iter()
-                .partition(std::thread::JoinHandle::is_finished);
-            *ending = running;
-            if finished.is_empty() && ending.is_empty() {
+            ending.retain(|run| !run.is_finished());
+            if ending.is_empty() {
                 return;
             }
-            finished
-        };
-        for run in finished {
-            let _ = run.join();
         }
         std::thread::sleep(Duration::from_millis(25));
     }
@@ -635,6 +629,35 @@ fn parse(text: &str) -> Option<Status> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_waiter_waits_for_an_ending_and_what_it_started() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let nested_done = std::sync::Arc::new(AtomicBool::new(false));
+        let done = nested_done.clone();
+        keep_ending(std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            keep_ending(std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(200));
+                done.store(true, Ordering::SeqCst);
+            }));
+        }));
+        let waiters: Vec<_> = (0..3)
+            .map(|_| {
+                let done = nested_done.clone();
+                std::thread::spawn(move || {
+                    wait_for_ended_runs();
+                    done.load(Ordering::SeqCst)
+                })
+            })
+            .collect();
+        for waiter in waiters {
+            assert!(
+                waiter.join().unwrap(),
+                "no waiter returns before the nested ending finished"
+            );
+        }
+    }
 
     #[test]
     fn a_paste_carries_no_control_character() {

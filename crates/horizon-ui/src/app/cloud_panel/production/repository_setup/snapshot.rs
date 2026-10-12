@@ -129,15 +129,21 @@ impl Setup {
         Ok((folder, tree.join(context), tree.join(dockerfile)))
     }
 
-    /// Writes the snapshot's `.horizon` into `tree`: files with the mode git commits for
-    /// them, 0644 or 0755 whatever the umask, as deployment's snapshot extracts them; links
-    /// as links.
+    /// Writes the snapshot's `.horizon` into `tree` as a commit of it holds it: files with
+    /// the mode git commits for them, 0644 or 0755 whatever the umask, as deployment's
+    /// snapshot extracts them, links as links, and a folder only where a file or link is
+    /// in it, since git commits no empty folder.
     fn write_into(&self, tree: &Path) -> Result<(), String> {
         std::fs::create_dir_all(tree.join(".horizon")).map_err(|error| error.to_string())?;
         for (relative, entry) in &self.entries {
             let target = tree.join(relative);
+            if !matches!(entry, Entry::Folder)
+                && let Some(parent) = target.parent()
+            {
+                std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
             match entry {
-                Entry::Folder => std::fs::create_dir_all(&target).map_err(|error| error.to_string())?,
+                Entry::Folder => {}
                 #[cfg(unix)]
                 Entry::Link(link) => std::os::unix::fs::symlink(link, &target).map_err(|error| error.to_string())?,
                 #[cfg(not(unix))]
@@ -288,6 +294,28 @@ mod tests {
         let (_folder, context, dockerfile) = setup.context(path, &build).unwrap();
         assert_eq!(std::fs::read_to_string(dockerfile).unwrap(), "FROM scratch\n");
         assert!(context.join("app.txt").is_file(), "the committed tree is the context");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_build_context_holds_the_setup_as_a_commit_holds_it() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let repository = tempfile::tempdir().unwrap();
+        let horizon = repository.path().join(".horizon");
+        std::fs::create_dir_all(horizon.join("empty/inner")).unwrap();
+        std::fs::create_dir_all(horizon.join("scripts")).unwrap();
+        std::fs::write(horizon.join("Dockerfile"), "FROM scratch\n").unwrap();
+        std::fs::write(horizon.join("scripts/setup.sh"), "true\n").unwrap();
+        std::fs::set_permissions(horizon.join("scripts/setup.sh"), std::fs::Permissions::from_mode(0o775)).unwrap();
+        std::fs::set_permissions(horizon.join("Dockerfile"), std::fs::Permissions::from_mode(0o664)).unwrap();
+        let setup = Setup::read(repository.path(), None).unwrap();
+        let build: horizon_core::cloud_panel::Build =
+            serde_yaml::from_str("{context: .horizon, dockerfile: .horizon/Dockerfile}").unwrap();
+        let (_folder, context, dockerfile) = setup.context(repository.path(), &build).unwrap();
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&dockerfile), 0o644, "git commits 0644");
+        assert_eq!(mode(&context.join("scripts/setup.sh")), 0o755, "and 0755");
+        assert!(!context.join("empty").exists(), "git commits no empty folder");
     }
 
     #[test]

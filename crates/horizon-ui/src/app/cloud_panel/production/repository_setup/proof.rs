@@ -763,25 +763,6 @@ impl Job {
         self.stream(overlay, log)
     }
 
-    /// Restores a .NET repository's packages on this computer first, with its own feed
-    /// credentials, so the container finds private packages in the read-only fallback
-    /// folder and no credential ever enters it. Best effort: a failure here shows up in
-    /// the CI step instead.
-    fn warm_packages(&self, log: &mut Option<std::fs::File>) {
-        // It runs the repository's MSBuild files here, with this computer's feed logins,
-        // so only when the person allowed it in the dialog.
-        if !self.host_restore || !uses_nuget(&self.repository) {
-            return;
-        }
-        let mut restore = Command::new("dotnet");
-        restore
-            .current_dir(&self.repository)
-            .args(["restore", "--nologo", "-v", "quiet"])
-            .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
-            .env("DOTNET_NOLOGO", "1");
-        let _ = self.stream(restore, log);
-    }
-
     /// Whether the default profile, whose image the CI runs in, asks for a GPU.
     fn wants_gpu(&self) -> bool {
         self.setup
@@ -1034,6 +1015,11 @@ mod tests {
         std::fs::create_dir_all(repository.path().join("src/App")).unwrap();
         std::fs::write(repository.path().join("src/App/App.csproj"), "").unwrap();
         assert!(uses_nuget(repository.path()));
+        let large = tempfile::tempdir().unwrap();
+        for index in 0..5001 {
+            std::fs::write(large.path().join(format!("file{index}.txt")), "").unwrap();
+        }
+        assert!(uses_nuget(large.path()), "an unfinished walk may still find a project");
     }
 
     #[cfg(unix)]
