@@ -14,30 +14,34 @@ const FILES: usize = 64;
 /// The PATH a container gets when its image names none.
 const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
+/// A docker command run within the proof's time limit and cancellation, returning what
+/// it wrote to standard output.
+pub(super) type Run<'a> = &'a dyn Fn(Command) -> Result<Vec<u8>, String>;
+
 /// The `-e` arguments that give a container of `image` its session environment; the
-/// image is created under the name `container` for the copy and removed again.
-pub(super) fn arguments(image: &str, container: &str) -> Result<Vec<String>, String> {
+/// image is created under the name `container` for the copy and removed again. Every
+/// docker command goes through `run`, so a daemon that hangs cannot hold the proof.
+pub(super) fn arguments(image: &str, container: &str, run: Run<'_>) -> Result<Vec<String>, String> {
     let folder = tempfile::Builder::new()
         .prefix("horizon-proof-env-")
         .tempdir()
         .map_err(|error| error.to_string())?;
-    let created = Command::new("docker")
-        .args(["create", "--name", container, image])
-        .output()
-        .map_err(|error| format!("cannot start docker: {error}"))?;
-    if !created.status.success() {
-        return Err(format!(
-            "cannot read the image's session environment: {}",
-            String::from_utf8_lossy(&created.stderr).trim()
-        ));
+    let mut create = Command::new("docker");
+    create.args(["create", "--name", container, image]);
+    run(create).map_err(|error| format!("cannot read the image's session environment: {error}"))?;
+    let mut copy = Command::new("docker");
+    copy.arg("cp").arg(format!("{container}:{FOLDER}")).arg(folder.path());
+    let copied = run(copy);
+    let mut remove = Command::new("docker");
+    remove.args(["rm", "--force", container]);
+    let _ = run(remove);
+    // An image without the folder has no session environment; any other failure is one.
+    if let Err(error) = copied
+        && !error.contains("Could not find the file")
+        && !error.contains("No such")
+    {
+        return Err(format!("cannot read the image's session environment: {error}"));
     }
-    // An image without the folder has no session environment; that is no failure.
-    let _ = Command::new("docker")
-        .arg("cp")
-        .arg(format!("{container}:{FOLDER}"))
-        .arg(folder.path())
-        .output();
-    let _ = Command::new("docker").args(["rm", "--force", container]).output();
     let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(folder.path().join("session-env.d"))
         .into_iter()
         .flatten()
@@ -52,21 +56,20 @@ pub(super) fn arguments(image: &str, container: &str) -> Result<Vec<String>, Str
         .filter_map(|path| super::super::untrusted::read_regular(path, FILE_LIMIT).ok())
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .collect();
-    Ok(apply(&image_path(image), &texts))
+    Ok(apply(&image_path(image, run)?, &texts))
 }
 
 /// The image's own PATH, as `docker image inspect` reports it.
-fn image_path(image: &str) -> String {
-    Command::new("docker")
-        .args(["image", "inspect", "--format", "{{json .Config.Env}}", image])
-        .output()
-        .ok()
-        .and_then(|output| serde_json::from_slice::<Vec<String>>(&output.stdout).ok())
-        .and_then(|env| {
-            env.into_iter()
-                .find_map(|entry| entry.strip_prefix("PATH=").map(str::to_owned))
-        })
-        .unwrap_or_else(|| DEFAULT_PATH.to_owned())
+fn image_path(image: &str, run: Run<'_>) -> Result<String, String> {
+    let mut inspect = Command::new("docker");
+    inspect.args(["image", "inspect", "--format", "{{json .Config.Env}}", image]);
+    let output = run(inspect).map_err(|error| format!("cannot inspect the image: {error}"))?;
+    let env: Vec<String> =
+        serde_json::from_slice(&output).map_err(|error| format!("cannot read the image's environment: {error}"))?;
+    Ok(env
+        .into_iter()
+        .find_map(|entry| entry.strip_prefix("PATH=").map(str::to_owned))
+        .unwrap_or_else(|| DEFAULT_PATH.to_owned()))
 }
 
 /// The `-e` arguments for session environment files, in order, over `path`: lines of

@@ -746,7 +746,8 @@ impl Job {
     /// before it; the steps then run in the image as the worker would run them.
     fn ci(&self, fast: bool, log: &mut Option<std::fs::File>) -> Result<(), String> {
         let head = self.head().unwrap_or_default();
-        let session = session_env::arguments(&self.image, &format!("{}-env", self.container))?;
+        let run = |command| self.capture(command, STEP_TIMEOUT);
+        let session = session_env::arguments(&self.image, &format!("{}-env", self.container), &run)?;
         if !fast {
             self.forget_older_records(&session, log)?;
         }
@@ -774,14 +775,14 @@ impl Job {
         self.stream(forget, log)
     }
 
-    /// The built image's ID, or its tag when Docker cannot say.
+    /// The built image's ID, or its tag when Docker cannot say, asked within the
+    /// proof's time limit.
     fn image_id(&self) -> String {
-        Command::new("docker")
-            .args(["image", "inspect", "--format", "{{.Id}}", &self.image])
-            .output()
+        let mut inspect = Command::new("docker");
+        inspect.args(["image", "inspect", "--format", "{{.Id}}", &self.image]);
+        self.capture(inspect, STEP_TIMEOUT)
             .ok()
-            .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+            .map(|output| String::from_utf8_lossy(&output).trim().to_owned())
             .filter(|id| !id.is_empty())
             .unwrap_or_else(|| self.image.clone())
     }
