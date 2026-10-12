@@ -9,7 +9,7 @@
 //! saves of other sessions go on.
 use super::SessionStore;
 use crate::RuntimeState;
-use crate::error::Result as StoreResult;
+use crate::error::{Error, Result as StoreResult};
 use std::{
     collections::BTreeMap,
     fs,
@@ -43,9 +43,6 @@ struct State {
     queued: BTreeMap<String, Queued>,
     /// The board the worker writes now.
     writing: Option<(String, Queued)>,
-    /// The board the worker writes now was replaced or its session deleted, so its result
-    /// counts for nothing.
-    dropped: bool,
     /// The newest generation written for each session.
     written: BTreeMap<String, u64>,
     next: u64,
@@ -213,37 +210,38 @@ impl Writer {
     }
 
     /// Drops the queued board of `session_id`, which a save that does not use the queue
-    /// replaces, and waits for a write of the session that runs now. A wait for a dropped
-    /// board ends with a reason.
-    pub(super) fn supersede(&self, session_id: &str) {
-        self.drop_session(session_id, "a later save that does not wait for the disk replaced it");
+    /// replaces. A wait for the dropped board ends with a reason. It is refused while the
+    /// writer writes the session, so that the caller never waits for the disk.
+    pub(super) fn supersede(&self, session_id: &str) -> StoreResult<()> {
+        self.drop_session(session_id, "a later save that does not wait for the disk replaced it")
+            .map(drop)
     }
 
-    /// As [`Self::supersede`], as before the session is deleted, so that nothing writes it
-    /// again.
-    pub(super) fn forget(&self, session_id: &str) {
-        self.drop_session(session_id, "the session was deleted");
+    /// As [`Self::supersede`], before the session is deleted, so that nothing writes it
+    /// again; returns the board that was not written.
+    pub(super) fn forget(&self, session_id: &str) -> StoreResult<Option<RuntimeState>> {
+        self.drop_session(session_id, "the session was deleted")
     }
 
-    fn drop_session(&self, session_id: &str, reason: &str) {
+    fn drop_session(&self, session_id: &str, reason: &str) -> StoreResult<Option<RuntimeState>> {
         let mut state = self.lock();
-        let writing = state.writing.as_ref().is_some_and(|(writing, _)| writing == session_id);
-        if state.queued.remove(session_id).is_some() || writing {
-            state.dropped |= writing;
-            let generation = state.next;
-            state.failed.insert(
-                session_id.to_owned(),
-                Failure {
-                    generation,
-                    reason: reason.to_owned(),
-                    wait: FIRST_RETRY,
-                },
-            );
-            self.shared.changed.notify_all();
+        if state.writing.as_ref().is_some_and(|(writing, _)| writing == session_id) {
+            return Err(Error::State(format!(
+                "Horizon is still saving session {session_id}; try again in a moment"
+            )));
         }
-        while state.writing.as_ref().is_some_and(|(writing, _)| writing == session_id) {
-            state = self.shared.changed.wait(state).unwrap_or_else(PoisonError::into_inner);
-        }
+        let Some(queued) = state.queued.remove(session_id) else {
+            return Ok(None);
+        };
+        let failure = Failure {
+            generation: state.next,
+            reason: reason.to_owned(),
+            wait: FIRST_RETRY,
+        };
+        state.failed.insert(session_id.to_owned(), failure);
+        drop(state);
+        self.shared.changed.notify_all();
+        Ok(Some(queued.board))
     }
 
     fn run(&self, store: &SessionStore) {
@@ -254,17 +252,14 @@ impl Writer {
             };
             let saved = store.save_runtime_state_durably(&session_id, &queued.board);
             let mut state = self.lock();
-            // A save that does not use the queue, or a delete, may have replaced this one.
             state.writing = None;
-            let current = !std::mem::take(&mut state.dropped);
-            match (saved, current) {
-                (_, false) => {}
-                (Ok(()), true) => {
+            match saved {
+                Ok(()) => {
                     state.failed.remove(&session_id);
                     let written = state.written.entry(session_id).or_default();
                     *written = (*written).max(queued.generation);
                 }
-                (Err(error), true) => {
+                Err(error) => {
                     tracing::error!(%session_id, %error, "failed to save the session; Horizon tries again");
                     let wait = state
                         .failed
@@ -344,7 +339,6 @@ impl Drop for PanicGuard<'_> {
             };
             state.failed.insert(session_id, failure);
         }
-        state.dropped = false;
         state.running = false;
         if !state.queued.is_empty() {
             self.writer.start(&mut state, self.store);
@@ -367,10 +361,34 @@ pub(super) fn durable_write(path: &Path, bytes: &[u8]) -> StoreResult<()> {
     sync_folder(parent)
 }
 
-/// Syncs the file at `path` and the folder that names it.
+/// Syncs the file at `path` and the folder that names it. Another thread can rename a new
+/// file over `path` meanwhile; then it syncs again, until the name on disk names a synced file.
 pub(super) fn sync_with_folder(path: &Path) -> StoreResult<()> {
-    fs::OpenOptions::new().write(true).open(path)?.sync_all()?;
-    path.parent().map_or(Ok(()), sync_folder)
+    const PASSES: usize = 8;
+    for _ in 0..PASSES {
+        let file = fs::File::open(path)?;
+        file.sync_all()?;
+        path.parent().map_or(Ok(()), sync_folder)?;
+        if same_file(&file.metadata()?, &fs::metadata(path)?) {
+            return Ok(());
+        }
+    }
+    Err(Error::State(format!(
+        "{} kept changing while Horizon synced it",
+        path.display()
+    )))
+}
+
+#[cfg(unix)]
+fn same_file(synced: &fs::Metadata, named: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    (synced.dev(), synced.ino()) == (named.dev(), named.ino())
+}
+
+/// Only a Unix host syncs a folder, and a durable wait is refused elsewhere.
+#[cfg(not(unix))]
+fn same_file(_: &fs::Metadata, _: &fs::Metadata) -> bool {
+    true
 }
 
 /// Syncs `folder` and the folder that names it.
@@ -489,7 +507,10 @@ mod tests {
             "the exit does not wait for a session that keeps failing"
         );
         assert!(!store.runtime_states_pending(), "a failed board is not pending");
-        store.writer.forget("broken");
+        // The writer may try the broken board again just now.
+        while store.writer.forget("broken").is_err() {
+            std::thread::sleep(Duration::from_millis(5));
+        }
         assert!(store.flush_runtime_states(Duration::ZERO));
     }
 

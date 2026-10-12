@@ -283,8 +283,9 @@ This work still runs on the UI thread. Do not copy it into new code.
   reads OS credentials. #1470 tracks it.
 - The save of a recovered startup board (`save_recovered_startup_runtime_state`
   in [`persistence.rs`](../../crates/horizon-ui/src/app/persistence.rs)) writes
-  and renames the session file on the UI thread, without a sync. It also waits
-  for a write of that session that the session writer thread runs. The session
+  and renames the session file on the UI thread, without a sync. While the
+  session writer thread writes that session, the save is refused, and the
+  startup prompt offers to try again. The session
   auto-save queues the board for the session writer thread
   ([`writer.rs`](../../crates/horizon-core/src/session_store/writer.rs)) and
   does not write.

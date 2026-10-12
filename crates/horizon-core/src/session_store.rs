@@ -212,7 +212,9 @@ impl SessionStore {
             )));
         }
 
-        if let Some(runtime_state) = self.load_runtime(session_id)? {
+        // Refused while the writer saves the session, so that no write recreates it.
+        let unwritten = self.writer.forget(session_id)?;
+        if let Some(runtime_state) = unwritten.map_or_else(|| self.load_runtime(session_id), |board| Ok(Some(board)))? {
             for workspace in &runtime_state.workspaces {
                 for panel in &workspace.panels {
                     if panel.kind == crate::panel::PanelKind::Browser {
@@ -231,23 +233,21 @@ impl SessionStore {
                 }
             }
         }
-        // The writer first: a write that runs now opens the index again.
-        self.writer.forget(session_id);
         self.index.forget(session_id);
         remove_dir_if_exists(&self.home.session_dir(session_id))?;
         self.update_session_index(|index| index.remove_profile_session(&self.profile_id, session_id))?;
         Ok(())
     }
 
-    /// Persist the runtime state and refreshed metadata for a session.
+    /// Persist the runtime state and refreshed metadata for a session. It replaces a
+    /// board of the session that is queued and not written yet.
     ///
     /// # Errors
     ///
-    /// Returns an error if the runtime state or session metadata cannot be
-    /// serialized or written to disk.
-    /// It replaces a board of the session that is queued and not written yet.
+    /// The board or metadata cannot be serialized or written, or the session writer
+    /// writes this session now.
     pub fn save_runtime_state(&self, session_id: &str, runtime_state: &RuntimeState) -> Result<()> {
-        self.writer.supersede(session_id);
+        self.writer.supersede(session_id)?;
         self.write_runtime_state(session_id, runtime_state, atomic_write)?;
         self.update_session_index(|index| index.touch_profile_session(&self.profile_id, session_id))
     }
