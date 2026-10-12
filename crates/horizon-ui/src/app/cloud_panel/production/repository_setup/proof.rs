@@ -204,7 +204,7 @@ impl Proof {
     /// container, so the cleanup of an earlier one never meets it. `host_restore` lets it
     /// restore private .NET packages on this computer, which the person allowed.
     pub(super) fn start(
-        repository: &Path,
+        (repository, run): (&Path, &str),
         (request, spec): (u64, Spec),
         log_path: PathBuf,
         host_restore: bool,
@@ -213,8 +213,7 @@ impl Proof {
         let (sender, receiver) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let inputs = fingerprint(repository, &spec);
-        let image = format!("horizon-setup-{}:candidate", slug(repository));
-        let volume = format!("horizon-setup-{}", slug(repository));
+        let (image, volume) = run_names(repository, run);
         let container = format!("{volume}-proof-{request}");
         let job = Job {
             repository: repository.to_path_buf(),
@@ -381,14 +380,7 @@ impl Job {
         let config = std::fs::read_to_string(self.repository.join(".horizon/cloud.yml"))
             .map_err(|error| format!("cannot read .horizon/cloud.yml: {error}"))?;
         let config = horizon_core::cloud_panel::CloudConfig::parse(&config).map_err(|error| error.to_string())?;
-        let profile = config
-            .profiles
-            .get(&config.default)
-            .ok_or("the default profile is missing")?;
-        let build = profile
-            .build
-            .as_ref()
-            .ok_or("the default profile has no build section")?;
+        let builds = distinct_builds(&config)?;
         // Only Horizon's own ghcr.io login, never this computer's credential helpers: a
         // private ghcr.io base pulls with it, and every other image anonymously.
         let horizon_docker = horizon_core::HorizonHome::resolve().root().join("cloud").join("docker");
@@ -399,6 +391,26 @@ impl Job {
         } else {
             "No Horizon GitHub login for ghcr.io; images are pulled anonymously.".to_owned()
         }));
+        // Every profile can be chosen in New cloud, so each distinct build is built and
+        // checked; the CI then runs in the default profile's image.
+        for (index, build) in builds.iter().enumerate() {
+            let tag = if index == 0 {
+                self.image.clone()
+            } else {
+                format!("{}-build{index}:candidate", self.volume)
+            };
+            self.build_one(build, &tag, docker_config.path(), log)?;
+        }
+        Ok(())
+    }
+
+    fn build_one(
+        &self,
+        build: &horizon_core::cloud_panel::Build,
+        tag: &str,
+        docker_config: &Path,
+        log: &mut Option<std::fs::File>,
+    ) -> Result<(), String> {
         // The agent wrote these paths: both stay inside the repository, as deployment
         // demands. A context outside .horizon builds from the committed tree with the
         // proposed .horizon laid over it, the image that deployment will build.
@@ -411,8 +423,8 @@ impl Job {
             Some(committed_snapshot(&root)?)
         };
         let (context, dockerfile) = match &snapshot {
-            Some(folder) => {
-                let moved = |path: &Path| folder.path().join(path.strip_prefix(&root).unwrap_or(path));
+            Some((_, tree)) => {
+                let moved = |path: &Path| tree.join(path.strip_prefix(&root).unwrap_or(path));
                 (moved(&context), moved(&dockerfile))
             }
             None => (context, dockerfile),
@@ -422,13 +434,13 @@ impl Job {
             .current_dir(&self.repository)
             .env_remove("DOCKER_AUTH_CONFIG")
             .arg("--config")
-            .arg(docker_config.path())
+            .arg(docker_config)
             .args(["buildx", "build", "--load", "--progress", "plain", "--platform"])
             .arg(&build.platform)
             .arg("-f")
             .arg(&dockerfile)
             .arg("-t")
-            .arg(&self.image)
+            .arg(tag)
             .arg(&context);
         self.stream_within(command, log, Some(BUILD_TIMEOUT))?;
         let mut check = Command::new("docker");
@@ -440,47 +452,53 @@ impl Job {
             "--entrypoint",
             "horizon-worker-check",
         ]);
-        check.arg(&self.image).arg("--git-auth");
+        check.arg(tag).arg("--git-auth");
         self.stream_within(check, log, Some(CHECK_TIMEOUT))
     }
 
     /// Clones the committed repository into the proof volume, or brings the clone
     /// up to date, so build output and caches stay between runs.
     fn prepare(&self, log: &mut Option<std::fs::File>) -> Result<(), String> {
-        // A worktree's .git only points into its repository's shared git folder, so the
-        // clone reads that folder and checks out the worktree's own commit.
-        let git = |args: &[&str]| {
-            Command::new("git")
-                .arg("-C")
-                .arg(&self.repository)
-                .args(args)
-                .output()
-                .ok()
-                .filter(|output| output.status.success())
-                .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-        };
-        let head = git(&["rev-parse", "HEAD"]).ok_or("the repository has no commit")?;
-        let common = git(&["rev-parse", "--path-format=absolute", "--git-common-dir"])
-            .ok_or("cannot find the repository's git folder")?;
+        // The image the agent wrote gets the tested commit and its history only, as a
+        // bundle made here, never this computer's git folder with its other branches.
+        let head = Command::new("git")
+            .arg("-C")
+            .arg(&self.repository)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+            .ok_or("the repository has no commit")?;
+        let bundle = self.log_path.with_file_name("head.bundle");
+        let mut create = Command::new("git");
+        create
+            .arg("-C")
+            .arg(&self.repository)
+            .args(["bundle", "create", "--quiet"])
+            .arg(&bundle)
+            .arg("HEAD");
+        self.stream(create, log)?;
         let mut own = Command::new("docker");
         own.args(["run", "--rm", "--name", &self.container, "-v"])
             .arg(format!("{}:/workspace", self.volume))
             .args(["--entrypoint", "sh", &self.image, "-c"])
             .arg("mkdir -p /workspace/home && chown 10001:10001 /workspace /workspace/home");
         self.stream(own, log)?;
-        // As root, so object files only their owner may read still copy; the checkout
-        // then belongs to the worker's account.
+        // As root, so the checkout can be handed to the worker's account after.
         let mut clone = Command::new("docker");
         clone
             .args(["run", "--rm", "--name", &self.container, "-v"])
             .arg(format!("{}:/workspace", self.volume))
             .arg("-v")
-            .arg(format!("{common}:/src.git:ro"))
+            .arg(format!("{}:/src.bundle:ro", bundle.display()))
             .args(["-e", "HOME=/workspace/home", "-e"])
             .arg(format!("HEAD_SHA={head}"))
             .args(["--entrypoint", "sh", &self.image, "-c"])
             .arg(CLONE);
-        self.stream(clone, log)
+        let result = self.stream(clone, log);
+        let _ = std::fs::remove_file(&bundle);
+        result
     }
 
     /// Restores a .NET repository's packages on this computer first, with its own feed
@@ -675,16 +693,12 @@ impl Job {
     }
 }
 
-/// Clones the repository's git folder into the volume once, fetches it after, and checks
-/// out the commit Horizon names; build output and caches stay between runs. It runs as
-/// root, so its Git settings go to the container's system file, not the shared home.
+/// Fetches the tested commit from its bundle into the volume's checkout and checks it
+/// out; build output stays for the fast rerun. It runs as root, so its Git settings go
+/// to the container's system file, not the shared home.
 const CLONE: &str = "set -e; git config --system --add safe.directory '*'; \
-if [ -d /workspace/checkout/.git ]; then git -C /workspace/checkout fetch -q /src.git '+refs/*:refs/src/*'; \
-else git clone -q --no-hardlinks --no-checkout /src.git /workspace/checkout && \
-git -C /workspace/checkout fetch -q /src.git '+refs/*:refs/src/*'; fi; \
-git -C /workspace/checkout cat-file -e \"$HEAD_SHA^{commit}\" 2>/dev/null || \
-git -C /workspace/checkout fetch -q --upload-pack='git -c uploadpack.allowAnySHA1InWant=true upload-pack' /src.git \"$HEAD_SHA\"; \
-git -C /workspace/checkout checkout -q --force --detach \"$HEAD_SHA\"; \
+mkdir -p /workspace/checkout; cd /workspace/checkout; [ -d .git ] || git init -q; \
+git fetch -q /src.bundle HEAD; git checkout -q --force --detach \"$HEAD_SHA\"; \
 chown -R 10001:10001 /workspace/checkout";
 
 /// Forgets localci's step records when the volume last ran a proof in another image.
@@ -708,27 +722,24 @@ fn inside(root: &Path, path: &str, field: &str) -> Result<PathBuf, String> {
     }
 }
 
-/// The committed tree of the repository at `root` with its working `.horizon` laid over
-/// it, in a private folder deleted on drop.
-fn committed_snapshot(root: &Path) -> Result<tempfile::TempDir, String> {
+/// The committed tree of the repository at `root`, made the way deployment makes it
+/// (Git LFS files and submodules included), with its working `.horizon` laid over it.
+/// The folder is private and deleted on drop; the second value is the tree inside it.
+fn committed_snapshot(root: &Path) -> Result<(tempfile::TempDir, PathBuf), String> {
     let folder = tempfile::Builder::new()
         .prefix("horizon-setup-context-")
         .tempdir()
         .map_err(|error| error.to_string())?;
-    let archive = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["archive", "--format=tar", "HEAD"])
-        .output()
-        .map_err(|error| format!("cannot read the committed tree: {error}"))?;
-    if !archive.status.success() {
-        return Err("cannot read the committed tree".to_owned());
-    }
-    tar::Archive::new(archive.stdout.as_slice())
-        .unpack(folder.path())
-        .map_err(|error| format!("cannot unpack the committed tree: {error}"))?;
-    copy_tree(&root.join(".horizon"), &folder.path().join(".horizon")).map_err(|error| error.to_string())?;
-    Ok(folder)
+    let cancel = horizon_core::cloud_runtime::Cancellation::default();
+    let runner = horizon_core::cloud_runtime::command::Runner {
+        cancel: &cancel,
+        emit: &|_| {},
+        secrets: Vec::new(),
+    };
+    let tree = horizon_core::cloud_runtime::repository::snapshot(root, "HEAD", folder.path(), &runner)
+        .map_err(|error| format!("cannot make the committed tree: {error}"))?;
+    copy_tree(&root.join(".horizon"), &tree.join(".horizon")).map_err(|error| error.to_string())?;
+    Ok((folder, tree))
 }
 
 fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -743,6 +754,87 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// The image and volume of one setup run's proofs: unique to the run, so two runs or
+/// two Horizon processes on the same checkout never share or remove each other's.
+pub(super) fn run_names(repository: &Path, run: &str) -> (String, String) {
+    let volume = format!("horizon-setup-{}-{run}", slug(repository));
+    (format!("{volume}:candidate"), volume)
+}
+
+/// A short name for the setup run whose status file is `status`.
+pub(super) fn run_id(status: &Path) -> String {
+    let folder = status.parent().unwrap_or(status).to_string_lossy();
+    let hash = folder.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    });
+    format!("{:08x}", hash & 0xffff_ffff)
+}
+
+/// Removes a finished run's containers, image and volume, in the background.
+pub(super) fn remove_run_resources(repository: &Path, run: &str) {
+    let (image, volume) = run_names(repository, run);
+    std::thread::spawn(move || {
+        let containers = Command::new("docker")
+            .args(["ps", "--all", "--quiet", "--filter"])
+            .arg(format!("name=^{volume}-"))
+            .output()
+            .map(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .split_whitespace()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if !containers.is_empty() {
+            let _ = Command::new("docker")
+                .args(["rm", "--force"])
+                .args(&containers)
+                .output();
+        }
+        let images = Command::new("docker")
+            .args(["images", "--format", "{{.Repository}}:{{.Tag}}", "--filter"])
+            .arg(format!("reference={volume}-build*"))
+            .output()
+            .map(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .split_whitespace()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let _ = Command::new("docker")
+            .args(["rmi", "--force", &image])
+            .args(&images)
+            .output();
+        let _ = Command::new("docker")
+            .args(["volume", "rm", "--force", &volume])
+            .output();
+    });
+}
+
+/// The default profile's build first, then each other profile's build that differs from
+/// all before it; a profile without a build section runs a published image.
+fn distinct_builds(
+    config: &horizon_core::cloud_panel::CloudConfig,
+) -> Result<Vec<horizon_core::cloud_panel::Build>, String> {
+    let default = config
+        .profiles
+        .get(&config.default)
+        .ok_or("the default profile is missing")?
+        .build
+        .clone()
+        .ok_or("the default profile has no build section")?;
+    let mut builds = vec![default];
+    for profile in config.profiles.values() {
+        if let Some(build) = &profile.build
+            && !builds.contains(build)
+        {
+            builds.push(build.clone());
+        }
+    }
+    Ok(builds)
 }
 
 /// Whether the repository restores .NET packages, possibly from private feeds.
@@ -900,6 +992,34 @@ mod tests {
             inside(&root, "..", "build.context")
                 .unwrap_err()
                 .contains("leaves the repository")
+        );
+    }
+
+    #[test]
+    fn every_distinct_profile_build_is_proved_and_the_default_first() {
+        let config = horizon_core::cloud_panel::CloudConfig::parse(
+            "version: 1\ndefault: gpu\nprofiles:\n  cpu:\n    provider: runpod\n    image: ghcr.io/o/r-worker\n    cpu: 4\n    memory_gb: 8\n    build: {context: .horizon, dockerfile: .horizon/Dockerfile.cpu}\n  gpu:\n    provider: runpod\n    image: ghcr.io/o/r-worker\n    cpu: 4\n    memory_gb: 8\n    gpu: true\n    build: {context: .horizon, dockerfile: .horizon/Dockerfile}\n  gpu-big:\n    provider: runpod\n    image: ghcr.io/o/r-worker\n    cpu: 4\n    memory_gb: 8\n    gpu: true\n    build: {context: .horizon, dockerfile: .horizon/Dockerfile}\n",
+        )
+        .unwrap();
+        let builds = distinct_builds(&config).unwrap();
+        assert_eq!(builds.len(), 2, "two profiles share one build");
+        assert_eq!(builds[0].dockerfile, ".horizon/Dockerfile", "the default first");
+    }
+
+    #[test]
+    fn each_setup_run_names_its_own_image_and_volume() {
+        let repository = Path::new("/home/me/app");
+        let (first, second) = (
+            run_id(Path::new("/tmp/horizon-cloud-setup-1-10/status.json")),
+            run_id(Path::new("/tmp/horizon-cloud-setup-1-11/status.json")),
+        );
+        assert_ne!(first, second);
+        let (image, volume) = run_names(repository, &first);
+        assert_eq!(image, format!("{volume}:candidate"));
+        assert_ne!(
+            volume,
+            run_names(repository, &second).1,
+            "two runs never share a volume"
         );
     }
 

@@ -137,8 +137,9 @@ impl HorizonApp {
             run.proved_request = request;
             run.proof_stale_reported = false;
             let log = run.status_path.with_extension(format!("proof-{request}.log"));
+            let id = super::proof::run_id(&run.status_path);
             run.proof = Some(super::proof::Proof::start(
-                &run.repository,
+                (&run.repository, &id),
                 (request, spec),
                 log,
                 run.host_restore,
@@ -279,11 +280,13 @@ impl HorizonApp {
             }
             Action::Stop => {
                 let path = run.status_path.clone();
+                let repository = run.repository.clone();
                 self.cloud_prototype.production.setup_run = None;
                 if self.board.panel(panel).is_some() {
                     self.close_panel(panel);
                 }
                 remove_run_folder(&path);
+                super::proof::remove_run_resources(&repository, &super::proof::run_id(&path));
             }
             Action::Use => self.use_cloud_repository_setup(ctx),
         }
@@ -351,6 +354,7 @@ impl HorizonApp {
         }
         if let Some(run) = self.cloud_prototype.production.setup_run.take() {
             remove_run_folder(&run.status_path);
+            super::proof::remove_run_resources(&run.repository, &super::proof::run_id(&run.status_path));
         }
         set_configuration(&mut self.cloud_prototype.production, Configuration::Committed);
         self.read_cloud_profiles(ctx);

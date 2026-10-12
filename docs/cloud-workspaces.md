@@ -508,7 +508,10 @@ setup** is available only after the proof that the agent asked for passed and
 only while the `.horizon` files and the commit are the ones it tested. A build
 context outside `.horizon` is built from the committed tree with the proposed
 `.horizon` files over it, which is the image that deployment builds, and a build
-path that leaves the repository is refused. For a .NET repository
+path that leaves the repository is refused. Each profile's distinct build is
+built and checked, and the CI runs in the default profile's image. The proof
+gets the tested commit and its history as a bundle, never this computer's git
+folder, and each setup run has its own image and volume, removed when it ends. For a .NET repository
 with private feeds, check **Restore private NuGet packages on this computer for
 the proof**: Horizon then runs `dotnet restore` here, with this computer's feed
 logins, and the container reads the packages from a read-only folder without any
