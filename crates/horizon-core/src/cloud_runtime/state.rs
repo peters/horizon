@@ -175,6 +175,14 @@ impl Store {
             lock_file: file,
         })
     }
+
+    /// Whether this host keeps cloud records. Where it does not, no controller can lock
+    /// or operate on one.
+    #[must_use]
+    pub fn supported() -> bool {
+        crate::session_store::require_directory_durability().is_ok()
+    }
+
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
