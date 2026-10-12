@@ -15,7 +15,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | Device panel | A Horizon panel that shows a VNC desktop. Agents can only read it. | native viewer, Device viewer, VNC viewer |
 | live view | A Device panel that shows the isolated desktop with frames that advance. | — |
 | lane | One platform or provider path through a procedure, for example "Hetzner lane". | track, leg |
-| run | One execution of a procedure on one candidate. | pass (as a noun), session |
+| run | One execution of a procedure on one candidate. | pass (as a noun for a run), session |
 | evidence | Screenshots, recordings, logs and hashes from a run. Keep private evidence out of the repository. | proof |
 | persistent launcher | A task-owned copy of the fixture that keeps its saved session. It runs the candidate without `--ephemeral`. | persistent fixture |
 | restart marker | The file `restart-request` in the state directory of the persistent launcher. When the candidate stops, the launcher finds the file and starts the candidate again. | restart flag |
