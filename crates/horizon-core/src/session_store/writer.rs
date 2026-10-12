@@ -410,6 +410,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_queued_board_is_read_back_before_it_is_written_and_then_is_durable_on_disk() {
         let (_temp, store) = store();
         store.save_runtime_state("session", &board("first")).unwrap();
@@ -426,6 +427,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_newer_board_replaces_one_that_is_not_written_yet() {
         let (_temp, store) = store();
         let boards: Vec<u64> = (0..20)
@@ -457,6 +459,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_session_that_cannot_be_saved_does_not_hold_up_the_others() {
         let (_temp, store) = store();
         store.save_runtime_state("broken", &board("old")).unwrap();
@@ -493,5 +496,18 @@ mod tests {
         assert_eq!(on_disk(&store).as_deref(), Some("direct"));
         let read = store.load_runtime("session").unwrap().unwrap();
         assert_eq!(read.active_workspace_local_id.as_deref(), Some("direct"));
+    }
+
+    #[test]
+    #[cfg(not(unix))]
+    fn a_durable_save_is_refused_where_folders_cannot_be_synced() {
+        let (_temp, store) = store();
+        let generation = store.queue_runtime_state("session", board("queued"));
+        assert!(matches!(
+            store.wait_runtime_state_durable("session", generation, Duration::from_secs(30)),
+            Err(Some(_))
+        ));
+        assert!(store.flush_runtime_states(Duration::from_secs(30)));
+        assert_eq!(on_disk(&store).as_deref(), Some("queued"), "the save itself still runs");
     }
 }

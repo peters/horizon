@@ -271,18 +271,21 @@ impl SessionStore {
     ///
     /// # Errors
     /// A save of that board or a newer one failed, with its reason; or the wait ran out
-    /// (`None`). The writer keeps trying a failed save.
+    /// (`None`). The writer keeps trying a failed save. Only a Unix host can sync a
+    /// folder, so elsewhere this refuses at once.
     pub fn wait_runtime_state_durable(
         &self,
         session_id: &str,
         generation: u64,
         timeout: Duration,
     ) -> std::result::Result<(), Option<String>> {
+        if let Err(error) = require_directory_durability() {
+            return Err(Some(error.to_string()));
+        }
         self.writer.wait_written(session_id, generation, timeout)
     }
 
-    /// Whether the writer writes a board now or has one it did not try yet. A board whose
-    /// save failed does not count, so an exit does not wait for it.
+    /// Whether a board is written now or not tried yet; a failed one does not hold an exit.
     #[must_use]
     pub fn runtime_states_pending(&self) -> bool {
         self.writer.pending()

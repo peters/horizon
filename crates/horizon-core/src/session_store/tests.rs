@@ -229,6 +229,7 @@ fn test_root(label: &str) -> tempfile::TempDir {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_queued_save_is_durable_on_disk_even_after_its_file_was_removed() {
     let root_dir = test_root("durable-queued-save");
     let home = HorizonHome::from_root(root_dir.path().into());
