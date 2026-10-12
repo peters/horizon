@@ -239,7 +239,7 @@ impl HorizonApp {
     /// Samples the agent's screen, delivers a pending Enter, lists the files of a
     /// finished run and notices a setup panel that closed.
     pub(in crate::app::cloud_panel::production) fn sync_cloud_repository_setup(&mut self, ctx: &egui::Context) {
-        self.close_orphaned_setup_panels();
+        self.close_orphaned_setup_panels(ctx);
         self.poll_cloud_setup_start(ctx);
         // Use waits for the agent's processes on a thread; it goes on once they ended.
         if self.poll_cloud_setup_use(ctx) {
@@ -484,8 +484,22 @@ impl HorizonApp {
 
     /// Closes hidden setup panels that no run follows. Setup panels are transient and
     /// never saved; this closes one an older Horizon saved before that.
-    fn close_orphaned_setup_panels(&mut self) {
+    /// It looks only when the panels or the run changed since it last looked, so a frame
+    /// without such a change costs nothing: a hidden setup panel appears only as panels
+    /// are added or a session's board loads, and stops being the run's only as the run
+    /// ends.
+    fn close_orphaned_setup_panels(&mut self, ctx: &egui::Context) {
         let current = self.cloud_prototype.production.setup_run.as_ref().map(|run| run.panel);
+        let looked = egui::Id::new("cloud-setup-orphan-scan");
+        let now = (
+            self.board.panels.len(),
+            self.board.panels.last().map(|panel| panel.id),
+            current,
+        );
+        if ctx.data(|data| data.get_temp(looked)) == Some(now) {
+            return;
+        }
+        ctx.data_mut(|data| data.insert_temp(looked, now));
         let orphans: Vec<_> = self
             .board
             .panels

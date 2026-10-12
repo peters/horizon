@@ -29,6 +29,10 @@ const LOG_LINES: usize = 200;
 /// Events waiting for the dialog; output lines beyond it are dropped, phases wait.
 const EVENT_QUEUE: usize = 1024;
 
+/// The longest a docker command may take that only prepares a proof, such as removing
+/// an earlier proof's container.
+const PREFLIGHT_TIMEOUT: Duration = Duration::from_mins(2);
+
 /// The longest an image build may take before the proof reports it hung.
 const BUILD_TIMEOUT: Duration = Duration::from_mins(45);
 
@@ -315,12 +319,7 @@ impl Proof {
         };
         let container = self.container.clone();
         super::run::keep_ending(std::thread::spawn(move || {
-            let _ = daemon
-                .command()
-                .args(["rm", "--force", &container])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
+            let _ = resources::remove_now(&daemon, &["rm", "--force", &container]);
         }));
     }
 
@@ -474,21 +473,13 @@ impl Job {
                 return;
             }
         }
-        // An earlier proof of this repository may still be stopping: its container goes.
-        let earlier = self
-            .docker()
-            .args(["ps", "--all", "--quiet", "--filter"])
-            .arg(format!("name=^/{}-proof-", self.volume))
-            .output()
-            .map(|output| {
-                String::from_utf8_lossy(&output.stdout)
-                    .split_whitespace()
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        if !earlier.is_empty() {
-            let _ = self.docker().args(["rm", "--force"]).args(&earlier).output();
+        // An earlier proof of this repository may still be stopping: its container goes,
+        // within the proof's limits, and a daemon that does not answer fails the build.
+        if let Err(reason) = self.remove_earlier() {
+            let _ = self.sender.send(Event::Started(Phase::Build));
+            let _ = self.sender.send(Event::Finished(Phase::Build, Err(reason)));
+            self.ctx.request_repaint();
+            return;
         }
         for phase in [Phase::Build, Phase::Ci, Phase::Fast] {
             if self.cancel.is_cancelled() {
@@ -736,7 +727,7 @@ impl Job {
         own.args(["run", "--rm", "--name", &self.container, "-v"])
             .arg(format!("{}:/workspace", self.volume))
             .args(["--entrypoint", "sh", TOOLS, "-c"])
-            .arg("mkdir -p /workspace/home && chown 10001:10001 /workspace /workspace/home");
+            .arg(OWN);
         self.stream(own, log)?;
         // As root, so the checkout can be handed to the worker's account after.
         let mut clone = self.docker();
@@ -936,13 +927,30 @@ impl Job {
             .unwrap_or_else(|| self.image.clone())
     }
 
+    /// Removes the containers of earlier proofs of this run's volume.
+    fn remove_earlier(&self) -> Result<(), String> {
+        let mut list = self.docker();
+        list.args(["ps", "--all", "--quiet", "--filter"])
+            .arg(format!("name=^/{}-proof-", self.volume));
+        let listed = self
+            .capture(list, PREFLIGHT_TIMEOUT)
+            .map_err(|error| format!("Docker does not list the containers of earlier proofs: {error}"))?;
+        let earlier: Vec<String> = String::from_utf8_lossy(&listed)
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect();
+        if earlier.is_empty() {
+            return Ok(());
+        }
+        let mut remove = self.docker();
+        remove.args(["rm", "--force"]).args(&earlier);
+        self.capture(remove, PREFLIGHT_TIMEOUT)
+            .map(|_| ())
+            .map_err(|error| format!("Docker does not remove the containers of earlier proofs: {error}"))
+    }
+
     fn remove_container(&self) {
-        let _ = self
-            .docker()
-            .args(["rm", "--force", &self.container])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .output();
+        let _ = resources::remove_now(&self.daemon, &["rm", "--force", &self.container]);
     }
 }
 
@@ -952,10 +960,15 @@ impl Job {
 /// proof's CI could have written to the checkout's .git and to HOME, and none of that
 /// may run here.
 const CLONE: &str = "set -e; export HOME=/tmp/horizon-clone GIT_CONFIG_GLOBAL=/dev/null; mkdir -p \"$HOME\"; \
-git config --system --add safe.directory '*'; mkdir -p /workspace/checkout; cd /workspace/checkout; \
-rm -rf .git; git init -q; G='git -c core.hooksPath=/dev/null -c core.fsmonitor=false'; \
+git config --system --add safe.directory '*'; rm -rf /workspace/checkout; mkdir /workspace/checkout; \
+cd /workspace/checkout; git init -q; G='git -c core.hooksPath=/dev/null -c core.fsmonitor=false'; \
 $G fetch -q /src.bundle HEAD; $G checkout -q --force --detach \"$HEAD_SHA\"; $G clean -q -ffdx; \
 chown -R 10001:10001 /workspace/checkout";
+
+/// Hands the volume to the worker's account. HOME stays between runs for its caches,
+/// but a link an earlier run left in its place goes, so nothing is made through it.
+const OWN: &str = "if [ -L /workspace/home ]; then rm -f /workspace/home; fi; mkdir -p /workspace/home; \
+chown 10001:10001 /workspace /workspace/home";
 
 /// Forgets localci's step records when the volume last ran a proof in another image.
 const FORGET_OLDER_IMAGE: &str = "marker=\"$HOME/.horizon-proof-image\"; \

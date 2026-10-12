@@ -82,10 +82,12 @@ pub(super) fn check_installed(
             "the localci at {IN_IMAGE} in the image is not localci {VERSION}; install the release the setup names"
         ));
     }
-    // The worker's agents run it as any user the image's sessions have.
-    if mode & 0o111 != 0o111 {
+    // The worker's agents run it as any user the image's sessions have; none of them
+    // may change it, and it runs with no more rights than the user who starts it.
+    if mode & 0o7777 != 0o755 {
         return Err(format!(
-            "the localci at {IN_IMAGE} in the image is not executable for everyone (mode {mode:o}); install it with mode 755"
+            "the localci at {IN_IMAGE} in the image has mode {:o}; install it with mode 755",
+            mode & 0o7777
         ));
     }
     Ok(())

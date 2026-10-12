@@ -151,6 +151,17 @@ fn arguments<'a>(words: impl IntoIterator<Item = &'a str>) -> Vec<String> {
     words.into_iter().map(str::to_owned).collect()
 }
 
+/// Runs one docker command against `daemon` within [`COMMAND_TIMEOUT`], ended with
+/// what it started past that; its standard output when it succeeded in time. For a
+/// removal that must also run after a proof was stopped.
+pub(super) fn remove_now(daemon: &LocalDocker, args: &[&str]) -> Option<String> {
+    let cleanup = Cleanup {
+        daemon,
+        deadline: std::time::Instant::now() + COMMAND_TIMEOUT,
+    };
+    docker(&cleanup, &arguments(args.iter().copied()))
+}
+
 /// The containers whose names match `pattern`, a Docker name filter.
 fn containers(cleanup: &Cleanup<'_>, pattern: &str) -> Vec<String> {
     docker(
