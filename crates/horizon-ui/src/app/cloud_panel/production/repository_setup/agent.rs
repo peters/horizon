@@ -19,8 +19,35 @@ const KILL_WAIT: Duration = Duration::from_secs(2);
 pub(super) struct AgentProcess {
     id: u32,
     started: Option<String>,
-    /// The agent's scope and its cgroup folder, when Horizon could make one.
-    scope: Option<(String, std::path::PathBuf)>,
+    /// The agent's scope, when it has one.
+    scope: Option<Scope>,
+}
+
+/// A systemd user scope and its cgroup folder, found once the scope exists: `systemd-run`
+/// may still be making it when the agent's panel has just started.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Scope {
+    unit: String,
+    cgroup: std::sync::OnceLock<std::path::PathBuf>,
+}
+
+impl Scope {
+    fn new(unit: String) -> Self {
+        Self {
+            unit,
+            cgroup: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// The scope's cgroup folder; none while systemd has no such scope, which also
+    /// means nothing runs in it.
+    fn cgroup(&self) -> Option<&std::path::Path> {
+        if let Some(cgroup) = self.cgroup.get() {
+            return Some(cgroup);
+        }
+        let found = cgroup_of(&self.unit)?;
+        Some(self.cgroup.get_or_init(|| found))
+    }
 }
 
 impl AgentProcess {
@@ -29,7 +56,7 @@ impl AgentProcess {
         Self {
             id,
             started: start_time(id),
-            scope: cgroup_of(unit).map(|cgroup| (unit.to_owned(), cgroup)),
+            scope: Some(Scope::new(unit.to_owned())),
         }
     }
 
@@ -83,7 +110,7 @@ impl AgentProcess {
     #[cfg(unix)]
     fn alive(&self) -> bool {
         // The scope holds everything the agent started: it must be empty.
-        let in_scope = self.scope.as_ref().is_some_and(|(_, cgroup)| {
+        let in_scope = self.scope.as_ref().and_then(Scope::cgroup).is_some_and(|cgroup| {
             std::fs::read_to_string(cgroup.join("cgroup.procs")).is_ok_and(|procs| !procs.trim().is_empty())
         });
         in_scope
@@ -99,9 +126,9 @@ impl AgentProcess {
 
     #[cfg(unix)]
     fn kill(&self) {
-        if let Some((unit, _)) = &self.scope {
+        if let Some(scope) = &self.scope {
             let _ = std::process::Command::new("systemctl")
-                .args(["--user", "kill", "--signal=SIGKILL", unit])
+                .args(["--user", "kill", "--signal=SIGKILL", &scope.unit])
                 .output();
         }
         if let Some(group) = self.group() {
@@ -116,7 +143,7 @@ impl AgentProcess {
 /// Moves the process `id` into a new transient scope of the systemd user manager, so
 /// every process it starts from now on stays in that cgroup; the scope and its cgroup
 /// folder, or none without a user manager or off Linux.
-fn contain(id: u32) -> Option<(String, std::path::PathBuf)> {
+fn contain(id: u32) -> Option<Scope> {
     if !cfg!(target_os = "linux") {
         return None;
     }
@@ -144,7 +171,9 @@ fn contain(id: u32) -> Option<(String, std::path::PathBuf)> {
     if !created {
         return None;
     }
-    cgroup_of(&unit).map(|cgroup| (unit, cgroup))
+    let scope = Scope::new(unit);
+    scope.cgroup()?;
+    Some(scope)
 }
 
 /// The cgroup folder of the systemd user scope `unit`.
@@ -238,7 +267,12 @@ mod tests {
             .spawn()
             .unwrap();
         let process = AgentProcess::of(agent.id());
-        let Some((_, cgroup)) = process.scope.clone() else {
+        let Some(cgroup) = process
+            .scope
+            .as_ref()
+            .and_then(Scope::cgroup)
+            .map(std::path::Path::to_path_buf)
+        else {
             agent.kill().unwrap();
             agent.wait().unwrap();
             return; // No systemd user manager here: only the process group can be ended.
@@ -266,12 +300,17 @@ mod tests {
         let started = Instant::now();
         let process = loop {
             let process = AgentProcess::in_scope(agent.id(), &unit);
-            if process.scope.is_some() || started.elapsed() > Duration::from_secs(5) {
+            if process.scope.as_ref().and_then(Scope::cgroup).is_some() || started.elapsed() > Duration::from_secs(5) {
                 break process;
             }
             std::thread::sleep(Duration::from_millis(50));
         };
-        let (_, cgroup) = process.scope.clone().expect("the agent runs in its scope");
+        let cgroup = process
+            .scope
+            .as_ref()
+            .and_then(Scope::cgroup)
+            .map(std::path::Path::to_path_buf)
+            .expect("the agent runs in its scope");
         std::thread::sleep(Duration::from_millis(300));
         let reaper = std::thread::spawn(move || agent.wait());
         assert!(process.end(), "everything in the scope is gone");

@@ -30,24 +30,72 @@ pub(super) fn check_operations(volume: &str) -> String {
     format!("horizon-setup-check-{:08x}", hash & 0xffff_ffff)
 }
 
+/// The most one cleanup command may take before Horizon gives up on it and goes on with
+/// the next, so a daemon that does not answer never holds an exit or a new setup.
+const CLEANUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Runs a docker cleanup command; its standard output when it succeeded in time. One
+/// that runs past [`CLEANUP_TIMEOUT`] is ended with everything it started.
+fn docker(args: &[String]) -> Option<String> {
+    use std::io::Read as _;
+    let mut command = Command::new("docker");
+    command
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    let mut child = command.spawn().ok()?;
+    let stdout = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut output = String::new();
+        if let Some(stdout) = stdout {
+            let _ = stdout.take(1024 * 1024).read_to_string(&mut output);
+        }
+        output
+    });
+    let deadline = std::time::Instant::now() + CLEANUP_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return reader.join().ok().filter(|_| status.success()),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            _ => {
+                #[cfg(unix)]
+                if let Some(group) = i32::try_from(child.id()).ok().and_then(rustix::process::Pid::from_raw) {
+                    let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
+/// `words` as the arguments of a docker command.
+fn arguments<'a>(words: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    words.into_iter().map(str::to_owned).collect()
+}
+
 /// The containers whose names match `pattern`, a Docker name filter.
 fn containers(pattern: &str) -> Vec<String> {
-    Command::new("docker")
-        .args(["ps", "--all", "--quiet", "--filter"])
-        .arg(format!("name={pattern}"))
-        .output()
-        .map(|output| {
-            String::from_utf8_lossy(&output.stdout)
-                .split_whitespace()
-                .map(str::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
+    docker(&arguments([
+        "ps",
+        "--all",
+        "--quiet",
+        "--filter",
+        &format!("name={pattern}"),
+    ]))
+    .map(|output| output.split_whitespace().map(str::to_owned).collect())
+    .unwrap_or_default()
 }
 
 /// Removes a finished run's containers, image and volume once `after`, the run's
 /// stopped proof, has ended and can create nothing more: in the background, or before
-/// returning with `wait`, as when Horizon exits.
+/// returning with `wait`, as when Horizon exits. Each docker command has a time limit.
 pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_resources(
     repository: &Path,
     run: &str,
@@ -72,30 +120,25 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_reso
                 .chain(containers(&checks))
                 .collect();
             if !found.is_empty() {
-                let _ = Command::new("docker")
-                    .args(["rm", "--force", "--volumes"])
-                    .args(&found)
-                    .output();
+                let mut remove = arguments(["rm", "--force", "--volumes"]);
+                remove.extend(found);
+                let _ = docker(&remove);
             }
         }
-        let images = Command::new("docker")
-            .args(["images", "--format", "{{.Repository}}:{{.Tag}}", "--filter"])
-            .arg(format!("reference={volume}-build*"))
-            .output()
-            .map(|output| {
-                String::from_utf8_lossy(&output.stdout)
-                    .split_whitespace()
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let _ = Command::new("docker")
-            .args(["rmi", "--force", &image])
-            .args(&images)
-            .output();
-        let _ = Command::new("docker")
-            .args(["volume", "rm", "--force", &volume])
-            .output();
+        let filter = format!("reference={volume}-build*");
+        let images: Vec<String> = docker(&arguments([
+            "images",
+            "--format",
+            "{{.Repository}}:{{.Tag}}",
+            "--filter",
+            &filter,
+        ]))
+        .map(|output| output.split_whitespace().map(str::to_owned).collect())
+        .unwrap_or_default();
+        let mut remove_images = arguments(["rmi", "--force", &image]);
+        remove_images.extend(images);
+        let _ = docker(&remove_images);
+        let _ = docker(&arguments(["volume", "rm", "--force", &volume]));
     };
     if wait {
         remove();

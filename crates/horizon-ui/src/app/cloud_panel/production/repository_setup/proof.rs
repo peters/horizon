@@ -633,7 +633,7 @@ impl Job {
             .arg(format!("{}:/workspace", self.volume))
             .arg("-v")
             .arg(format!("{}:/src.bundle:ro", bundle.display()))
-            .args(["-e", "HOME=/workspace/home", "-e"])
+            .arg("-e")
             .arg(format!("HEAD_SHA={head}"))
             .args(["--entrypoint", "sh", TOOLS, "-c"])
             .arg(CLONE);
@@ -797,11 +797,14 @@ impl Job {
 }
 
 /// Fetches the tested commit from its bundle into the volume's checkout and checks it
-/// out; build output stays for the fast rerun. It runs as root, so its Git settings go
-/// to the container's system file, not the shared home.
-const CLONE: &str = "set -e; git config --system --add safe.directory '*'; \
-mkdir -p /workspace/checkout; cd /workspace/checkout; [ -d .git ] || git init -q; \
-git fetch -q /src.bundle HEAD; git checkout -q --force --detach \"$HEAD_SHA\"; git clean -q -ffdx; \
+/// out, then removes everything untracked. It runs as root in Horizon's base image, so
+/// it starts from a fresh git folder with no global settings and no hooks: an earlier
+/// proof's CI could have written to the checkout's .git and to HOME, and none of that
+/// may run here.
+const CLONE: &str = "set -e; export HOME=/tmp/horizon-clone GIT_CONFIG_GLOBAL=/dev/null; mkdir -p \"$HOME\"; \
+git config --system --add safe.directory '*'; mkdir -p /workspace/checkout; cd /workspace/checkout; \
+rm -rf .git; git init -q; G='git -c core.hooksPath=/dev/null -c core.fsmonitor=false'; \
+$G fetch -q /src.bundle HEAD; $G checkout -q --force --detach \"$HEAD_SHA\"; $G clean -q -ffdx; \
 chown -R 10001:10001 /workspace/checkout";
 
 /// Forgets localci's step records when the volume last ran a proof in another image.
