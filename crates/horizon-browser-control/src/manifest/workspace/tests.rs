@@ -151,19 +151,19 @@ fn host_state_sync_writes_only_when_presentation_or_membership_changes() {
     let workspace = stamp(HOST_A, &["horizon:agent-a"]);
 
     assert_eq!(
-        sync_host_state_at(&path, "panel", true, &workspace).expect("stamp"),
+        sync_host_state_at(&path, "panel", Some(true), &workspace).expect("stamp"),
         HostStampOutcome::Written
     );
     let stamped = read_at(&path).expect("read stamped");
     assert!(!stamped.hidden);
     assert_eq!(stamped.workspace.as_ref(), Some(&workspace));
     assert_eq!(
-        sync_host_state_at(&path, "panel", true, &workspace).expect("steady state"),
+        sync_host_state_at(&path, "panel", Some(true), &workspace).expect("steady state"),
         HostStampOutcome::Unchanged
     );
 
     assert_eq!(
-        sync_host_state_at(&path, "panel", false, &workspace).expect("hide"),
+        sync_host_state_at(&path, "panel", Some(false), &workspace).expect("hide"),
         HostStampOutcome::Written
     );
     assert!(read_at(&path).expect("read hidden").hidden);
@@ -186,7 +186,7 @@ fn host_state_sync_writes_only_when_presentation_or_membership_changes() {
     })
     .expect("seed lease and handoff");
     assert_eq!(
-        sync_host_state_at(&path, "panel", false, &workspace).expect("same placement"),
+        sync_host_state_at(&path, "panel", Some(false), &workspace).expect("same placement"),
         HostStampOutcome::Unchanged,
         "an unchanged placement keeps the lease and handoff"
     );
@@ -194,7 +194,7 @@ fn host_state_sync_writes_only_when_presentation_or_membership_changes() {
 
     let moved = ManifestWorkspace::new(HOST_A, "ws-b", vec!["horizon:agent-b".to_string()]);
     assert_eq!(
-        sync_host_state_at(&path, "panel", false, &moved).expect("move"),
+        sync_host_state_at(&path, "panel", Some(false), &moved).expect("move"),
         HostStampOutcome::Written
     );
     let after_move = read_at(&path).expect("read moved");
@@ -211,7 +211,7 @@ fn host_state_sync_writes_only_when_presentation_or_membership_changes() {
 
     let other_host = stamp(HOST_B, &["horizon:agent-a"]);
     assert_eq!(
-        sync_host_state_at(&path, "panel", false, &other_host).expect("foreign host is reported, not an error"),
+        sync_host_state_at(&path, "panel", Some(false), &other_host).expect("foreign host is reported, not an error"),
         HostStampOutcome::NotOwned,
         "another live host must not rewrite the stamp"
     );
@@ -225,7 +225,7 @@ fn host_state_sync_writes_only_when_presentation_or_membership_changes() {
     let legacy = manifest_path_for_root(root.path(), "legacy");
     write_at(&legacy, &driver_manifest(None)).expect("write legacy manifest");
     assert_eq!(
-        sync_host_state_at(&legacy, "legacy", true, &workspace).expect("host-less manifest is reported, not an error"),
+        sync_host_state_at(&legacy, "legacy", Some(true), &workspace).expect("host-less manifest is not an error"),
         HostStampOutcome::NotOwned,
         "a manifest without a recorded host is never stamped"
     );
@@ -233,7 +233,7 @@ fn host_state_sync_writes_only_when_presentation_or_membership_changes() {
     let corrupt = manifest_path_for_root(root.path(), "corrupt");
     std::fs::write(&corrupt, b"{ not json").expect("write corrupt manifest");
     assert_eq!(
-        sync_host_state_at(&corrupt, "corrupt", true, &workspace)
+        sync_host_state_at(&corrupt, "corrupt", Some(true), &workspace)
             .expect_err("a corrupt manifest is a read failure, not a missing panel")
             .kind(),
         std::io::ErrorKind::InvalidData
@@ -241,7 +241,7 @@ fn host_state_sync_writes_only_when_presentation_or_membership_changes() {
     let unreadable = manifest_path_for_root(root.path(), "unreadable");
     std::fs::create_dir_all(&unreadable).expect("directory where a manifest is expected");
     assert_ne!(
-        sync_host_state_at(&unreadable, "unreadable", true, &workspace)
+        sync_host_state_at(&unreadable, "unreadable", Some(true), &workspace)
             .expect_err("an unreadable manifest path is a read failure")
             .kind(),
         std::io::ErrorKind::NotFound,
@@ -250,7 +250,7 @@ fn host_state_sync_writes_only_when_presentation_or_membership_changes() {
 
     let missing = manifest_path_for_root(root.path(), "missing");
     assert_eq!(
-        sync_host_state_at(&missing, "missing", true, &workspace)
+        sync_host_state_at(&missing, "missing", Some(true), &workspace)
             .expect_err("missing manifest must fail")
             .kind(),
         std::io::ErrorKind::NotFound
@@ -407,4 +407,105 @@ fn an_assigned_host_instance_is_adopted_once_and_never_replaced() {
         std::io::ErrorKind::AlreadyExists,
         "an identity already in use is never replaced"
     );
+}
+
+#[test]
+fn an_owned_host_state_sync_writes_nothing_once_the_lease_has_moved() {
+    let root = tempfile::tempdir().expect("isolated root");
+    let path = manifest_path_for_root(root.path(), "panel");
+    write_at(&path, &driver_manifest(Some(HOST_A))).expect("write manifest");
+    let workspace = stamp(HOST_A, &["horizon:agent-a", "horizon:agent-b"]);
+    let lease = |name: &str, updated_at: i64| {
+        update_at(&path, "panel", |manifest| {
+            manifest.owner = Some(crate::manifest::ManifestOwner {
+                name: name.to_string(),
+                tty: None,
+                updated_at,
+            });
+        })
+        .expect("lease");
+    };
+
+    lease("horizon:agent-a", now_millis());
+    assert_eq!(
+        sync_owned_host_state_at(&path, "panel", false, &workspace, "horizon:agent-a").expect("hide"),
+        OwnedStampOutcome::Stamped {
+            stamp: HostStampOutcome::Written,
+            was_visible: true
+        }
+    );
+    assert!(read_at(&path).expect("hidden").hidden);
+
+    // The lease moves to another agent after the request was accepted.
+    lease("horizon:agent-b", now_millis());
+    let before = std::fs::read(&path).expect("manifest bytes");
+    assert_eq!(
+        sync_owned_host_state_at(&path, "panel", true, &workspace, "horizon:agent-a").expect("show"),
+        OwnedStampOutcome::OwnerChanged
+    );
+    assert_eq!(
+        std::fs::read(&path).expect("manifest bytes"),
+        before,
+        "the new owner's manifest is untouched"
+    );
+
+    lease("horizon:agent-a", now_millis() - crate::manifest::OWNER_TTL_MILLIS - 1);
+    assert_eq!(
+        sync_owned_host_state_at(&path, "panel", true, &workspace, "horizon:agent-a").expect("expired"),
+        OwnedStampOutcome::OwnerChanged,
+        "an expired lease is not held"
+    );
+    assert!(read_at(&path).expect("still hidden").hidden);
+
+    lease("horizon:agent-a", now_millis());
+    assert_eq!(
+        sync_owned_host_state_at(&path, "panel", false, &workspace, "horizon:agent-a").expect("steady"),
+        OwnedStampOutcome::Stamped {
+            stamp: HostStampOutcome::Unchanged,
+            was_visible: false
+        }
+    );
+    let other_host = stamp(HOST_B, &["horizon:agent-a"]);
+    assert_eq!(
+        sync_owned_host_state_at(&path, "panel", true, &other_host, "horizon:agent-a").expect("other host"),
+        OwnedStampOutcome::Stamped {
+            stamp: HostStampOutcome::NotOwned,
+            was_visible: false
+        }
+    );
+    assert!(read_at(&path).expect("unchanged").hidden);
+}
+
+#[test]
+fn a_host_state_sync_without_a_visibility_keeps_the_manifests_under_its_lock() {
+    let root = tempfile::tempdir().expect("isolated root");
+    let path = manifest_path_for_root(root.path(), "panel");
+    let hidden = BrowserManifest {
+        hidden: true,
+        ..driver_manifest(Some(HOST_A))
+    };
+    write_at(&path, &hidden).expect("write manifest");
+    let workspace = stamp(HOST_A, &["horizon:agent-a"]);
+
+    assert_eq!(
+        sync_host_state_at(&path, "panel", None, &workspace).expect("move"),
+        HostStampOutcome::Written
+    );
+    let stamped = read_at(&path).expect("stamped");
+    assert!(stamped.hidden, "a hidden panel stays hidden");
+    assert_eq!(stamped.workspace.as_ref(), Some(&workspace));
+    assert_eq!(
+        sync_host_state_at(&path, "panel", None, &workspace).expect("steady state"),
+        HostStampOutcome::Unchanged
+    );
+
+    // A manifest that cannot be read is an error, never a visible panel.
+    std::fs::write(&path, b"{ not json").expect("write corrupt manifest");
+    assert_eq!(
+        sync_host_state_at(&path, "panel", None, &workspace)
+            .expect_err("a corrupt manifest is a read failure")
+            .kind(),
+        std::io::ErrorKind::InvalidData
+    );
+    assert_eq!(std::fs::read(&path).expect("manifest"), b"{ not json");
 }
