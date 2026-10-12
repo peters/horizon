@@ -164,8 +164,10 @@ dropped, the work stops at its next check.
 
 ### A bounded wait at exit
 
-Work that saves data must finish before the process exits, but the exit must
-not wait for an unknown time.
+Give work that saves data a bounded time to finish before the process
+exits. The exit must not wait for an unknown time. If the work does not
+finish in that time, Horizon exits without it, and the data is not saved or
+not durable.
 
 - `poll_shutdown_progress` in
   [`lifecycle/shutdown.rs`](../../crates/horizon-ui/src/app/lifecycle/shutdown.rs)
@@ -209,7 +211,8 @@ that `horizon-ui` calls during a frame.
 - [ ] The UI shows a busy state, and a second request of the same work is
   refused or merged.
 - [ ] Writes that must stay in order use one ordered worker thread.
-- [ ] Work that saves data finishes within the bounded exit wait.
+- [ ] Work that saves data can finish in the bounded exit wait. The PR
+  says what is not saved when the wait ends first.
 - [ ] A test proves that the UI call returns while the I/O waits.
 
 ## Test
@@ -251,8 +254,9 @@ after the call, so a new test must also start the release thread of step 2.
   holds the worker thread on a channel. It also makes sure that the UI drops results
   of an earlier generation.
 
-Named pipes are not available on Windows. Put the test module behind
-`#[cfg(all(test, unix))]`, and put its helpers behind the same condition.
+Windows has no named pipe in the file system that `mkfifo` makes. Put the
+test module behind `#[cfg(all(test, unix))]`, and put its helpers behind the
+same condition.
 
 ## Known UI-thread work
 
