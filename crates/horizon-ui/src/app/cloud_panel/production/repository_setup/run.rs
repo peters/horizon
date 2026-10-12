@@ -95,6 +95,9 @@ pub(in crate::app::cloud_panel::production) struct Run {
     pub(super) dotnet: bool,
     /// Set once the run's proof resources and folder are being removed.
     released: bool,
+    /// The agent's process, kept when Use closes its panel, so Use waits until it and
+    /// everything it started have ended before it reads and commits the setup.
+    pub(super) agent_process: Option<u32>,
 }
 
 /// What the person did in the progress view.
@@ -160,6 +163,7 @@ impl Run {
             outside: super::commit::Outside::default(),
             dotnet: false,
             released: false,
+            agent_process: None,
         }
     }
 

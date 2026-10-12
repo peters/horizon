@@ -103,8 +103,16 @@ impl Setup {
             let tree =
                 horizon_core::cloud_runtime::repository::snapshot(repository, &self.head, folder.path(), &runner)
                     .map_err(|error| format!("cannot make the committed tree: {error}"))?;
-            // The proposed .horizon replaces the committed one exactly: deletions and links too.
-            let _ = std::fs::remove_dir_all(tree.join(".horizon"));
+            // The proposed .horizon replaces the committed one exactly: deletions and links
+            // too, and a committed file or link of that name as well as a folder.
+            let committed = tree.join(".horizon");
+            match std::fs::symlink_metadata(&committed) {
+                Ok(metadata) if metadata.is_dir() => std::fs::remove_dir_all(&committed),
+                Ok(_) => std::fs::remove_file(&committed),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error),
+            }
+            .map_err(|error| format!("cannot replace the committed .horizon: {error}"))?;
             tree
         };
         self.write_into(&tree)?;
@@ -237,6 +245,36 @@ mod tests {
             "two targets that are not UTF-8 stay apart"
         );
         assert_ne!(read(b"a\\b"), read(b"a/b"), "a backslash is its own byte");
+    }
+
+    #[test]
+    fn a_committed_horizon_file_gives_way_to_the_proposed_folder() {
+        let repository = tempfile::tempdir().unwrap();
+        let path = repository.path();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(path)
+                .args(["-c", "user.name=Test", "-c", "user.email=test@example.invalid"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(path.join(".horizon"), "an old file\n").unwrap();
+        std::fs::write(path.join("app.txt"), "app\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "first"]);
+        std::fs::remove_file(path.join(".horizon")).unwrap();
+        std::fs::create_dir(path.join(".horizon")).unwrap();
+        std::fs::write(path.join(".horizon/Dockerfile"), "FROM scratch\n").unwrap();
+        let setup = Setup::read(path).unwrap();
+        let build: horizon_core::cloud_panel::Build =
+            serde_yaml::from_str("{context: ., dockerfile: .horizon/Dockerfile}").unwrap();
+        let (_folder, context, dockerfile) = setup.context(path, &build).unwrap();
+        assert_eq!(std::fs::read_to_string(dockerfile).unwrap(), "FROM scratch\n");
+        assert!(context.join("app.txt").is_file(), "the committed tree is the context");
     }
 
     #[test]
