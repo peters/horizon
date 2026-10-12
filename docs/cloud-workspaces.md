@@ -512,8 +512,12 @@ localci release, so agents on the worker run the CI jobs with
 `localci run --fast`. The agent does not build the image or run the CI itself:
 it names the CI jobs in its status file, and Horizon proves the image on this
 computer with Docker. Horizon builds it, runs the worker check, runs the jobs
-with localci in a container of the image as the worker account, then once more
-with `--fast` to show the warm rerun, and tells the agent the result. The
+in a container of the image as the worker account with the localci that a worker
+session finds first on its `PATH`, as the agents on the worker do, then once more
+with `--fast` to show the warm rerun, and tells the agent the result. A wrapper
+there that starts what the CI needs, such as a database, and then runs localci
+is allowed. A job whose `if:` is false on this computer, such as a publish job,
+is left out of the proof and named in its output. The
 dialog shows these steps as proved by Horizon, with their times. **Use this
 setup** is available only after the proof that the agent asked for passed and
 only while the `.horizon` files and the commit are the ones it tested. A build
@@ -522,17 +526,19 @@ context outside `.horizon` is built from the committed tree with the proposed
 path that leaves the repository is refused. Each profile's distinct build is
 built and checked, and the CI runs in the default profile's image; a default
 profile that runs a published image is pulled and checked instead of built. Each
-image the setup builds must hold the pinned localci; a published image runs as it
-is published, so its workers have localci only when the image does. The CI runs
+image the setup builds must have localci on a worker session's `PATH`, with mode
+755; a published image runs as it is published, so its workers have localci only
+when the image does, and its proof runs Horizon's own. The CI runs
 with the session environment a worker gives, not the image's `ENV`. A
 setup with a GPU profile is proved only on a computer with an NVIDIA GPU, and the
 CI uses that GPU when the default profile asks for one. The proof
 gets the tested commit and its history as a bundle, never this computer's git
-folder, and each setup run has its own image and volume, removed when it ends. For a .NET repository
+folder, checked out on its branch with the tags in its history, as
+`actions/checkout` leaves a push build, and each setup run has its own image and volume, removed when it ends. For a .NET repository
 with private feeds, check **Restore private NuGet packages on this computer for
 the proof**: Horizon then runs `dotnet restore` here, with this computer's feed
-logins, and the container reads the packages from a read-only folder without any
-credential. It is off by default, because the restore runs the repository's
+logins, and the container restores again from those packages in a read-only
+folder, without any credential. It is off by default, because the restore runs the repository's
 build files on this computer. The agent asks before it uses a credential of yours, such as your
 GitHub token for a private package feed. It does not allocate compute, push
 images, commit or open a pull request.
