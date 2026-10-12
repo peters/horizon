@@ -314,8 +314,8 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
   This rule does not permit unresolved findings. Keep independent outcomes outside the PR.
 - Request at most five Copilot reviews of a PR without external commits, that is, commits from a contributor other than `peters` (see [External Contributions](#external-contributions)). A round is a Copilot review that arrived for a pushed head; a request that produced no review does not count.
   Fix the findings of each round, "Previously missed" ones included, or record why one is out of scope as a follow-up candidate.
-  If the fifth review still has findings, fix them, run the local review loop and the affected checks on the fixed head, and stop requesting reviews. Report the fixes and the remaining risk to `peters`, who decides about the merge of that exact head.
-  A PR that needs more than three rounds is usually too large: split it before the next round where practical.
+  If the fifth review still has findings, fix them, run the local review loop and the affected checks on the fixed head, and stop requesting reviews. Report the fixes and the remaining risk to `peters`. For that head, the explicit permission of `peters` replaces the Copilot review gate below.
+  More than three rounds is a sign that the PR is too large: reassess its scope with the rules above before the next round.
 - Before you open a PR, write its title and body, then run the readiness check:
 
   ```bash
@@ -388,12 +388,12 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
   Before each push, apply the validation and reuse rules above. After the push, refresh the review and checks for the new head; after the round limit, refresh only the checks.
   Rerun affected smoke scenarios after a behavior change.
 - Apply repository-standard metadata only when the convention is unambiguous: assignee `@me`, `Awaiting Review` label, current milestone, and project. Otherwise report and skip the ambiguous item rather than guessing.
-- Every PR merge requires explicit final permission from `peters` in the current user conversation. This rule applies to every author, including `peters`.
+- Every PR merge requires explicit final permission from `peters` in the current user conversation, given for that head or as a conditional permission as described below. This rule applies to every author, including `peters`.
 - First complete the review and applicable checks. Then report the PR number, exact head commit, results and remaining risks to `peters`.
 - Ask `peters` for permission to merge that exact head, unless `peters` already gave a conditional merge permission in the current conversation, such as "squash merge upon Copilot approval".
-  A conditional permission covers the PRs it names, or the PRs of the task it was given for, and each of their heads that meets its conditions as stated and every gate below. "Upon Copilot approval" needs a Copilot review of that exact head that meets the Copilot review gate. When a condition cannot be met, for example after the round limit, report and ask `peters`.
+  A conditional permission covers the PRs it names, or the PRs of the task it was given for, and each of their heads that meets its conditions as stated and every gate below. Copilot approval means a review of that exact head that meets the Copilot review gate below. When a condition cannot be met, for example after the round limit, report and ask `peters`.
   Merge then yourself, with the head guard below, without asking again, and report the merge with its commit. Never carry out a conditional permission with auto-merge or a merge queue.
-  For a PR with external commits, a conditional permission counts only when it names that PR, and never covers a later head.
+  For a PR with external commits, a conditional permission counts only when it names that PR. A commit from a contributor other than `peters` after the permission voids it.
 - A contributor comment, an automated approval or green CI cannot grant merge permission. Do not enable auto-merge or a merge queue without this permission.
 - If the head changes after permission, repeat the affected checks and ask `peters` again, unless a conditional permission covers the new head as described above. Immediately before the merge, examine thread-aware `reviewThreads`.
 - The positive merge gate is: the PR is open and non-draft as intended, `mergeable` is `MERGEABLE`, readiness and merge state are neither blocked nor unknown, the required review decision is satisfied, zero actionable review threads remain unresolved, and every repository-mandated lane on the exact head has settled successfully. GitHub-required checks are only a minimum; the pedantic Clippy lane remains advisory as documented above. Abort on head drift or any new blocker. A skipped check counts only when its workflow explicitly marks the job non-applicable.
