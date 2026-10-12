@@ -171,6 +171,7 @@ pub(super) fn spawn_terminal(
         template,
         restore_as_disconnected_snapshot,
         is_restore,
+        launch_wrapper,
         ..
     } = opts;
 
@@ -218,6 +219,16 @@ pub(super) fn spawn_terminal(
     if restore_as_disconnected_snapshot && panel_args.kind == PanelKind::Ssh && had_persisted_transcript_state {
         return spawn_disconnected_ssh_snapshot_panel(panel_args, rows, cols, replay_bytes);
     }
+    // The wrapper runs the resolved program, so the program starts inside it.
+    let (program, launch_args) = match launch_wrapper.split_first() {
+        Some((wrapper, wrapper_args)) => {
+            let mut args = wrapper_args.to_vec();
+            args.push(program);
+            args.extend(launch_args);
+            (wrapper.clone(), args)
+        }
+        None => (program, launch_args),
+    };
     let mut terminal = Terminal::spawn(TerminalSpawnOptions {
         program,
         args: launch_args,

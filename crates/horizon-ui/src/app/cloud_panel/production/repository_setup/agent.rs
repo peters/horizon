@@ -24,6 +24,17 @@ pub(super) struct AgentProcess {
 }
 
 impl AgentProcess {
+    /// The agent process `id`, which the terminal started inside the scope `unit`.
+    pub(super) fn in_scope(id: u32, unit: &str) -> Self {
+        Self {
+            id,
+            started: start_time(id),
+            scope: cgroup_of(unit).map(|cgroup| (unit.to_owned(), cgroup)),
+        }
+    }
+
+    /// The agent process `id`, started without a scope: Horizon moves it into one now
+    /// where it can, which holds what it starts from then on.
     pub(super) fn of(id: u32) -> Self {
         let started = start_time(id);
         // Only the process Horizon just started goes into the scope, checked by its start.
@@ -133,13 +144,41 @@ fn contain(id: u32) -> Option<(String, std::path::PathBuf)> {
     if !created {
         return None;
     }
+    cgroup_of(&unit).map(|cgroup| (unit, cgroup))
+}
+
+/// The cgroup folder of the systemd user scope `unit`.
+fn cgroup_of(unit: &str) -> Option<std::path::PathBuf> {
     let output = std::process::Command::new("systemctl")
-        .args(["--user", "show", "--property=ControlGroup", "--value", &unit])
+        .args(["--user", "show", "--property=ControlGroup", "--value", unit])
         .output()
         .ok()?;
     let group = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     let cgroup = std::path::Path::new("/sys/fs/cgroup").join(group.trim_start_matches('/'));
-    (!group.is_empty() && cgroup.is_dir()).then_some((unit, cgroup))
+    (!group.is_empty() && cgroup.is_dir()).then_some(cgroup)
+}
+
+/// The command line that starts a program inside a new systemd user scope `unit`, or
+/// none where Horizon cannot make one: everything the program starts is held in it
+/// from its first instruction.
+pub(super) fn scope_launcher(unit: &str) -> Option<Vec<String>> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let works = std::process::Command::new("systemd-run")
+        .args(["--user", "--scope", "--quiet", "--collect", "true"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    works.then(|| {
+        ["systemd-run", "--user", "--scope", "--quiet", "--collect"]
+            .into_iter()
+            .map(str::to_owned)
+            .chain([format!("--unit={unit}"), "--".to_owned()])
+            .collect()
+    })
 }
 
 /// When the process `id` started, or none when no process has the id: on Linux its
@@ -210,6 +249,35 @@ mod tests {
         reaper.join().unwrap().unwrap();
         let left = std::fs::read_to_string(cgroup.join("cgroup.procs")).unwrap_or_default();
         assert!(left.trim().is_empty(), "nothing is left in the scope: {left}");
+    }
+
+    #[test]
+    fn an_agent_started_in_its_scope_ends_with_all_it_started() {
+        let unit = format!("horizon-setup-agent-test-{}.scope", std::process::id());
+        let Some(launcher) = scope_launcher(&unit) else {
+            return; // No systemd user manager here.
+        };
+        let mut agent = std::process::Command::new(&launcher[0])
+            .args(&launcher[1..])
+            .args(["sh", "-c", "setsid sleep 30 & sleep 30"])
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let started = Instant::now();
+        let process = loop {
+            let process = AgentProcess::in_scope(agent.id(), &unit);
+            if process.scope.is_some() || started.elapsed() > Duration::from_secs(5) {
+                break process;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        let (_, cgroup) = process.scope.clone().expect("the agent runs in its scope");
+        std::thread::sleep(Duration::from_millis(300));
+        let reaper = std::thread::spawn(move || agent.wait());
+        assert!(process.end(), "everything in the scope is gone");
+        reaper.join().unwrap().unwrap();
+        let left = std::fs::read_to_string(cgroup.join("cgroup.procs")).unwrap_or_default();
+        assert!(left.trim().is_empty(), "{left}");
     }
 
     #[test]

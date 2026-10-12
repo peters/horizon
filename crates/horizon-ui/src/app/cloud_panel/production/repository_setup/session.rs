@@ -23,7 +23,9 @@ pub(in crate::app::cloud_panel::production) struct Starting {
     status: PathBuf,
     mode: super::Mode,
     chosen_mode: super::Mode,
-    receiver: std::sync::mpsc::Receiver<(super::commit::Outside, bool)>,
+    /// The scope the agent starts in, when Horizon can make one.
+    unit: String,
+    receiver: std::sync::mpsc::Receiver<(super::commit::Outside, bool, Option<Vec<String>>)>,
 }
 
 impl HorizonApp {
@@ -103,8 +105,16 @@ impl HorizonApp {
         let (sender, receiver) = std::sync::mpsc::channel();
         let scan = repository.clone();
         let wake = ctx.clone();
+        let unit = format!(
+            "horizon-setup-agent-{}-{}.scope",
+            super::proof::run_id(&status),
+            std::process::id()
+        );
+        let launcher_unit = unit.clone();
         std::thread::spawn(move || {
-            let _ = sender.send((super::commit::outside(&scan), super::proof::uses_nuget(&scan)));
+            let outside = super::commit::outside(&scan);
+            let dotnet = super::proof::uses_nuget(&scan);
+            let _ = sender.send((outside, dotnet, super::agent::scope_launcher(&launcher_unit)));
             wake.request_repaint();
         });
         self.cloud_prototype.production.setup_starting = Some(Starting {
@@ -115,6 +125,7 @@ impl HorizonApp {
             status,
             mode,
             chosen_mode,
+            unit,
             receiver,
         });
         self.cloud_prototype.error = None;
@@ -147,7 +158,7 @@ impl HorizonApp {
         &mut self,
         ctx: &egui::Context,
         starting: Starting,
-        (outside, dotnet): (super::commit::Outside, bool),
+        (outside, dotnet, launcher): (super::commit::Outside, bool, Option<Vec<String>>),
     ) {
         let Starting {
             preset,
@@ -157,8 +168,10 @@ impl HorizonApp {
             status,
             mode,
             chosen_mode,
+            unit,
             receiver: _,
         } = starting;
+        let scoped = launcher.is_some();
         let kind = preset.kind;
         let workspace = self.board.ensure_local_workspace("Cloud setup");
         // Deliberately local: config preparation must not inherit a focused cloud.
@@ -174,6 +187,8 @@ impl HorizonApp {
                 visible: false,
                 rows: 48,
                 cols: 160,
+                // Started inside a scope of its own, which holds everything it starts.
+                launch_wrapper: launcher.unwrap_or_default(),
                 ..PanelOptions::default()
             },
             workspace,
@@ -185,7 +200,7 @@ impl HorizonApp {
                     created.transient = true;
                 }
                 let mut run = Run::new(panel, kind, repository, status, mode);
-                run.agent_process = self.agent_process_of(panel);
+                run.agent_process = self.agent_process_of(panel, scoped.then_some(unit.as_str()));
                 run.agent.clone_from(&preset.name);
                 run.pending_prompt = pending_prompt;
                 run.outside = outside;
@@ -413,13 +428,28 @@ const STALE_PROOF: &str = "The .horizon files or the proof changed after Horizon
 const PANEL_NAME: &str = "Cloud repository setup";
 
 impl HorizonApp {
+    /// Ends the setup run, and a setup about to start, when the board they belong to
+    /// goes: a session switch restarts panel ids, so a kept id could name another panel.
+    pub(in crate::app) fn end_cloud_repository_setup(&mut self) {
+        if let Some(run) = self.cloud_prototype.production.setup_run.take() {
+            run.discard();
+        }
+        if let Some(starting) = self.cloud_prototype.production.setup_starting.take() {
+            run::remove_run_folder(&starting.status);
+        }
+    }
+
     /// The process the agent's panel started, which leads its own process group.
-    fn agent_process_of(&self, panel: horizon_core::PanelId) -> Option<super::agent::AgentProcess> {
-        self.board
+    fn agent_process_of(&self, panel: horizon_core::PanelId, unit: Option<&str>) -> Option<super::agent::AgentProcess> {
+        let id = self
+            .board
             .panel(panel)
             .and_then(horizon_core::Panel::terminal)
-            .and_then(horizon_core::Terminal::child_pid)
-            .map(super::agent::AgentProcess::of)
+            .and_then(horizon_core::Terminal::child_pid)?;
+        Some(match unit {
+            Some(unit) => super::agent::AgentProcess::in_scope(id, unit),
+            None => super::agent::AgentProcess::of(id),
+        })
     }
 
     /// Closes hidden setup panels that no run follows. Setup panels are transient and
