@@ -471,21 +471,87 @@ is checked; they do not mean a worker is missing or authorize a replacement.
 ## Repository setup and deployment
 
 If the selected commit has no `.horizon/cloud.yml`, **New cloud** shows
-**This commit has no .horizon/cloud.yml**. This is not an error. The dialog then
-shows two choices:
+**No cloud setup yet**. This is not an error. The dialog then shows two choices:
 
-- **Quick start on the public base image** starts the repository on the base image.
-  See [Quick start](#quick-start).
-- **Open setup agent** opens a local agent panel that prepares the settings of the
-  repository.
+- **Quick start** starts the repository on the base image. See
+  [Quick start](#quick-start).
+- **Set up from CI** starts a setup agent, Claude or Codex, that prepares the
+  settings of the repository. It runs on Linux with a systemd user session:
+  Horizon starts the agent in a systemd user scope, which holds every process the
+  agent starts as its descendant, so it can end them all before it commits. The
+  scope is not a sandbox: the agent runs as you, and a program it hands to another
+  service of yours, such as Docker or your systemd user manager, runs outside it,
+  as any program you start does. What **Use this setup** commits does not rest on
+  the scope: it is the setup Horizon proved, read after the agent ended, with every
+  other change named first. On macOS and Windows the dialog does not offer it, and
+  on Linux without a systemd user session the agent does not start; use
+  **Quick start** or write `.horizon` yourself.
 
-The setup agent is a normal local agent panel with its existing local login.
-Horizon does not export the API-key bindings of remote workers to it. The agent
-examines the repository requirements and proposes the capabilities before it
-prepares files. Review its changes and prerequisites, run the repository checks
-and commit the setup. Then go back to **New cloud** and choose **Read
-.horizon/cloud.yml**. A change of the repository or YAML that is not valid clears
-the profiles that the dialog read before. Thus you cannot deploy an old profile
+The setup agent is a normal local agent session with its existing local login.
+Horizon does not export the API-key bindings of remote workers to it. Its panel is
+hidden: the dialog becomes a preparation view, **Set up REPOSITORY**, because
+nothing is rented yet. The left column shows the steps (Read CI, Find tools,
+Write Dockerfile, Build image, Run CI in image, Fast rerun), each
+with a short detail and its elapsed time. The right column is the agent's own
+terminal without panel chrome. Click it to type to the agent, for example to
+answer a question or to change its plan. A question also shows above the steps.
+**Stop** closes the agent. **Close** keeps it working, and **New cloud** shows it
+again for the same repository.
+
+The agent reads the CI of the repository first, the GitHub Actions workflows in
+`.github/workflows`: the Linux jobs that restore, build and test, the tool versions
+they use and where those versions come from. Horizon proves GitHub Actions jobs
+only, so a repository without a GitHub Actions workflow that builds or tests on
+Linux cannot finish the setup yet; the agent says so. It uses
+[localci](https://github.com/peters/localci) when it is installed: `localci plan`
+resolves the jobs, and each `uses:` step that localci skips is a tool that the
+image must supply. Then it reads `AGENTS.md`, the README and existing Dockerfiles.
+It writes `.horizon/Dockerfile` on the public worker base of
+[Quick start](#quick-start) and `.horizon/cloud.yml`. The image also gets a pinned
+localci release, so agents on the worker run the CI jobs with
+`localci run --fast`. The agent does not build the image or run the CI itself:
+it names the CI jobs in its status file, and Horizon proves the image on this
+computer with Docker. Horizon builds it, runs the worker check, runs the jobs
+in a container of the image as the worker account with the localci that a worker
+session finds first on its `PATH`, as the agents on the worker do, then once more
+with `--fast` to show the warm rerun, and tells the agent the result. A wrapper
+there that starts what the CI needs, such as a database, and then runs localci
+is allowed. A job that runs no command here, because its `if:` is false on this
+computer, such as a publish job, or because the proof skips each step of it that
+runs one, is left out of the proof and named in its output. The proof shows that
+the setup works, not that the image is honest: every program the CI runs comes
+from the image, its shell included. The
+dialog shows these steps as proved by Horizon, with their times. **Use this
+setup** is available only after the proof that the agent asked for passed and
+only while the `.horizon` files and the commit are the ones it tested. A build
+context outside `.horizon` is built from the committed tree with the proposed
+`.horizon` files over it, which is the image that deployment builds, and a build
+path that leaves the repository is refused. Each profile's distinct build is
+built and checked, and the CI runs in the default profile's image; a default
+profile that runs a published image is pulled and checked instead of built. Each
+image the setup builds must have localci on a worker session's `PATH`, with mode
+755; a published image runs as it is published, so its workers have localci only
+when the image does, and its proof runs Horizon's own. The CI runs
+with the session environment a worker gives, not the image's `ENV`. A
+setup with a GPU profile is proved only on a computer with an NVIDIA GPU, and the
+CI uses that GPU when the default profile asks for one. The proof
+gets the tested commit and its history as a bundle, never this computer's git
+folder, checked out on its branch with the tags in its history, as
+`actions/checkout` leaves a push build, and each setup run has its own image and volume, removed when it ends. For a .NET repository
+with private feeds, check **Restore private NuGet packages on this computer for
+the proof**: Horizon then runs `dotnet restore` here, with this computer's feed
+logins, copies the packages that restore used into the proof's volume for the
+worker's account, and the container restores again from them, without any
+credential; the CI reads only those packages. A restore here or in the container
+that fails, fails the proof. It is off by default, because the restore runs the repository's
+build files on this computer. The agent asks before it uses a credential of yours, such as your
+GitHub token for a private package feed. It does not allocate compute, push
+images, commit or open a pull request.
+
+When the agent is done, **Use this setup** commits the files in `.horizon` and
+reads them as the repository profile, so **Start cloud** can use them. A change
+of the repository or YAML that is not valid clears the profiles that the dialog
+read before. Thus you cannot deploy an old profile
 by accident.
 
 If the read fails for a different cause, for example a committed

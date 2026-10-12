@@ -52,7 +52,7 @@ impl State {
             ctx.request_repaint();
         });
     }
-    fn poll(&mut self, ctx: &egui::Context) {
+    pub(super) fn poll(&mut self, ctx: &egui::Context) {
         if let Some(receiver) = &self.receiver {
             match receiver.try_recv() {
                 Ok(result) => {

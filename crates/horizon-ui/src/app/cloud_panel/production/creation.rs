@@ -63,6 +63,8 @@ enum RepositoryAction {
     Choose,
     Load,
     Setup,
+    /// Something in the running setup agent's progress view.
+    SetupRun(super::repository_setup::Action),
     /// A folder or fresh clone to make the repository.
     Adopt(PathBuf),
     /// Choose the folder clones go into.
@@ -77,7 +79,13 @@ impl HorizonApp {
             return;
         }
         let viewport = ctx.content_rect();
-        let width = (viewport.width() - 64.0).clamp(240.0, 1180.0);
+        // A running setup agent shows its output; large windows give it room.
+        let widest = if self.cloud_prototype.production.setup_run.is_some() {
+            1480.0
+        } else {
+            1180.0
+        };
+        let width = (viewport.width() - 64.0).clamp(240.0, widest);
         let body_height = body_height(viewport);
         let mut actions = Actions::default();
         let escape = ctx.input(|input| input.key_pressed(egui::Key::Escape));
@@ -113,14 +121,34 @@ impl HorizonApp {
                     ui.disable();
                 }
                 ui.spacing_mut().item_spacing = Vec2::new(10.0, 8.0);
-                heading(ui, provider::label(&self.cloud_prototype.production));
+                // While a setup agent prepares the repository, nothing is rented yet: the
+                // dialog is a preparation view with its own heading and footer.
+                let preparing = super::repository_setup::running_here(&self.cloud_prototype.production);
+                if preparing {
+                    super::repository_setup::heading(ui, &self.cloud_prototype.production);
+                } else {
+                    heading(ui, provider::label(&self.cloud_prototype.production));
+                }
                 ui.add_space(16.0);
                 self.cloud_creation_columns(ui, width, body_height, &mut actions, refocus_repository);
                 ui.add_space(12.0);
-                checks::footer(ui, &mut self.cloud_prototype.production, &mut actions);
+                if preparing {
+                    match super::repository_setup::footer(ui, &self.cloud_prototype.production) {
+                        super::repository_setup::Footer::None => {}
+                        super::repository_setup::Footer::Close => actions.cancel = true,
+                        super::repository_setup::Footer::Run(action) => {
+                            actions.repository = RepositoryAction::SetupRun(action);
+                        }
+                    }
+                } else {
+                    checks::footer(ui, &mut self.cloud_prototype.production, &mut actions);
+                }
             });
         ctx.move_to_top(response.response.layer_id);
-        let dismissed = self.cloud_creation_dismissed(ctx, &response, picking, escape);
+        // Escape is the agent's while its live terminal shows and it still works.
+        let terminal_live =
+            width >= TWO_COLUMNS && super::repository_setup::working_here(&self.cloud_prototype.production);
+        let dismissed = self.cloud_creation_dismissed(ctx, &response, picking, escape && !terminal_live);
         if dismissed || actions.cancel {
             self.close_cloud_creation();
             return;
@@ -133,6 +161,7 @@ impl HorizonApp {
             RepositoryAction::Choose => self.choose_cloud_repository(ctx),
             RepositoryAction::Load => self.read_cloud_profiles(ctx),
             RepositoryAction::Setup => self.start_cloud_repository_setup(ctx),
+            RepositoryAction::SetupRun(action) => self.cloud_repository_setup_action(ctx, action),
             RepositoryAction::ChooseSibling(alias) => self.choose_cloud_sibling(ctx, alias),
             RepositoryAction::Adopt(path) => self.adopt_cloud_source(ctx, &path),
             RepositoryAction::CloneFolder => self.choose_clone_folder(ctx),
@@ -161,17 +190,30 @@ impl HorizonApp {
         actions: &mut Actions,
         refocus_repository: bool,
     ) {
+        // While a setup agent works, its live output takes the summary's place and half the width.
+        let setup_output = super::repository_setup::running_here(&self.cloud_prototype.production);
         if width >= TWO_COLUMNS {
-            let left = width - SUMMARY_WIDTH - GUTTER;
+            let right = if setup_output {
+                (width * 0.5).max(SUMMARY_WIDTH)
+            } else {
+                SUMMARY_WIDTH
+            };
+            let left = width - right - GUTTER;
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = GUTTER;
                 column(ui, left, body_height, |ui| {
                     super::super::runtime::solid_scroll_area(ui)
                         .id_salt("cloud-creation-body")
                         .max_height(body_height)
-                        .show(ui, |ui| self.cloud_creation_body(ui, actions, refocus_repository));
+                        .show(ui, |ui| {
+                            self.cloud_creation_body(ui, actions, refocus_repository, setup_output);
+                        });
                 });
-                column(ui, SUMMARY_WIDTH, body_height, |ui| {
+                column(ui, right, body_height, |ui| {
+                    if setup_output {
+                        self.show_cloud_setup_terminal(ui, body_height);
+                        return;
+                    }
                     super::super::runtime::solid_scroll_area(ui)
                         .id_salt("cloud-creation-summary")
                         .max_height(body_height)
@@ -193,7 +235,7 @@ impl HorizonApp {
                 .min_scrolled_height(body_height)
                 .max_height(body_height)
                 .show(ui, |ui| {
-                    self.cloud_creation_body(ui, actions, refocus_repository);
+                    self.cloud_creation_body(ui, actions, refocus_repository, false);
                     ui.add_space(12.0);
                     checks::with_summary(
                         ui,
@@ -234,6 +276,9 @@ impl HorizonApp {
             self.read_cloud_profiles(ctx);
         }
         self.request_cloud_prices(ctx);
+        // Start needs the tailnet settings, and their picker now waits in More options.
+        self.cloud_prototype.production.tailnets.poll(ctx);
+        self.offer_setup_presets();
         checks::update(
             &mut self.cloud_prototype.production,
             self.cloud_prototype.root.as_deref(),
@@ -250,17 +295,39 @@ impl HorizonApp {
     }
 
     /// Everything left of the summary: title, profile, worker, place and more options.
-    fn cloud_creation_body(&mut self, ui: &mut Ui, actions: &mut Actions, refocus_repository: bool) {
+    /// `setup_output_beside` is true when a setup agent's output has its own column.
+    fn cloud_creation_body(
+        &mut self,
+        ui: &mut Ui,
+        actions: &mut Actions,
+        refocus_repository: bool,
+        setup_output_beside: bool,
+    ) {
+        // A read failure of the settings, and nothing else, is what a fixing agent starts from.
+        let error = self.cloud_prototype.production.launch.read_error.clone();
         let form = &mut self.cloud_prototype.production;
         ui.add_enabled_ui(
             form.pending_creation.is_none() && !form.launch.submitted && form.launch.watch.is_none(),
             |ui| {
+                // A setup run needs none of the cloud's fields yet: beside its own output, or
+                // inline with the output below it in a narrow dialog.
+                if setup_output_beside || super::repository_setup::running_here(form) {
+                    if let super::repository_setup::Choice::Run(action) =
+                        super::repository_setup::render(ui, form, setup_output_beside, None)
+                    {
+                        actions.repository = RepositoryAction::SetupRun(action);
+                    }
+                    return;
+                }
                 actions.this_pc = super::new_workspace::notes(ui, form);
                 actions.repository = fields(ui, form, &mut actions.create, refocus_repository);
                 if !form.launch.loading() && form.profiles.is_none() && !checks::source_step(form) {
-                    match super::repository_setup::render(ui, form) {
+                    match super::repository_setup::render(ui, form, setup_output_beside, error.as_deref()) {
                         super::repository_setup::Choice::None => {}
                         super::repository_setup::Choice::SetupAgent => actions.repository = RepositoryAction::Setup,
+                        super::repository_setup::Choice::Run(action) => {
+                            actions.repository = RepositoryAction::SetupRun(action);
+                        }
                         super::repository_setup::Choice::QuickStart => {
                             super::repository_setup::set_configuration(form, Configuration::QuickStart);
                             actions.repository = RepositoryAction::Load;
@@ -307,7 +374,10 @@ impl HorizonApp {
         escape: bool,
     ) -> bool {
         if !picking {
-            let dismissed = response.should_close();
+            // `escape` is false while the agent's live terminal has Escape: Codex and Claude
+            // use it to interrupt. Close and the backdrop still close the dialog.
+            let pressed = ctx.input(|input| input.key_pressed(egui::Key::Escape));
+            let dismissed = response.should_close() && (escape || !pressed);
             if dismissed && escape {
                 self.consume_navigation_key(ctx, navigation_key(ShortcutKey::Escape));
             }
@@ -464,7 +534,6 @@ fn title_field(ui: &mut Ui, form: &mut Production, submit: &mut bool) {
         &mut form.title,
         "e.g. Feature development",
     );
-    title_requirement(ui, form);
     if title.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) && can_submit(form) {
         *submit = true;
     }
@@ -503,9 +572,9 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
         false
     } else if form.profiles.is_some() {
         profiles::field(ui, form);
-        super::repository_setup::quick_start_note(ui, form);
-        ui.add_space(12.0);
-        form.tailnets.choice(ui, &mut form.tailnet);
+        if super::repository_setup::quick_start_note(ui, form) {
+            action = RepositoryAction::Setup;
+        }
         ui.add_space(12.0);
         machine(ui, form)
     } else {
@@ -523,6 +592,11 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
         .id_salt("cloud-more-options")
         .default_open(form.profiles.is_none() && !form.launch.loading())
         .show(ui, |ui| {
+            // A tailnet is chosen rarely, so it waits here instead of above the machine.
+            if form.profiles.is_some() && !form.launch.loading() {
+                form.tailnets.choice(ui, &mut form.tailnet);
+                ui.add_space(8.0);
+            }
             if listed
                 && let Some(profile) = form
                     .profiles
@@ -618,16 +692,6 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production) -> RepositoryAction {
         RepositoryAction::Load
     } else {
         RepositoryAction::None
-    }
-}
-
-fn title_requirement(ui: &mut Ui, form: &Production) {
-    if form.title.trim().is_empty() && !checks::source_step(form) {
-        ui.label(
-            RichText::new("A cloud title is required before Start cloud can be used.")
-                .size(14.0)
-                .color(theme::FG()),
-        );
     }
 }
 

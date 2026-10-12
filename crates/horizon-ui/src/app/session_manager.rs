@@ -407,6 +407,7 @@ impl HorizonApp {
     }
 
     fn finish_session_switch(&mut self) {
+        self.end_cloud_repository_setup();
         self.git_watchers.clear();
         self.release_active_session_lease();
         self.active_session = None;

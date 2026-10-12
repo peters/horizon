@@ -101,6 +101,15 @@ pub(super) struct Production {
     prices: prices::State,
     setup_agent: Option<PanelKind>,
     setup_agents: Vec<horizon_core::cloud_runtime::setup::Agent>,
+    /// The setup agent for a repository without settings (it outlives the dialog); one starting.
+    setup_run: Option<repository_setup::Run>,
+    setup_starting: Option<repository_setup::Starting>,
+    /// Where the next setup agent starts from: new, an update or a fix.
+    setup_mode: repository_setup::Mode,
+    /// The agent presets of the New Workspace menu, offered for the setup agent.
+    setup_presets: Vec<horizon_core::PresetConfig>,
+    /// The chosen setup preset, by name.
+    setup_preset: Option<String>,
     session_id: Option<String>,
     pub runtimes: HashMap<u32, Runtime>,
     companions: companions::State,
@@ -542,6 +551,9 @@ impl Runtime {
 impl HorizonApp {
     pub(super) fn prepare_production_clouds(&mut self, ctx: &egui::Context) {
         self.sync_cloud_worker_exchanges(ctx);
+        // The setup agent works with the dialog closed too, for example while the person
+        // signs in to GitHub in a browser panel for it; Horizon's proofs and messages follow.
+        self.sync_cloud_repository_setup(ctx);
         if self.pending_startup_runtime_state.is_some() || self.startup_receiver.is_some() {
             return;
         }

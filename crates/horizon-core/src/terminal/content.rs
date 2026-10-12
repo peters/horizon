@@ -200,6 +200,12 @@ impl Terminal {
         current_cwd_for_pid(self.child_pid?)
     }
 
+    /// The process the terminal started, which leads its own process group.
+    #[must_use]
+    pub fn child_pid(&self) -> Option<u32> {
+        self.child_pid
+    }
+
     #[must_use]
     pub fn child_exited(&self) -> bool {
         self.child_exited

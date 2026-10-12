@@ -177,6 +177,9 @@ pub struct PanelOptions {
     /// True when this panel is being restored from persisted state rather
     /// than newly added; continue-style agents only reconnect on restore.
     pub is_restore: bool,
+    /// A command line the terminal's program runs under, such as a systemd scope
+    /// that holds every process the program starts; empty for none.
+    pub launch_wrapper: Vec<String>,
 }
 
 impl Default for PanelOptions {
@@ -210,6 +213,7 @@ impl Default for PanelOptions {
             transcript_root: None,
             restore_as_disconnected_snapshot: false,
             is_restore: false,
+            launch_wrapper: Vec::new(),
         }
     }
 }
@@ -239,6 +243,9 @@ pub struct Panel {
     pub work_resume: ResumePolicy,
     pub layout: PanelLayout,
     pub visible: bool,
+    /// Horizon neither saves nor restores this panel, such as a setup agent's hidden
+    /// panel whose arguments hold its task: a restart must not run it again unseen.
+    pub transient: bool,
     pub workspace_id: WorkspaceId,
     pub content: PanelContent,
     /// Preserve browser identity while an inert restore placeholder awaits its remote worker.
@@ -422,6 +429,7 @@ impl Panel {
             visible: true,
             workspace_id,
             content,
+            transient: false,
             disconnected_browser_profile: None,
             disconnected_device_identity: None,
             cloud_wait: None,
@@ -824,6 +832,7 @@ mod tests {
             visible: true,
             workspace_id: WorkspaceId(1),
             content: PanelContent::Usage(UsageDashboard::new()),
+            transient: false,
             disconnected_browser_profile: None,
             disconnected_device_identity: None,
             cloud_wait: None,
@@ -1433,5 +1442,42 @@ mod tests {
         };
 
         assert_eq!(platform_default_shell(), expected);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod launch_wrapper_tests {
+    use super::*;
+
+    #[test]
+    fn a_launch_wrapper_runs_the_resolved_program_inside_it() {
+        let temp = tempfile::tempdir().expect("temporary folder");
+        let marker = temp.path().join("wrapped");
+        let ran = temp.path().join("program-ran");
+        let panel = Panel::spawn(
+            PanelId(1),
+            WorkspaceId(1),
+            PanelOptions {
+                kind: PanelKind::Command,
+                command: Some("touch".to_owned()),
+                args: vec![ran.display().to_string()],
+                // The wrapper leaves a mark, then runs the program with its arguments.
+                launch_wrapper: vec![
+                    "sh".to_owned(),
+                    "-c".to_owned(),
+                    "touch \"$0\"; exec \"$@\"".to_owned(),
+                    marker.display().to_string(),
+                ],
+                ..PanelOptions::default()
+            },
+        )
+        .expect("panel starts");
+        let started = std::time::Instant::now();
+        while !(marker.exists() && ran.exists()) && started.elapsed() < std::time::Duration::from_secs(10) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        drop(panel);
+        assert!(marker.exists(), "the wrapper ran");
+        assert!(ran.exists(), "and ran the program with its arguments");
     }
 }

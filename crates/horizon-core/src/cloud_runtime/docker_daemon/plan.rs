@@ -47,6 +47,16 @@ impl Endpoint {
             Self::Remote(host.to_owned())
         }
     }
+
+    /// The address as `DOCKER_HOST` and `--host` take it.
+    #[must_use]
+    pub fn address(&self) -> String {
+        match self {
+            Self::Socket(path) => format!("unix://{}", path.display()),
+            Self::Pipe(pipe) => format!("npipe://{pipe}"),
+            Self::Remote(host) => host.clone(),
+        }
+    }
 }
 
 /// What Horizon observed about the Docker a cloud uses.
@@ -252,6 +262,17 @@ mod tests {
         match plan(facts) {
             Plan::Restart { argv, .. } => Ok(argv.join(" ")),
             Plan::Manual { instructions, .. } => Err(instructions),
+        }
+    }
+
+    #[test]
+    fn an_address_round_trips() {
+        for address in [
+            "unix:///var/run/docker.sock",
+            "npipe:////./pipe/docker_engine",
+            "ssh://builder@build.example",
+        ] {
+            assert_eq!(Endpoint::parse(address).address(), address, "the address round-trips");
         }
     }
 

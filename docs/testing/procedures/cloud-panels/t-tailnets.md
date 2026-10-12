@@ -194,7 +194,8 @@ D01 starts `smoke-a` on the test tailnet and records it in the ledger. If D01 di
 
    Result: The summary shows a Hetzner worker.
 
-6. Click `Smoke test tailnet` in the **Tailnet** chooser.
+6. Open **More options** if it is closed. Click `Smoke test tailnet` in the
+   **Tailnet** chooser.
 
    Result: The chooser shows **None** and `Smoke test tailnet`. `Smoke test tailnet`
    is selected.
@@ -399,7 +400,8 @@ path between clouds. Do not add a Tailscale Serve setting for this test.
    > **CAUTION:** SELECT ONLY THE TEST TAILNET. The worker joins the tailnet and
    > can reach the devices that its policy permits.
 
-7. Click `Smoke test tailnet` in the **Tailnet** chooser.
+7. Open **More options** if it is closed. Click `Smoke test tailnet` in the
+   **Tailnet** chooser.
 
    Result: `Smoke test tailnet` is selected.
 
