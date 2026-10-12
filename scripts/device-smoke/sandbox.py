@@ -76,14 +76,25 @@ def start(command, **popen_args):
     return subprocess.Popen(command, start_new_session=True, **popen_args)
 
 
+def process_state(pid):
+    """The state letter and process group of `pid` from /proc, as bytes, or None
+    once it is gone. Read as bytes: a process name need not be UTF-8, and it ends
+    at the last `)`."""
+    try:
+        fields = Path(f'/proc/{pid}/stat').read_bytes().rsplit(b')', 1)[1].split()
+    except (OSError, IndexError):
+        return None
+    return (fields[0], fields[2]) if len(fields) > 2 else None
+
+
 def _group_runs(group):
     """Whether a process of `group` other than a zombie still runs."""
-    for stat_file in Path('/proc').glob('[0-9]*/stat'):
-        try:
-            fields = stat_file.read_text().rsplit(')', 1)[1].split()
-        except (OSError, IndexError):
+    wanted = str(group).encode()
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit():
             continue
-        if len(fields) > 2 and fields[2] == str(group) and fields[0] != 'Z':
+        found = process_state(entry.name)
+        if found is not None and found[1] == wanted and found[0] != b'Z':
             return True
     return False
 

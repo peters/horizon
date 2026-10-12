@@ -142,6 +142,25 @@ class NamespaceTests(unittest.TestCase):
         self.assertIn('--nofork', command)
 
 
+@unittest.skipUnless(sys.platform.startswith('linux'), 'Linux /proc required')
+class ProcessGroupTests(unittest.TestCase):
+    def test_a_process_name_that_is_not_utf8_does_not_stop_the_scan(self):
+        # PR_SET_NAME gives the child a name that is not UTF-8 before it sleeps.
+        named = sandbox.start(
+            [sys.executable, '-c',
+             'import ctypes, time; ctypes.CDLL(None).prctl(15, b"\\xff\\xfebox", 0, 0, 0); time.sleep(30)'])
+        self.addCleanup(sandbox.end, named)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if Path(f'/proc/{named.pid}/comm').read_bytes().startswith(b'\xff'):
+                break
+            time.sleep(0.05)
+        self.assertTrue(Path(f'/proc/{named.pid}/comm').read_bytes().startswith(b'\xff'))
+        self.assertTrue(sandbox._group_runs(named.pid))
+        sandbox.end(named)
+        self.assertFalse(sandbox._group_runs(named.pid))
+
+
 @unittest.skipUnless(
     sys.platform.startswith('linux')
     and shutil.which('bwrap')
@@ -236,7 +255,9 @@ class LiveSessionBusTests(unittest.TestCase):
         self.assertTrue(children, 'bwrap runs the bus daemon as its child')
         sandbox.end(bus)
         for child in children:
-            self.assertFalse(Path(f'/proc/{child}').exists(), f'process {child} outlived its box')
+            # Gone, or a zombie its new parent has not reaped yet: either way it ended.
+            state = sandbox.process_state(child)
+            self.assertTrue(state is None or state[0] == b'Z', f'process {child} outlived its box')
 
     def test_repeated_launch_expires_the_private_socket(self):
         sockets = []
