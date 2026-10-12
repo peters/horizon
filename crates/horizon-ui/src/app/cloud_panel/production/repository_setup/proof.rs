@@ -17,7 +17,7 @@ mod session_env;
 mod stream;
 use needs::distinct_builds;
 pub(super) use needs::uses_nuget;
-pub(super) use resources::{Pinned, remove_run_resources, run_id, run_names};
+pub(super) use resources::{Pinned, remove_run_resources, retry_unremoved, run_id, run_names};
 
 /// The step titles Horizon owns once the agent asks for a proof.
 pub(super) const BUILD: &str = "Build image";

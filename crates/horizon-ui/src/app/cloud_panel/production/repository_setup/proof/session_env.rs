@@ -224,8 +224,9 @@ fn session_files(archive: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
 fn pam_variables(text: &str) -> Vec<(String, String)> {
     text.lines()
         .filter_map(|line| {
+            // `export KEY=VALUE` is shell, which pam_env does not read: its name has a
+            // space, so it names no variable and is skipped, as pam_env skips it.
             let line = line.trim();
-            let line = line.strip_prefix("export ").unwrap_or(line);
             let (key, value) = line.split_once('=')?;
             (!line.starts_with('#') && variable_name(key)).then(|| (key.to_owned(), value.trim_matches('"').to_owned()))
         })
@@ -497,10 +498,8 @@ mod tests {
     fn pam_skips_what_names_no_variable() {
         assert_eq!(
             pam_variables("LANG=\"C.UTF-8\"\n\n#LANG=x\n1X=2\nexport LC_ALL=C\n"),
-            [
-                ("LANG".to_owned(), "C.UTF-8".to_owned()),
-                ("LC_ALL".to_owned(), "C".to_owned())
-            ]
+            [("LANG".to_owned(), "C.UTF-8".to_owned())],
+            "a shell export line is not PAM's"
         );
     }
 }

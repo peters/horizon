@@ -193,6 +193,7 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_reso
     wait: bool,
 ) {
     let (image, volume) = run_names(repository, run);
+    let resources = RunResources::new(image, volume);
     let remove = move || {
         if let Some(after) = after {
             let _ = after.join();
@@ -203,44 +204,147 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_reso
         let Some(daemon) = pinned.or_else(|| LocalDocker::resolve().ok()) else {
             return;
         };
+        resources.remove_or_keep(daemon);
+    };
+    if wait {
+        remove();
+    } else {
+        super::super::run::keep_ending(std::thread::spawn(remove));
+    }
+}
+
+/// What a run made with Docker, by name: its proof and check containers, its images and
+/// its volume.
+#[derive(Clone, Debug)]
+struct RunResources {
+    image: String,
+    volume: String,
+    /// The name filter of its worker-check containers.
+    checks: String,
+}
+
+/// Run resources a cleanup could not show gone, with the daemon they are on: the next
+/// setup and Horizon's exit try again.
+static UNREMOVED: std::sync::Mutex<Vec<(RunResources, LocalDocker)>> = std::sync::Mutex::new(Vec::new());
+
+/// Tries again to remove what earlier cleanups could not, in the background; a new setup
+/// and Horizon's exit wait for it.
+pub(in crate::app::cloud_panel::production::repository_setup) fn retry_unremoved() {
+    let pending = std::mem::take(&mut *UNREMOVED.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    for (resources, daemon) in pending {
+        super::super::run::keep_ending(std::thread::spawn(move || resources.remove_or_keep(daemon)));
+    }
+}
+
+impl RunResources {
+    fn new(image: String, volume: String) -> Self {
+        let checks = format!("^/horizon-contract-{}-", check_operations(&volume));
+        Self { image, volume, checks }
+    }
+
+    /// Removes them; what a cleanup cannot show gone is logged and kept for a retry.
+    fn remove_or_keep(self, daemon: LocalDocker) {
+        if !self.remove(&daemon) {
+            tracing::warn!(
+                image = %self.image,
+                volume = %self.volume,
+                "a setup run's Docker resources are not removed yet; the next setup or exit tries again"
+            );
+            UNREMOVED
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((self, daemon));
+        }
+    }
+
+    /// Removes them, again and again until a listing shows none left, within the
+    /// cleanup's deadline; whether one did. A check stopped mid-way can still have its
+    /// container appear a moment later, so a second pass always follows a pause.
+    fn remove(&self, daemon: &LocalDocker) -> bool {
         let cleanup = &Cleanup {
-            daemon: &daemon,
+            daemon,
             deadline: std::time::Instant::now() + CLEANUP_TIMEOUT,
         };
-        // The proof's own containers and the worker-check containers of its profiles.
-        // A check stopped mid-way can still have its container appear a moment later,
-        // so the search runs once more after a pause.
-        let checks = format!("^/horizon-contract-{}-", check_operations(&volume));
-        for pass in 0..2 {
+        let mut pass = 0;
+        loop {
             if pass > 0 {
                 std::thread::sleep(std::time::Duration::from_secs(2));
             }
-            let found: Vec<String> = containers(cleanup, &format!("^/{volume}-"))
-                .into_iter()
-                .chain(containers(cleanup, &checks))
-                .collect();
-            if !found.is_empty() {
-                let mut remove = arguments(["rm", "--force", "--volumes"]);
-                remove.extend(found);
-                let _ = docker(cleanup, &remove);
+            self.remove_once(cleanup);
+            if pass > 0 && self.left(cleanup).is_some_and(|left| left.is_empty()) {
+                return true;
             }
+            if std::time::Instant::now() >= cleanup.deadline {
+                return false;
+            }
+            pass += 1;
         }
-        let filter = format!("reference={volume}-build*");
+    }
+
+    fn remove_once(&self, cleanup: &Cleanup<'_>) {
+        let found: Vec<String> = containers(cleanup, &format!("^/{}-", self.volume))
+            .into_iter()
+            .chain(containers(cleanup, &self.checks))
+            .collect();
+        if !found.is_empty() {
+            let mut remove = arguments(["rm", "--force", "--volumes"]);
+            remove.extend(found);
+            let _ = docker(cleanup, &remove);
+        }
+        let filter = format!("reference={}-build*", self.volume);
         let images: Vec<String> = docker(
             cleanup,
             &arguments(["images", "--format", "{{.Repository}}:{{.Tag}}", "--filter", &filter]),
         )
         .map(|output| output.split_whitespace().map(str::to_owned).collect())
         .unwrap_or_default();
-        let mut remove_images = arguments(["rmi", "--force", &image]);
+        let mut remove_images = arguments(["rmi", "--force", &self.image]);
         remove_images.extend(images);
         let _ = docker(cleanup, &remove_images);
-        let _ = docker(cleanup, &arguments(["volume", "rm", "--force", &volume]));
-    };
-    if wait {
-        remove();
-    } else {
-        super::super::run::keep_ending(std::thread::spawn(remove));
+        let _ = docker(cleanup, &arguments(["volume", "rm", "--force", &self.volume]));
+    }
+
+    /// What is left of them, by Docker's own listings; none when a listing failed, so a
+    /// daemon that does not answer is never taken for one that has nothing left.
+    fn left(&self, cleanup: &Cleanup<'_>) -> Option<Vec<String>> {
+        let list = |args: Vec<String>| {
+            docker(cleanup, &args).map(|output| output.split_whitespace().map(str::to_owned).collect::<Vec<_>>())
+        };
+        let mut left = list(arguments([
+            "ps",
+            "--all",
+            "--quiet",
+            "--filter",
+            &format!("name=^/{}-", self.volume),
+        ]))?;
+        left.extend(list(arguments([
+            "ps",
+            "--all",
+            "--quiet",
+            "--filter",
+            &format!("name={}", self.checks),
+        ]))?);
+        left.extend(list(arguments([
+            "images",
+            "--quiet",
+            "--filter",
+            &format!("reference={}", self.image),
+        ]))?);
+        left.extend(list(arguments([
+            "images",
+            "--quiet",
+            "--filter",
+            &format!("reference={}-build*", self.volume),
+        ]))?);
+        let volumes = list(arguments([
+            "volume",
+            "ls",
+            "--quiet",
+            "--filter",
+            &format!("name={}", self.volume),
+        ]))?;
+        left.extend(volumes.into_iter().filter(|name| *name == self.volume));
+        Some(left)
     }
 }
 

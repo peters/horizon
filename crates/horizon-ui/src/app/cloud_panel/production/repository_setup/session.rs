@@ -116,7 +116,9 @@ impl HorizonApp {
         );
         let launcher_unit = unit.clone();
         std::thread::spawn(move || {
-            // One setup at a time: an earlier run still ending, as after Stop, ends first.
+            // One setup at a time: an earlier run still ending, as after Stop, ends first,
+            // with what an earlier cleanup could not remove.
+            super::proof::retry_unremoved();
             run::wait_for_ended_runs();
             let outside = super::commit::outside(&scan);
             let dotnet = super::proof::uses_nuget(&scan);
@@ -477,6 +479,7 @@ impl HorizonApp {
     /// exits right after, and a thread still ending would be cut off.
     pub(in crate::app) fn end_cloud_repository_setup_for_exit(&mut self) {
         self.end_cloud_repository_setup();
+        super::proof::retry_unremoved();
         run::wait_for_ended_runs();
     }
 
