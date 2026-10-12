@@ -254,11 +254,12 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 ### Pull Request Scope
 
 - Deliver one independently testable outcome per PR. Split multi-part issues, refactoring, migrations, and cleanup into serial PRs.
-- Stop and request explicit user approval before a PR changes more than 10 source or test files, changes more than 1,500 non-generated source or test lines (additions plus deletions), or spans multiple independent subsystems. Test procedures and reports under `docs/testing/` do not count toward these limits.
+- Use 10 source or test files and 1,500 non-generated changed source or test lines (additions plus deletions) as review-size thresholds. Test procedures and reports under `docs/testing/` do not count toward these thresholds. Above either threshold, first split the work into cohesive, independently testable PRs without asking permission.
+- If splitting would leave incomplete behavior, break a shared contract, or require artificial intermediate changes, keep the outcome together. Explain why it must stay together and how to review it in the PR body. Size alone does not require user approval. Ask the user only when the work requires expanding the requested scope.
 - Migrate only the call sites required by the acceptance criteria. Treat similar pre-existing code as follow-up work.
 - Fix only problems that the PR introduces or worsens, acceptance-criteria violations, security or data-loss risks, and merge blockers in the same PR.
 - Keep local and agent self-review findings local and deduplicated. Do not publish automated self-review findings unless the user explicitly requests them; this does not replace the repository-mandated independent review below.
-- Reassess scope after material fix rounds, but do not split solely because of the number of fix rounds or percentage diff growth. Split when the absolute source/test file or changed-line limits above are crossed, the work spans multiple independent subsystems, or review uncovers a separately testable outcome.
+- Reassess scope after material fix rounds, but do not split solely because of the number of fix rounds or percentage diff growth. Use the size thresholds above to check whether a split is practical. Split independent subsystems or separately testable outcomes; keep necessary larger outcomes together with the explanation required above.
 - Put purely mechanical module moves in a separate prerequisite PR.
 - Request cross-machine smoke testing only after local review is complete and CI has stabilized on the candidate head.
 
@@ -280,13 +281,13 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
   ```
 
   The check finds the PR rules that Copilot reports as findings:
-  - the scope limits;
+  - advisory notes for the review-size thresholds;
   - the test procedure and the GIF of a UI change;
   - the test procedure of a feature;
   - the two bundled skill copies;
   - the place of new test plans.
 
-  Fix each error. If `peters` approved a larger PR, add `--scope-approved`. If the UI files change no visible behavior, write `No visible change:` and the reason in the PR body, and add `--no-visible-change`.
+  Fix each error. For a size note, split the work where practical or explain the necessary larger outcome and review approach in the PR body. Do not ask for approval because of size alone. If the UI files change no visible behavior, write `No visible change:` and the reason in the PR body, and add `--no-visible-change`.
 - Open PRs ready for review by default, not as drafts, unless the user explicitly requests a draft. Include reproduction details for bug fixes, runtime or platform assumptions when relevant, and screenshots, logs, or completed smoke evidence for behavior-affecting changes.
 - Every PR gets an independent Copilot review. Request it after the PR exists through the REST API, using the login `copilot-pull-request-reviewer[bot]`. The POST returns 200 whether or not it registered, so the only proof is that the PR gained a `review_requested` event — count them either side of the request:
 
