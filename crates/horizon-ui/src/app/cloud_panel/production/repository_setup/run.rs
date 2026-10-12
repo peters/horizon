@@ -102,6 +102,9 @@ pub(in crate::app::cloud_panel::production) struct Run {
     /// The agent's process until it is known to have ended: Use, Stop and the end of
     /// the run end it, with its process group, before the run's setup is read or let go.
     pub(super) agent_process: Option<super::agent::AgentProcess>,
+    /// The agent's processes ending on a thread for Use: whether they ended, and the
+    /// process again when they did not.
+    pub(super) ending: Option<std::sync::mpsc::Receiver<(bool, super::agent::AgentProcess)>>,
 }
 
 /// What the person did in the progress view.
@@ -170,6 +173,7 @@ impl Run {
             dotnet: false,
             released: false,
             agent_process: None,
+            ending: None,
         }
     }
 
@@ -364,6 +368,11 @@ impl Run {
         }
         self.missing_proof_summary.clone_from(&self.status.summary);
         true
+    }
+
+    /// Use is waiting for the agent's processes to end.
+    pub(super) fn ending(&self) -> bool {
+        self.ending.is_some()
     }
 
     /// The proof the agent asks for now.

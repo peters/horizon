@@ -174,9 +174,12 @@ pub(super) enum Footer {
 /// Close keeps the agent working; Use this setup appears once it reports a summary.
 pub(super) fn footer(ui: &mut egui::Ui, form: &Production) -> Footer {
     let finished = form.setup_run.as_ref().is_some_and(Run::finished);
+    let ending = form.setup_run.as_ref().is_some_and(Run::ending);
     let mut footer = Footer::None;
     ui.horizontal(|ui| {
-        let hint = if finished {
+        let hint = if ending {
+            "Ending the setup agent before Horizon reads and commits the setup…"
+        } else if finished {
             "Use this setup commits the files in .horizon and reads them as this repository's profile."
         } else {
             "Close keeps the agent working. Open New cloud again to come back."
@@ -188,7 +191,7 @@ pub(super) fn footer(ui: &mut egui::Ui, form: &Production) -> Footer {
                     .fill(theme::ACCENT())
                     .corner_radius(10)
                     .min_size(Vec2::new(120.0, 40.0));
-                if ui.add(primary).clicked() {
+                if ui.add_enabled(!ending, primary).clicked() {
                     footer = Footer::Run(Action::Use);
                 }
             }

@@ -21,6 +21,30 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn run_id(status: 
     format!("{:08x}", hash & 0xffff_ffff)
 }
 
+/// The start of the worker-check operation names of the run whose volume is `volume`;
+/// each check adds its profile's number.
+pub(super) fn check_operations(volume: &str) -> String {
+    let hash = volume.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    });
+    format!("horizon-setup-check-{:08x}", hash & 0xffff_ffff)
+}
+
+/// The containers whose names match `pattern`, a Docker name filter.
+fn containers(pattern: &str) -> Vec<String> {
+    Command::new("docker")
+        .args(["ps", "--all", "--quiet", "--filter"])
+        .arg(format!("name={pattern}"))
+        .output()
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
 /// Removes a finished run's containers, image and volume once `after`, the run's
 /// stopped proof, has ended and can create nothing more: in the background, or before
 /// returning with `wait`, as when Horizon exits.
@@ -35,22 +59,24 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_reso
         if let Some(after) = after {
             let _ = after.join();
         }
-        let containers = Command::new("docker")
-            .args(["ps", "--all", "--quiet", "--filter"])
-            .arg(format!("name=^{volume}-"))
-            .output()
-            .map(|output| {
-                String::from_utf8_lossy(&output.stdout)
-                    .split_whitespace()
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        if !containers.is_empty() {
-            let _ = Command::new("docker")
-                .args(["rm", "--force"])
-                .args(&containers)
-                .output();
+        // The proof's own containers and the worker-check containers of its profiles.
+        // A check stopped mid-way can still have its container appear a moment later,
+        // so the search runs once more after a pause.
+        let checks = format!("^/horizon-contract-{}-", check_operations(&volume));
+        for pass in 0..2 {
+            if pass > 0 {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            }
+            let found: Vec<String> = containers(&format!("^/{volume}-"))
+                .into_iter()
+                .chain(containers(&checks))
+                .collect();
+            if !found.is_empty() {
+                let _ = Command::new("docker")
+                    .args(["rm", "--force", "--volumes"])
+                    .args(&found)
+                    .output();
+            }
         }
         let images = Command::new("docker")
             .args(["images", "--format", "{{.Repository}}:{{.Tag}}", "--filter"])

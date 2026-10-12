@@ -331,7 +331,7 @@ fn finished_actions(ui: &mut Ui, run: &Run, inline: bool) -> Option<Action> {
             if inline {
                 let primary = egui::Button::new(RichText::new("Use this setup").size(14.0).strong().color(theme::BG()))
                     .fill(theme::ACCENT());
-                if ui.add(dialog_button(primary)).clicked() {
+                if ui.add_enabled(!run.ending(), dialog_button(primary)).clicked() {
                     action = Some(Action::Use);
                 }
                 if ui.add(dialog_button(action_button("Show agent"))).clicked() {

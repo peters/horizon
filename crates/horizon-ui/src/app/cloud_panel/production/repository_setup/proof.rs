@@ -393,7 +393,7 @@ impl Job {
         // An earlier proof of this repository may still be stopping: its container goes.
         let earlier = Command::new("docker")
             .args(["ps", "--all", "--quiet", "--filter"])
-            .arg(format!("name=^{}-proof-", self.volume))
+            .arg(format!("name=^/{}-proof-", self.volume))
             .output()
             .map(|output| {
                 String::from_utf8_lossy(&output.stdout)
@@ -512,10 +512,9 @@ impl Job {
             runner: &runner,
             publisher: None,
         };
-        let hash = self.container.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
-            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
-        });
-        let operation = format!("horizon-setup-check-{:08x}-{number}", hash & 0xffff_ffff);
+        // Named after the run, so the run's cleanup finds a check container that a
+        // cancelled check left, and the next check of the same profile reuses the name.
+        let operation = format!("{}-{number}", resources::check_operations(&self.volume));
         let result = images
             .validate_contract(tag, &operation, profile, true)
             .map(|_| ())

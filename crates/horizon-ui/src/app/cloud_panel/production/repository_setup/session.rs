@@ -147,6 +147,24 @@ impl HorizonApp {
         let Some(run) = self.cloud_prototype.production.setup_run.as_mut() else {
             return;
         };
+        // Use waits for the agent's processes on a thread; it goes on once they ended.
+        if let Some(ending) = &run.ending {
+            match ending.try_recv() {
+                Ok((true, _)) => {
+                    run.ending = None;
+                    self.use_cloud_repository_setup(ctx);
+                    return;
+                }
+                Ok((false, agent)) => {
+                    run.ending = None;
+                    run.agent_process = Some(agent);
+                    self.cloud_prototype.error =
+                        Some("The setup agent is still ending. Press Use this setup again in a moment.".into());
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(100)),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => run.ending = None,
+            }
+        }
         run.poll();
         if run.finished() && run.files.is_none() {
             run.files = Some(changed_files(&run.repository));
@@ -335,15 +353,24 @@ impl HorizonApp {
         let Some(run) = self.cloud_prototype.production.setup_run.as_mut() else {
             return;
         };
-        // Closing the panel only hangs up: nothing is read until the agent and everything
-        // in its process group are gone, killed if they ignore it, so no late write races
-        // the check.
-        if !run.agent_process.as_ref().is_none_or(super::agent::AgentProcess::end) {
-            self.cloud_prototype.error =
-                Some("The setup agent is still ending. Press Use this setup again in a moment.".into());
+        if run.ending() {
             return;
         }
-        run.agent_process = None;
+        // Closing the panel only hangs up: nothing is read until the agent and everything
+        // in its process group are gone, killed if they ignore it, so no late write races
+        // the check. That wait runs on a thread; Use goes on when it reports.
+        if let Some(agent) = run.agent_process.take() {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let wake = ctx.clone();
+            std::thread::spawn(move || {
+                let ended = agent.end();
+                let _ = sender.send((ended, agent));
+                wake.request_repaint();
+            });
+            run.ending = Some(receiver);
+            self.cloud_prototype.error = None;
+            return;
+        }
         // One reading of the setup: it must be the proved one, and it is what is committed,
         // so nothing written while the agent's process ends can slip in after the check.
         run.refresh_inputs_now();
