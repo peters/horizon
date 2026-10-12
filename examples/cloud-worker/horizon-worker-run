@@ -58,7 +58,13 @@ if [ "$(id -u)" != 0 ]; then
     approvals="$(python3 -I - <<'PY' 2>/dev/null
 import json
 with open('/workspace/capabilities.json') as selection:
-    print('ask' if json.load(selection).get('agent_approvals') == 'ask' else 'auto')
+    value = json.load(selection)
+# Only a selection that horizon-worker-check could have written decides; any other shape
+# fails here, and the prompts stay.
+approvals = value.get('agent_approvals', 'auto') if isinstance(value, dict) else None
+if approvals not in ('auto', 'ask'):
+    raise SystemExit(1)
+print(approvals)
 PY
 )" || approvals=ask
     [ "$approvals" = auto ] || approvals=ask
@@ -200,7 +206,7 @@ def current():
         return b''
 
 
-def seeded(raw):
+def addition(raw):
     # None: nothing to add, or a file Codex itself would refuse, which stays as it is.
     try:
         text = raw.decode()
@@ -209,33 +215,26 @@ def seeded(raw):
             return None
     except (UnicodeDecodeError, tomllib.TOMLDecodeError):
         return None
-    if text and not text.endswith('\n'):
-        text += '\n'
-    text += f'\n[projects.{json.dumps(folder)}]\ntrust_level = "trusted"\n'
+    entry = f'\n[projects.{json.dumps(folder)}]\ntrust_level = "trusted"\n'
     try:
-        tomllib.loads(text)
+        tomllib.loads(text + entry)
     except tomllib.TOMLDecodeError:
         return None
-    return text
+    return entry
 
 
 os.makedirs(home, mode=0o700, exist_ok=True)
 with open(path + '.horizon-lock', 'a') as lock:
+    # Launchers serialize on this lock, so two sessions never add the same entry. Codex saves
+    # the file without it, so the entry is appended and the file is never replaced: a save
+    # by a running Codex is never lost. If Codex replaces the file at the same moment, only
+    # the entry can be lost, and the question then comes back once.
     fcntl.flock(lock, fcntl.LOCK_EX)
-    # Codex saves this file without the lock: write only when the entry is missing, and start
-    # over if the file changed while the update was prepared.
-    for _ in range(5):
-        raw = current()
-        text = seeded(raw)
-        if text is None:
-            break
-        pending = path + '.horizon-new'
-        descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    entry = addition(current())
+    if entry is not None:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         with os.fdopen(descriptor, 'w') as out:
-            out.write(text)
-        if current() == raw:
-            os.replace(pending, path)
-            break
+            out.write(entry)
 PY
     if [ "$approvals" = auto ]; then
         # Bypasses the sandbox too: where the container denies user namespaces, as RunPod's

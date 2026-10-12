@@ -308,7 +308,9 @@ if sys.argv[1:] == ['--help']:
     def test_ask_an_unreadable_selection_or_root_keeps_claude_prompts(self):
         selection = self.workspace / 'capabilities.json'
         for uid, text in [(10001, json.dumps({'agent_approvals': 'ask'})), (10001, None),
-                          (10001, '{not json'), (0, json.dumps({}))]:
+                          (10001, '{not json'), (10001, json.dumps({'agent_approvals': None})),
+                          (10001, json.dumps({'agent_approvals': 'never'})), (10001, json.dumps([])),
+                          (0, json.dumps({}))]:
             with self.subTest(uid=uid, selection=text):
                 self.as_uid(uid)
                 selection.unlink(missing_ok=True)
