@@ -1,5 +1,6 @@
 //! The setup agent's session: a hidden panel the dialog starts, samples, writes to
 //! and closes, and the commit of the files it wrote.
+use super::access::{self, Fixer};
 use super::prompt::prompt;
 use super::run::{self, Action, Run};
 use crate::app::cloud_panel::production::{HorizonApp, PanelKind, PanelOptions};
@@ -262,6 +263,7 @@ impl HorizonApp {
             // The finished card lists the files of the proof that passes, not an earlier one.
             run.files = None;
             run.files_job = None;
+            run.fixer = None;
             let log = run.status_path.with_extension(format!("proof-{request}.log"));
             let id = super::proof::run_id(&run.status_path);
             // The proof and the preview it replaces stop first: the two never build the same
@@ -273,7 +275,7 @@ impl HorizonApp {
                 (&run.repository, &id, run.identity),
                 (request, spec),
                 log,
-                run.host_restore,
+                (run.host_restore, run.root_dirty.clone()),
                 (after, ctx.clone()),
             ));
         }
@@ -287,6 +289,7 @@ impl HorizonApp {
         let preview_report = run.sync_preview(ctx);
         let Some(panel) = self.board.panel_mut(run.panel) else {
             run.agent_panel_closed();
+            self.close_cloud_setup_fix_panel();
             // A live preview still opens, for example after a refused Use closed the agent.
             self.open_cloud_setup_preview();
             return;
@@ -471,12 +474,28 @@ impl HorizonApp {
         };
         let panel = run.panel;
         match action {
-            Action::Steer(text) => {
-                if let Some(panel) = self.board.panel_mut(panel) {
-                    run::paste(panel, &mut run.submit_at, &text);
-                    ctx.request_repaint_after(run::SUBMIT_DELAY);
+            Action::Steer(text) => self.steer_cloud_setup(ctx, &text),
+            Action::Fix(fixer) => self.start_cloud_setup_fix(ctx, fixer),
+            Action::ShowFix => {
+                if let Some(browser) = run.fix_panel.filter(|browser| self.board.panel(*browser).is_some()) {
+                    self.reveal_cloud_setup_panel(ctx, browser);
+                } else {
+                    // The person closed it: open it again for whoever makes the fix, and show it.
+                    let fixer = run.fixer.unwrap_or(Fixer::Person);
+                    self.start_cloud_setup_fix(ctx, fixer);
+                    if fixer == Fixer::Agent
+                        && let Some(browser) = self
+                            .cloud_prototype
+                            .production
+                            .setup_run
+                            .as_ref()
+                            .and_then(|run| run.fix_panel)
+                    {
+                        self.reveal_cloud_setup_panel(ctx, browser);
+                    }
                 }
             }
+            Action::ProveAgain => self.steer_cloud_setup(ctx, access::FIXED),
             Action::Show => {
                 self.board.set_panel_visible(panel, true);
                 let workspace = self.board.panel(panel).map(|panel| panel.workspace_id);
@@ -489,19 +508,14 @@ impl HorizonApp {
             Action::Stop if run.ending() => {}
             Action::ShowPreview => {
                 if let Some(preview) = run.preview_panel {
-                    let workspace = self.board.panel(preview).map(|panel| panel.workspace_id);
-                    self.close_cloud_creation();
-                    if let Some(workspace) = workspace {
-                        self.reveal_new_panel(ctx, workspace, preview);
-                    }
+                    self.reveal_cloud_setup_panel(ctx, preview);
                 }
             }
             Action::Stop => {
-                let preview = run.preview_panel.take();
-                if let Some(preview) = preview
-                    && self.board.panel(preview).is_some()
-                {
-                    self.close_panel(preview);
+                for helper in [run.preview_panel.take(), run.fix_panel.take()].into_iter().flatten() {
+                    if self.board.panel(helper).is_some() {
+                        self.close_panel(helper);
+                    }
                 }
                 if self.board.panel(panel).is_some() {
                     self.close_panel(panel);
@@ -511,6 +525,105 @@ impl HorizonApp {
                 }
             }
             Action::Use => self.use_cloud_repository_setup(ctx),
+        }
+    }
+
+    /// Closes the run's GitHub access panel, which served this run only.
+    fn close_cloud_setup_fix_panel(&mut self) {
+        let Some(browser) = self
+            .cloud_prototype
+            .production
+            .setup_run
+            .as_mut()
+            .and_then(|run| run.fix_panel.take())
+        else {
+            return;
+        };
+        if self.board.panel(browser).is_some() {
+            self.close_panel(browser);
+        }
+    }
+
+    /// Passes `text` to the agent as one message.
+    fn steer_cloud_setup(&mut self, ctx: &egui::Context, text: &str) {
+        let Some(run) = self.cloud_prototype.production.setup_run.as_mut() else {
+            return;
+        };
+        if let Some(panel) = self.board.panel_mut(run.panel) {
+            run::paste(panel, &mut run.submit_at, text);
+            ctx.request_repaint_after(run::SUBMIT_DELAY);
+        }
+    }
+
+    /// Closes the dialog and shows a panel the setup opened beside the agent.
+    fn reveal_cloud_setup_panel(&mut self, ctx: &egui::Context, panel: horizon_core::PanelId) {
+        let workspace = self.board.panel(panel).map(|panel| panel.workspace_id);
+        self.close_cloud_creation();
+        if let Some(workspace) = workspace {
+            self.reveal_new_panel(ctx, workspace, panel);
+        }
+    }
+
+    /// Opens the page of the fix the proof needs in a browser panel beside the agent.
+    /// The agent works in it while the dialog shows its progress, or the person does.
+    fn start_cloud_setup_fix(&mut self, ctx: &egui::Context, fixer: Fixer) {
+        let Some(run) = self.cloud_prototype.production.setup_run.as_ref() else {
+            return;
+        };
+        let Some(fix) = run.proof.as_ref().and_then(|proof| proof.fix.clone()) else {
+            return;
+        };
+        let Some(workspace) = self.board.panel(run.panel).map(|panel| panel.workspace_id) else {
+            return;
+        };
+        // Each fix starts on its own page: an earlier fix may have left the panel on
+        // another organization's policy page. The open panel goes back to it, keeping its
+        // browser profile and so the GitHub sign-in; a panel the person closed is opened
+        // again.
+        let open = run.fix_panel.filter(|panel| self.board.panel(*panel).is_some());
+        let browser = if let Some(panel) = open {
+            if let Some(browser) = self.board.panel_mut(panel).and_then(|panel| panel.browser_mut()) {
+                browser.submit_navigation(fix.url());
+            }
+            panel
+        } else {
+            let created = self.board.create_panel(
+                PanelOptions {
+                    name: Some("GitHub access".into()),
+                    name_is_custom: Some(true),
+                    kind: PanelKind::Browser,
+                    command: Some(fix.url().to_owned()),
+                    browser_config: Some(self.template_config.browser.clone()),
+                    ..PanelOptions::default()
+                },
+                workspace,
+            );
+            match created {
+                Ok(panel) => {
+                    // It belongs to this run: never saved, so no restart brings it back alone.
+                    if let Some(created) = self.board.panel_mut(panel) {
+                        created.transient = true;
+                    }
+                    panel
+                }
+                Err(error) => {
+                    self.cloud_prototype.error = Some(error.to_string());
+                    return;
+                }
+            }
+        };
+        let local = self
+            .board
+            .panel(browser)
+            .map(|panel| panel.local_id.clone())
+            .unwrap_or_default();
+        if let Some(run) = self.cloud_prototype.production.setup_run.as_mut() {
+            run.fix_panel = Some(browser);
+            run.fixer = Some(fixer);
+        }
+        match fixer {
+            Fixer::Agent => self.steer_cloud_setup(ctx, &fix.task(&local)),
+            Fixer::Person => self.reveal_cloud_setup_panel(ctx, browser),
         }
     }
 }

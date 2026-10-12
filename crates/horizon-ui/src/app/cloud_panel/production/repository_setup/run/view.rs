@@ -1,6 +1,6 @@
 //! The setup agent's progress view: a card with the steps, their elapsed times and
 //! the actions, and the agent's screen in a log well when it has no column of its own.
-use super::{Action, Run, State, Step};
+use super::{Action, Fixer, Run, State, Step};
 use crate::app::cloud_panel::runtime::{action_button, danger_button};
 use crate::theme;
 use egui::{Align, Color32, CornerRadius, Frame, Key, Layout, RichText, Sense, Stroke, TextEdit, Ui, Vec2};
@@ -54,6 +54,10 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn render(
                 ui.add_space(8.0);
                 proof_tail(ui, proof);
             }
+            if working && let Some(fix) = run.proof.as_ref().and_then(|proof| proof.fix.clone()) {
+                ui.add_space(8.0);
+                action = fix_card(ui, &fix, run.fixer);
+            }
             if let Some(question) = run.status.question.as_deref().filter(|_| working) {
                 ui.add_space(8.0);
                 callout(ui, question);
@@ -62,11 +66,12 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn render(
             // Beside the agent's own terminal, the person types there; inline, a field
             // passes messages and the footer is not the only place to act.
             let inline = output_height.is_some();
-            action = if finished {
+            let pressed = if finished {
                 finished_actions(ui, run, inline)
             } else {
                 working_actions(ui, run, working, inline)
             };
+            action = action.take().or(pressed);
         });
     if let Some(height) = output_height {
         ui.add_space(12.0);
@@ -249,6 +254,59 @@ fn proof_tail(ui: &mut Ui, proof: &super::Proof) {
                 ui.add(egui::Label::new(RichText::new(line).monospace().size(11.5).color(theme::FG_SOFT())).truncate());
             }
         });
+}
+
+/// What Horizon recognised in a failed proof, and the person's ways to fix it: let the
+/// agent do it in a browser panel they can watch and take over, or do it themselves.
+fn fix_card(ui: &mut Ui, fix: &super::super::access::Fix, fixer: Option<Fixer>) -> Option<Action> {
+    let mut action = None;
+    Frame::new()
+        .fill(theme::alpha(theme::ACCENT(), 18))
+        .stroke(Stroke::new(1.0, theme::alpha(theme::ACCENT(), 110)))
+        .corner_radius(10)
+        .inner_margin(egui::Margin::symmetric(12, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new(fix.title()).size(14.0).strong().color(theme::FG()));
+            ui.add_space(2.0);
+            let text = match fixer {
+                None => fix.explanation(),
+                Some(Fixer::Agent) => "The agent is making the fix on GitHub in a browser panel. If GitHub asks you to sign in, the agent hands the browser to you: sign in there, then press Done.".to_owned(),
+                Some(Fixer::Person) => "Make the fix in the GitHub browser panel, then prove again.".to_owned(),
+            };
+            ui.label(RichText::new(text).size(13.0).color(theme::FG_SOFT()));
+            ui.add_space(8.0);
+            ui.horizontal(|ui| match fixer {
+                None => {
+                    let primary = egui::Button::new(
+                        RichText::new("Let the agent do it")
+                            .size(14.0)
+                            .strong()
+                            .color(theme::BG()),
+                    )
+                    .fill(theme::ACCENT());
+                    if ui.add(primary.min_size(Vec2::new(170.0, 36.0)).corner_radius(10)).clicked() {
+                        action = Some(Action::Fix(Fixer::Agent));
+                    }
+                    if ui.add(fix_button("Open GitHub myself")).clicked() {
+                        action = Some(Action::Fix(Fixer::Person));
+                    }
+                }
+                Some(fixer) => {
+                    if ui.add(fix_button("Show browser")).clicked() {
+                        action = Some(Action::ShowFix);
+                    }
+                    if fixer == Fixer::Person && ui.add(fix_button("Prove again")).clicked() {
+                        action = Some(Action::ProveAgain);
+                    }
+                }
+            });
+        });
+    action
+}
+
+fn fix_button(text: &str) -> egui::Button<'_> {
+    action_button(text).min_size(Vec2::new(150.0, 36.0)).corner_radius(10)
 }
 
 fn callout(ui: &mut Ui, question: &str) {

@@ -18,6 +18,10 @@ use zeroize::{Zeroize as _, Zeroizing};
 /// Horizon's own OAuth app "Horizon": public, with device sign-in on. Its tokens carry
 /// scopes, which the package registry requires.
 const CLIENT_ID: &str = "Ov23liPNCPgWraJDo6XM";
+
+/// The GitHub page where the person sees Horizon's OAuth app and grants it to an
+/// organization that limits OAuth apps.
+pub const APP_PAGE: &str = "https://github.com/settings/connections/applications/Ov23liPNCPgWraJDo6XM";
 const SCOPE: &str = "write:packages";
 const REGISTRY: &str = "ghcr.io";
 /// The chain, private, in Horizon's Docker configuration directory.
@@ -160,6 +164,81 @@ fn build_config_with(docker_config: &Path, machine: Option<&Path>) -> Result<(te
     let bytes = stored::serialized(|writer| serde_json::to_writer(writer, &config.0))?;
     write_private(directory.path(), "config.json", &bytes)?;
     Ok((directory, signed_in))
+}
+
+/// The organization that keeps Horizon's own login from pulling a `ghcr.io` image named
+/// in `text`, a build's output, because it limits OAuth apps, as GitHub's packages API
+/// says. `None` without a stored login, without such an image, when GitHub cannot be
+/// asked, or once `cancelled` says so; it is asked before each request.
+#[must_use]
+pub fn restricting_organization(docker_config: &Path, text: &str, cancelled: &dyn Fn() -> bool) -> Option<String> {
+    let packages = ghcr_packages(text);
+    if packages.is_empty() || !docker_config.join(STORE).is_file() || cancelled() {
+        return None;
+    }
+    let client = Client::new();
+    // Another cloud may hold the login while it publishes or signs in: a stop ends the
+    // wait, and nothing is renewed after it.
+    let (_, token) = stored::lock(&docker_config.join(LOCK), || {
+        if cancelled() {
+            Err(std::io::Error::other("the proof stopped").into())
+        } else {
+            Ok(())
+        }
+    })
+    .ok()
+    .filter(|_| !cancelled())
+    .and_then(|_lock| current(docker_config, &client).ok().flatten())?;
+    // The first answer that is neither yes nor no (an outage, a rate limit) ends the
+    // probing: asking the next image would only wait out another timeout.
+    for (owner, name) in packages {
+        if cancelled() {
+            return None;
+        }
+        match client.oauth_restricted(&token, &owner, &name) {
+            Ok(true) => return Some(owner),
+            Ok(false) => {}
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
+/// The most images one diagnosis asks GitHub about.
+const MAX_PACKAGES: usize = 8;
+
+/// The owner and name of each distinct `ghcr.io` image named in `text`, without its tag
+/// or digest; at most [`MAX_PACKAGES`], the first ones named.
+fn ghcr_packages(text: &str) -> Vec<(String, String)> {
+    let mut packages = Vec::new();
+    for (index, _) in text.match_indices("ghcr.io/") {
+        if packages.len() == MAX_PACKAGES {
+            break;
+        }
+        // A registry API address such as https://ghcr.io/v2/OWNER/NAME/manifests/TAG
+        // names no image in that form; the image reference beside it does.
+        if text[..index].ends_with("://") {
+            continue;
+        }
+        let reference: String = text[index + "ghcr.io/".len()..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || "._-/:@".contains(*c))
+            .collect();
+        let path = reference.split('@').next().unwrap_or_default();
+        // A tag follows the first colon after the last slash.
+        let last = path.rfind('/').map_or(0, |slash| slash + 1);
+        let path = path[last..].find(':').map_or(path, |colon| &path[..last + colon]);
+        // A sentence may end right after the image: its full stop is no part of the name.
+        let path = path.trim_end_matches(['/', '.', '_', '-']);
+        let Some((owner, name)) = path.split_once('/') else {
+            continue;
+        };
+        let package = (owner.to_ascii_lowercase(), name.to_ascii_lowercase());
+        if !name.is_empty() && !packages.contains(&package) {
+            packages.push(package);
+        }
+    }
+    packages
 }
 
 /// The stored chain's account and a usable access token, renewed when it is close to its

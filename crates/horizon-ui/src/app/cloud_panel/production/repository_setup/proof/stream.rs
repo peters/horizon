@@ -178,6 +178,7 @@ impl Job {
                 }
             }
         }
+        self.tail.borrow_mut().push(&line);
         let _ = self.sender.try_send(Event::Line(line));
         self.ctx.request_repaint();
     }

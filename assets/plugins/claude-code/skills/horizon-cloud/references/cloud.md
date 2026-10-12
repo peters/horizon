@@ -232,6 +232,18 @@ GitHub and chooses its repositories; agents cannot set it up.
   build files give), shows a desktop app live in a Device panel when the agent names
   one, and **Use this setup** commits it. No MCP tool starts a setup: ask the person
   to open **New cloud** for the repository.
+- When that proof's build fails because an organization limits OAuth apps, Horizon names
+  the organization and offers the fix on GitHub; the Dockerfile is not the cause. If the
+  person lets the setup agent make the fix, the agent gets one **GitHub access** browser
+  panel: it uses that panel, hands sign-in pages to the person with `browser_handoff`,
+  never types a password or code, and asks for a new proof once access is granted.
+- A desktop app that needs hardware virtualization, such as an x86_64 Android
+  emulator, gets `/dev/kvm` in the setup's live preview when the agent adds
+  `"kvm": true` to the preview in the status file; with rootless Docker that preview
+  runs as the container's root. When this computer has no `/dev/kvm`, or a
+  container cannot open it, Horizon skips the preview, tells the agent why, and
+  accepts the setup without it. A GPU profile's
+  proof and preview get this computer's GPU; a computer without one fails the proof.
 
 ## Development-only registry
 

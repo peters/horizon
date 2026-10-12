@@ -555,9 +555,27 @@ takes a screenshot (when the image has ImageMagick's `import`) and opens the
 desktop live in a Device panel beside the agent,
 on this computer's loopback, before anything is rented. A new proof or a new
 preview request replaces the live desktop, and **Stop** or **Use this setup**
-removes it. The agent asks before it uses a credential of yours, such as your
+removes it. The preview of a GPU profile gets this computer's GPU, and it gets
+`/dev/kvm` when the app asks for it, such as an x86_64 Android emulator. With
+rootless Docker, only the container's root account can open `/dev/kvm`, so that
+preview runs as root, which is your own account. When this computer has no
+`/dev/kvm`, or a container cannot open it (with rootless Docker the person's
+account needs access to it), Horizon skips that preview, says why, and accepts the
+setup without it. The agent asks before it uses a credential of yours, such as your
 GitHub token for a private package feed. It does not allocate compute, push
 images, commit or open a pull request.
+
+Some build failures are account problems, not Dockerfile problems. Horizon
+pulls private `ghcr.io` bases with its own GitHub login. If an organization
+limits OAuth apps, GitHub refuses that pull. Horizon then shows the cause,
+**ORGANIZATION blocks Horizon's GitHub app**, and tells the agent not to change
+files for it. **Let the agent do it** opens a **GitHub access** browser panel on
+the page of Horizon's app, beside the agent, and the agent clicks **Grant** for
+that organization. When GitHub asks you to sign in, the agent hands the browser
+to you: sign in, then press **Done**. The agent never types a password or a
+code. **Open GitHub myself** opens the same panel for you; **Prove again**
+then runs the proof again. Only an owner of the organization can grant access.
+For other members, GitHub shows **Request**, and an owner must approve it.
 
 When the agent is done, **Use this setup** commits the files in `.horizon` and
 reads them as the repository profile, so **Start cloud** can use them. A change

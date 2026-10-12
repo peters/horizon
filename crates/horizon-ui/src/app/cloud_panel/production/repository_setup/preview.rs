@@ -40,6 +40,8 @@ pub(super) struct Spec {
     pub(super) command: String,
     pub(super) width: u32,
     pub(super) height: u32,
+    /// The app needs hardware virtualization, such as an `x86_64` Android emulator.
+    pub(super) kvm: bool,
 }
 
 impl Spec {
@@ -55,7 +57,13 @@ impl Spec {
             .and_then(|(width, height)| Some((width.trim().parse().ok()?, height.trim().parse().ok()?)))
             .filter(|&(width, height): &(u32, u32)| (320..=7680).contains(&width) && (240..=4320).contains(&height))
             .unwrap_or((1280, 800));
-        Some(Self { command, width, height })
+        let kvm = value.get("kvm").and_then(serde_json::Value::as_bool).unwrap_or(false);
+        Some(Self {
+            command,
+            width,
+            height,
+            kvm,
+        })
     }
 }
 
@@ -69,9 +77,13 @@ pub(super) enum Outcome {
         port: u16,
         window: String,
         after: Duration,
+        /// `None` when the image has no `ImageMagick` to take one.
         screenshot: Option<PathBuf>,
     },
     Failed(String),
+    /// This computer has no `/dev/kvm` for an app that needs it: the preview is skipped,
+    /// and the setup is accepted without it.
+    Unavailable(String),
 }
 
 pub(super) struct Preview {
@@ -91,10 +103,11 @@ pub(super) struct Preview {
 
 impl Preview {
     /// Starts preview number `request`; each gets its own container, so the removal of
-    /// an earlier one never meets this one. It begins once `after`, the run of the
+    /// an earlier one never meets this one. `gpu`: the profile asks for a GPU, so the preview
+    /// gets this computer's, as the proof does. It begins once `after`, the run of the
     /// preview or proof it follows, has ended.
     pub(super) fn start(
-        (image, volume, pinned): (&str, &str, Pinned),
+        (image, volume, pinned, gpu, root_dirty): (&str, &str, Pinned, bool, Arc<AtomicBool>),
         (request, spec): (u64, Spec),
         screenshot: PathBuf,
         (after, ctx): (Option<std::thread::JoinHandle<()>>, egui::Context),
@@ -105,6 +118,8 @@ impl Preview {
         let job = Job {
             image: image.to_owned(),
             volume: volume.to_owned(),
+            gpu,
+            root_dirty,
             container: container.clone(),
             spec,
             screenshot,
@@ -208,6 +223,23 @@ impl Preview {
         }
     }
 
+    /// A preview this computer cannot run, with no run behind it, for the tests of the run.
+    #[cfg(test)]
+    pub(super) fn unavailable(reason: &str) -> Self {
+        let (_, receiver) = mpsc::channel();
+        Self {
+            receiver,
+            cancel: Arc::new(AtomicBool::new(false)),
+            container: "horizon-test-preview".to_owned(),
+            outcome: Outcome::Unavailable(reason.to_owned()),
+            started: Instant::now(),
+            ended: Some(Instant::now()),
+            unreported: false,
+            worker: None,
+            pinned: Pinned::default(),
+        }
+    }
+
     pub(super) fn report(&self) -> String {
         match &self.outcome {
             Outcome::Starting => String::new(),
@@ -226,6 +258,9 @@ impl Preview {
             ),
             Outcome::Failed(reason) => format!(
                 "Horizon desktop preview failed: {reason} Fix the preview command and increase preview_request by one; when the image or cloud.yml needs a change, change it and increase proof_request instead, and Horizon starts the preview again once that proof passed."
+            ),
+            Outcome::Unavailable(reason) => format!(
+                "Horizon cannot preview the app on this computer: {reason}. Desktop preview is skipped, and the setup is accepted without a live preview. Write your summary; keep preview and preview_request as they are."
             ),
         }
     }
@@ -246,6 +281,9 @@ impl Drop for Preview {
 struct Job {
     image: String,
     volume: String,
+    gpu: bool,
+    /// The run's own record that a preview ran as root, kept by Horizon, never on the volume.
+    root_dirty: Arc<AtomicBool>,
     container: String,
     spec: Spec,
     screenshot: PathBuf,
@@ -292,7 +330,7 @@ impl Job {
         // A stop can come while `docker run` starts the container, and a failed preview
         // keeps no app or desktop running: the run removes its container in both cases.
         let stopped = self.cancel.load(Ordering::Relaxed);
-        if stopped || matches!(outcome, Outcome::Failed(_)) {
+        if stopped || matches!(outcome, Outcome::Failed(_) | Outcome::Unavailable(_)) {
             let _ = self.docker(&["rm", "--force", &self.container]);
         }
         if stopped {
@@ -344,8 +382,9 @@ impl Job {
     }
 
     /// Starts the app's container on a virtual desktop, with the image's session
-    /// environment, against the proof's pinned daemon.
-    fn start_app(&self) -> Result<(), String> {
+    /// environment and the account and devices of `identity`, against the proof's
+    /// pinned daemon.
+    fn start_app(&self, identity: &[String]) -> Result<(), String> {
         // Its desktop is published on this computer's loopback, so the daemon must be
         // this computer's: the proof's pinned one.
         let daemon = self.daemon()?;
@@ -398,8 +437,6 @@ impl Job {
             "max-size=10m",
             "--log-opt",
             "max-file=2",
-            "--user",
-            "10001:10001",
             "-v",
             &volume,
         ];
@@ -409,16 +446,11 @@ impl Job {
             "HOME=/workspace/home",
             "-e",
             "DISPLAY=:99",
-            "-e",
-            "LIBGL_ALWAYS_SOFTWARE=1",
             "-p",
             "127.0.0.1::5900",
-            "--entrypoint",
-            "bash",
-            &self.image,
-            "-c",
-            &script,
         ]);
+        run.extend(identity.iter().map(String::as_str));
+        run.extend(["--entrypoint", "bash", &self.image, "-c", &script]);
         docker(&daemon, &run).map_err(|error| {
             if error.contains("No such image") || error.contains("Unable to find image") {
                 "the proved image is no longer on this computer. Increase proof_request by one so Horizon proves the setup again, and the preview starts after it.".to_owned()
@@ -434,7 +466,11 @@ impl Job {
         if self.cancel.load(Ordering::Relaxed) {
             return Err("stopped.".to_owned());
         }
-        self.start_app()?;
+        let identity = match self.identity(&self.daemon()?)? {
+            Hardware::Ready(identity) => identity,
+            Hardware::Missing(missing) => return Ok(Outcome::Unavailable(missing)),
+        };
+        self.start_app(&identity)?;
         let started = Instant::now();
         let window = loop {
             if self.cancel.load(Ordering::Relaxed) {
@@ -514,6 +550,151 @@ impl Job {
             .map(|(stdout, stderr)| format!("{stdout}\n{stderr}"))
             .unwrap_or_default()
     }
+}
+
+/// What the preview gets of this computer's hardware: its account and devices, or why
+/// `/dev/kvm` it asked for is out of reach.
+enum Hardware {
+    Ready(Vec<String>),
+    Missing(String),
+}
+
+/// The hardware virtualization device an Android emulator boots on in seconds.
+const KVM: &str = "/dev/kvm";
+
+impl Job {
+    /// The account the preview runs as, the devices it gets and, without the GPU,
+    /// software GL, as `docker run` arguments, or why it cannot get `/dev/kvm` it asked for. Rootless Docker maps the
+    /// container's root to the person's own account, the only one there that may open
+    /// `/dev/kvm`, and leaves the device's group unmapped. That preview keeps the proof's home, where the CI left emulator
+    /// images and caches; what it writes there and in the checkout goes back to the worker
+    /// account when the next proof prepares the volume.
+    fn identity(&self, daemon: &Docker) -> Result<Hardware, String> {
+        let root = self.spec.kvm && rootless(daemon);
+        let user = if root { "0:0" } else { "10001:10001" };
+        let devices = devices(self.gpu, self.spec.kvm.then_some(Path::new(KVM)), root);
+        if let Some(missing) = self.kvm_missing(user, &devices)? {
+            return Ok(Hardware::Missing(missing));
+        }
+        // Horizon notes a root preview before it starts, so the worker's next run takes back
+        // what it wrote; only then are the caches walked, and the note goes once that worked.
+        if root {
+            self.root_dirty.store(true, Ordering::SeqCst);
+        } else if self.root_dirty.load(Ordering::SeqCst) && self.take_back_volume() {
+            self.root_dirty.store(false, Ordering::SeqCst);
+        }
+        // Without the GPU, GL apps render in software rather than fail to find one.
+        let software = (!self.gpu).then(|| ["-e".to_owned(), "LIBGL_ALWAYS_SOFTWARE=1".to_owned()]);
+        let user = ["--user".to_owned(), user.to_owned()];
+        Ok(Hardware::Ready(
+            user.into_iter()
+                .chain(software.into_iter().flatten())
+                .chain(devices)
+                .collect(),
+        ))
+    }
+
+    /// Gives the worker's account back what an earlier preview that ran as root left on
+    /// the volume, in the home, the checkout and the session and lock folders the worker
+    /// session names, so this preview can write there; only when the run noted such a
+    /// preview, so an ordinary one walks no caches. Links
+    /// themselves, never followed; Horizon's own pinned image does it, named so a hung
+    /// run is removed. A failure leaves the volume as it is: the app reports what it
+    /// cannot write.
+    fn take_back_volume(&self) -> bool {
+        let name = format!("{}-own", self.container);
+        let volume = format!("{}:/workspace", self.volume);
+        let _ = self.docker(&["rm", "--force", &name]);
+        let took = self.docker(&[
+            "run",
+            "--rm",
+            "--name",
+            &name,
+            "--network",
+            "none",
+            "--user",
+            "0:0",
+            "-v",
+            &volume,
+            "--entrypoint",
+            "sh",
+            super::proof::TOOLS,
+            "-c",
+            "find /workspace/home /workspace/checkout /workspace/session-data /workspace/locks ! -user 10001 -exec chown -h 10001:10001 {} +",
+        ]);
+        let _ = self.docker(&["rm", "--force", &name]);
+        took.is_ok()
+    }
+
+    /// Why the preview cannot get `/dev/kvm` it asked for, if it cannot. A GPU profile's
+    /// proof already refused a computer without a GPU, so only the device is checked.
+    /// Passing it is not enough: a rootless container opens it only when the person's
+    /// account may (a kvm group the daemon keeps, or the seat's access list), so a short
+    /// container of Horizon's own pinned image tries it with the preview's identity,
+    /// named so a hung try is removed. An error says the check itself could not run,
+    /// which fails the preview instead of skipping it.
+    fn kvm_missing(&self, user: &str, devices: &[String]) -> Result<Option<String>, String> {
+        if !self.spec.kvm {
+            return Ok(None);
+        }
+        if !Path::new(KVM).exists() {
+            return Ok(Some(format!("the app needs {KVM}, which this computer does not have")));
+        }
+        let name = format!("{}-kvm", self.container);
+        let _ = self.docker(&["rm", "--force", &name]);
+        // The try says which way it went, so a Docker or launch failure is never taken
+        // for a device the container may not open.
+        let mut try_open = vec!["run", "--rm", "--name", &name, "--network", "none", "--user", user];
+        try_open.extend(devices.iter().map(String::as_str));
+        try_open.extend([
+            "--entrypoint",
+            "sh",
+            super::proof::TOOLS,
+            "-c",
+            "if (exec 3<>/dev/kvm) 2>/dev/null; then echo kvm-opens; else echo kvm-refused; fi",
+        ]);
+        let tried = self.docker(&try_open);
+        let _ = self.docker(&["rm", "--force", &name]);
+        match tried {
+            Ok(answer) if answer.contains("kvm-refused") => Ok(Some(format!(
+                "a container cannot open {KVM} on this computer; with rootless Docker, your account needs access to it"
+            ))),
+            Ok(answer) if answer.contains("kvm-opens") => Ok(None),
+            Ok(answer) => Err(format!(
+                "Horizon could not check {KVM} in a container: {}",
+                answer.trim()
+            )),
+            Err(error) => Err(format!("Horizon could not check {KVM} in a container: {error}")),
+        }
+    }
+}
+
+/// Whether Docker runs rootless, so devices open only for the container's root.
+fn rootless(daemon: &Docker) -> bool {
+    docker(daemon, &["info", "--format", "{{json .SecurityOptions}}"]).is_ok_and(|options| options.contains("rootless"))
+}
+
+/// The devices of this computer the preview gets: its GPU for a GPU profile, and
+/// `kvm` when the app asks for it, with the device's group so the worker account may
+/// open it. A preview that runs as `root` gets no group: rootless Docker cannot map it.
+fn devices(gpu: bool, kvm: Option<&Path>, root: bool) -> Vec<String> {
+    let mut args = Vec::new();
+    if gpu {
+        args.extend(["--gpus".to_owned(), "all".to_owned()]);
+    }
+    if let Some(kvm) = kvm
+        && let Ok(meta) = std::fs::metadata(kvm)
+    {
+        args.extend(["--device".to_owned(), kvm.display().to_string()]);
+        #[cfg(unix)]
+        if !root {
+            use std::os::unix::fs::MetadataExt as _;
+            args.extend(["--group-add".to_owned(), meta.gid().to_string()]);
+        }
+        #[cfg(not(unix))]
+        let _ = (meta, root);
+    }
+    args
 }
 
 /// Runs one docker command within `COMMAND_TIMEOUT` and keeps at most `OUTPUT_LIMIT`
@@ -770,6 +951,9 @@ mod tests {
         let plain = Spec::parse(&serde_json::json!({"command": "./app"})).unwrap();
         assert_eq!((plain.width, plain.height), (1280, 800), "a default size");
         assert!(Spec::parse(&serde_json::json!({"command": " "})).is_none());
+        assert!(!plain.kvm);
+        let android = Spec::parse(&serde_json::json!({"command": "youpark-preview", "kvm": true})).unwrap();
+        assert!(android.kvm, "an Android emulator asks for hardware virtualization");
         let odd = Spec::parse(&serde_json::json!({"command": "./app", "size": "9x9"})).unwrap();
         assert_eq!((odd.width, odd.height), (1280, 800), "an unusable size falls back");
         let wide = "é".repeat(MAX_COMMAND_LENGTH);
@@ -791,6 +975,46 @@ mod tests {
         let tail = tail(&long);
         assert_eq!(tail.matches(" | ").count(), 5, "six lines");
         assert!(tail.len() < 6 * 240 + 6 * 3, "each line cut short");
+    }
+
+    #[test]
+    fn a_preview_this_computer_cannot_run_is_accepted_without_a_retry() {
+        let (_, receiver) = mpsc::channel();
+        let preview = Preview {
+            receiver,
+            cancel: Arc::default(),
+            container: String::new(),
+            outcome: Outcome::Unavailable("the app needs /dev/kvm".to_owned()),
+            started: Instant::now(),
+            ended: None,
+            unreported: true,
+            worker: None,
+            pinned: Pinned::default(),
+        };
+        let report = preview.report();
+        assert!(report.contains("accepted without a live preview"), "{report}");
+        assert!(!report.contains("increase preview_request"), "no retry is asked for");
+    }
+
+    #[test]
+    fn the_preview_gets_the_gpu_and_kvm_this_computer_has() {
+        let none = Path::new("/nonexistent/kvm");
+        assert!(devices(false, Some(none), false).is_empty());
+        assert_eq!(devices(true, Some(none), false), ["--gpus", "all"]);
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        assert!(devices(false, None, false).is_empty(), "only an app that asks gets kvm");
+        let kvm = devices(false, Some(temp.path()), false);
+        assert_eq!(kvm[..2], ["--device".to_owned(), temp.path().display().to_string()]);
+        // The device's group is added on Unix only.
+        #[cfg(unix)]
+        assert_eq!(kvm.get(2).map(String::as_str), Some("--group-add"));
+        #[cfg(not(unix))]
+        assert_eq!(kvm.len(), 2);
+        assert_eq!(
+            devices(false, Some(temp.path()), true),
+            ["--device".to_owned(), temp.path().display().to_string()],
+            "rootless Docker cannot map the device's group for a preview that runs as root"
+        );
     }
 
     #[test]

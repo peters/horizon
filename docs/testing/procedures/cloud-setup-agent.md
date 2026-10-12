@@ -309,9 +309,105 @@ setup** commits `.horizon` and reads it as the repository profile.
    Result: Within one minute, `docker ps --all`, `docker volume ls` and
    `docker network ls` list no name that starts with `horizon-setup-gui-app-`.
 
+### 6.15 S15 — An organization blocks Horizon's GitHub app
+
+Steps 1 to 8 use a test double for the build. Step 9 uses a real organization and
+is optional.
+
+Test double: put an executable `docker` script first on the `PATH` of the candidate
+only, not of your shell. For `docker buildx build`, the script writes these lines, as
+buildx does when ghcr.io refuses an image, and exits with 1. For all other commands,
+it runs `/usr/bin/docker`:
+
+```text
+#2 [internal] load metadata for ghcr.io/acme/base:1
+ERROR: failed to build: failed to solve: ghcr.io/acme/base:1: failed to resolve source metadata for ghcr.io/acme/base:1: unexpected status from HEAD request to https://ghcr.io/v2/acme/base/manifests/1: 403 Forbidden
+denied: Although you appear to have the correct authorization credentials, the `acme` organization has enabled OAuth App access restrictions, meaning that data access to third-parties is limited.
+```
+
+1. Make a fixture repository `<home>/smoke/org-app` like `ci-app` whose README names
+   the base image `ghcr.io/acme/base:1`. Open **New cloud** for it and click **Set
+   up with <agent>**.
+
+   Result: The agent writes a Dockerfile `FROM ghcr.io/acme/base:1` and asks for a
+   proof.
+
+2. Wait for the proof.
+
+   Result: **Build image** fails. A card **acme blocks Horizon's GitHub app** shows,
+   with **Let the agent do it** and **Open GitHub myself**. The agent gets a message
+   that the Dockerfile is not the cause and that it must change no file.
+
+3. Click **Let the agent do it**.
+
+   Result: A browser panel **GitHub access** opens in the agent's workspace at
+   Horizon's app page on GitHub. The card says that the agent makes the fix and
+   shows **Show browser**. The agent gets the task. When GitHub shows a sign-in
+   page, the agent hands the browser to you and does not type a password or code.
+
+4. Click **Close**, close the **GitHub access** panel on the canvas, open **New
+   cloud** again and click **Show browser**.
+
+   Result: A new **GitHub access** panel opens and shows, and the agent gets the
+   task again for the new panel.
+
+5. Click **Stop**.
+
+   Result: The **GitHub access** panel closes with the run.
+
+6. Start the setup again and wait for the card. Click **Open GitHub myself**.
+
+   Result: The **New cloud** dialog closes and the **GitHub access** panel shows. The
+   agent gets no task.
+
+7. Open **New cloud** again and click **Prove again**.
+
+   Result: Before the click, the card shows **Show browser** and **Prove again**.
+   After it, the agent gets the message that the fix was made on GitHub, and it asks
+   for a new proof. **Build image** fails again, because the test double refuses
+   every build, and the card comes back.
+
+8. Click **Stop**, and remove the test double from the `PATH` of the candidate.
+
+   Result: The **GitHub access** panel closes with the run.
+
+> **CAUTION:** THE NEXT STEP CHANGES THE OAUTH APP POLICY OF A REAL ORGANIZATION.
+> Use only an organization where you may grant Horizon. The grant stays after the
+> test.
+
+9. Optional, with a real organization that limits OAuth apps, has not granted
+   Horizon, and owns a private image `ghcr.io/<organization>/<image>` (you must be an
+   owner of it): set up a fixture whose README names that image, click **Let the
+   agent do it** on the card, sign in when the agent asks, and let the agent grant
+   Horizon to the organization.
+
+   Result: The agent asks for a new proof, and **Build image** passes.
+
+### 6.16 S16 — A preview that needs hardware virtualization
+
+The result of step 2 depends on whether the host has `/dev/kvm`.
+
+1. In `<home>/smoke/gui-app`, change the README so that the app needs hardware
+   virtualization. Start the setup agent.
+
+   Result: The agent adds `"kvm": true` to the preview in the status file.
+
+2. Wait for Desktop preview.
+
+   Result, with `/dev/kvm`: `docker inspect` of the container whose name starts
+   with `horizon-setup-gui-app-` and ends with `-preview-1` shows the device
+   `/dev/kvm`. With rootless Docker, the container user is `0:0`, with no group
+   added; otherwise it is `10001:10001` with the group of `/dev/kvm` added.
+
+   Result, without `/dev/kvm`: Desktop preview shows as skipped with "the app
+   needs /dev/kvm, which this computer does not have". No preview container
+   starts. When the other steps pass, **Use this setup** is available. When the
+   device exists but a container cannot open it (rootless Docker without access
+   for your account), the step shows as skipped with that reason instead.
+
 ## 7. Pass criteria
 
-- S01 to S14 give the results above.
+- S01 to S16 give the results above.
 - The proof ran on this computer. Before you click **Use this setup** in S04,
   `docker images` lists `horizon-setup-ci-app-<hash>-<run>:candidate`. `<hash>` is
   six hexadecimal digits that Horizon derives from the repository's path. `<run>` is
@@ -323,14 +419,14 @@ setup** commits `.horizon` and reads it as the repository profile.
 ## 8. Cleanup
 
 > **CAUTION:** THE NEXT STEP REMOVES DOCKER CONTAINERS, IMAGES, VOLUMES AND NETWORKS. Remove
-> only the names that start with `horizon-setup-ci-app-`, `horizon-setup-gui-app-`
-> or `horizon-setup-plain-app-`.
+> only the names that start with `horizon-setup-ci-app-`, `horizon-setup-gui-app-`,
+> `horizon-setup-plain-app-` or `horizon-setup-org-app-`.
 
 1. Find the proof containers, images, volumes and preview networks with
-   `docker ps --all --format '{{.Names}}' | grep -E '^horizon-setup-(ci|gui|plain)-app-'`,
-   `docker images --format '{{.Repository}}' | grep -E '^horizon-setup-(ci|gui|plain)-app-'` and
-   `docker volume ls --format '{{.Name}}' | grep -E '^horizon-setup-(ci|gui|plain)-app-'` and
-   `docker network ls --format '{{.Name}}' | grep -E '^horizon-setup-(ci|gui|plain)-app-'`,
+   `docker ps --all --format '{{.Names}}' | grep -E '^horizon-setup-(ci|gui|plain|org)-app-'`,
+   `docker images --format '{{.Repository}}' | grep -E '^horizon-setup-(ci|gui|plain|org)-app-'` and
+   `docker volume ls --format '{{.Name}}' | grep -E '^horizon-setup-(ci|gui|plain|org)-app-'` and
+   `docker network ls --format '{{.Name}}' | grep -E '^horizon-setup-(ci|gui|plain|org)-app-'`,
    then remove each with `docker rm --force <name>`, `docker rmi <name>:candidate`,
    `docker volume rm <name>` and `docker network rm <name>`.
 
@@ -339,7 +435,8 @@ setup** commits `.horizon` and reads it as the repository profile.
 > **CAUTION:** THE NEXT STEP DELETES FOLDERS. Make sure that each path is a
 > fixture copy under `<home>/smoke` and not a real repository.
 
-2. Delete `<home>/smoke/ci-app`, `<home>/smoke/gui-app` and `<home>/smoke/plain-app`.
+2. Delete `<home>/smoke/ci-app`, `<home>/smoke/gui-app`, `<home>/smoke/plain-app`
+   and `<home>/smoke/org-app`, and the `docker` test double of S15.
 
 ## 9. Record of results
 
