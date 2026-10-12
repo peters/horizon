@@ -207,7 +207,10 @@ impl HorizonApp {
             let _ = self.auto_save_runtime_state();
             *self.exit_save_deadline.insert(Instant::now() + MAX_SHUTDOWN_WAIT)
         };
-        if self.session_store.flush_runtime_states(Duration::ZERO) {
+        if !self.session_store.runtime_states_pending() {
+            if !self.session_store.flush_runtime_states(Duration::ZERO) {
+                tracing::warn!("exiting with a session save that failed");
+            }
             return false;
         }
         if Instant::now() < deadline {

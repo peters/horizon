@@ -281,6 +281,13 @@ impl SessionStore {
         self.writer.wait_written(session_id, generation, timeout)
     }
 
+    /// Whether the writer writes a board now or has one it did not try yet. A board whose
+    /// save failed does not count, so an exit does not wait for it.
+    #[must_use]
+    pub fn runtime_states_pending(&self) -> bool {
+        self.writer.pending()
+    }
+
     /// Waits up to `timeout` until every queued board is durable, as before an exit.
     #[must_use]
     pub fn flush_runtime_states(&self, timeout: Duration) -> bool {

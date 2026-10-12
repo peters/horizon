@@ -62,6 +62,12 @@ struct Failure {
     wait: Duration,
 }
 
+impl State {
+    fn pending(&self) -> bool {
+        self.writing.is_some() || self.queued.values().any(|queued| queued.retry.is_none())
+    }
+}
+
 #[derive(Clone)]
 struct Queued {
     board: RuntimeState,
@@ -100,6 +106,11 @@ impl Writer {
         drop(state);
         self.shared.changed.notify_all();
         generation
+    }
+
+    /// Whether a board is written now or was not tried yet; see [`Self::flush`].
+    pub(super) fn pending(&self) -> bool {
+        self.lock().pending()
     }
 
     fn start(&self, state: &mut State, store: &SessionStore) {
@@ -186,13 +197,8 @@ impl Writer {
         let deadline = Instant::now() + timeout;
         let mut state = self.lock();
         loop {
-            if state.writing.is_none() {
-                if state.queued.is_empty() {
-                    return true;
-                }
-                if state.queued.values().all(|queued| queued.retry.is_some()) {
-                    return false;
-                }
+            if !state.pending() {
+                return state.queued.is_empty();
             }
             let Some(left) = deadline.checked_duration_since(Instant::now()) else {
                 return false;
@@ -473,6 +479,7 @@ mod tests {
             !store.flush_runtime_states(Duration::from_secs(30)),
             "the exit does not wait for a session that keeps failing"
         );
+        assert!(!store.runtime_states_pending(), "a failed board is not pending");
         store.writer.forget("broken");
         assert!(store.flush_runtime_states(Duration::ZERO));
     }
