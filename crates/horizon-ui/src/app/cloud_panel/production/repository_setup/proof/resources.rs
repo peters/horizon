@@ -46,21 +46,29 @@ pub(in crate::app::cloud_panel::production::repository_setup) type Pinned =
     std::sync::Arc<std::sync::OnceLock<LocalDocker>>;
 
 impl LocalDocker {
-    /// The daemon the Docker CLI uses now, refused when it runs on another machine. The
-    /// proof mounts files of this computer into its containers, the repository's bundle
-    /// and snapshot and Horizon's localci, and a daemon elsewhere would look for those
-    /// paths on its own machine.
+    /// The daemon the Docker CLI uses now, accepted only through a socket or pipe of
+    /// this computer. The proof mounts files of this computer into its containers, the
+    /// repository's bundle and snapshot and Horizon's localci, and a daemon elsewhere
+    /// would look for those paths on its own machine. A socket needs no TLS settings, so
+    /// its address alone pins it; the mount check then refuses a socket forwarded from
+    /// another machine.
     pub(in crate::app::cloud_panel::production::repository_setup) fn resolve() -> Result<Self, String> {
-        match horizon_core::cloud_runtime::docker_daemon::Target::default().daemon() {
+        Self::accept(horizon_core::cloud_runtime::docker_daemon::Target::default().daemon())
+    }
+
+    /// The daemon at `endpoint`, as [`Self::resolve`] accepts it.
+    fn accept(endpoint: Option<horizon_core::cloud_runtime::docker_daemon::Endpoint>) -> Result<Self, String> {
+        use horizon_core::cloud_runtime::docker_daemon::Endpoint;
+        match endpoint {
             None => Err(
                 "Horizon cannot tell which Docker daemon Docker uses here (docker context inspect names none), so it runs no proof: check that Docker is installed and its context works, then start the setup again."
                     .to_owned(),
             ),
-            Some(endpoint) if endpoint.is_local() => Ok(Self {
+            Some(endpoint @ (Endpoint::Socket(_) | Endpoint::Pipe(_))) => Ok(Self {
                 host: Some(endpoint.address()),
             }),
             Some(endpoint) => Err(format!(
-                "Docker here uses the daemon at {}, on another machine. Horizon's proof mounts files from this computer, so it needs Docker running on this computer: switch to a local Docker context (docker context use default) or unset DOCKER_HOST, then start the setup again.",
+                "Docker here uses the daemon at {}, not a socket of this computer. Horizon's proof mounts files from this computer, so it needs Docker running on this computer through its socket: switch to a local Docker context (docker context use default) or unset DOCKER_HOST, then start the setup again.",
                 endpoint.address()
             )),
         }
@@ -276,6 +284,20 @@ fn folder_slug(repository: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_socket_of_this_computer_is_pinned() {
+        use horizon_core::cloud_runtime::docker_daemon::Endpoint;
+        let socket = LocalDocker::accept(Some(Endpoint::parse("unix:///run/user/1000/docker.sock"))).unwrap();
+        assert_eq!(socket.host(), Some("unix:///run/user/1000/docker.sock"));
+        for refused in ["tcp://127.0.0.1:2376", "ssh://builder@build.example"] {
+            assert!(
+                LocalDocker::accept(Some(Endpoint::parse(refused))).is_err(),
+                "{refused}"
+            );
+        }
+        assert!(LocalDocker::accept(None).is_err(), "an unknown daemon is refused");
+    }
 
     #[test]
     fn the_image_and_volume_take_a_name_docker_accepts() {

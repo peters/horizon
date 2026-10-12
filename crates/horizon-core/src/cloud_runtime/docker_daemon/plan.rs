@@ -57,24 +57,6 @@ impl Endpoint {
             Self::Remote(host) => host.clone(),
         }
     }
-
-    /// Whether the daemon runs on this computer, so a path of this computer that Docker
-    /// mounts names the same file: a socket, a pipe or a TCP address on loopback.
-    #[must_use]
-    pub fn is_local(&self) -> bool {
-        match self {
-            Self::Socket(_) | Self::Pipe(_) => true,
-            Self::Remote(host) => host.strip_prefix("tcp://").is_some_and(|address| {
-                let authority = address.split('/').next().unwrap_or_default();
-                let name = match authority.strip_prefix('[') {
-                    Some(rest) => rest.split_once(']').map_or(rest, |(name, _)| name),
-                    None => authority.rsplit_once(':').map_or(authority, |(name, _)| name),
-                };
-                name.eq_ignore_ascii_case("localhost")
-                    || name.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
-            }),
-        }
-    }
 }
 
 /// What Horizon observed about the Docker a cloud uses.
@@ -284,23 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_daemon_on_this_computer_is_local() {
-        for local in [
-            "unix:///var/run/docker.sock",
-            "npipe:////./pipe/docker_engine",
-            "tcp://127.0.0.1:2375",
-            "tcp://localhost:2376",
-            "tcp://[::1]:2375",
-        ] {
-            assert!(Endpoint::parse(local).is_local(), "{local}");
-        }
-        for remote in [
-            "ssh://builder@build.example",
-            "tcp://10.0.0.5:2376",
-            "tcp://build.example:2375",
-        ] {
-            assert!(!Endpoint::parse(remote).is_local(), "{remote}");
-        }
+    fn an_address_round_trips() {
         for address in [
             "unix:///var/run/docker.sock",
             "npipe:////./pipe/docker_engine",
