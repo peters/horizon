@@ -103,6 +103,16 @@ impl State {
         }
     }
 
+    /// How long until a failed board is tried again. A reserved session is left out: the
+    /// worker cannot take it, and the end of its reservation wakes the worker.
+    fn next_retry(&self, now: Instant) -> Duration {
+        (self.queued.iter())
+            .filter(|(session_id, _)| !self.direct.contains(*session_id))
+            .filter_map(|(_, queued)| queued.retry.map(|at| at.saturating_duration_since(now)))
+            .min()
+            .unwrap_or(IDLE)
+    }
+
     fn pending(&self) -> bool {
         self.writing.is_some()
             || self.writing_parks.is_some()
@@ -431,10 +441,7 @@ impl Writer {
                 state.writing_parks = Some(session_id.clone());
                 return Some(Job::Parks(session_id, parks));
             }
-            let wait = (state.queued.values())
-                .filter_map(|queued| queued.retry.map(|at| at.saturating_duration_since(now)))
-                .min()
-                .unwrap_or(IDLE);
+            let wait = state.next_retry(now);
             let (next, timeout) = self
                 .shared
                 .changed

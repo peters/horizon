@@ -131,6 +131,28 @@ fn a_save_outside_the_queue_is_refused_while_park_records_of_the_session_are_wri
 
 #[cfg(unix)]
 #[test]
+fn a_reserved_session_does_not_wake_the_worker_for_its_retry() {
+    let now = Instant::now();
+    let mut state = State::default();
+    let failed = |retry: Duration| Queued {
+        board: board("failed"),
+        generation: 1,
+        retry: Some(now + retry),
+    };
+    state.queued.insert("reserved".into(), failed(Duration::ZERO));
+    state.queued.insert("other".into(), failed(Duration::from_secs(2)));
+    assert_eq!(state.next_retry(now), Duration::ZERO);
+    state.direct.insert("reserved".into());
+    assert_eq!(
+        state.next_retry(now),
+        Duration::from_secs(2),
+        "no wait of zero while it is reserved"
+    );
+    state.queued.remove("other");
+    assert_eq!(state.next_retry(now), IDLE);
+}
+
+#[test]
 #[cfg(unix)]
 fn the_writer_leaves_a_session_alone_while_a_save_outside_the_queue_writes_it() {
     let (_temp, store) = store();
