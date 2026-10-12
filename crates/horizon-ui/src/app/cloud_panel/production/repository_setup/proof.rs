@@ -63,6 +63,15 @@ pub(super) fn fingerprint(repository: &Path, spec: &Spec) -> u64 {
             .into_owned()
     };
     feed(format!("{spec:?}").as_bytes());
+    // The commit too: a context outside .horizon builds from the committed tree.
+    let head = Command::new("git")
+        .arg("-C")
+        .arg(repository)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .map(|output| output.stdout)
+        .unwrap_or_default();
+    feed(&head);
     for file in &files {
         feed(relative(file).as_bytes());
         feed(&std::fs::read(file).unwrap_or_default());
@@ -390,6 +399,24 @@ impl Job {
         } else {
             "No Horizon GitHub login for ghcr.io; images are pulled anonymously.".to_owned()
         }));
+        // The agent wrote these paths: both stay inside the repository, as deployment
+        // demands. A context outside .horizon builds from the committed tree with the
+        // proposed .horizon laid over it, the image that deployment will build.
+        let root = std::fs::canonicalize(&self.repository).map_err(|error| error.to_string())?;
+        let context = inside(&root, &build.context, "build.context")?;
+        let dockerfile = inside(&root, &build.dockerfile, "build.dockerfile")?;
+        let snapshot = if context.starts_with(root.join(".horizon")) {
+            None
+        } else {
+            Some(committed_snapshot(&root)?)
+        };
+        let (context, dockerfile) = match &snapshot {
+            Some(folder) => {
+                let moved = |path: &Path| folder.path().join(path.strip_prefix(&root).unwrap_or(path));
+                (moved(&context), moved(&dockerfile))
+            }
+            None => (context, dockerfile),
+        };
         let mut command = Command::new("docker");
         command
             .current_dir(&self.repository)
@@ -399,10 +426,10 @@ impl Job {
             .args(["buildx", "build", "--load", "--progress", "plain", "--platform"])
             .arg(&build.platform)
             .arg("-f")
-            .arg(&build.dockerfile)
+            .arg(&dockerfile)
             .arg("-t")
             .arg(&self.image)
-            .arg(&build.context);
+            .arg(&context);
         self.stream_within(command, log, Some(BUILD_TIMEOUT))?;
         let mut check = Command::new("docker");
         check.args([
@@ -516,8 +543,18 @@ impl Job {
                 .arg(format!("{}:/opt/host-nuget:ro", packages.display()))
                 .args(["-e", "RestoreAdditionalProjectFallbackFolders=/opt/host-nuget"]);
         }
+        // localci's step records do not know the image: after a rebuild the full run
+        // forgets them, so no job passes on a record an older image left.
+        let forget = if fast {
+            ""
+        } else {
+            command
+                .arg("-e")
+                .arg(format!("HORIZON_PROOF_IMAGE={}", self.image_id()));
+            FORGET_OLDER_IMAGE
+        };
         let script = format!(
-            "{SESSION_ENV} exec localci {}",
+            "{SESSION_ENV} {forget} exec localci {}",
             self.spec
                 .localci_args(fast, &head)
                 .iter()
@@ -527,6 +564,18 @@ impl Job {
         );
         command.args(["--entrypoint", "bash", &self.image, "-c", &script]);
         self.stream_within(command, log, Some(CI_TIMEOUT))
+    }
+
+    /// The built image's ID, or its tag when Docker cannot say.
+    fn image_id(&self) -> String {
+        Command::new("docker")
+            .args(["image", "inspect", "--format", "{{.Id}}", &self.image])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+            .filter(|id| !id.is_empty())
+            .unwrap_or_else(|| self.image.clone())
     }
 
     fn remove_container(&self) {
@@ -638,11 +687,63 @@ git -C /workspace/checkout fetch -q --upload-pack='git -c uploadpack.allowAnySHA
 git -C /workspace/checkout checkout -q --force --detach \"$HEAD_SHA\"; \
 chown -R 10001:10001 /workspace/checkout";
 
+/// Forgets localci's step records when the volume last ran a proof in another image.
+const FORGET_OLDER_IMAGE: &str = "marker=\"$HOME/.horizon-proof-image\"; \
+if [ \"$(cat \"$marker\" 2>/dev/null)\" != \"$HORIZON_PROOF_IMAGE\" ]; then \
+rm -rf \"${XDG_CACHE_HOME:-$HOME/.cache}/localci\"; printf '%s' \"$HORIZON_PROOF_IMAGE\" > \"$marker\"; fi;";
+
 /// Applies the image's session environment, as a worker session gets it.
 const SESSION_ENV: &str = "for f in /etc/horizon-worker/session-env.d/*.env; do [ -f \"$f\" ] || continue; \
 while IFS= read -r line || [ -n \"$line\" ]; do case \"$line\" in ''|'#'*) ;; \
 PATH_PREPEND=*) PATH=\"${line#PATH_PREPEND=}:$PATH\";; PATH_APPEND=*) PATH=\"$PATH:${line#PATH_APPEND=}\";; \
 *=*) export \"$line\";; esac; done < \"$f\"; done; export PATH;";
+
+/// `path` of the repository at `root`, refused when it leaves the repository.
+fn inside(root: &Path, path: &str, field: &str) -> Result<PathBuf, String> {
+    let resolved = std::fs::canonicalize(root.join(path)).map_err(|error| format!("{field} {path}: {error}"))?;
+    if resolved.starts_with(root) {
+        Ok(resolved)
+    } else {
+        Err(format!("{field} {path} leaves the repository"))
+    }
+}
+
+/// The committed tree of the repository at `root` with its working `.horizon` laid over
+/// it, in a private folder deleted on drop.
+fn committed_snapshot(root: &Path) -> Result<tempfile::TempDir, String> {
+    let folder = tempfile::Builder::new()
+        .prefix("horizon-setup-context-")
+        .tempdir()
+        .map_err(|error| error.to_string())?;
+    let archive = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["archive", "--format=tar", "HEAD"])
+        .output()
+        .map_err(|error| format!("cannot read the committed tree: {error}"))?;
+    if !archive.status.success() {
+        return Err("cannot read the committed tree".to_owned());
+    }
+    tar::Archive::new(archive.stdout.as_slice())
+        .unpack(folder.path())
+        .map_err(|error| format!("cannot unpack the committed tree: {error}"))?;
+    copy_tree(&root.join(".horizon"), &folder.path().join(".horizon")).map_err(|error| error.to_string())?;
+    Ok(folder)
+}
+
+fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            copy_tree(&entry.path(), &to.join(entry.file_name()))?;
+        } else if kind.is_file() {
+            std::fs::copy(entry.path(), to.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+}
 
 /// Whether the repository restores .NET packages, possibly from private feeds.
 pub(super) fn uses_nuget(repository: &Path) -> bool {
@@ -762,6 +863,43 @@ mod tests {
             first,
             fingerprint(repository.path(), &spec),
             "a link to elsewhere is a change"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_image_forgets_the_step_records_an_older_one_left() {
+        let home = tempfile::tempdir().unwrap();
+        let records = home.path().join(".cache/localci");
+        let run = |image: &str| {
+            std::fs::create_dir_all(&records).unwrap();
+            std::fs::write(records.join("record"), "passed").unwrap();
+            let status = Command::new("bash")
+                .args(["-c", FORGET_OLDER_IMAGE])
+                .env("HOME", home.path())
+                .env_remove("XDG_CACHE_HOME")
+                .env("HORIZON_PROOF_IMAGE", image)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            records.join("record").exists()
+        };
+        assert!(!run("sha256:one"), "the first proof in a volume starts clean");
+        assert!(run("sha256:one"), "the same image keeps its records");
+        assert!(!run("sha256:two"), "a rebuilt image forgets them");
+    }
+
+    #[test]
+    fn a_context_outside_the_setup_must_stay_in_the_repository() {
+        let repository = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(repository.path()).unwrap();
+        std::fs::create_dir_all(root.join(".horizon")).unwrap();
+        assert!(inside(&root, ".horizon", "build.context").is_ok());
+        assert!(inside(&root, ".", "build.context").is_ok());
+        assert!(
+            inside(&root, "..", "build.context")
+                .unwrap_err()
+                .contains("leaves the repository")
         );
     }
 

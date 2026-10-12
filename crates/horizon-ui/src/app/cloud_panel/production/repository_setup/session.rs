@@ -60,7 +60,8 @@ impl HorizonApp {
             }
         };
         let status = status_path();
-        let mode = std::mem::take(&mut self.cloud_prototype.production.setup_mode).resolve(&repository);
+        let chosen_mode = std::mem::take(&mut self.cloud_prototype.production.setup_mode);
+        let mode = chosen_mode.clone().resolve(&repository);
         let instructions = prompt(&self.cloud_prototype.production.setup_agents, &status, &mode);
         // Claude and Codex take the instructions as their starting prompt; other agents get
         // them pasted once their session settles.
@@ -99,7 +100,12 @@ impl HorizonApp {
                 self.cloud_prototype.error = None;
                 ctx.request_repaint();
             }
-            Err(error) => self.cloud_prototype.error = Some(error.to_string()),
+            Err(error) => {
+                // A retry after fixing the agent keeps the Update or Fix it was asked for.
+                self.cloud_prototype.production.setup_mode = chosen_mode;
+                remove_run_folder(&status);
+                self.cloud_prototype.error = Some(error.to_string());
+            }
         }
     }
 

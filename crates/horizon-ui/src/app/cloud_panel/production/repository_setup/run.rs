@@ -234,9 +234,11 @@ impl Run {
         self.status.summary.is_some() && self.passed() && !self.changed_since_proof()
     }
 
-    /// The last proof the agent asked for ran and passed.
+    /// The last proof the agent asked for ran and passed: its current request is valid
+    /// and is the one Horizon ran, so removing the request does not keep an old pass.
     fn passed(&self) -> bool {
-        self.proof_wanted().is_none()
+        self.status.proof.is_some()
+            && self.status.proof_request == self.proved_request
             && self.proof.as_ref().is_some_and(|proof| {
                 proof
                     .phases

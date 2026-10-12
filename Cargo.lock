@@ -2735,6 +2735,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "smithay-clipboard",
+ "tar",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
