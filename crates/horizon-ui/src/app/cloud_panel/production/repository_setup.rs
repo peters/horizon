@@ -564,6 +564,12 @@ mod tests {
         // A non-process panel exercises placement without invoking a real login in unit tests.
         app.cloud_prototype.production.setup_agent = Some(PanelKind::Usage);
         app.start_cloud_repository_setup(&ctx);
+        // Windows offers no setup agent: it says why and starts nothing.
+        if cfg!(windows) {
+            assert_eq!(app.cloud_prototype.error.as_deref(), Some(WINDOWS_NOTE));
+            assert!(app.cloud_prototype.production.setup_starting.is_none());
+            return;
+        }
         assert!(app.cloud_prototype.error.is_none());
         // The agent starts once its run's baseline was read on a thread.
         let started = std::time::Instant::now();

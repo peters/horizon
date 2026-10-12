@@ -247,6 +247,8 @@ mod tests {
         assert_ne!(read(b"a\\b"), read(b"a/b"), "a backslash is its own byte");
     }
 
+    // The setup agent runs on Linux and macOS only.
+    #[cfg(unix)]
     #[test]
     fn a_committed_horizon_file_gives_way_to_the_proposed_folder() {
         let repository = tempfile::tempdir().unwrap();

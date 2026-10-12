@@ -460,7 +460,8 @@ pub(super) fn changed(before: &Outside, after: &Outside) -> Vec<String> {
     paths
 }
 
-#[cfg(test)]
+// The setup agent, and so its commit, runs on Linux and macOS only.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
@@ -581,6 +582,8 @@ mod tests {
         assert!(!mark.exists(), "listing the changes runs no filter either");
     }
 
+    // The setup agent runs on Linux and macOS only.
+    #[cfg(unix)]
     #[test]
     fn a_replace_ref_does_not_change_what_use_commits_on() {
         let folder = repository();
@@ -623,6 +626,8 @@ mod tests {
         );
     }
 
+    // The setup agent runs on Linux and macOS only.
+    #[cfg(unix)]
     #[test]
     fn changes_outside_the_setup_are_named() {
         let folder = repository();
