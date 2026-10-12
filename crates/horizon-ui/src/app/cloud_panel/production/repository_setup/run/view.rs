@@ -19,7 +19,7 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn render(
     repository: &str,
     output_height: Option<f32>,
 ) -> Option<Action> {
-    run.poll();
+    run.poll(&ui.ctx().clone());
     let mut action = None;
     let steps = run.steps();
     let finished = run.finished();

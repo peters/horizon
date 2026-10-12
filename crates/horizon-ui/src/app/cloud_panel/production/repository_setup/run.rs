@@ -30,6 +30,36 @@ pub(super) const STEPS: [&str; 6] = [
 /// The largest status file Horizon reads.
 const STATUS_LIMIT: u64 = 1024 * 1024;
 
+/// How often the status file's thread looks at it.
+const STATUS_EVERY: Duration = Duration::from_millis(250);
+
+/// Reads the agent's status file on a thread whenever it changed and sends each status
+/// that parses, waking the dialog; the thread ends once `alive` has no run behind it.
+/// The agent writes this file, so it is read as untrusted: no link, no pipe, small.
+fn watch_status(path: PathBuf, ctx: egui::Context, alive: std::sync::Weak<()>) -> std::sync::mpsc::Receiver<Status> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut seen: Option<SystemTime> = None;
+        while alive.strong_count() > 0 {
+            let modified = std::fs::metadata(&path).and_then(|metadata| metadata.modified()).ok();
+            if modified.is_some()
+                && modified != seen
+                && let Some(status) = super::untrusted::read_regular(&path, STATUS_LIMIT)
+                    .ok()
+                    .and_then(|bytes| parse(&String::from_utf8_lossy(&bytes)))
+            {
+                seen = modified;
+                if sender.send(status).is_err() {
+                    return;
+                }
+                ctx.request_repaint();
+            }
+            std::thread::sleep(STATUS_EVERY);
+        }
+    });
+    receiver
+}
+
 /// `text` as one pasted message, so a terminal agent takes it whole even mid-turn.
 /// Line breaks become spaces and every other control character goes, so text that
 /// quotes the agent's own files, such as a proof failure, can never end the paste
@@ -70,12 +100,17 @@ pub(in crate::app::cloud_panel::production) struct Run {
     /// Instructions still to paste, for an agent that takes no starting prompt argument.
     pub(super) pending_prompt: Option<String>,
     pub(super) repository: PathBuf,
+    /// The repository as the person entered it, so the dialog knows it without the disk.
+    pub(super) entered: String,
     /// Which folder the repository was when the run started; reads check it.
     pub(super) identity: super::untrusted::Identity,
     pub(super) status_path: PathBuf,
     pub(super) started: Instant,
     status: Status,
-    modified: Option<SystemTime>,
+    /// The agent's status as a thread reads it from the status file, started on the
+    /// first poll; the thread ends once the run is gone.
+    status_feed: Option<std::sync::mpsc::Receiver<Status>>,
+    watching: std::sync::Arc<()>,
     steer: String,
     /// When Enter goes to the terminal after a pasted message.
     pub(super) submit_at: Option<Instant>,
@@ -164,12 +199,15 @@ impl Run {
             panel,
             agent: kind.display_name().to_owned(),
             pending_prompt: None,
-            identity: super::untrusted::identity(&repository),
+            // Read on the thread that prepares the run, never here.
+            identity: None,
+            entered: String::new(),
             repository,
             status_path,
             started: Instant::now(),
             status: Status::default(),
-            modified: None,
+            status_feed: None,
+            watching: std::sync::Arc::new(()),
             steer: String::new(),
             submit_at: None,
             stopped: false,
@@ -252,23 +290,19 @@ impl Run {
         Some(end.unwrap_or_else(Instant::now).saturating_duration_since(*start))
     }
 
-    /// Rereads the status file when it changed. A file the agent is still writing, or
-    /// one that does not parse, keeps the last good status.
-    pub(super) fn poll(&mut self) {
-        self.refresh_inputs();
-        let Ok(modified) = std::fs::metadata(&self.status_path).and_then(|meta| meta.modified()) else {
-            return;
-        };
-        if self.modified == Some(modified) {
-            return;
-        }
-        // The agent writes this file, so it is read as untrusted: no link, no pipe, small.
-        if let Some(status) = super::untrusted::read_regular(&self.status_path, STATUS_LIMIT)
-            .ok()
-            .and_then(|bytes| parse(&String::from_utf8_lossy(&bytes)))
-        {
+    /// Takes the newest status the status file's thread read. A file the agent is still
+    /// writing, or one that does not parse, keeps the last good status.
+    pub(super) fn poll(&mut self, ctx: &egui::Context) {
+        self.refresh_inputs(ctx);
+        let feed = self.status_feed.get_or_insert_with(|| {
+            watch_status(
+                self.status_path.clone(),
+                ctx.clone(),
+                std::sync::Arc::downgrade(&self.watching),
+            )
+        });
+        if let Some(status) = std::iter::from_fn(|| feed.try_recv().ok()).last() {
             self.status = status;
-            self.modified = Some(modified);
             self.time_steps();
         }
     }
@@ -344,7 +378,7 @@ impl Run {
     /// Reads the setup's fingerprint again, at most once a second and only while a proof
     /// passed, on a thread of its own: the setup can hold many files, and the dialog
     /// must not wait for them. Use reads it once more itself before it commits.
-    fn refresh_inputs(&mut self) {
+    fn refresh_inputs(&mut self, ctx: &egui::Context) {
         if let Some(job) = &self.inputs_job {
             match job.try_recv() {
                 Ok(now) => self.inputs = Some((Instant::now(), now)),
@@ -363,20 +397,12 @@ impl Run {
         let repository = self.repository.clone();
         let identity = self.identity;
         let (sender, receiver) = std::sync::mpsc::channel();
+        let wake = ctx.clone();
         std::thread::spawn(move || {
             let _ = sender.send(super::snapshot::fingerprint(&repository, &spec, identity).ok());
+            wake.request_repaint();
         });
         self.inputs_job = Some(receiver);
-    }
-
-    /// Reads the setup's fingerprint again now, as Use does before it commits.
-    pub(super) fn refresh_inputs_now(&mut self) {
-        if let Some(spec) = self.status.proof.as_ref() {
-            self.inputs = Some((
-                Instant::now(),
-                super::snapshot::fingerprint(&self.repository, spec, self.identity).ok(),
-            ));
-        }
     }
 
     /// The agent wrote its summary without a proof request Horizon can run, and was not
@@ -443,6 +469,8 @@ impl Run {
     /// the proof's containers, image and volume and the run's folder go. A new setup
     /// waits for that, so two setups never run at once.
     pub(super) fn discard(self) {
+        // Noted before the thread starts, so an exit that comes first keeps them.
+        proof::expect_removal(&self.repository, &proof::run_id(&self.status_path));
         keep_ending(std::thread::spawn(move || drop(self)));
     }
 
@@ -460,7 +488,7 @@ impl Run {
             agent.end_completely();
         }
         self.release_proof(None, wait);
-        remove_run_folder(&self.status_path);
+        remove_run_folder_now(&self.status_path);
     }
 
     /// The steps to draw: always the whole expected sequence, each with what the agent
@@ -543,13 +571,22 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn keep_ending(end
 /// finished, so every waiter sees each running one: a thread leaves the list only once
 /// its work has returned, and any ending it started by then is in the list already.
 pub(super) fn wait_for_ended_runs() {
+    let _ = wait_for_ended_runs_within(None);
+}
+
+/// As [`wait_for_ended_runs`], for at most `limit`; whether every one ended in time.
+pub(super) fn wait_for_ended_runs_within(limit: Option<Duration>) -> bool {
+    let deadline = limit.map(|limit| Instant::now() + limit);
     loop {
         {
             let mut ending = ENDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             ending.retain(|run| !run.is_finished());
             if ending.is_empty() {
-                return;
+                return true;
             }
+        }
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return false;
         }
         std::thread::sleep(Duration::from_millis(25));
     }
@@ -563,8 +600,15 @@ impl Drop for Run {
     }
 }
 
-/// Removes a finished run's folder: its status, proof logs and screenshots.
+/// Removes a finished run's folder, its status, proof logs and screenshots, on a thread
+/// that a new setup and Horizon's exit wait for.
 pub(super) fn remove_run_folder(status: &std::path::Path) {
+    let status = status.to_path_buf();
+    keep_ending(std::thread::spawn(move || remove_run_folder_now(&status)));
+}
+
+/// As [`remove_run_folder`], here and now, on a thread that may wait for the disk.
+pub(super) fn remove_run_folder_now(status: &std::path::Path) {
     if let Some(folder) = status.parent().filter(|folder| {
         folder
             .file_name()

@@ -44,11 +44,7 @@ pub(super) fn render(ui: &mut egui::Ui, form: &mut Production, output_beside: bo
         ui.add_space(12.0);
     }
     let repository = form.repository.clone();
-    if let Some(run) = form
-        .setup_run
-        .as_mut()
-        .filter(|run| same_folder(&run.repository, &repository))
-    {
+    if let Some(run) = form.setup_run.as_mut().filter(|run| same_folder(run, &repository)) {
         let name = run.repository.file_name().map_or_else(
             || "the repository".to_owned(),
             |name| name.to_string_lossy().into_owned(),
@@ -135,7 +131,7 @@ fn quick_start_card(ui: &mut egui::Ui, choice: &mut Choice) {
 
 fn setup_card(ui: &mut egui::Ui, form: &mut Production, choice: &mut Choice) {
     // Files an earlier setup left uncommitted are where the agent continues.
-    let earlier = prompt::has_setup_files(Path::new(form.repository.trim()));
+    let earlier = prompt::setup_files_seen(ui.ctx(), form.repository.trim());
     option_card(ui, theme::ACCENT(), |ui| {
         ui.label(RichText::new("Set up from CI").size(15.0).strong().color(theme::FG()));
         let detail = if earlier { CONTINUE_DETAIL } else { SETUP_DETAIL };
@@ -244,7 +240,7 @@ pub(super) fn working_here(form: &Production) -> bool {
 pub(super) fn running_here(form: &Production) -> bool {
     form.setup_run
         .as_ref()
-        .is_some_and(|run| same_folder(&run.repository, &form.repository))
+        .is_some_and(|run| same_folder(run, &form.repository))
 }
 
 fn option_card(ui: &mut egui::Ui, tint: Color32, add: impl FnOnce(&mut egui::Ui)) {
@@ -268,9 +264,11 @@ const QUICK_START_DETAIL: &str = "A 2 vCPU, 4 GB RunPod worker with Claude, Code
 const SETUP_DETAIL: &str = "An agent reads your CI and writes a worker setup; Horizon builds its image and runs your CI jobs in it to prove it.";
 const CONTINUE_DETAIL: &str = "This folder has uncommitted files in .horizon. An agent continues from them against your CI; Horizon builds the image and runs your CI jobs in it to prove them.";
 
-fn same_folder(a: &Path, b: &str) -> bool {
-    let b = Path::new(b.trim());
-    a == b || std::fs::canonicalize(b).is_ok_and(|b| a == b)
+/// Whether `entered`, the repository the person typed, is the run's: as typed when the
+/// run started, or its folder. Read without the disk, since the dialog draws it.
+fn same_folder(run: &run::Run, entered: &str) -> bool {
+    let entered = entered.trim();
+    run.entered == entered || run.repository == Path::new(entered)
 }
 
 /// The start button, `verb` and the agent's name, with the agent chooser beside it.

@@ -192,6 +192,7 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_reso
     pinned: Option<Pinned>,
     wait: bool,
 ) {
+    expect_removal(repository, run);
     let (image, volume) = run_names(repository, run);
     let resources = RunResources::new(image, volume);
     let remove = move || {
@@ -202,6 +203,7 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_reso
         // this computer Docker uses now. A daemon on another machine is never touched.
         let pinned = pinned.as_ref().and_then(|pinned| pinned.get().cloned());
         let Some(daemon) = pinned.or_else(|| LocalDocker::resolve().ok()) else {
+            resources.set_waiting(None);
             return;
         };
         resources.remove_or_keep(daemon);
@@ -223,12 +225,41 @@ struct RunResources {
     checks: String,
 }
 
-/// Run resources a cleanup could not show gone, with the daemon they are on: the next
-/// setup and Horizon's exit try again, and what is still left at exit is kept in
-/// [`leftovers_file`] for the next run of Horizon.
-static UNREMOVED: std::sync::Mutex<Vec<(RunResources, LocalDocker)>> = std::sync::Mutex::new(Vec::new());
+/// A run's resources that are being removed or wait for another try, with the daemon
+/// they are on once a proof or cleanup knew it.
+struct Pending {
+    resources: RunResources,
+    daemon: Option<LocalDocker>,
+    /// A thread is removing them now.
+    working: bool,
+}
+
+/// Every run whose resources are not shown gone yet: from the moment the run is let go
+/// until a cleanup showed them gone. A new setup and Horizon's exit try those not being
+/// worked on again, and what is still here when Horizon exits is kept in
+/// [`leftovers_file`] for its next run.
+static PENDING: std::sync::Mutex<Vec<Pending>> = std::sync::Mutex::new(Vec::new());
+
+fn pending() -> std::sync::MutexGuard<'static, Vec<Pending>> {
+    PENDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Notes that the resources of `run` in `repository` are to be removed, before any thread
+/// works on them, so an exit that comes first keeps them for the next run.
+pub(in crate::app::cloud_panel::production::repository_setup) fn expect_removal(repository: &Path, run: &str) {
+    let (image, volume) = run_names(repository, run);
+    let mut pending = pending();
+    if !pending.iter().any(|known| known.resources.volume == volume) {
+        pending.push(Pending {
+            resources: RunResources::new(image, volume),
+            daemon: None,
+            working: true,
+        });
+    }
+}
 
 /// Where Horizon keeps the run resources it could not remove before it exited.
+#[cfg(not(test))]
 fn leftovers_file() -> std::path::PathBuf {
     horizon_core::HorizonHome::resolve()
         .root()
@@ -236,42 +267,68 @@ fn leftovers_file() -> std::path::PathBuf {
         .join("setup-leftovers.json")
 }
 
+/// A test keeps its leftovers to itself, never in the person's Horizon home.
+#[cfg(test)]
+fn leftovers_file() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("horizon-test-setup-leftovers-{}.json", std::process::id()))
+}
+
 /// Tries again to remove what earlier cleanups could not, this run of Horizon's or one
 /// before it, in the background; a new setup and Horizon's exit wait for it.
 pub(in crate::app::cloud_panel::production::repository_setup) fn retry_unremoved() {
-    let mut pending = std::mem::take(&mut *UNREMOVED.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
     let file = leftovers_file();
     if let Ok(bytes) = super::super::untrusted::read_regular(&file, 1024 * 1024) {
         let _ = std::fs::remove_file(&file);
         let kept: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap_or_default();
+        let mut pending = pending();
         for entry in kept {
             if let (Some(image), Some(volume)) = (entry["image"].as_str(), entry["volume"].as_str())
-                && !pending.iter().any(|(known, _)| known.volume == volume)
+                && !pending.iter().any(|known| known.resources.volume == volume)
             {
-                let daemon = LocalDocker {
-                    host: entry["host"].as_str().map(str::to_owned),
-                };
-                pending.push((RunResources::new(image.to_owned(), volume.to_owned()), daemon));
+                pending.push(Pending {
+                    resources: RunResources::new(image.to_owned(), volume.to_owned()),
+                    daemon: entry["host"].as_str().map(|host| LocalDocker {
+                        host: Some(host.to_owned()),
+                    }),
+                    working: false,
+                });
             }
         }
     }
-    for (resources, daemon) in pending {
-        super::super::run::keep_ending(std::thread::spawn(move || resources.remove_or_keep(daemon)));
+    let waiting: Vec<(RunResources, Option<LocalDocker>)> = pending()
+        .iter_mut()
+        .filter(|known| !known.working)
+        .map(|known| {
+            known.working = true;
+            (known.resources.clone(), known.daemon.clone())
+        })
+        .collect();
+    for (resources, daemon) in waiting {
+        super::super::run::keep_ending(std::thread::spawn(move || {
+            match daemon.or_else(|| LocalDocker::resolve().ok()) {
+                Some(daemon) => resources.remove_or_keep(daemon),
+                None => resources.set_waiting(None),
+            }
+        }));
     }
 }
 
-/// Keeps what is still not removed, as Horizon exits, for its next run to remove.
+/// Keeps every run whose resources are not shown gone, as Horizon exits, for its next
+/// run to remove: those that failed and those a thread still works on.
 pub(in crate::app::cloud_panel::production::repository_setup) fn keep_unremoved() {
-    let pending = UNREMOVED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if pending.is_empty() {
-        return;
-    }
-    let kept: Vec<serde_json::Value> = pending
+    let kept: Vec<serde_json::Value> = pending()
         .iter()
-        .map(|(resources, daemon)| {
-            serde_json::json!({"image": resources.image, "volume": resources.volume, "host": daemon.host})
+        .map(|known| {
+            serde_json::json!({
+                "image": known.resources.image,
+                "volume": known.resources.volume,
+                "host": known.daemon.as_ref().and_then(|daemon| daemon.host.clone()),
+            })
         })
         .collect();
+    if kept.is_empty() {
+        return;
+    }
     let file = leftovers_file();
     let written = file.parent().is_some_and(|folder| {
         std::fs::create_dir_all(folder).is_ok()
@@ -293,16 +350,37 @@ impl RunResources {
 
     /// Removes them; what a cleanup cannot show gone is logged and kept for a retry.
     fn remove_or_keep(self, daemon: LocalDocker) {
-        if !self.remove(&daemon) {
+        {
+            let mut pending = pending();
+            match pending.iter_mut().find(|known| known.resources.volume == self.volume) {
+                Some(known) => {
+                    known.daemon = Some(daemon.clone());
+                    known.working = true;
+                }
+                None => pending.push(Pending {
+                    resources: self.clone(),
+                    daemon: Some(daemon.clone()),
+                    working: true,
+                }),
+            }
+        }
+        if self.remove(&daemon) {
+            pending().retain(|known| known.resources.volume != self.volume);
+        } else {
             tracing::warn!(
                 image = %self.image,
                 volume = %self.volume,
                 "a setup run's Docker resources are not removed yet; the next setup or exit tries again"
             );
-            UNREMOVED
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push((self, daemon));
+            self.set_waiting(Some(daemon));
+        }
+    }
+
+    /// Marks them as waiting for another try, on `daemon` when it is known.
+    fn set_waiting(&self, daemon: Option<LocalDocker>) {
+        if let Some(known) = pending().iter_mut().find(|known| known.resources.volume == self.volume) {
+            known.working = false;
+            known.daemon = daemon.or_else(|| known.daemon.take());
         }
     }
 

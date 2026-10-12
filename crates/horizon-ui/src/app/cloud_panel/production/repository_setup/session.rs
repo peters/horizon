@@ -13,19 +13,28 @@ const PROMPT_SETTLE: Duration = Duration::from_secs(3);
 /// How long the agent's screen must stay still before the paste.
 const PROMPT_QUIET: Duration = Duration::from_millis(1200);
 
-/// A setup agent about to start: what it starts with, while the files outside
-/// `.horizon` are read for its run.
+/// A setup agent about to start: what it starts with, while a thread prepares its run.
 pub(in crate::app::cloud_panel::production) struct Starting {
     preset: horizon_core::PresetConfig,
-    args: Vec<String>,
-    pending_prompt: Option<String>,
+    chosen_mode: super::Mode,
+    /// The repository as the person entered it.
+    entered: String,
+    receiver: std::sync::mpsc::Receiver<Result<Prepared, String>>,
+}
+
+/// What the thread that prepares a run read and made: the repository, its folder's
+/// identity and the files outside `.horizon` before the agent starts, the run's status
+/// file, the agent's instructions and the scope it starts in.
+struct Prepared {
     repository: PathBuf,
+    identity: super::untrusted::Identity,
     status: PathBuf,
     mode: super::Mode,
-    chosen_mode: super::Mode,
-    /// The scope the agent starts in, when Horizon can make one.
+    instructions: String,
     unit: String,
-    receiver: std::sync::mpsc::Receiver<(super::commit::Outside, bool, Option<Vec<String>>)>,
+    outside: super::commit::Outside,
+    dotnet: bool,
+    launcher: Option<Vec<String>>,
 }
 
 impl HorizonApp {
@@ -38,9 +47,9 @@ impl HorizonApp {
         }
         // One setup at a time. A run still working for another repository is not stopped
         // behind the person's back; a finished or stopped one is cleared.
+        let entered = self.cloud_prototype.production.repository.trim().to_owned();
         if let Some(run) = self.cloud_prototype.production.setup_run.as_ref() {
-            let same = std::fs::canonicalize(&self.cloud_prototype.production.repository)
-                .is_ok_and(|repository| repository == run.repository);
+            let same = run.entered == entered || run.repository == Path::new(&entered);
             // The setup choices say so and offer nothing to click; this guards the action.
             if !same && !run.finished() && !run.stopped {
                 return;
@@ -68,72 +77,26 @@ impl HorizonApp {
         let Some(preset) = preset else {
             return;
         };
-        let kind = preset.kind;
-        let repository = match std::fs::canonicalize(&self.cloud_prototype.production.repository) {
-            Ok(path) if path.is_dir() => path,
-            _ => {
-                self.cloud_prototype.error = Some("Choose an existing local repository directory".into());
-                return;
-            }
-        };
-        let status = match status_path() {
-            Ok(status) => status,
-            Err(error) => {
-                self.cloud_prototype.error = Some(error);
-                return;
-            }
-        };
-        let chosen_mode = std::mem::take(&mut self.cloud_prototype.production.setup_mode);
-        let mode = chosen_mode.clone().resolve(&repository);
-        let instructions = prompt(
-            &self.cloud_prototype.production.setup_agents,
-            (&repository, &status),
-            &mode,
-        );
-        // Claude and Codex take the instructions as their starting prompt; other agents get
-        // them pasted once their session settles.
-        let takes_prompt = matches!(kind, PanelKind::Claude | PanelKind::Codex);
-        let mut args = preset.args.clone();
-        let mut pending_prompt = None;
-        if takes_prompt {
-            args.push(instructions);
-        } else {
-            pending_prompt = Some(instructions);
-        }
-        // The files outside .horizon are read before the agent starts, so nothing it
-        // changes becomes the baseline, and on a thread, since a repository with many
-        // ignored files takes a while; the agent starts once they are read.
         if self.cloud_prototype.production.setup_starting.is_some() {
             return;
         }
+        let chosen_mode = std::mem::take(&mut self.cloud_prototype.production.setup_mode);
+        let agents = self.cloud_prototype.production.setup_agents.clone();
         let (sender, receiver) = std::sync::mpsc::channel();
-        let scan = repository.clone();
         let wake = ctx.clone();
-        let unit = format!(
-            "horizon-setup-agent-{}-{}.scope",
-            super::proof::run_id(&status),
-            std::process::id()
-        );
-        let launcher_unit = unit.clone();
+        let (folder, mode) = (entered.clone(), chosen_mode.clone());
+        // Everything that reads or writes the disk happens on this thread: the repository's
+        // folder, the run's status folder, and the files outside .horizon, read before the
+        // agent starts so nothing it changes becomes the baseline; the agent starts once
+        // they are read.
         std::thread::spawn(move || {
-            // One setup at a time: an earlier run still ending, as after Stop, ends first,
-            // with what an earlier cleanup could not remove.
-            super::proof::retry_unremoved();
-            run::wait_for_ended_runs();
-            let outside = super::commit::outside(&scan);
-            let dotnet = super::proof::uses_nuget(&scan);
-            let _ = sender.send((outside, dotnet, super::agent::scope_launcher(&launcher_unit)));
+            let _ = sender.send(prepare(&folder, mode, &agents));
             wake.request_repaint();
         });
         self.cloud_prototype.production.setup_starting = Some(Starting {
             preset,
-            args,
-            pending_prompt,
-            repository,
-            status,
-            mode,
             chosen_mode,
-            unit,
+            entered,
             receiver,
         });
         self.cloud_prototype.error = None;
@@ -144,42 +107,54 @@ impl HorizonApp {
         let Some(starting) = self.cloud_prototype.production.setup_starting.as_ref() else {
             return;
         };
-        let scan = match starting.receiver.try_recv() {
-            Ok(scan) => scan,
+        let prepared = match starting.receiver.try_recv() {
+            Ok(prepared) => prepared,
             Err(std::sync::mpsc::TryRecvError::Empty) => return,
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                if let Some(starting) = self.cloud_prototype.production.setup_starting.take() {
-                    run::remove_run_folder(&starting.status);
-                    self.cloud_prototype.production.setup_mode = starting.chosen_mode;
-                }
-                self.cloud_prototype.error = Some("Could not read the repository before the setup agent starts".into());
-                return;
+                Err("Could not read the repository before the setup agent starts".to_owned())
             }
         };
-        if let Some(starting) = self.cloud_prototype.production.setup_starting.take() {
-            self.launch_cloud_repository_setup(ctx, starting, scan);
+        let Some(starting) = self.cloud_prototype.production.setup_starting.take() else {
+            return;
+        };
+        match prepared {
+            Ok(prepared) => self.launch_cloud_repository_setup(ctx, starting, prepared),
+            Err(error) => {
+                self.cloud_prototype.production.setup_mode = starting.chosen_mode;
+                self.cloud_prototype.error = Some(error);
+            }
         }
     }
 
     /// Creates the agent's hidden panel and the run that follows it.
-    fn launch_cloud_repository_setup(
-        &mut self,
-        ctx: &egui::Context,
-        starting: Starting,
-        (outside, dotnet, launcher): (super::commit::Outside, bool, Option<Vec<String>>),
-    ) {
+    fn launch_cloud_repository_setup(&mut self, ctx: &egui::Context, starting: Starting, prepared: Prepared) {
         let Starting {
             preset,
-            args,
-            pending_prompt,
-            repository,
-            status,
-            mode,
             chosen_mode,
-            unit,
+            entered,
             receiver: _,
         } = starting;
+        let Prepared {
+            repository,
+            identity,
+            status,
+            mode,
+            instructions,
+            unit,
+            outside,
+            dotnet,
+            launcher,
+        } = prepared;
         let kind = preset.kind;
+        // Claude and Codex take the instructions as their starting prompt; other agents get
+        // them pasted once their session settles.
+        let mut args = preset.args.clone();
+        let mut pending_prompt = None;
+        if matches!(kind, PanelKind::Claude | PanelKind::Codex) {
+            args.push(instructions);
+        } else {
+            pending_prompt = Some(instructions);
+        }
         // An agent starts only inside a scope that holds all its descendants: without
         // one, a process it started could leave its group and keep writing while Use
         // reads and commits.
@@ -216,6 +191,8 @@ impl HorizonApp {
                     created.transient = true;
                 }
                 let mut run = Run::new(panel, kind, repository, status, mode);
+                run.identity = identity;
+                run.entered = entered;
                 run.agent_process = self.agent_process_of(panel, &unit);
                 run.agent.clone_from(&preset.name);
                 run.pending_prompt = pending_prompt;
@@ -258,7 +235,7 @@ impl HorizonApp {
         let Some(run) = self.cloud_prototype.production.setup_run.as_mut() else {
             return;
         };
-        run.poll();
+        run.poll(ctx);
         // The finished card's list of changed files, made off the dialog's thread.
         if run.finished() && run.files.is_none() {
             if let Some(job) = &run.files_job {
@@ -459,6 +436,9 @@ const STALE_PROOF: &str = "The .horizon files or the proof changed after Horizon
 /// Why the setup agent did not start on a Linux computer without a systemd user manager.
 const NO_SCOPE: &str = "The setup agent needs a systemd user session (systemd-run --user), so Horizon can end everything it starts before it commits. Start one, or use Quick start or write .horizon yourself.";
 
+/// The longest Horizon's exit waits for setup runs to end; the window does not draw meanwhile.
+const EXIT_WAIT: Duration = Duration::from_secs(20);
+
 /// The name of a setup agent's hidden panel.
 const PANEL_NAME: &str = "Cloud repository setup";
 
@@ -470,18 +450,30 @@ impl HorizonApp {
             run.discard();
         }
         if let Some(starting) = self.cloud_prototype.production.setup_starting.take() {
-            run::remove_run_folder(&starting.status);
+            // The thread preparing it may still make the run's status folder, which goes
+            // once it reports. Not one of the endings a new setup waits for, since that
+            // thread waits for those itself.
+            std::thread::spawn(move || {
+                if let Ok(Ok(prepared)) = starting.receiver.recv() {
+                    run::remove_run_folder_now(&prepared.status);
+                }
+            });
         }
     }
 
-    /// Ends the setup run as Horizon exits and waits until its agent and proof have
-    /// ended and what they made is removed, with every run already ending: the process
-    /// exits right after, and a thread still ending would be cut off.
+    /// Ends the setup run as Horizon exits, and waits up to [`EXIT_WAIT`] until its agent
+    /// and proof have ended and what they made is removed, with every run already
+    /// ending. Whatever is not shown removed by then, the run's containers, images and
+    /// volume among them, is kept for Horizon's next run to remove; an agent process that
+    /// outlived its kills is logged and goes when the system ends it.
     pub(in crate::app) fn end_cloud_repository_setup_for_exit(&mut self) {
         self.end_cloud_repository_setup();
         super::proof::retry_unremoved();
-        run::wait_for_ended_runs();
-        // What Docker still would not remove is kept for Horizon's next run.
+        if !run::wait_for_ended_runs_within(Some(EXIT_WAIT)) {
+            tracing::warn!(
+                "Horizon exits while a setup run still ends; its Docker resources are kept for the next start"
+            );
+        }
         super::proof::keep_unremoved();
     }
 
@@ -524,6 +516,43 @@ impl HorizonApp {
             self.close_panel(panel);
         }
     }
+}
+
+/// Prepares a run on a thread, for the repository the person entered as `folder`: its
+/// folder must exist, the run gets its status folder, and the files outside `.horizon` are
+/// read once any earlier run has ended.
+fn prepare(
+    folder: &str,
+    chosen_mode: super::Mode,
+    agents: &[horizon_core::cloud_runtime::setup::Agent],
+) -> Result<Prepared, String> {
+    let repository = std::fs::canonicalize(folder)
+        .ok()
+        .filter(|path| path.is_dir())
+        .ok_or("Choose an existing local repository directory")?;
+    let status = status_path()?;
+    let mode = chosen_mode.resolve(&repository);
+    let instructions = prompt(agents, (&repository, &status), &mode);
+    let unit = format!(
+        "horizon-setup-agent-{}-{}.scope",
+        super::proof::run_id(&status),
+        std::process::id()
+    );
+    // One setup at a time: an earlier run still ending, as after Stop, ends first, with
+    // what an earlier cleanup could not remove.
+    super::proof::retry_unremoved();
+    run::wait_for_ended_runs();
+    Ok(Prepared {
+        identity: super::untrusted::identity(&repository),
+        outside: super::commit::outside(&repository),
+        dotnet: super::proof::uses_nuget(&repository),
+        launcher: super::agent::scope_launcher(&unit),
+        repository,
+        status,
+        mode,
+        instructions,
+        unit,
+    })
 }
 
 /// The run's status file in a new folder that only this user may read, with a random

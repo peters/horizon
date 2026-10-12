@@ -62,7 +62,56 @@ impl Mode {
     }
 }
 
-/// Whether the working copy holds a setup in `.horizon`.
+/// Whether the working copy at `repository` holds a setup in `.horizon`, as a thread last
+/// saw it, so the dialog never reads the disk while it draws. While the dialog asks, a
+/// thread looks again at most every 2 s and wakes the dialog when the answer changed.
+pub(super) fn setup_files_seen(ctx: &egui::Context, repository: &str) -> bool {
+    /// What a thread last saw of a repository, when, and whether one looks now.
+    struct Seen {
+        answer: bool,
+        at: Option<std::time::Instant>,
+        looking: bool,
+    }
+    static SEEN: std::sync::Mutex<Option<std::collections::HashMap<String, Seen>>> = std::sync::Mutex::new(None);
+    let mut seen = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let known = seen.get_or_insert_with(std::collections::HashMap::new);
+    // Every repository typed is kept until there are many; then the list starts again.
+    if known.len() > 64 && !known.contains_key(repository) {
+        known.clear();
+    }
+    let entry = known.entry(repository.to_owned()).or_insert(Seen {
+        answer: false,
+        at: None,
+        looking: false,
+    });
+    if !entry.looking
+        && entry
+            .at
+            .is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(2))
+    {
+        entry.looking = true;
+        let (path, wake) = (repository.to_owned(), ctx.clone());
+        std::thread::spawn(move || {
+            let answer = has_setup_files(Path::new(&path));
+            let mut seen = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(entry) = seen.as_mut().and_then(|known| known.get_mut(&path)) {
+                let changed = entry.answer != answer;
+                *entry = Seen {
+                    answer,
+                    at: Some(std::time::Instant::now()),
+                    looking: false,
+                };
+                drop(seen);
+                if changed {
+                    wake.request_repaint();
+                }
+            }
+        });
+    }
+    entry.answer
+}
+
+/// Whether the working copy holds a setup in `.horizon`, read from the disk.
 pub(super) fn has_setup_files(repository: &Path) -> bool {
     [".horizon/cloud.yml", ".horizon/Dockerfile"]
         .iter()
