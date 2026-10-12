@@ -129,7 +129,9 @@ impl Setup {
         Ok((folder, tree.join(context), tree.join(dockerfile)))
     }
 
-    /// Writes the snapshot's `.horizon` into `tree`: files with their mode, links as links.
+    /// Writes the snapshot's `.horizon` into `tree`: files with the mode git commits for
+    /// them, 0644 or 0755 whatever the umask, as deployment's snapshot extracts them; links
+    /// as links.
     fn write_into(&self, tree: &Path) -> Result<(), String> {
         std::fs::create_dir_all(tree.join(".horizon")).map_err(|error| error.to_string())?;
         for (relative, entry) in &self.entries {
@@ -143,9 +145,10 @@ impl Setup {
                 Entry::File { executable, content } => {
                     std::fs::write(&target, content).map_err(|error| error.to_string())?;
                     #[cfg(unix)]
-                    if *executable {
+                    {
                         use std::os::unix::fs::PermissionsExt as _;
-                        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))
+                        let mode = if *executable { 0o755 } else { 0o644 };
+                        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(mode))
                             .map_err(|error| error.to_string())?;
                     }
                     #[cfg(not(unix))]

@@ -81,6 +81,10 @@ impl Job {
     /// [`CAPTURE_LIMIT`], within `limit`. Stop and the limit end its whole group.
     pub(super) fn capture(&self, mut command: Command, limit: Duration) -> Result<Vec<u8>, String> {
         use std::io::Read as _;
+        // Docker commands built elsewhere, as for the image checks, go to the run's daemon too.
+        if command.get_program() == "docker" {
+            self.daemon.pin(&mut command);
+        }
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(&mut command, 0);
         let mut child = command
@@ -191,6 +195,9 @@ impl Job {
         log: &mut Option<std::fs::File>,
         limit: Option<Duration>,
     ) -> Result<(), String> {
+        if command.get_program() == "docker" {
+            self.daemon.pin(&mut command);
+        }
         let started = Instant::now();
         // Its own process group, so Stop and the time limit end everything it started,
         // such as the build processes of a host restore, not only the command itself.

@@ -48,6 +48,16 @@ impl Endpoint {
         }
     }
 
+    /// The address as `DOCKER_HOST` and `--host` take it.
+    #[must_use]
+    pub fn address(&self) -> String {
+        match self {
+            Self::Socket(path) => format!("unix://{}", path.display()),
+            Self::Pipe(pipe) => format!("npipe://{pipe}"),
+            Self::Remote(host) => host.clone(),
+        }
+    }
+
     /// Whether the daemon runs on this computer, so a path of this computer that Docker
     /// mounts names the same file: a socket, a pipe or a TCP address on loopback.
     #[must_use]
@@ -291,7 +301,15 @@ mod tests {
         ] {
             assert!(!Endpoint::parse(remote).is_local(), "{remote}");
         }
+        for address in [
+            "unix:///var/run/docker.sock",
+            "npipe:////./pipe/docker_engine",
+            "ssh://builder@build.example",
+        ] {
+            assert_eq!(Endpoint::parse(address).address(), address, "the address round-trips");
+        }
     }
+
     #[test]
     fn rootless_docker_restarts_through_its_user_unit_only_when_systemd_runs_it() {
         // A system unit and pkexec do not turn rootless Docker into the system service.

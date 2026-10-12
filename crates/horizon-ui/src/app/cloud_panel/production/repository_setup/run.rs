@@ -405,24 +405,37 @@ impl Run {
     /// agent's processes end, the proof stops and its containers, image and volume go.
     /// The run's folder stays for its view until Stop.
     pub(super) fn abandon(&mut self) {
-        if let Some(agent) = self.agent_process.take() {
-            keep_ending(std::thread::spawn(move || {
+        let agent = self.agent_process.take().map(|agent| {
+            std::thread::spawn(move || {
                 agent.end();
-            }));
-        }
-        self.release_proof(false);
+            })
+        });
+        self.release_proof(agent, false);
     }
 
-    /// Stops the proof and removes its containers, image and volume once its run has
-    /// ended, only once: a second, unordered removal could race the first.
-    fn release_proof(&mut self, wait: bool) {
+    /// Stops the proof and removes the run's containers, image and volume once `before`,
+    /// the agent ending, and the proof's run have ended, so neither creates one after.
+    /// A run without a proof has them removed too, such as the agent's preview
+    /// container. Only once: a second, unordered removal could race the first.
+    fn release_proof(&mut self, before: Option<std::thread::JoinHandle<()>>, wait: bool) {
         if std::mem::replace(&mut self.proof_released, true) {
+            if let Some(before) = before {
+                keep_ending(before);
+            }
             return;
         }
-        if let Some(proof) = self.proof.as_mut() {
-            let worker = proof.stop();
-            proof::remove_run_resources(&self.repository, &proof::run_id(&self.status_path), worker, wait);
-        }
+        let (worker, pinned) = self
+            .proof
+            .as_mut()
+            .map_or((None, None), |proof| (proof.stop(), Some(proof.daemon())));
+        let after = match (before, worker) {
+            (Some(before), Some(worker)) => Some(std::thread::spawn(move || {
+                let _ = before.join();
+                let _ = worker.join();
+            })),
+            (before, worker) => before.or(worker),
+        };
+        proof::remove_run_resources(&self.repository, &proof::run_id(&self.status_path), after, pinned, wait);
     }
 
     /// Ends the run in the background: its agent's processes end, its proof stops, then
@@ -445,7 +458,7 @@ impl Run {
         if let Some(agent) = self.agent_process.take() {
             agent.end();
         }
-        self.release_proof(wait);
+        self.release_proof(None, wait);
         remove_run_folder(&self.status_path);
     }
 

@@ -30,15 +30,68 @@ pub(super) fn check_operations(volume: &str) -> String {
     format!("horizon-setup-check-{:08x}", hash & 0xffff_ffff)
 }
 
+/// The Docker daemon of this computer a proof uses, pinned when the proof starts: every
+/// docker command of the proof and of its cleanup goes to that daemon, so a Docker context
+/// switched meanwhile never sends one to another machine.
+#[derive(Clone, Debug, Default)]
+pub(in crate::app::cloud_panel::production::repository_setup) struct LocalDocker {
+    /// The daemon's address; none when the Docker CLI could not say which it uses, and
+    /// then its own commands fail with the reason.
+    host: Option<String>,
+}
+
+/// A proof's pinned daemon, shared by the proof's run, its Stop and its cleanup; empty
+/// until the proof's run has checked it.
+pub(in crate::app::cloud_panel::production::repository_setup) type Pinned =
+    std::sync::Arc<std::sync::OnceLock<LocalDocker>>;
+
+impl LocalDocker {
+    /// The daemon the Docker CLI uses now, refused when it runs on another machine. The
+    /// proof mounts files of this computer into its containers, the repository's bundle
+    /// and snapshot and Horizon's localci, and a daemon elsewhere would look for those
+    /// paths on its own machine.
+    pub(in crate::app::cloud_panel::production::repository_setup) fn resolve() -> Result<Self, String> {
+        match horizon_core::cloud_runtime::docker_daemon::Target::default().daemon() {
+            None => Ok(Self::default()),
+            Some(endpoint) if endpoint.is_local() => Ok(Self {
+                host: Some(endpoint.address()),
+            }),
+            Some(endpoint) => Err(format!(
+                "Docker here uses the daemon at {}, on another machine. Horizon's proof mounts files from this computer, so it needs Docker running on this computer: switch to a local Docker context (docker context use default) or unset DOCKER_HOST, then start the setup again.",
+                endpoint.address()
+            )),
+        }
+    }
+
+    /// The daemon's address, for a Docker command line's `--host`.
+    pub(in crate::app::cloud_panel::production::repository_setup) fn host(&self) -> Option<&str> {
+        self.host.as_deref()
+    }
+
+    /// A docker command that talks to this daemon only.
+    pub(in crate::app::cloud_panel::production::repository_setup) fn command(&self) -> Command {
+        let mut command = Command::new("docker");
+        self.pin(&mut command);
+        command
+    }
+
+    /// Points `command`, a docker command, at this daemon only.
+    pub(in crate::app::cloud_panel::production::repository_setup) fn pin(&self, command: &mut Command) {
+        if let Some(host) = &self.host {
+            command.env("DOCKER_HOST", host).env_remove("DOCKER_CONTEXT");
+        }
+    }
+}
+
 /// The most one cleanup command may take before Horizon gives up on it and goes on with
 /// the next, so a daemon that does not answer never holds an exit or a new setup.
 const CLEANUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Runs a docker cleanup command; its standard output when it succeeded in time. One
 /// that runs past [`CLEANUP_TIMEOUT`] is ended with everything it started.
-fn docker(args: &[String]) -> Option<String> {
+fn docker(daemon: &LocalDocker, args: &[String]) -> Option<String> {
     use std::io::Read as _;
-    let mut command = Command::new("docker");
+    let mut command = daemon.command();
     command
         .args(args)
         .stdin(std::process::Stdio::null())
@@ -81,25 +134,25 @@ fn arguments<'a>(words: impl IntoIterator<Item = &'a str>) -> Vec<String> {
 }
 
 /// The containers whose names match `pattern`, a Docker name filter.
-fn containers(pattern: &str) -> Vec<String> {
-    docker(&arguments([
-        "ps",
-        "--all",
-        "--quiet",
-        "--filter",
-        &format!("name={pattern}"),
-    ]))
+fn containers(daemon: &LocalDocker, pattern: &str) -> Vec<String> {
+    docker(
+        daemon,
+        &arguments(["ps", "--all", "--quiet", "--filter", &format!("name={pattern}")]),
+    )
     .map(|output| output.split_whitespace().map(str::to_owned).collect())
     .unwrap_or_default()
 }
 
 /// Removes a finished run's containers, image and volume once `after`, the run's
-/// stopped proof, has ended and can create nothing more: in the background, or before
-/// returning with `wait`, as when Horizon exits. Each docker command has a time limit.
+/// stopped proof and agent, has ended and can create nothing more: in the background, or
+/// before returning with `wait`, as when Horizon exits. A run without a proof still has
+/// them removed, such as the agent's preview container. The commands go to the daemon
+/// `pinned` names, and each has a time limit.
 pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_resources(
     repository: &Path,
     run: &str,
     after: Option<std::thread::JoinHandle<()>>,
+    pinned: Option<Pinned>,
     wait: bool,
 ) {
     let (image, volume) = run_names(repository, run);
@@ -107,6 +160,13 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_reso
         if let Some(after) = after {
             let _ = after.join();
         }
+        // The daemon the proof pinned; without a proof that checked one, the daemon of
+        // this computer Docker uses now. A daemon on another machine is never touched.
+        let pinned = pinned.as_ref().and_then(|pinned| pinned.get().cloned());
+        let Some(daemon) = pinned.or_else(|| LocalDocker::resolve().ok()) else {
+            return;
+        };
+        let daemon = &daemon;
         // The proof's own containers and the worker-check containers of its profiles.
         // A check stopped mid-way can still have its container appear a moment later,
         // so the search runs once more after a pause.
@@ -115,52 +175,33 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_reso
             if pass > 0 {
                 std::thread::sleep(std::time::Duration::from_secs(2));
             }
-            let found: Vec<String> = containers(&format!("^/{volume}-"))
+            let found: Vec<String> = containers(daemon, &format!("^/{volume}-"))
                 .into_iter()
-                .chain(containers(&checks))
+                .chain(containers(daemon, &checks))
                 .collect();
             if !found.is_empty() {
                 let mut remove = arguments(["rm", "--force", "--volumes"]);
                 remove.extend(found);
-                let _ = docker(&remove);
+                let _ = docker(daemon, &remove);
             }
         }
         let filter = format!("reference={volume}-build*");
-        let images: Vec<String> = docker(&arguments([
-            "images",
-            "--format",
-            "{{.Repository}}:{{.Tag}}",
-            "--filter",
-            &filter,
-        ]))
+        let images: Vec<String> = docker(
+            daemon,
+            &arguments(["images", "--format", "{{.Repository}}:{{.Tag}}", "--filter", &filter]),
+        )
         .map(|output| output.split_whitespace().map(str::to_owned).collect())
         .unwrap_or_default();
         let mut remove_images = arguments(["rmi", "--force", &image]);
         remove_images.extend(images);
-        let _ = docker(&remove_images);
-        let _ = docker(&arguments(["volume", "rm", "--force", &volume]));
+        let _ = docker(daemon, &remove_images);
+        let _ = docker(daemon, &arguments(["volume", "rm", "--force", &volume]));
     };
     if wait {
         remove();
     } else {
         super::super::run::keep_ending(std::thread::spawn(remove));
     }
-}
-
-/// Refuses a Docker daemon on another machine. The proof mounts files of this computer
-/// into its containers, the repository's bundle and snapshot and Horizon's localci, and a
-/// daemon elsewhere would look for those paths on its own machine.
-pub(super) fn local_docker() -> Result<(), String> {
-    use horizon_core::cloud_runtime::docker_daemon::{Endpoint, Target};
-    let Some(Endpoint::Remote(host)) = Target::default().daemon() else {
-        return Ok(());
-    };
-    if Endpoint::parse(&host).is_local() {
-        return Ok(());
-    }
-    Err(format!(
-        "Docker here uses the daemon at {host}, on another machine. Horizon's proof mounts files from this computer, so it needs Docker running on this computer: switch to a local Docker context (docker context use default) or unset DOCKER_HOST, then start the setup again."
-    ))
 }
 
 /// A name Docker accepts for the repository: its folder name and a short hash of its

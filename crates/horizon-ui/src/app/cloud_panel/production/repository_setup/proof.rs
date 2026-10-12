@@ -10,10 +10,13 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 mod localci;
+mod needs;
 mod resources;
 mod session_env;
 mod stream;
-pub(super) use resources::{remove_run_resources, run_id, run_names};
+use needs::distinct_builds;
+pub(super) use needs::uses_nuget;
+pub(super) use resources::{Pinned, remove_run_resources, run_id, run_names};
 
 /// The step titles Horizon owns once the agent asks for a proof.
 pub(super) const BUILD: &str = "Build image";
@@ -218,6 +221,8 @@ pub(super) struct Proof {
     pub(super) host_restore: bool,
     /// The background run, so cleanup waits until it can create nothing more.
     worker: Option<std::thread::JoinHandle<()>>,
+    /// The daemon the run checked and uses, for Stop and the run's cleanup.
+    pinned: Pinned,
 }
 
 impl Proof {
@@ -235,6 +240,7 @@ impl Proof {
     ) -> Self {
         let (sender, receiver) = mpsc::sync_channel(EVENT_QUEUE);
         let cancel = Cancellation::default();
+        let pinned = Pinned::default();
         let (image, volume) = run_names(repository, run);
         let container = format!("{volume}-proof-{request}");
         let job = Job {
@@ -250,7 +256,9 @@ impl Proof {
             cancel: cancel.clone(),
             sender,
             logged: std::cell::Cell::new(0),
-            localci: std::cell::OnceCell::new(),
+            localci: std::cell::RefCell::new(Vec::new()),
+            daemon: resources::LocalDocker::default(),
+            pinned: pinned.clone(),
             ctx,
         };
         let worker = std::thread::spawn(move || {
@@ -275,7 +283,13 @@ impl Proof {
             inputs: None,
             host_restore,
             worker: Some(worker),
+            pinned,
         }
+    }
+
+    /// The daemon the proof's run checked and uses, once it has.
+    pub(super) fn daemon(&self) -> Pinned {
+        self.pinned.clone()
     }
 
     /// Stops the proof and hands back its run, to wait for before its resources go.
@@ -294,9 +308,15 @@ impl Proof {
         // Killing the docker client leaves its container running; the run goes too. On
         // a thread that waits for it, so the dialog never blocks and no process is left
         // unreaped.
+        // A run that has not checked its daemon has started no container yet; the run's
+        // cleanup removes one it starts after all.
+        let Some(daemon) = self.pinned.get().cloned() else {
+            return;
+        };
         let container = self.container.clone();
         super::run::keep_ending(std::thread::spawn(move || {
-            let _ = Command::new("docker")
+            let _ = daemon
+                .command()
                 .args(["rm", "--force", &container])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -377,6 +397,9 @@ impl Drop for Proof {
     }
 }
 
+/// Horizon's own localci in its private folder, or why it is not there.
+type TrustedLocalci = Result<(tempfile::TempDir, PathBuf), String>;
+
 struct Job {
     repository: PathBuf,
     /// Which folder the repository was when the run started.
@@ -393,12 +416,22 @@ struct Job {
     sender: mpsc::SyncSender<Event>,
     /// Bytes written to the whole log so far, against [`LOG_FILE_LIMIT`].
     logged: std::cell::Cell<u64>,
-    /// Horizon's own localci for the CI, fetched once per proof.
-    localci: std::cell::OnceCell<Result<(tempfile::TempDir, PathBuf), String>>,
+    /// Horizon's own localci for each platform the proof's images have, fetched once per
+    /// proof.
+    localci: std::cell::RefCell<Vec<(String, TrustedLocalci)>>,
+    /// The daemon of this computer every docker command of the run goes to, checked
+    /// before the first one, and shared with the proof for its Stop and cleanup.
+    daemon: resources::LocalDocker,
+    pinned: Pinned,
     ctx: egui::Context,
 }
 
 impl Job {
+    /// A docker command for the run's daemon.
+    fn docker(&self) -> Command {
+        self.daemon.command()
+    }
+
     /// The commit the proof's snapshot names: the proof clones and tests that one.
     fn head(&self) -> Option<&str> {
         self.setup
@@ -427,8 +460,23 @@ impl Job {
                 return;
             }
         };
+        // The daemon is checked before the first docker command, and every later one
+        // goes to it.
+        match resources::LocalDocker::resolve() {
+            Ok(daemon) => {
+                let _ = self.pinned.set(daemon.clone());
+                self.daemon = daemon;
+            }
+            Err(reason) => {
+                let _ = self.sender.send(Event::Started(Phase::Build));
+                let _ = self.sender.send(Event::Finished(Phase::Build, Err(reason)));
+                self.ctx.request_repaint();
+                return;
+            }
+        }
         // An earlier proof of this repository may still be stopping: its container goes.
-        let earlier = Command::new("docker")
+        let earlier = self
+            .docker()
             .args(["ps", "--all", "--quiet", "--filter"])
             .arg(format!("name=^/{}-proof-", self.volume))
             .output()
@@ -440,7 +488,7 @@ impl Job {
             })
             .unwrap_or_default();
         if !earlier.is_empty() {
-            let _ = Command::new("docker").args(["rm", "--force"]).args(&earlier).output();
+            let _ = self.docker().args(["rm", "--force"]).args(&earlier).output();
         }
         for phase in [Phase::Build, Phase::Ci, Phase::Fast] {
             if self.cancel.is_cancelled() {
@@ -469,7 +517,6 @@ impl Job {
     }
 
     fn build(&self, setup: &super::snapshot::Setup, log: &mut Option<std::fs::File>) -> Result<(), String> {
-        resources::local_docker()?;
         let config = setup.config()?;
         // Deployment layers each same-worker companion's recipe on the image and checks
         // the layered result; this proof builds only the profiles' own images, so it
@@ -509,14 +556,27 @@ impl Job {
             self.build_one(setup, (build, arguments), &tag(index), docker_config.path(), log)?;
         }
         // The proof runs Horizon's own localci, but the agents on the worker run the
-        // image's: it must be the same pinned release.
+        // image's: every image the setup builds must hold the same pinned release, as
+        // any profile with a build can be chosen in New cloud.
         let run = |command| self.capture(command, STEP_TIMEOUT);
-        localci::check_installed(
-            &self.image,
-            &format!("{}-localci", self.container),
-            self.trusted_localci()?,
-            &run,
-        )?;
+        for (index, (build, _)) in builds.iter().enumerate() {
+            localci::check_installed(
+                &tag(index),
+                &format!("{}-localci{index}", self.container),
+                &self.trusted_localci_for(&build.platform)?,
+                &run,
+            )
+            .map_err(|error| {
+                let profiles = config
+                    .profiles
+                    .iter()
+                    .filter(|(_, profile)| profile.build.as_ref() == Some(build))
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{error} (the image of profile {profiles})")
+            })?;
+        }
         // Each profile's worker contract, checked the way deployment checks it: its
         // capabilities go to horizon-worker-check and every marker it reports is validated.
         for (number, (name, profile)) in config.profiles.iter().enumerate() {
@@ -529,7 +589,7 @@ impl Job {
                 )
                 .is_some();
                 if !trusted {
-                    let mut pull = Command::new("docker");
+                    let mut pull = self.docker();
                     pull.env_remove("DOCKER_AUTH_CONFIG")
                         .arg("--config")
                         .arg(docker_config.path())
@@ -571,7 +631,7 @@ impl Job {
             secrets: Vec::new(),
         };
         let images = horizon_core::cloud_runtime::image::Images {
-            docker_host: None,
+            docker_host: self.daemon.host(),
             isolated_registry: true,
             docker_config,
             runner: &runner,
@@ -599,7 +659,7 @@ impl Job {
         // The agent wrote these paths: both stay inside the repository, as deployment
         // demands, and the build reads the proof's snapshot, never the live folder.
         let (folder, context, dockerfile) = setup.context(&self.repository, build)?;
-        let mut command = Command::new("docker");
+        let mut command = self.docker();
         command
             .current_dir(folder.path())
             .env_remove("DOCKER_AUTH_CONFIG")
@@ -633,14 +693,14 @@ impl Job {
         self.stream(create, log)?;
         // Horizon's pinned base image, not the candidate, prepares the volume: what the
         // CI later runs on is the bundled commit, whatever the candidate's tools do.
-        let mut own = Command::new("docker");
+        let mut own = self.docker();
         own.args(["run", "--rm", "--name", &self.container, "-v"])
             .arg(format!("{}:/workspace", self.volume))
             .args(["--entrypoint", "sh", TOOLS, "-c"])
             .arg("mkdir -p /workspace/home && chown 10001:10001 /workspace /workspace/home");
         self.stream(own, log)?;
         // As root, so the checkout can be handed to the worker's account after.
-        let mut clone = Command::new("docker");
+        let mut clone = self.docker();
         clone
             .args(["run", "--rm", "--name", &self.container, "-v"])
             .arg(format!("{}:/workspace", self.volume))
@@ -692,7 +752,7 @@ impl Job {
         };
         let tree = horizon_core::cloud_runtime::repository::snapshot(&self.repository, head, folder.path(), &runner)
             .map_err(|error| format!("cannot make the committed tree with its submodules and LFS files: {error}"))?;
-        let mut overlay = Command::new("docker");
+        let mut overlay = self.docker();
         overlay
             .args(["run", "--rm", "--name", &self.container, "-v"])
             .arg(format!("{}:/workspace", self.volume))
@@ -733,23 +793,31 @@ impl Job {
     }
 
     /// Horizon's own localci for the image's platform, fetched and checked once.
-    fn trusted_localci(&self) -> Result<&Path, String> {
-        self.localci
-            .get_or_init(|| {
-                let platform = self
-                    .setup
-                    .as_ref()
-                    .ok()
-                    .and_then(|setup| setup.config().ok())
-                    .and_then(|config| {
-                        let build = config.profiles.get(&config.default)?.build.as_ref()?;
-                        Some(build.platform.clone())
-                    })
-                    .unwrap_or_else(|| "linux/amd64".to_owned());
-                localci::trusted(&platform)
-            })
+    fn trusted_localci(&self) -> Result<PathBuf, String> {
+        let platform = self
+            .setup
             .as_ref()
-            .map(|(_, binary)| binary.as_path())
+            .ok()
+            .and_then(|setup| setup.config().ok())
+            .and_then(|config| {
+                let build = config.profiles.get(&config.default)?.build.as_ref()?;
+                Some(build.platform.clone())
+            })
+            .unwrap_or_else(|| "linux/amd64".to_owned());
+        self.trusted_localci_for(&platform)
+    }
+
+    /// Horizon's own localci for images of `platform`, fetched and checked once.
+    fn trusted_localci_for(&self, platform: &str) -> Result<PathBuf, String> {
+        let mut known = self.localci.borrow_mut();
+        let index = known.iter().position(|(name, _)| name == platform).unwrap_or_else(|| {
+            known.push((platform.to_owned(), localci::trusted(platform)));
+            known.len() - 1
+        });
+        known[index]
+            .1
+            .as_ref()
+            .map(|(_, binary)| binary.clone())
             .map_err(Clone::clone)
     }
 
@@ -768,7 +836,7 @@ impl Job {
     /// GPU, this computer's packages and Horizon's localci that the proof needs.
     fn ci_container(&self) -> Result<Command, String> {
         let localci = self.trusted_localci()?;
-        let mut command = Command::new("docker");
+        let mut command = self.docker();
         command
             .args(["run", "--rm", "--name", &self.container, "--user", "10001:10001", "-v"])
             .arg(format!("{}:/workspace", self.volume))
@@ -824,7 +892,7 @@ impl Job {
     /// Horizon's base image removes them from the volume, so no job passes on a record
     /// an older image left.
     fn forget_older_records(&self, session: &[String], log: &mut Option<std::fs::File>) -> Result<(), String> {
-        let mut forget = Command::new("docker");
+        let mut forget = self.docker();
         forget
             .args(["run", "--rm", "--name", &self.container, "--user", "10001:10001", "-v"])
             .arg(format!("{}:/workspace", self.volume))
@@ -839,7 +907,7 @@ impl Job {
     /// The built image's ID, or its tag when Docker cannot say, asked within the
     /// proof's time limit.
     fn image_id(&self) -> String {
-        let mut inspect = Command::new("docker");
+        let mut inspect = self.docker();
         inspect.args(["image", "inspect", "--format", "{{.Id}}", &self.image]);
         self.capture(inspect, STEP_TIMEOUT)
             .ok()
@@ -849,7 +917,8 @@ impl Job {
     }
 
     fn remove_container(&self) {
-        let _ = Command::new("docker")
+        let _ = self
+            .docker()
             .args(["rm", "--force", &self.container])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -881,68 +950,6 @@ pub(super) fn localci_instruction() -> String {
 /// The image that prepares the proof's volume: Horizon's pinned base, never the
 /// candidate the agent wrote.
 const TOOLS: &str = horizon_core::cloud_runtime::repository::launch::quick_start::IMAGE;
-
-/// The images deployment would build: each profile's build with the build arguments
-/// its capabilities give, the default profile's first, every other one that differs
-/// from all before it. A profile without a build section runs a published image.
-fn distinct_builds(
-    config: &horizon_core::cloud_panel::CloudConfig,
-    arguments: impl Fn(&horizon_core::cloud_panel::Profile) -> Vec<String>,
-) -> Result<Vec<(horizon_core::cloud_panel::Build, Vec<String>)>, String> {
-    let default = config
-        .profiles
-        .get(&config.default)
-        .ok_or("the default profile is missing")?;
-    let build = default
-        .build
-        .clone()
-        .ok_or("the default profile has no build section")?;
-    let mut builds = vec![(build, arguments(default))];
-    for profile in config.profiles.values() {
-        if let Some(build) = &profile.build {
-            let candidate = (build.clone(), arguments(profile));
-            if !builds.contains(&candidate) {
-                builds.push(candidate);
-            }
-        }
-    }
-    Ok(builds)
-}
-
-/// Whether the repository restores .NET packages, possibly from private feeds: a package
-/// configuration, or a solution or project file near the top. A bounded walk that never
-/// follows links and skips hidden and build folders.
-pub(super) fn uses_nuget(repository: &Path) -> bool {
-    const CONFIGS: [&str; 3] = ["nuget.config", "NuGet.Config", "Directory.Packages.props"];
-    const PROJECTS: [&str; 5] = ["sln", "slnx", "csproj", "fsproj", "vbproj"];
-    const SKIPPED: [&str; 5] = ["node_modules", "target", "bin", "obj", "vendor"];
-    let mut pending = vec![(repository.to_path_buf(), 0)];
-    let mut seen = 0;
-    while let Some((folder, depth)) = pending.pop() {
-        for entry in std::fs::read_dir(&folder).into_iter().flatten().flatten() {
-            seen += 1;
-            if seen > 5000 {
-                return false;
-            }
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            let Ok(kind) = entry.file_type() else { continue };
-            if kind.is_dir() {
-                if depth < 3 && !name.starts_with('.') && !SKIPPED.contains(&name.as_ref()) {
-                    pending.push((entry.path(), depth + 1));
-                }
-            } else if kind.is_file()
-                && (CONFIGS.contains(&name.as_ref())
-                    || Path::new(name.as_ref())
-                        .extension()
-                        .is_some_and(|extension| PROJECTS.iter().any(|project| extension == *project)))
-            {
-                return true;
-            }
-        }
-    }
-    false
-}
 
 #[cfg(test)]
 mod tests {

@@ -79,7 +79,7 @@ pub fn snapshot(repository: &Path, revision: &str, root: &Path, runner: &Runner<
     )?;
     runner.run(
         "extract committed source",
-        Command::new("tar").arg("-xf").arg(&archive).arg("-C").arg(&path),
+        Command::new("tar").arg("-xpf").arg(&archive).arg("-C").arg(&path),
         Duration::from_secs(120),
     )?;
     for (index, module) in material.modules.iter().enumerate() {
@@ -93,7 +93,7 @@ pub fn snapshot(repository: &Path, revision: &str, root: &Path, runner: &Runner<
         )?;
         runner.run(
             "Extract committed submodule",
-            Command::new("tar").arg("-xf").arg(archive).arg("-C").arg(destination),
+            Command::new("tar").arg("-xpf").arg(archive).arg("-C").arg(destination),
             Duration::from_secs(120),
         )?;
     }
@@ -104,12 +104,23 @@ pub fn snapshot(repository: &Path, revision: &str, root: &Path, runner: &Runner<
 /// The Linux worker builds the snapshot, so pin the conversion to a Linux
 /// checkout's: Windows defaults (`core.autocrlf=true`, a CRLF `core.eol`) would
 /// otherwise turn committed LF text into CRLF. Explicit `eol` attributes still
-/// apply. The caller appends the output path and revision.
+/// apply. The file modes are pinned too: git keeps only whether a file is
+/// executable, so the archive holds 0644 and 0755, which extraction keeps (`-p`)
+/// whatever this computer's umask, and the image copies the committed modes.
+/// The caller appends the output path and revision.
 fn archive_command(repository: &Path) -> Command {
     let mut command = Command::new("git");
     command
         .arg("--no-replace-objects")
-        .args(["-c", "core.autocrlf=false", "-c", "core.eol=lf", "-C"])
+        .args([
+            "-c",
+            "core.autocrlf=false",
+            "-c",
+            "core.eol=lf",
+            "-c",
+            "tar.umask=0022",
+            "-C",
+        ])
         .arg(repository)
         .args(["archive", "--format=tar", "--output"]);
     command
