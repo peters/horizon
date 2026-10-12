@@ -190,7 +190,8 @@ pub(super) fn prepare(input: Input, ctx: &egui::Context) -> Receiver<Report> {
 
 impl Input {
     fn run(self, send: &dyn Fn(Report)) -> Result<(), Failure> {
-        // Nothing is allocated before the record holds every running panel's session.
+        // Nothing is allocated before the record holds every running panel's session, unless
+        // a save failed so long that it released the cloud; that save adds it later.
         self.fence.wait();
         if let Some(first) = &self.first {
             first.sync().map_err(Failure::Unsaved)?;

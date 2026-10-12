@@ -61,6 +61,10 @@ fn reveal_confirmation(runtime: &mut super::Runtime, button: &egui::Response) {
     }
 }
 
+/// A panel's session save failed for so long that it released the cloud.
+const UNRECORDED_SESSION: &str = "A panel's session is not in this cloud's record yet: Stop, Resume or a rebuild \
+                                  would not restart that panel. Horizon keeps trying to record it.";
+
 fn accent_button<'a>(ui: &egui::Ui, label: &'a str) -> egui::Button<'a> {
     action_button(label).min_size(Vec2::new(ui.available_width(), 34.0))
 }
@@ -157,6 +161,9 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
     rebuild::notes(ui, runtime);
     for error in runtime.error.iter().chain(&runtime.remote_release_error) {
         ui.colored_label(egui::Color32::LIGHT_RED, error);
+    }
+    if runtime.sessions.unrecorded() {
+        ui.colored_label(egui::Color32::LIGHT_RED, UNRECORDED_SESSION);
     }
     if let Some(action) = super::resize::controls(ui, id, runtime) {
         return Some(action);

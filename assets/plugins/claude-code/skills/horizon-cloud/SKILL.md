@@ -24,5 +24,12 @@ Get explicit authorization for the exact resource before starting or stopping a 
 Keep credentials in Horizon. Do not send keys, tokens, endpoints, or raw provider
 capabilities as tool arguments. Preserve an uncertain operation's identity.
 
+The cloud header's × asks to delete provider resources before removing the cloud.
+A current empty record offers Remove cloud, even after a prior failure. After
+deletion fails, or when a deployed cloud's resource record is missing or unreadable, Remove from Horizon anyway leaves provider
+resources and saved records in place; they can still cost money. While a local
+or another controller's operation runs, the dialog offers only Cancel.
+This UI close dialog does not grant lifecycle authorization through MCP.
+
 Browser provider catalogs and browser sessions use `horizon-browser`.
 This skill does not install servers, start resources, or enable network access on load.

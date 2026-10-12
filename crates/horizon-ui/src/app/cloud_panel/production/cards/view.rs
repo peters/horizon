@@ -275,7 +275,9 @@ impl HorizonApp {
         match action {
             Action::Deploy => self.start_production_deployment(id, ctx),
             Action::Desktop => self.cloud_add_panel(ctx, id, horizon_core::PanelKind::Device, None),
-            Action::Remove => self.remove_deleted_cloud(id, ctx),
+            Action::Remove => {
+                self.remove_deleted_cloud(id, ctx);
+            }
             Action::ShareLocalNetwork => self.share_local_network(id, true),
             Action::StopSharingLocalNetwork => self.share_local_network(id, false),
             Action::ContainerRegistry { pull } => self.open_cloud_registry(ctx, id, pull),

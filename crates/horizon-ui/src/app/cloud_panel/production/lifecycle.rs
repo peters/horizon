@@ -468,78 +468,130 @@ impl HorizonApp {
         });
     }
 
-    pub(super) fn remove_deleted_cloud(&mut self, id: u32, ctx: &egui::Context) {
+    /// Removes cloud `id` once its saved record holds no provider resources. Returns
+    /// whether it was removed; otherwise the card says why.
+    pub(super) fn remove_deleted_cloud(&mut self, id: u32, ctx: &egui::Context) -> bool {
         let Some(index) = self.cloud_prototype.groups.0.iter().position(|group| group.issue == id) else {
-            return;
+            return false;
         };
         if self
             .cloud_prototype
             .production
             .runtimes
             .get(&id)
-            // A preparation that has not locked the record yet would write it again.
-            .is_some_and(|runtime| runtime.receiver.is_some() || runtime.preparation.is_some())
+            .is_some_and(|runtime| runtime.receiver.is_some() || runtime.busy())
         {
-            return;
+            return false;
         }
         let Some(launch) = self.cloud_prototype.groups.0[index].remote.as_ref() else {
-            return;
+            return false;
         };
-        let Some(root) = &self.cloud_prototype.root else { return };
-        let store = match cloud_runtime::state::cloud_directory(root, &launch.id).and_then(|path| Store::lock(&path)) {
-            Ok(store) => store,
+        let Some(root) = &self.cloud_prototype.root else {
+            if launch.deployment_started {
+                return false;
+            }
+            self.discard_cloud(index, ctx);
+            return true;
+        };
+        // A host without cloud records has no lock to take, and a cloud that never
+        // started a deployment and has no record holds nothing at its provider.
+        if !Store::supported() && !launch.deployment_started && !recorded(root, launch) {
+            self.discard_cloud(index, ctx);
+            return true;
+        }
+        // Held until the cloud is discarded, so no operation can start in between.
+        let _store = match removable(root, launch) {
+            Ok((store, true)) => store,
+            Ok((_, false)) => {
+                self.cloud_removal_error(
+                    id,
+                    "Delete the worker and workspace storage before removing this cloud".into(),
+                );
+                return false;
+            }
             Err(error) => {
                 self.cloud_removal_error(id, error.to_string());
-                return;
+                return false;
             }
         };
-        let allowed = match store.load() {
-            Ok(Some(state)) => match cloud_runtime::lifecycle::can_remove(&store, &state) {
-                Ok(allowed) => allowed,
-                Err(error) => {
-                    self.cloud_removal_error(id, error.to_string());
-                    return;
-                }
-            },
-            Ok(None) => !launch.deployment_started,
-            Err(error) => {
-                self.cloud_removal_error(id, error.to_string());
-                return;
-            }
-        };
-        if !allowed {
-            self.cloud_removal_error(
-                id,
-                "Delete the worker and workspace storage before removing this cloud".into(),
-            );
-            return;
-        }
-        if self
-            .cloud_prototype
-            .fullscreen
-            .as_ref()
-            .is_some_and(|view| view.id == id)
-        {
-            self.exit_cloud_fullscreen(ctx);
-        }
-        let group = self.cloud_prototype.groups.0.remove(index);
-        for local in group.panels {
-            if let Some(panel) = self.board.panel_id_by_local_id(&local) {
-                self.board.close_panel(panel);
-                self.panel_render_caches.browser_ui_state.remove(&panel);
-                self.panel_render_caches.device_ui_state.remove(&panel);
-                self.panel_render_caches.terminal_grid_cache.remove(&panel);
-            }
-        }
-        self.cloud_prototype.production.runtimes.remove(&id);
-        super::cards::forget_log_heights(ctx, id);
-        self.save_cloud_prototype();
-        self.release_removed_cloud_workspace(&group.workspace, ctx);
+        self.discard_cloud(index, ctx);
+        true
     }
+
+    /// Whether the saved record of cloud `id` holds provider resources. `None` means
+    /// a deployed cloud's record is missing, so its resource state is unknown.
+    /// # Errors
+    /// The record cannot be read, or a running operation holds it.
+    pub(super) fn cloud_holds_resources(&self, id: u32) -> cloud_runtime::Result<Option<bool>> {
+        let Some(launch) = self
+            .cloud_prototype
+            .groups
+            .0
+            .iter()
+            .find(|group| group.issue == id)
+            .and_then(|group| group.remote.as_ref())
+        else {
+            return Ok(Some(false));
+        };
+        let Some(root) = &self.cloud_prototype.root else {
+            return Ok((!launch.deployment_started).then_some(false));
+        };
+        // Only asking must not leave a state directory behind for a cloud that never had one.
+        if !recorded(root, launch) {
+            return Ok((!launch.deployment_started).then_some(false));
+        }
+        let (store, allowed) = removable(root, launch)?;
+        Ok((!launch.deployment_started || store.load()?.is_some()).then_some(!allowed))
+    }
+
+    /// Locks the saved record of cloud `id`, so no other controller operates on it while
+    /// it is held. `None` when
+    /// Horizon keeps no cloud records, here or on this host.
+    /// # Errors
+    /// `Busy` while another controller owns it, or the lock cannot be taken.
+    pub(super) fn lock_cloud_record(&self, id: u32) -> cloud_runtime::Result<Option<Store>> {
+        let Some(launch) = self
+            .cloud_prototype
+            .groups
+            .0
+            .iter()
+            .find(|group| group.issue == id)
+            .and_then(|group| group.remote.as_ref())
+        else {
+            return Ok(None);
+        };
+        let Some(root) = self.cloud_prototype.root.as_ref().filter(|_| Store::supported()) else {
+            return Ok(None);
+        };
+        // An identity that cannot name a record directory has no record to operate on.
+        let Ok(path) = cloud_runtime::state::cloud_directory(root, &launch.id) else {
+            return Ok(None);
+        };
+        Store::lock(&path).map(Some)
+    }
+
     fn cloud_removal_error(&mut self, id: u32, message: String) {
         if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
             runtime.error = Some(message.clone());
         }
         self.cloud_prototype.error = Some(message);
     }
+}
+
+/// Whether `launch` may have a record directory. An unreadable path counts as one.
+fn recorded(root: &std::path::Path, launch: &horizon_core::cloud_panel::CloudLaunch) -> bool {
+    cloud_runtime::state::cloud_directory(root, &launch.id).map_or(true, |path| path.try_exists().unwrap_or(true))
+}
+
+/// Locks the saved record of `launch` and reads whether it holds no provider resources.
+fn removable(
+    root: &std::path::Path,
+    launch: &horizon_core::cloud_panel::CloudLaunch,
+) -> cloud_runtime::Result<(Store, bool)> {
+    let store = cloud_runtime::state::cloud_directory(root, &launch.id).and_then(|path| Store::lock(&path))?;
+    let allowed = match store.load()? {
+        Some(state) => cloud_runtime::lifecycle::can_remove(&store, &state)?,
+        None => !launch.deployment_started && cloud_runtime::lifecycle::can_remove_without_deployment(&store)?,
+    };
+    Ok((store, allowed))
 }
