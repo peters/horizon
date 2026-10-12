@@ -104,7 +104,7 @@ pub(in crate::app::cloud_panel::production) struct Run {
     pub(super) agent_process: Option<super::agent::AgentProcess>,
     /// The agent's processes ending on a thread for Use: whether they ended, and the
     /// process again when they did not.
-    pub(super) ending: Option<std::sync::mpsc::Receiver<(bool, super::agent::AgentProcess)>>,
+    pub(super) ending: Option<std::sync::mpsc::Receiver<super::accept::Ending>>,
 }
 
 /// What the person did in the progress view.

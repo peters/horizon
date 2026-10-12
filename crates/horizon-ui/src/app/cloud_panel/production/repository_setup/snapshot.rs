@@ -305,6 +305,7 @@ mod tests {
             (fingerprint(repository.path(), &spec), repository)
         };
         let (one, _kept) = read(&[("a", "b")]);
+        #[cfg_attr(not(unix), allow(unused_variables))]
         let (other, repository) = read(&[("ab", "")]);
         assert_ne!(one, other, "a path and its content never run together");
         #[cfg(unix)]

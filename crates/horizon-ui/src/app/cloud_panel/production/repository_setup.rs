@@ -10,6 +10,7 @@ use horizon_core::{
 };
 use std::path::Path;
 
+mod accept;
 mod agent;
 mod commit;
 mod prompt;
@@ -22,6 +23,7 @@ pub(super) use prompt::Mode;
 #[cfg(test)]
 use prompt::prompt;
 pub(super) use run::{Action, Run};
+pub(super) use session::Starting;
 
 /// What the person chose for a repository without cloud settings.
 #[derive(Debug, PartialEq, Eq)]
@@ -282,6 +284,14 @@ fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str) -> Choice {
         return Choice::None;
     }
     if busy_elsewhere(ui, form) {
+        return Choice::None;
+    }
+    if form.setup_starting.is_some() {
+        ui.label(
+            RichText::new("Reading the repository before the setup agent starts…")
+                .size(12.5)
+                .color(theme::FG_SOFT()),
+        );
         return Choice::None;
     }
     let presets = setup_choices(form);
@@ -555,6 +565,16 @@ mod tests {
         app.cloud_prototype.production.setup_agent = Some(PanelKind::Usage);
         app.start_cloud_repository_setup(&ctx);
         assert!(app.cloud_prototype.error.is_none());
+        // The agent starts once its run's baseline was read on a thread.
+        let started = std::time::Instant::now();
+        while app.cloud_prototype.production.setup_starting.is_some() {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(20),
+                "the baseline was read"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            app.sync_cloud_repository_setup(&ctx);
+        }
         let panel = app
             .board
             .panels

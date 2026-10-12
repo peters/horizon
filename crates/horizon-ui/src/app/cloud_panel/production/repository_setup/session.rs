@@ -2,11 +2,9 @@
 //! and closes, and the commit of the files it wrote.
 use super::prompt::prompt;
 use super::run::{self, Action, Run};
-use super::set_configuration;
 use crate::app::cloud_panel::production::{HorizonApp, PanelKind, PanelOptions};
 use crate::theme;
 use egui::{Frame, RichText, Stroke, Vec2};
-use horizon_core::cloud_runtime::repository::launch::Configuration;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -14,6 +12,19 @@ use std::time::{Duration, Instant};
 const PROMPT_SETTLE: Duration = Duration::from_secs(3);
 /// How long the agent's screen must stay still before the paste.
 const PROMPT_QUIET: Duration = Duration::from_millis(1200);
+
+/// A setup agent about to start: what it starts with, while the files outside
+/// `.horizon` are read for its run.
+pub(in crate::app::cloud_panel::production) struct Starting {
+    preset: horizon_core::PresetConfig,
+    args: Vec<String>,
+    pending_prompt: Option<String>,
+    repository: PathBuf,
+    status: PathBuf,
+    mode: super::Mode,
+    chosen_mode: super::Mode,
+    receiver: std::sync::mpsc::Receiver<(super::commit::Outside, bool)>,
+}
 
 impl HorizonApp {
     /// Starts the setup agent in a hidden panel; the dialog shows its progress and
@@ -83,8 +94,72 @@ impl HorizonApp {
         } else {
             pending_prompt = Some(instructions);
         }
-        // Read before the agent starts, so nothing it changes becomes the baseline.
-        let outside = super::commit::outside(&repository);
+        // The files outside .horizon are read before the agent starts, so nothing it
+        // changes becomes the baseline, and on a thread, since a repository with many
+        // ignored files takes a while; the agent starts once they are read.
+        if self.cloud_prototype.production.setup_starting.is_some() {
+            return;
+        }
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let scan = repository.clone();
+        let wake = ctx.clone();
+        std::thread::spawn(move || {
+            let _ = sender.send((super::commit::outside(&scan), super::proof::uses_nuget(&scan)));
+            wake.request_repaint();
+        });
+        self.cloud_prototype.production.setup_starting = Some(Starting {
+            preset,
+            args,
+            pending_prompt,
+            repository,
+            status,
+            mode,
+            chosen_mode,
+            receiver,
+        });
+        self.cloud_prototype.error = None;
+    }
+
+    /// Starts the agent once the files outside `.horizon` were read for its run.
+    fn poll_cloud_setup_start(&mut self, ctx: &egui::Context) {
+        let Some(starting) = self.cloud_prototype.production.setup_starting.as_ref() else {
+            return;
+        };
+        let scan = match starting.receiver.try_recv() {
+            Ok(scan) => scan,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                if let Some(starting) = self.cloud_prototype.production.setup_starting.take() {
+                    run::remove_run_folder(&starting.status);
+                    self.cloud_prototype.production.setup_mode = starting.chosen_mode;
+                }
+                self.cloud_prototype.error = Some("Could not read the repository before the setup agent starts".into());
+                return;
+            }
+        };
+        if let Some(starting) = self.cloud_prototype.production.setup_starting.take() {
+            self.launch_cloud_repository_setup(ctx, starting, scan);
+        }
+    }
+
+    /// Creates the agent's hidden panel and the run that follows it.
+    fn launch_cloud_repository_setup(
+        &mut self,
+        ctx: &egui::Context,
+        starting: Starting,
+        (outside, dotnet): (super::commit::Outside, bool),
+    ) {
+        let Starting {
+            preset,
+            args,
+            pending_prompt,
+            repository,
+            status,
+            mode,
+            chosen_mode,
+            receiver: _,
+        } = starting;
+        let kind = preset.kind;
         let workspace = self.board.ensure_local_workspace("Cloud setup");
         // Deliberately local: config preparation must not inherit a focused cloud.
         let result = self.board.create_panel(
@@ -114,7 +189,7 @@ impl HorizonApp {
                 run.agent.clone_from(&preset.name);
                 run.pending_prompt = pending_prompt;
                 run.outside = outside;
-                run.dotnet = super::proof::uses_nuget(&run.repository);
+                run.dotnet = dotnet;
                 self.cloud_prototype.production.setup_run = Some(run);
                 self.cloud_prototype.error = None;
                 ctx.request_repaint();
@@ -144,27 +219,14 @@ impl HorizonApp {
     /// finished run and notices a setup panel that closed.
     pub(in crate::app::cloud_panel::production) fn sync_cloud_repository_setup(&mut self, ctx: &egui::Context) {
         self.close_orphaned_setup_panels();
+        self.poll_cloud_setup_start(ctx);
+        // Use waits for the agent's processes on a thread; it goes on once they ended.
+        if self.poll_cloud_setup_use(ctx) {
+            return;
+        }
         let Some(run) = self.cloud_prototype.production.setup_run.as_mut() else {
             return;
         };
-        // Use waits for the agent's processes on a thread; it goes on once they ended.
-        if let Some(ending) = &run.ending {
-            match ending.try_recv() {
-                Ok((true, _)) => {
-                    run.ending = None;
-                    self.use_cloud_repository_setup(ctx);
-                    return;
-                }
-                Ok((false, agent)) => {
-                    run.ending = None;
-                    run.agent_process = Some(agent);
-                    self.cloud_prototype.error =
-                        Some("The setup agent is still ending. Press Use this setup again in a moment.".into());
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(100)),
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => run.ending = None,
-            }
-        }
         run.poll();
         if run.finished() && run.files.is_none() {
             run.files = Some(changed_files(&run.repository));
@@ -339,100 +401,6 @@ impl HorizonApp {
             Action::Use => self.use_cloud_repository_setup(ctx),
         }
     }
-
-    /// Commits the files the agent wrote and reads them as the repository's settings.
-    /// The agent stops first, so nothing writes while the files are checked against the
-    /// proof once more and committed; files that changed after the proof are refused.
-    fn use_cloud_repository_setup(&mut self, ctx: &egui::Context) {
-        let Some(panel) = self.cloud_prototype.production.setup_run.as_ref().map(|run| run.panel) else {
-            return;
-        };
-        if self.board.panel(panel).is_some() {
-            self.close_panel(panel);
-        }
-        let Some(run) = self.cloud_prototype.production.setup_run.as_mut() else {
-            return;
-        };
-        if run.ending() {
-            return;
-        }
-        // Closing the panel only hangs up: nothing is read until the agent and everything
-        // in its process group are gone, killed if they ignore it, so no late write races
-        // the check. That wait runs on a thread; Use goes on when it reports.
-        if let Some(agent) = run.agent_process.take() {
-            let (sender, receiver) = std::sync::mpsc::channel();
-            let wake = ctx.clone();
-            std::thread::spawn(move || {
-                let ended = agent.end();
-                let _ = sender.send((ended, agent));
-                wake.request_repaint();
-            });
-            run.ending = Some(receiver);
-            self.cloud_prototype.error = None;
-            return;
-        }
-        // One reading of the setup: it must be the proved one, and it is what is committed,
-        // so nothing written while the agent's process ends can slip in after the check.
-        run.refresh_inputs_now();
-        let setup = super::snapshot::Setup::read(&run.repository);
-        let proved = run.proof.as_ref().and_then(|proof| proof.inputs);
-        let current = setup
-            .as_ref()
-            .ok()
-            .zip(run.proof_spec())
-            .map(|(setup, spec)| setup.fingerprint(spec));
-        let setup = match setup {
-            Ok(setup) if run.finished() && current.is_some() && current == proved => setup,
-            _ => {
-                run.stopped = true;
-                self.cloud_prototype.error = Some(
-                "The .horizon files changed after Horizon's proof, so they are not committed. Start the setup again to prove them."
-                    .into(),
-            );
-                return;
-            }
-        };
-        // The agent may change only .horizon. Anything else that changed during the
-        // setup is named once; pressing Use again commits .horizon and leaves the rest.
-        let outside = super::commit::outside(&run.repository);
-        let changed = super::commit::changed(&run.outside, &outside);
-        if !changed.is_empty() {
-            run.outside = outside;
-            self.cloud_prototype.error = Some(outside_changes_message(&changed));
-            return;
-        }
-        let committed = match super::commit::commit(&run.repository, run.mode.commit_message(), &setup) {
-            Ok(committed) => committed,
-            Err(error) => {
-                self.cloud_prototype.error = Some(format!("Could not commit .horizon: {error}"));
-                return;
-            }
-        };
-        if let Some(run) = self.cloud_prototype.production.setup_run.take() {
-            run.discard();
-        }
-        // The setup was made and committed on HEAD, so the dialog reads HEAD again.
-        self.cloud_prototype.production.revision.clear();
-        set_configuration(&mut self.cloud_prototype.production, Configuration::Committed);
-        self.read_cloud_profiles(ctx);
-        if let super::commit::Committed::IndexBehind(error) = committed {
-            self.cloud_prototype.error = Some(format!(
-                "Committed .horizon, but your git index was not updated ({error}). Run `git reset -q -- .horizon` in the repository to refresh it."
-            ));
-        }
-    }
-}
-
-/// What Use says when files outside `.horizon` changed while the setup ran.
-fn outside_changes_message(changed: &[String]) -> String {
-    let shown = changed.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
-    let more = match changed.len().saturating_sub(5) {
-        0 => String::new(),
-        more => format!(" and {more} more"),
-    };
-    format!(
-        "Changed outside .horizon while the setup ran: {shown}{more}. Use this setup commits only .horizon on the current HEAD and leaves the rest as it is. Review the changes, then press Use this setup again."
-    )
 }
 
 /// What the agent hears when it wrote a summary but no proof Horizon could run.

@@ -66,6 +66,16 @@ fn workflow_name(name: &str) -> bool {
     !name.starts_with(['.', '-']) && yaml && name.bytes().all(allowed)
 }
 
+/// The most steps a proof may leave out.
+const SKIP_LIMIT: usize = 20;
+
+/// A step to leave out, which localci matches as a part of a step's name: never blank or
+/// so short that it matches nearly every step, so leaving steps out cannot empty a job.
+fn skip_name(step: &str) -> bool {
+    let length = step.trim().chars().count();
+    (3..=200).contains(&length)
+}
+
 /// A localci job: its id, `#N` for a matrix entry, never an option or a word localci
 /// reads as a command.
 fn job_name(name: &str) -> bool {
@@ -96,16 +106,19 @@ impl Spec {
             .to_owned();
         // The agent writes these and localci reads them as its arguments: a workflow is a
         // file name in .github/workflows, a job and the event are names, never options.
+        let skip = strings("skip").unwrap_or_default();
         let valid = workflow_name(&workflow)
             && !jobs.is_empty()
             && jobs.iter().all(|job| job_name(job))
+            && skip.len() <= SKIP_LIMIT
+            && skip.iter().all(|step| skip_name(step))
             && !event.is_empty()
             && event.bytes().all(|byte| byte.is_ascii_lowercase() || byte == b'_');
-        valid.then(|| Self {
+        valid.then_some(Self {
             workflow,
             jobs,
             event,
-            skip: strings("skip").unwrap_or_default(),
+            skip,
         })
     }
 
@@ -819,6 +832,12 @@ mod tests {
             assert!(Spec::parse(&serde_json::json!({"workflow": workflow, "jobs": ["a"]})).is_none());
         }
         assert!(Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": ["rust-test#2"]})).is_some());
+        for skip in ["", "   ", "t"] {
+            assert!(
+                Spec::parse(&serde_json::json!({"workflow": "ci.yml", "jobs": ["test"], "skip": [skip]})).is_none(),
+                "{skip:?} would leave out every step"
+            );
+        }
     }
 
     #[cfg(unix)]
