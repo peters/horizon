@@ -540,8 +540,10 @@ folder, checked out on its branch with the tags in its history, as
 `actions/checkout` leaves a push build, and each setup run has its own image and volume, removed when it ends. For a .NET repository
 with private feeds, check **Restore private NuGet packages on this computer for
 the proof**: Horizon then runs `dotnet restore` here, with this computer's feed
-logins, and the container restores again from those packages in a read-only
-folder, without any credential. It is off by default, because the restore runs the repository's
+logins, copies the packages that restore used into the proof's volume for the
+worker's account, and the container restores again from them, without any
+credential; the CI reads only those packages. A restore here or in the container
+that fails, fails the proof. It is off by default, because the restore runs the repository's
 build files on this computer. The agent asks before it uses a credential of yours, such as your
 GitHub token for a private package feed. It does not allocate compute, push
 images, commit or open a pull request.

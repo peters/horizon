@@ -267,6 +267,7 @@ impl Proof {
             planned: std::cell::RefCell::new(Vec::new()),
             ci_localci: std::cell::RefCell::new(None),
             restored: std::cell::RefCell::new(Vec::new()),
+            packages_copied: std::cell::Cell::new(false),
             docker_config: std::cell::OnceCell::new(),
             ctx,
         };
@@ -428,6 +429,8 @@ struct Job {
     pinned: Pinned,
     /// The .NET solutions or projects the host restored, by their path in the checkout.
     restored: std::cell::RefCell<Vec<String>>,
+    /// The host restore copied the packages it used into the volume.
+    packages_copied: std::cell::Cell<bool>,
     /// The localci a worker session of the CI's image runs, which the CI runs too; none
     /// when the image has none, and then Horizon's own runs.
     ci_localci: std::cell::RefCell<Option<String>>,
@@ -519,10 +522,11 @@ impl Job {
                     Err(reason) => Err(format!("Horizon does not read this setup: {reason}")),
                     Ok(setup) => self.build(setup, &mut log),
                 },
-                Phase::Ci => self.prepare(&mut log).and_then(|()| self.check_plan()).and_then(|()| {
-                    self.warm_packages(&mut log);
-                    self.ci(false, &mut log)
-                }),
+                Phase::Ci => self
+                    .prepare(&mut log)
+                    .and_then(|()| self.check_plan())
+                    .and_then(|()| self.warm_packages(&mut log))
+                    .and_then(|()| self.ci(false, &mut log)),
                 Phase::Fast => self.ci(true, &mut log),
             };
             let failed = result.is_err();
@@ -830,18 +834,11 @@ impl Job {
             }
             command.args(["--gpus", "all"]);
         }
-        // Packages this computer already restored, private ones included, need no feed
-        // credential: NuGet reads them as a fallback folder before it asks a source. Only
-        // with the person's consent, since the repository's CI could read every one.
-        if self.host_restore
-            && uses_nuget(&self.repository)
-            && let Some(packages) = std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".nuget/packages"))
-            && packages.is_dir()
-        {
-            command
-                .arg("-v")
-                .arg(format!("{}:/opt/host-nuget:ro", packages.display()))
-                .args(["-e", "RestoreAdditionalProjectFallbackFolders=/opt/host-nuget"]);
+        // Packages this computer restored, private ones included, need no feed credential:
+        // NuGet reads the ones copied into the volume as a fallback folder before it asks
+        // a source.
+        if let Some(packages) = self.package_folder() {
+            command.args(["-e", &format!("RestoreAdditionalProjectFallbackFolders={packages}")]);
         }
         Ok(command)
     }
@@ -861,7 +858,7 @@ impl Job {
         let session = session_env::arguments(&self.image, &format!("{}-env", self.container), &run)?;
         if !fast {
             self.forget_older_records(&session, log)?;
-            self.restore_in_container(&session, log);
+            self.restore_in_container(&session, log)?;
         }
         let mut command = self.ci_container()?;
         command
