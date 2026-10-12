@@ -93,9 +93,20 @@ pub(super) fn check_installed(
     Ok(())
 }
 
+/// A command run within the proof's cancellation and the time limit given, returning
+/// what it wrote to standard output.
+pub(super) type Bounded<'a> = &'a dyn Fn(Command, std::time::Duration) -> Result<Vec<u8>, String>;
+
+/// How long the download of the release may take.
+const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(5);
+
+/// How long unpacking the release may take.
+const UNPACK_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(1);
+
 /// The trusted localci for an image of `platform`, extracted from the verified release
-/// into a new private folder, which goes when the returned value is dropped.
-pub(super) fn trusted(platform: &str) -> Result<(tempfile::TempDir, PathBuf), String> {
+/// into a new private folder, which goes when the returned value is dropped. The
+/// download and the unpacking run through `run`, so Stop ends them at once.
+pub(super) fn trusted(platform: &str, run: Bounded<'_>) -> Result<(tempfile::TempDir, PathBuf), String> {
     let (_, asset, sum) = RELEASES
         .iter()
         .find(|(name, ..)| *name == platform)
@@ -108,7 +119,7 @@ pub(super) fn trusted(platform: &str) -> Result<(tempfile::TempDir, PathBuf), St
     let bytes = if let Some(bytes) = read_verified(&archive, sum) {
         bytes
     } else {
-        download(asset, &archive)?;
+        download(asset, &archive, run)?;
         read_verified(&archive, sum)
             .ok_or_else(|| format!("the downloaded localci {VERSION} does not match its checksum"))?
     };
@@ -118,17 +129,20 @@ pub(super) fn trusted(platform: &str) -> Result<(tempfile::TempDir, PathBuf), St
         .map_err(|error| error.to_string())?;
     let copy = folder.path().join("release.tar.gz");
     std::fs::write(&copy, bytes).map_err(|error| error.to_string())?;
-    let status = Command::new("tar")
+    let mut unpack = Command::new("tar");
+    unpack
         .arg("-xzf")
         .arg(&copy)
         .arg("-C")
         .arg(folder.path())
-        .arg("localci")
-        .status()
-        .map_err(|error| format!("cannot unpack localci: {error}"))?;
+        .arg("localci");
+    let unpacked = run(unpack, UNPACK_TIMEOUT);
     let _ = std::fs::remove_file(&copy);
     let binary = folder.path().join("localci");
-    if !status.success() || !binary.is_file() {
+    if let Err(error) = unpacked {
+        return Err(format!("cannot unpack localci {VERSION}: {error}"));
+    }
+    if !binary.is_file() {
         return Err(format!("cannot unpack localci {VERSION}"));
     }
     // The proof's container runs it as the image's user, whatever mode tar gave it.
@@ -150,20 +164,18 @@ fn read_verified(archive: &Path, sum: &str) -> Option<Vec<u8>> {
 }
 
 /// Downloads the release `asset` to `target`, through a partial file beside it.
-fn download(asset: &str, target: &Path) -> Result<(), String> {
+fn download(asset: &str, target: &Path, run: Bounded<'_>) -> Result<(), String> {
     let url = format!("https://github.com/peters/localci/releases/download/{VERSION}/{asset}");
     let partial = target.with_extension("partial");
-    let status = Command::new("curl")
-        .args(["-fsSL", "--proto", "=https", "--max-time", "300", "--max-filesize"])
+    let mut curl = Command::new("curl");
+    curl.args(["-fsSL", "--proto", "=https", "--max-time", "300", "--max-filesize"])
         .arg(ARCHIVE_LIMIT.to_string())
         .arg("-o")
         .arg(&partial)
-        .arg(&url)
-        .status()
-        .map_err(|error| format!("cannot download localci: {error}"))?;
-    if !status.success() {
+        .arg(&url);
+    if let Err(error) = run(curl, DOWNLOAD_TIMEOUT) {
         let _ = std::fs::remove_file(&partial);
-        return Err(format!("cannot download localci {VERSION} from {url}"));
+        return Err(format!("cannot download localci {VERSION} from {url}: {error}"));
     }
     std::fs::rename(&partial, target).map_err(|error| error.to_string())
 }

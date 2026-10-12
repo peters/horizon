@@ -1,9 +1,9 @@
 //! The setup agent's process. Horizon records it when the agent's panel starts and ends
 //! it, with everything it started, before it reads a setup for Use or lets a run go:
 //! closing a terminal only hangs up, and an agent or a command it started may ignore
-//! that and keep writing to the repository. On Linux with a systemd user manager the
-//! agent goes into a scope of its own, a cgroup that holds every process it starts, even
-//! one that leaves its process group; elsewhere its process group is what Horizon ends.
+//! that and keep writing to the repository. The agent starts in a systemd user scope of
+//! its own, a cgroup that holds every process it starts, even one that leaves its process
+//! group; Horizon starts no setup agent where it cannot make one.
 use std::time::{Duration, Instant};
 
 /// How long the agent may take to end on its own once its panel closed.
@@ -58,15 +58,6 @@ impl AgentProcess {
             started: start_time(id),
             scope: Some(Scope::new(unit.to_owned())),
         }
-    }
-
-    /// The agent process `id`, started without a scope: Horizon moves it into one now
-    /// where it can, which holds what it starts from then on.
-    pub(super) fn of(id: u32) -> Self {
-        let started = start_time(id);
-        // Only the process Horizon just started goes into the scope, checked by its start.
-        let scope = started.is_some().then(|| contain(id)).flatten();
-        Self { id, started, scope }
     }
 
     /// Ends the agent and its group: they get a short grace after the hang-up of the
@@ -140,42 +131,6 @@ impl AgentProcess {
     fn kill(&self) {}
 }
 
-/// Moves the process `id` into a new transient scope of the systemd user manager, so
-/// every process it starts from now on stays in that cgroup; the scope and its cgroup
-/// folder, or none without a user manager or off Linux.
-fn contain(id: u32) -> Option<Scope> {
-    if !cfg!(target_os = "linux") {
-        return None;
-    }
-    let unit = format!("horizon-setup-agent-{id}-{}.scope", std::process::id());
-    let created = std::process::Command::new("busctl")
-        .args([
-            "--user",
-            "call",
-            "org.freedesktop.systemd1",
-            "/org/freedesktop/systemd1",
-            "org.freedesktop.systemd1.Manager",
-            "StartTransientUnit",
-            "ssa(sv)a(sa(sv))",
-            &unit,
-            "fail",
-            "1",
-            "PIDs",
-            "au",
-            "1",
-            &id.to_string(),
-            "0",
-        ])
-        .output()
-        .is_ok_and(|output| output.status.success());
-    if !created {
-        return None;
-    }
-    let scope = Scope::new(unit);
-    scope.cgroup()?;
-    Some(scope)
-}
-
 /// The cgroup folder of the systemd user scope `unit`.
 fn cgroup_of(unit: &str) -> Option<std::path::PathBuf> {
     let output = std::process::Command::new("systemctl")
@@ -244,6 +199,15 @@ mod tests {
     use super::*;
     use std::os::unix::process::CommandExt as _;
 
+    /// An agent process without a scope, which its group alone ends.
+    fn grouped(id: u32) -> AgentProcess {
+        AgentProcess {
+            id,
+            started: start_time(id),
+            scope: None,
+        }
+    }
+
     #[test]
     fn an_agent_that_ignores_the_hang_up_is_ended_with_its_group() {
         let mut agent = std::process::Command::new("sh")
@@ -251,38 +215,11 @@ mod tests {
             .process_group(0)
             .spawn()
             .unwrap();
-        let process = AgentProcess::of(agent.id());
+        let process = grouped(agent.id());
         assert!(!process.ended_within(Duration::from_millis(200)), "it still runs");
         let reaper = std::thread::spawn(move || agent.wait());
         assert!(process.end(), "the agent and its sleep are gone");
         reaper.join().unwrap().unwrap();
-    }
-
-    #[test]
-    fn a_process_that_leaves_the_group_still_ends_with_the_agent() {
-        // The shell starts a sleep in a session of its own, outside its process group.
-        let mut agent = std::process::Command::new("sh")
-            .args(["-c", "setsid sleep 30 & sleep 30"])
-            .process_group(0)
-            .spawn()
-            .unwrap();
-        let process = AgentProcess::of(agent.id());
-        let Some(cgroup) = process
-            .scope
-            .as_ref()
-            .and_then(Scope::cgroup)
-            .map(std::path::Path::to_path_buf)
-        else {
-            agent.kill().unwrap();
-            agent.wait().unwrap();
-            return; // No systemd user manager here: only the process group can be ended.
-        };
-        std::thread::sleep(Duration::from_millis(300));
-        let reaper = std::thread::spawn(move || agent.wait());
-        assert!(process.end(), "the agent and the sleep that left its group are gone");
-        reaper.join().unwrap().unwrap();
-        let left = std::fs::read_to_string(cgroup.join("cgroup.procs")).unwrap_or_default();
-        assert!(left.trim().is_empty(), "nothing is left in the scope: {left}");
     }
 
     #[test]

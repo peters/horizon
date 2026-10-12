@@ -273,14 +273,14 @@ fn same_folder(a: &Path, b: &str) -> bool {
 }
 
 /// The start button, `verb` and the agent's name, with the agent chooser beside it.
-/// Why the setup agent is not offered on Windows: Horizon can neither end an agent's
-/// processes there nor be sure that nothing it started still writes.
-pub(super) const WINDOWS_NOTE: &str =
-    "Set up from CI runs on Linux and macOS. On Windows, use Quick start or write .horizon yourself.";
+/// Why the setup agent is offered on Linux only: there Horizon starts it in a systemd
+/// user scope, which holds every process it starts, so Use can end them all before it
+/// commits. Elsewhere a process the agent started could leave and keep writing.
+pub(super) const PLATFORM_NOTE: &str = "Set up from CI runs on Linux, where Horizon holds everything the agent starts. Elsewhere, use Quick start or write .horizon yourself.";
 
 fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str) -> Choice {
-    if cfg!(windows) {
-        ui.label(RichText::new(WINDOWS_NOTE).size(12.5).color(theme::FG_SOFT()));
+    if !cfg!(target_os = "linux") {
+        ui.label(RichText::new(PLATFORM_NOTE).size(12.5).color(theme::FG_SOFT()));
         return Choice::None;
     }
     if busy_elsewhere(ui, form) {
@@ -568,9 +568,9 @@ mod tests {
         // A non-process panel exercises placement without invoking a real login in unit tests.
         app.cloud_prototype.production.setup_agent = Some(PanelKind::Usage);
         app.start_cloud_repository_setup(&ctx);
-        // Windows offers no setup agent: it says why and starts nothing.
-        if cfg!(windows) {
-            assert_eq!(app.cloud_prototype.error.as_deref(), Some(WINDOWS_NOTE));
+        // Only Linux offers the setup agent: elsewhere it says why and starts nothing.
+        if !cfg!(target_os = "linux") {
+            assert_eq!(app.cloud_prototype.error.as_deref(), Some(PLATFORM_NOTE));
             assert!(app.cloud_prototype.production.setup_starting.is_none());
             return;
         }

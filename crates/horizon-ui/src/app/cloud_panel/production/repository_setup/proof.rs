@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 mod localci;
 mod needs;
+mod preflight;
 mod resources;
 mod session_env;
 mod stream;
@@ -28,10 +29,6 @@ const LOG_LINES: usize = 200;
 
 /// Events waiting for the dialog; output lines beyond it are dropped, phases wait.
 const EVENT_QUEUE: usize = 1024;
-
-/// The longest a docker command may take that only prepares a proof, such as removing
-/// an earlier proof's container.
-const PREFLIGHT_TIMEOUT: Duration = Duration::from_mins(2);
 
 /// The longest an image build may take before the proof reports it hung.
 const BUILD_TIMEOUT: Duration = Duration::from_mins(45);
@@ -508,6 +505,7 @@ impl Job {
     }
 
     fn build(&self, setup: &super::snapshot::Setup, log: &mut Option<std::fs::File>) -> Result<(), String> {
+        self.check_mounts()?;
         let config = setup.config()?;
         // Deployment layers each same-worker companion's recipe on the image and checks
         // the layered result; this proof builds only the profiles' own images, so it
@@ -533,9 +531,8 @@ impl Job {
             .build
             .is_some();
         // The agent CLI releases deployment would pin, so every build gets its arguments.
-        let releases =
-            horizon_core::cloud_runtime::image::agents::latest(&horizon_core::cloud_runtime::Cancellation::default())
-                .map_err(|error| format!("cannot look up the agent CLI releases: {error}"))?;
+        let releases = horizon_core::cloud_runtime::image::agents::latest(&self.cancel)
+            .map_err(|error| format!("cannot look up the agent CLI releases: {error}"))?;
         let builds = distinct_builds(&config, |profile| {
             horizon_core::cloud_runtime::image::build_arguments(&profile.capabilities, &releases)
         })?;
@@ -822,7 +819,8 @@ impl Job {
     fn trusted_localci_for(&self, platform: &str) -> Result<PathBuf, String> {
         let mut known = self.localci.borrow_mut();
         let index = known.iter().position(|(name, _)| name == platform).unwrap_or_else(|| {
-            known.push((platform.to_owned(), localci::trusted(platform)));
+            let run = |command, limit| self.capture(command, limit);
+            known.push((platform.to_owned(), localci::trusted(platform, &run)));
             known.len() - 1
         });
         known[index]
@@ -925,28 +923,6 @@ impl Job {
             .map(|output| String::from_utf8_lossy(&output).trim().to_owned())
             .filter(|id| !id.is_empty())
             .unwrap_or_else(|| self.image.clone())
-    }
-
-    /// Removes the containers of earlier proofs of this run's volume.
-    fn remove_earlier(&self) -> Result<(), String> {
-        let mut list = self.docker();
-        list.args(["ps", "--all", "--quiet", "--filter"])
-            .arg(format!("name=^/{}-proof-", self.volume));
-        let listed = self
-            .capture(list, PREFLIGHT_TIMEOUT)
-            .map_err(|error| format!("Docker does not list the containers of earlier proofs: {error}"))?;
-        let earlier: Vec<String> = String::from_utf8_lossy(&listed)
-            .split_whitespace()
-            .map(str::to_owned)
-            .collect();
-        if earlier.is_empty() {
-            return Ok(());
-        }
-        let mut remove = self.docker();
-        remove.args(["rm", "--force"]).args(&earlier);
-        self.capture(remove, PREFLIGHT_TIMEOUT)
-            .map(|_| ())
-            .map_err(|error| format!("Docker does not remove the containers of earlier proofs: {error}"))
     }
 
     fn remove_container(&self) {

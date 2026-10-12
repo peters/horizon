@@ -32,8 +32,8 @@ impl HorizonApp {
     /// Starts the setup agent in a hidden panel; the dialog shows its progress and
     /// passes the person's messages to it.
     pub(in crate::app::cloud_panel::production) fn start_cloud_repository_setup(&mut self, ctx: &egui::Context) {
-        if cfg!(windows) {
-            self.cloud_prototype.error = Some(super::WINDOWS_NOTE.into());
+        if !cfg!(target_os = "linux") {
+            self.cloud_prototype.error = Some(super::PLATFORM_NOTE.into());
             return;
         }
         // One setup at a time. A run still working for another repository is not stopped
@@ -177,8 +177,16 @@ impl HorizonApp {
             unit,
             receiver: _,
         } = starting;
-        let scoped = launcher.is_some();
         let kind = preset.kind;
+        // An agent starts only inside a scope that holds everything it starts: without
+        // one, a process it started could leave its group and keep writing while Use
+        // reads and commits.
+        let Some(launcher) = launcher.or_else(|| (!kind.is_agent()).then(Vec::new)) else {
+            self.cloud_prototype.production.setup_mode = chosen_mode;
+            run::remove_run_folder(&status);
+            self.cloud_prototype.error = Some(NO_SCOPE.into());
+            return;
+        };
         let workspace = self.board.ensure_local_workspace("Cloud setup");
         // Deliberately local: config preparation must not inherit a focused cloud.
         let result = self.board.create_panel(
@@ -194,7 +202,7 @@ impl HorizonApp {
                 rows: 48,
                 cols: 160,
                 // Started inside a scope of its own, which holds everything it starts.
-                launch_wrapper: launcher.unwrap_or_default(),
+                launch_wrapper: launcher,
                 ..PanelOptions::default()
             },
             workspace,
@@ -206,7 +214,7 @@ impl HorizonApp {
                     created.transient = true;
                 }
                 let mut run = Run::new(panel, kind, repository, status, mode);
-                run.agent_process = self.agent_process_of(panel, scoped.then_some(unit.as_str()));
+                run.agent_process = self.agent_process_of(panel, &unit);
                 run.agent.clone_from(&preset.name);
                 run.pending_prompt = pending_prompt;
                 run.outside = outside;
@@ -446,6 +454,9 @@ const MISSING_PROOF: &str = "Horizon has no proof to run: put a valid proof in t
 /// What the agent hears when the setup changed after Horizon's proof passed.
 const STALE_PROOF: &str = "The .horizon files or the proof changed after Horizon's proof passed, so it no longer proves this setup. Increase proof_request by one so Horizon proves it again.";
 
+/// Why the setup agent did not start on a Linux computer without a systemd user manager.
+const NO_SCOPE: &str = "The setup agent needs a systemd user session (systemd-run --user), so Horizon can end everything it starts before it commits. Start one, or use Quick start or write .horizon yourself.";
+
 /// The name of a setup agent's hidden panel.
 const PANEL_NAME: &str = "Cloud repository setup";
 
@@ -470,16 +481,13 @@ impl HorizonApp {
     }
 
     /// The process the agent's panel started, which leads its own process group.
-    fn agent_process_of(&self, panel: horizon_core::PanelId, unit: Option<&str>) -> Option<super::agent::AgentProcess> {
+    fn agent_process_of(&self, panel: horizon_core::PanelId, unit: &str) -> Option<super::agent::AgentProcess> {
         let id = self
             .board
             .panel(panel)
             .and_then(horizon_core::Panel::terminal)
             .and_then(horizon_core::Terminal::child_pid)?;
-        Some(match unit {
-            Some(unit) => super::agent::AgentProcess::in_scope(id, unit),
-            None => super::agent::AgentProcess::of(id),
-        })
+        Some(super::agent::AgentProcess::in_scope(id, unit))
     }
 
     /// Closes hidden setup panels that no run follows. Setup panels are transient and
