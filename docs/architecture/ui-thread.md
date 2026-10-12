@@ -32,8 +32,8 @@ facts below come from the source of that version.
   after 100, 250 or 500 ms, or after 1 s. The time increases while the board
   stays quiet (`finalize_frame` in
   [`app/lifecycle.rs`](../../crates/horizon-ui/src/app/lifecycle.rs)).
-  Thus, a result that a worker sends can wait up to 1 s. If no code asks for a
-  frame, the result waits for the next input. A worker must ask for a frame.
+  Thus, a result that a worker thread sends can wait up to 1 s. If no code asks for a
+  frame, the result waits for the next input. A worker thread must ask for a frame.
 - `egui::Context` is cheap to clone: each clone refers to the same data. It is
   `Send + Sync`. A worker thread can keep a clone and call
   `request_repaint()`. eframe then wakes the UI thread.
@@ -46,7 +46,7 @@ time, or uses a lot of CPU.
 - File I/O. This includes `fsync` (`File::sync_all`, `sync_data`), `rename`,
   directory syncs and file locks (`flock`, `File::lock`).
 - A wait for a lock that another thread can hold during I/O. A `Mutex::lock`
-  is a wait when a worker holds the same mutex while it writes or calls a
+  is a wait when a worker thread holds the same mutex while it writes or calls a
   service.
 - Network calls: HTTP, provider APIs, WebDriver and DNS lookups.
 - A start of a process, or a wait for a process: `docker`, `ssh`, `git` and
@@ -73,9 +73,9 @@ The coordination files of browser MCP requests are the same type of work. The
 claims, manifest stamps, audits and results take file locks, write manifests
 and call `fsync`.
 [#1469](https://github.com/peters/horizon/pull/1469) moved the claims to one
-ordered worker. The open PR
+ordered worker thread. The open PR
 [#1489](https://github.com/peters/horizon/pull/1489) moves the stamps, audits
-and results to the same worker.
+and results to the same worker thread.
 
 ## Patterns
 
@@ -87,13 +87,13 @@ Use these patterns. Each pattern names code that uses it.
 2. Start a thread with the inputs, a `Sender` and a clone of the
    `egui::Context`.
 3. Keep the `Receiver` on the app state.
-4. On the worker, send the result.
-5. On the worker, call `ctx.request_repaint()` after the send.
+4. On the worker thread, send the result.
+5. On the worker thread, call `ctx.request_repaint()` after the send.
 6. On each frame, read the `Receiver` with `try_recv`.
 7. Apply each result that came.
 8. If the result has not come and `try_recv` returns
    `TryRecvError::Disconnected`, treat it as a failure. The thread stopped
-   before it sent its result, for example after a panic. A worker that sent
+   before it sent its result, for example after a panic. A worker thread that sent
    its result and then ended also disconnects the channel. Thus, do not let a
    disconnect after the result replace that result.
 
@@ -123,13 +123,13 @@ times and does not apply an old result.
   [`speech/engine.rs`](../../crates/horizon-ui/src/app/speech/engine.rs).
 - Record which session or board started the work. `poll_cloud_creation`
   cancels the work when the active session is not the session that started it.
-- A fence tells a worker to wait for earlier work on its own thread. The
+- A fence tells a worker thread to wait for earlier work on its own thread. The
   preparation of a deployment takes the fence of a running session save
   (`fence` in
   [`session_record.rs`](../../crates/horizon-ui/src/app/cloud_panel/production/session_record.rs))
-  and waits for it on the worker, not on the UI thread.
+  and waits for it on the worker thread, not on the UI thread.
 
-### One ordered worker
+### One ordered worker thread
 
 If writes must stay in order, use one worker thread with a job queue. Do not
 start one thread for each write.
@@ -141,8 +141,11 @@ start one thread for each write.
 - `HostIo` in
   [`browser_host_io.rs`](../../crates/horizon-ui/src/app/browser_host_io.rs)
   does the work on the browser coordination files. #1489 adds jobs to it.
-  Its worker runs the jobs in the order that the UI sends them, and the UI
-  applies the outcomes in the same order. A board fence makes a job write nothing when its board was replaced.
+  Its worker thread runs the jobs in the order that the UI sends them, and
+  the UI applies the outcomes in the same order. A job that must not
+  write for a replaced board, for example a claim, takes a board fence when
+  the UI sends it. Before it writes, the job checks the fence. If the board
+  was replaced, the job writes nothing.
 
 ### A bounded queue
 
@@ -166,13 +169,13 @@ not wait for an unknown time.
 
 - `poll_shutdown_progress` in
   [`lifecycle/shutdown.rs`](../../crates/horizon-ui/src/app/lifecycle/shutdown.rs)
-  runs on the frames of the exit and does not wait for workers. Before the
+  runs on the frames of the exit and does not wait for worker threads. Before the
   exit, it saves the session file on the UI thread. The window shows
   **Closing Horizon…**. The exit waits up to `MAX_SHUTDOWN_WAIT` (10 s)
   for the panels and for each cloud session save (`cloud_sessions_recorded`).
   If the browsers did not stop in that time, it stops them by force, which
   can take 3 s more. Then it waits up to 2 s (`EXIT_FLUSH`) for the jobs of
-  the browser coordination worker. The window paints during these waits.
+  the browser coordination worker thread. The window paints during these waits.
 - Before that wait, the exit waits for companion access removals and saved
   session deletions, with no time limit. The window still paints.
 - A synchronous wait at exit, for example in `run_exit_cleanup`, must also
@@ -181,7 +184,7 @@ not wait for an unknown time.
 ## Work that can stay on the UI thread
 
 - Changes to the app state in memory.
-- Reads of data in memory that the UI thread owns, or that a worker gives to
+- Reads of data in memory that the UI thread owns, or that a worker thread gives to
   it through a channel.
 - `Mutex::try_lock`, which returns at once when the lock is held. The UI then
   shows the old data, or tries again on a later frame. Do not loop on
@@ -197,15 +200,15 @@ that `horizon-ui` calls during a frame.
 - [ ] No new path from `App::ui` does file I/O or starts a process. File I/O
   includes opens, reads, writes, `sync_all`, `rename` and a file lock that
   waits. A process includes `std::process::Command`.
-- [ ] No new `lock()` on the UI thread uses a mutex that a worker holds during
+- [ ] No new `lock()` on the UI thread uses a mutex that a worker thread holds during
   I/O, a network call or a credential store call.
 - [ ] No new `recv`, `recv_timeout`, `join` or `sleep` runs on the UI thread,
   except a bounded wait at exit.
-- [ ] Each worker sends its result and then calls `request_repaint()`.
+- [ ] Each worker thread sends its result and then calls `request_repaint()`.
 - [ ] The UI drops a result from an earlier generation, session or board.
 - [ ] The UI shows a busy state, and a second request of the same work is
   refused or merged.
-- [ ] Writes that must stay in order use one ordered worker.
+- [ ] Writes that must stay in order use one ordered worker thread.
 - [ ] Work that saves data finishes within the bounded exit wait.
 - [ ] A test proves that the UI call returns while the I/O waits.
 
@@ -218,7 +221,7 @@ Write a regression test that stops the fake I/O and measures the UI call.
      waits until a writer opens it.
    - Hold the lock in the test, for example the file lock or the mutex that
      the code takes.
-   - Give the worker a job that waits on a channel until the test sends a
+   - Give the worker thread a job that waits on a channel until the test sends a
      value.
 2. Before the call, start a release thread. The thread waits for a signal
    from the test with `recv_timeout` and a time limit that is longer than the
@@ -245,7 +248,7 @@ after the call, so a new test must also start the release thread of step 2.
 - `blocked_persistence_never_blocks_submission_and_stale_completions_are_discarded`
   in
   [`native_app/transfer.rs`](../../crates/horizon-ui/src/native_app/transfer.rs)
-  holds the worker on a channel. It also makes sure that the UI drops results
+  holds the worker thread on a channel. It also makes sure that the UI drops results
   of an earlier generation.
 
 Named pipes are not available on Windows. Put the test module behind
@@ -270,7 +273,7 @@ This work still runs on the UI thread. Do not copy it into new code.
   read can retry for up to 2 s. #1470 does not list this call.
 - `plan_remote_create` in
   [`browser_remote_create.rs`](../../crates/horizon-ui/src/app/browser_remote_create.rs)
-  locks the keychain store mutex, which the credential worker can hold, and
+  locks the keychain store mutex, which the credential worker thread can hold, and
   reads OS credentials. #1470 tracks it.
 - The session auto-save (`auto_save_runtime_state` in
   [`persistence.rs`](../../crates/horizon-ui/src/app/persistence.rs)) writes
@@ -290,13 +293,13 @@ This work still runs on the UI thread. Do not copy it into new code.
   itself is file I/O.
 - A session switch and the restore of a cloud prototype board wait on the
   UI thread for up to 2 s (`EXIT_FLUSH`) until the jobs of the browser
-  coordination worker end (`finish_browser_host_io_before_replacement` in
+  coordination worker thread end (`finish_browser_host_io_before_replacement` in
   [`browser_host_io.rs`](../../crates/horizon-ui/src/app/browser_host_io.rs)).
   The window does not paint during this wait.
 - Two synchronous waits at exit have no time limit. `on_exit` in
   [`app/mod.rs`](../../crates/horizon-ui/src/app/mod.rs) waits until the
-  companion access removals are saved. `run_exit_cleanup` joins the worker of
+  companion access removals are saved. `run_exit_cleanup` joins the worker thread of
   a saved session deletion. The other synchronous waits in
-  `run_exit_cleanup` have a time limit: 10 s for the casting teardown on
-  Linux, 2 s for the browser coordination worker, and 10 s for each wait for
-  the panels of a session switch.
+  `run_exit_cleanup` have a time limit, for example 10 s for the casting
+  teardown on Linux and 2 s for the browser coordination worker thread. Each
+  wait has its own limit, so together they can take longer.
