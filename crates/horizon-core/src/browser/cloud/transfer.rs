@@ -225,9 +225,11 @@ fn unique_name(files: &[(PathBuf, String, u64)], name: &str) -> String {
     // One of these is free: the batch has fewer names than numbers.
     (2..=files.len() + 1)
         .map(|number| {
-            let suffix = format!(" ({number}){extension}");
-            let stem = truncate_bytes(stem, MAX_UPLOAD_NAME_BYTES.saturating_sub(suffix.len()));
-            format!("{stem}{suffix}")
+            // The marker always fits; a long extension shortens before the stem does.
+            let marker = format!(" ({number})");
+            let extension = truncate_bytes(extension, MAX_UPLOAD_NAME_BYTES - marker.len());
+            let stem = truncate_bytes(stem, MAX_UPLOAD_NAME_BYTES - marker.len() - extension.len());
+            format!("{stem}{marker}{extension}")
         })
         .find(|candidate| !taken(candidate))
         .unwrap_or_else(|| name.to_owned())

@@ -117,6 +117,12 @@ fn plans_bound_counts_sizes_and_folders_and_make_names_valid_on_the_worker() {
     let second = unique_name(&taken, &name);
     assert!(valid_upload_name(&second) && second.ends_with(" (2)"), "{second}");
     assert_eq!(upload_name(Path::new("/")), "file");
+
+    let long_extension = format!("a.{}", "b".repeat(MAX_UPLOAD_NAME_BYTES - 2));
+    let taken = [(PathBuf::new(), long_extension.clone(), 0)];
+    let second = unique_name(&taken, &long_extension);
+    assert!(valid_upload_name(&second) && second != long_extension, "{second}");
+    assert!(second.contains(" (2)"));
 }
 
 #[test]
