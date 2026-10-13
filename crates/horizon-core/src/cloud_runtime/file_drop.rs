@@ -4,7 +4,8 @@
 //! `/workspace/.horizon-drops/SESSION/BATCH`. That identity owns `.horizon-drops`, the
 //! session folder and the batch folder, so an agent that runs as `horizon-agent` can read
 //! the files but cannot choose or redirect where the controller writes. A file is complete
-//! or absent: the worker removes a file whose size differs from the local file.
+//! or absent: it arrives in the private folder `.BATCH.part` next to the batch folder and
+//! moves into the batch folder only after the worker checked its size.
 use super::{Error, Result, settings::Settings, ssh::Connection, state::cloud_directory};
 use horizon_cloud::{Worker, valid_id};
 use std::collections::HashSet;
@@ -48,40 +49,54 @@ done
 mkdir -- "$drops/$session/$batch"
 chgrp -- "$group" "$drops/$session/$batch"
 chmod 0750 -- "$drops/$session/$batch"
+mkdir -- "$drops/$session/.$batch.part"
 "#;
 
-/// Writes one file from standard input. It never replaces a file, and it removes a file
-/// that is shorter or longer than the local file, such as after a cancelled transfer.
+/// Writes one file from standard input into the private folder, then moves it into the
+/// batch folder after a size check. It never replaces a file. A transfer that ends early,
+/// is cancelled or is cut off by a signal leaves nothing in the batch folder.
 const WRITE: &str = r#"
 set -eu
 umask 077
 dir="$1/.horizon-drops/$2/$3"
+part="$1/.horizon-drops/$2/.$3.part"
 name=$4
 size=$5
 group=$(id -g)
 if [ -f /run/horizon-tailnet/agent-isolation ]; then group=$(id -g horizon-agent); fi
-if [ -L "$dir" ] || [ ! -d "$dir" ]; then
-    echo 'The upload folder on the worker is missing. Drop the files again.' >&2
-    exit 3
-fi
+for folder in "$dir" "$part"; do
+    if [ -L "$folder" ] || [ ! -d "$folder" ]; then
+        echo 'The upload folder on the worker is missing. Drop the files again.' >&2
+        exit 3
+    fi
+done
 file="$dir/$name"
+partial="$part/$name"
+cleanup() { rm -f -- "$partial"; }
+trap cleanup EXIT
+trap 'cleanup; exit 129' HUP INT TERM
 set -C
-cat > "$file"
-received=$(stat -c %s -- "$file")
+cat > "$partial"
+received=$(stat -c %s -- "$partial")
 if [ "$received" != "$size" ]; then
-    rm -f -- "$file"
     echo "The worker received $received of $size bytes of $name, so it kept nothing." >&2
     exit 4
 fi
-chgrp -- "$group" "$file"
-chmod 0640 -- "$file"
+chgrp -- "$group" "$partial"
+chmod 0640 -- "$partial"
+if [ -e "$file" ] || [ -L "$file" ]; then
+    echo "Horizon did not replace $name, which exists on the worker." >&2
+    exit 3
+fi
+mv -- "$partial" "$file"
+trap - EXIT HUP INT TERM
 "#;
 
 const REMOVE: &str = r#"
 set -eu
-dir="$1/.horizon-drops/$2/$3"
-if [ -L "$dir" ] || [ ! -d "$dir" ]; then exit 0; fi
-rm -rf -- "$dir"
+for folder in "$1/.horizon-drops/$2/$3" "$1/.horizon-drops/$2/.$3.part"; do
+    if [ -d "$folder" ] && [ ! -L "$folder" ]; then rm -rf -- "$folder"; fi
+done
 "#;
 
 /// The worker and session that a drop goes to, captured when the person drops the files.
@@ -187,7 +202,7 @@ impl Batch {
         )
     }
 
-    /// Removes the batch folder and everything in it.
+    /// Removes the batch folder, its private folder and everything in them.
     #[must_use]
     pub fn remove_command(&self) -> String {
         command(REMOVE, &[&self.workspace, &self.session, &self.id])

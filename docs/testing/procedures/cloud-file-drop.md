@@ -189,7 +189,7 @@ the display of the fixture. Start `drag.py` with `DISPLAY` set to that display.
 
 4. Examine the session folder in `.horizon-drops` of the stand-in worker.
 
-   Result: The folder of the cancelled drop is gone.
+   Result: The batch folder and the `.part` folder of the cancelled drop are gone.
 
 5. Click **Done**.
 

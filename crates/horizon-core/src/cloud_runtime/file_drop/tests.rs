@@ -71,7 +71,9 @@ mod worker_scripts {
     use super::*;
     use std::io::Write;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::os::unix::process::CommandExt;
     use std::process::{Command, Output, Stdio};
+    use std::time::{Duration, Instant};
 
     struct Fixture {
         _temp: tempfile::TempDir,
@@ -108,6 +110,16 @@ mod worker_scripts {
         std::fs::metadata(path).unwrap().permissions().mode() & 0o777
     }
 
+    fn part(batch: &Batch) -> PathBuf {
+        let directory = PathBuf::from(batch.directory());
+        let name = directory.file_name().unwrap().to_str().unwrap().to_owned();
+        directory.with_file_name(format!(".{name}.part"))
+    }
+
+    fn entries(path: &Path) -> usize {
+        std::fs::read_dir(path).unwrap().count()
+    }
+
     #[test]
     fn a_batch_receives_unusual_names_complete_and_readable() {
         let fixture = fixture();
@@ -116,6 +128,11 @@ mod worker_scripts {
         let directory = PathBuf::from(fixture.batch.directory());
         assert_eq!(mode(&directory), 0o750);
         assert_eq!(mode(directory.parent().unwrap()), 0o750);
+        assert_eq!(
+            mode(&part(&fixture.batch)),
+            0o700,
+            "only the SSH user sees partial files"
+        );
         let png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0xff];
         for (name, content) in [
             ("screen shot.png", &png[..]),
@@ -133,16 +150,71 @@ mod worker_scripts {
                 std::fs::metadata(&directory).unwrap().gid()
             );
         }
+        assert_eq!(entries(&part(&fixture.batch)), 0);
         let again = run(&fixture.batch.write_command("screen shot.png", 3), b"new");
         assert!(!again.status.success(), "an upload never replaces a file");
         assert_eq!(std::fs::read(fixture.batch.path("screen shot.png")).unwrap(), png);
+        assert_eq!(entries(&part(&fixture.batch)), 0);
         assert!(
             !run(&fixture.batch.prepare_command(), b"").status.success(),
             "a batch folder is new"
         );
         assert!(run(&fixture.batch.remove_command(), b"").status.success());
-        assert!(!directory.exists());
+        assert!(!directory.exists() && !part(&fixture.batch).exists());
         assert!(run(&fixture.batch.remove_command(), b"").status.success());
+    }
+
+    /// Cuts a transfer off with `signal` sent to its process group, as sshd does when the
+    /// connection ends, after the worker started to write the file.
+    fn cut_off(batch: &Batch, signal: &str) {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", &batch.write_command("cut off.bin", 1 << 20)])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(&[7; 4096]).unwrap();
+        stdin.flush().unwrap();
+        let partial = part(batch).join("cut off.bin");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while std::fs::metadata(&partial).map_or(true, |metadata| metadata.len() < 4096) {
+            assert!(Instant::now() < deadline, "the worker did not start to write");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let group = format!("-{}", child.id());
+        assert!(
+            Command::new("kill")
+                .args([signal, "--", &group])
+                .status()
+                .unwrap()
+                .success()
+        );
+        drop(stdin);
+        assert!(!child.wait().unwrap().success());
+    }
+
+    #[test]
+    fn a_transfer_cut_off_by_a_signal_leaves_nothing_in_the_batch_folder() {
+        let fixture = fixture();
+        assert!(run(&fixture.batch.prepare_command(), b"").status.success());
+        let directory = PathBuf::from(fixture.batch.directory());
+        cut_off(&fixture.batch, "-HUP");
+        assert_eq!(entries(&directory), 0);
+        // The outer test shell ends at once; the worker's shell then runs its hangup trap.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while entries(&part(&fixture.batch)) > 0 {
+            assert!(Instant::now() < deadline, "the hangup trap removes the partial file");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(entries(&directory), 0);
+        // No trap runs for SIGKILL: the partial file stays private, and the cleanup removes it.
+        cut_off(&fixture.batch, "-KILL");
+        assert_eq!(entries(&directory), 0);
+        assert!(run(&fixture.batch.remove_command(), b"").status.success());
+        assert!(!directory.exists() && !part(&fixture.batch).exists());
     }
 
     #[test]

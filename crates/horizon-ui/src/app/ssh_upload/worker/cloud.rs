@@ -24,8 +24,13 @@ pub(in crate::app::ssh_upload) fn start_cloud_upload(
     let (progress_tx, progress_rx) = mpsc::channel();
     let (control_tx, control_rx) = mpsc::channel();
     thread::spawn(move || {
-        let result = upload(&destination, paths, &control_rx, &progress_tx);
+        let mut leftover = None;
+        let result = upload(&destination, paths, &control_rx, &progress_tx, &mut leftover);
         let _ = progress_tx.send(UploadMessage::Finished(result));
+        // After the failure is shown, so an unreachable worker does not delay it.
+        if let Some((connection, batch)) = leftover {
+            remove(&connection, &batch);
+        }
     });
     UploadWorkerHandle {
         progress_rx,
@@ -33,11 +38,14 @@ pub(in crate::app::ssh_upload) fn start_cloud_upload(
     }
 }
 
+/// `leftover` gets the batch folder that a failed preparation may have made before the
+/// failure reached Horizon, such as when the connection ended before the exit status.
 fn upload(
     destination: &Destination,
     paths: Vec<PathBuf>,
     control_rx: &Receiver<UploadControl>,
     progress_tx: &Sender<UploadMessage>,
+    leftover: &mut Option<(Connection, Batch)>,
 ) -> Result<UploadOutcome, String> {
     let files = local_files(paths)?;
     let names = remote_names(&files.iter().map(|file| file.path.clone()).collect::<Vec<_>>());
@@ -67,9 +75,10 @@ fn upload(
     };
     let prepare = connection.pinned_command(&batch.prepare_command());
     if let Err(exit) = wait_for_command(spawn(prepare), control_rx) {
-        // A failed preparation leaves at most an empty folder; a cancelled one may leave it too.
         if matches!(exit, WorkerExit::Cancelled) {
             remove(&connection, &batch);
+        } else {
+            *leftover = Some((connection, batch));
         }
         return stopped(exit, progress, "");
     }
