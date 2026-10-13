@@ -137,6 +137,10 @@ fn names_batches_counts_and_sizes_are_bounded() {
     let mut wide = chunk("b1", "a.txt", b"abcd", 0, 4);
     wide.data = base64::engine::general_purpose::STANDARD.encode(b"abcdefgh");
     assert!(refused(&mut staging, &wide).contains("larger than the worker accepts"));
+    // Five or six bytes encode to eight characters, the same length as four bytes.
+    let mut padded = chunk("b1", "a.txt", b"abcdef", 0, 4);
+    padded.data = base64::engine::general_purpose::STANDARD.encode(b"abcdef");
+    assert!(refused(&mut staging, &padded).contains("larger than the worker accepts"));
     assert!(refused(&mut staging, &chunk("b1", "big", &[0; 9], 0, 4)).contains("limit"));
 
     stage_all(&mut staging, "b1", "one", b"12345", now);
@@ -213,4 +217,32 @@ fn a_new_service_removes_the_files_of_the_previous_one() {
     let staging = Staging::new(root.path().join(".uploads")).unwrap();
     assert!(!root.path().join(".uploads").exists());
     assert_eq!(staging.limits(), CloudUploadLimits::default());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_planted_link_never_moves_a_staged_file_out_of_its_batch() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let mut staging = staging(root.path());
+    std::fs::create_dir_all(root.path().join(".uploads")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), root.path().join(".uploads").join(BROWSER)).unwrap();
+    assert!(refused(&mut staging, &chunk("b1", "a.txt", b"ab", 0, 2)).contains("could not save"));
+    std::fs::remove_file(root.path().join(".uploads").join(BROWSER)).unwrap();
+    std::fs::create_dir_all(root.path().join(".uploads").join(BROWSER)).unwrap();
+    std::os::unix::fs::symlink(outside.path(), root.path().join(".uploads").join(BROWSER).join("b2")).unwrap();
+    assert!(refused(&mut staging, &chunk("b2", "a.txt", b"ab", 0, 2)).contains("could not save"));
+    std::fs::create_dir_all(root.path().join(".uploads").join(BROWSER).join("b3")).unwrap();
+    let target = outside.path().join("target.txt");
+    std::os::unix::fs::symlink(
+        &target,
+        root.path().join(".uploads").join(BROWSER).join("b3").join("a.txt"),
+    )
+    .unwrap();
+    assert!(refused(&mut staging, &chunk("b3", "a.txt", b"ab", 0, 2)).contains("more than once"));
+    assert!(
+        std::fs::read_dir(outside.path()).unwrap().next().is_none(),
+        "nothing was written outside"
+    );
+    assert!(staging.batches.is_empty());
 }

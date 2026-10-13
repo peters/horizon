@@ -47,6 +47,8 @@ struct StagedFile {
     received: u64,
     /// `None` after the service verified the whole file.
     digest: Option<Sha256>,
+    /// Open while parts arrive, so each part goes to the file that the service created.
+    output: Option<std::fs::File>,
 }
 
 impl Staging {
@@ -114,7 +116,7 @@ impl Staging {
             Some(_) => {}
         }
         let path = self.path(&key.0, &key.1, &chunk.name);
-        let result = self.write(&key, chunk, &data, &path, now);
+        let result = self.write(&key, chunk, &data, now);
         if result.is_err() {
             self.discard_file(&key, &chunk.name, &path);
         }
@@ -174,9 +176,14 @@ impl Staging {
         if data.len() as u64 > bound {
             return Err("An upload chunk is larger than the worker accepts".into());
         }
-        base64::engine::general_purpose::STANDARD
+        let data = base64::engine::general_purpose::STANDARD
             .decode(data)
-            .map_err(|_| "An upload chunk is not valid base64".to_owned())
+            .map_err(|_| "An upload chunk is not valid base64".to_owned())?;
+        // Base64 rounds to groups of four, so the encoded bound alone admits two more bytes.
+        if data.len() as u64 > self.limits.max_chunk_bytes {
+            return Err("An upload chunk is larger than the worker accepts".into());
+        }
+        Ok(data)
     }
 
     fn admit_batch(&mut self, key: &(String, String), now: Instant) -> Result<(), String> {
@@ -221,12 +228,11 @@ impl Staging {
                 return Err("The worker has no room for more uploads. Close a cloud browser, then try again.".into());
             }
         }
-        let directory = self.root.join(&key.0).join(&key.1);
-        create_private_directory(&directory).map_err(|error| error.to_string())?;
-        create_private_file(&directory.join(&chunk.name)).map_err(|error| match error.kind() {
-            io::ErrorKind::AlreadyExists => format!("The upload names {} more than once", chunk.name),
-            _ => error.to_string(),
-        })?;
+        let output =
+            create_staged_file(&self.root, &key.0, &key.1, &chunk.name).map_err(|error| match error.kind() {
+                io::ErrorKind::AlreadyExists => format!("The upload names {} more than once", chunk.name),
+                _ => format!("The worker could not save {}: {error}", chunk.name),
+            })?;
         if let Some(batch) = self.batches.get_mut(key) {
             batch.files.insert(
                 chunk.name.clone(),
@@ -234,6 +240,7 @@ impl Staging {
                     size: chunk.size,
                     received: 0,
                     digest: Some(Sha256::new()),
+                    output: Some(output),
                 },
             );
         }
@@ -245,7 +252,6 @@ impl Staging {
         key: &(String, String),
         chunk: &CloudStageChunk,
         data: &[u8],
-        path: &Path,
         now: Instant,
     ) -> Result<CloudStageReceipt, String> {
         let batch = self.batches.get_mut(key).ok_or("The upload batch is gone")?;
@@ -258,10 +264,10 @@ impl Staging {
                 chunk.name
             ));
         }
-        std::fs::OpenOptions::new()
-            .append(true)
-            .open(path)
-            .and_then(|mut output| output.write_all(data))
+        file.output
+            .as_mut()
+            .ok_or("The upload file is closed")?
+            .write_all(data)
             .map_err(|error| format!("The worker could not save {}: {error}", chunk.name))?;
         digest.update(data);
         file.received += data.len() as u64;
@@ -274,6 +280,7 @@ impl Staging {
                 }),
             };
         }
+        file.output = None;
         let actual = hex(&file.digest.take().unwrap_or_default().finalize());
         if chunk.sha256.as_deref() != Some(actual.as_str()) {
             return Err(format!(
@@ -340,20 +347,62 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-fn create_private_directory(path: &Path) -> io::Result<()> {
-    let mut builder = std::fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
-    builder.create(path)
+/// Creates `root/browser/batch/name` as a new private file. Below the parent of
+/// `root`, no step follows a symbolic link, so a link that an agent planted
+/// cannot move the file out of its batch folder.
+#[cfg(unix)]
+fn create_staged_file(root: &Path, browser: &str, batch: &str, name: &str) -> io::Result<std::fs::File> {
+    use rustix::fs::{Mode, OFlags, openat};
+    let (Some(parent), Some(folder)) = (root.parent(), root.file_name()) else {
+        return Err(io::Error::other("The upload folder has no parent"));
+    };
+    std::fs::create_dir_all(parent)?;
+    let parent = openat(
+        rustix::fs::CWD,
+        parent,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    let root = private_directory(&parent, folder)?;
+    let browser = private_directory(&root, browser)?;
+    let batch = private_directory(&browser, batch)?;
+    let file = openat(
+        &batch,
+        name,
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::RUSR | Mode::WUSR,
+    )?;
+    Ok(std::fs::File::from(file))
 }
 
-fn create_private_file(path: &Path) -> io::Result<()> {
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    options.open(path).map(drop)
+/// Makes the folder `name` in `parent` if it is missing and opens it, never through a link.
+#[cfg(unix)]
+fn private_directory(
+    parent: impl std::os::fd::AsFd,
+    name: impl rustix::path::Arg + Copy,
+) -> io::Result<std::os::fd::OwnedFd> {
+    use rustix::fs::{Mode, OFlags};
+    match rustix::fs::mkdirat(&parent, name, Mode::RWXU) {
+        Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(rustix::fs::openat(
+        &parent,
+        name,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?)
+}
+
+/// The worker runs on Linux; other hosts only build and test this module.
+#[cfg(not(unix))]
+fn create_staged_file(root: &Path, browser: &str, batch: &str, name: &str) -> io::Result<std::fs::File> {
+    let directory = root.join(browser).join(batch);
+    std::fs::create_dir_all(&directory)?;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(directory.join(name))
 }
 
 #[cfg(test)]

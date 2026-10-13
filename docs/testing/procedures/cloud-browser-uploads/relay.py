@@ -10,6 +10,7 @@ serves the test page on the worker loopback. It prints one line for each check a
 Usage: relay.py [--ssh "ssh -i KEY root@HOST"] [--engine chromium|firefox]
 """
 import argparse
+import atexit
 import base64
 import hashlib
 import http.server
@@ -71,12 +72,19 @@ class Connection:
 
 
 def serve_page(ssh):
+    """Returns the page URL and a function that stops the page server."""
     if ssh:
-        script = (f'mkdir -p /tmp/relay-page && cat > /tmp/relay-page/index.html && cd /tmp/relay-page && '
-                  f'(setsid python3 -m http.server {PAGE_PORT} --bind 127.0.0.1 >/dev/null 2>&1 < /dev/null &)')
-        subprocess.run([*ssh, script], input=PAGE, check=True, timeout=60)
+        folder = f'/tmp/relay-page-{os.getpid()}'
+        script = (f'mkdir -p {folder} && cat > {folder}/index.html && cd {folder} && '
+                  f'{{ setsid python3 -m http.server {PAGE_PORT} --bind 127.0.0.1 >/dev/null 2>&1 < /dev/null & '
+                  f'echo $!; }}')
+        started = subprocess.run([*ssh, script], input=PAGE, check=True, timeout=60, capture_output=True)
+        pid = int(started.stdout.split()[-1])
         time.sleep(1)
-        return f'http://127.0.0.1:{PAGE_PORT}/'
+
+        def stop():
+            subprocess.run([*ssh, f'kill {pid}; rm -rf {folder}'], check=False, timeout=60)
+        return f'http://127.0.0.1:{PAGE_PORT}/', stop
 
     class Page(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -90,7 +98,7 @@ def serve_page(ssh):
             pass
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Page)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    return f'http://127.0.0.1:{server.server_address[1]}/'
+    return f'http://127.0.0.1:{server.server_address[1]}/', server.shutdown
 
 
 def click(x, y):
@@ -145,7 +153,9 @@ def main():
                 sys.exit(f'stage {name}: {reply["error"]}')
         return reply['staged']
 
-    url = serve_page(args.ssh)
+    url, stop_page = serve_page(args.ssh)
+    # Also after an early exit: no page server stays on the worker.
+    atexit.register(stop_page)
     opened = view.call({'operation': 'open', 'id': browser, 'url': url, 'backend': args.engine})
     if opened.get('error'):
         sys.exit(f'open: {opened["error"]}')

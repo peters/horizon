@@ -36,7 +36,9 @@ A page or an agent can open a file chooser at any time, and the page writes the
 - An answer applies only to the request that it names. An answer to a replaced
   or closed request never reaches a newer request.
 - A batch ID and a file name are one path component each. A staged file is a
-  new file in its batch folder.
+  new file in its batch folder. Below the browser history folder, the service
+  creates the folders and the file through descriptors that never follow a
+  symbolic link, and writes each part to the file that it created.
 - Counts, sizes, parts and the time that unused files stay are bounded.
 
 ## Untrusted toward the host: the worker
@@ -71,6 +73,8 @@ worker and never sends a host path to the worker.
 - The control service, the browsers and the agents use one account. An agent can
   read or change staged files, as it can change all browser state. Without agent
   isolation that account is `root`.
+- The removal of a batch uses its path. An agent that plants a link can make
+  the service remove files that the agent itself can remove.
 - A used batch stays until its browser closes, because the page reads the files
   after the attachment. At a limit the oldest used batch goes first.
 - The `commands` of a poll still go to the browser as before. This includes a
