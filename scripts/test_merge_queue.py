@@ -125,6 +125,7 @@ class CiVerdictTests(unittest.TestCase):
     def test_open_failed_cancelled_or_missing_blocks(self):
         cases = [
             ([], []),
+            ([self.run_(name="CodeQL")], [self.run_(name="Analyze")]),
             ([self.run_(status="in_progress", conclusion=None)], []),
             ([self.run_()], [self.run_(conclusion="failure", name="Tests (macOS)")]),
             ([self.run_()], [self.run_(conclusion="cancelled", name="Tests (Windows x64 ui)")]),

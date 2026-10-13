@@ -11,8 +11,13 @@ and only that tested result lands.
 - build: applies each queued head to a fresh origin/main as one squash commit, in
   queue order, and pushes the result as `mq/<UTC time>`. CI runs on that branch.
 - land: when CI on the batch tip passed, main has not moved and no head drifted,
-  squash-merges each PR with its head guard, then checks that main now has the
-  tested tree.
+  squash-merges each PR with its head guard, then checks that each merge commit has
+  the tested tree.
+
+GitHub cannot guard the base of a squash merge, so the tree check runs after each
+merge: a push to main by someone else during `land` is found and stops the batch, but
+is not prevented. Only the batch tip is tested; if `land` stops partway, main holds an
+untested prefix of the batch until the next batch or a fix lands, and main CI checks it.
 
 Usage: merge-queue.py enqueue PR --head SHA --subject TEXT --body-file FILE
        merge-queue.py dequeue PR --reason TEXT
@@ -43,6 +48,7 @@ DEQUEUED = "<!-- merge-queue dequeued -->"
 # Only peters may give merge permission, and agents act with that account.
 TRUSTED = {"OWNER"}
 BASE_BRANCH = "main"
+CI_WORKFLOW = "CI"
 GOOD_CONCLUSIONS = {"success", "skipped", "neutral"}
 # Every form that makes GitHub skip workflows for a push.
 SKIP_FORMS = re.compile(r"\[(?:skip ci|ci skip|no ci|skip actions|actions skip)\]"
@@ -164,8 +170,8 @@ def ci_verdict(runs, check_runs):
     """(passed, problems) for CI on one commit. Runs are workflow runs, check_runs the
     jobs. Nothing passes before a run exists or while any job is still open."""
     problems = []
-    if not runs:
-        problems.append("no workflow run for this commit yet")
+    if not any(item["name"] == CI_WORKFLOW for item in runs):
+        problems.append(f"no {CI_WORKFLOW} workflow run for this commit yet")
     for item in runs:
         if item["status"] != "completed":
             problems.append(f"workflow {item['name']} is {item['status']}")
