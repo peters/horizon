@@ -67,7 +67,7 @@ fn upload(
     };
     let prepare = connection.pinned_command(&batch.prepare_command());
     if let Err(exit) = wait_for_command(spawn(prepare), control_rx) {
-        // A failed preparation made no folder; a cancelled one may have.
+        // A failed preparation leaves at most an empty folder; a cancelled one may leave it too.
         if matches!(exit, WorkerExit::Cancelled) {
             remove(&connection, &batch);
         }
