@@ -82,6 +82,10 @@ COLOR_QUERY = b'\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b[c'
 COLOR_REPLY = re.compile(rb'\x1b\](1[01]);([^\x07\x1b]*)(?:\x07|\x1b\\)')
 RGB = re.compile(rb'rgb:([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})')
 IDENTITY_REPLY = re.compile(rb'\x1b\[\?[0-9;]*c')
+# The start of an answer that the next read may complete. A key also starts with ESC, ESC [ or
+# ESC ], so these wait only MARKER_SECONDS; a longer start is no key and waits PIECE_SECONDS.
+PIECE_SECONDS = 1
+PARTIAL_REPLY = re.compile(rb'\x1b(?:\](?:1(?:[01](?:;[^\x07\x1b]*\x1b?)?)?)?|\[(?:\?[0-9;]*)?)?\Z')
 # The attach waits this long for the answer before it shows the session. A later answer is removed
 # from the input when it comes, and gives tmux the colors then.
 COLOR_SECONDS = 10
@@ -541,6 +545,8 @@ class Attachment:
         # The answer to the color query did not come yet, and the colors that came of it.
         self.outstanding = False
         self.colors = {}
+        # The end of the last read while it can be the start of an answer.
+        self.pending = b''
 
     def wait(self, count, required=True):
         """The next `count` replies, and the session output that tmux wrote after them. The output
@@ -594,8 +600,12 @@ class Attachment:
         commands that give tmux the colors it reports, and the input that was typed."""
         if not self.outstanding:
             return [], data
+        data, self.pending = self.pending + data, b''
         self.outstanding = not IDENTITY_REPLY.search(data)
         found, typed = colors(data)
+        partial = PARTIAL_REPLY.search(typed) if self.outstanding else None
+        if partial:
+            typed, self.pending = typed[:partial.start()], typed[partial.start():]
         if not found:
             return [], typed
         # An answer can come in pieces, and a style replaces the whole style.
@@ -653,6 +663,10 @@ class Attachment:
         while not self.control.ended:
             waiting = self.input.waiting()
             timeout = None if waiting is None else max(0, last_input + waiting - time.monotonic())
+            pending = (MARKER_SECONDS if len(self.pending) <= 2 else PIECE_SECONDS) if self.pending else None
+            if pending is not None:
+                left = max(0, last_input + pending - time.monotonic())
+                timeout = left if timeout is None else min(timeout, left)
             ready = select.select([stdin, tmux, wake_read], [], [], timeout)[0]
             if wake_read in ready:
                 os.read(wake_read, 512)
@@ -678,6 +692,10 @@ class Attachment:
                 self.control.send(commands + self.input.feed(typed))
             elif waiting is not None and time.monotonic() >= last_input + waiting:
                 self.control.send(self.input.flush())
+            if pending is not None and stdin not in ready and time.monotonic() >= last_input + pending:
+                # No answer came of it, so it was typed.
+                typed, self.pending = self.pending, b''
+                self.control.send(self.input.feed(typed))
 
 
 def main(argv):

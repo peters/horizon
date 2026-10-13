@@ -154,12 +154,14 @@ class InputTests(unittest.TestCase):
         self.assertEqual(typed.feed(b'more\x1b[201~x'), ['send-keys -H -t %3 6d 6f 72 65', 'send-keys -H -t %3 78'])
 
     def test_an_answer_that_comes_after_the_wait_is_removed_and_still_gives_the_colors(self):
-        attachment = types.SimpleNamespace(outstanding=True, target='%3', colors={})
+        attachment = types.SimpleNamespace(outstanding=True, target='%3', colors={}, pending=b'')
         commands, typed = attach.Attachment.answered(attachment, b'a\x1b]10;rgb:a1a1/b2b2/c3c3\x1b\\')
         self.assertEqual(typed, b'a')
         self.assertIn("set-option -wg window-style 'fg=#a1b2c3'", commands)
         self.assertTrue(attachment.outstanding)
-        commands, typed = attach.Attachment.answered(attachment, b'\x1b]11;rgb:1010/2020/3030\x07\x1b[?62cb')
+        # A read can end inside the answer.
+        self.assertEqual(attach.Attachment.answered(attachment, b'\x1b]11;rgb:10'), ([], b''))
+        commands, typed = attach.Attachment.answered(attachment, b'10/2020/3030\x07\x1b[?62cb')
         self.assertEqual((commands[0], typed), ("set-option -p -t %3 window-style 'fg=#a1b2c3,bg=#102030'", b'b'))
         self.assertFalse(attachment.outstanding)
         # Once the answer is complete, input is keys again.
@@ -394,6 +396,19 @@ class TmuxTests(unittest.TestCase):
         terminal.write(PANEL_COLORS)
         terminal.read_until(lambda data: b'\r\n42\r\n' in data)
         self.assertIn('fg=#a1b2c3,bg=#102030', self.tmux('show-options', '-wg', 'window-style'))
+
+    def test_an_answer_after_the_wait_is_removed_also_in_pieces(self):
+        terminal = self.start(['a'])
+        terminal.read_until(lambda data: attach.COLOR_QUERY in data)
+        terminal.read_until(lambda data: data.endswith(b'\x1b[?2004h'), seconds=attach.COLOR_SECONDS + 10)
+        terminal.write(b'echo before\r\x1b]11;rgb:10')
+        time.sleep(0.5)
+        terminal.write(b'10/2020/3030\x1b\\\x1b[?62;22cecho after\r')
+        terminal.read_until(lambda data: b'\r\nafter\r\n' in data)
+        shown = self.tmux('capture-pane', '-p', '-t', '=a:')
+        self.assertIn('before', shown)
+        self.assertNotIn('rgb', shown)
+        self.wait_for(lambda: 'bg=#102030' in self.tmux('show-options', '-wg', 'window-style'))
 
     def test_a_panel_that_reports_no_colors_sets_no_style_and_keeps_typed_keys(self):
         terminal = self.attach(answer=b'echo early\r\x1b[?1;2c')

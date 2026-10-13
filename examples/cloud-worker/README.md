@@ -512,8 +512,8 @@ tmux stays the terminal of the session:
   queries of the session from that style. The helper waits up to ten seconds
   for the answer before it shows the session, so keys typed meanwhile, and the
   programs that they start, reach the session after tmux has the colors. An
-  answer that comes later is removed from the input when it comes in one
-  piece, and then gives tmux the colors. A session that starts later gets the colors of the panel that attached
+  answer that comes later is removed from the input when it comes, also in
+  pieces, and then gives tmux the colors. A session that starts later gets the colors of the panel that attached
   last to its tmux server, before its own first attach. A program that asks
   before the first attach to a new tmux server gets no answer or black. tmux
   does not answer palette queries (OSC 4). If the panel colors change while a
