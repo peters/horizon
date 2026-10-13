@@ -38,7 +38,12 @@ fn paths_outside_the_horizon_home(integrations: &str) -> Vec<PathBuf> {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    assert!(horizon_home.is_dir(), "horizon did not prepare its Horizon home");
+    // The session store opens after every integration install, so its folder proves that the
+    // run got that far.
+    assert!(
+        horizon_home.join("sessions").is_dir(),
+        "horizon stopped before it opened its session store"
+    );
     let mut outside = Vec::new();
     collect_outside(&home, &horizon_home, &mut outside);
     outside

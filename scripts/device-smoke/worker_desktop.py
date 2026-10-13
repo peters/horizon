@@ -231,6 +231,7 @@ def main(argv=None):
     def interrupted(_signal, _frame):
         raise KeyboardInterrupt
 
+    previous = {number: signal.getsignal(number) for number in (signal.SIGTERM, signal.SIGINT)}
     signal.signal(signal.SIGTERM, interrupted)
     process = None
     try:
@@ -279,7 +280,12 @@ def main(argv=None):
     except KeyboardInterrupt:
         return 0
     finally:
+        # A second signal must not interrupt the stop.
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         signal.signal(signal.SIGINT, signal.SIG_IGN)
-        if process is not None:
-            stop(process, args.display)
+        try:
+            if process is not None:
+                stop(process, args.display)
+        finally:
+            for number, handler in previous.items():
+                signal.signal(number, handler)
