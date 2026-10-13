@@ -68,7 +68,11 @@ impl Reader {
         } else {
             self.missing = false;
             match read_bytes(&self.path) {
-                Err(error) => Err(error),
+                Err(error) => {
+                    // The next readable content counts as new, even the last valid one.
+                    self.last_hash = None;
+                    Err(error)
+                }
                 Ok(bytes) => {
                     let hash = fingerprint(&bytes);
                     if self.last_hash == Some(hash) {
@@ -304,6 +308,22 @@ mod tests {
             .set_modified(modified)
             .unwrap();
         assert_eq!(reader.check().unwrap().unwrap().agent, "bbbb");
+    }
+
+    #[test]
+    fn the_last_valid_content_after_a_read_error_clears_the_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("status.json");
+        let mut reader = Reader::new(path.clone());
+        std::fs::write(&path, r#"{"agent":"codex"}"#).unwrap();
+        assert!(reader.check().unwrap().is_ok());
+        std::fs::write(&path, " ".repeat(usize::try_from(STATUS_LIMIT).unwrap() + 1)).unwrap();
+        assert_eq!(
+            reader.check().unwrap().unwrap_err(),
+            "The Upkeep status is too large to read."
+        );
+        std::fs::write(&path, r#"{"agent":"codex"}"#).unwrap();
+        assert_eq!(reader.check().unwrap().unwrap().agent, "codex");
     }
 
     #[test]

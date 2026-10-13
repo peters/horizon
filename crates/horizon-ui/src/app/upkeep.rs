@@ -107,7 +107,7 @@ impl HorizonApp {
             .workspace(workspace)
             .map(|workspace| workspace.local_id.clone());
         if let Some(detached) = local_id.and_then(|local_id| self.detached_workspaces.get_mut(&local_id)) {
-            detached.initial_fit_pending = true;
+            detached.pending_fit = true;
         }
         ctx.request_repaint();
     }

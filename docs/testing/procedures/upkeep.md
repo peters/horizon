@@ -110,6 +110,16 @@ names made-up repositories and one public pull request.
    where GitHub shows that the page is not found (`acme/api` is made up). No second
    browser panel opens.
 
+3. Close the **Pull request** panel. On the workspace bar, click **Detach**. In the
+   new window, click the row `api` #88.
+
+   Result: A **Pull request** browser panel opens. The detached window fits the
+   workspace, so the board and the page are both in view.
+
+4. Click **Attach to Main Window**.
+
+   Result: The workspace is back in the main window.
+
 ### 6.4 UPK-04 — A wrong or missing status is shown as such
 
 1. In `<folder>/status.json`, change the `url` of `acme/web` #409 to

@@ -162,6 +162,8 @@ struct DetachedWorkspaceViewportState {
     pan_target: Option<Vec2>,
     interaction: DetachedCanvasInteractionState,
     initial_fit_pending: bool,
+    /// Fit the workspace into this window at the next render, as Fit Workspace does.
+    pending_fit: bool,
     pending_device_reveal: Option<PanelId>,
     panel_screen_rects: HashMap<PanelId, Rect>,
     terminal_body_screen_rects: HashMap<PanelId, Rect>,
@@ -176,6 +178,7 @@ impl DetachedWorkspaceViewportState {
             pan_target: None,
             interaction: DetachedCanvasInteractionState::default(),
             initial_fit_pending: true,
+            pending_fit: false,
             pending_device_reveal: None,
             panel_screen_rects: HashMap::new(),
             terminal_body_screen_rects: HashMap::new(),
