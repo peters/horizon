@@ -313,7 +313,8 @@ The debug Horizon gets a changed environment:
   removed names, never their values.
 - `HORIZON_AGENT_INTEGRATIONS` is `off`. The debug app does not install agent
   skills, plugins, MCP registrations or a desktop entry in `HOME`, and takes no
-  skill leases there. The worker's own agents use those folders.
+  skill leases there. The worker's own agents use those folders. Claude Code
+  panels in the debug app therefore start without the Horizon plugin.
 - `CODEX_HOME`, `GROK_HOME`, `XDG_DATA_HOME`, `XDG_CONFIG_HOME` and
   `XDG_CACHE_HOME` go to the state directory. The agents and tools that the
   debug app starts keep their files there.
@@ -367,7 +368,8 @@ Options:
 - `--horizon PATH` uses this binary and does not build.
 - `--state DIR` uses a new state directory.
 - `--config PATH` uses this config instead of the disposable fixture.
-- `--target-dir DIR` builds into this directory. See the next section.
+- `--target-dir DIR` builds into this directory. See the next section. It cannot
+  be used with `--horizon`.
 - `--display NAME` uses another X display, for example for a local test.
 - `--window-timeout SECONDS` sets how long the command waits for the window.
 - Set `CARGO_BUILD_JOBS` to use fewer build jobs when the worker has little memory.

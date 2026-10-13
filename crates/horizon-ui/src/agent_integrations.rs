@@ -1,6 +1,7 @@
 //! `HORIZON_AGENT_INTEGRATIONS=off` keeps a Horizon out of the user's home directory. It then
 //! installs no agent skills or plugins, takes no skill leases, registers no MCP servers in the
-//! agents' settings and writes no desktop entry. Its own state stays in the Horizon home.
+//! agents' settings and writes no desktop entry. It also skips the Claude plugin and the
+//! work-resume hooks in the Horizon home, so its Claude panels start without them.
 
 use std::ffi::OsStr;
 

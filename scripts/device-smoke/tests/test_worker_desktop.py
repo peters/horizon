@@ -207,6 +207,10 @@ class FreezeAndStopTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'Horizon exited with code 101 before its window showed'):
                     worker_desktop.main(arguments)
 
+    def test_a_binary_and_a_target_directory_are_refused_together(self):
+        with mock.patch('sys.stderr'), self.assertRaises(SystemExit):
+            worker_desktop.parse(['--horizon', '/bin/true', '--target-dir', '/nonexistent', '--state', '/nonexistent'])
+
     def test_an_interrupt_before_the_launch_is_not_a_success(self):
         with tempfile.TemporaryDirectory() as raw:
             arguments = ['--target-dir', str(Path(raw) / 'target'), '--state', str(Path(raw) / 'state')]

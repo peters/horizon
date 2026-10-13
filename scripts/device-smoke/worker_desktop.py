@@ -220,7 +220,10 @@ def parse(argv):
     parser.add_argument('--config', type=Path, help='Horizon config; the default is the disposable fixture')
     parser.add_argument('--display', default=WORKER_DISPLAY, help='X display of the worker desktop')
     parser.add_argument('--window-timeout', type=float, default=60, help='Seconds to wait for the window')
-    return default_paths(parser.parse_args(argv), os.environ)
+    args = parser.parse_args(argv)
+    if args.horizon is not None and args.target_dir is not None:
+        parser.error('--horizon uses a built binary; --target-dir is for a build')
+    return default_paths(args, os.environ)
 
 
 def main(argv=None):
