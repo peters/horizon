@@ -1,6 +1,8 @@
 //! Fake external authenticator command with test P-256 keys. It follows the
 //! bridge's stdin/stdout contract and keeps its keys in a state directory.
-//! A `mode` file with `hang` makes it record its PID and wait to be killed.
+//! An optional `mode` file in that directory changes the answer: `hang`
+//! records the PID and waits to be killed, `slow` answers after three
+//! seconds, and `deny` answers `denied`.
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -33,10 +35,18 @@ pub(crate) fn run(state: &Path) -> i32 {
     {
         let _ = writeln!(log, "{op} {}", request["origin"].as_str().unwrap_or_default());
     }
-    if std::fs::read_to_string(state.join("mode")).is_ok_and(|mode| mode.trim() == "hang") {
-        let _ = std::fs::write(state.join("hang.pid"), std::process::id().to_string());
-        std::thread::sleep(std::time::Duration::from_secs(120));
-        return 0;
+    match std::fs::read_to_string(state.join("mode")).unwrap_or_default().trim() {
+        "hang" => {
+            let _ = std::fs::write(state.join("hang.pid"), std::process::id().to_string());
+            std::thread::sleep(std::time::Duration::from_secs(120));
+            return 0;
+        }
+        "slow" => std::thread::sleep(std::time::Duration::from_secs(3)),
+        "deny" => {
+            println!("{}", json!({ "version": 1, "status": "denied", "message": "denied by the test" }));
+            return 0;
+        }
+        _ => {}
     }
     let answer = match op {
         "create" => create(state, &request),

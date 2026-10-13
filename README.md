@@ -741,6 +741,26 @@ window lookup, or confirmed minimization fails. `hide_native_window` defaults to
 `false` and is ignored for headless Chromium and other backends. It does not
 promise that websites cannot detect automation.
 
+### Passkeys
+
+A headless browser has no authenticator of its own, so a passkey sign-in in a
+panel normally goes nowhere. Point Horizon at an authenticator command and local
+Chromium and Firefox panels hand each passkey request to it:
+
+```yaml
+browser:
+  webauthn_command: ["/path/to/authenticator", "--profile", "work"]
+```
+
+Horizon, not the page, decides which site is asking. It refuses cross-origin
+iframes, plain `http` sites other than `http://localhost`, and relying party IDs
+that do not belong to the site. While the command waits for you (up to two
+minutes), the panel shows **passkey request waiting**. Leave the key out and
+nothing changes. Safari, BrowserStack and standalone `horizon-browser` CLI
+sessions keep the browser's own behavior. The command's JSON contract and the
+full set of rules are in
+[the WebAuthn bridge reference](docs/architecture/browser-webauthn-bridge.md).
+
 ### Agent steering, audit, and CLI
 
 Horizon-launched Codex, Claude, and default-command Grok agents receive the bundled `horizon-browser` MCP server automatically. Grok defaults to `--no-leader` so browser identity stays local to its panel (an explicit `--leader` remains an opt-out from this isolation); its existing login, home, session history, and permission settings are retained. Horizon adds an environment-based `horizon-browser` entry to Grok's config only when that name is unused, and preserves an existing custom entry or browser skill. Outside Horizon, that entry has no executable and cannot start a server; Grok may report it as an inactive configuration error. Custom-command Grok presets manage their own integration. Agents start with `browser_list` and use `browser_create` to open a visible browser in their own workspace when none exists. They reuse that panel for iframe, popup, dialog, and consent flows. A fresh user page action pauses the agent queue for five seconds; an explicit handoff keeps it paused until you select **Done — hand back to agent**. `browser_handoff` waits for that click before returning, so any MCP client — Codex, Claude, Grok, or `horizon-browser` CLI — resumes in the same turn.
