@@ -209,6 +209,30 @@ impl FileChooserHandle {
         state.answered = false;
         state.supported = false;
     }
+
+    /// Opens a request as a browser session does, for host tests.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn open_for_test(&self, multiple: bool, accept: &str, origin: &str) -> u64 {
+        self.enable();
+        self.open(multiple, accept.into(), origin.into())
+    }
+
+    /// Takes the answer as a browser session does, for host tests.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn take_answer_for_test(&self, id: u64) -> Option<FileChooserAnswer> {
+        self.take_answer(id)
+    }
+
+    /// Reports a failed attachment as a browser session does, for host tests.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn retry_for_test(&self, id: u64, message: &str) {
+        self.retry(id, message.into());
+    }
 }
 
 /// A lifecycle token remains visible while a protocol call temporarily owns

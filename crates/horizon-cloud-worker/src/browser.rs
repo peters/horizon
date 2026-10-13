@@ -1,5 +1,7 @@
+mod chooser;
 mod host_instance;
 mod orientation;
+mod staging;
 use base64::Engine;
 use horizon_browser::{
     BackendKind, BrowserConfig, BrowserEvent, BrowserSession, BrowserSessionConfig, FrameSlot, VideoCaptureHandle,
@@ -16,6 +18,7 @@ use std::{
 pub struct HostedBrowser {
     pub session: BrowserSession,
     pub state: CloudViewState,
+    relay: chooser::Relay,
     orientation_rejections: horizon_browser_protocol::remote::RemoteOrientationView,
     pub start_orientation_failure: Option<horizon_browser::RemoteStartFailure>,
 }
@@ -29,6 +32,8 @@ pub struct Host {
     stopping: BTreeMap<String, horizon_browser::BrowserShutdownSignal>,
     pub catalog: super::catalog::Host,
     pub remote_allocations: super::remote::Allocations,
+    /// `None` while uploads are off: the service then acts as one that predates them.
+    staging: Option<staging::Staging>,
 }
 impl Host {
     pub fn new() -> io::Result<Self> {
@@ -49,8 +54,18 @@ impl Host {
             Err(error) => return Err(error),
         };
         let remote_allocations = super::remote::Allocations::new(root.join("remote-holds"))?;
+        // A browser identity cannot contain a dot, so no history marker uses this name.
+        // Also with uploads off: this removes what an earlier service with uploads left.
+        // Only a service with uploads fails to start when it cannot.
+        let staging = staging::Staging::new(root.join(".uploads"));
+        let staging = if uploads_enabled(std::env::var_os(UPLOADS_ENV).as_deref()) {
+            Some(staging?)
+        } else {
+            None
+        };
         Ok(Self {
             capabilities,
+            staging,
             browsers: BTreeMap::new(),
             pending: Vec::new(),
             pending_cleanup: std::collections::BTreeSet::new(),
@@ -127,6 +142,11 @@ impl Host {
             },
             ..BrowserConfig::default()
         };
+        let frame_slot = Arc::new(FrameSlot::new());
+        // A provider device cannot read worker files, so only a worker engine relays choosers.
+        if remote.is_none() && self.staging.is_some() {
+            frame_slot.file_chooser().register_consumer();
+        }
         let session = start_fenced(&marker, || {
             start_session(BrowserSessionConfig {
                 browser: config,
@@ -134,7 +154,7 @@ impl Host {
                 initial_url: url,
                 width: 1280,
                 height: 800,
-                frame_slot: Arc::new(FrameSlot::new()),
+                frame_slot,
                 coordination: Some(Arc::new(coordination)),
                 capture_directory: Some(
                     self.root
@@ -152,6 +172,7 @@ impl Host {
             id.into(),
             HostedBrowser {
                 session,
+                relay: chooser::Relay::default(),
                 start_orientation_failure: None,
                 orientation_rejections: horizon_browser_protocol::remote::RemoteOrientationView::default(),
                 state: CloudViewState {
@@ -166,7 +187,9 @@ impl Host {
         Ok(())
     }
     pub fn drain(&mut self) {
+        let now = std::time::Instant::now();
         for browser in self.browsers.values_mut() {
+            browser.relay.tick(browser.session.frame_slot.file_chooser(), now);
             for event in browser.session.event_rx.try_iter() {
                 match event {
                     BrowserEvent::RemoteSession(horizon_browser::RemoteSessionEvent::DeviceIdentity {
@@ -186,7 +209,12 @@ impl Host {
                     }
                     BrowserEvent::Ready => browser.state.ready = true,
                     BrowserEvent::Title(title) => browser.state.title = title,
-                    BrowserEvent::UrlChanged(url) => browser.state.url = url,
+                    BrowserEvent::UrlChanged(url) => {
+                        browser.state.url = url;
+                        browser.relay.navigated();
+                    }
+                    // A reload keeps the URL, but the drop target is a new document.
+                    BrowserEvent::Loading(true) => browser.relay.navigated(),
                     BrowserEvent::HandoffRequested(reason) => {
                         browser.state.handoff = Some(reason);
                         browser.state.handoff_error = None;
@@ -208,10 +236,15 @@ impl Host {
                         browser.state.ready = false;
                     }
                     BrowserEvent::Warning(message) => browser.state.error = Some(message),
+                    BrowserEvent::NavigationFailed(message) => browser.relay.notice(message),
                     BrowserEvent::Frame { .. } => browser.session.frame_slot.release_notification(),
                     _ => {}
                 }
             }
+        }
+        let browsers = &self.browsers;
+        if let Some(staging) = &mut self.staging {
+            staging.sweep(|id| browsers.get(id).is_some_and(|browser| !browser.state.lost), now);
         }
     }
     pub fn request(&mut self, request: CloudViewRequest) -> CloudViewResponse {
@@ -236,35 +269,13 @@ impl Host {
                     ..CloudViewResponse::default()
                 },
             },
-            // This service predates uploads, so it ignores upload polls and refuses parts.
             CloudViewRequest::Poll {
-                id, after, commands, ..
-            } => {
-                if commands.len() > 128 {
-                    return CloudViewResponse {
-                        error: Some("Too many browser inputs".into()),
-                        ..CloudViewResponse::default()
-                    };
-                }
-                if let Some(browser) = self.browsers.get_mut(&id) {
-                    for command in commands {
-                        // Closing a client presentation must not terminate the worker browser.
-                        if !matches!(command, horizon_browser::BrowserCommand::Stop) {
-                            orientation::forward(
-                                &mut browser.state.orientation,
-                                &mut browser.orientation_rejections,
-                                command,
-                                |command| browser.session.send(command),
-                            );
-                        }
-                    }
-                }
-                self.snapshot(&id, after)
-            }
-            CloudViewRequest::Stage(_) => CloudViewResponse {
-                error: Some("This cloud browser does not accept uploads".into()),
-                ..CloudViewResponse::default()
-            },
+                id,
+                after,
+                commands,
+                uploads,
+            } => self.poll(&id, after, commands, uploads),
+            CloudViewRequest::Stage(chunk) => self.stage(&chunk),
             CloudViewRequest::Close { id } => match self.close(&id) {
                 Ok(()) => CloudViewResponse {
                     closed: vec![id],
@@ -310,6 +321,60 @@ impl Host {
                 closed: self.closed.iter().cloned().collect(),
                 browsers: self.browsers.values().map(|b| b.state.clone()).collect(),
                 error: None,
+                ..CloudViewResponse::default()
+            },
+        }
+    }
+    fn poll(
+        &mut self,
+        id: &str,
+        after: u64,
+        commands: Vec<horizon_browser::BrowserCommand>,
+        uploads: Option<horizon_browser_protocol::cloud_view::CloudUploadPoll>,
+    ) -> CloudViewResponse {
+        if commands.len() > 128 {
+            return CloudViewResponse {
+                error: Some("Too many browser inputs".into()),
+                ..CloudViewResponse::default()
+            };
+        }
+        // A drop must see each navigation that the browser already reported.
+        if uploads.as_ref().is_some_and(|uploads| uploads.drop.is_some()) {
+            self.drain();
+        }
+        if let Some(browser) = self.browsers.get_mut(id) {
+            for command in commands {
+                // Closing a client presentation must not terminate the worker browser.
+                if !matches!(command, horizon_browser::BrowserCommand::Stop) {
+                    orientation::forward(
+                        &mut browser.state.orientation,
+                        &mut browser.orientation_rejections,
+                        command,
+                        |command| browser.session.send(command),
+                    );
+                }
+            }
+            if let (Some(uploads), Some(staging)) = (uploads, &mut self.staging) {
+                browser.relay_uploads(id, uploads, staging);
+            }
+        }
+        self.snapshot(id, after)
+    }
+    /// An error ends only the upload: the host sends each upload on its own connection.
+    fn stage(&mut self, chunk: &horizon_browser_protocol::cloud_view::CloudStageChunk) -> CloudViewResponse {
+        let result = match &mut self.staging {
+            Some(staging) if self.browsers.get(&chunk.id).is_some_and(HostedBrowser::accepts_uploads) => {
+                staging.stage(chunk, std::time::Instant::now())
+            }
+            _ => Err("This cloud browser does not accept uploads".into()),
+        };
+        match result {
+            Ok(receipt) => CloudViewResponse {
+                staged: Some(receipt),
+                ..CloudViewResponse::default()
+            },
+            Err(message) => CloudViewResponse {
+                error: Some(message),
                 ..CloudViewResponse::default()
             },
         }
@@ -364,6 +429,13 @@ impl Host {
             return lost_response(id, None, None);
         };
         let mut state = browser.state.clone();
+        state.uploads = self.staging.as_ref().map(|staging| {
+            browser.relay.state(
+                browser.session.frame_slot.file_chooser(),
+                browser.accepts_uploads(),
+                staging.limits(),
+            )
+        });
         if let Some(frame) = browser.session.frame_slot.latest() {
             if frame.width > 4096 || frame.height > 4096 {
                 return CloudViewResponse {
@@ -382,6 +454,42 @@ impl Host {
             ..CloudViewResponse::default()
         }
     }
+}
+
+impl HostedBrowser {
+    /// A worker engine reads staged files; a provider device cannot.
+    fn accepts_uploads(&self) -> bool {
+        self.state.remote_target.is_none() && !self.state.lost
+    }
+
+    fn relay_uploads(
+        &mut self,
+        id: &str,
+        uploads: horizon_browser_protocol::cloud_view::CloudUploadPoll,
+        staging: &mut staging::Staging,
+    ) {
+        let now = std::time::Instant::now();
+        self.relay.presented(now);
+        if !self.accepts_uploads() {
+            return;
+        }
+        if let Some(answer) = uploads.answer {
+            self.relay
+                .answer(self.session.frame_slot.file_chooser(), staging, id, answer, now);
+        }
+        if let Some(drop) = uploads.drop {
+            let session = &self.session;
+            self.relay
+                .drop_files(staging, id, &drop, now, |command| session.send(command));
+        }
+    }
+}
+
+/// Uploads stay off until hosts relay them. The upload tests and procedure set `1`.
+const UPLOADS_ENV: &str = "HORIZON_CLOUD_BROWSER_UPLOADS";
+
+fn uploads_enabled(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|value| value == "1")
 }
 
 const LOST_PROCESS: &str = "Browser process was lost; create a new browser explicitly";
@@ -482,6 +590,39 @@ fn encode_frame(frame: &horizon_browser::frames::FrameData) -> io::Result<String
 mod tests {
     use super::*;
     #[test]
+    fn uploads_stay_off_unless_the_service_is_told_to_relay_them() {
+        for value in [None, Some(""), Some("0"), Some("true"), Some("1 ")] {
+            assert!(!uploads_enabled(value.map(std::ffi::OsStr::new)), "{value:?}");
+        }
+        assert!(uploads_enabled(Some(std::ffi::OsStr::new("1"))));
+        let root = tempfile::tempdir().unwrap();
+        let mut host = Host {
+            capabilities: horizon_cloud::Capabilities::default(),
+            catalog: crate::catalog::Host::default(),
+            browsers: BTreeMap::new(),
+            pending: Vec::new(),
+            pending_cleanup: std::collections::BTreeSet::new(),
+            root: root.path().into(),
+            closed: std::collections::BTreeSet::default(),
+            stopping: BTreeMap::new(),
+            remote_allocations: super::super::remote::Allocations::new(root.path().join("remote-holds")).unwrap(),
+            staging: None,
+        };
+        let staged = host.request(CloudViewRequest::Stage(
+            horizon_browser_protocol::cloud_view::CloudStageChunk {
+                id: "browser-1".into(),
+                batch: "b1".into(),
+                name: "notes.txt".into(),
+                size: 0,
+                offset: 0,
+                data: String::new(),
+                sha256: None,
+            },
+        ));
+        assert!(staged.error.as_deref().unwrap().contains("does not accept uploads"));
+        assert!(!root.path().join(".uploads").exists());
+    }
+    #[test]
     fn fenced_browser_returns_typed_loss_before_credentials_or_capacity_validation() {
         let root = tempfile::tempdir().unwrap();
         let mut host = Host {
@@ -494,6 +635,7 @@ mod tests {
             closed: std::collections::BTreeSet::default(),
             stopping: BTreeMap::new(),
             remote_allocations: super::super::remote::Allocations::new(root.path().join("remote-holds")).unwrap(),
+            staging: Some(staging::Staging::new(root.path().join(".uploads")).unwrap()),
         };
         std::fs::write(root.path().join("lost"), "").unwrap();
         let response = host.request(CloudViewRequest::Open {
@@ -519,7 +661,6 @@ mod tests {
         });
         assert!(polled.error.is_none());
         assert!(polled.browsers[0].lost);
-        assert!(polled.browsers[0].uploads.is_none());
         let staged = host.request(CloudViewRequest::Stage(
             horizon_browser_protocol::cloud_view::CloudStageChunk {
                 id: "lost".into(),
@@ -533,6 +674,7 @@ mod tests {
         ));
         assert!(staged.error.as_deref().unwrap().contains("does not accept uploads"));
         assert!(staged.staged.is_none());
+        assert!(!root.path().join(".uploads").exists());
         assert!(
             host.request(CloudViewRequest::Open {
                 id: "../lost".into(),
@@ -557,6 +699,7 @@ mod tests {
             closed: std::collections::BTreeSet::default(),
             stopping: BTreeMap::new(),
             remote_allocations: super::super::remote::Allocations::new(root.path().join("remote-holds")).unwrap(),
+            staging: Some(staging::Staging::new(root.path().join(".uploads")).unwrap()),
         };
         let (completion, signal) = std::sync::mpsc::channel();
         host.stopping
