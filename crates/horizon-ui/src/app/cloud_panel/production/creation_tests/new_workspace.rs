@@ -1,5 +1,16 @@
 use super::*;
 
+/// The labels a screen reader gets in `output`, each with whether its control is disabled.
+fn spoken(output: &egui::FullOutput) -> Vec<(String, bool)> {
+    output
+        .platform_output
+        .accesskit_update
+        .iter()
+        .flat_map(|update| &update.nodes)
+        .filter_map(|(_, node)| Some((node.label()?.to_owned(), node.is_disabled())))
+        .collect()
+}
+
 #[test]
 fn new_offers_the_cloud_first_above_the_sidebar_and_a_cancel_leaves_no_workspace() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
@@ -73,10 +84,15 @@ fn the_toolbar_split_button_makes_a_cloud_workspace_or_opens_the_place_menu() {
         frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     }
     let workspaces = app.board.workspaces.len();
+    ctx.enable_accesskit();
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
     let create = label_position(&output, "+  New workspace");
-    // The place part shows where the left part makes the workspace.
+    // The place part shows where the left part makes the workspace, also to a screen reader.
     let place = label_position(&output, "Cloud");
+    let labels = spoken(&output);
+    for label in ["New workspace on Cloud", "Choose where it runs, now Cloud", "Menu"] {
+        assert!(labels.iter().any(|(spoken, _)| spoken == label), "{label}: {labels:?}");
+    }
     assert!(
         place.x > create.x && (place.y - create.y).abs() < 1.0,
         "Cloud ▾ follows + New workspace"
@@ -127,9 +143,15 @@ fn without_cloud_workspaces_the_toolbar_makes_a_this_pc_workspace_and_offers_no_
     // Startup makes cloud workspaces ready; this computer has none.
     app.cloud_prototype.ready = false;
     let workspaces = app.board.workspaces.len();
+    ctx.enable_accesskit();
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
     let create = label_position(&output, "+  New workspace");
     let place = label_position(&output, "PC");
+    assert!(
+        spoken(&output)
+            .iter()
+            .any(|(label, _)| label == "New workspace on This PC")
+    );
     click(&ctx, &mut app, create);
     assert!(
         !app.cloud_prototype.production.creating,
@@ -139,18 +161,36 @@ fn without_cloud_workspaces_the_toolbar_makes_a_this_pc_workspace_and_offers_no_
 
     click(&ctx, &mut app, place);
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
-    let cloud = output
-        .shapes
-        .iter()
-        .filter_map(|shape| match &shape.shape {
-            Shape::Text(text) if text.galley.job.text == "Cloud" => {
-                Some(Rect::from_min_size(text.pos, text.galley.size()).center())
-            }
-            _ => None,
-        })
-        // Below the toolbar: the place menu's row.
-        .find(|position| position.y > place.y + 20.0)
-        .expect("a Cloud row in the place menu");
+    // The menu offers This PC and a dimmed Cloud row.
+    let rows = spoken(&output);
+    let row = |title: &str| {
+        rows.iter()
+            .find(|(label, _)| label.starts_with(&format!("{title}. ")))
+            .unwrap_or_else(|| panic!("a {title} row: {rows:?}"))
+            .1
+    };
+    assert!(row("Cloud"), "the Cloud row is disabled");
+    assert!(!row("This PC"), "the This PC row can be chosen");
+    // The Cloud row's title is aligned with the This PC title under it.
+    let titles = |title: &str| {
+        output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                Shape::Text(text) if text.galley.job.text == title => Some(text.pos),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let this_pc = titles("This PC")
+        .into_iter()
+        .max_by(|a, b| a.x.total_cmp(&b.x))
+        .expect("the This PC row");
+    let cloud = titles("Cloud")
+        .into_iter()
+        .find(|position| (position.x - this_pc.x).abs() < 1.0 && position.y < this_pc.y)
+        .expect("the Cloud row above This PC");
+    let cloud = cloud + egui::vec2(10.0, 6.0);
     click(&ctx, &mut app, cloud);
     assert!(
         !app.cloud_prototype.production.creating,
