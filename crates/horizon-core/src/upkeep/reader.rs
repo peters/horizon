@@ -5,7 +5,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use super::{PrState, Status};
 
@@ -28,11 +28,11 @@ pub(super) type Reading = Result<Status, String>;
 /// Looks at the document when asked; [`spawn`] asks every two seconds on its own thread.
 pub(super) struct Reader {
     path: PathBuf,
-    /// Whether `seen` holds a look. It is false before the first look and after a read
-    /// that failed, so that read is tried again.
-    settled: bool,
-    /// The file's modification time and length at the last settled look, `None` when missing.
-    seen: Option<(SystemTime, u64)>,
+    /// A fingerprint of the bytes last parsed. The file's time and length are not enough: a
+    /// copy from the worker can keep both and still change.
+    last_hash: Option<u64>,
+    /// Whether the file was missing at the last look.
+    missing: bool,
     /// The last error sent, so a read that keeps failing the same way is sent once.
     last_error: Option<String>,
     /// Whether a valid status was read before.
@@ -43,36 +43,42 @@ impl Reader {
     pub(super) fn new(path: PathBuf) -> Self {
         Self {
             path,
-            settled: false,
-            seen: None,
+            last_hash: None,
+            missing: false,
             last_error: None,
             read_once: false,
         }
     }
 
     /// A new reading when the document changed, appeared or went since the last look.
-    /// A file is the same while its modification time and length are; a read that
-    /// failed is tried again at the next look.
+    /// The bytes are read at every look and compared by fingerprint, so any change counts;
+    /// a failure is sent once until the file changes again.
     pub(super) fn check(&mut self) -> Option<Reading> {
-        let found = std::fs::metadata(&self.path)
-            .ok()
-            .map(|meta| (meta.modified().unwrap_or(SystemTime::UNIX_EPOCH), meta.len()));
-        if self.settled && self.seen == found {
-            return None;
-        }
-        let reading = if found.is_none() {
-            self.settled = true;
+        let reading = if std::fs::symlink_metadata(&self.path).is_err() {
+            if self.missing {
+                return None;
+            }
+            self.missing = true;
+            self.last_hash = None;
             Err(if self.read_once {
                 "The Upkeep status file is gone.".to_string()
             } else {
                 "Upkeep has not reported yet.".to_string()
             })
         } else {
-            let reading = read_status(&self.path);
-            self.settled = reading.is_ok();
-            reading
+            self.missing = false;
+            match read_bytes(&self.path) {
+                Err(error) => Err(error),
+                Ok(bytes) => {
+                    let hash = fingerprint(&bytes);
+                    if self.last_hash == Some(hash) {
+                        return None;
+                    }
+                    self.last_hash = Some(hash);
+                    parse_status(&bytes)
+                }
+            }
         };
-        self.seen = found;
         match reading {
             Ok(status) => {
                 self.read_once = true;
@@ -145,7 +151,7 @@ pub(super) fn spawn(path: PathBuf, alive: Arc<AtomicBool>) -> Option<Latest> {
     Some(latest)
 }
 
-fn read_status(path: &Path) -> Reading {
+fn read_bytes(path: &Path) -> Result<Vec<u8>, String> {
     let file = std::fs::File::open(path).map_err(|error| format!("The Upkeep status cannot be read: {error}"))?;
     // The limit holds even when the file grows while it is read.
     let mut bytes = Vec::new();
@@ -155,10 +161,26 @@ fn read_status(path: &Path) -> Reading {
     if bytes.len() as u64 > STATUS_LIMIT {
         return Err("The Upkeep status is too large to read.".into());
     }
+    Ok(bytes)
+}
+
+fn fingerprint(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn parse_status(bytes: &[u8]) -> Reading {
     let mut status: Status =
-        serde_json::from_slice(&bytes).map_err(|error| format!("The Upkeep status is not valid: {error}"))?;
+        serde_json::from_slice(bytes).map_err(|error| format!("The Upkeep status is not valid: {error}"))?;
     bound(&mut status);
     Ok(status)
+}
+
+#[cfg(test)]
+fn read_status(path: &Path) -> Reading {
+    parse_status(&read_bytes(path)?)
 }
 
 /// Puts runs and activity in time order, keeps the newest entries of each list and
@@ -210,8 +232,11 @@ fn keep_last<T>(list: &mut Vec<T>, limit: usize) {
     list.drain(..extra);
 }
 
+/// Cuts a text longer than `MAX_TEXT` characters to `MAX_TEXT` with an ellipsis at the end.
 fn clip(text: &mut String) {
-    if let Some((cut, _)) = text.char_indices().nth(MAX_TEXT) {
+    if text.chars().nth(MAX_TEXT).is_some()
+        && let Some((cut, _)) = text.char_indices().nth(MAX_TEXT - 1)
+    {
         text.truncate(cut);
         text.push('…');
     }
@@ -261,6 +286,35 @@ mod tests {
             .set_modified(modified)
             .unwrap();
         assert_eq!(reader.check().unwrap().unwrap().agent, "c");
+    }
+
+    #[test]
+    fn a_change_that_keeps_the_time_and_length_is_still_seen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("status.json");
+        let mut reader = Reader::new(path.clone());
+        std::fs::write(&path, r#"{"agent":"aaaa"}"#).unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(reader.check().unwrap().unwrap().agent, "aaaa");
+        std::fs::write(&path, r#"{"agent":"bbbb"}"#).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        assert_eq!(reader.check().unwrap().unwrap().agent, "bbbb");
+    }
+
+    #[test]
+    fn a_clipped_text_keeps_the_limit_and_a_text_at_the_limit_stays() {
+        let mut long = "x".repeat(MAX_TEXT + 5);
+        clip(&mut long);
+        assert_eq!(long.chars().count(), MAX_TEXT);
+        assert!(long.ends_with('…'));
+        let mut exact = "y".repeat(MAX_TEXT);
+        clip(&mut exact);
+        assert_eq!(exact, "y".repeat(MAX_TEXT));
     }
 
     #[test]
@@ -315,8 +369,8 @@ mod tests {
         std::fs::write(&path, document.to_string()).unwrap();
         let status = read_status(&path).unwrap();
         assert_eq!(status.pull_requests.len(), MAX_PULL_REQUESTS);
-        assert_eq!(status.pull_requests[0].title.chars().count(), MAX_TEXT + 1);
-        assert_eq!(status.agent.chars().count(), MAX_TEXT + 1);
+        assert_eq!(status.pull_requests[0].title.chars().count(), MAX_TEXT);
+        assert_eq!(status.agent.chars().count(), MAX_TEXT);
         assert_eq!(status.runs.len(), MAX_RUNS);
         assert_eq!(status.runs[0].merged, 500, "the newest runs stay");
     }

@@ -80,8 +80,9 @@ The board guarantees these items:
   must be those of the row, and the repository must be a plain `owner/name`.
   Other URLs open nothing.
 - When a newer document is not valid or the file is gone, the board keeps the last
-  valid status. A yellow line tells the cause. The board tries a failed read again
-  every two seconds, also when the time and length of the file did not change.
+  valid status. A yellow line tells the cause. The board reads the file every two
+  seconds and compares its content, so it sees every change, also one that keeps the
+  time and length of the file.
 
 The board does not guarantee that the status is true. The agent writes it, and an
 agent can make errors. Check a merge on GitHub before you act on it.

@@ -12,16 +12,16 @@ const BAR_HEIGHT: f32 = 26.0;
 /// How far ahead of this computer's clock a start time may be and still count.
 const CLOCK_SKEW: time::Duration = time::Duration::minutes(5);
 
-/// The run in progress, if the status shows one: the newest run that ran, when it is still
-/// running. A skipped run after it only says that it was still busy, and a start in the
-/// future is not believed.
+/// The run in progress, if the status shows one: the newest run that was not skipped, when
+/// it is still running. A skipped run after it only says that it was still busy; any other
+/// later run, even of an unknown outcome, ends it. A start in the future is not believed.
 pub(super) fn running(status: &Status, now: OffsetDateTime) -> Option<&Run> {
     status
         .runs
         .iter()
         .rev()
         .filter(|run| run.started_at <= now + CLOCK_SKEW)
-        .find(|run| !matches!(run.outcome, RunOutcome::Skipped | RunOutcome::Other))
+        .find(|run| run.outcome != RunOutcome::Skipped)
         .filter(|run| run.outcome == RunOutcome::Running)
 }
 
@@ -103,12 +103,12 @@ fn bars(ui: &mut Ui, status: &Status, now: OffsetDateTime) {
         let this_hour = start_of_hour(now);
         let first = this_hour - time::Duration::hours(HOURS - 1);
         let end = this_hour + time::Duration::hours(1);
+        // The reader puts runs in time order, so the day and each hour are slices found by
+        // binary search: no scan and no allocation per frame.
+        let day = &status.runs[status.runs.partition_point(|run| run.started_at < first)..];
+        let day = &day[..day.partition_point(|run| run.started_at < end)];
         // The same runs as the bars, summed without overflow: the counts are untrusted.
-        let merged = status
-            .runs
-            .iter()
-            .filter(|run| run.started_at >= first && run.started_at < end)
-            .fold(0_u32, |total, run| total.saturating_add(run.merged));
+        let merged = day.iter().fold(0_u32, |total, run| total.saturating_add(run.merged));
         ui.horizontal(|ui| {
             super::caption(ui, "Last 24 hours");
             ui.label(
@@ -129,16 +129,14 @@ fn bars(ui: &mut Ui, status: &Status, now: OffsetDateTime) {
             let index = f32::from(u8::try_from(slot).unwrap_or(0));
             let x = rect.min.x + index * (bar_width + gap);
             let bar = Rect::from_min_size(Pos2::new(x, rect.min.y), Vec2::new(bar_width, BAR_HEIGHT));
-            let runs: Vec<&Run> = status
-                .runs
-                .iter()
-                .filter(|run| run.started_at >= hour && run.started_at < hour + time::Duration::hours(1))
-                .collect();
-            let summary = Hour::of(&runs);
+            let from = day.partition_point(|run| run.started_at < hour);
+            let to = day.partition_point(|run| run.started_at < hour + time::Duration::hours(1));
+            let runs = &day[from..to];
+            let summary = Hour::of(runs);
             paint_bar(ui, bar, summary);
             ui.interact(bar, ui.id().with(("upkeep-hour", slot)), Sense::hover())
                 .on_hover_ui(|ui| {
-                    ui.label(tooltip(hour, &runs, summary));
+                    ui.label(tooltip(hour, runs, summary));
                 });
         }
         ui.horizontal(|ui| {
@@ -170,7 +168,7 @@ struct Hour {
 impl Hour {
     /// `None` for an hour without runs. A run in progress outranks a failure, a failure
     /// outranks a finished run, and a finished run outranks a skipped or unknown one.
-    fn of(runs: &[&Run]) -> Option<Self> {
+    fn of(runs: &[Run]) -> Option<Self> {
         let rank = |outcome: RunOutcome| match outcome {
             RunOutcome::Running => 3,
             RunOutcome::Failed => 2,
@@ -221,7 +219,7 @@ fn paint_bar(ui: &Ui, bar: Rect, hour: Option<Hour>) {
     }
 }
 
-fn tooltip(hour: OffsetDateTime, runs: &[&Run], summary: Option<Hour>) -> String {
+fn tooltip(hour: OffsetDateTime, runs: &[Run], summary: Option<Hour>) -> String {
     let at = clock(hour);
     match (runs, summary) {
         ([], _) | (_, None) => format!("{at}: no run"),
@@ -275,7 +273,8 @@ mod tests {
             Some("2026-10-13T14:09:00Z"),
         );
         let second = run("2026-10-13T14:40:00Z", RunOutcome::Done, u32::MAX, None);
-        let hour = Hour::of(&[&first, &second]).unwrap();
+        let both = [first.clone(), second.clone()];
+        let hour = Hour::of(&both).unwrap();
         assert_eq!(
             hour,
             Hour {
@@ -286,16 +285,26 @@ mod tests {
         );
         let at = parse_time("2026-10-13T14:00:00Z").unwrap();
         assert_eq!(
-            tooltip(at, &[&first, &second], Some(hour)),
+            tooltip(at, &both, Some(hour)),
             format!("14:00 UTC: 2 runs, {} merged", u32::MAX)
         );
         assert_eq!(
-            tooltip(at, &[&first], Hour::of(&[&first])),
+            tooltip(at, std::slice::from_ref(&first), Hour::of(std::slice::from_ref(&first))),
             "14:00 UTC: done after 4 min, nothing to merge"
         );
         let failed = run("2026-10-13T14:40:00Z", RunOutcome::Failed, 0, None);
-        assert_eq!(tooltip(at, &[&failed], Hour::of(&[&failed])), "14:00 UTC: failed");
-        assert_eq!(Hour::of(&[&first, &failed]).unwrap().outcome, RunOutcome::Failed);
+        assert_eq!(
+            tooltip(
+                at,
+                std::slice::from_ref(&failed),
+                Hour::of(std::slice::from_ref(&failed))
+            ),
+            "14:00 UTC: failed"
+        );
+        assert_eq!(
+            Hour::of(&[first.clone(), failed.clone()]).unwrap().outcome,
+            RunOutcome::Failed
+        );
         assert_eq!(Hour::of(&[]), None);
     }
 

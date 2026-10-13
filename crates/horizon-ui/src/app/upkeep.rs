@@ -54,7 +54,7 @@ impl HorizonApp {
             }
             self.board.focus(panel);
             // The panel may be out of view; show it beside the board.
-            self.fit_workspace_visible(ctx, workspace);
+            self.show_board_and_page(ctx, workspace);
             return;
         }
         // Beside the board, unless the workspace arranges its panels itself: an explicit
@@ -91,8 +91,24 @@ impl HorizonApp {
             upkeep.browser = Some(panel);
         }
         self.board.focus(panel);
-        // The board and the page it opened are seen side by side.
-        self.fit_workspace_visible(ctx, workspace);
+        self.show_board_and_page(ctx, workspace);
         self.mark_runtime_dirty();
+    }
+
+    /// Fits the workspace so the board and its page are seen side by side, in the main
+    /// window or in the workspace's own window.
+    fn show_board_and_page(&mut self, ctx: &Context, workspace: horizon_core::WorkspaceId) {
+        if !self.workspace_is_detached(workspace) {
+            self.fit_workspace_visible(ctx, workspace);
+            return;
+        }
+        let local_id = self
+            .board
+            .workspace(workspace)
+            .map(|workspace| workspace.local_id.clone());
+        if let Some(detached) = local_id.and_then(|local_id| self.detached_workspaces.get_mut(&local_id)) {
+            detached.initial_fit_pending = true;
+        }
+        ctx.request_repaint();
     }
 }
