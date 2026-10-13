@@ -56,6 +56,8 @@ The board guarantees these items:
 - It reads the document on a separate thread, not on the UI thread. It looks for a
   change every two seconds.
 - It reads at most 4 MiB and refuses a larger document.
+- It reads at most 10,000 entries of each list. It skips later entries without
+  keeping them.
 - It keeps at most these entries:
   - 500 pull requests. Open pull requests come before merged pull requests.
   - The newest 1,500 runs.
@@ -73,8 +75,8 @@ The board guarantees these items:
   - It refuses a time that is out of range in UTC.
 - It puts runs and activity lines in time order before it keeps the newest. Thus
   the document can list them in any order.
-- Each bar shows all runs that started in its hour. The merged total counts the same
-  runs.
+- Each bar shows all runs that started in its hour, up to now. The merged total
+  counts the same runs. A run that starts later than now does not count yet.
 - A row opens a page only when its URL is exactly
   `https://github.com/<owner>/<name>/pull/<number>`. The owner, name and number
   must be those of the row, and the repository must be a plain `owner/name`.

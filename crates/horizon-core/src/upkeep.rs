@@ -341,20 +341,81 @@ fn lenient_time<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Opt
     Ok(value.as_str().and_then(parse_time))
 }
 
-/// The entries that parse; the others are left out.
+/// The most entries of one list that the board reads from a document; later entries are
+/// skipped without being kept, so a document of many tiny entries stays cheap.
+const LIST_READ_LIMIT: usize = 10_000;
+
+/// The entries that parse, up to [`LIST_READ_LIMIT`]; the others are left out. A value that
+/// is not a list is an empty list.
 fn lenient_list<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: serde::de::DeserializeOwned,
 {
-    let value = serde_json::Value::deserialize(deserializer)?;
-    let serde_json::Value::Array(entries) = value else {
-        return Ok(Vec::new());
-    };
-    Ok(entries
-        .into_iter()
-        .filter_map(|entry| T::deserialize(entry).ok())
-        .collect())
+    struct Entries<T>(std::marker::PhantomData<T>);
+
+    impl<'de, T: serde::de::DeserializeOwned> serde::de::Visitor<'de> for Entries<T> {
+        type Value = Vec<T>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a list")
+        }
+
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<T>, A::Error> {
+            let mut entries = Vec::new();
+            let mut read = 0;
+            loop {
+                if read >= LIST_READ_LIMIT {
+                    if seq.next_element::<serde::de::IgnoredAny>()?.is_none() {
+                        break;
+                    }
+                    continue;
+                }
+                let Some(entry) = seq.next_element::<serde_json::Value>()? else {
+                    break;
+                };
+                read += 1;
+                if let Ok(entry) = T::deserialize(entry) {
+                    entries.push(entry);
+                }
+            }
+            Ok(entries)
+        }
+
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Vec<T>, A::Error> {
+            while map
+                .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+                .is_some()
+            {}
+            Ok(Vec::new())
+        }
+
+        fn visit_bool<E>(self, _: bool) -> Result<Vec<T>, E> {
+            Ok(Vec::new())
+        }
+
+        fn visit_i64<E>(self, _: i64) -> Result<Vec<T>, E> {
+            Ok(Vec::new())
+        }
+
+        fn visit_u64<E>(self, _: u64) -> Result<Vec<T>, E> {
+            Ok(Vec::new())
+        }
+
+        fn visit_f64<E>(self, _: f64) -> Result<Vec<T>, E> {
+            Ok(Vec::new())
+        }
+
+        fn visit_str<E>(self, _: &str) -> Result<Vec<T>, E> {
+            Ok(Vec::new())
+        }
+
+        fn visit_unit<E>(self) -> Result<Vec<T>, E> {
+            Ok(Vec::new())
+        }
+    }
+
+    deserializer.deserialize_any(Entries(std::marker::PhantomData))
 }
 
 /// Parses an RFC 3339 time and turns it into UTC. A time whose UTC date is out of range
@@ -424,6 +485,19 @@ mod tests {
         assert!(status.schedule.next_run_at.is_none());
         assert_eq!(status.activity.len(), 1);
         assert_eq!(clock(status.activity[0].at), "10:00 UTC");
+    }
+
+    #[test]
+    fn a_list_reads_at_most_its_limit_and_skips_the_rest() {
+        let many = vec!["0"; LIST_READ_LIMIT + 50].join(",");
+        let status: Status = serde_json::from_str(&format!(
+            r#"{{"repositories":[{many}],"activity":{{"a":1}},"runs":null,"agent":"codex"}}"#
+        ))
+        .unwrap();
+        assert!(status.repositories.is_empty(), "numbers are not names");
+        let names = vec![r#""o/r""#; LIST_READ_LIMIT + 50].join(",");
+        let status: Status = serde_json::from_str(&format!(r#"{{"repositories":[{names}]}}"#)).unwrap();
+        assert_eq!(status.repositories.len(), LIST_READ_LIMIT);
     }
 
     #[test]

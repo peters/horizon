@@ -106,7 +106,8 @@ fn bars(ui: &mut Ui, status: &Status, now: OffsetDateTime) {
         // The reader puts runs in time order, so the day and each hour are slices found by
         // binary search: no scan and no allocation per frame.
         let day = &status.runs[status.runs.partition_point(|run| run.started_at < first)..];
-        let day = &day[..day.partition_point(|run| run.started_at < end)];
+        // Nothing that has not started yet counts, beyond a little clock skew.
+        let day = &day[..day.partition_point(|run| run.started_at < end && run.started_at <= now + CLOCK_SKEW)];
         // The same runs as the bars, summed without overflow: the counts are untrusted.
         let merged = day.iter().fold(0_u32, |total, run| total.saturating_add(run.merged));
         ui.horizontal(|ui| {
