@@ -139,6 +139,19 @@ fn the_empty_canvas_offers_new_cloud_and_an_empty_workspace() {
         }
         assert!(app.board.workspaces.is_empty(), "the empty canvas needs an empty board");
         let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+        // All the card's buttons stay on one row.
+        let rows = [
+            "New Cloud",
+            "New Workspace",
+            "New Terminal",
+            "Quick Nav",
+            "Fit Workspace",
+        ]
+        .map(|label| label_position(&output, label).y);
+        assert!(
+            rows.iter().all(|y| (y - rows[0]).abs() < 1.0),
+            "one row of buttons: {rows:?}"
+        );
         click(&ctx, &mut app, label_position(&output, button));
         assert_eq!(app.board.workspaces.len(), 1, "{button} makes one workspace");
         assert_eq!(
@@ -205,11 +218,7 @@ fn a_dimmed_new_cloud_takes_no_focus_and_says_why_on_hover() {
     input.events = vec![Event::PointerMoved(cloud)];
     let output = run_app_frame_with_input(&ctx, &mut app, input);
     assert!(
-        text_center(
-            &output,
-            "Cloud workspaces are not ready on this computer. Open Menu › Cloud settings."
-        )
-        .is_some(),
+        text_center(&output, crate::app::sidebar::NEW_CLOUD_NOT_READY).is_some(),
         "the hover explains the dimmed button"
     );
 }

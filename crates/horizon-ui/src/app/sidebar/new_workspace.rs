@@ -4,6 +4,10 @@ use egui::Context;
 
 use super::super::HorizonApp;
 
+/// Why New cloud is dimmed, on hover.
+pub(in crate::app) const NEW_CLOUD_NOT_READY: &str =
+    "Cloud workspaces are not ready on this computer. Open Menu › Cloud settings.";
+
 /// Where a new workspace runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::app) enum NewWorkspace {

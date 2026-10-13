@@ -8,7 +8,7 @@ mod text;
 mod toolbar;
 
 pub(in crate::app) use list::{IdleCloud, ListCache};
-pub(in crate::app) use new_workspace::NewWorkspace;
+pub(in crate::app) use new_workspace::{NEW_CLOUD_NOT_READY, NewWorkspace};
 
 use std::collections::HashMap;
 

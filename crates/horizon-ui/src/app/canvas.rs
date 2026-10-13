@@ -220,6 +220,7 @@ impl HorizonApp {
                 self.new_cloud_workspace_ready(),
                 super::util::primary_button("New Cloud"),
             )
+            .on_disabled_hover_text(super::sidebar::NEW_CLOUD_NOT_READY)
             .clicked()
         {
             self.create_new_workspace(ui.ctx(), super::sidebar::NewWorkspace::Cloud, None);

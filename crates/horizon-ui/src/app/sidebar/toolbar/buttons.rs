@@ -109,7 +109,7 @@ impl HorizonApp {
         button.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ready, "New cloud"));
         paint_new_cloud(ui.painter(), rect, &button, compact, ready);
         if !ready {
-            button.on_hover_text("Cloud workspaces are not ready on this computer. Open Menu › Cloud settings.");
+            button.on_hover_text(super::super::NEW_CLOUD_NOT_READY);
             return;
         }
         #[cfg(feature = "cloud-workspaces")]
@@ -233,11 +233,31 @@ impl HorizonApp {
 }
 
 /// Paints the New cloud button: the accent pill, lighter while hovered and darker while
-/// pressed, and dimmed when no cloud can start.
+/// pressed. When no cloud can start, it is a framed pill with dim text, as disabled
+/// controls are.
 fn paint_new_cloud(painter: &egui::Painter, rect: Rect, button: &egui::Response, compact: bool, ready: bool) {
-    let fill = if !ready {
-        theme::blend(theme::ACCENT(), theme::PANEL_BG_ALT(), 0.55)
-    } else if button.is_pointer_button_down_on() {
+    let label = if compact { "+  Cloud" } else { "+  New cloud" };
+    let paint_label = |painter: &egui::Painter, ink| {
+        painter.text(
+            Pos2::new(rect.min.x + 14.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            label,
+            FontId::proportional(12.5),
+            ink,
+        );
+    };
+    if !ready {
+        painter.rect_filled(rect, 10, theme::PANEL_BG_ALT());
+        painter.rect_stroke(
+            rect,
+            10,
+            Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 210)),
+            StrokeKind::Inside,
+        );
+        paint_label(painter, theme::FG_DIM());
+        return;
+    }
+    let fill = if button.is_pointer_button_down_on() {
         theme::blend(theme::ACCENT(), theme::BG(), 0.14)
     } else if button.hovered() {
         theme::blend(theme::ACCENT(), theme::FG(), 0.16)
@@ -245,14 +265,7 @@ fn paint_new_cloud(painter: &egui::Painter, rect: Rect, button: &egui::Response,
         theme::ACCENT()
     };
     painter.rect_filled(rect, 10, fill);
-    let label = if compact { "+  Cloud" } else { "+  New cloud" };
-    painter.text(
-        Pos2::new(rect.min.x + 14.0, rect.center().y),
-        Align2::LEFT_CENTER,
-        label,
-        FontId::proportional(12.5),
-        theme::BG(),
-    );
+    paint_label(painter, theme::BG());
     if button.has_focus() {
         painter.rect_stroke(rect.expand(2.0), 12, Stroke::new(2.0, theme::FG()), StrokeKind::Outside);
     }
