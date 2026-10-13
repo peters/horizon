@@ -59,7 +59,7 @@ pub(super) fn committed_tree(
     let objects = objects_dir(repository)?;
     let info = borrowed.join("objects").join("info");
     std::fs::create_dir_all(&info)?;
-    std::fs::write(info.join("alternates"), format!("{}\n", objects.display()))?;
+    std::fs::write(info.join("alternates"), alternate_line(&objects))?;
     name_refs(repository, &neutral, &borrowed, private.path(), runner);
     runner.run(
         "git archive",
@@ -81,6 +81,27 @@ fn objects_dir(repository: &Path) -> Result<PathBuf> {
     // `\\?\` extended-length prefix on Windows that the git command line can reject.
     std::path::absolute(repository.commondir().join("objects"))
         .map_err(|_| Error::Invalid("Cannot locate repository objects"))
+}
+
+/// `path` as one line of an alternates file, quoted the way git reads a line that starts
+/// with `"`: a quote or backslash is escaped and every byte outside printable ASCII is an
+/// octal escape, so a checkout path that holds a newline or, on Unix, bytes that are not
+/// UTF-8 names the same folder.
+fn alternate_line(path: &Path) -> Vec<u8> {
+    #[cfg(unix)]
+    let bytes = std::os::unix::ffi::OsStrExt::as_bytes(path.as_os_str()).to_vec();
+    #[cfg(not(unix))]
+    let bytes = path.to_string_lossy().into_owned().into_bytes();
+    let mut line = vec![b'"'];
+    for byte in bytes {
+        match byte {
+            b'"' | b'\\' => line.extend([b'\\', byte]),
+            0x20..=0x7e => line.push(byte),
+            _ => line.extend(format!("\\{byte:03o}").bytes()),
+        }
+    }
+    line.extend(b"\"\n");
+    line
 }
 
 /// Copies the source repository's refs into the private repository as data, so a committed
@@ -190,7 +211,11 @@ fn archive_command(neutral: &Path, borrowed: &Path) -> Command {
             "tar.umask=0022",
             "-c",
         ])
-        .arg(format!("core.attributesFile={}", neutral.display()))
+        .arg({
+            let mut setting = std::ffi::OsString::from("core.attributesFile=");
+            setting.push(neutral);
+            setting
+        })
         .arg("-C")
         .arg(borrowed)
         .args(["archive", "--format=tar", "--output"]);
@@ -222,7 +247,7 @@ fn isolated<'c>(neutral: &Path, command: &'c mut Command) -> &'c mut Command {
 
 #[cfg(test)]
 mod tests {
-    use super::isolated;
+    use super::{alternate_line, isolated};
     use std::process::Command;
 
     #[test]
@@ -264,5 +289,11 @@ mod tests {
         let listed = command.args(["config", "--list"]).output().unwrap();
         let listed = String::from_utf8_lossy(&listed.stdout);
         assert!(!listed.contains("horizon."), "{listed}");
+    }
+
+    #[test]
+    fn an_alternates_line_keeps_every_byte_of_its_path() {
+        let path = std::path::Path::new("/a \"b\\c\nd");
+        assert_eq!(alternate_line(path), b"\"/a \\\"b\\\\c\\012d\"\n");
     }
 }

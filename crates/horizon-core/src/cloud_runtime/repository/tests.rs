@@ -927,3 +927,44 @@ fn a_detached_head_does_not_name_a_branch_in_export_subst() {
         "a detached HEAD names no branch in the decoration: {refs}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_checkout_whose_path_holds_a_newline_is_snapshotted() {
+    let temp = tempfile::tempdir().unwrap();
+    // A newline, and on Linux a byte that is not UTF-8: names that other systems refuse.
+    #[cfg(target_os = "linux")]
+    let name = <std::ffi::OsString as std::os::unix::ffi::OsStringExt>::from_vec(b"repo\nline\xff".to_vec());
+    #[cfg(not(target_os = "linux"))]
+    let name = std::ffi::OsString::from("repo\nline");
+    let repo = temp.path().join(name);
+    std::fs::create_dir_all(&repo).unwrap();
+    // Quiet, since git names the folder in what it prints, which the helper reads as UTF-8.
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("file.txt"), "committed\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(
+        &repo,
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-q",
+            "-m",
+            "Commit in an unusual folder",
+        ],
+    );
+    let cancel = horizon_cloud::Cancellation::default();
+    let emit = |_| {};
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &emit,
+        secrets: vec![],
+    };
+    let out = temp.path().join("out");
+    std::fs::create_dir(&out).unwrap();
+    let export = snapshot(&repo, "HEAD", &out, &runner).unwrap();
+    assert_eq!(std::fs::read_to_string(export.join("file.txt")).unwrap(), "committed\n");
+}
