@@ -13,16 +13,17 @@ owner: peters
 ## 1. Purpose
 
 This procedure makes sure that **Interact** sends mouse and keyboard input from
-a local Device panel to its desktop. It also makes sure that a Device panel does
-not offer **Interact** when its VNC server ignores input.
+a local Device panel to its desktop, and that no input reaches the desktop while
+**Interact** is off.
 
 ## 2. Applicability
 
 - Candidate: a frozen debug build of one exact commit, `<candidate-commit>`.
 - Platforms: Linux with Xvfb.
 - This procedure does not test:
-  - The cloud desktop viewer on a real worker. Area E of the
-    [cloud panels procedure](cloud-panels/e-panels.md) (test E05) does that test.
+  - The view-only cloud desktop viewer on a real worker, which offers no
+    **Interact** and shows the reason. That test needs a paid cloud worker, so
+    test E05 of the [cloud panels procedure](cloud-panels/e-panels.md) does it.
   - Agent input through the device CLI and MCP tools.
 
 ## 3. Safety
@@ -99,19 +100,10 @@ not offer **Interact** when its VNC server ignores input.
 
    Result: The `xterm` does not change.
 
-### 6.3 I03 — A view-only server gets no Interact
-
-1. Do test E05 of the [cloud panels procedure](cloud-panels/e-panels.md) on a
-   ready cloud.
-
-   Result: The cloud desktop viewer shows **Interact** disabled with the text
-   `View only: the VNC server of this desktop ignores mouse and keyboard input`.
-
 ## 7. Pass criteria
 
 - I01: The text typed through **Interact** shows in the `xterm`.
 - I02: No input reaches the `xterm` while **Interact** is off.
-- I03: The cloud desktop viewer does not offer **Interact** and shows the reason.
 
 ## 8. Cleanup
 
