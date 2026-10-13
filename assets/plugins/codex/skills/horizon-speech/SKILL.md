@@ -27,7 +27,9 @@ reason this skill exists.
 
 ## 1. Compare configured device against reality
 
-Horizon resolves its config by checking, in order, `$HOME/.horizon/`, then
+When `HORIZON_HOME` is set and not empty, Horizon looks for its config only in
+that folder (`config.yaml`, then `config.yml`) and ignores every location
+below. Otherwise it checks, in order, `$HOME/.horizon/`, then
 `$XDG_CONFIG_HOME/horizon/`, then a relative `horizon.yaml`/`horizon.yml` in the
 working directory. Resolution keys off `HOME` on every platform — **Windows
 included**; `USERPROFILE` is never consulted, so a native Windows launch without

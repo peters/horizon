@@ -99,7 +99,8 @@ artifact sink. Absolute paths and lexical parent traversal are rejected before
 the agent starts; the page and agent cannot choose or expand the authorized
 path. Without an authorized path, returned artifact content is rejected.
 Diagnostics and structured agent results stay in
-an owner-only job directory under `~/.horizon/browser-jobs/`; MCP runtime
+an owner-only job directory under `browser-jobs/` in the browser runtime
+root (see [Custom browser runtime directory](#custom-browser-runtime-directory)); MCP runtime
 profiles use a separate temporary home and are removed after each job.
 
 Every completed prompt job also writes a private redacted `trace.jsonl`, a
@@ -209,7 +210,7 @@ limits, and writer failure). Tools that were not called are reported as
 `observed: false`. Every invocation stages its
 validated plan and initial `prepared` state in an owner-only directory, flushes
 both artifacts plus an empty checkpoint-artifact directory, and atomically
-publishes the complete job under `~/.horizon/browser-jobs/`; later lifecycle
+publishes the complete job under `browser-jobs/` in the browser runtime root; later lifecycle
 updates remain atomic. The prepared
 state records an absolute deadline and acts as a lease: it may represent a live
 runner before the deadline, and must be treated as `timed_out` at or after the
@@ -332,7 +333,8 @@ coordination directory for discovery, ownership, queues, results, audit and
 durable browser job state. Use the same value for a host and a connecting MCP
 client. Relative paths resolve once at startup; an empty value is an error.
 Task-owned browser/agent subprocesses still use their dedicated private roots.
-The default remains `HOME/.horizon`; the override does not move Horizon's
+Without it, the root is the Horizon home: the absolute path in `HORIZON_HOME`
+when that is set, else `HOME/.horizon`. `HORIZON_BROWSER_ROOT` does not move Horizon's
 application configuration or terminal sessions.
 
 ## Provider device discovery
