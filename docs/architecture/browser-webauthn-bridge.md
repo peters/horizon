@@ -160,7 +160,9 @@ stdout. All binary values are base64url without padding.
 
 The page script refuses a `create` without `rp.name`, `user.name`,
 `user.displayName` or `pubKeyCredParams` with a `TypeError`, as a browser
-does. These members are required in the WebAuthn options.
+does. These members are required in the WebAuthn options. A
+`pubKeyCredParams` list with entries but no `public-key` entry gets
+`NotSupportedError`; an empty list gets the default algorithms.
 
 The page options `userVerification` and `residentKey` are strings, not
 fixed lists. The WebAuthn specification tells clients to ignore an unknown

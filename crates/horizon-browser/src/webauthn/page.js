@@ -72,14 +72,19 @@
             || user.displayName === undefined || publicKey.pubKeyCredParams === undefined;
         if (missing) throw new TypeError("publicKey is missing a required member");
         const selection = publicKey.authenticatorSelection || {};
+        const parameters = Array.from(publicKey.pubKeyCredParams);
+        const algorithms = parameters.filter((parameter) => parameter && parameter.type === "public-key").map(algorithmOf);
+        // An empty list asks for the defaults; a list of only unknown types
+        // offers nothing that a public-key credential can use.
+        if (parameters.length && !algorithms.length) {
+            throw new DOMException("No supported public key algorithm", "NotSupportedError");
+        }
         return {
             challenge: encode(publicKey.challenge),
             rp_id: text(rp.id),
             rp_name: text(rp.name),
             user: { id: encode(user.id), name: text(user.name), display_name: text(user.displayName) },
-            algorithms: Array.from(publicKey.pubKeyCredParams)
-                .filter((parameter) => parameter && parameter.type === "public-key")
-                .map(algorithmOf),
+            algorithms,
             exclude_credentials: credentialIds(publicKey.excludeCredentials),
             // An unknown residentKey counts as absent, so requireResidentKey applies.
             resident_key: residentKeys.includes(selection.residentKey)
@@ -154,7 +159,8 @@
             const options = op === "get" ? getOptions(publicKey) : createOptions(publicKey);
             message = stringify({ kind: "request", id, op, options });
         } catch (error) {
-            return Promise.reject(error instanceof TypeError ? error : new TypeError(String(error)));
+            const known = error instanceof TypeError || error instanceof DOMException;
+            return Promise.reject(known ? error : new TypeError(String(error)));
         }
         if (encoder.encode(message).length > maxMessageBytes) {
             return Promise.reject(new TypeError("The publicKey options are too large"));

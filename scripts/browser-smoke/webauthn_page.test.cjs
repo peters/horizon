@@ -98,6 +98,9 @@ test('a create without a required member is a TypeError and never posts', async 
         await assert.rejects(credentials.create({publicKey}), {name: 'TypeError'});
     }
     assert.equal(posted.length, 0);
+    await assert.rejects(credentials.create({publicKey: {...complete, pubKeyCredParams: [{type: 'foo', alg: -7}]}}),
+        {name: 'NotSupportedError'});
+    assert.equal(posted.length, 0);
     credentials.create({publicKey: {...complete, pubKeyCredParams: []}});
     assert.deepEqual(posted[0].options.algorithms, []);
 });
