@@ -297,3 +297,124 @@ fn a_queued_save_is_durable_on_disk_even_after_its_file_was_removed() {
     );
     assert!(RuntimeState::load(&created.runtime_state_path).unwrap().is_some());
 }
+
+#[test]
+fn session_create_copy_and_delete_never_wait_for_the_index_lock() {
+    use std::time::{Duration, Instant};
+    let root_dir = test_root("index-lock");
+    let home = HorizonHome::from_root(root_dir.path().into());
+    let store = SessionStore::new(home.clone(), home.config_path());
+    let first = store.create_session_from_runtime(RuntimeState::default()).unwrap();
+    let doomed = store.create_session_from_runtime(RuntimeState::default()).unwrap();
+    assert!(store.flush_runtime_states(Duration::from_secs(30)));
+    // Another Horizon process holds the index lock, so the writer cannot change the index.
+    let held = std::fs::File::create(home.sessions_dir().join("index.lock")).unwrap();
+    held.lock().unwrap();
+    let started = Instant::now();
+    let second = store.create_session_from_runtime(RuntimeState::default()).unwrap();
+    let copy = store.duplicate_session(&first.session_id).unwrap();
+    store.delete_session(&doomed.session_id).unwrap();
+    let waited = started.elapsed();
+    let listed = store.list_profile_sessions().unwrap();
+    // The exit wait for the writer keeps its bound while the change cannot be written.
+    let started = Instant::now();
+    let flushed = store.flush_runtime_states(Duration::from_millis(200));
+    let exit_wait = started.elapsed();
+    drop(held);
+    assert!(
+        waited < Duration::from_secs(2),
+        "create, copy and delete took {waited:?}"
+    );
+    assert_eq!(listed[0].session_id, copy.session_id, "a read sees the queued changes");
+    assert!(
+        !flushed && exit_wait < Duration::from_secs(2),
+        "the exit wait took {exit_wait:?}"
+    );
+    assert!(
+        store.flush_runtime_states(Duration::from_secs(30)),
+        "the exit wait writes them"
+    );
+    let index = super::IndexFile::at(&home.session_index_path()).load().unwrap();
+    let profile = index.profile(store.profile_id()).unwrap();
+    assert_eq!(profile.last_session_id.as_deref(), Some(copy.session_id.as_str()));
+    assert!(index.names(store.profile_id(), &second.session_id));
+    assert!(index.names(store.profile_id(), &first.session_id));
+    assert!(!index.names(store.profile_id(), &doomed.session_id));
+}
+
+#[test]
+fn an_index_change_that_fails_is_tried_again() {
+    let root_dir = test_root("index-retry");
+    let home = HorizonHome::from_root(root_dir.path().into());
+    let store = SessionStore::new(home.clone(), home.config_path());
+    store.create_session_from_runtime(RuntimeState::default()).unwrap();
+    assert!(store.flush_runtime_states(std::time::Duration::from_secs(30)));
+    // A damaged index refuses each change until it is repaired.
+    let saved = std::fs::read(home.session_index_path()).unwrap();
+    std::fs::write(home.session_index_path(), "\0").unwrap();
+    let second = store.create_session_from_runtime(RuntimeState::default()).unwrap();
+    assert!(
+        !store.flush_runtime_states(std::time::Duration::from_secs(30)),
+        "the change failed and is still queued"
+    );
+    std::fs::write(home.session_index_path(), saved).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let index_path = home.session_index_path();
+    let index = super::IndexFile::at(&index_path);
+    while !index.load().unwrap().names(store.profile_id(), &second.session_id) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the change is written once it can be"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(store.flush_runtime_states(std::time::Duration::from_secs(30)));
+}
+
+#[test]
+fn a_board_save_never_overtakes_an_index_change_queued_before_it() {
+    let root_dir = test_root("index-order");
+    let home = HorizonHome::from_root(root_dir.path().into());
+    let store = SessionStore::new(home.clone(), home.config_path());
+    let later = store.create_session_from_runtime(RuntimeState::default()).unwrap();
+    assert!(store.flush_runtime_states(std::time::Duration::from_secs(30)));
+    // The touch of `earlier` fails and waits for its retry.
+    let saved = std::fs::read(home.session_index_path()).unwrap();
+    std::fs::write(home.session_index_path(), "\0").unwrap();
+    let earlier = store.create_session_from_runtime(RuntimeState::default()).unwrap();
+    assert!(!store.flush_runtime_states(std::time::Duration::from_secs(30)));
+    std::fs::write(home.session_index_path(), saved).unwrap();
+    // `later` is used after `earlier`, so it stays the last session.
+    let _ = store.queue_runtime_state(&later.session_id, RuntimeState::default());
+    assert!(store.flush_runtime_states(std::time::Duration::from_secs(30)));
+    let index_path = home.session_index_path();
+    let index = super::IndexFile::at(&index_path).load().unwrap();
+    let profile = index.profile(store.profile_id()).unwrap();
+    assert_eq!(profile.last_session_id.as_deref(), Some(later.session_id.as_str()));
+    assert!(index.names(store.profile_id(), &earlier.session_id));
+}
+
+#[test]
+fn boards_and_index_changes_are_written_in_queue_order() {
+    let root_dir = test_root("index-queue-order");
+    let home = HorizonHome::from_root(root_dir.path().into());
+    let store = SessionStore::new(home.clone(), home.config_path());
+    let board = store.create_session_from_runtime(RuntimeState::default()).unwrap();
+    let touched = store.create_session_from_runtime(RuntimeState::default()).unwrap();
+    assert!(store.flush_runtime_states(std::time::Duration::from_secs(30)));
+    // Another Horizon process holds the index lock, so the writer waits in the next change
+    // while a board and then an index change are queued behind it.
+    let held = std::fs::File::create(home.sessions_dir().join("index.lock")).unwrap();
+    held.lock().unwrap();
+    store.create_session_from_runtime(RuntimeState::default()).unwrap();
+    let _ = store.queue_runtime_state(&board.session_id, RuntimeState::default());
+    store
+        .save_runtime_state(&touched.session_id, &RuntimeState::default())
+        .unwrap();
+    drop(held);
+    assert!(store.flush_runtime_states(std::time::Duration::from_secs(30)));
+    let index_path = home.session_index_path();
+    let index = super::IndexFile::at(&index_path).load().unwrap();
+    let profile = index.profile(store.profile_id()).unwrap();
+    assert_eq!(profile.last_session_id.as_deref(), Some(touched.session_id.as_str()));
+}

@@ -64,6 +64,10 @@ fn rejecting_a_future_session_preserves_runtime_metadata_index_and_transcripts()
     let home = HorizonHome::from_root(directory.path().to_path_buf());
     let store = SessionStore::new(home.clone(), home.config_path());
     let session = store.create_new_session(&Config::default()).expect("create fixture");
+    assert!(
+        store.flush_runtime_states(std::time::Duration::from_secs(30)),
+        "the index is written"
+    );
     let yaml = serde_yaml::to_string(&future_snapshot(RUNTIME_STATE_VERSION + 1)).expect("future fixture");
     std::fs::write(&session.runtime_state_path, yaml).expect("write future runtime");
     let transcript = session.transcript_root.join("saved-panel.bin");
@@ -98,6 +102,10 @@ fn saving_an_unsupported_snapshot_preserves_the_existing_session() {
     let home = HorizonHome::from_root(directory.path().to_path_buf());
     let store = SessionStore::new(home.clone(), home.config_path());
     let session = store.create_new_session(&Config::default()).expect("create fixture");
+    assert!(
+        store.flush_runtime_states(std::time::Duration::from_secs(30)),
+        "the index is written"
+    );
     let paths = [
         session.runtime_state_path.clone(),
         home.session_meta_path(&session.session_id),

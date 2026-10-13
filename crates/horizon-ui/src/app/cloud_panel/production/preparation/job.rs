@@ -232,6 +232,7 @@ mod tests {
             temp.path().join("config.yaml"),
         );
         store.save_runtime_state("session", &RuntimeState::default()).unwrap();
+        assert!(store.flush_runtime_states(std::time::Duration::from_secs(30)));
         // A named pipe holds the session index, so the writer waits in the save of the
         // cloud board until the test answers it.
         let index = store.home().session_index_path();

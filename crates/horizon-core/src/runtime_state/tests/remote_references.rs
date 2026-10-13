@@ -367,6 +367,10 @@ fn rejected_remote_session_operations_preserve_saved_files() {
     let home = HorizonHome::from_root(directory.path().to_path_buf());
     let store = SessionStore::new(home.clone(), home.config_path());
     let session = store.create_session_from_runtime(snapshot(OWNER)).expect("session");
+    assert!(
+        store.flush_runtime_states(std::time::Duration::from_secs(30)),
+        "the index is written"
+    );
     let metadata = std::fs::read(home.session_meta_path(&session.session_id)).expect("metadata");
     let index = std::fs::read(home.session_index_path()).expect("index");
     let original = std::fs::read(&session.runtime_state_path).expect("runtime");

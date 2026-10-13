@@ -3,13 +3,17 @@
 //! The UI queues the newest board of a session; a later queue of the same session replaces
 //! a board that is not written yet. The worker writes each board, its metadata and the
 //! session index so that a crash cannot leave a session without its content: each file is
-//! written to a temporary file, synced, renamed into place, and its folder is synced. A
-//! read of a session that is queued or being written returns the queued board, so a reader
-//! never sees an older one. A save that fails is kept and tried again later, while the
-//! saves of other sessions go on.
-use super::SessionStore;
+//! written to a temporary file, synced, renamed into place, and its folder is synced. It
+//! alone writes the index, with the queued changes of it in queue order with the boards. A
+//! read of a session or of the index returns what is queued and not written yet, so a reader
+//! never sees an older one. A save or an index change that fails is kept and tried again
+//! later, while the saves of other sessions go on.
+mod index_queue;
+
+use super::{SessionStore, index_file::IndexChange};
 use crate::RuntimeState;
 use crate::error::{Error, Result as StoreResult};
+use index_queue::IndexQueue;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -56,6 +60,7 @@ struct State {
     writing_parks: Option<String>,
     /// Sessions that a save outside the queue writes now; the worker leaves them alone.
     direct: BTreeSet<String>,
+    index: IndexQueue,
 }
 
 /// The status of a cloud panel; a Horizon without clouds has none.
@@ -74,6 +79,7 @@ pub(super) struct Park {
 }
 
 enum Job {
+    Index(IndexChange),
     Board(String, Box<Queued>),
     Parks(String, Vec<Park>),
 }
@@ -109,6 +115,7 @@ impl State {
         (self.queued.iter())
             .filter(|(session_id, _)| !self.direct.contains(*session_id))
             .filter_map(|(_, queued)| queued.retry.map(|at| at.saturating_duration_since(now)))
+            .chain(self.index.next_retry(now))
             .min()
             .unwrap_or(IDLE)
     }
@@ -116,6 +123,7 @@ impl State {
     fn pending(&self) -> bool {
         self.writing.is_some()
             || self.writing_parks.is_some()
+            || self.index.pending()
             || self.queued.values().any(|queued| queued.retry.is_none())
             || self
                 .parks
@@ -202,6 +210,22 @@ impl Writer {
         self.shared.changed.notify_all();
     }
 
+    /// Queues `change` of the session index; a worker of `store` writes it in queue order.
+    pub(super) fn queue_index(&self, store: &SessionStore, change: IndexChange) {
+        let mut state = self.lock();
+        state.next += 1;
+        let generation = state.next;
+        state.index.push(generation, change);
+        self.start(&mut state, store);
+        drop(state);
+        self.shared.changed.notify_all();
+    }
+
+    /// The changes of the session index that may not be on disk yet, in order.
+    pub(super) fn unwritten_index_changes(&self) -> Vec<IndexChange> {
+        self.lock().index.unwritten()
+    }
+
     /// The newest board queued for `session_id` that is not on disk yet.
     pub(super) fn unwritten(&self, session_id: &str) -> Option<RuntimeState> {
         let state = self.lock();
@@ -279,7 +303,7 @@ impl Writer {
         let mut state = self.lock();
         loop {
             if !state.pending() {
-                return state.queued.is_empty() && state.parks.is_empty();
+                return state.queued.is_empty() && state.parks.is_empty() && state.index.is_empty();
             }
             let Some(left) = deadline.checked_duration_since(Instant::now()) else {
                 return false;
@@ -355,17 +379,29 @@ impl Writer {
         loop {
             let (session_id, queued) = match self.next_job() {
                 None => return,
+                Some(Job::Index(change)) => {
+                    let written = store.write_index_changes([&change]);
+                    if let Err(error) = &written {
+                        tracing::warn!(?change, %error, "failed to change the session index; Horizon tries again");
+                    }
+                    self.lock().index.written(written.is_ok());
+                    self.shared.changed.notify_all();
+                    continue;
+                }
                 Some(Job::Board(session_id, queued)) => (session_id, *queued),
                 Some(Job::Parks(session_id, parks)) => {
                     self.write_parks(store, &session_id, &parks);
                     continue;
                 }
             };
-            let saved = store.save_runtime_state_durably(&session_id, &queued.board);
+            // Index changes queued before this board are written with it, so it never overtakes them.
+            let ahead = self.lock().index.ahead_of(queued.generation);
+            let saved = store.save_runtime_state_durably(&session_id, &queued.board, &ahead);
             let mut state = self.lock();
             state.writing = None;
             match saved {
                 Ok(()) => {
+                    state.index.written_ahead(ahead.len());
                     state.failed.remove(&session_id);
                     let written = state.written.entry(session_id).or_default();
                     *written = (*written).max(queued.generation);
@@ -415,8 +451,9 @@ impl Writer {
         self.shared.changed.notify_all();
     }
 
-    /// Takes the oldest board that is due, so every session is written in turn, else the
-    /// park records of a session that has no board waiting; `None` ends an idle worker.
+    /// Takes the index change or board that is due and was queued first, so every session is
+    /// written in turn, else the park records of a session that has no board waiting; `None`
+    /// ends an idle worker.
     fn next_job(&self) -> Option<Job> {
         let mut state = self.lock();
         loop {
@@ -425,8 +462,14 @@ impl Writer {
                 .filter(|(session_id, _)| !state.direct.contains(*session_id))
                 .filter(|(_, queued)| queued.retry.is_none_or(|at| at <= now))
                 .min_by_key(|(_, queued)| queued.generation)
-                .map(|(session_id, _)| session_id.clone());
-            if let Some(session_id) = due
+                .map(|(session_id, queued)| (session_id.clone(), queued.generation));
+            if let Some(change) = state
+                .index
+                .take_due(now, due.as_ref().map(|(_, generation)| *generation))
+            {
+                return Some(Job::Index(change));
+            }
+            if let Some((session_id, _)) = due
                 && let Some(queued) = state.queued.remove(&session_id)
             {
                 state.writing = Some((session_id.clone(), queued.clone()));
@@ -448,7 +491,7 @@ impl Writer {
                 .wait_timeout(state, wait)
                 .unwrap_or_else(PoisonError::into_inner);
             state = next;
-            if timeout.timed_out() && state.queued.is_empty() && state.parks.is_empty() {
+            if timeout.timed_out() && state.queued.is_empty() && state.parks.is_empty() && state.index.is_empty() {
                 state.running = false;
                 return None;
             }
@@ -504,8 +547,9 @@ impl Drop for PanicGuard<'_> {
             state.failed.insert(session_id, failure);
         }
         state.writing_parks = None;
+        state.index.abandon_writing();
         state.running = false;
-        if !state.queued.is_empty() || !state.parks.is_empty() {
+        if !state.queued.is_empty() || !state.parks.is_empty() || !state.index.is_empty() {
             self.writer.start(&mut state, self.store);
         }
         drop(state);
@@ -526,34 +570,15 @@ pub(super) fn durable_write(path: &Path, bytes: &[u8]) -> StoreResult<()> {
     sync_folder(parent)
 }
 
-/// Syncs the file at `path` and the folder that names it. Another thread can rename a new
-/// file over `path` meanwhile; then it syncs again, until the name on disk names a synced file.
-pub(super) fn sync_with_folder(path: &Path) -> StoreResult<()> {
-    const PASSES: usize = 8;
-    for _ in 0..PASSES {
-        // Windows syncs only a file that is open for writing.
-        let file = fs::OpenOptions::new().write(true).open(path)?;
-        file.sync_all()?;
-        path.parent().map_or(Ok(()), sync_folder)?;
-        if same_file(&file.metadata()?, &fs::metadata(path)?) {
-            return Ok(());
-        }
-    }
-    Err(Error::State(format!(
-        "{} kept changing while Horizon synced it",
-        path.display()
-    )))
-}
-
 #[cfg(unix)]
-fn same_file(synced: &fs::Metadata, named: &fs::Metadata) -> bool {
+pub(super) fn same_file(synced: &fs::Metadata, named: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     (synced.dev(), synced.ino()) == (named.dev(), named.ino())
 }
 
 /// Only a Unix host syncs a folder, and a durable wait is refused elsewhere.
 #[cfg(not(unix))]
-fn same_file(_: &fs::Metadata, _: &fs::Metadata) -> bool {
+pub(super) fn same_file(_: &fs::Metadata, _: &fs::Metadata) -> bool {
     true
 }
 
@@ -563,7 +588,7 @@ pub(super) fn sync_folder_and_parent(folder: &Path) -> StoreResult<()> {
     folder.parent().map_or(Ok(()), sync_folder)
 }
 
-fn sync_folder(folder: &Path) -> StoreResult<()> {
+pub(super) fn sync_folder(folder: &Path) -> StoreResult<()> {
     #[cfg(unix)]
     fs::File::open(folder)?.sync_all()?;
     #[cfg(not(unix))]

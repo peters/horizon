@@ -207,6 +207,16 @@ impl SessionIndex {
         self.profiles.iter().find(|profile| profile.profile_id == profile_id)
     }
 
+    pub(super) fn names(&self, profile_id: &str, session_id: &str) -> bool {
+        self.profile(profile_id).is_some_and(|profile| {
+            profile.last_session_id.as_deref() == Some(session_id)
+                || profile
+                    .recent_session_ids
+                    .iter()
+                    .any(|candidate| candidate == session_id)
+        })
+    }
+
     pub(super) fn touch_profile_session(&mut self, profile_id: &str, session_id: &str) {
         self.version = super::SESSION_INDEX_VERSION;
         let profile = if let Some(profile) = self
