@@ -89,6 +89,8 @@ pub(super) type Start<'a> = &'a dyn Fn(Vec<PathBuf>, CloudUploadLimits, Purpose)
 pub(super) struct Relay {
     pub(super) outgoing: SharedOutgoing,
     worker: Option<CloudUploadState>,
+    /// A state arrived, so a missing `worker` means a worker without uploads.
+    connected: bool,
     /// The worker request and the local request that shows it.
     mirrored: Option<(u64, u64)>,
     /// `None` until the first state: earlier errors and notices are not shown again.
@@ -132,6 +134,7 @@ impl Relay {
             .map(|notice| shorten(&notice.message));
         self.notices_seen = Some(notices);
         self.worker = state;
+        self.connected = true;
         shown
     }
 
@@ -152,16 +155,15 @@ impl Relay {
 
     /// Sends dropped files, then drops them at the point of the page that the person saw.
     pub(super) fn drop_files(&mut self, paths: Vec<PathBuf>, x: f64, y: f64, start: Start<'_>) -> Result<(), String> {
-        let state = self
+        if !self.connected {
+            return Err("Wait until the cloud browser is connected, then drop the files again.".into());
+        }
+        let page = self
             .worker
             .as_ref()
-            .ok_or("Wait until the cloud browser is connected, then drop the files again.")?;
-        if !state.drops {
-            return Err(
-                "This cloud browser does not accept dropped files. Rebuild the cloud with a newer image.".into(),
-            );
-        }
-        let page = state.page;
+            .filter(|state| state.drops)
+            .ok_or("This cloud browser does not accept dropped files. Rebuild the cloud with a newer image.")?
+            .page;
         self.start(paths, Purpose::Drop { page, x, y }, start)
     }
 

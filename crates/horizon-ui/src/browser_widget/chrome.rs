@@ -109,7 +109,9 @@ pub fn show(
     if matches!(browser.status, horizon_core::browser::BrowserStatus::Ready)
         && !browser.frame_slot.file_chooser().supported()
     {
-        let message = if browser.is_cloud() {
+        let message = if browser.accepts_cloud_drops() {
+            "Upload selection is unavailable in this cloud browser. Drop the files on the page instead."
+        } else if browser.is_cloud() {
             "This cloud browser cannot take files from this computer. A provider device never can; for a worker browser, rebuild the cloud with a newer image."
         } else {
             "Manual upload selection is unavailable. Use local Chromium, or update local Firefox to a build with file-dialog support."

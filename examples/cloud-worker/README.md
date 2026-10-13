@@ -223,7 +223,9 @@ Limits: 32 files and 256 MB in one choice or drop, parts of 4 MB, 64 batches and
 stays until its browser closes. At a limit, the control service removes the
 oldest used batch. It removes a batch that no answer or drop used after 10
 minutes. It removes all files of a browser that closed or stopped, and all
-files of an earlier control service when it starts.
+files of an earlier control service when it starts. If it cannot remove
+them, it refuses uploads until the next start, and the cloud browsers still
+work.
 
 The files belong to the account of the control service, mode `0600` in folders
 with mode `0700`. That account is also the account of the agents, so an agent

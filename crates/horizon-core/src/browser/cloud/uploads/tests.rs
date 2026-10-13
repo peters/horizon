@@ -168,6 +168,14 @@ fn drops_carry_the_page_that_the_person_saw_and_report_failures() {
             .unwrap_err()
             .contains("newer image")
     );
+    relay.apply(None, &chooser);
+    assert!(
+        relay
+            .drop_files(vec!["/local/a".into()], 1.0, 2.0, &start)
+            .unwrap_err()
+            .contains("newer image"),
+        "a state without uploads comes from a worker that predates them"
+    );
     relay.apply(Some(state(None)), &chooser);
     relay.drop_files(vec!["/local/a".into()], 1.0, 2.0, &start).unwrap();
     assert!(
