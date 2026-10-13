@@ -229,7 +229,7 @@ minutes. The runner stops a gate lane after 7 hours for each of its entries.
 | Line under the table | Meaning |
 |---|---|
 | Left out of the spec | The `leave_out` jobs of an entry. |
-| Left behind by an entry that ended, then removed | A Docker resource or a temporary folder that the cleanup of the candidate did not remove. The runner removed it. This is a failure of the candidate. |
+| Left behind by an entry that ended, then removed | A Docker resource that was still there 2 minutes after the entry ended, or a temporary folder of a gate lane whose entries all ended. The cleanup of the candidate did not remove it, so the runner removed it. This is a failure of the candidate. |
 | Removed for an entry that did not end | A resource of an entry that a stop or a failed gate lane interrupted. |
 | NOT REMOVED, remove it by hand | A resource that the runner could not remove. Remove it with its exact name. |
 

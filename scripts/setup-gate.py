@@ -48,6 +48,8 @@ LISTINGS = {
 }
 # How long one removal command may take.
 REMOVAL_SECONDS = 15 * 60
+# How long what a finished entry left in Docker may take to go on its own before it is a leak.
+LEAK_GRACE_SECONDS = 2 * 60
 # In this order: a container holds its image, volume and network.
 REMOVALS = (
     ("container", ["rm", "--force", "--volumes"]),
@@ -191,7 +193,9 @@ def build_test_binary():
 def docker(args, timeout=120):
     """Runs a docker command; its standard output, or None when it failed."""
     try:
-        done = subprocess.run(["docker", *args], capture_output=True, text=True, timeout=timeout, check=False)
+        # A session of its own, so a Ctrl-C in the terminal never ends a removal midway.
+        done = subprocess.run(["docker", *args], capture_output=True, text=True, timeout=timeout, check=False,
+                              start_new_session=True)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return done.stdout if done.returncode == 0 else None
@@ -528,7 +532,7 @@ class Gate:
             lane, entry = self.by_run[run]
             # The gate removed the entry's resources before it wrote the result; what is
             # still there is a leak of Horizon's cleanup.
-            removed, left = self.remove(run)
+            removed, left = self.settle(run)
             if removed or left:
                 self.leaks.append(f"{entry['label']}: {', '.join(removed + left)}")
             self.unremoved += left
@@ -538,6 +542,21 @@ class Gate:
             if preview != "-":
                 line += f", preview {preview}"
             print(line + (f": {failure}" if failure else ""), flush=True)
+
+    def settle(self, run):
+        """Gives what a finished entry still holds in Docker time to go, as Docker can still
+        delete a large volume after Horizon's cleanup stopped waiting; then removes the rest."""
+        record = self.records.get(run)
+        if record is not None and valid_record(record, self.prefixes):
+            deadline = time.monotonic() + LEAK_GRACE_SECONDS
+            while True:
+                listings = docker_listings()
+                if listings is not None and not any(leftover_names(record, listings).values()):
+                    return [], []
+                if self.interrupted or time.monotonic() >= deadline:
+                    break
+                time.sleep(5)
+        return self.remove(run)
 
     def remove(self, run):
         record = self.records.get(run)
