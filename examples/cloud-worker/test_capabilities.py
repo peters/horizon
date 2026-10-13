@@ -49,6 +49,7 @@ class CapabilitiesTests(unittest.TestCase):
     def run_check(self, *args, missing=(), environment=None, reported=None, run=None, identities=(10001, 10001),
                   bin_dir='/bin'):
         output = io.StringIO()
+        change_owner = os.chown if os.geteuid() == 0 else mock.Mock()
         def reply(command, **kwargs):
             if command[:1] == ['/usr/bin/id']:
                 value = identities[0 if command[1] == '-u' else 1]
@@ -58,6 +59,7 @@ class CapabilitiesTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0, stdout=(reported or {}).get(command[0], b''))
         with mock.patch('pathlib.Path', side_effect=self.path), \
                 mock.patch('os.geteuid', return_value=0), \
+                mock.patch('os.chown', side_effect=change_owner), \
                 mock.patch('sys.argv', ['horizon-worker-check', *args]), \
                 mock.patch.dict(os.environ, environment or {}, clear=True), \
                 mock.patch('subprocess.run', side_effect=reply) as commands, \
@@ -392,13 +394,23 @@ class CapabilitiesTests(unittest.TestCase):
             self.assertEqual(nested.returncode, 0, nested.stderr)
             self.assertNotIn('skipped', nested.stderr)
             return
+        for existing_agent_directory in (False, True):
+            with self.subTest(existing_agent_directory=existing_agent_directory):
+                self.assert_protected_policy(existing_agent_directory)
+
+    def assert_protected_policy(self, existing_agent_directory):
         self.root.chmod(0o755)
         requested = dict(self.available, agent_approvals='ask')
         # Worker startup uses umask 077; the root-owned parent must still be searchable.
         mask = os.umask(0o077)
         try:
             self.path('/run/horizon-worker/agent-approvals').unlink()
-            self.path('/run/horizon-worker/agent-approvals').parent.rmdir()
+            directory = self.path('/run/horizon-worker/agent-approvals').parent
+            directory.rmdir()
+            if existing_agent_directory:
+                directory.mkdir()
+                os.chown(directory, 10001, 10001)
+                directory.chmod(0o777)
             status, output, _ = self.run_check('--write-runtime', '--capabilities-json', json.dumps(requested))
         finally:
             os.umask(mask)
@@ -406,12 +418,15 @@ class CapabilitiesTests(unittest.TestCase):
         policy = self.path('/run/horizon-worker/agent-approvals')
         self.assertEqual(policy.stat().st_uid, 0)
         self.assertEqual(policy.parent.stat().st_uid, 0)
+        self.assertEqual(policy.parent.stat().st_gid, 0)
+        self.assertEqual(policy.parent.stat().st_mode & 0o777, 0o755)
         probe = r"""
 import os, pathlib, sys
 policy, workspace = map(pathlib.Path, sys.argv[1:])
 assert policy.read_text() == 'ask\n'
 workspace.write_text('{}')
-for operation in (lambda: policy.write_text('auto\n'), policy.unlink,
+for operation in (lambda: policy.parent.chmod(0o777),
+                  lambda: policy.write_text('auto\n'), policy.unlink,
                   lambda: os.replace(workspace, policy),
                   lambda: policy.parent.rename(policy.parent.with_name('replaced'))):
     try:
@@ -429,6 +444,17 @@ assert policy.read_text() == 'ask\n'
                       sys.executable, '-I', '-c', probe, str(policy), str(workspace)],
                      capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_policy_publication_refuses_a_symlinked_runtime_directory(self):
+        policy = self.path('/run/horizon-worker/agent-approvals')
+        target = policy.parent.with_name('agent-state')
+        policy.parent.rename(target)
+        policy.parent.symlink_to(target, target_is_directory=True)
+        requested = dict(self.available, agent_approvals='ask')
+        status, output, _ = self.run_check('--write-runtime', '--capabilities-json', json.dumps(requested))
+        self.assertEqual(status, 1)
+        self.assertIn('Worker validation failed', output)
+        self.assertEqual((target / 'agent-approvals').read_text(), 'auto\n')
 
     def test_readiness_refuses_a_changed_agent_approvals_setting(self):
         self.write('/workspace/capabilities.json', dict(self.available, agent_approvals='ask'))

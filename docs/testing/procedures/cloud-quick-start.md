@@ -449,8 +449,9 @@ and sends no agent prompt.
 2. On a disposable Linux test runner with root access, run the same tests as root.
 
    Result: The two-user test runs. UID 10001 reads the policy that root publishes
-   with a restrictive startup umask. It cannot write, delete or replace the policy
-   or rename its parent. The root-only tests report no skip.
+   with a restrictive startup umask, including when the directory was agent-owned.
+   It cannot write, delete or replace the policy, change its directory permissions
+   or rename its parent. A symlinked directory is refused. The root-only tests report no skip.
 
 3. Run the worker-contract regression from the repository root:
 

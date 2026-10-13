@@ -629,8 +629,9 @@ capabilities:
 - The agent runs as an account that is not root. An image without agent isolation runs its
   agents as root, and Claude Code refuses to skip its prompts as root.
 - `/run/horizon-worker/agent-approvals` contains `auto`. Root publishes this policy at
-  startup with mode `0644` in a root-owned directory with mode `0755`. The agent can read
-  it but cannot change or replace it. A missing or invalid policy keeps the prompts.
+  startup with mode `0644` in a directory with mode `0755`. Startup resets the directory
+  owner and group to root and refuses a symlinked directory. The agent can read the policy
+  but cannot change or replace it. A missing or invalid policy keeps the prompts.
   Readiness compares this protected value with the requested profile.
 
 In `ask` mode, Claude Code starts with `--permission-mode default`, the manual interactive

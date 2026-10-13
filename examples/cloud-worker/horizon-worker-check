@@ -300,6 +300,10 @@ try:
         if os.geteuid() != 0:
             raise ValueError('Only root can publish the agent approval policy')
         approval_policy.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        if approval_policy.parent.is_symlink():
+            raise ValueError('Agent approval policy directory must not be a symlink')
+        # A configurable base image can already contain an agent-owned directory.
+        os.chown(approval_policy.parent, 0, 0)
         approval_policy.parent.chmod(0o755)
         with tempfile.NamedTemporaryFile(dir=approval_policy.parent, delete=False) as pending_policy:
             pending_policy.write((selected.get('agent_approvals', 'auto') + '\n').encode())
