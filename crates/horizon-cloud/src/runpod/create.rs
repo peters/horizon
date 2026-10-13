@@ -59,16 +59,8 @@ pub(super) fn create_body(spec: &WorkerSpec) -> Value {
     let profile = &spec.profile;
     let mut body = json!({
         "name":spec.name(), "image":spec.image_digest, "cloud":"SECURE",
-        "disk":profile.storage.container_gb, "ports":["22/tcp"],
-        "env":{"PUBLIC_KEY":spec.public_key,"HORIZON_CLOUD_OPERATION":spec.operation_id,
-               "HORIZON_WORKER_CAPABILITIES":json!(profile.capabilities).to_string()},
+        "disk":profile.storage.container_gb, "ports":["22/tcp"], "env":environment(spec),
     });
-    if let Some(metadata) = &spec.startup_metadata {
-        body["env"][crate::startup::ENVIRONMENT_KEY] = json!(metadata.as_str());
-    }
-    if let Some(minutes) = spec.idle_stop_environment() {
-        body["env"][crate::IDLE_STOP_ENVIRONMENT_KEY] = json!(minutes);
-    }
     if profile.gpu {
         body["gpu"] = json!({"id":spec.gpu_types.first(), "count":1,
                             "minVcpuCountPerGpu":profile.cpu, "minRamPerGpu":profile.memory_gb});
@@ -86,4 +78,17 @@ pub(super) fn create_body(spec: &WorkerSpec) -> Value {
         body["registry"] = json!(id);
     }
     body
+}
+
+/// The worker's whole environment, all of it derived from `spec`.
+pub(super) fn environment(spec: &WorkerSpec) -> Value {
+    let mut env = json!({"PUBLIC_KEY":spec.public_key,"HORIZON_CLOUD_OPERATION":spec.operation_id,
+                         "HORIZON_WORKER_CAPABILITIES":json!(spec.profile.capabilities).to_string()});
+    if let Some(metadata) = &spec.startup_metadata {
+        env[crate::startup::ENVIRONMENT_KEY] = json!(metadata.as_str());
+    }
+    if let Some(minutes) = spec.idle_stop_environment() {
+        env[crate::IDLE_STOP_ENVIRONMENT_KEY] = json!(minutes);
+    }
+    env
 }

@@ -14,6 +14,8 @@ pub(super) enum Action {
     Remove,
     RevokeBrowserstack,
     Reconcile,
+    /// Opens the rebuild's confirmation, which reads what the latest commit changes.
+    PreviewRebuild,
     Rebuild,
     ContinueRebuild,
     CancelRebuild,
@@ -373,8 +375,7 @@ impl HorizonApp {
             self.start_production_resize(id, target, ctx);
             return;
         }
-        if let Some(kind) = super::rebuild::Kind::of(action) {
-            self.start_production_rebuild(id, kind, ctx);
+        if self.rebuild_action(id, action, ctx) {
             return;
         }
         let Some(launch) = self
@@ -451,6 +452,7 @@ impl HorizonApp {
                 | Action::Desktop
                 | Action::Remove
                 | Action::Reconcile
+                | Action::PreviewRebuild
                 | Action::Rebuild
                 | Action::ContinueRebuild
                 | Action::CancelRebuild

@@ -1,6 +1,6 @@
 ---
 procedure: cloud-panels-l-lifecycle
-feature: Cloud panels smoke test, area L (stop, resume, reconnect, restart, reconcile, rebuild, resize, idle stop and delete)
+feature: Cloud panels smoke test, area L (stop, resume, reconnect, restart, reconcile, rebuild, rebuild with changed settings, resize, idle stop and delete)
 platforms: [linux]
 cost: rents compute
 destructive: yes
@@ -14,7 +14,8 @@ owner: peters
 
 This area makes sure that the lifecycle actions of a cloud keep its data and its
 identity. It covers stop, resume, reconnect, a restart of Horizon, the provider
-check, the image rebuild, resize, idle stop, deletion and redeploy.
+check, the image rebuild with and without changed settings, resize, idle stop,
+deletion and redeploy.
 
 ## 2. Applicability
 
@@ -231,7 +232,9 @@ Use `smoke-sib`. Its profile has a `build` section.
 
 1. On the card of `smoke-sib`, click **Rebuild image & restart…**.
 
-   Result: The card asks for confirmation and names the consequences.
+   Result: The card shows `Reading the latest committed .horizon/cloud.yml…`. Then
+   it asks for confirmation, names the consequences and shows `The cloud's settings
+   stay as they are.`
 
    > **CAUTION:** THIS STEP STARTS A BUILD AND A PUSH. If you do not cancel in
    > time, the worker restarts on the new image.
@@ -660,22 +663,23 @@ with other storage values, then rebuilds it at the same commit
 
     Result: The value is the same as in step 8.
 
-15. In `<repo>`, add `idle_stop_minutes: 30` to the profile `runpod-build`. Commit the change.
+15. In `<repo>`, set `image:` of the profile `runpod-build` to another repository,
+    for example `ghcr.io/example/other-worker`. Commit the change.
 
     Result: `git -C <repo> log -1` shows the new commit.
 
-16. On the card, click **Rebuild image & restart…**, then **Rebuild and restart**.
+16. On the card, click **Rebuild image & restart…**.
 
-    Result: The card shows **Rebuild refused:** with the field `idle_stop_minutes`.
-    The worker does not restart.
+    Result: The confirmation shows **Rebuild refused:** with the field `image`. It
+    does not show **Rebuild and restart**. The worker does not restart.
 
-17. Revert the commit of step 15.
+17. Click **Keep current image**. Revert the commit of step 15.
 
     ```sh
     git -C <repo> revert --no-edit HEAD
     ```
 
-    Result: The profile `runpod-build` has no `idle_stop_minutes`.
+    Result: The profile `runpod-build` has its previous `image`.
 
 ### 6.12 L12: Refuse a rebuilt image that is larger than the container disk
 
@@ -759,6 +763,86 @@ must refuse the rebuild before it changes the worker
 
     Result: The cloud `smoke-hd` is not on the board.
 
+### 6.13 L13: Rebuild with changed settings
+
+Use `smoke-sib` on RunPod. Then do steps 1 to 12 again with `smoke-hb` on Hetzner
+and its profile `runpod-build`. The profile of the cloud must have `agents: [claude]`
+and no `idle_stop_minutes` at the start.
+
+1. In `<repo>`, add `codex` to `capabilities.agents` of the profile of the cloud.
+   Add `idle_stop_minutes: 30`. Commit the change.
+
+   Result: `git -C <repo> log -1` shows the new commit.
+
+2. Write `Uncommitted change` in a new file in `<repo>`. Do not commit it.
+
+   Result: `git -C <repo> status --short` shows the new file.
+
+3. On the card, click **Rebuild image & restart…**.
+
+   Result: The confirmation lists `Adds agent codex` and `Idle stop off → 30 min`
+   under `The latest commit changes this cloud's settings:`.
+
+4. Record the worker ID from the **Machine** tab.
+
+   Result: The **Machine** tab shows `Agents` with `claude` only.
+
+   > **CAUTION:** THIS STEP PUSHES AN IMAGE AND RESTARTS THE WORKER. On Hetzner, it
+   > also starts a new server. Record the new server in the resource ledger.
+
+5. Click **Rebuild and restart**. Wait until the card shows **Ready**.
+
+   Result: The card keeps the notes `Profile change: Adds agent codex` and
+   `Profile change: Idle stop off → 30 min`.
+
+6. Examine the **Machine** tab.
+
+   Result: `Agents` shows `codex` and `claude`. On RunPod, the worker ID is the same
+   as in step 4. On Hetzner, the server ID is new.
+
+7. Open a Codex panel in the cloud's workspace.
+
+   Result: Codex starts and does not ask you to sign in. It has the credential from
+   Cloud settings or the ChatGPT login of this computer, as a new cloud does.
+
+8. In a Shell panel of the cloud, show the Codex program.
+
+   ```sh
+   command -v codex
+   ```
+
+   Result: The command shows a path.
+
+9. Revert the commit of step 1. Delete the file of step 2.
+
+   ```sh
+   git -C <repo> revert --no-edit HEAD
+   ```
+
+   Result: The profile has `agents: [claude]` and no `idle_stop_minutes`.
+
+10. On the card, click **Rebuild image & restart…**.
+
+    Result: The confirmation lists `Removes agent codex` and `Idle stop 30 min → off`.
+
+    > **CAUTION:** THIS STEP RESTARTS THE WORKER. The Codex session ends.
+
+11. Click **Rebuild and restart**. Wait until the card shows **Ready**.
+
+    Result: The card shows the note `Session <panel> (codex): this cloud's profile no
+    longer has agent codex, so its process was not relaunched`. The Codex panel does
+    not show a running Codex. The other sessions relaunch.
+
+12. Examine the **Machine** tab.
+
+    Result: `Agents` shows `claude` only.
+
+13. Commit `gpu: true` in the profile of `smoke-sib`. On the card, click **Rebuild
+    image & restart…**.
+
+    Result: The confirmation shows **Rebuild refused:** with the field `gpu`. Click
+    **Keep current image**, then revert the commit.
+
 ## 7. Pass criteria
 
 - The marker files survive stop, resume, resize and the Hetzner resume.
@@ -767,8 +851,12 @@ must refuse the rebuild before it changes the worker
 - **Check provider** and `cloud_deploy reconcile` show the same worker ID.
 - After **Cancel rebuild**, no rebuild step waits. A full rebuild reaches **Ready**.
 - `smoke-hb` rebuilds on Hetzner at the same commit, although its profile names
-  RunPod and other storage values. A changed `idle_stop_minutes` gives a refusal
-  that names the field.
+  RunPod and other storage values. A changed `image` gives a refusal that names the
+  field.
+- A rebuild adds and removes the agent `codex` and changes the idle stop on RunPod
+  and on Hetzner. The confirmation lists each change before the rebuild starts. An
+  added agent has its credential. A session of a removed agent is reported and does
+  not relaunch.
 - The rebuild of `smoke-hd` is refused with `storage.container_gb`, and its
   server stays.
 - Idle stop stops `smoke-x` after the profile limit.

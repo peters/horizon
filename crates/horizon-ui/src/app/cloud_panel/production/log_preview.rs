@@ -11,6 +11,9 @@ use std::time::{Duration, Instant};
 
 const PREVIEW_ISSUE: u32 = 8_800_001;
 const DOCKER_STUCK_ISSUES: [u32; 2] = [8_800_005, 8_800_006];
+const REBUILD_ISSUE: u32 = 8_800_007;
+/// The profile of the synthetic cloud whose rebuild reads a repository's latest commit.
+const REBUILD_PROFILE: &str = "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n    build:\n      context: .\n      dockerfile: Dockerfile\n    capabilities:\n      agents: [claude]\n      browsers: [chromium]\n";
 
 pub(super) fn seed(app: &mut HorizonApp, ctx: &egui::Context) {
     if let Some(count) = std::env::var("HORIZON_CLOUD_LOG_PREVIEW")
@@ -36,6 +39,66 @@ pub(super) fn seed(app: &mut HorizonApp, ctx: &egui::Context) {
     {
         seed_cost(app, Duration::from_mins(minutes));
     }
+    // A Git repository whose latest commit changes the settings of `REBUILD_PROFILE`.
+    if let Some(repository) = std::env::var_os("HORIZON_CLOUD_REBUILD_PREVIEW") {
+        seed_rebuild(app, repository.into());
+    }
+}
+
+/// A ready synthetic `RunPod` cloud of `repository` on `REBUILD_PROFILE`, whose rebuild
+/// confirmation lists what the repository's latest commit changes. Its record lives in
+/// memory only, so a rebuild that starts finds no record and changes nothing.
+fn seed_rebuild(app: &mut HorizonApp, repository: std::path::PathBuf) -> bool {
+    if !super::preview::accepts(app) {
+        return false;
+    }
+    let Some(profile) = CloudConfig::parse(REBUILD_PROFILE)
+        .ok()
+        .and_then(|mut config| config.profiles.remove("dev"))
+    else {
+        return false;
+    };
+    let Ok(state) = serde_json::from_value::<Deployment>(serde_json::json!({
+        "version": 1, "cloud_id": "synthetic-rebuild", "repository": repository, "revision": "a".repeat(40),
+        "profile": profile, "stage": "Ready", "operation": {"state": "bound", "worker_id": "synthetic1"},
+        "spec": null, "sessions": [], "source_ready": true,
+        "worker": {"id": "synthetic1", "name": "synthetic-rebuild", "imageName": "example.invalid/worker",
+            "desiredStatus": "RUNNING"}
+    })) else {
+        return false;
+    };
+    let mut group = CloudGroup::new(
+        REBUILD_ISSUE,
+        "Synthetic rebuild".into(),
+        "synthetic".into(),
+        repository,
+        [40.0, 600.0],
+    );
+    group.size = [1140.0, 620.0];
+    group.remote = Some(CloudLaunch {
+        deployment_started: true,
+        id: "synthetic-rebuild".into(),
+        revision: "a".repeat(40),
+        profile_name: "dev".into(),
+        profile,
+        placement: horizon_core::cloud_panel::Placement::default(),
+    });
+    app.cloud_prototype.groups.0.push(group);
+    let runtime = app
+        .cloud_prototype
+        .production
+        .runtimes
+        .entry(REBUILD_ISSUE)
+        .or_default();
+    runtime.progress.stage(Stage::Validate, Instant::now());
+    runtime.progress.stage(Stage::Ready, Instant::now());
+    runtime.stage = Some(Stage::Ready);
+    runtime.state = Some(state);
+    // Connected, as after a deployment; the open channel carries no event.
+    let (sender, receiver) = std::sync::mpsc::channel();
+    runtime.sender = Some(sender);
+    runtime.receiver = Some(receiver);
+    true
 }
 
 fn seed_lines(app: &mut HorizonApp, count: usize) -> bool {
@@ -310,6 +373,25 @@ fn preview_launch() -> Option<CloudLaunch> {
 mod tests {
     use super::*;
     use crate::app::test_support::test_app;
+
+    #[test]
+    fn a_rebuild_preview_is_a_ready_bound_cloud_of_the_given_repository() {
+        let (temp, mut app) = test_app();
+        assert!(seed_rebuild(&mut app, temp.path().into()));
+        let runtime = &app.cloud_prototype.production.runtimes[&REBUILD_ISSUE];
+        let state = runtime.state.as_ref().unwrap();
+        assert_eq!(state.repository, temp.path());
+        assert!(matches!(
+            state.operation,
+            horizon_core::cloud_runtime::CreateState::Bound { .. }
+        ));
+        assert_eq!(runtime.stage, Some(Stage::Ready));
+        assert!(!runtime.busy());
+        assert!(
+            !seed_rebuild(&mut app, temp.path().into()),
+            "one synthetic cloud at most"
+        );
+    }
 
     #[test]
     fn a_preview_keeps_every_requested_line() {

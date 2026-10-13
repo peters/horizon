@@ -180,11 +180,14 @@ so Horizon does not switch the server in place:
 3. It records the new image and clears the server's fence in one save, then
    reconnects. The reconnect creates a new server on the rebuilt image, attaches
    the same volume and relaunches the sessions. The server gets a new address.
+   When the rebuild changes the cloud's settings, the same save records the new
+   profile, and the new server gets the new capabilities and idle stop.
 
 Every step is recorded first, so after an interruption **Continue rebuild**
 finishes the release and starts the new server. **Cancel rebuild** leaves the
 cloud as it was when the release had not begun. Once the release has begun, it
-finishes the release and starts a new server on the previous image instead.
+finishes the release and starts a new server on the previous image instead, with
+the previous settings.
 
 ## Not available on Hetzner yet
 

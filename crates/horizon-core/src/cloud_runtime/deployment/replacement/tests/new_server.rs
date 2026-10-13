@@ -330,6 +330,44 @@ fn a_rebuild_cancelled_after_the_release_starts_a_new_server_on_the_previous_ima
 }
 
 #[test]
+fn a_new_server_binds_changed_settings_with_the_image_and_a_cancel_keeps_the_old_ones() {
+    let settings = |fixture: &Fixture| {
+        let mut committed = fixture.state().profile;
+        committed.capabilities.agents.insert(horizon_cloud::Agent::Codex);
+        committed.idle_stop_minutes = Some(30);
+        let mut script = Script::new(fixture);
+        script.head.config = Some(config(&committed));
+        (committed, script)
+    };
+    let fixture = hetzner();
+    let (committed, script) = settings(&fixture);
+    let steps = NewServer {
+        script: &script,
+        hosting: Hosting::default(),
+    };
+    assert_eq!(rebuild_new(&fixture, &steps).unwrap(), Driven::Committed);
+    assert_committed(&fixture, &steps);
+    // The reconnect starts the new server from this specification, environment included.
+    let state = fixture.state();
+    assert_eq!(state.profile, committed);
+    assert_eq!(state.spec.unwrap().profile, committed);
+    // Cancelled after the release, the new server starts with the previous settings.
+    let fixture = hetzner();
+    let before = fixture.state();
+    let (_, script) = settings(&fixture);
+    let steps = NewServer {
+        script: &script,
+        hosting: Hosting::default(),
+    };
+    steps.hosting.release_fails.set(true);
+    assert!(rebuild_new(&fixture, &steps).is_err());
+    assert_eq!(cancel_new(&fixture, &steps).unwrap(), flow::Cancelled::Released);
+    let after = fixture.state();
+    assert_eq!(after.profile, before.profile);
+    assert_eq!(after.spec, before.spec);
+}
+
+#[test]
 fn an_interrupted_release_is_never_reconnected_around_or_read_as_a_stop() {
     use crate::cloud_runtime::{deployment::Compute as _, settings::Settings, state::REPLACEMENT_PENDING};
     let fixture = hetzner();

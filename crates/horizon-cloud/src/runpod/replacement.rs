@@ -42,7 +42,7 @@ impl RunPod {
     /// `next` is updated, and therefore reset, again.
     /// # Errors
     /// Refuses a worker that is not running or not verifiably this operation's,
-    /// and any change beyond the image and its registry credential. Only errors
+    /// and any change `WorkerSpec::verify_replacement` refuses. Only errors
     /// for which `may_have_applied` holds leave the outcome uncertain; observe the
     /// worker with `observe_image` before retrying or reverting.
     pub fn replace_image(
@@ -70,7 +70,8 @@ impl RunPod {
     /// Reports which image of the replacement the provider records for the worker.
     /// A worker with a CPU workspace `volume` is also read through the current API,
     /// and the replacement settles only when both observations report the same image.
-    /// `timeout` bounds the whole observation.
+    /// A worker whose environment still selects the other side's capabilities or idle
+    /// stop is unsettled too. `timeout` bounds the whole observation.
     /// # Errors
     /// `WorkerLost` when the provider no longer returns the worker; `IdentityMismatch`
     /// for a third image, a missing or different operation marker, or another mount.
@@ -91,7 +92,18 @@ impl RunPod {
         let worker = self
             .inspect_with_timeout(worker_id, cancel, timeout)?
             .ok_or(CloudError::WorkerLost)?;
-        let listed = identify(&worker, current, next)?;
+        let listed = match identify(&worker, current, next) {
+            Ok(side) => side,
+            Err(CloudError::IdentityMismatch) if lags_idle_stop(&worker, current, next) => {
+                return Ok(Observed::Unsettled);
+            }
+            Err(error) => return Err(error),
+        };
+        // The image and the environment may not change at once; a worker that still
+        // carries the other side's capabilities is not settled on this one.
+        if !carries_capabilities(&worker, listed, current, next) {
+            return Ok(Observed::Unsettled);
+        }
         let Some(volume) = volume else {
             return Ok(listed.into());
         };
@@ -130,10 +142,46 @@ fn identify(worker: &Worker, current: &WorkerSpec, next: &WorkerSpec) -> Result<
     Ok(side)
 }
 
-/// Sends only the fields that change, relying on the update to keep omitted ones.
+/// Whether the worker reports one image of the pair with the other side's idle stop
+/// and is otherwise that side's: the update may switch the image before the environment.
+fn lags_idle_stop(worker: &Worker, current: &WorkerSpec, next: &WorkerSpec) -> bool {
+    let Some(side) = ImageSide::of(&worker.image_name, current, next) else {
+        return false;
+    };
+    let (spec, other) = match side {
+        ImageSide::Previous => (current, next),
+        ImageSide::Next => (next, current),
+    };
+    let mut lagging = spec.clone();
+    lagging.profile.idle_stop_minutes = other.profile.idle_stop_minutes;
+    worker.env.get("HORIZON_CLOUD_OPERATION") == Some(&current.operation_id) && worker.verify(&lagging).is_ok()
+}
+
+/// Whether the worker's environment selects the capabilities of the `side` it reports.
+/// A worker created before Horizon recorded them carries none: that is its previous
+/// environment, and on the new image it is settled only when the capabilities do not
+/// change, since an update that changes them sends them.
+fn carries_capabilities(worker: &Worker, side: ImageSide, current: &WorkerSpec, next: &WorkerSpec) -> bool {
+    let spec = if side == ImageSide::Next { next } else { current };
+    worker.env.get("HORIZON_WORKER_CAPABILITIES").map_or_else(
+        || side == ImageSide::Previous || current.profile.capabilities == next.profile.capabilities,
+        |selected| {
+            serde_json::from_str::<crate::Capabilities>(selected)
+                .is_ok_and(|selected| selected == spec.profile.capabilities)
+        },
+    )
+}
+
+/// Sends only the fields that change, relying on the update to keep omitted ones. A
+/// rebuild that changes the worker's capabilities or idle stop sends the whole new
+/// environment, which the update replaces as a whole.
 fn update_body(current: &WorkerSpec, next: &WorkerSpec) -> Result<Value, CloudError> {
     current.verify_replacement(next)?;
     let mut body = json!({"image": next.image_digest});
+    let environment = super::create::environment(next);
+    if environment != super::create::environment(current) {
+        body["env"] = environment;
+    }
     match (&current.registry_auth_id, &next.registry_auth_id) {
         // How the update clears a credential is unverified; refuse rather than guess.
         (Some(_), None) => {

@@ -1,7 +1,7 @@
 //! Journaled switch of a dedicated cloud's bound worker to a rebuilt image.
 use super::{Deployment, Error, OperationId, Result, Stage};
 use crate::cloud_runtime::repository;
-use horizon_cloud::{CreateState, WorkerSpec};
+use horizon_cloud::{CreateState, Profile, WorkerSpec};
 use serde::{Deserialize, Serialize};
 
 /// Refusal for actions that assume the worker runs its recorded image.
@@ -9,11 +9,13 @@ pub(in crate::cloud_runtime) const REPLACEMENT_PENDING: &str = "Image replacemen
 const REPLACEMENT_MISMATCH: &str = "Image replacement journal does not match this cloud's worker";
 const REPLACEMENT_UNBOUND: &str = "Only a bound worker's image can be replaced";
 const TAG_TOO_LONG: &str = "This cloud's identity is too long for an image tag";
+const PROFILE_MISMATCH: &str = "Image replacement journal changes more of this cloud's profile than a rebuild can";
 
 /// A journaled switch of a dedicated cloud's bound worker to a rebuilt image. It is
 /// saved before each provider mutation and kept until the replacement commits or is
-/// cancelled. Only the image digest and the registry credential that pulls it change;
-/// the worker ID, workspace volume, protocol, sharing mode and SSH trust are kept.
+/// cancelled. Only the image digest, the registry credential that pulls it and the
+/// profile's rebuild settings (`Profile::with_rebuild_settings`) change; the worker ID,
+/// workspace volume, protocol, sharing mode and SSH trust are kept.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ImageReplacement {
@@ -33,6 +35,11 @@ pub struct ImageReplacement {
     /// The replacement image's unique registry tag, `horizon-<cloud>-<operation>`.
     pub tag: String,
     pub phase: ReplacementPhase,
+    /// The cloud's profile once the replacement commits, when the rebuild changes its
+    /// settings. Omitted otherwise, so journals of an unchanged profile keep their
+    /// encoding; an earlier Horizon version refuses a journal that carries it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<Box<Profile>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -85,7 +92,8 @@ impl ImageReplacement {
 
 impl Deployment {
     /// The bound worker's specification on the replacement image once it is built:
-    /// only the image digest and its registry credential differ from `spec`.
+    /// only the image digest, its registry credential and the journaled profile differ
+    /// from `spec`.
     /// # Errors
     /// Rejects a journal that does not match this deployment's worker, image and
     /// stage, and a replacement image that is not a different immutable digest.
@@ -116,6 +124,16 @@ impl Deployment {
         {
             return Err(Error::Invalid(REPLACEMENT_MISMATCH));
         }
+        // A changed profile must be one that a rebuild may bind: valid, with a recipe, and
+        // different from the bound one only in its rebuild settings.
+        if let Some(profile) = &replacement.profile
+            && (**profile == spec.profile
+                || spec.profile.with_rebuild_settings(profile) != **profile
+                || profile.build.is_none()
+                || profile.validate(false).is_err())
+        {
+            return Err(Error::Invalid(PROFILE_MISMATCH));
+        }
         let Some(image) = replacement.image() else {
             return Ok(None);
         };
@@ -125,6 +143,9 @@ impl Deployment {
         let mut next = spec.clone();
         next.image_digest.clone_from(&image.digest);
         next.registry_auth_id.clone_from(&image.registry_auth_id);
+        if let Some(profile) = &replacement.profile {
+            next.profile.clone_from(profile);
+        }
         spec.verify_replacement(&next)?;
         Ok(Some(next))
     }
@@ -195,11 +216,38 @@ impl Deployment {
             sibling_revisions,
             tag,
             phase: ReplacementPhase::Prepared {},
+            profile: None,
         };
         self.replace_journal(|state| {
             state.image_replacement = Some(replacement);
             Ok(())
         })
+    }
+
+    /// Records `profile` as the cloud's profile once the prepared replacement commits.
+    /// # Errors
+    /// Refuses unless the replacement is prepared, and a profile that differs from the
+    /// bound one in more than its rebuild settings.
+    pub fn replacement_changes_profile(&mut self, profile: Profile) -> Result<()> {
+        self.replace_journal(|state| {
+            let changed = state.spec.as_ref().is_some_and(|spec| spec.profile != profile);
+            let replacement = state.pending_replacement()?;
+            if !matches!(replacement.phase, ReplacementPhase::Prepared {}) {
+                return Err(Error::Invalid("Image replacement is already built"));
+            }
+            replacement.profile = changed.then(|| Box::new(profile));
+            Ok(())
+        })
+    }
+
+    /// The profile the pending replacement builds for and binds once it commits; the
+    /// bound profile without one.
+    #[must_use]
+    pub fn replacement_profile(&self) -> &Profile {
+        self.image_replacement
+            .as_ref()
+            .and_then(|replacement| replacement.profile.as_deref())
+            .unwrap_or(&self.profile)
     }
 
     /// Records the pushed and verified image; the provider update is still unsent.
@@ -254,9 +302,10 @@ impl Deployment {
     }
 
     /// Commits a replacement that the provider reports on the new image: the worker's
-    /// specification and registry binding switch to it, the journal is cleared and the
-    /// sessions must relaunch before the cloud is ready again. Persist it only through
-    /// `deployment::commit_replacement`, which rebinds the storage journal first.
+    /// specification, registry binding and the cloud's profile switch to it, the
+    /// journal is cleared and the sessions must relaunch before the cloud is ready
+    /// again. Persist it only through `deployment::commit_replacement`, which rebinds
+    /// the storage journal first.
     pub(in crate::cloud_runtime) fn commit_replacement(&mut self) -> Result<OperationId> {
         self.require_bound_worker()?;
         let next = self.replacement_worker()?;
@@ -274,6 +323,7 @@ impl Deployment {
             }
         }
         self.registry_generation.clone_from(&image.registry_generation);
+        self.profile.clone_from(&next.profile);
         self.spec = Some(next);
         self.image_replacement = None;
         self.session_restart = Some(operation);

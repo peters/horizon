@@ -221,12 +221,15 @@ fn refuses_to_update_a_stopped_lost_or_unverified_worker() {
 }
 
 fn identity_changes(current: &WorkerSpec) -> Vec<WorkerSpec> {
-    let edits: [fn(&mut WorkerSpec); 9] = [
+    let edits: [fn(&mut WorkerSpec); 12] = [
         |spec| spec.operation_id = "other-operation".into(),
         |spec| spec.profile.cpu += 1,
         |spec| spec.profile.memory_gb += 1,
         |spec| spec.profile.storage.volume_gb += 1,
-        |spec| spec.profile.capabilities.desktop = !spec.profile.capabilities.desktop,
+        |spec| spec.profile.provider = crate::hetzner::PROVIDER.into(),
+        |spec| spec.profile.image = "example/other".into(),
+        |spec| spec.profile.capabilities.browserstack = Some(crate::BrowserStack::default()),
+        |spec| spec.profile.bootstrap.contract_version += 1,
         |spec| spec.public_key = OTHER_KEY.into(),
         |spec| spec.gpu_types = vec!["NVIDIA RTX A5000".into()],
         |spec| spec.cpu_flavors = vec!["cpu5c".into()],
@@ -243,7 +246,39 @@ fn identity_changes(current: &WorkerSpec) -> Vec<WorkerSpec> {
 }
 
 #[test]
-fn only_the_image_and_its_credential_may_change() {
+fn a_rebuild_that_changes_the_settings_sends_the_whole_new_environment() {
+    let current = spec();
+    let mut changed = next(&current);
+    changed.profile.capabilities.desktop = !changed.profile.capabilities.desktop;
+    changed.profile.idle_stop_minutes = Some(30);
+    changed.profile.bootstrap.readiness_seconds += 60;
+    current.verify_replacement(&changed).unwrap();
+    changed.verify_replacement(&current).unwrap();
+    let (provider, requests, task) = server(vec![(200, pod(&current, &current).to_string()), (200, "{}".into())]);
+    provider
+        .replace_image(&current, &changed, "worker1", &Cancellation::default())
+        .unwrap();
+    task.join().unwrap();
+    let sent = body(&requests.lock().unwrap()[1]);
+    assert_eq!(sent["image"], json!(changed.image_digest));
+    assert_eq!(sent["env"], super::super::create::create_body(&changed)["env"]);
+    assert_eq!(sent["env"]["HORIZON_IDLE_STOP_MINUTES"], json!("30"));
+    // A readiness timeout never reaches the worker, so only the image is sent.
+    let mut host_only = next(&current);
+    host_only.profile.bootstrap.readiness_seconds += 60;
+    let (provider, requests, task) = server(vec![(200, pod(&current, &current).to_string()), (200, "{}".into())]);
+    provider
+        .replace_image(&current, &host_only, "worker1", &Cancellation::default())
+        .unwrap();
+    task.join().unwrap();
+    assert_eq!(
+        body(&requests.lock().unwrap()[1]),
+        json!({"image": host_only.image_digest})
+    );
+}
+
+#[test]
+fn only_the_image_its_credential_and_the_rebuild_settings_may_change() {
     let current = spec();
     for changed in identity_changes(&current) {
         assert!(matches!(
@@ -342,6 +377,62 @@ fn observe(
         &Cancellation::default(),
         Duration::from_secs(2),
     )
+}
+
+#[test]
+fn a_worker_on_the_new_image_with_the_previous_capabilities_is_not_settled() {
+    let current = spec();
+    let mut next = next(&current);
+    next.profile.capabilities.desktop = !next.profile.capabilities.desktop;
+    let carrying = |on: &WorkerSpec, capabilities: &crate::Capabilities| {
+        let mut value = pod(&current, on);
+        value["env"]["HORIZON_WORKER_CAPABILITIES"] = json!(json!(capabilities).to_string());
+        value
+    };
+    for (inspected, expected) in [
+        (carrying(&next, &current.profile.capabilities), Observed::Unsettled),
+        (carrying(&next, &next.profile.capabilities), Observed::Next),
+        (carrying(&current, &current.profile.capabilities), Observed::Previous),
+        (carrying(&current, &next.profile.capabilities), Observed::Unsettled),
+        // A worker created before the variable existed: its previous environment has none,
+        // and an update that changes the capabilities sends them.
+        (pod(&current, &current), Observed::Previous),
+        (pod(&current, &next), Observed::Unsettled),
+    ] {
+        let (provider, _requests, task) = server(vec![(200, inspected.to_string())]);
+        assert_eq!(observe(&provider, &current, &next, None).unwrap(), expected);
+        task.join().unwrap();
+    }
+}
+
+#[test]
+fn a_worker_on_one_image_with_the_other_idle_stop_is_not_settled() {
+    let current = spec();
+    let mut next = next(&current);
+    next.profile.idle_stop_minutes = Some(30);
+    let idle = |on: &WorkerSpec, minutes: Option<&str>| {
+        let mut value = pod(&current, on);
+        if let Some(minutes) = minutes {
+            value["env"]["HORIZON_IDLE_STOP_MINUTES"] = json!(minutes);
+        }
+        value
+    };
+    for (inspected, expected) in [
+        (idle(&next, None), Ok(Observed::Unsettled)),
+        (idle(&next, Some("30")), Ok(Observed::Next)),
+        (idle(&current, None), Ok(Observed::Previous)),
+        (idle(&current, Some("30")), Ok(Observed::Unsettled)),
+        // An idle stop of neither side is not this replacement's.
+        (idle(&next, Some("45")), Err(())),
+    ] {
+        let (provider, _requests, task) = server(vec![(200, inspected.to_string())]);
+        let observed = observe(&provider, &current, &next, None);
+        task.join().unwrap();
+        match expected {
+            Ok(expected) => assert_eq!(observed.unwrap(), expected),
+            Err(()) => assert!(matches!(observed, Err(CloudError::IdentityMismatch)), "{observed:?}"),
+        }
+    }
 }
 
 #[test]

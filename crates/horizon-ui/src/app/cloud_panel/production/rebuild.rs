@@ -1,14 +1,18 @@
 //! Runs a cloud's image rebuild, or continues or cancels a pending one, off the UI
-//! thread. The build, switch and reconnect live in `deployment::replacement`.
+//! thread, and reads what the rebuild changes for its confirmation. The plan, build,
+//! switch and reconnect live in `deployment::replacement`.
 use super::{
     Confirmation, Event, HorizonApp, Request, Runtime, Settings, Stage, Store, cloud_runtime, lifecycle::Action,
     presentation,
 };
-use horizon_core::cloud_runtime::deployment::replacement;
+use horizon_core::{
+    cloud_panel::Profile,
+    cloud_runtime::deployment::replacement::{self, Plan},
+};
 use std::{
     cell::Cell,
     path::PathBuf,
-    sync::mpsc::{Sender, channel},
+    sync::mpsc::{Receiver, Sender, TryRecvError, channel},
     time::Instant,
 };
 
@@ -19,6 +23,52 @@ pub(super) mod tests;
 const NOTE_LIMIT: usize = 20;
 /// Starts the note for a rebuild refused before anything was journaled.
 const REFUSED: &str = "Rebuild refused:";
+const UNREAD: &str = "The latest commit could not be read; close this and try again";
+
+/// What the latest commit changes in a cloud's settings, read off the UI thread while
+/// the rebuild's confirmation is open, so the person confirms exactly that.
+#[derive(Default)]
+pub(super) struct Preview {
+    reading: Option<Receiver<Result<Plan, String>>>,
+    read: Option<Result<Plan, String>>,
+}
+
+impl Preview {
+    /// The plan or the reason it was refused, once read.
+    pub(super) fn read(&mut self) -> Option<&Result<Plan, String>> {
+        if let Some(reading) = &self.reading {
+            match reading.try_recv() {
+                Ok(read) => self.read = Some(read),
+                Err(TryRecvError::Disconnected) => self.read = Some(Err(UNREAD.into())),
+                Err(TryRecvError::Empty) => return None,
+            }
+            self.reading = None;
+        }
+        self.read.as_ref()
+    }
+
+    /// The profile the person confirms by starting the rebuild.
+    fn confirmed(&self) -> Option<Profile> {
+        Some(self.read.as_ref()?.as_ref().ok()?.profile.clone())
+    }
+
+    #[cfg(test)]
+    pub(super) fn of(read: Result<Plan, String>) -> Box<Self> {
+        Box::new(Self {
+            reading: None,
+            read: Some(read),
+        })
+    }
+}
+
+/// Two previews are equal while they show the same plan; one being read equals another.
+impl PartialEq for Preview {
+    fn eq(&self, other: &Self) -> bool {
+        self.read == other.read && self.reading.is_some() == other.reading.is_some()
+    }
+}
+
+impl Eq for Preview {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Kind {
@@ -74,6 +124,7 @@ impl Attempt {
         let warning =
             (line.starts_with("Session ") && line.ends_with("was not relaunched")) || line.starts_with(REFUSED);
         let notable = warning
+            || line.starts_with(replacement::PROFILE_CHANGE)
             || line.starts_with("Image unchanged")
             || line.starts_with("Image replacement cancelled")
             || line.starts_with("Agent CLI releases:");
@@ -95,7 +146,14 @@ impl Runtime {
 
     /// The rebuild restarts the worker, so the presentation watch and desktop tunnel
     /// stop first; a successful attempt ends in `Ready` and reattaches them.
-    fn start_rebuild(&mut self, request: Request, kind: Kind, profile_name: String, ctx: &egui::Context) {
+    fn start_rebuild(
+        &mut self,
+        request: Request,
+        kind: Kind,
+        profile_name: String,
+        confirmed: Option<Profile>,
+        ctx: &egui::Context,
+    ) {
         if let Some(cancel) = self.cancel.take() {
             cancel.cancel();
         }
@@ -114,11 +172,62 @@ impl Runtime {
         self.sender = Some(tx.clone());
         let ctx = ctx.clone();
         let idle = self.listen_idle();
-        std::thread::spawn(move || run(&request, kind, &profile_name, &cancel, &tx, idle, &ctx));
+        std::thread::spawn(move || {
+            let operation = Operation {
+                kind,
+                profile_name: &profile_name,
+                confirmed: confirmed.as_ref(),
+            };
+            run(&request, &operation, &cancel, &tx, idle, &ctx);
+        });
     }
 }
 
 impl HorizonApp {
+    /// Starts what a rebuild `action` asks for; `false` for any other action.
+    pub(super) fn rebuild_action(&mut self, id: u32, action: Action, ctx: &egui::Context) -> bool {
+        if action == Action::PreviewRebuild {
+            self.preview_production_rebuild(id, ctx);
+            return true;
+        }
+        let Some(kind) = Kind::of(action) else {
+            return false;
+        };
+        self.start_production_rebuild(id, kind, ctx);
+        true
+    }
+
+    /// Reads, for the open confirmation of cloud `id`, what a rebuild would change. The
+    /// cloud's record names its repository and its bound profile.
+    fn preview_production_rebuild(&mut self, id: u32, ctx: &egui::Context) {
+        let Some(group) = self.cloud_prototype.groups.0.iter().find(|group| group.issue == id) else {
+            return;
+        };
+        let Some(profile_name) = group.remote.as_ref().map(|launch| launch.profile_name.clone()) else {
+            return;
+        };
+        let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) else {
+            return;
+        };
+        let (Some(state), Confirmation::Rebuild(preview)) = (&runtime.state, &mut runtime.confirmation) else {
+            return;
+        };
+        let (repository, bound) = (state.repository.clone(), state.profile.clone());
+        let (tx, rx) = channel();
+        **preview = Preview {
+            reading: Some(rx),
+            read: None,
+        };
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let cancel = cloud_runtime::Cancellation::default();
+            let read =
+                replacement::plan(&repository, &bound, &profile_name, &cancel).map_err(|error| error.to_string());
+            let _ = tx.send(read);
+            ctx.request_repaint();
+        });
+    }
+
     pub(super) fn start_production_rebuild(&mut self, id: u32, kind: Kind, ctx: &egui::Context) {
         let Some(group) = self.cloud_prototype.groups.0.iter().find(|group| group.issue == id) else {
             return;
@@ -132,9 +241,17 @@ impl HorizonApp {
         if runtime.busy() || runtime.state_unavailable {
             return;
         }
+        // A rebuild starts only with the changes its person confirmed.
+        let confirmed = match &runtime.confirmation {
+            Confirmation::Rebuild(preview) => preview.confirmed(),
+            _ => None,
+        };
+        if kind == Kind::Rebuild && confirmed.is_none() {
+            return;
+        }
         let profile_name = launch.profile_name.clone();
         match request(&root, launch, repository) {
-            Ok(request) => runtime.start_rebuild(request, kind, profile_name, ctx),
+            Ok(request) => runtime.start_rebuild(request, kind, profile_name, confirmed, ctx),
             Err(error) => runtime.fail_preflight(Stage::Validate, error.to_string()),
         }
     }
@@ -157,10 +274,17 @@ fn request(
     ))
 }
 
+/// A rebuild operation as its person started it.
+struct Operation<'a> {
+    kind: Kind,
+    profile_name: &'a str,
+    /// For a rebuild, the profile the person confirmed.
+    confirmed: Option<&'a Profile>,
+}
+
 fn run(
     request: &Request,
-    kind: Kind,
-    profile_name: &str,
+    operation: &Operation<'_>,
     cancel: &cloud_runtime::Cancellation,
     tx: &Sender<Event>,
     idle: Sender<super::idle::Report>,
@@ -172,8 +296,8 @@ fn run(
         let _ = tx.send(event);
         ctx.request_repaint();
     };
-    let result = match kind {
-        Kind::Rebuild => replacement::rebuild(request, profile_name, cancel, &emit),
+    let result = match operation.kind {
+        Kind::Rebuild => replacement::rebuild(request, operation.profile_name, operation.confirmed, cancel, &emit),
         Kind::Continue => replacement::continue_replacement(request, cancel, &emit),
         Kind::Cancel => replacement::cancel_replacement(request, cancel, &emit),
     };

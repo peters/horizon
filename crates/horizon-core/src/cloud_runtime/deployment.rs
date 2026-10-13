@@ -44,6 +44,7 @@ use std::{
     time::{Duration, Instant},
 };
 const RELAUNCH: Duration = Duration::from_mins(1);
+#[derive(Clone)]
 pub struct Request {
     pub cloud_id: String,
     pub repository: PathBuf,

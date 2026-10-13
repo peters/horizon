@@ -310,7 +310,10 @@ impl HorizonApp {
         });
     }
 
-    pub(super) fn sync_resized_profiles(&mut self) {
+    /// Keeps each cloud's saved profile on what its record binds: the size and storage a
+    /// resize set, and the settings a rebuild took from its commit
+    /// (`Profile::with_rebuild_settings`), so the next deployment request matches the record.
+    pub(super) fn sync_bound_profiles(&mut self) {
         let mut changed = false;
         for group in &mut self.cloud_prototype.groups.0 {
             let Some(launch) = &mut group.remote else { continue };
@@ -323,16 +326,28 @@ impl HorizonApp {
             else {
                 continue;
             };
-            if !matches!(state.operation, cloud_runtime::CreateState::Bound { .. }) {
+            // Until a worker is bound, the size comes from the saved profile. A rebuild's
+            // settings bind at any stage: a Hetzner rebuild leaves no server bound.
+            let sized = matches!(state.operation, cloud_runtime::CreateState::Bound { .. });
+            let (saved, bound) = (&launch.profile, &state.profile);
+            // Compared field by field first, so an unchanged cloud costs no copy each frame.
+            if (!sized
+                || ((saved.cpu, saved.memory_gb) == (bound.cpu, bound.memory_gb) && saved.storage == bound.storage))
+                && saved.capabilities == bound.capabilities
+                && saved.bootstrap == bound.bootstrap
+                && saved.idle_stop_minutes == bound.idle_stop_minutes
+                && saved.build == bound.build
+            {
                 continue;
             }
-            if launch.profile.cpu != state.profile.cpu
-                || launch.profile.memory_gb != state.profile.memory_gb
-                || launch.profile.storage != state.profile.storage
-            {
-                launch.profile.cpu = state.profile.cpu;
-                launch.profile.memory_gb = state.profile.memory_gb;
-                launch.profile.storage = state.profile.storage.clone();
+            let mut synced = saved.with_rebuild_settings(bound);
+            if sized {
+                synced.cpu = bound.cpu;
+                synced.memory_gb = bound.memory_gb;
+                synced.storage = bound.storage.clone();
+            }
+            if synced != launch.profile {
+                launch.profile = synced;
                 changed = true;
             }
         }

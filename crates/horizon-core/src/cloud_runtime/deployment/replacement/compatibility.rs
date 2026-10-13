@@ -1,10 +1,11 @@
-//! Whether the committed profile still describes a cloud's running worker, so a rebuild
-//! can build its recipe for that worker, and whether the built image fits that worker.
-//! The choices a cloud binds when it is created, its provider, a CPU cloud's vCPU and
-//! memory, and its storage, stay the worker's: committed values for them are defaults
-//! for new clouds, never a request to move, resize or reformat this one.
+//! Which committed profile a rebuild can bind a cloud's running worker to, what that
+//! changes, and whether the built image fits that worker. The choices a cloud binds
+//! when it is created, its provider, a CPU cloud's vCPU and memory, and its storage,
+//! stay the worker's: committed values for them are defaults for new clouds, never a
+//! request to move, resize or reformat this one. The settings a rebuild may change
+//! (`Profile::with_rebuild_settings`) come from the commit; any other difference is refused.
 use super::{Error, Result};
-use horizon_cloud::{CloudConfig, Profile, Storage};
+use horizon_cloud::{AgentApprovals, Bootstrap, Capabilities, CloudConfig, Profile, ProfileError, Storage};
 
 pub(super) const NO_CONFIG: &str =
     "The latest commit has no readable .horizon/cloud.yml; commit the cloud configuration to rebuild";
@@ -12,29 +13,42 @@ pub(super) const NO_PROFILE: &str = "The latest commit's .horizon/cloud.yml no l
 const GPU: &str = "This cloud's profile in the latest commit's .horizon/cloud.yml differs from its worker in gpu. A running worker cannot add or remove a GPU; create a new cloud to use it.";
 const GPU_HOST: &str = "This cloud's profile in the latest commit's .horizon/cloud.yml differs from its GPU worker in cpu or memory_gb. A running worker cannot be resized; create a new cloud to use them.";
 const GPU_REQUIREMENTS: &str = "This cloud's profile in the latest commit's .horizon/cloud.yml differs from its worker in min_cuda_version or min_gpu_memory_gb. A rebuild keeps the worker's GPU host; create a new cloud to use them.";
-const CAPABILITIES: &str = "This cloud's profile in the latest commit's .horizon/cloud.yml differs from its worker in capabilities. They are fixed when the worker is created; create a new cloud to use them.";
 const IMAGE: &str = "This cloud's profile in the latest commit's .horizon/cloud.yml differs from its worker in image. A rebuild pushes to the worker's image repository; create a new cloud to use another one.";
-const BUILD: &str = "This cloud's profile in the latest commit's .horizon/cloud.yml differs from its worker in its build section (context, dockerfile or platform). Create a new cloud to use it.";
-const BOOTSTRAP: &str = "This cloud's profile in the latest commit's .horizon/cloud.yml differs from its worker in bootstrap (contract_version or readiness_seconds). Create a new cloud to use it.";
-const IDLE_STOP: &str = "This cloud's profile in the latest commit's .horizon/cloud.yml differs from its worker in idle_stop_minutes. A rebuild keeps the worker's idle stop; create a new cloud to use it.";
+const HOSTED_DEVICES: &str = "This cloud's profile in the latest commit's .horizon/cloud.yml differs from its worker in capabilities.browserstack. Hosted devices are fixed when the worker is created; create a new cloud to change them.";
+const CONTRACT: &str = "This cloud's profile in the latest commit's .horizon/cloud.yml differs from its worker in bootstrap.contract_version. A rebuild keeps the worker's bootstrap contract; create a new cloud to use another one.";
+const NO_BUILD: &str = "This cloud's profile in the latest commit's .horizon/cloud.yml has no build section, so there is no recipe to rebuild this cloud's image from";
+const INVALID: &str = "This cloud's profile in the latest commit's .horizon/cloud.yml is not valid";
 pub(super) const IMAGE_TOO_LARGE: &str = "The rebuilt image is larger than this cloud's container disk (storage.container_gb), so its worker cannot hold it. A rebuild keeps the worker's container disk; make the image smaller, or create a new cloud with a larger container disk.";
 pub(super) const BUILT_IMAGE_TOO_LARGE: &str = "The built image is larger than this cloud's container disk (storage.container_gb), so its worker cannot hold it. Cancel the rebuild; then make the image smaller, or create a new cloud with a larger container disk.";
 pub(super) const BYTES_PER_GB: u64 = 1_000_000_000;
 
-/// Refuses, naming the field, when the profile `name` of the latest commit's `config`
-/// differs from the `bound` one in anything but the choices bound at creation.
-pub(super) fn unchanged(bound: &Profile, config: Option<&CloudConfig>, name: &str) -> Result<()> {
+/// The profile the cloud binds once a rebuild to the profile `name` of the latest
+/// commit's `config` commits: the `bound` profile with the commit's rebuild settings.
+/// Refuses, naming the field, any other difference but the choices bound at creation,
+/// and a combination of settings that no profile may have.
+pub(super) fn next_profile(bound: &Profile, config: Option<&CloudConfig>, name: &str) -> Result<Profile> {
     let committed = config
         .ok_or(Error::Invalid(NO_CONFIG))?
         .profiles
         .get(name)
         .ok_or(Error::Invalid(NO_PROFILE))?;
-    difference(bound, committed).map_or(Ok(()), |reason| Err(Error::Invalid(reason)))
+    if let Some(reason) = refusal(bound, committed) {
+        return Err(Error::Invalid(reason));
+    }
+    let next = bound.with_rebuild_settings(committed);
+    next.validate(false).map_err(|error| {
+        Error::Invalid(match error {
+            ProfileError::Invalid(reason) => reason,
+            ProfileError::Yaml => INVALID,
+        })
+    })?;
+    Ok(next)
 }
 
-/// The first field in which `committed` differs from `bound`, other than a creation choice.
-fn difference(bound: &Profile, committed: &Profile) -> Option<&'static str> {
-    // Destructured in full, so a new profile field is either compared or named a creation choice.
+/// The first field in which `committed` differs from `bound` that a rebuild cannot take.
+fn refusal(bound: &Profile, committed: &Profile) -> Option<&'static str> {
+    // Destructured in full, so a new profile field is compared, named a rebuild setting
+    // or named a creation choice.
     let Profile {
         provider: _,
         image,
@@ -48,9 +62,19 @@ fn difference(bound: &Profile, committed: &Profile) -> Option<&'static str> {
             volume_gb: _,
             volume_tier: _,
         },
-        bootstrap,
-        capabilities,
-        idle_stop_minutes,
+        bootstrap: Bootstrap {
+            readiness_seconds: _,
+            contract_version,
+        },
+        capabilities:
+            Capabilities {
+                agents: _,
+                browsers: _,
+                desktop: _,
+                browserstack,
+                agent_approvals: _,
+            },
+        idle_stop_minutes: _,
         min_cuda_version,
         min_gpu_memory_gb,
     } = committed;
@@ -65,14 +89,74 @@ fn difference(bound: &Profile, committed: &Profile) -> Option<&'static str> {
             (min_cuda_version, min_gpu_memory_gb) != (&bound.min_cuda_version, &bound.min_gpu_memory_gb),
             GPU_REQUIREMENTS,
         ),
-        (*capabilities != bound.capabilities, CAPABILITIES),
         (*image != bound.image, IMAGE),
-        (*build != bound.build, BUILD),
-        (*bootstrap != bound.bootstrap, BOOTSTRAP),
-        (*idle_stop_minutes != bound.idle_stop_minutes, IDLE_STOP),
+        (*browserstack != bound.capabilities.browserstack, HOSTED_DEVICES),
+        // Version 1 is the only contract a profile may name today.
+        (*contract_version != bound.bootstrap.contract_version, CONTRACT),
+        (build.is_none(), NO_BUILD),
     ]
     .into_iter()
     .find_map(|(differs, reason)| differs.then_some(reason))
+}
+
+/// What binding `next` instead of `bound` changes, one plain sentence per change.
+pub(super) fn changes(bound: &Profile, next: &Profile) -> Vec<String> {
+    let (before, after) = (&bound.capabilities, &next.capabilities);
+    let mut changes = Vec::new();
+    let mut members = |kind: &str, before: Vec<&'static str>, after: Vec<&'static str>| {
+        let added = after.iter().filter(|name| !before.contains(name));
+        let removed = before.iter().filter(|name| !after.contains(name));
+        changes.extend(added.map(|name| format!("Adds {kind} {name}")));
+        changes.extend(removed.map(|name| format!("Removes {kind} {name}")));
+    };
+    members(
+        "agent",
+        before.agents.iter().map(|agent| agent.as_str()).collect(),
+        after.agents.iter().map(|agent| agent.as_str()).collect(),
+    );
+    members(
+        "browser",
+        before.browsers.iter().map(|browser| browser.as_str()).collect(),
+        after.browsers.iter().map(|browser| browser.as_str()).collect(),
+    );
+    if before.desktop != after.desktop {
+        changes.push(
+            if after.desktop {
+                "Adds the desktop"
+            } else {
+                "Removes the desktop"
+            }
+            .into(),
+        );
+    }
+    let approvals = |approvals: AgentApprovals| if approvals.is_auto() { "auto" } else { "ask" };
+    let minutes = |minutes: Option<u16>| minutes.map_or_else(|| "off".to_owned(), |minutes| format!("{minutes} min"));
+    let mut differs = |what: &str, before: String, after: String| {
+        if before != after {
+            changes.push(format!("{what} {before} → {after}"));
+        }
+    };
+    differs(
+        "Agent approvals",
+        approvals(before.agent_approvals).into(),
+        approvals(after.agent_approvals).into(),
+    );
+    differs(
+        "Readiness timeout",
+        format!("{} s", bound.bootstrap.readiness_seconds),
+        format!("{} s", next.bootstrap.readiness_seconds),
+    );
+    differs(
+        "Idle stop",
+        minutes(bound.idle_stop_minutes),
+        minutes(next.idle_stop_minutes),
+    );
+    if let (Some(before), Some(after)) = (&bound.build, &next.build) {
+        differs("Build context", before.context.clone(), after.context.clone());
+        differs("Build dockerfile", before.dockerfile.clone(), after.dockerfile.clone());
+        differs("Build platform", before.platform.clone(), after.platform.clone());
+    }
+    changes
 }
 
 /// Whether the `bound` worker's container disk holds an image of `unpacked_bytes`. The

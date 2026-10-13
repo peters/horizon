@@ -15,6 +15,7 @@ use std::{
     time::Duration,
 };
 const TIMEOUT: Duration = Duration::from_mins(30);
+const SETTINGS_LABEL: &str = "io.horizon.worker.settings";
 
 /// The deployment stages that preparing `profile` never runs: an image-only profile has
 /// nothing to build or push, so [`Images::prepare_layered`] reports neither stage.
@@ -124,7 +125,8 @@ impl Images<'_> {
             )));
             let releases = agents::latest(self.runner.cancel)?;
             (self.runner.emit)(Event::Output(format!("Agent CLI releases: {}", releases.summary())));
-            let arguments = build_arguments(&profile.capabilities, &releases);
+            let mut arguments = build_arguments(&profile.capabilities, &releases);
+            arguments.extend(settings_label(profile));
             let builder = Builder {
                 docker: || self.docker(),
                 runner: self.runner,
@@ -286,6 +288,26 @@ pub fn build_arguments(capabilities: &Capabilities, releases: &agents::Releases)
     .flat_map(|value| ["--build-arg".to_owned(), value])
     .collect()
 }
+/// The label that records the profile settings an image was built for: its rebuild
+/// settings (`Profile::with_rebuild_settings`), some of which reach the worker only with
+/// the image's switch. So a rebuild that changes them makes another image, which the
+/// provider tells apart from the worker's current one, while a cached build with the same
+/// settings keeps its digest. It holds only committed profile values: the capabilities
+/// without hosted devices, the readiness timeout, the idle stop and the build paths.
+fn settings_label(profile: &Profile) -> [String; 2] {
+    // Hosted devices are fixed at creation, and their names stay out of public metadata.
+    let capabilities = Capabilities {
+        browserstack: None,
+        ..profile.capabilities.clone()
+    };
+    let settings = serde_json::json!({
+        "capabilities": capabilities,
+        "readiness_seconds": profile.bootstrap.readiness_seconds,
+        "idle_stop_minutes": profile.idle_stop_minutes,
+        "build": profile.build,
+    });
+    ["--label".to_owned(), format!("{SETTINGS_LABEL}={settings}")]
+}
 fn uploaded_image_matches(local_id: &str, reference: &str, manifest: &serde_json::Value) -> bool {
     // Classic Docker identifies the config; containerd-backed Docker identifies the manifest.
     manifest["config"]["digest"].as_str() == Some(local_id)
@@ -374,6 +396,50 @@ mod tests {
             ("docker.io/team/worker:latest", "docker.io/team/worker"),
         ] {
             assert_eq!(repository_name(reference), expected);
+        }
+    }
+
+    #[test]
+    fn the_settings_label_changes_with_each_rebuild_setting_and_nothing_else() {
+        let profile = horizon_cloud::CloudConfig::parse(horizon_cloud::EXAMPLE)
+            .unwrap()
+            .profiles["image-only"]
+            .clone();
+        let label = settings_label(&profile);
+        assert_eq!(label[0], "--label");
+        assert!(label[1].starts_with("io.horizon.worker.settings={"), "{}", label[1]);
+        assert_eq!(
+            settings_label(&profile.clone()),
+            label,
+            "a cached build keeps its digest"
+        );
+        let mut resized = profile.clone();
+        resized.cpu += 1;
+        resized.storage.volume_gb += 1;
+        // Hosted devices are fixed at creation, and their names stay out of the label.
+        resized.capabilities.browserstack = Some(horizon_cloud::BrowserStack {
+            provider: "synthetic-devices".into(),
+            targets: ["synthetic-phone".into()].into(),
+            local_ports: std::collections::BTreeSet::new(),
+        });
+        assert_eq!(settings_label(&resized), label);
+        assert!(!label[1].contains("synthetic"));
+        let edits: [fn(&mut Profile); 4] = [
+            |profile| profile.capabilities.desktop = !profile.capabilities.desktop,
+            |profile| profile.idle_stop_minutes = Some(30),
+            |profile| profile.bootstrap.readiness_seconds += 1,
+            |profile| {
+                profile.build = Some(horizon_cloud::Build {
+                    context: ".".into(),
+                    dockerfile: "Other".into(),
+                    platform: "linux/amd64".into(),
+                });
+            },
+        ];
+        for edit in edits {
+            let mut changed = profile.clone();
+            edit(&mut changed);
+            assert_ne!(settings_label(&changed), label, "{changed:?}");
         }
     }
 

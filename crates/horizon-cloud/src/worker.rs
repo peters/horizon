@@ -141,8 +141,9 @@ impl WorkerSpec {
         }
         Ok(())
     }
-    /// The size, capabilities, placement, key and operation are bound to the
-    /// worker; only the image and the credential that pulls it may change.
+    /// The size, placement, key and operation are bound to the worker; only the
+    /// image, the credential that pulls it and the profile's rebuild settings
+    /// ([`crate::Profile::with_rebuild_settings`]) may change.
     /// # Errors
     /// Refuses any other difference and a replacement with the same image.
     pub fn verify_replacement(&self, next: &Self) -> Result<(), CloudError> {
@@ -159,7 +160,7 @@ impl WorkerSpec {
             startup_metadata,
         } = next;
         if *operation_id != self.operation_id
-            || *profile != self.profile
+            || self.profile.with_rebuild_settings(profile) != *profile
             || *public_key != self.public_key
             || *gpu_types != self.gpu_types
             || *cpu_flavors != self.cpu_flavors
@@ -372,7 +373,7 @@ impl Worker {
     /// either image. Only replacement code accepts a worker this way.
     /// # Errors
     /// Refuses mismatching identities, any third image and replacements that
-    /// change more than the image and its registry credential.
+    /// change more than `verify_replacement` allows.
     pub fn verify_either(&self, current: &WorkerSpec, next: &WorkerSpec) -> Result<ImageSide, CloudError> {
         current.verify_replacement(next)?;
         let side = ImageSide::of(&self.image_name, current, next).ok_or(CloudError::IdentityMismatch)?;
