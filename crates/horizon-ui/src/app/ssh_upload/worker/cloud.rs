@@ -161,7 +161,8 @@ fn remove(connection: &Connection, batch: &Batch) -> bool {
     }
 }
 
-/// Puts what the person can do first, then what SSH or the worker said.
+/// Puts what the person can do first, then what SSH or the worker said: only its last
+/// line after known advice, since SSH prints long banners for these failures.
 fn explain(error: &str) -> String {
     let lower = error.to_ascii_lowercase();
     let advice = if lower.contains("host key verification failed") || lower.contains("host identification has changed")
@@ -182,7 +183,13 @@ fn explain(error: &str) -> String {
     } else {
         return format!("The cloud worker did not take the files: {}", error.trim());
     };
-    format!("{advice}\n\n{}", error.trim())
+    let last = error
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    format!("{advice}\n\n{last}")
 }
 
 #[cfg(test)]
@@ -201,7 +208,13 @@ mod tests {
 
     #[test]
     fn failures_start_with_what_to_do() {
-        assert!(explain("Host key verification failed.\n").starts_with("The worker did not show the host key"));
+        let banner = "@@@@\n@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @\nHost key verification failed.\n";
+        let host_key = explain(banner);
+        assert!(
+            host_key.starts_with("The worker did not show the host key"),
+            "{host_key}"
+        );
+        assert!(host_key.ends_with("\n\nHost key verification failed."), "{host_key}");
         assert!(explain("ssh: connect to host 192.0.2.1 port 22: Connection refused").contains("could not reach"));
         assert_eq!(
             explain("The worker has no session for this panel.\n"),
