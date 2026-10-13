@@ -320,13 +320,13 @@ impl Steps for Live<'_> {
         Ok(())
     }
 
-    fn unpacked_bytes(&self, state: &Deployment, tag: &str) -> Result<Option<u64>> {
+    fn unpacked_bytes(&self, state: &Deployment, tag: &str, digest: &str) -> Result<Option<u64>> {
         if quick_start::on_public_base(&state.profile) {
             return Ok(None);
         }
         let registry = self.registry.borrow();
         self.images(registry.as_ref(), false)
-            .unpacked_bytes(&state.profile, tag)
+            .unpacked_bytes(&state.profile, tag, digest)
             .map(Some)
     }
 

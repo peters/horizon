@@ -100,8 +100,8 @@ impl Steps for NewServer<'_> {
         self.script.verify(state, image)
     }
 
-    fn unpacked_bytes(&self, state: &Deployment, tag: &str) -> Result<Option<u64>> {
-        self.script.unpacked_bytes(state, tag)
+    fn unpacked_bytes(&self, state: &Deployment, tag: &str, digest: &str) -> Result<Option<u64>> {
+        self.script.unpacked_bytes(state, tag, digest)
     }
 
     fn release_devices(&self, _: &Deployment) -> Result<()> {

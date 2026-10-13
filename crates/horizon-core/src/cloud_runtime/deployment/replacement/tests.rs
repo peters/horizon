@@ -253,8 +253,9 @@ impl Steps for Script {
         Ok(())
     }
 
-    fn unpacked_bytes(&self, _state: &Deployment, tag: &str) -> Result<Option<u64>> {
+    fn unpacked_bytes(&self, _state: &Deployment, tag: &str, digest: &str) -> Result<Option<u64>> {
         assert!(tag.starts_with("horizon-rebuilt-"));
+        assert_eq!(digest, self.built, "the size of the image that was pushed");
         Ok(self.unpacked)
     }
 

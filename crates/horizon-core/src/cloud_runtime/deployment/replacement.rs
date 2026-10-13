@@ -101,9 +101,10 @@ trait Steps: Provider {
     fn build(&self, state: &Deployment, revision: &str, siblings: &[String], tag: &str) -> Result<ReplacementImage>;
     /// Verifies again that a built image and its pull binding are unchanged.
     fn verify(&self, state: &Deployment, image: &ReplacementImage) -> Result<()>;
-    /// The unpacked size in bytes of the image that `build` made under `tag`, as local
-    /// Docker reports it; `None` when nothing was built, as for the pinned base image.
-    fn unpacked_bytes(&self, state: &Deployment, tag: &str) -> Result<Option<u64>>;
+    /// The unpacked size in bytes of the image that `build` made under `tag` and pushed as
+    /// `digest`, as local Docker reports it; `None` when nothing was built, as for the
+    /// pinned base image. Refuses when `tag` no longer names that image.
+    fn unpacked_bytes(&self, state: &Deployment, tag: &str, digest: &str) -> Result<Option<u64>>;
     /// Releases hosted devices before the container reset ends the worker's copies.
     fn release_devices(&self, state: &Deployment) -> Result<()>;
     /// For a provider that rebuilds on a new server (`provider::Rebuild::NewServer`),
@@ -451,7 +452,7 @@ fn drive(steps: &impl Steps, store: &Store, state: &mut Deployment, emit: &dyn F
                 return Ok(Driven::Unchanged);
             }
             // Checked before the image is journaled, so every built replacement fits its worker.
-            require_held(steps, store, state, &journal.tag, emit)?;
+            require_held(steps, store, state, &journal.tag, &image.digest, emit)?;
             state.replacement_built(image)?;
             store.save(state)?;
             steps.checkpoint(Boundary::Built)?;
@@ -460,7 +461,7 @@ fn drive(steps: &impl Steps, store: &Store, state: &mut Deployment, emit: &dyn F
             emit(activity("Verifying the built image and its pull binding"));
             steps.verify(state, &image)?;
             // Checked again, as an earlier Horizon version journaled a built image unchecked.
-            require_held(steps, store, state, &journal.tag, emit)?;
+            require_held(steps, store, state, &journal.tag, &image.digest, emit)?;
         }
         ReplacementPhase::Requested(_) => {
             match steps.server() {
@@ -474,16 +475,17 @@ fn drive(steps: &impl Steps, store: &Store, state: &mut Deployment, emit: &dyn F
     Ok(Driven::Committed)
 }
 
-/// Refuses an image built under `tag` that the worker's container disk cannot hold, and
-/// drops the replacement, whose update was never sent.
+/// Refuses an image built under `tag` and pushed as `digest` that the worker's container
+/// disk cannot hold, and drops the replacement, whose update was never sent.
 fn require_held(
     steps: &impl Steps,
     store: &Store,
     state: &mut Deployment,
     tag: &str,
+    digest: &str,
     emit: &dyn Fn(Event),
 ) -> Result<()> {
-    if held(steps, state, tag, emit)? {
+    if held(steps, state, tag, digest, emit)? {
         return Ok(());
     }
     state.discard_replacement()?;
@@ -491,10 +493,10 @@ fn require_held(
     Err(Error::Invalid(compatibility::IMAGE_TOO_LARGE))
 }
 
-/// Whether the worker's container disk holds the image built under `tag`
-/// ([`compatibility::holds_image`]), after reporting both sizes.
-fn held(steps: &impl Steps, state: &Deployment, tag: &str, emit: &dyn Fn(Event)) -> Result<bool> {
-    let Some(bytes) = steps.unpacked_bytes(state, tag)? else {
+/// Whether the worker's container disk holds the image built under `tag` and pushed as
+/// `digest` ([`compatibility::holds_image`]), after reporting both sizes.
+fn held(steps: &impl Steps, state: &Deployment, tag: &str, digest: &str, emit: &dyn Fn(Event)) -> Result<bool> {
+    let Some(bytes) = steps.unpacked_bytes(state, tag, digest)? else {
         return Ok(true);
     };
     // Rounded up to a tenth, so an image just over the disk never reads as equal to it.

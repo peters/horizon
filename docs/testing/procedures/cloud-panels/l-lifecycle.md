@@ -714,37 +714,48 @@ must refuse the rebuild before it changes the worker
 
    Result: The ledger contains the resources of `smoke-hd`.
 
+7. In `<repo>`, add the line `LABEL horizon.smoke=l12` at the end of the
+   Dockerfile that the `build` section of `runpod-build` names. Commit the change.
+
+   Result: `git -C <repo> log -1` shows the new commit. The rebuild builds an
+   image with another digest, so Horizon checks its size instead of reporting an
+   unchanged image.
+
    > **CAUTION:** THIS STEP PUSHES AN IMAGE TO THE REGISTRY.
 
-7. On the card, click **Rebuild image & restart…**, then **Rebuild and restart**.
+8. On the card, click **Rebuild image & restart…**, then **Rebuild and restart**.
 
    Result: The card shows the build and the push. Then it shows **Rebuild refused:**
    with the text `storage.container_gb`.
 
-8. Wait until the card shows **Ready**.
+9. Wait until the card shows **Ready**.
 
    Result: The **Machine** tab shows the server ID from step 6. The card does not
    offer **Continue rebuild** or **Cancel rebuild**.
 
-9. On the card of `smoke-hd`, click **Delete cloud resources…**.
+10. Revert the commit of step 7.
 
-   Result: The card asks for confirmation and shows **Delete resources permanently**.
+    Result: The Dockerfile of `runpod-build` does not contain `horizon.smoke=l12`.
 
-   > **CAUTION:** THIS STEP DELETES THE VOLUME OF `smoke-hd`. Its files cannot
-   > come back.
+11. On the card of `smoke-hd`, click **Delete cloud resources…**.
 
-10. Click **Delete resources permanently**.
+    Result: The card asks for confirmation and shows **Delete resources permanently**.
+
+    > **CAUTION:** THIS STEP DELETES THE VOLUME OF `smoke-hd`. Its files cannot
+    > come back.
+
+12. Click **Delete resources permanently**.
 
     Result: The card shows **Deleted**.
 
-11. Mark the resources of `smoke-hd` as deleted in the resource ledger.
+13. Mark the resources of `smoke-hd` as deleted in the resource ledger.
 
     Result: The ledger shows no active resource for `smoke-hd`.
 
     > **CAUTION:** REMOVE ONLY `smoke-hd`. Horizon removes the cloud and its panels
     > from the board.
 
-12. Click **Remove cloud**.
+14. Click **Remove cloud**.
 
     Result: The cloud `smoke-hd` is not on the board.
 
