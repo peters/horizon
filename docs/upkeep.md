@@ -73,6 +73,8 @@ The board guarantees these items:
   - It shows an unknown state as **Other** and an unknown check state as
     **No checks**.
   - It refuses a time that is out of range in UTC.
+  - It refuses a whole document that is nested more than 128 levels deep, the
+    limit of the JSON parser.
 - It puts runs and activity lines in time order before it keeps the newest. Thus
   the document can list them in any order.
 - Each bar shows all runs that started in its hour, up to now. The merged total
