@@ -100,8 +100,6 @@ pub(super) struct Account {
     pub(super) failed: Option<String>,
     /// Why the shown list could not be refreshed; it may be out of date.
     pub(super) stale: Option<String>,
-    /// The shown list is the one kept from last time, not yet confirmed by GitHub.
-    kept: bool,
     /// The account the shown list belongs to.
     listed_for: Option<String>,
     /// The account the running request signed in as.
@@ -125,7 +123,6 @@ impl Account {
             repositories: None,
             failed: None,
             stale: None,
-            kept: false,
             listed_for: None,
             signed_in_as: None,
             retry_at: None,
@@ -273,7 +270,6 @@ impl Account {
                     if repositories.is_some() {
                         self.repositories = repositories;
                         self.stale = None;
-                        self.kept = false;
                         self.listed_for = login;
                         self.retry_at = None;
                         self.check_at = Some(std::time::Instant::now() + RETRY);
@@ -302,7 +298,6 @@ impl Account {
                 Ok(Answer::Cached { login, repositories }) => {
                     if self.repositories.is_none() {
                         self.repositories = Some(repositories);
-                        self.kept = true;
                         self.listed_for = Some(login);
                         self.check_at = Some(std::time::Instant::now() + RETRY);
                     }
@@ -317,7 +312,6 @@ impl Account {
                     if self.listed_for.as_ref().is_some_and(|listed| *listed != login) {
                         self.repositories = None;
                         self.stale = None;
-                        self.kept = false;
                         self.listed_for = None;
                     }
                     self.signed_in_as = Some(login);
@@ -326,7 +320,6 @@ impl Account {
                     self.finish();
                     self.repositories = None;
                     self.stale = None;
-                    self.kept = false;
                     self.listed_for = None;
                     self.retry_at = None;
                     self.check_at = None;
@@ -343,7 +336,6 @@ impl Account {
                     self.repositories = None;
                     self.listed_for = None;
                     self.stale = None;
-                    self.kept = false;
                     self.retry_at = None;
                     return None;
                 }

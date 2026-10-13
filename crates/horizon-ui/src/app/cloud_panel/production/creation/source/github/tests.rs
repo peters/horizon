@@ -16,7 +16,6 @@ fn account() -> Account {
         repositories: None,
         failed: None,
         stale: None,
-        kept: false,
         listed_for: None,
         signed_in_as: None,
         retry_at: None,
