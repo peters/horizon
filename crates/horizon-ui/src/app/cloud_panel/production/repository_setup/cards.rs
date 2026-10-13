@@ -184,16 +184,8 @@ fn card(ui: &mut Ui, key: &str, tint: Color32, paired: bool, add: impl FnOnce(&m
         .inner_margin(14)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            // As tall as the other card's content, so the pair lines up at the bottom too.
-            let other = if key == "quick-start" {
-                "setup-from-ci"
-            } else {
-                "quick-start"
-            };
-            if paired {
-                let beside = ui.data(|data| data.get_temp::<f32>(card_id(other).with("content")));
-                ui.set_min_height(CARD_HEIGHT.max(beside.unwrap_or_default()));
-            }
+            // The content's own height, measured before any minimum, is what the other card
+            // matches: a height copied back and forth would never shrink again.
             let content = ui
                 .with_layout(egui::Layout::top_down(egui::Align::Min), |ui| add(ui, tint))
                 .response
@@ -206,6 +198,21 @@ fn card(ui: &mut Ui, key: &str, tint: Color32, paired: bool, add: impl FnOnce(&m
             {
                 ui.data_mut(|data| data.insert_temp(stored, content));
                 ui.ctx().request_repaint();
+            }
+            // As tall as the other card's content, so the pair lines up at the bottom too.
+            if paired {
+                let other = if key == "quick-start" {
+                    "setup-from-ci"
+                } else {
+                    "quick-start"
+                };
+                let beside = ui.data(|data| data.get_temp::<f32>(card_id(other).with("content")));
+                let target = CARD_HEIGHT.max(beside.unwrap_or_default());
+                // Space after the content, which already ends one item spacing lower.
+                let short = target - content - ui.spacing().item_spacing.y;
+                if short > 0.0 {
+                    ui.add_space(short);
+                }
             }
         });
     let rect = shown.response.rect;
@@ -314,12 +321,15 @@ mod tests {
 
     /// Draws the cards in a column `width` wide; returns each text's rect and the cards'.
     fn draw(width: f32) -> (Vec<(String, Rect)>, [Rect; 2]) {
-        let ctx = egui::Context::default();
+        draw_in(&egui::Context::default(), width)
+    }
+
+    fn draw_in(ctx: &egui::Context, width: f32) -> (Vec<(String, Rect)>, [Rect; 2]) {
         let mut form = Production::default();
         let mut cards = [Rect::NOTHING; 2];
         let mut texts = Vec::new();
-        // The second pass draws with the heights the first one measured.
-        for _ in 0..2 {
+        // Later passes draw with the heights the earlier ones measured.
+        for _ in 0..3 {
             let input = egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width + 40.0, 1200.0))),
                 ..Default::default()
@@ -373,5 +383,19 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn widening_the_dialog_again_gives_the_cards_their_own_height_back() {
+        let ctx = egui::Context::default();
+        let (_, wide) = draw_in(&ctx, 900.0);
+        let _ = draw_in(&ctx, 660.0);
+        let _ = draw_in(&ctx, 300.0);
+        let (_, again) = draw_in(&ctx, 900.0);
+        assert!(
+            (again[0].height() - wide[0].height()).abs() < 0.5,
+            "{again:?} is not as tall as {wide:?} again"
+        );
+        assert!((again[0].bottom() - again[1].bottom()).abs() < 0.5);
     }
 }
