@@ -2,9 +2,9 @@
 procedure: tailnet-tagged-enrollment
 feature: tagged worker tailnet enrollment
 platforms: [linux]
-cost: none
-destructive: no
-secrets: none
+cost: rents compute  # Optional R01 only; T01 to T03 use local synthetic inputs.
+destructive: yes  # Optional R01 deletes its worker and node.
+secrets: [provider API key, Tailscale auth key]  # Optional R01 only.
 owner: peters
 ---
 
