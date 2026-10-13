@@ -251,13 +251,18 @@ pub fn mark_first_run(cloud_id: &str) -> std::io::Result<u128> {
 }
 
 /// The token of the first run of `cloud_id` when it was not sent yet. Reads the disk.
-#[must_use]
-pub fn first_run_pending(cloud_id: &str) -> Option<u128> {
+/// # Errors
+/// The marker is there but cannot be read; a marker that does not hold a token counts as
+/// none.
+pub fn first_run_pending(cloud_id: &str) -> std::io::Result<Option<u128>> {
     if !valid_cloud_id(cloud_id) {
-        return None;
+        return Ok(None);
     }
-    let text = std::fs::read_to_string(directory(cloud_id).join(FIRST_RUN)).ok()?;
-    u128::from_str_radix(text.trim(), 16).ok()
+    match std::fs::read_to_string(directory(cloud_id).join(FIRST_RUN)) {
+        Ok(text) => Ok(u128::from_str_radix(text.trim(), 16).ok()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// Forgets the marker once an exchange carried the first run to the worker. Blocks on the
@@ -277,18 +282,52 @@ pub fn first_run_sent(cloud_id: &str) -> std::io::Result<()> {
 /// Every saved Upkeep: its cloud id and choice.
 #[must_use]
 pub fn saved() -> Vec<(String, Config)> {
+    read_saved(false).unwrap_or_default()
+}
+
+/// Every saved Upkeep. With `strict`, a choice that cannot be read for a reason other than
+/// a missing or refused file stops the read, so a caller can try again rather than keep a
+/// partial list; without it, such a choice is left out, so it never hides the others for
+/// good. A choice that is not valid JSON is always left out.
+/// # Errors
+/// The folder of the saved Upkeeps could not be listed, or, with `strict`, one saved choice
+/// could not be read.
+pub fn read_saved(strict: bool) -> std::io::Result<Vec<(String, Config)>> {
     let root = super::default_status_path().with_file_name("");
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return Vec::new();
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
     };
-    entries
-        .filter_map(std::result::Result::ok)
-        .filter_map(|entry| {
-            let text = std::fs::read_to_string(entry.path().join("upkeep.json")).ok()?;
-            let config = serde_json::from_str(&text).ok()?;
-            Some((entry.file_name().to_string_lossy().into_owned(), config))
-        })
-        .collect()
+    let mut saved = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) if strict => return Err(error),
+            Err(_) => continue,
+        };
+        let text = match std::fs::read_to_string(entry.path().join("upkeep.json")) {
+            Ok(text) => text,
+            Err(error)
+                if strict
+                    && !matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound
+                            | std::io::ErrorKind::NotADirectory
+                            | std::io::ErrorKind::IsADirectory
+                            | std::io::ErrorKind::PermissionDenied
+                            | std::io::ErrorKind::InvalidData
+                    ) =>
+            {
+                return Err(error);
+            }
+            Err(_) => continue,
+        };
+        if let Ok(config) = serde_json::from_str(&text) {
+            saved.push((entry.file_name().to_string_lossy().into_owned(), config));
+        }
+    }
+    Ok(saved)
 }
 
 /// What the board asked for since the last exchange.

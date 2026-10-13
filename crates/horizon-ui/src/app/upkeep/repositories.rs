@@ -173,12 +173,14 @@ fn list(ui: &mut Ui, form: &mut Form, owner: &str) {
                     }
                 });
         });
-    let names: Vec<String> = shown.iter().map(|repository| repository.name.clone()).collect();
+    // Names are copied only for a click on Select all shown, not each frame.
     match select {
-        Some(true) => form.selected.extend(names),
-        Some(false) => names.iter().for_each(|name| {
-            form.selected.remove(name);
-        }),
+        Some(true) => form
+            .selected
+            .extend(shown.iter().map(|repository| repository.name.clone())),
+        // Clear clears every choice, also of other owners and of rows the filter hides,
+        // so nothing stays chosen out of sight.
+        Some(false) => form.selected.clear(),
         None => {}
     }
     for name in toggled {

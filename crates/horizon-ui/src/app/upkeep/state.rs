@@ -25,7 +25,12 @@ pub(in crate::app) struct State {
     /// The saved Upkeeps, once read; `None` reads them again.
     pub(in crate::app) saved: Option<Saved>,
     /// The read of the saved Upkeeps under way.
-    pub(in crate::app) reading: Option<Receiver<Read>>,
+    pub(in crate::app) reading: Option<Receiver<Result<Read, String>>>,
+    /// After a failed read, when to read again.
+    pub(in crate::app) read_after: Option<Instant>,
+    /// Reads that failed in a row; after a few, a choice that cannot be read is left out
+    /// rather than holding back every Upkeep.
+    pub(in crate::app) read_failures: u32,
     pub(in crate::app) syncs: HashMap<String, Sync>,
 }
 
@@ -54,6 +59,8 @@ pub(in crate::app) struct Answer {
     pub(in crate::app) settled: bool,
     /// A run is in progress.
     pub(in crate::app) running: bool,
+    /// The first-run marker could not be removed after the worker got the first run.
+    pub(in crate::app) marker_left: bool,
 }
 
 /// What an exchange hands back: the GitHub access requests it allowed, also when the rest
@@ -68,6 +75,8 @@ pub(in crate::app) struct Sync {
     pub(in crate::app) allowed: Vec<String>,
     /// What the exchange under way sent, put back if it fails.
     pub(in crate::app) sent: Signals,
+    /// The first-run marker of a run already delivered is still to be removed.
+    pub(in crate::app) marker_left: bool,
     pub(in crate::app) next: Option<Instant>,
     /// What the board asked for since the last exchange.
     pub(in crate::app) signals: Signals,

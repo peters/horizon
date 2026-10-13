@@ -84,7 +84,8 @@ cause, and **Try again**.
 4. It starts a quick-start cloud on Hetzner. The cloud has no idle stop, because
    the loop must run while this computer sleeps. The first exchange with the
    worker sends **Run now**, so the first run starts when the loop is installed.
-   The exchange removes the `first-run` marker. Thus a restart of Horizon before
+   The exchange that delivered **Run now** removes the `first-run` marker; Horizon
+   never removes it before that. Thus a restart of Horizon before
    that exchange does not lose the first run. When Horizon cannot remove the
    marker, each later exchange tries again. A restart sends the same token, so it
    does not start a second run.
@@ -104,7 +105,12 @@ sign-in. The dialog shows the cause when a step fails, and keeps the choice.
 ## Horizon and the worker
 
 While Horizon runs, it does one exchange with the worker of each ready Upkeep
-cloud every 30 seconds, and every 8 seconds while a run continues. Each exchange
+cloud every 30 seconds, and every 8 seconds while a run continues. It reads the
+saved Upkeeps in `~/.horizon/upkeep` first; when that read fails, it tries again
+after 30 seconds and does not keep an incomplete list. After three failed reads in a
+row, it leaves out a saved choice that it cannot read, so that choice does not stop
+the other Upkeeps. A saved choice that is missing, refused or not valid JSON is
+always left out. Each exchange
 runs on a separate thread and does these steps:
 
 1. It reads the GitHub access requests on the worker. It allows the requests of

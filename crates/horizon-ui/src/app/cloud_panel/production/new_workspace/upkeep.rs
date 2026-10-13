@@ -178,6 +178,7 @@ impl HorizonApp {
         // The saved choices are read again, with the new one; a read under way may be older.
         self.upkeep.saved = None;
         self.upkeep.reading = None;
+        self.upkeep.read_after = None;
         self.fit_workspace_visible(ctx, workspace);
         self.mark_runtime_dirty();
         Ok(())

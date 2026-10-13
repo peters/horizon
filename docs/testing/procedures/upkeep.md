@@ -56,8 +56,8 @@ made-up repositories and one public pull request.
   a Hetzner project with free capacity for one `cx23` server, and the ChatGPT login
   of Codex. Bind the full credentials folder into the fixture, not single token
   files: Horizon saves a renewed GitHub sign-in with an atomic rename.
-- For task UPK-10: a repository `<repo>` with at least one open Dependabot pull
-  request, and a second repository `<second>`, both where you are permitted to merge
+- For task UPK-10: two repositories, `<repo>` and `<second>`, each with at least
+  one open Dependabot pull request, both where you are permitted to merge
   Dependabot pull requests.
 - A browser that is signed in to the GitHub account of Cloud settings. Each new
   cloud asks for one GitHub authorization.
@@ -288,8 +288,8 @@ made-up repositories and one public pull request.
 
 7. Click **Clear**.
 
-   Result: The row is not selected. **Start Upkeep** is unavailable and the footer
-   shows **Choose at least one repository.**
+   Result: No repository is selected, also in the other owner tabs. **Start Upkeep**
+   is unavailable and the footer shows **Choose at least one repository.**
 
 ### 6.10 UPK-10 — Start Upkeep on Hetzner
 
@@ -297,59 +297,64 @@ made-up repositories and one public pull request.
 > PUSH ACCESS TO `<repo>` AND `<second>`. The agent can merge their Dependabot pull
 > requests.
 
-1. Select `<repo>` and `<second>`.
+1. Remove the text in **Filter repositories**.
+
+   Result: The list shows all repositories of the owner tab.
+
+2. Select `<repo>` and `<second>`. Click the tab of their owner first when it is
+   not open.
 
    Result: The summary shows **2 repositories**.
 
-2. Click **Start Upkeep**.
+3. Click **Start Upkeep**.
 
    Result: The footer shows **Starting Upkeep...** with a spinner. When the
    checkout of `<repo>` is not on this computer, Horizon clones it first.
 
-3. Wait until the dialog closes.
+4. Wait until the dialog closes.
 
    Result: The workspace **Upkeep** shows the cloud card and the board. The card
    shows `Hetzner / quick-start`. The board shows **Upkeep has not reported
    yet.**
 
-4. Close Horizon while the card shows **Provision worker** or **Check readiness**.
+5. Close Horizon while the card shows **Provision worker** or **Check readiness**.
 
    Result: Horizon closes. The cloud start stops on this computer.
 
-5. Start Horizon again in the same session.
+6. Start Horizon again in the same session.
 
    Result: The card continues the start.
 
 > **CAUTION:** THE NEXT STEP GIVES THE CLOUD ACCESS TO THE GITHUB ACCOUNT OF CLOUD
 > SETTINGS.
 
-6. When the card asks to connect GitHub, finish the authorization in the browser
+7. When the card asks to connect GitHub, finish the authorization in the browser
    that is signed in to GitHub.
 
    Result: The card shows that GitHub is signed in for 1 repository.
 
-7. Wait until the card shows **Ready**.
+8. Wait until the card shows **Ready**.
 
    Result: Within one minute, the board shows the agent, **every hour**, the worker
    **Hetzner, always on** and **2 repositories**. The panel **Upkeep agent** opens
    in the workspace and shows the tmux session of the loop.
 
-8. Open the panel picker of the cloud and click **Shell**.
+9. Open the panel picker of the cloud and click **Shell**.
 
    Result: A shell panel on the worker opens.
 
-9. In the shell panel, type `cat /workspace/home/upkeep/runs.jsonl`.
+10. In the shell panel, type `cat /workspace/home/upkeep/runs.jsonl`.
 
    Result: Within two minutes after **Ready**, the file shows exactly one run that
-   started, also after the restart of steps 4 and 5. The first run does not wait for the
+   started, also after the restart of steps 5 and 6. The first run does not wait for the
    next full hour. The run started an agent for each repository.
 
-10. Wait until the agent of `<second>` asks for GitHub access to it.
+11. Wait until the agent of `<second>` asks for GitHub access to it.
 
    Result: Horizon allows the request without a prompt. The cloud card shows no
    request. The agent log shows that it can reach `<second>`.
 
-11. Wait until the run ends.
+12. Wait until the run ends.
 
    Result: The board shows the pull requests of `<repo>` with their states, and
    **Latest run** shows the lines of the agent. Each pull request that the agent

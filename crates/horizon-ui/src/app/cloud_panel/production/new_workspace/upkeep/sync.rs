@@ -27,6 +27,8 @@ use crate::app::upkeep::{Answer, Exchanged, Saved};
 const POLL: Duration = Duration::from_secs(30);
 /// How often while a run is active: the agent's `github_access` call waits about a minute.
 const POLL_RUNNING: Duration = Duration::from_secs(8);
+/// Failed reads of the saved Upkeeps in a row before one leaves out what it cannot read.
+const READ_ATTEMPTS: u32 = 3;
 /// How many allowed requests are remembered to keep them off the cloud card.
 const ALLOWED_KEPT: usize = 64;
 
@@ -60,11 +62,17 @@ impl HorizonApp {
                         sync.allowed.extend(allowed);
                         let excess = sync.allowed.len().saturating_sub(ALLOWED_KEPT);
                         sync.allowed.drain(..excess);
-                        sync.last = answer.unwrap_or_else(|error| {
-                            tracing::warn!(cloud = %cloud_id, %error, "the Upkeep exchange failed");
-                            requeue(&mut sync.signals, sync.sent);
-                            Answer::default()
-                        });
+                        match answer {
+                            Ok(answer) => {
+                                sync.marker_left = answer.marker_left;
+                                sync.last = answer;
+                            }
+                            Err(error) => {
+                                tracing::warn!(cloud = %cloud_id, %error, "the Upkeep exchange failed");
+                                requeue(&mut sync.signals, sync.sent);
+                                sync.last = Answer::default();
+                            }
+                        }
                         // A run that just started is polled at its own pace from now on.
                         if sync.last.running {
                             let soon = now + POLL_RUNNING;
@@ -114,8 +122,10 @@ impl HorizonApp {
                 let (tx, rx) = channel();
                 let repaint = ctx.clone();
                 let (cloud_id, config, state) = (cloud_id.clone(), config.clone(), state.clone());
+                let marker_left = sync.marker_left;
                 std::thread::spawn(move || {
-                    let _ = tx.send(exchange(&root, &cloud_id, &revision, &state, &config, signals));
+                    let exchanged = exchange(&root, &cloud_id, &revision, &state, &config, signals, marker_left);
+                    let _ = tx.send(exchanged);
                     repaint.request_repaint();
                 });
                 sync.inflight = Some(rx);
@@ -135,23 +145,50 @@ impl HorizonApp {
         if let Some(saved) = &self.upkeep.saved {
             return Some(saved.clone());
         }
+        let now = Instant::now();
+        if let Some(after) = self.upkeep.read_after.filter(|after| now < *after) {
+            ctx.request_repaint_after(after - now);
+            return None;
+        }
+        // A few failed reads in a row: the next one leaves out what it cannot read.
+        let strict = self.upkeep.read_failures < READ_ATTEMPTS;
         let rx = self.upkeep.reading.get_or_insert_with(|| {
             let (tx, rx) = channel();
             let repaint = ctx.clone();
             std::thread::spawn(move || {
-                let saved = worker::saved();
-                let first_runs = saved
-                    .iter()
-                    .filter_map(|(cloud, _)| Some((cloud.clone(), worker::first_run_pending(cloud)?)))
-                    .collect();
-                let _ = tx.send((Saved::new(saved), first_runs));
+                let read = (|| -> std::io::Result<crate::app::upkeep::Read> {
+                    let saved = worker::read_saved(strict)?;
+                    let mut first_runs = Vec::new();
+                    for (cloud, _) in &saved {
+                        match worker::first_run_pending(cloud) {
+                            Ok(Some(token)) => first_runs.push((cloud.clone(), token)),
+                            // A marker that cannot be read now may hold a first run.
+                            Err(error) if strict => return Err(error),
+                            Ok(None) | Err(_) => {}
+                        }
+                    }
+                    Ok((Saved::new(saved), first_runs))
+                })()
+                .map_err(|error| error.to_string());
+                let _ = tx.send(read);
                 repaint.request_repaint();
             });
             rx
         });
         match rx.try_recv() {
-            Ok((saved, first_runs)) => {
+            // A list that could not be read whole is not kept: it would hide an Upkeep until
+            // Horizon restarts. It is read again a little later.
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "could not read the saved Upkeeps");
+                self.upkeep.read_failures += 1;
                 self.upkeep.reading = None;
+                self.upkeep.read_after = Some(now + POLL);
+                ctx.request_repaint_after(POLL);
+                None
+            }
+            Ok(Ok((saved, first_runs))) => {
+                self.upkeep.reading = None;
+                self.upkeep.read_failures = 0;
                 self.upkeep.saved = Some(saved.clone());
                 // Only for a cloud this run of Horizon has not exchanged with yet: a marker
                 // that is still there may belong to an exchange under way.
@@ -167,7 +204,8 @@ impl HorizonApp {
             Err(TryRecvError::Empty) => None,
             Err(TryRecvError::Disconnected) => {
                 self.upkeep.reading = None;
-                self.upkeep.saved = Some(Saved::default());
+                self.upkeep.read_after = Some(now + POLL);
+                ctx.request_repaint_after(POLL);
                 None
             }
         }
@@ -219,6 +257,7 @@ fn exchange(
     state: &cloud_runtime::state::Deployment,
     config: &Config,
     signals: Signals,
+    marker_left: bool,
 ) -> Exchanged {
     let connection = (|| -> Result<Connection, String> {
         let settings = Settings::load(&root.join("settings.json")).map_err(|error| error.to_string())?;
@@ -238,21 +277,23 @@ fn exchange(
     };
     let allowed = allow_chosen(&connection, &runner, cloud_id, config);
     let answer = worker::exchange(&connection, &runner, cloud_id, revision, config, signals)
-        .map(|answer| learned(cloud_id, config, signals, &answer))
+        .map(|answer| learned(cloud_id, config, signals, marker_left, &answer))
         .map_err(|error| error.to_string());
     (allowed, answer)
 }
 
 /// What Horizon keeps of an exchange that reached the worker: it forgets the first-run
-/// marker the exchange delivered and writes the board's status document.
-fn learned(cloud_id: &str, config: &Config, signals: Signals, answer: &worker::Exchange) -> Answer {
-    // A marker left behind would ask for the first run again after a restart: each later
-    // exchange tries again to remove it, without sending Run now again.
-    if (signals.run_now || worker::first_run_pending(cloud_id).is_some())
-        && let Err(error) = worker::first_run_sent(cloud_id)
-    {
-        tracing::warn!(cloud = %cloud_id, %error, "could not remove the Upkeep first-run marker");
-    }
+/// marker once a Run now was delivered, and writes the board's status document. A marker is
+/// never removed before its Run now reached the worker.
+fn learned(cloud_id: &str, config: &Config, signals: Signals, marker_left: bool, answer: &worker::Exchange) -> Answer {
+    // A marker left behind would ask for the first run again after a restart, with the same
+    // token: each later exchange tries again to remove it, without sending Run now again.
+    let marker_left = (signals.run_now || marker_left)
+        && worker::first_run_sent(cloud_id)
+            .inspect_err(
+                |error| tracing::warn!(cloud = %cloud_id, %error, "could not remove the Upkeep first-run marker"),
+            )
+            .is_err();
     // The worker has the signals now: a status that cannot be written is only logged, so
     // they are not sent again. The next exchange writes it again.
     if let Err(error) = write_status(cloud_id, answer, config) {
@@ -261,6 +302,7 @@ fn learned(cloud_id: &str, config: &Config, signals: Signals, answer: &worker::E
     Answer {
         settled: answer.loop_running && answer.settled,
         running: answer.running(),
+        marker_left,
     }
 }
 
