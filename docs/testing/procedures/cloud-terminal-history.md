@@ -246,6 +246,31 @@ with synthetic agents.
 
    Result: The last output line shows `"passed": true`.
 
+### 6.9 COLORS — Answer color queries with the panel colors
+
+1. In a local shell panel of the fixture, type this command. Then push Enter.
+
+   ```bash
+   printf '\033]11;?\033\\'; read -rs -t 2 -d '\' r; echo "${r#*;}"
+   ```
+
+   Result: The panel shows the background color of the panel, for example
+   `rgb:1e1e/1e1e/2e2e`. This is the baseline.
+
+2. Type the same command in the cloud shell panel. Push Enter.
+
+   Result: The cloud panel shows the same value as the local panel, not
+   `rgb:0000/0000/0000`.
+
+3. Open a new cloud shell panel and type the same command again.
+
+   Result: The new panel shows the same value.
+
+4. Open a cloud Codex panel.
+
+   Result: The composer of Codex has a background that matches the panel
+   colors, as in a local Codex panel.
+
 ## 7. Pass criteria
 
 - 6.1 scrolls to the first line of the output, and the mouse wheel sends no
@@ -260,6 +285,7 @@ with synthetic agents.
 - 6.7 shows no change for local and SSH panels.
 - 6.8 attaches a signed project session with its history, and the race
   scenario passes.
+- 6.9 answers color queries with the colors of the panel.
 
 ## 8. Cleanup
 
