@@ -263,6 +263,7 @@ class Job:
         self.peak_mb = 0
         self.code = None
         self.launched = False
+        self.mark = 0
         self.log = DIR + '/logs/' + self.slug + '.log'
 
     def last_line(self):
@@ -283,7 +284,7 @@ class Job:
         try:
             self.attempt(template)
             # The model service sometimes has no capacity for a moment; one later try often works.
-            if self.code != 0 and 'at capacity' in self.tail(4096):
+            if self.launched and self.code != 0 and 'at capacity' in self.tail(4096):
                 time.sleep(60)
                 self.attempt(template)
         except Exception as error:  # noqa: BLE001 - the run records the job as failed
@@ -294,10 +295,11 @@ class Job:
             self.finished = time.time()
 
     def tail(self, size):
+        """The end of what the last attempt wrote, never text of an earlier run."""
         try:
             with open(self.log, 'rb') as handle:
                 handle.seek(0, os.SEEK_END)
-                handle.seek(max(0, handle.tell() - size))
+                handle.seek(max(self.mark, handle.tell() - size))
                 return handle.read().decode('utf-8', 'replace')
         except OSError:
             return ''
@@ -312,13 +314,13 @@ class Job:
                 log.write('\nThe worker asks before an agent runs a command, or refused its session '
                           'environment; this agent did not start.\n')
             return
-        self.launched = True
         prompt = (template.replace('@@REPOSITORY@@', self.repository)
                   .replace('@@STATUS@@', DIR + '/status.d/' + self.slug + '.json'))
         # The prompt goes on standard input: as an argument, text that starts with a dash
         # would be read as an option, and a long one would pass the argument size limit.
         trim(self.log)
         with open(self.log, 'a') as log, tempfile.TemporaryFile() as instructions:
+            self.mark = log.tell()
             instructions.write(prompt.encode())
             instructions.seek(0)
             log.write(f'\n=== {time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())} {self.repository} ===\n')
@@ -326,6 +328,7 @@ class Job:
             process = subprocess.Popen(
                 codex_command(environment), cwd=DIR + '/repos', stdin=instructions, stdout=log, stderr=subprocess.STDOUT,
                 env=environment)
+            self.launched = True
             stopped = False
             while process.poll() is None:
                 self.peak_mb = max(self.peak_mb, tree_rss_mb(process.pid))

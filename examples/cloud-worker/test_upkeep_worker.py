@@ -265,7 +265,10 @@ class LoopTests(unittest.TestCase):
             self.assertIn('args:--no-daemon exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - '
                           'env:1\n', log)
             self.assertIn(f'--help\nWork on acme/web and write {directory}/status.d/acme__web.json.', log)
-            # A policy that changed to ask during the run starts no further agent.
+            # A policy that changed to ask during the run starts no further agent, and an old
+            # capacity error in the log does not make it wait and try again.
+            with open(job.log, 'a') as log:
+                log.write('The model is at capacity.\n')
             policy.write_text('ask\n')
             with mock.patch.dict(names, DIR=str(directory), REFRESH=0.05, APPROVALS=str(policy)), \
                     mock.patch('os.geteuid', return_value=10001):
@@ -273,6 +276,7 @@ class LoopTests(unittest.TestCase):
                 job.run('Work on @@REPOSITORY@@.')
             self.assertIsNone(job.code)
             self.assertFalse(job.launched)
+            self.assertLess(job.finished - job.started, 5)
             self.assertIn('this agent did not start', Path(job.log).read_text())
 
 
