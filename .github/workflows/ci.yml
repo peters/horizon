@@ -439,7 +439,8 @@ jobs:
   # fail, so a release can still be forced on demand.
   rust-artifacts:
     name: Artifacts (${{ matrix.name }})
-    if: always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && needs.repo-checks.outputs.release_inputs == 'true'))
+    # Release artifacts build for main only; a merge-queue batch is checked like a PR.
+    if: always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.repo-checks.outputs.release_inputs == 'true'))
     needs: repo-checks
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
