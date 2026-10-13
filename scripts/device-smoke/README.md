@@ -356,7 +356,8 @@ Result: The first command shows only files that the worker's own agents and
 services changed, never a file of the debug app. The second output is empty
 when no browser panel of the worker changed meanwhile.
 
-To stop, press Ctrl-C, or send `SIGTERM` to `launcher_pid`. A command that runs
+To stop, press Ctrl-C, or send `SIGTERM` to `launcher_pid`. Closing the
+terminal of the command (`SIGHUP`) also stops it. A command that runs
 in the background ignores `SIGINT`. The command sends `WM_DELETE_WINDOW` to the
 windows of `pid`, as a window manager does, so Horizon exits normally. After
 15 seconds it stops the process group. The state directory and the logs stay.

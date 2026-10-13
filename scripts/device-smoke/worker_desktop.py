@@ -235,8 +235,10 @@ def main(argv=None):
     def interrupted(_signal, _frame):
         raise KeyboardInterrupt
 
-    previous = {number: signal.getsignal(number) for number in (signal.SIGTERM, signal.SIGINT)}
+    # SIGHUP comes when the terminal of the command closes; the window must not stay behind.
+    previous = {number: signal.getsignal(number) for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
     signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGHUP, interrupted)
     process = None
     launched = False
     try:
@@ -288,8 +290,8 @@ def main(argv=None):
         return 0 if launched else 130
     finally:
         # A second signal must not interrupt the stop.
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        for number in previous:
+            signal.signal(number, signal.SIG_IGN)
         try:
             if process is not None:
                 stop(process, args.display)
