@@ -2439,6 +2439,7 @@ dependencies = [
  "png",
  "process-wrap",
  "rav1e",
+ "ring",
  "serde",
  "serde_json",
  "sha2",
