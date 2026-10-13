@@ -513,10 +513,11 @@ tmux stays the terminal of the session:
   two seconds, the helper shows the session first. Until the answer is
   complete, for at most ten seconds after the query, it holds the input from
   the first escape sequence on, so the answer never reaches the session as
-  keys. A session that starts later gets these colors before its first attach. A program that asks before the first
-  attach to a new tmux server gets no answer or black. tmux does not answer
-  palette queries (OSC 4). If the panel colors change while a panel is
-  attached, the session gets the new colors at the next attach.
+  keys. A session that starts later gets the colors of the panel that attached
+  last to its tmux server, before its own first attach. A program that asks
+  before the first attach to a new tmux server gets no answer or black. tmux
+  does not answer palette queries (OSC 4). If the panel colors change while a
+  panel is attached, the session gets the new colors at the next attach.
 - The session cannot read or change the clipboard of the computer, because the
   helper removes its clipboard requests (OSC 52), as tmux did.
 - The panel always brackets a paste. The helper gives the paste to tmux, and

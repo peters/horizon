@@ -544,9 +544,10 @@ class Attachment:
         self.answer = b''
         self.answer_deadline = None
 
-    def wait(self, count):
+    def wait(self, count, required=True):
         """The next `count` replies, and the session output that tmux wrote after them. The output
-        that came before them is already in what they read."""
+        that came before them is already in what they read. A refused command ends the attach only
+        when it is `required`."""
         deadline = time.monotonic() + REPLY_SECONDS
         later = []
         while len(self.control.replies) < count:
@@ -554,7 +555,7 @@ class Attachment:
                 raise SystemExit('horizon-worker-attach: tmux did not attach the session')
             later = [(pane, data) for replies, pane, data in self.control.read() if replies >= count]
         replies, self.control.replies = self.control.replies[:count], self.control.replies[count:]
-        if not all(ok for ok, _ in replies):
+        if required and not all(ok for ok, _ in replies):
             raise SystemExit('horizon-worker-attach: tmux refused to read the session')
         return [body for _, body in replies], later
 
@@ -621,7 +622,8 @@ class Attachment:
             commands, typed = self.answered()
             if commands:
                 self.control.send(commands)
-                self.wait(len(commands))
+                # Without the colors, tmux answers as before; the attach goes on.
+                self.wait(len(commands), required=False)
         query = ' '.join('#{%s}' % name for name in STATE)
         # In the alternate screen, the pane's grid holds its normal history above the alternate
         # screen, and the normal screen is saved apart (-a). One command line, so tmux reads no
