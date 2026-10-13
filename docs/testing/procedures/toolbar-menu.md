@@ -31,7 +31,7 @@ in the toolbar in a narrow window.
     **+ New cloud** is dimmed, or not in a build without cloud workspaces. The
     unit tests of the toolbar cover it.
   - The words that a screen reader speaks. The unit tests of the menu rows
-    check that a row gives its title, description, note and shortcut.
+    check that a row gives its title, description and shortcut.
 
 ## 3. Safety
 
