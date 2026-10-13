@@ -59,8 +59,7 @@ mkdir -- "$drops/$session/.$batch.$4.part"
 
 /// Writes one file from standard input into the private folder, then moves it into the
 /// batch folder after a size check. It never replaces a file. A transfer that ends early,
-/// is cancelled or is cut off by a signal leaves nothing in the batch folder. The last
-/// file of a drop also removes the empty private folder.
+/// is cancelled or is cut off by a signal leaves nothing in the batch folder.
 const WRITE: &str = r#"
 set -eu
 umask 077
@@ -68,7 +67,6 @@ dir="$1/.horizon-drops/$2/$3"
 part="$1/.horizon-drops/$2/.$3.$4.part"
 name=$5
 size=$6
-last=$7
 group=$(id -g)
 if [ -f /run/horizon-tailnet/agent-isolation ]; then group=$(id -g horizon-agent); fi
 for folder in "$dir" "$part"; do
@@ -97,12 +95,12 @@ if [ -e "$file" ] || [ -L "$file" ]; then
 fi
 mv -- "$partial" "$file"
 trap - EXIT HUP INT TERM
-if [ "$last" = 1 ]; then rmdir -- "$part" 2>/dev/null || true; fi
 "#;
 
-/// Removes the folders of one drop, only when its private folder shows that this drop
-/// made them, and never through a symbolic link or a folder that another user owns.
-const REMOVE: &str = r#"
+/// Checks the drops and session folders and the private folder of one drop; exits with
+/// nothing done when one is a symbolic link, is missing or has another owner. `REMOVE` and
+/// `FINISH` start with it.
+const OWNED: &str = r#"
 set -eu
 owner=$(id -u)
 for folder in "$1/.horizon-drops" "$1/.horizon-drops/$2"; do
@@ -113,8 +111,18 @@ done
 dir="$1/.horizon-drops/$2/$3"
 part="$1/.horizon-drops/$2/.$3.$4.part"
 if [ -L "$part" ] || [ ! -d "$part" ]; then exit 0; fi
+"#;
+
+/// Removes the folders of one drop, only when its private folder shows that this drop
+/// made them, and never through a symbolic link or a folder that another user owns.
+const REMOVE: &str = r#"
 if [ -d "$dir" ] && [ ! -L "$dir" ]; then rm -rf -- "$dir"; fi
 rm -rf -- "$part"
+"#;
+
+/// Removes the empty private folder of a drop that Horizon saw finish.
+const FINISH: &str = r#"
+rmdir -- "$part"
 "#;
 
 /// The worker and session that a drop goes to, captured when the person drops the files.
@@ -221,22 +229,25 @@ impl Batch {
     }
 
     /// Writes standard input to `name` in the batch folder and checks that it has `size` bytes.
-    /// The `last` file of the drop also removes the private folder.
     #[must_use]
-    pub fn write_command(&self, name: &str, size: u64, last: bool) -> String {
+    pub fn write_command(&self, name: &str, size: u64) -> String {
         let size = size.to_string();
         let [workspace, session, id, token] = self.args();
-        command(
-            WRITE,
-            &[workspace, session, id, token, name, &size, if last { "1" } else { "0" }],
-        )
+        command(WRITE, &[workspace, session, id, token, name, &size])
     }
 
     /// Removes the batch folder, its private folder and everything in them, when this
     /// drop made them.
     #[must_use]
     pub fn remove_command(&self) -> String {
-        command(REMOVE, &self.args())
+        command(&format!("{OWNED}{REMOVE}"), &self.args())
+    }
+
+    /// Removes the empty private folder after Horizon saw every file arrive. Until then
+    /// the folder proves that this drop made the batch folder, so a cancel can remove it.
+    #[must_use]
+    pub fn finish_command(&self) -> String {
+        command(&format!("{OWNED}{FINISH}"), &self.args())
     }
 }
 

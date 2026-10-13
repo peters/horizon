@@ -6,7 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use horizon_core::cloud_runtime::file_drop::{Batch, Destination, remote_names};
-use horizon_core::cloud_runtime::ssh::Connection;
+use horizon_core::cloud_runtime::ssh::{Connection, USER};
 
 use super::{
     LocalUploadFile, SSH_POLL_INTERVAL, UploadControl, UploadMessage, UploadOutcome, UploadProgressContext,
@@ -14,8 +14,16 @@ use super::{
     wait_for_command,
 };
 
-/// How long a failed or cancelled drop waits for the worker to remove its partial folder.
+/// How long the worker gets to remove a drop's folders after the result is shown.
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// What happens to a drop's folders on the worker after Horizon shows the result.
+enum After {
+    /// Every file arrived: remove the empty private folder.
+    Finish(Connection, Batch),
+    /// The drop stopped: remove the batch folder and its private folder.
+    Remove(Connection, Batch),
+}
 
 pub(in crate::app::ssh_upload) fn start_cloud_upload(
     destination: Destination,
@@ -24,14 +32,19 @@ pub(in crate::app::ssh_upload) fn start_cloud_upload(
     let (progress_tx, progress_rx) = mpsc::channel();
     let (control_tx, control_rx) = mpsc::channel();
     thread::spawn(move || {
-        let mut leftover = None;
-        let result = upload(&destination, paths, &control_rx, &progress_tx, &mut leftover);
+        let mut after = None;
+        let result = upload(&destination, paths, &control_rx, &progress_tx, &mut after);
         let _ = progress_tx.send(UploadMessage::Finished(result));
-        // After the cancel or failure is shown, so an unreachable worker does not delay it.
-        if let Some((connection, batch)) = leftover
-            && !remove(&connection, &batch)
-        {
-            tracing::warn!(folder = %batch.directory(), "cloud file drop left its batch folder on the worker");
+        // After the result is shown, so an unreachable worker does not delay it. A cancel can
+        // no longer arrive, so the private folder stays until the result is certain.
+        match after {
+            Some(After::Remove(connection, batch)) if !on_worker(&connection, &batch.remove_command()) => {
+                tracing::warn!(folder = %batch.directory(), "cloud file drop left its batch folder on the worker");
+            }
+            Some(After::Finish(connection, batch)) if !on_worker(&connection, &batch.finish_command()) => {
+                tracing::debug!(folder = %batch.directory(), "cloud file drop left its empty private folder");
+            }
+            _ => {}
         }
     });
     UploadWorkerHandle {
@@ -40,14 +53,14 @@ pub(in crate::app::ssh_upload) fn start_cloud_upload(
     }
 }
 
-/// `leftover` gets the batch folder of a drop that stopped, also one that a failed
-/// preparation may have made before its failure reached Horizon.
+/// `after` gets what to do with the drop's folders once the result is shown, also the
+/// folder that a failed preparation may have made before its failure reached Horizon.
 fn upload(
     destination: &Destination,
     paths: Vec<PathBuf>,
     control_rx: &Receiver<UploadControl>,
     progress_tx: &Sender<UploadMessage>,
-    leftover: &mut Option<(Connection, Batch)>,
+    after: &mut Option<After>,
 ) -> Result<UploadOutcome, String> {
     let files = local_files(paths)?;
     let names = remote_names(&files.iter().map(|file| file.path.clone()).collect::<Vec<_>>());
@@ -77,16 +90,15 @@ fn upload(
     };
     let prepare = connection.pinned_command(&batch.prepare_command());
     if let Err(exit) = wait_for_command(spawn(prepare), control_rx) {
-        *leftover = Some((connection, batch));
+        *after = Some(After::Remove(connection, batch));
         return stopped(exit, progress);
     }
     let mut remote_paths = Vec::with_capacity(total_files);
-    for (index, (file, name)) in files.iter().zip(&names).enumerate() {
-        let last = index + 1 == total_files;
-        let mut command = connection.pinned_command(&batch.write_command(name, file.size_bytes, last));
+    for (file, name) in files.iter().zip(&names) {
+        let mut command = connection.pinned_command(&batch.write_command(name, file.size_bytes));
         let detail = format!("Uploading {} to the cloud worker", file.name);
         if let Err(exit) = stream_file(&mut command, file, &detail, progress, control_rx, progress_tx) {
-            *leftover = Some((connection, batch));
+            *after = Some(After::Remove(connection, batch));
             return stopped(exit, progress);
         }
         progress.completed_files += 1;
@@ -94,6 +106,7 @@ fn upload(
         remote_paths.push(batch.path(name));
     }
     tracing::debug!(files = total_files, folder = %batch.directory(), "cloud file drop uploaded");
+    *after = Some(After::Finish(connection, batch));
     Ok(UploadOutcome {
         cancelled: false,
         completed_files: progress.completed_files,
@@ -144,8 +157,9 @@ fn stopped(exit: WorkerExit, progress: UploadProgressContext) -> Result<UploadOu
     }
 }
 
-fn remove(connection: &Connection, batch: &Batch) -> bool {
-    let mut command = connection.pinned_command(&batch.remove_command());
+/// Runs `remote` on the worker with a time limit; true when it succeeded.
+fn on_worker(connection: &Connection, remote: &str) -> bool {
+    let mut command = connection.pinned_command(remote);
     command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     let Ok(mut child) = command.spawn() else {
         return false;
@@ -165,25 +179,24 @@ fn remove(connection: &Connection, batch: &Batch) -> bool {
 }
 
 /// Puts what the person can do first, then what SSH or the worker said: only its last
-/// line after known advice, since SSH prints long banners for these failures.
+/// line after known advice, since SSH prints long banners for these failures. Advice
+/// follows only whole OpenSSH diagnostic lines, which a file name cannot make.
 fn explain(error: &str) -> String {
-    let lower = error.to_ascii_lowercase();
-    // Only SSH's own wording: a file name or a local file error can contain the same words.
-    let advice = if lower.contains("host key verification failed") || lower.contains("host identification has changed")
-    {
-        "The worker did not show the host key that Horizon recorded for this cloud, so Horizon sent nothing. Reconnect the cloud, then drop the files again."
-    } else if lower.contains("permission denied (publickey") {
-        "The worker refused the cloud SSH key of this computer. Reconnect the cloud, then drop the files again."
-    } else if lower
-        .lines()
-        .any(|line| line.starts_with("ssh: connect to host") || line.starts_with("ssh: could not resolve"))
-    {
-        "Horizon could not reach the cloud worker. Make sure that the cloud runs, then drop the files again."
-    } else if error.starts_with("failed to read ") {
+    if error.starts_with("failed to read ") {
         return format!(
             "Horizon could not read a dropped file on this computer: {}",
             error.trim()
         );
+    }
+    let refused_key = format!("{USER}@");
+    let lines: Vec<String> = error.lines().map(|line| line.trim().to_ascii_lowercase()).collect();
+    let any = |test: &dyn Fn(&str) -> bool| lines.iter().any(|line| test(line));
+    let advice = if any(&|line| line == "host key verification failed.") {
+        "The worker did not show the host key that Horizon recorded for this cloud, so Horizon sent nothing. Reconnect the cloud, then drop the files again."
+    } else if any(&|line| line.starts_with(&refused_key) && line.contains(": permission denied (")) {
+        "The worker refused the cloud SSH key of this computer. Reconnect the cloud, then drop the files again."
+    } else if any(&|line| line.starts_with("ssh: connect to host") || line.starts_with("ssh: could not resolve")) {
+        "Horizon could not reach the cloud worker. Make sure that the cloud runs, then drop the files again."
     } else {
         return format!("The cloud worker did not take the files: {}", error.trim());
     };
@@ -231,6 +244,14 @@ mod tests {
         assert!(
             explain("failed to read /synthetic/secret.txt: Permission denied (os error 13)")
                 .starts_with("Horizon could not read a dropped file on this computer:")
+        );
+        assert!(
+            explain("failed to read /synthetic/Host key verification failed.: Permission denied (os error 13)")
+                .starts_with("Horizon could not read a dropped file on this computer:")
+        );
+        assert!(
+            explain("Horizon did not replace Host key verification failed., which exists on the worker.")
+                .starts_with("The cloud worker did not take the files:")
         );
         assert!(
             explain("The worker received 3 of 10 bytes of timed out.txt, so it kept nothing.")

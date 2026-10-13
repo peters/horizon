@@ -666,7 +666,8 @@ user of the worker, `root`. The boundary is as follows:
   `SESSION/.BATCH.TOKEN.part` (mode `0700`) and moves it into the batch folder only
   after its size is the size of the local file. A transfer that stops early leaves
   nothing in the batch folder. The worker writes only new files, never over an
-  existing file. The last file of a drop removes the empty private folder.
+  existing file. After Horizon saw every file arrive, it removes the empty private
+  folder. Until then a cancel can remove the complete batch folder.
 - After a failure or a cancel, Horizon pastes nothing and removes the batch folder
   and its private folder. `TOKEN` is new for each drop, and the worker makes the
   private folder after the batch folder. Thus the cleanup removes a batch folder

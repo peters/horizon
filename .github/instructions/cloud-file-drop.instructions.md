@@ -54,6 +54,8 @@ a cloud panel, also when the cloud is not connected or the upload fails.
   result, over a new connection. When that connection fails, or the cleanup runs
   before a cut-off preparation made its folder, an empty batch folder or partial
   files in the private folder stay. Horizon never pasted their paths.
+- Horizon removes the empty private folder of a finished drop over a new
+  connection after it pasted the paths. When that fails, the empty folder stays.
 - An agent without agent isolation is `root` on its worker and can read or
   change anything there, the dropped files included.
 
