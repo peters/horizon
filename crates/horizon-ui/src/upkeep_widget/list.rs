@@ -1,6 +1,7 @@
 //! Filter chips and the pull request rows, grouped by where each one stands.
 use egui::{
-    Align, CornerRadius, CursorIcon, Frame, Layout, Margin, RichText, Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2,
+    Align, CornerRadius, CursorIcon, Frame, Layout, Margin, Rect, RichText, Sense, Stroke, StrokeKind, Ui, UiBuilder,
+    Vec2,
 };
 use horizon_core::upkeep::time::OffsetDateTime;
 use horizon_core::upkeep::{PrState, PullRequest, relative};
@@ -101,6 +102,14 @@ fn chip(ui: &mut Ui, filter: &mut Filter, value: Filter, label: &str, count: usi
             StrokeKind::Inside,
         );
     }
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            response.rect.expand(2.0),
+            CornerRadius::same(10),
+            Stroke::new(1.5, theme::FG()),
+            StrokeKind::Outside,
+        );
+    }
     if response.clicked() {
         *filter = value;
     }
@@ -152,15 +161,26 @@ pub(super) fn show(ui: &mut Ui, shown: &[&PullRequest], filter: Filter, now: Off
 fn row(ui: &mut Ui, pr: &PullRequest, now: OffsetDateTime) -> Option<String> {
     let has_note = !pr.note.is_empty();
     let height = if has_note { ROW_HEIGHT + NOTE_HEIGHT } else { ROW_HEIGHT };
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::click());
+    // Only a row with a page takes clicks and keyboard focus.
+    let opens = pr.has_page();
+    let sense = if opens { Sense::click() } else { Sense::hover() };
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), sense);
     // A row out of view only takes its space: a long list costs nothing per frame.
     if !ui.is_rect_visible(rect) {
         return None;
     }
     // The page and the texts are made only when the row is pointed at or clicked.
-    let url = (response.hovered() || response.clicked())
+    let url = (opens && (response.hovered() || response.clicked()))
         .then(|| pr.github_url())
         .flatten();
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            rect.shrink(1.0),
+            CornerRadius::same(8),
+            Stroke::new(1.5, theme::FG()),
+            StrokeKind::Inside,
+        );
+    }
     let response = if url.is_some() {
         response.on_hover_cursor(CursorIcon::PointingHand).on_hover_ui(|ui| {
             ui.label(format!("Open #{} in a browser panel", pr.number));
@@ -170,7 +190,7 @@ fn row(ui: &mut Ui, pr: &PullRequest, now: OffsetDateTime) -> Option<String> {
     };
     response.widget_info(|| {
         let name = format!("{}#{} {}", pr.repository, pr.number, pr.title);
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, pr.github_url().is_some(), name)
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, opens, name)
     });
     if response.hovered() {
         ui.painter().rect_filled(
@@ -179,7 +199,16 @@ fn row(ui: &mut Ui, pr: &PullRequest, now: OffsetDateTime) -> Option<String> {
             theme::blend(theme::PANEL_BG(), theme::FG(), 0.05),
         );
     }
-    let inner = rect.shrink2(Vec2::new(10.0, 0.0));
+    row_body(ui, rect.shrink2(Vec2::new(10.0, 0.0)), pr, now, has_note);
+    ui.painter().line_segment(
+        [rect.left_bottom(), rect.right_bottom()],
+        Stroke::new(0.5, theme::alpha(theme::BORDER_SUBTLE(), 180)),
+    );
+    response.clicked().then_some(url).flatten()
+}
+
+/// The repository, number, title, checks, age and note of one row, inside `inner`.
+fn row_body(ui: &mut Ui, inner: Rect, pr: &PullRequest, now: OffsetDateTime, has_note: bool) {
     ui.scope_builder(
         UiBuilder::new().max_rect(inner).layout(Layout::top_down(Align::Min)),
         |ui| {
@@ -242,11 +271,6 @@ fn row(ui: &mut Ui, pr: &PullRequest, now: OffsetDateTime) -> Option<String> {
             }
         },
     );
-    ui.painter().line_segment(
-        [rect.left_bottom(), rect.right_bottom()],
-        Stroke::new(0.5, theme::alpha(theme::BORDER_SUBTLE(), 180)),
-    );
-    response.clicked().then_some(url).flatten()
 }
 
 fn checks(ui: &mut Ui, pr: &PullRequest) {

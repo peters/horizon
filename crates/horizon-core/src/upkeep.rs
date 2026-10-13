@@ -172,11 +172,24 @@ impl PullRequest {
     /// the worker wrote is not opened.
     #[must_use]
     pub fn github_url(&self) -> Option<String> {
-        if !plain_repository(&self.repository) {
-            return None;
-        }
-        let expected = format!("https://github.com/{}/pull/{}", self.repository, self.number);
-        (self.url == expected).then_some(expected)
+        self.has_page().then(|| self.url.clone())
+    }
+
+    /// Whether [`Self::github_url`] gives a page, checked without allocating.
+    #[must_use]
+    pub fn has_page(&self) -> bool {
+        plain_repository(&self.repository)
+            && self
+                .url
+                .strip_prefix("https://github.com/")
+                .and_then(|rest| rest.strip_prefix(self.repository.as_str()))
+                .and_then(|rest| rest.strip_prefix("/pull/"))
+                .is_some_and(|number| {
+                    // Exactly the decimal form: no sign, no leading zero, nothing after it.
+                    number.bytes().all(|b| b.is_ascii_digit())
+                        && !(number.len() > 1 && number.starts_with('0'))
+                        && number.parse::<u64>().ok() == Some(self.number)
+                })
     }
 }
 
@@ -454,6 +467,16 @@ mod tests {
         assert_eq!(pr.github_url(), None);
         pr.url = "https://github.com/o/r/pull/8".into();
         assert_eq!(pr.github_url(), None);
+        for url in [
+            "https://github.com/o/r/pull/07",
+            "https://github.com/o/r/pull/+7",
+            "https://github.com/o/r/pull/7/files",
+        ] {
+            pr.repository = "o/r".into();
+            pr.number = 7;
+            pr.url = url.into();
+            assert!(!pr.has_page(), "{url}");
+        }
         for repository in ["o/r/../../x", "o/..", "o", "o/r?x=1", "o/r#x"] {
             pr.repository = repository.into();
             pr.url = format!("https://github.com/{repository}/pull/7");
