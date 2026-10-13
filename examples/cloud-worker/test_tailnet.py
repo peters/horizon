@@ -5,6 +5,9 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -17,6 +20,52 @@ loader.exec_module(worker)
 KEY = 'tskey-auth-synthetic12345678901234567890'
 CLOUD = '3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b'
 NAME = 'horizon-cloud-' + CLOUD
+
+def root_available():
+    # CI runners grant passwordless sudo; the two-user test then runs there as root.
+    if os.geteuid() == 0:
+        return True
+    return bool(shutil.which('sudo')) and subprocess.run(
+        ['sudo', '-n', 'true'], capture_output=True, timeout=20, check=False).returncode == 0
+
+
+class DeviceTargetHandoffTests(unittest.TestCase):
+    """horizon-device creates `<target>.lock` and its markers beside its target, as the agent."""
+
+    @unittest.skipUnless(root_available() and shutil.which('setpriv'), 'needs root or passwordless sudo, and setpriv')
+    def test_after_the_handoff_the_agent_can_create_files_beside_the_device_target(self):
+        if os.geteuid() != 0:
+            name = f'{Path(__file__).stem}.{type(self).__name__}.{self._testMethodName}'
+            nested = subprocess.run(['sudo', '-n', sys.executable, '-B', '-m', 'unittest', name],
+                                    cwd=Path(__file__).parent, capture_output=True, text=True, timeout=120)
+            self.assertEqual(nested.returncode, 0, nested.stderr)
+            self.assertNotIn('skipped', nested.stderr)
+            return
+        with tempfile.TemporaryDirectory() as raw:
+            os.chmod(raw, 0o755)
+            # As on a worker: the mount root belongs to root, mode 755.
+            workspace = Path(raw) / 'workspace'
+            workspace.mkdir(mode=0o755)
+            real = Path
+
+            def path(*parts):
+                value = real(*parts)
+                if value.is_relative_to('/workspace'):
+                    return workspace / value.relative_to('/workspace')
+                if value == real('/run/horizon-credentials'):
+                    return real(raw) / 'credentials'
+                return value
+            with patch.object(worker, 'Path', side_effect=path):
+                worker.handoff_paths(True)
+
+            def agent_creates(name):
+                return subprocess.run(['setpriv', f'--reuid={worker.USER}', f'--regid={worker.USER}', '--clear-groups',
+                                       '--', sys.executable, '-I', '-c', 'import sys; open(sys.argv[1], "a").close()',
+                                       str(workspace / name)], cwd=raw, capture_output=True, check=False).returncode == 0
+            self.assertFalse(agent_creates('device.lock'), 'the old target beside /workspace is out of reach')
+            for name in ['device/target.lock', 'device/target.json.controller.json', 'device/target.json.resize-pending']:
+                self.assertTrue(agent_creates(name), name)
+
 
 class TailnetTests(unittest.TestCase):
     def setUp(self):

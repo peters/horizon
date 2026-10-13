@@ -11,7 +11,7 @@ struct Controller {
 }
 
 pub(super) fn observe(response: &mut CloudViewResponse) {
-    if let Ok(bytes) = std::fs::read("/workspace/device.json.controller.json")
+    if let Ok(bytes) = std::fs::read("/workspace/device/target.json.controller.json")
         && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes)
     {
         apply(response, Controller::from_value(&value), Path::new("/proc"));
