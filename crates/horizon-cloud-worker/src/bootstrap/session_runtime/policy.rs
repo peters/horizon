@@ -15,6 +15,8 @@ use std::{
 
 pub(super) const AGENT: &str = "/usr/local/bin/claude";
 pub(super) const TMUX: &str = "/usr/bin/tmux";
+/// Attaches a terminal through tmux control mode, so the terminal keeps the session history.
+pub(super) const ATTACH: &str = "/usr/local/bin/horizon-worker-attach";
 pub(super) const ARGUMENTS: &[&str] = &[
     "--safe-mode",
     "--strict-mcp-config",
@@ -36,7 +38,7 @@ pub(super) fn qualify(store: &Store) -> io::Result<()> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         _ => return Err(invalid()),
     }
-    for path in [AGENT, TMUX] {
+    for path in [AGENT, TMUX, ATTACH] {
         let meta = fs::metadata(path)?;
         if !meta.is_file() || meta.mode() & 0o022 != 0 || meta.mode() & 0o111 == 0 {
             return Err(invalid());

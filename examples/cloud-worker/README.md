@@ -474,9 +474,14 @@ panel keeps the history of the session in its own scrollback. The history
 indicator, the scroll bar, the mouse wheel and the selection operate as in a
 local panel. The mouse wheel sends no keys to the session, unless a program in
 the session turned on mouse reports: then, as in a local panel, the wheel goes
-to the program and Shift+wheel scrolls the scrollback. A plain tmux client is
+to the program and Shift+wheel scrolls the scrollback. A program on the
+alternate screen without mouse reports, such as Codex, also gets arrow keys
+from the wheel, as in a local panel. A plain tmux client is
 not used: it draws a screen, which a panel shows in its alternate screen, and
-it drops lines when output is fast.
+it drops lines when output is fast. The signed project sessions of
+`horizon-cloud-worker` attach through the same helper, with
+`horizon-worker-attach --socket PROXY PANE` (see
+[Signed attachment to an existing session](#signed-attachment-to-an-existing-session)).
 
 At each attach, the helper does these steps:
 
@@ -2147,7 +2152,7 @@ Externally delegated services are outside the supervised process tree.
 The retained manifest is bounded to 128 KiB; individual requests, observations
 and runtime records remain bounded to 64 KiB. Each active launch reserves history
 and byte capacity for one stop, alongside project cancellation capacity. History
-is never evicted to admit another operation. Per-session tmux scrollback is 2,000
+is never evicted to admit another operation. Per-session tmux scrollback is 10,000
 lines; this does not establish CPU, memory, disk or process quotas.
 
 The local `runtime` SSH smoke uses synthetic agents in one persistent isolated
@@ -2181,14 +2186,18 @@ and unique pane identities. Older runtime records without an endpoint binding
 remain inspectable/stoppable but cannot attach. Only running or retained exited
 sessions with an intact supervisor qualify. The verified upstream Unix connection
 is retained across the handoff; it is never reconnected by pathname. A fixed
-`tmux -N` child connects through an authenticated private proxy and receives only
-an intermediary PTY. Both directions to the real SSH terminal remain gated until
+child runs `horizon-worker-attach --socket PROXY PANE` (see
+[Terminal history](#terminal-history)) on an intermediary PTY only. Its `tmux -N`
+control client connects through a private proxy, which accepts only a process
+that this child started. Both directions to the real SSH terminal remain gated until
 peer authentication and a final signed state check ordered with stop. The relay
 holds no allocation lock and bounds each direction to 64 KiB and 16 ancillary
 descriptors. Managed terminal bindings cannot create, split or respawn panes.
 
-Disconnect detaches without stopping the agent. Reconnect preserves processes,
-checkout edits and private home data. Multiple clients may attach concurrently;
+Disconnect detaches without stopping the agent. A paste that a disconnect cuts
+off leaves its tmux buffer on the private server of the session until the
+session ends, because the private proxy accepts no second client to delete it.
+Reconnect preserves processes, checkout edits and private home data. Multiple clients may attach concurrently;
 tmux selects the smallest client terminal size. Explicit stop closes attachments
 and never relaunches. This internal transport does not expose public UI/CLI/MCP
 project admission, grant credentials, or complete shared-worker delivery.

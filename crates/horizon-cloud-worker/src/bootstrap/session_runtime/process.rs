@@ -41,17 +41,25 @@ impl Identity {
             && state(self.pid).is_ok_and(|(_, status)| !matches!(status, 'Z' | 'X'))
     }
 }
-fn state(pid: i32) -> io::Result<(u64, char)> {
+/// The fields of `/proc/<pid>/stat` after the command name, from the state on.
+fn stat(pid: i32) -> io::Result<Vec<String>> {
     if pid <= 0 {
         return Err(invalid());
     }
     let stat = fs::read_to_string(format!("/proc/{pid}/stat"))?;
     let tail = stat.rsplit_once(") ").ok_or_else(invalid)?.1;
-    let parts: Vec<_> = tail.split_whitespace().collect();
+    Ok(tail.split_whitespace().map(str::to_owned).collect())
+}
+fn state(pid: i32) -> io::Result<(u64, char)> {
+    let parts = stat(pid)?;
     Ok((
         parts.get(19).ok_or_else(invalid)?.parse().map_err(|_| invalid())?,
         parts.first().and_then(|s| s.chars().next()).ok_or_else(invalid)?,
     ))
+}
+/// The parent process ID of `pid`.
+pub(super) fn parent(pid: i32) -> io::Result<i32> {
+    stat(pid)?.get(1).ok_or_else(invalid)?.parse().map_err(|_| invalid())
 }
 fn children() -> io::Result<Vec<Pid>> {
     let path = format!("/proc/self/task/{}/children", std::process::id());
@@ -118,5 +126,16 @@ mod tests {
         let mut changed = identity;
         changed.pid = -1;
         assert!(!changed.alive());
+    }
+
+    #[test]
+    fn parent_names_the_process_that_started_a_child() {
+        let mut child = std::process::Command::new("/bin/sleep").arg("5").spawn().unwrap();
+        let pid = i32::try_from(child.id()).unwrap();
+        let own = parent(pid);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(own.unwrap(), i32::try_from(std::process::id()).unwrap());
+        assert!(parent(-1).is_err());
     }
 }

@@ -119,7 +119,7 @@ fn attach(request: &RecoveryRequest) -> io::Result<()> {
     let proxy = Proxy::new()?;
     let mut terminal = terminal::Terminal::spawn(&proxy.socket(), &endpoint.pane_id)?;
     let client = proxy.accept(deadline, &mut terminal.child)?;
-    require_peer(
+    require_child_peer(
         &client,
         &Identity::capture(i32::try_from(terminal.child.id()).map_err(|_| invalid())?)?,
     )?;
@@ -184,6 +184,19 @@ pub(super) fn valid_pane(value: &str) -> bool {
 fn require_peer(stream: &UnixStream, identity: &Identity) -> io::Result<()> {
     let peer = rustix::net::sockopt::socket_peercred(stream)?;
     if peer.pid.as_raw_nonzero().get() != identity.pid || peer.uid != rustix::process::getuid() || !identity.alive() {
+        return Err(invalid());
+    }
+    Ok(())
+}
+/// The proxy client is the tmux control client that the attachment child started. The child stays
+/// unreaped until the relay ends, so its PID cannot name another process; a process that
+/// reused the peer's PID passes only when that child started it too.
+fn require_child_peer(stream: &UnixStream, parent: &Identity) -> io::Result<()> {
+    let peer = rustix::net::sockopt::socket_peercred(stream)?;
+    if peer.uid != rustix::process::getuid()
+        || super::process::parent(peer.pid.as_raw_nonzero().get())? != parent.pid
+        || !parent.alive()
+    {
         return Err(invalid());
     }
     Ok(())
@@ -312,6 +325,38 @@ mod tests {
         accepted.read_exact(&mut bytes).unwrap();
         assert_eq!(&bytes, b"original endpoint");
         assert_eq!(replacement.accept().unwrap_err().kind(), io::ErrorKind::WouldBlock);
+    }
+
+    #[test]
+    fn proxy_client_must_be_started_by_the_attachment_child() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("s");
+        let listener = UnixListener::bind(&path).unwrap();
+        let current = Identity::current().unwrap();
+        let _own = UnixStream::connect(&path).unwrap();
+        let (accepted, _) = listener.accept().unwrap();
+        assert!(require_child_peer(&accepted, &current).is_err());
+        let mut child = Command::new("/usr/bin/python3")
+            .args([
+                "-c",
+                "import socket, sys\ns = socket.socket(socket.AF_UNIX)\ns.connect(sys.argv[1])\nsys.stdin.read()",
+            ])
+            .arg(&path)
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let (accepted, _) = listener.accept().unwrap();
+        let checked = require_child_peer(&accepted, &current);
+        let foreign = Command::new("/bin/sleep").arg("5").spawn().unwrap();
+        let other = Identity::capture(i32::try_from(foreign.id()).unwrap()).unwrap();
+        let rejected = require_child_peer(&accepted, &other);
+        drop(child.stdin.take());
+        child.wait().unwrap();
+        let mut foreign = foreign;
+        foreign.kill().unwrap();
+        foreign.wait().unwrap();
+        checked.unwrap();
+        assert!(rejected.is_err());
     }
 
     #[test]

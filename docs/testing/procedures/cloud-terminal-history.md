@@ -53,6 +53,9 @@ next attach, one time only.
     `examples/cloud-worker/horizon-worker-session` of the candidate commit to
     `/usr/local/bin` as root, with mode 755. A session that started before the
     copy keeps the tmux default of 2000 lines of history.
+- For task 6.8 only, on the local Linux computer: Python with `paramiko`, an
+  OpenSSH server executable, `bwrap`, `strace` and `tmux`. This task rents no
+  compute.
 
 ## 5. Setup
 
@@ -198,12 +201,50 @@ next attach, one time only.
    Result: The agent draws its screen again at the new width. The history
    indicator still shows the history.
 
+4. Open a cloud Codex panel, or start another program on the alternate screen
+   that does not turn on mouse reports. Turn the mouse wheel up on the panel.
+
+   Result: The program gets arrow keys from the wheel, as in a local panel
+   with the same program. Codex, for example, shows an earlier prompt.
+
 ### 6.7 LOCAL — Keep the scrolling of other panels
 
 1. In a local Claude panel and in an SSH panel of **Remote Hosts**, write more
    than one screen of output. Turn the mouse wheel up.
 
    Result: Each panel scrolls its history as before.
+
+### 6.8 SIGNED — Attach a signed project session
+
+The signed project sessions of `horizon-cloud-worker` attach through
+`horizon-worker-attach --socket`. This task uses the local initialization smoke
+with synthetic agents.
+
+1. Build the worker of the candidate commit:
+   `cargo build -p horizon-cloud-worker`.
+
+   Result: `target/debug/horizon-cloud-worker` exists.
+
+2. Run the attachment scenario with a new, absolute evidence directory:
+
+   ```bash
+   python3 scripts/cloud-initialization-smoke.py --scenario attachment \
+     --worker target/debug/horizon-cloud-worker --sshd <path of sshd> \
+     --evidence <new absolute directory>
+   ```
+
+   Result: The last output line shows `"passed": true`.
+
+3. In the evidence directory, open the `terminal-client-*.bin` file that shows
+   `reconnected-same-process`.
+
+   Result: After the scrollback clear (`ESC [3J`), the file shows
+   `session-0-first`, `second-client` and their `echo:` lines before
+   `reconnected-same-process`. The attach shows the history of the session.
+
+4. Do step 2 again with `--attachment-race` and a new evidence directory.
+
+   Result: The last output line shows `"passed": true`.
 
 ## 7. Pass criteria
 
@@ -214,8 +255,11 @@ next attach, one time only.
 - 6.4 shows the alternate screen after an attach, and the normal history after
   the program ends.
 - 6.5 brackets a paste only for a program that asked for it.
-- 6.6 scrolls the history of an agent panel.
+- 6.6 scrolls the history of an agent panel. A program on the alternate
+  screen without mouse reports gets arrow keys from the wheel.
 - 6.7 shows no change for local and SSH panels.
+- 6.8 attaches a signed project session with its history, and the race
+  scenario passes.
 
 ## 8. Cleanup
 
