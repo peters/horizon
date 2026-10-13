@@ -41,7 +41,8 @@
         return bytes.buffer;
     };
     const text = (value) => (value === undefined || value === null ? undefined : String(value));
-    const timeoutOf = (value) => (Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined);
+    const timeoutOf = (value) =>
+        Number.isFinite(value) && value >= 0 ? Math.min(Math.floor(value), 0xffffffff) : undefined;
     const algorithmOf = (parameter) => {
         const alg = Number(parameter.alg);
         if (!Number.isInteger(alg)) throw new TypeError("pubKeyCredParams[].alg must be an integer");
@@ -209,6 +210,7 @@
     });
     replace(Container.prototype, "create", function create(options) {
         if (!options || typeof options !== "object" || !options.publicKey) return nativeCreate.apply(this, arguments);
+        if (options.mediation === "conditional") return conditional(options.signal);
         return request("create", options.publicKey, options.signal);
     });
     const Credential = globalThis.PublicKeyCredential;

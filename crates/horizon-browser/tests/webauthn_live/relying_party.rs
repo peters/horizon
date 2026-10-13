@@ -207,7 +207,7 @@ fn page_html(shared: &Shared, page: &str) -> String {
         }
         "/refusals" => format!(
             r#"(async () => {{
-    await outcome("foreign_rp_id", navigator.credentials.get({{ publicKey: {{ challenge: anyChallenge(), rpId: "example.com" }} }}));
+    await outcome("foreign_rp_id", navigator.credentials.get({{ publicKey: {{ challenge: anyChallenge(), rpId: "example.com", timeout: 1e21 }} }}));
     await outcome("malformed_options", navigator.credentials.create({{ publicKey: {{
         challenge: anyChallenge(), rp: {{ name: "x" }}, user: {{ id: anyChallenge(), name: "u", displayName: "u" }},
         pubKeyCredParams: [{{ type: "public-key" }}],
@@ -217,6 +217,13 @@ fn page_html(shared: &Shared, page: &str) -> String {
     const conditional = navigator.credentials.get({{ mediation: "conditional", publicKey: {{ challenge: anyChallenge() }}, signal: controller.signal }});
     setTimeout(() => controller.abort(), 300);
     await outcome("conditional", conditional);
+    const createController = new AbortController();
+    const conditionalCreate = navigator.credentials.create({{ mediation: "conditional", publicKey: {{
+        challenge: anyChallenge(), rp: {{ name: "x" }}, user: {{ id: anyChallenge(), name: "u", displayName: "u" }},
+        pubKeyCredParams: [{{ type: "public-key", alg: -7 }}], timeout: 1e21,
+    }}, signal: createController.signal }});
+    setTimeout(() => createController.abort(), 300);
+    await outcome("conditional_create", conditionalCreate);
     const frame = document.createElement("iframe");
     frame.src = "http://localhost:{}/frame";
     document.body.appendChild(frame);

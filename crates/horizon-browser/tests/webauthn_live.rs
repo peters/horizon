@@ -112,6 +112,7 @@ fn run_engine(backend: BackendKind) {
         ("malformed_options", "TypeError"),
         ("conditional_available", "false"),
         ("conditional", "AbortError"),
+        ("conditional_create", "AbortError"),
         ("cross_origin_iframe", "NotAllowedError"),
     ] {
         let report = rp.wait_report(scenario, REPORT_TIMEOUT, &session);

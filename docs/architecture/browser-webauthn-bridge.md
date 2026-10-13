@@ -87,8 +87,8 @@ The `browser_panel` and `browser_list` MCP results report
   `SecurityError`.
 - In Chromium, only the main world of the page session can use the binding.
   Isolated worlds and out-of-process iframes cannot send a request.
-- Conditional mediation (`mediation: "conditional"`) never starts the
-  command. `PublicKeyCredential.isConditionalMediationAvailable()` resolves
+- Conditional mediation (`mediation: "conditional"`) on `get` or `create`
+  never starts the command. `PublicKeyCredential.isConditionalMediationAvailable()` resolves
   `false`. A conditional request stays pending until the page aborts it.
 - When the page aborts a request with its `AbortSignal`, the driver kills the
   command process. A navigation of the calling frame also kills it.
@@ -117,6 +117,9 @@ The `browser_panel` and `browser_list` MCP results report
   can detect the Runtime domain.
 - The bridge does not cover a popup that the page opens in a new top-level
   context or target.
+- If Firefox replaces the top-level context of the panel, the bridge stays
+  off in that panel until its browser session starts again. The manual file
+  chooser has the same limit.
 - A cross-site iframe in Chromium runs in another process. It keeps the
   browser's own WebAuthn behavior and never reaches the command.
 - When the driver kills the command, child processes of the command can
