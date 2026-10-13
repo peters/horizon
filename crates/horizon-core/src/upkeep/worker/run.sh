@@ -7,8 +7,6 @@ export HOME=/workspace/home DISPLAY=:99 HORIZON_BROWSER_ROOT=/workspace/home/.ho
 export HORIZON_CLOUD_ACTOR="cloud:$session" HORIZON_BROWSER_ACTOR="horizon:cloud-$session"
 export HORIZON_DEVICE_ACTOR="horizon:cloud-$session"
 export HORIZON_SESSION_DIR="/workspace/session-data/$session"
+# run.py gives each agent the browser host instance that the worker publishes at that time.
 unset HORIZON HORIZON_BROWSER_HOST_INSTANCE
-if host_value="$(cat /run/horizon-worker/browser-host-instance 2>/dev/null)" && [ -n "$host_value" ]; then
-    export HORIZON_BROWSER_HOST_INSTANCE="$host_value"
-fi
 exec python3 -I -u /workspace/home/upkeep/run.py "$session"

@@ -143,13 +143,15 @@ class ExchangeTests(unittest.TestCase):
     def test_a_run_file_of_the_agent_cannot_make_the_answer_invalid(self):
         self.worker.upkeep.mkdir(mode=0o700)
         lines = ['{"started_at": 1, "x": NaN, "outcome": "done"}', '[' * 100000,
+                 '{"started_at": 3, "outcome": "\\ud800"}',
                  '{"started_at": 99999999999999999999}', '{"started_at": true}',
                  '{"started_at": 2, "finished_at": 1e400, "outcome": {"deep": [[[]]]}}']
         (self.worker.upkeep / 'runs.jsonl').write_text('\n'.join(lines) + '\n')
         (self.worker.upkeep / 'next-run').write_text('99999999999999999999')
         os.mkdir(self.worker.upkeep / 'status.json')
         answer = self.worker.exchange()
-        self.assertEqual(answer['runs'], [{'started_at': 1, 'outcome': 'done'}, {'started_at': 2}])
+        self.assertEqual(answer['runs'], [{'started_at': 1, 'outcome': 'done'}, {'started_at': 3, 'outcome': '?'},
+                                          {'started_at': 2}])
         self.assertIsNone(answer['next_run'])
         self.assertIsNone(answer['status'])
 
@@ -240,6 +242,88 @@ class LoopTests(unittest.TestCase):
             self.assertEqual(job.code, 0)
             self.assertIn('args:exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - env:1\n', log)
             self.assertIn(f'--help\nWork on acme/web and write {directory}/status.d/acme__web.json.', log)
+
+
+class SchedulerTests(unittest.TestCase):
+    """run_once with fake gh, codex and session environment tools on PATH."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.dir = self.root / 'upkeep'
+        tools = self.root / 'tools'
+        for folder in (self.dir / 'repos', self.dir / 'logs', self.dir / 'status.d', tools):
+            folder.mkdir(parents=True)
+        (self.dir / 'prompt.md').write_text('Work on @@REPOSITORY@@.')
+        self.pulls = self.root / 'pulls.json'
+        self.pulls.write_text('[{"number": 1, "headRefOid": "a", "statusCheckRollup": []}]')
+        self.agents = self.root / 'agents.log'
+        scripts = {
+            'gh': f'#!/bin/sh\ncat {self.pulls}\n',
+            'codex': f'#!/bin/sh\ncat >> {self.agents}\necho >> {self.agents}\n',
+            'horizon-worker-session-env': '#!/bin/sh\n',
+        }
+        for name, text in scripts.items():
+            (tools / name).write_text(text)
+            (tools / name).chmod(0o700)
+        policy = self.root / 'agent-approvals'
+        policy.write_text('auto\n')
+        names = RUN['run_once'].__globals__
+        for patch in (mock.patch.dict(names, DIR=str(self.dir), APPROVALS=str(policy), REFRESH=0.05),
+                      mock.patch.dict(os.environ, PATH=f'{tools}:{os.environ["PATH"]}'),
+                      mock.patch('os.geteuid', return_value=10001)):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def run_once(self, forced=False):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return RUN['run_once']({'repositories': ['acme/web', 'acme/api']}, forced)
+
+    def agents_started(self):
+        return self.agents.read_text().count('Work on') if self.agents.exists() else 0
+
+    def test_unchanged_repositories_are_skipped_unless_run_now_forces_them(self):
+        self.assertTrue(self.run_once())
+        self.assertEqual(self.agents_started(), 2)
+        self.assertTrue(self.run_once())
+        self.assertEqual(self.agents_started(), 2)
+        self.assertTrue(self.run_once(forced=True))
+        self.assertEqual(self.agents_started(), 4)
+        self.pulls.write_text('[{"number": 1, "headRefOid": "b", "statusCheckRollup": []}]')
+        self.assertTrue(self.run_once())
+        self.assertEqual(self.agents_started(), 6)
+
+    def test_reports_of_any_shape_merge_into_a_bounded_status(self):
+        (self.dir / 'status.d' / 'acme__web.json').write_text('[]')
+        (self.dir / 'status.d' / 'acme__api.json').write_text(json.dumps({
+            'pull_requests': [{'number': n, 'note': 'x' * (5000 if n == 0 else 10)} for n in range(600)] + [7],
+            'activity': None}))
+        RUN['merge_status'](['acme/web', 'acme/api'])
+        status = json.loads((self.dir / 'status.json').read_text())
+        self.assertEqual(len(status['pull_requests']), RUN['PULL_REQUESTS'])
+        self.assertEqual(status['pull_requests'][0]['number'], 1)
+        self.assertEqual(status['activity'], [])
+
+    def test_a_run_the_loop_did_not_finish_is_closed_as_failed(self):
+        RUN['record']({'started_at': 100, 'outcome': 'running'})
+        RUN['close_interrupted']()
+        RUN['close_interrupted']()
+        lines = [json.loads(line) for line in (self.dir / 'runs.jsonl').read_text().splitlines()]
+        self.assertEqual([line['outcome'] for line in lines], ['running', 'failed'])
+
+    def test_a_listing_that_hangs_or_is_not_a_list_reads_as_unreadable(self):
+        self.pulls.write_text('{"number": 1}')
+        self.assertIsNone(RUN['open_pull_requests']('acme/web', ['app/dependabot']))
+        with mock.patch('subprocess.run', side_effect=RUN['subprocess'].TimeoutExpired('gh', 60)):
+            self.assertIsNone(RUN['open_pull_requests']('acme/web', ['app/dependabot']))
+
+    def test_a_log_past_its_limit_keeps_its_end(self):
+        log = self.dir / 'logs' / 'big.log'
+        log.write_bytes(b'a' * RUN['LOG_LIMIT'] + b'end')
+        RUN['trim'](str(log))
+        self.assertEqual(log.stat().st_size, RUN['LOG_LIMIT'] // 8)
+        self.assertTrue(log.read_bytes().endswith(b'end'))
 
 
 if __name__ == '__main__':

@@ -166,22 +166,28 @@ def tmux(*args):
     return subprocess.run(['tmux', '-L', 'horizon-cloud', *args], capture_output=True, text=True, timeout=20)
 
 
+def runs_loop(session):
+    """Whether the session exists, and whether it runs the loop."""
+    start = tmux('display-message', '-p', '-t', '=' + session + ':', '#{pane_start_command}')
+    return start.returncode == 0, start.returncode == 0 and 'upkeep/run.sh' in start.stdout
+
+
 def keep_loop(session, directory):
     """Whether the loop's session runs, and whether it already ran before this exchange."""
     # A reconnect relaunches recorded sessions as interactive agents; only the loop belongs here.
-    start = tmux('display-message', '-p', '-t', '=' + session + ':', '#{pane_start_command}')
-    loop = start.returncode == 0 and 'upkeep/run.sh' in start.stdout
+    exists, loop = runs_loop(session)
     # A loop that already ran before this exchange has survived its start; only then is its
     # session ready for a panel to attach.
     settled = loop
-    if start.returncode == 0 and not loop:
+    if exists and not loop:
         tmux('kill-session', '-t', '=' + session)
     if not loop:
         command = ['/bin/bash', '--noprofile', '--norc', directory + '/run.sh', session]
         started = tmux('new-session', '-d', '-s', session, '-c', directory,
                        '-e', 'PATH=' + os.environ.get('PATH', '/usr/local/bin:/usr/bin:/bin'),
                        '-e', 'BASH_ENV=', '-e', 'ENV=', *command)
-        loop = started.returncode == 0
+        # Another exchange may have started it a moment ago.
+        loop = started.returncode == 0 or runs_loop(session)[1]
     return loop, settled
 
 
@@ -202,7 +208,8 @@ def run_record(line):
     if moment(run.get('finished_at')) is not None:
         record['finished_at'] = run['finished_at']
     if isinstance(run.get('outcome'), str):
-        record['outcome'] = run['outcome'][:40]
+        # A lone surrogate from a \ud800 escape is not valid JSON for Horizon.
+        record['outcome'] = run['outcome'][:40].encode('utf-8', 'replace').decode()
     return record
 
 

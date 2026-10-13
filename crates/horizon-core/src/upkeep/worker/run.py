@@ -24,6 +24,12 @@ import time
 
 DIR = '/workspace/home/upkeep'
 APPROVALS = '/run/horizon-worker/agent-approvals'
+HOST_INSTANCE = '/run/horizon-worker/browser-host-instance'
+# What the merged status may hold, so it stays far below what the exchange reads (1 MiB).
+PULL_REQUESTS = 400
+ENTRY_LIMIT = 2048
+ACTIVITY = 80
+LOG_LIMIT = 8 * 1024 * 1024
 # A job that runs longer than this is stopped, so one stuck repository cannot hold the hour.
 JOB_LIMIT = 90 * 60
 REFRESH = 5
@@ -82,17 +88,26 @@ def session_environment():
     it, or None when the worker refuses it."""
     try:
         result = subprocess.run(['horizon-worker-session-env', 'apply'], capture_output=True, timeout=60)
-    except FileNotFoundError:
-        return dict(os.environ)
-    if result.returncode != 0:
-        print(f'The worker refused its session environment: {result.stderr.decode(errors="replace").strip()[:300]}',
-              flush=True)
+        refusal = result.stderr.decode(errors='replace').strip()[:300] if result.returncode else None
+    except (OSError, subprocess.TimeoutExpired) as error:
+        refusal = str(error)
+    if refusal is not None:
+        print(f'The worker refused its session environment, so Upkeep starts no agent: {refusal}', flush=True)
         return None
     environment = dict(os.environ)
     for assignment in result.stdout.split(b'\0'):
         key, separator, value = assignment.decode(errors='replace').partition('=')
         if separator:
             environment[key] = value
+    # The control service publishes it when it answers, and again after a restart.
+    environment.pop('HORIZON_BROWSER_HOST_INSTANCE', None)
+    try:
+        with open(HOST_INSTANCE) as handle:
+            instance = handle.read().strip()
+        if instance:
+            environment['HORIZON_BROWSER_HOST_INSTANCE'] = instance
+    except OSError:
+        pass
     return environment
 
 
@@ -111,7 +126,7 @@ def sources():
 def every(cfg):
     try:
         return max(15, int(cfg.get('every_minutes', 60)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 60
 
 
@@ -156,16 +171,17 @@ def open_pull_requests(repository, authors):
     checks, review and mergeability. None when the repository cannot be read yet."""
     found = []
     for author in authors:
-        result = subprocess.run(
-            ['gh', 'pr', 'list', '--repo', repository, '--author', author, '--state', 'open',
-             '--json', 'number,headRefOid,statusCheckRollup,reviewDecision,mergeable'],
-            capture_output=True, text=True, timeout=60)
-        if result.returncode != 0:
-            return None
         try:
-            found += json.loads(result.stdout or '[]')
-        except ValueError:
+            result = subprocess.run(
+                ['gh', 'pr', 'list', '--repo', repository, '--author', author, '--state', 'open',
+                 '--json', 'number,headRefOid,statusCheckRollup,reviewDecision,mergeable'],
+                capture_output=True, text=True, timeout=60)
+            page = json.loads(result.stdout or '[]') if result.returncode == 0 else None
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            page = None
+        if not isinstance(page, list):
             return None
+        found += [pr for pr in page if isinstance(pr, dict)]
     return found
 
 
@@ -179,8 +195,8 @@ def fingerprint(pull_requests, template):
     return hashlib.sha256(json.dumps([state, template]).encode()).hexdigest()
 
 
-def tree_rss_mb(pid):
-    """Resident memory of `pid` and its descendants."""
+def tree(pid):
+    """`pid` and its descendants."""
     children = {}
     for status in glob.glob('/proc/[0-9]*/stat'):
         try:
@@ -189,10 +205,18 @@ def tree_rss_mb(pid):
             children.setdefault(int(fields[1]), []).append(int(status.split('/')[2]))
         except (OSError, IndexError, ValueError):
             continue
-    total, stack = 0, [pid]
+    found, stack = [], [pid]
     while stack:
         current = stack.pop()
+        found.append(current)
         stack.extend(children.get(current, []))
+    return found
+
+
+def tree_rss_mb(pid):
+    """Resident memory of `pid` and its descendants."""
+    total = 0
+    for current in tree(pid):
         try:
             with open(f'/proc/{current}/status') as handle:
                 for line in handle:
@@ -252,6 +276,7 @@ class Job:
                   .replace('@@STATUS@@', DIR + '/status.d/' + self.slug + '.json'))
         # The prompt goes on standard input: as an argument, text that starts with a dash
         # would be read as an option, and a long one would pass the argument size limit.
+        trim(self.log)
         with open(self.log, 'a') as log, tempfile.TemporaryFile() as instructions:
             instructions.write(prompt.encode())
             instructions.seek(0)
@@ -260,16 +285,17 @@ class Job:
             process = subprocess.Popen(
                 ['codex', 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', '-'],
                 cwd=DIR + '/repos', stdin=instructions, stdout=log, stderr=subprocess.STDOUT,
-                env=environment, start_new_session=True)
+                env=environment)
             stopped = False
             while process.poll() is None:
                 self.peak_mb = max(self.peak_mb, tree_rss_mb(process.pid))
                 if not stopped and time.time() - self.started > JOB_LIMIT:
-                    # The whole process group, so no tool the agent started keeps running.
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
+                    # With every process it started, so no tool of the agent keeps running.
+                    for pid in tree(process.pid):
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
                     log.write('\nStopped: the run passed its time limit.\n')
                     stopped = True
                 time.sleep(REFRESH)
@@ -281,15 +307,49 @@ def heavy(costs, repository, memory):
     return cost.get('minutes', 0) >= 20 or cost.get('peak_mb', 0) >= memory * 0.35
 
 
+def entries(report, key):
+    """The entries of one list in an agent's report that are objects of a reasonable size."""
+    values = report.get(key) if isinstance(report, dict) else None
+    return [value for value in values if isinstance(value, dict)
+            and len(json.dumps(value)) <= ENTRY_LIMIT] if isinstance(values, list) else []
+
+
 def merge_status(repositories):
-    """One status document from the jobs' own reports."""
+    """One status document from the jobs' own reports, which the agents write as they like."""
     pull_requests, activity = [], []
     for repository in repositories:
         report = load(DIR + '/status.d/' + repository.replace('/', '__') + '.json', {})
-        pull_requests += [pr for pr in report.get('pull_requests', []) if isinstance(pr, dict)]
-        activity += [entry for entry in report.get('activity', []) if isinstance(entry, dict)]
+        pull_requests += entries(report, 'pull_requests')
+        activity += entries(report, 'activity')
     activity.sort(key=lambda entry: str(entry.get('at', '')))
-    save(DIR + '/status.json', {'pull_requests': pull_requests, 'activity': activity[-80:]})
+    save(DIR + '/status.json', {'pull_requests': pull_requests[:PULL_REQUESTS], 'activity': activity[-ACTIVITY:]})
+
+
+def trim(path):
+    """Keeps the last part of a log that grew past its limit, so the volume never fills."""
+    try:
+        if os.path.getsize(path) <= LOG_LIMIT:
+            return
+        with open(path, 'rb') as handle:
+            handle.seek(-LOG_LIMIT // 8, os.SEEK_END)
+            tail = handle.read()
+        with open(path + '.tmp', 'wb') as handle:
+            handle.write(tail)
+        os.replace(path + '.tmp', path)
+    except OSError:
+        pass
+
+
+def close_interrupted():
+    """A run the loop did not see to its end (the loop was stopped) is recorded as failed, so
+    the board never shows it running forever."""
+    try:
+        with open(DIR + '/runs.jsonl') as handle:
+            last = json.loads(handle.readlines()[-1])
+        if last.get('outcome') == 'running':
+            record({'started_at': last['started_at'], 'finished_at': int(time.time()), 'outcome': 'failed'})
+    except (OSError, IndexError, ValueError, AttributeError, KeyError):
+        pass
 
 
 def draw(started, jobs, queued, capacity):
@@ -401,13 +461,21 @@ def run_once(cfg, forced):
 def main():
     for folder in ('repos', 'logs', 'status.d'):
         os.makedirs(os.path.join(DIR, folder), exist_ok=True)
+    close_interrupted()
     cfg = config()
+    minutes = every(cfg)
     upcoming = next_slot(cfg)
     with open(DIR + '/next-run', 'w') as handle:
         handle.write(str(upcoming))
     print(f'Upkeep waits for its next run at {time.strftime("%H:%M", time.gmtime(upcoming))} UTC.', flush=True)
     installed = sources()
     while True:
+        cfg = config()
+        if every(cfg) != minutes:
+            minutes = every(cfg)
+            upcoming = next_slot(cfg)
+            with open(DIR + '/next-run', 'w') as handle:
+                handle.write(str(upcoming))
         # Between runs only, so an update never stops an agent in the middle of its work.
         if sources() != installed:
             print('\nAn exchange installed a new loop; starting it.', flush=True)
@@ -437,6 +505,7 @@ def main():
             while slot < ended:
                 record({'started_at': slot, 'outcome': 'skipped'})
                 slot += every(cfg) * 60
+            minutes = every(cfg)
             upcoming = next_slot(cfg)
             with open(DIR + '/next-run', 'w') as handle:
                 handle.write(str(upcoming))

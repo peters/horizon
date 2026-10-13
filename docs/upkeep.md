@@ -116,7 +116,10 @@ The number of agents that run side by side depends on the processor cores, the
 memory and the peak memory of earlier runs. The loop stops an agent and all of its
 processes after 90 minutes. A run that **Run now** started also starts agents for
 the repositories that did not change. When an exchange installed a new loop, the
-loop starts the new loop between two runs.
+loop starts the new loop between two runs. When the schedule changes, the loop
+calculates the next run again. When the loop starts, it records a run that did not
+end (for example, because the loop was stopped) as failed. The loop keeps the last
+1 MiB of a log of an agent that grew to more than 8 MiB.
 
 ## Trust boundary of the worker loop
 
@@ -171,6 +174,10 @@ The exchange and the loop guarantee these items:
     without control characters. The instructions can have line breaks and tabs.
   - A cloud ID of letters, digits, `-` and `_`, and a revision of 40 or 64
     lowercase hexadecimal characters.
+- The loop merges the reports of the agents into one status. It keeps only list
+  entries that are objects of at most 2 KiB, at most 400 pull requests and the
+  newest 80 activity lines. Thus the status stays below the 1 MiB that the
+  exchange reads.
 - The loop examines the repositories and the bots in `config.json` again. It
   leaves out the names that Horizon does not accept. Thus no name can start an
   option of `gh`, or change a file name or the agent instructions.
