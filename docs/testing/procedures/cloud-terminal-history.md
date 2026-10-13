@@ -16,7 +16,8 @@ This procedure makes sure that the scrollback of a cloud shell panel and a cloud
 agent panel operates as in a local panel. The history indicator, the scroll
 bar, the mouse wheel and the selection must show the output of the session. The
 output that the session writes while no panel is attached must come back at the
-next attach, one time only.
+next attach, one time only. A color query of the session must get the colors of
+the panel.
 
 ## 2. Applicability
 

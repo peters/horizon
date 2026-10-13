@@ -82,8 +82,9 @@ COLOR_QUERY = b'\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b[c'
 COLOR_REPLY = re.compile(rb'\x1b\](1[01]);([^\x07\x1b]*)(?:\x07|\x1b\\)')
 RGB = re.compile(rb'rgb:([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})')
 IDENTITY_REPLY = re.compile(rb'\x1b\[\?[0-9;]*c')
-# The attach shows the session after this long without the answer. Input then waits for the rest
-# of the answer until ANSWER_SECONDS after the query, so a late answer never reaches the session.
+# The attach shows the session after this long without the answer. Input from its first escape
+# sequence on then waits for the rest of the answer until ANSWER_SECONDS after the query, so a late
+# answer never reaches the session.
 COLOR_SECONDS = 2
 ANSWER_SECONDS = 10
 LITERAL = frozenset(b'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ,./:=@_+-')
@@ -588,6 +589,16 @@ class Attachment:
             self.answer += chunk
         return True
 
+    def hold(self, data):
+        """Holds input from its first escape sequence on, which can be part of the answer; returns
+        the input before it, which was typed."""
+        self.answer += data
+        start = self.answer.find(b'\x1b')
+        if start < 0:
+            start = len(self.answer)
+        typed, self.answer = self.answer[:start], self.answer[start:]
+        return typed
+
     def answered(self):
         """Ends the wait for the answer: the tmux commands that give tmux the colors, and the input
         typed meanwhile."""
@@ -644,6 +655,8 @@ class Attachment:
         typed = self.synchronize()
         stdin, stdout, tmux = self.terminal, self.terminal + 1, self.control.process.stdout
         last_input = time.monotonic()
+        if self.answer_deadline is not None:
+            typed += self.hold(b'')
         self.control.send(self.input.feed(typed))
         while not self.control.ended:
             waiting = self.input.waiting()
@@ -672,10 +685,7 @@ class Attachment:
                     self.connected = False
                     break
                 last_input = time.monotonic()
-                if self.answer_deadline is None:
-                    self.control.send(self.input.feed(data))
-                else:
-                    self.answer += data
+                self.control.send(self.input.feed(data if self.answer_deadline is None else self.hold(data)))
             elif waiting is not None and time.monotonic() >= last_input + waiting:
                 self.control.send(self.input.flush())
             if self.answer_deadline is not None and (IDENTITY_REPLY.search(self.answer)

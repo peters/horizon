@@ -376,10 +376,13 @@ class TmuxTests(unittest.TestCase):
         terminal.read_until(lambda data: attach.COLOR_QUERY in data)
         # The attach shows the session without the answer after COLOR_SECONDS.
         terminal.read_until(lambda data: data.endswith(b'\x1b[?2004h'))
-        terminal.write(b'echo late\r' + PANEL_COLORS)
+        # Keys before the first escape sequence reach the session at once.
+        terminal.write(b'echo early\r')
+        terminal.read_until(lambda data: b'\r\nearly\r\n' in data)
+        terminal.write(b'\x1b]10;rgb:a1a1/b2b2/c3c3\x1b\\' + b'echo late\r' + PANEL_COLORS.split(b'\\', 1)[1])
         terminal.read_until(lambda data: b'\r\nlate\r\n' in data)
         self.assertNotIn(']1', self.tmux('capture-pane', '-p', '-t', '=a:'))
-        self.wait_for(lambda: 'bg=#102030' in self.tmux('show-options', '-wg', 'window-style'))
+        self.wait_for(lambda: 'fg=#a1b2c3,bg=#102030' in self.tmux('show-options', '-wg', 'window-style'))
 
     def test_a_panel_that_reports_no_colors_sets_no_style_and_keeps_typed_keys(self):
         terminal = self.attach(answer=b'echo early\r\x1b[?1;2c')
