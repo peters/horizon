@@ -256,7 +256,8 @@ impl Account {
 
     /// The sign-in box while this computer signs in, with a way out.
     pub(super) fn sign_in_box(&mut self, ui: &mut Ui) {
-        if prompt(ui, self.prompt.as_ref(), self.job.is_some()) {
+        // A quiet refresh is no request of the person's and shows no spinner.
+        if prompt(ui, self.prompt.as_ref(), self.busy()) {
             // The request goes, and its sign-in ends with it.
             self.finish();
         }
