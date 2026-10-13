@@ -51,7 +51,7 @@ pub(in crate::app) fn menu(button: &Response, cloud_ready: bool, machine: Option
     let popup = Popup::menu(button).kind(egui::PopupKind::Tooltip);
     let popup_layer = egui::LayerId::new(egui::Order::Tooltip, popup.get_id());
     let shown = popup.show(|ui| {
-        ui.set_min_width(330.0);
+        ui.set_width(410.0);
         ui.spacing_mut().item_spacing.y = 2.0;
         super::rich_menu::caption(ui, "New workspace");
         for choice in NewWorkspace::ALL {

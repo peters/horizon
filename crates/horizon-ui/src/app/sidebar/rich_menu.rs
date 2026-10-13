@@ -1,10 +1,11 @@
 //! Menu rows that say what they do: an optional glyph tile, a title, a one-line
-//! description, an optional note under it and an optional shortcut. Used by New workspace and the toolbar Menu.
+//! description, an optional note under it and an optional shortcut. Used by New
+//! workspace and the toolbar Menu.
 use std::f32::consts::PI;
 
 use egui::{
-    Align, Color32, CornerRadius, CursorIcon, Layout, Painter, Pos2, Rect, RichText, Sense, Shape, Stroke, StrokeKind,
-    Ui, UiBuilder, Vec2,
+    Color32, CornerRadius, CursorIcon, FontId, Painter, Pos2, Rect, RichText, Sense, Shape, Stroke, StrokeKind, Ui,
+    UiBuilder, Vec2,
 };
 
 use crate::theme;
@@ -62,50 +63,46 @@ pub(in crate::app) fn row(
         paint(ui.painter(), glyph, tile_rect.center(), ink);
         left = tile_rect.max.x + 12.0;
     }
-    let inner = Rect::from_min_max(Pos2::new(left, rect.min.y), Pos2::new(rect.max.x - 10.0, rect.max.y));
-    ui.scope_builder(
-        UiBuilder::new()
-            .max_rect(inner)
-            .layout(Layout::left_to_right(Align::Center)),
-        |ui| {
-            if !enabled {
-                ui.disable();
-            }
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 1.0;
-                ui.add_space((height - text_height) / 2.0);
-                ui.add(egui::Label::new(RichText::new(title).size(13.5).strong().color(theme::FG())).selectable(false));
-                ui.add(
-                    egui::Label::new(RichText::new(detail).size(11.5).color(theme::FG_SOFT()))
-                        .truncate()
-                        .selectable(false),
-                );
-                if let Some(note) = note {
-                    ui.add(
-                        egui::Label::new(RichText::new(note).size(11.5).color(theme::FG_DIM()))
-                            .truncate()
-                            .selectable(false),
-                    );
-                }
-            });
-            if let Some(shortcut) = shortcut {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    egui::Frame::new()
-                        .fill(theme::BG_ELEVATED())
-                        .corner_radius(4)
-                        .inner_margin(egui::Margin::symmetric(6, 2))
-                        .show(ui, |ui| {
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(shortcut).size(10.0).monospace().color(theme::FG_SOFT()),
-                                )
-                                .selectable(false),
-                            );
-                        });
-                });
-            }
-        },
-    );
+    let mut right = rect.max.x - 10.0;
+    if let Some(shortcut) = shortcut {
+        // A small key chip at the right; the text column ends before it.
+        let galley = ui
+            .painter()
+            .layout_no_wrap(shortcut.to_owned(), FontId::monospace(10.0), theme::FG_SOFT());
+        let chip = Rect::from_min_size(
+            Pos2::new(
+                right - galley.size().x - 12.0,
+                rect.center().y - galley.size().y / 2.0 - 2.0,
+            ),
+            galley.size() + Vec2::new(12.0, 4.0),
+        );
+        ui.painter()
+            .rect_filled(chip, CornerRadius::same(4), theme::BG_ELEVATED());
+        ui.painter()
+            .galley(chip.min + Vec2::new(6.0, 2.0), galley, theme::FG_SOFT());
+        right = chip.min.x - 10.0;
+    }
+    let inner = Rect::from_min_max(Pos2::new(left, rect.min.y), Pos2::new(right.max(left), rect.max.y));
+    ui.scope_builder(UiBuilder::new().max_rect(inner), |ui| {
+        if !enabled {
+            ui.disable();
+        }
+        ui.spacing_mut().item_spacing.y = 1.0;
+        ui.add_space((height - text_height) / 2.0);
+        ui.add(egui::Label::new(RichText::new(title).size(13.5).strong().color(theme::FG())).selectable(false));
+        ui.add(
+            egui::Label::new(RichText::new(detail).size(11.5).color(theme::FG_SOFT()))
+                .truncate()
+                .selectable(false),
+        );
+        if let Some(note) = note {
+            ui.add(
+                egui::Label::new(RichText::new(note).size(11.5).color(theme::FG_DIM()))
+                    .truncate()
+                    .selectable(false),
+            );
+        }
+    });
     response
 }
 

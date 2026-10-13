@@ -210,7 +210,7 @@ impl HorizonApp {
         let popup_layer = egui::LayerId::new(egui::Order::Tooltip, popup.get_id());
         let mut chosen = None;
         let shown = popup.show(|ui| {
-            ui.set_min_width(320.0);
+            ui.set_width(400.0);
             ui.spacing_mut().item_spacing.y = 2.0;
             for (index, entry) in MENU.iter().enumerate() {
                 if let Some(group) = entry.group {
