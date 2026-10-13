@@ -153,7 +153,7 @@ impl Account {
             let answer = exchange(&root, &settings, &cancel, &show, purpose);
             // Without a sign-in no list stays on this computer.
             if matches!(answer, Answer::Quiet)
-                && let Err(error) = host::forget_repositories(&root, &settings)
+                && let Err(error) = host::forget_repositories(&root, &settings, &cancel)
             {
                 tracing::debug!(%error, "could not forget the GitHub repository list");
             }
@@ -369,7 +369,7 @@ fn exchange(
             Ok(found) => {
                 // Kept for the account it was listed for; losing it only costs the next
                 // dialog its head start.
-                if let Err(error) = host::keep_repositories(root, settings, &login, &found) {
+                if let Err(error) = host::keep_repositories(root, settings, &login, &found, cancel) {
                     tracing::debug!(%error, "could not keep the GitHub repository list");
                 }
                 Some(found)
@@ -512,7 +512,9 @@ impl super::State {
         // The list kept from last time shows at once, and a fresh one replaces it.
         account.refresh_once(ui.ctx());
         if account.repositories.is_none() {
-            if account.busy() || account.refreshing() {
+            // A quiet refresh shows nothing until it has a list: the button stays, and a
+            // click on it takes over.
+            if account.busy() {
                 if !picked {
                     account.sign_in_box(ui);
                 }

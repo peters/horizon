@@ -177,12 +177,20 @@ pub fn kept_repositories(root: &Path, settings: &Settings) -> Option<Vec<String>
 
 /// Keeps `repositories`, listed for the account `login`, for the next **New cloud**: private
 /// beside the sign-in and under its lock. A Disconnect forgets them with it, and a list
-/// that arrives after one, or after a sign-in as another account, is not kept.
+/// that arrives after one, after a sign-in as another account, or for a request that was
+/// `cancel`led and replaced, is not kept: checked under the lock, so a newer list written
+/// after the cancel is never overwritten by an older one.
 /// # Errors
 /// A file that cannot be written.
-pub fn keep_repositories(root: &Path, settings: &Settings, login: &str, repositories: &[String]) -> Result<()> {
+pub fn keep_repositories(
+    root: &Path,
+    settings: &Settings,
+    login: &str,
+    repositories: &[String],
+    cancel: &Cancellation,
+) -> Result<()> {
     let _lock = lock(root, settings)?;
-    if !configured(root, settings) {
+    if cancel.is_cancelled() || !configured(root, settings) {
         return Ok(());
     }
     let Some(chain) = stored::load(&path(root, settings)).filter(|chain| chain.login == login) else {
@@ -196,11 +204,15 @@ pub fn keep_repositories(root: &Path, settings: &Settings, login: &str, reposito
     stored::write_private(&root.join("credentials"), &listed_name(settings.app_id), &bytes)
 }
 
-/// Forgets the kept list, as when this computer turns out not to be signed in.
+/// Forgets the kept list, as when this computer turns out not to be signed in, unless the
+/// request that found that out was `cancel`led and replaced: a newer list stays.
 /// # Errors
 /// A file that cannot be removed.
-pub fn forget_repositories(root: &Path, settings: &Settings) -> Result<()> {
+pub fn forget_repositories(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<()> {
     let _lock = lock(root, settings)?;
+    if cancel.is_cancelled() {
+        return Ok(());
+    }
     stored::forget(&listed(root, settings)).map(|_| ())
 }
 
