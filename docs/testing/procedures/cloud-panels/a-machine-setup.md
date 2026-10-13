@@ -278,7 +278,7 @@ Do this task after B02. It needs the synthetic repository.
 
    Result: The second fixture shows the repository at `<home>/smoke/app`.
 
-4. In the second fixture, open **Menu › New cloud**.
+4. In the second fixture, open **Menu › Add cloud here**.
 
    Result: The New cloud dialog opens.
 

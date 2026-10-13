@@ -219,19 +219,19 @@ including for launching the declaring repository's own cloud.
 
 ## One-time machine setup
 
-A new workspace runs in the cloud by default. **+ New workspace** in the toolbar
-makes one where the default says: in the cloud when cloud workspaces are ready,
-else on this computer. The part after it (**Cloud ▾**) opens the menu of places,
-as **New** in the sidebar and the **New Workspace** menu of the empty canvas do.
-The menu shows **Cloud** first, then **This PC**, each with a one-line
-description:
+The toolbar has two buttons that make a workspace:
 
-- **Cloud** makes the workspace and opens **New cloud** for it. Under **Cloud**,
-  the menu shows the machine of a quick start and its hourly price, for example
+- **+ New cloud** makes a workspace and opens **New cloud** for it. Its tooltip
+  shows the machine of a quick start and its hourly price, for example
   `from €0.0088/h · 2 vCPU · 4 GB · Hetzner`: the cheapest offer of the providers
   that this computer can deploy to. A repository with its own profile can ask for a
-  larger machine. **New cloud** then shows that machine and its price.
-- **This PC** makes a workspace on this computer, as before clouds.
+  larger machine. **New cloud** then shows that machine and its price. In a narrow
+  window, the button shows **+ Cloud**.
+- **+ Workspace** makes an empty workspace on this computer. No dialog opens.
+  **New** in the sidebar does the same.
+
+The empty canvas shows **New Cloud** and **New Workspace**, which do the same.
+**Menu › Add cloud here** starts a cloud in the current workspace.
 
 The preset picker that opens when you double-click an empty part of the canvas
 also offers **Cloud GPU**. It does what **Cloud** does and selects the first
@@ -239,9 +239,9 @@ profile with `gpu: true`. When the repository has no GPU profile, the dialog say
 so and keeps the default profile on a CPU worker. The presets under **This PC** in
 that picker make a workspace on this computer with a panel.
 
-When you cancel **New cloud** for a workspace that **Cloud** made, the empty
-workspace goes too, unless it is the only workspace on the board. When cloud workspaces are not ready on this computer, only
-**This PC** can be chosen.
+When you cancel **New cloud** for a workspace that **+ New cloud** made, the
+empty workspace goes too, unless it is the only workspace on the board. When cloud
+workspaces are not ready on this computer, **+ New cloud** is dimmed.
 
 A repository can ask for This PC with `placement: local` at the top level of
 `.horizon/cloud.yml` (the default is `placement: cloud`). **New cloud** then shows
@@ -249,7 +249,7 @@ A repository can ask for This PC with `placement: local` at the top level of
 terminal in the repository in that workspace and closes the dialog. You can still
 start a cloud for it.
 
-In **New cloud** from **New workspace**, select **Keep my choice for this
+In **New cloud** from **+ New cloud**, select **Keep my choice for this
 repository** to keep where the repository runs. **Start cloud** keeps **Cloud**,
 and **Open on This PC** (or **Open on This PC instead**) keeps **This PC**. The
 next time, **New cloud** says **You keep This PC for this repository.** or
@@ -259,7 +259,7 @@ does not. Click **Forget** to remove the choice. Horizon keeps the choices on th
 computer only, in `~/.horizon/cloud/repository-choices.json`.
 
 In an existing workspace, choose **Cloud** from the panel-creation menu (or
-**Menu > New cloud** in the toolbar), enter a title, and press Enter. Horizon discovers the Git
+**Menu > Add cloud here** in the toolbar), enter a title, and press Enter. Horizon discovers the Git
 root from the workspace directory, loads `.horizon/cloud.yml`, and uses its named
 default profile. Preparation runs while you type. A configured launch starts
 provisioning immediately after submission, without a separate Deploy action.

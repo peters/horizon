@@ -1,15 +1,15 @@
-//! The machine and hourly price that the New workspace menu shows under Cloud: the
+//! The machine and hourly price that the tooltip of + New cloud shows: the
 //! cheapest worker for a quick start, ranked as `cloud_offers` ranks offers. A repository
 //! with its own profile can ask for more; New cloud then shows its own machine and price.
 use super::HorizonApp;
 use horizon_core::cloud_runtime::{offers::Requirements, repository::launch::quick_start};
 use serde_json::Value;
 
-/// What the menu says under Cloud while the prices come in.
+/// What the tooltip says while the prices come in.
 pub(in crate::app) const CHECKING: &str = "Checking machine prices…";
 
 impl HorizonApp {
-    /// The menu line for Cloud: `CHECKING` while prices are fetched, and nothing when no
+    /// The tooltip line of + New cloud: `CHECKING` while prices are fetched, and nothing when no
     /// provider answers. Asks the providers only when their prices are stale.
     pub(in crate::app) fn new_cloud_machine_line(&mut self, ctx: &egui::Context) -> Option<String> {
         let config = quick_start::builtin().ok()?;
@@ -29,9 +29,9 @@ impl HorizonApp {
     }
 }
 
-/// The cheapest offer of a ranked answer, as the menu shows it. Without a complete
+/// The cheapest offer of a ranked answer, as the tooltip shows it. Without a complete
 /// comparison (no exchange rate), offers in different currencies cannot be ranked, so
-/// the menu shows none of them.
+/// the tooltip shows none of them.
 pub(super) fn line(answer: &Value) -> Option<String> {
     let comparison = answer.get("comparison")?;
     let offers = comparison.get("offers")?.as_array()?;

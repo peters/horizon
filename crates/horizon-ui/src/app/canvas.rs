@@ -171,11 +171,7 @@ impl HorizonApp {
                             );
                             ui.add_space(18.0);
                             ui.horizontal_wrapped(|ui| {
-                                // The same choice as New in the sidebar: the cloud first.
-                                let new_workspace = ui.add(super::util::primary_button("New Workspace"));
-                                if let Some(choice) = self.new_workspace_menu(&new_workspace) {
-                                    self.create_new_workspace(ctx, choice, None);
-                                }
+                                self.render_empty_state_new_buttons(ui);
                                 if ui.add(super::util::chrome_button("New Terminal")).clicked() {
                                     if let Some(preset) = self.presets.first().cloned() {
                                         let workspace_id = self.ensure_workspace_visible(ctx);
@@ -214,6 +210,23 @@ impl HorizonApp {
                         });
                     });
             });
+    }
+
+    /// The same two as the toolbar: a cloud first, then an empty workspace on this computer.
+    fn render_empty_state_new_buttons(&mut self, ui: &mut egui::Ui) {
+        #[cfg(feature = "cloud-workspaces")]
+        if ui
+            .add_enabled(
+                self.new_cloud_workspace_ready(),
+                super::util::primary_button("New Cloud"),
+            )
+            .clicked()
+        {
+            self.create_new_workspace(ui.ctx(), super::sidebar::NewWorkspace::Cloud, None);
+        }
+        if ui.add(super::util::chrome_button("New Workspace")).clicked() {
+            self.create_new_workspace(ui.ctx(), super::sidebar::NewWorkspace::ThisPc, None);
+        }
     }
 
     fn empty_state_card_visible(&self) -> bool {

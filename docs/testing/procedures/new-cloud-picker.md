@@ -124,7 +124,7 @@ report. Hetzner counts include current x86 types outside the configured fallback
    Note: If you close the dialog without **Save settings**, Horizon discards
    the key, the token and the lists.
 
-9. Open **Menu › New cloud**.
+9. Open **Menu › Add cloud here**.
 
    Result: The New cloud dialog opens.
 

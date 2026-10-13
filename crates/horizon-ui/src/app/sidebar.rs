@@ -50,7 +50,7 @@ struct SidebarPanelEntry {
 
 #[derive(Clone, Copy, Default)]
 struct SidebarActions {
-    create_workspace: Option<NewWorkspace>,
+    create_workspace: bool,
     fit_active_workspace: bool,
     workspace_drop: Option<SidebarWorkspaceDropAction>,
     focus_panel: Option<PanelId>,
@@ -253,11 +253,13 @@ impl HorizonApp {
                     actions.fit_active_workspace = true;
                 }
 
-                let new_workspace = ui
+                // New cloud lives in the toolbar; this one makes a workspace on this computer.
+                if ui
                     .add(util::chrome_button("New").min_size(Vec2::new(46.0, 24.0)))
-                    .on_hover_text("Create a new workspace: in the cloud, or on This PC.");
-                if let Some(choice) = self.new_workspace_menu(&new_workspace) {
-                    actions.create_workspace = Some(choice);
+                    .on_hover_text("A new empty workspace on this computer.")
+                    .clicked()
+                {
+                    actions.create_workspace = true;
                 }
             });
         });
@@ -491,8 +493,8 @@ impl HorizonApp {
     }
 
     fn apply_sidebar_actions(&mut self, ctx: &Context, actions: &SidebarActions) {
-        if let Some(choice) = actions.create_workspace {
-            self.create_new_workspace(ctx, choice, None);
+        if actions.create_workspace {
+            self.create_new_workspace(ctx, NewWorkspace::ThisPc, None);
         }
         if actions.fit_active_workspace {
             let _ = self.fit_active_workspace(ctx);

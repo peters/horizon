@@ -79,7 +79,7 @@ Give each task an ID. A report uses the ID to give a result.
 
 ### 6.1 C1 — Current prices
 
-1. Open **Menu › New cloud**.
+1. Open **Menu › Add cloud here**.
 
    Result: The New cloud dialog opens.
 
@@ -167,7 +167,7 @@ fixture opens the candidate window at 1480 × 900 pixels.
 
    Result: The dialog closes.
 
-2. Open **Menu › New cloud**.
+2. Open **Menu › Add cloud here**.
 
    Result: The dialog shows the summary to the right of the worker fields.
 
@@ -195,14 +195,14 @@ fixture opens the candidate window at 1480 × 900 pixels.
      windowsize %1 800 900
    ```
 
-   Result: The window is 800 pixels wide. The toolbar shows **+ New workspace**
-   and **Menu**, without the tagline.
+   Result: The window is 800 pixels wide. The toolbar shows **+ New cloud**,
+   **+ Workspace** and **Menu**, without the tagline.
 
 7. Start a recording of the isolated desktop.
 
    Result: The recorder writes frames.
 
-8. Open **Menu › New cloud**.
+8. Open **Menu › Add cloud here**.
 
    Result: The dialog shows the summary below the worker fields in one column.
 

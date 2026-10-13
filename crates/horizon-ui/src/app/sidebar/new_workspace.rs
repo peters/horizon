@@ -1,5 +1,6 @@
-//! The New workspace menu: a new workspace runs in the cloud unless the person picks This PC.
-use egui::{Context, Popup, Response};
+//! Where a new workspace runs: **+ New cloud** makes one with a cloud, and **+ Workspace**
+//! makes an empty one on this computer.
+use egui::Context;
 
 use super::super::HorizonApp;
 
@@ -8,20 +9,13 @@ use super::super::HorizonApp;
 pub(in crate::app) enum NewWorkspace {
     /// A cloud on a CPU worker: the default.
     Cloud,
-    /// A cloud on a worker with a GPU. Only the canvas picker offers it: from the menu,
-    /// New cloud chooses a GPU profile.
+    /// A cloud on a worker with a GPU. Only the canvas picker offers it.
     CloudGpu,
     /// This computer, as before clouds.
     ThisPc,
-    /// An Upkeep: one agent on an always-on cloud worker that keeps dependency pull
-    /// requests moving. New Upkeep makes its workspace.
-    Upkeep,
 }
 
 impl NewWorkspace {
-    /// In the order the menu shows them: the default first, This PC second, and the
-    /// templates last.
-    pub(in crate::app) const ALL: [Self; 3] = [Self::Cloud, Self::ThisPc, Self::Upkeep];
     /// The cloud choices of the canvas picker.
     #[cfg(feature = "cloud-workspaces")]
     pub(in crate::app) const CLOUDS: [Self; 2] = [Self::Cloud, Self::CloudGpu];
@@ -31,7 +25,6 @@ impl NewWorkspace {
             Self::Cloud => "Cloud",
             Self::CloudGpu => "Cloud GPU",
             Self::ThisPc => "This PC",
-            Self::Upkeep => "Upkeep",
         }
     }
 
@@ -40,7 +33,6 @@ impl NewWorkspace {
             Self::Cloud => "Agents run on a cloud worker, also while this computer sleeps.",
             Self::CloudGpu => "Runs on a cloud worker with a GPU.",
             Self::ThisPc => "Terminals and agents run on this computer.",
-            Self::Upkeep => "An agent fixes and merges dependency updates on a schedule.",
         }
     }
 
@@ -49,68 +41,8 @@ impl NewWorkspace {
     }
 }
 
-/// The menu that `button` opens, with `machine` under Cloud: the machine and its hourly
-/// price. Without cloud workspaces ready, only This PC can be chosen.
-pub(in crate::app) fn menu(button: &Response, cloud_ready: bool, machine: Option<&str>) -> Option<NewWorkspace> {
-    let mut chosen = None;
-    // The sidebar is drawn above the canvas, so the menu goes on the Tooltip order and
-    // above the sidebar's own layer, as the sidebar's other menus do.
-    let popup = Popup::menu(button).kind(egui::PopupKind::Tooltip);
-    let popup_layer = egui::LayerId::new(egui::Order::Tooltip, popup.get_id());
-    let shown = popup.show(|ui| {
-        ui.set_width(410.0);
-        ui.spacing_mut().item_spacing.y = 2.0;
-        super::rich_menu::caption(ui, "New workspace");
-        for choice in NewWorkspace::ALL {
-            if choice == NewWorkspace::Upkeep {
-                super::rich_menu::divider(ui);
-                super::rich_menu::caption(ui, "Templates");
-            }
-            let enabled = cloud_ready || !choice.is_cloud();
-            let note = machine.filter(|_| choice == NewWorkspace::Cloud && enabled);
-            let glyph = match choice {
-                NewWorkspace::Cloud | NewWorkspace::CloudGpu => super::rich_menu::Glyph::Cloud,
-                NewWorkspace::ThisPc => super::rich_menu::Glyph::Screen,
-                NewWorkspace::Upkeep => super::rich_menu::Glyph::Loop,
-            };
-            let row = super::rich_menu::row(ui, Some(glyph), choice.label(), choice.detail(), note, None, enabled);
-            let row = if enabled {
-                row
-            } else {
-                row.on_hover_text("Cloud workspaces are not ready on this computer.")
-            };
-            if row.clicked() {
-                chosen = Some(choice);
-                ui.close();
-            }
-        }
-    });
-    if shown.is_some() {
-        button
-            .ctx
-            .memory_mut(|memory| memory.areas_mut().set_sublayer(button.layer_id, popup_layer));
-    }
-    chosen
-}
-
 impl HorizonApp {
-    /// The New workspace menu of `button`. Machine prices are asked for only while it is open.
-    pub(in crate::app) fn new_workspace_menu(&mut self, button: &Response) -> Option<NewWorkspace> {
-        let ready = self.new_cloud_workspace_ready();
-        let open = button.clicked() || Popup::is_id_open(&button.ctx, Popup::default_response_id(button));
-        #[cfg(feature = "cloud-workspaces")]
-        let machine = (ready && open)
-            .then(|| self.new_cloud_machine_line(&button.ctx))
-            .flatten();
-        #[cfg(not(feature = "cloud-workspaces"))]
-        let machine: Option<String> = {
-            let _ = open;
-            None
-        };
-        menu(button, ready, machine.as_deref())
-    }
-
-    /// Whether the New workspace menu can offer the cloud.
+    /// Whether New cloud can start a cloud on this computer.
     pub(in crate::app) fn new_cloud_workspace_ready(&self) -> bool {
         #[cfg(feature = "cloud-workspaces")]
         {
@@ -130,14 +62,6 @@ impl HorizonApp {
         choice: NewWorkspace,
         canvas_pos: Option<[f32; 2]>,
     ) {
-        // New Upkeep makes the workspace once its cloud can start.
-        if choice == NewWorkspace::Upkeep {
-            #[cfg(feature = "cloud-workspaces")]
-            if self.cloud_launch_ready() {
-                self.open_upkeep_dialog(ctx);
-            }
-            return;
-        }
         let name = format!("Workspace {}", self.board.workspaces.len() + 1);
         let workspace = match canvas_pos {
             Some(position) => self.create_workspace_at_visible(ctx, &name, position),
@@ -158,13 +82,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_cloud_comes_first_and_this_pc_second() {
-        assert_eq!(
-            NewWorkspace::ALL.map(NewWorkspace::label),
-            ["Cloud", "This PC", "Upkeep"]
-        );
+    fn only_this_pc_is_not_a_cloud() {
         assert!(NewWorkspace::Cloud.is_cloud() && NewWorkspace::CloudGpu.is_cloud());
         assert!(!NewWorkspace::ThisPc.is_cloud());
-        assert!(NewWorkspace::Upkeep.is_cloud(), "it needs cloud workspaces");
     }
 }

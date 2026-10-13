@@ -11,9 +11,11 @@ const ROOT_TOOLBAR_CLUSTER_GAP: f32 = 12.0;
 const ROOT_TOOLBAR_SEARCH_MIN_WIDTH: f32 = 180.0;
 const ROOT_TOOLBAR_SEARCH_MAX_WIDTH: f32 = 420.0;
 pub(super) const ROOT_TOOLBAR_FPS_WIDTH: f32 = 72.0;
-/// "+ New workspace · Cloud ▾"; the compact form drops "workspace".
-pub(super) const ROOT_TOOLBAR_NEW_WIDTH: f32 = 214.0;
-pub(super) const ROOT_TOOLBAR_NEW_COMPACT_WIDTH: f32 = 140.0;
+/// "+ New cloud"; the compact form drops "New".
+pub(super) const ROOT_TOOLBAR_NEW_CLOUD_WIDTH: f32 = 108.0;
+pub(super) const ROOT_TOOLBAR_NEW_CLOUD_COMPACT_WIDTH: f32 = 82.0;
+/// "+ Workspace".
+pub(super) const ROOT_TOOLBAR_NEW_WORKSPACE_WIDTH: f32 = 112.0;
 pub(super) const ROOT_TOOLBAR_MENU_WIDTH: f32 = 82.0;
 const ROOT_TOOLBAR_NAME_WIDTH: f32 = 72.0;
 const ROOT_TOOLBAR_TAGLINE_WIDTH: f32 = 152.0;
@@ -35,10 +37,13 @@ pub(super) enum ToolbarAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ToolbarItem {
     FpsMeter,
-    /// The primary New workspace button; `compact` drops the word "workspace".
-    NewWorkspace {
+    /// The primary New cloud button, which makes a workspace with a cloud; `compact` drops
+    /// the word "New".
+    NewCloud {
         compact: bool,
     },
+    /// Makes an empty workspace on this computer.
+    NewWorkspace,
     Menu,
 }
 
@@ -46,8 +51,9 @@ impl ToolbarItem {
     fn estimated_width(self) -> f32 {
         match self {
             Self::FpsMeter => ROOT_TOOLBAR_FPS_WIDTH,
-            Self::NewWorkspace { compact: false } => ROOT_TOOLBAR_NEW_WIDTH,
-            Self::NewWorkspace { compact: true } => ROOT_TOOLBAR_NEW_COMPACT_WIDTH,
+            Self::NewCloud { compact: false } => ROOT_TOOLBAR_NEW_CLOUD_WIDTH,
+            Self::NewCloud { compact: true } => ROOT_TOOLBAR_NEW_CLOUD_COMPACT_WIDTH,
+            Self::NewWorkspace => ROOT_TOOLBAR_NEW_WORKSPACE_WIDTH,
             Self::Menu => ROOT_TOOLBAR_MENU_WIDTH,
         }
     }
@@ -83,7 +89,7 @@ pub(super) fn root_toolbar_layout(viewport: Rect) -> RootToolbarLayout {
         ),
     );
 
-    // (tagline, fps meter, compact New workspace), from roomiest to tightest.
+    // (tagline, fps meter, compact New cloud), from roomiest to tightest.
     let states = [
         (true, true, false),
         (false, true, false),
@@ -118,11 +124,14 @@ fn layout_candidate(
         };
     let brand_rect = Rect::from_min_size(content_rect.min, Vec2::new(brand_width, content_rect.height()));
 
-    let mut visible_items = Vec::with_capacity(3);
+    let mut visible_items = Vec::with_capacity(4);
     if show_fps {
         visible_items.push(ToolbarItem::FpsMeter);
     }
-    visible_items.push(ToolbarItem::NewWorkspace { compact });
+    if cfg!(feature = "cloud-workspaces") {
+        visible_items.push(ToolbarItem::NewCloud { compact });
+    }
+    visible_items.push(ToolbarItem::NewWorkspace);
     visible_items.push(ToolbarItem::Menu);
 
     let actions_width = visible_items_width(&visible_items);
@@ -184,11 +193,9 @@ mod tests {
 
         assert!(layout.show_tagline);
         assert!(layout.visible_items.contains(&ToolbarItem::FpsMeter));
-        assert!(
-            layout
-                .visible_items
-                .contains(&ToolbarItem::NewWorkspace { compact: false })
-        );
+        assert!(layout.visible_items.contains(&ToolbarItem::NewWorkspace));
+        #[cfg(feature = "cloud-workspaces")]
+        assert!(layout.visible_items.contains(&ToolbarItem::NewCloud { compact: false }));
         assert!(layout.search_rect.width() >= 180.0);
     }
 
@@ -203,15 +210,15 @@ mod tests {
     }
 
     #[test]
-    fn toolbar_keeps_new_workspace_and_menu_at_every_width() {
+    fn toolbar_keeps_both_new_buttons_and_menu_at_every_width() {
         for width in [760.0, 800.0, 900.0, 1024.0, 1280.0] {
             let layout = root_toolbar_layout(Rect::from_min_max(Pos2::ZERO, Pos2::new(width, 768.0)));
-            let news = layout
-                .visible_items
-                .iter()
-                .filter(|item| matches!(item, ToolbarItem::NewWorkspace { .. }))
-                .count();
-            assert_eq!(news, 1, "{width}");
+            let count =
+                |wanted: fn(&ToolbarItem) -> bool| layout.visible_items.iter().filter(|item| wanted(item)).count();
+            assert_eq!(count(|item| *item == ToolbarItem::NewWorkspace), 1, "{width}");
+            let clouds = count(|item| matches!(item, ToolbarItem::NewCloud { .. }));
+            assert_eq!(clouds, usize::from(cfg!(feature = "cloud-workspaces")), "{width}");
+            assert!(layout.search_rect.width() >= 180.0, "{width}");
             assert_eq!(layout.visible_items.last(), Some(&ToolbarItem::Menu), "{width}");
             assert!(layout.brand_rect.max.x <= layout.search_rect.min.x);
             assert!(layout.search_rect.max.x <= layout.actions_rect.min.x);
