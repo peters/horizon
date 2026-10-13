@@ -20,15 +20,16 @@ The `upkeep` panel kind is the board of one Upkeep. The board shows these items:
   merges.
 - The pull requests in groups by state: **Blocked**, **Fixing**, **Needs review**,
   **Checks running**, **Ready to merge**, **Other** (a state that this Horizon does
-  not know) and **Merged**. Merged pull requests stay for seven days. The open list
-  shows the newest six merged rows; the **Merged** chip shows all of them.
+  not know) and **Merged**. The **Merged, 7 days** chip shows the pull requests that
+  merged in the last seven days. The other chips show no merged rows.
 - Chips that filter the list: **Open**, **Needs you** (Blocked and Needs review),
   **Fixing**, **Checks running**, **Ready to merge**, **Merged, 7 days**, and
   **Other** only when a row has an unknown state.
 - **Latest run**: the last lines that the agent wrote about its work.
 
 A click on a row opens its pull request page in the browser panel **Pull request**
-next to the board. The board uses the same panel for the next row.
+next to the board. The board uses the same panel for the next row. A browser panel
+that the board did not open is never used, also when it has the same name.
 
 The board is read-only. It reads the status document that the panel `command` names.
 When the command is empty, it reads `~/.horizon/upkeep/status.json`. A config file

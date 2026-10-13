@@ -237,6 +237,20 @@ impl PanelContent {
     }
 
     #[must_use]
+    pub fn upkeep(&self) -> Option<&UpkeepBoard> {
+        match self {
+            Self::Upkeep(board) => Some(board),
+            Self::Terminal(_)
+            | Self::Editor(_)
+            | Self::GitChanges(_)
+            | Self::Usage(_)
+            | Self::Browser(_)
+            | Self::Device(_)
+            | Self::Parked(_) => None,
+        }
+    }
+
+    #[must_use]
     pub fn upkeep_mut(&mut self) -> Option<&mut UpkeepBoard> {
         match self {
             Self::Upkeep(board) => Some(board),

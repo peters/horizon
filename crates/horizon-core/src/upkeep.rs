@@ -208,6 +208,8 @@ pub struct UpkeepBoard {
     /// Why the document could not be read, the last time it changed.
     pub error: Option<String>,
     pub request: Option<Request>,
+    /// The browser panel this board opened for pull requests, while it exists.
+    pub browser: Option<crate::PanelId>,
     latest: Option<reader::Latest>,
     /// The reader thread could not start; the board does not try again.
     reader_failed: bool,
@@ -222,6 +224,7 @@ impl UpkeepBoard {
             status: None,
             error: None,
             request: None,
+            browser: None,
             latest: None,
             reader_failed: false,
             alive: Arc::new(AtomicBool::new(true)),

@@ -37,14 +37,17 @@ impl HorizonApp {
         if self.fullscreen_panel == Some(board) {
             self.fullscreen_panel = None;
         }
+        // Only the panel this board opened is reused: a title can be anyone's.
         let existing = self
             .board
-            .panels
-            .iter()
-            .find(|panel| {
-                panel.workspace_id == workspace && panel.kind == PanelKind::Browser && panel.title == PULL_REQUEST_PANEL
-            })
-            .map(|panel| panel.id);
+            .panel(board)
+            .and_then(|panel| panel.content.upkeep())
+            .and_then(|upkeep| upkeep.browser)
+            .filter(|page| {
+                self.board
+                    .panel(*page)
+                    .is_some_and(|panel| panel.workspace_id == workspace && panel.kind == PanelKind::Browser)
+            });
         if let Some(panel) = existing {
             if let Some(browser) = self.board.panel_mut(panel).and_then(|panel| panel.browser_mut()) {
                 browser.submit_navigation(url);
@@ -72,6 +75,9 @@ impl HorizonApp {
             workspace,
         );
         if let Ok(panel) = created {
+            if let Some(upkeep) = self.board.panel_mut(board).and_then(|board| board.content.upkeep_mut()) {
+                upkeep.browser = Some(panel);
+            }
             self.board.focus(panel);
         }
         // The board and the page it opened are seen side by side.

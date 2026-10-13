@@ -13,9 +13,6 @@ const NOTE_HEIGHT: f32 = 16.0;
 const REPO_WIDTH: f32 = 168.0;
 const CHECKS_WIDTH: f32 = 118.0;
 const AGE_WIDTH: f32 = 64.0;
-/// Merged rows shown before "and N more".
-const MERGED_ROWS: usize = 6;
-
 pub(super) fn chips(ui: &mut Ui, shown: &[&PullRequest], filter: &mut Filter) {
     let count = |admit: &dyn Fn(PrState) -> bool| shown.iter().filter(|pr| admit(pr.state)).count();
     // The Other chip leaves with its last row; its filter goes with it.
@@ -132,23 +129,10 @@ pub(super) fn show(ui: &mut Ui, shown: &[&PullRequest], filter: Filter, now: Off
                     .color(theme::FG_DIM()),
             );
         });
-        // The Merged chip shows every merged row; the open list shows the newest few.
-        let limit = if state == PrState::Merged && filter != Filter::State(PrState::Merged) {
-            MERGED_ROWS
-        } else {
-            usize::MAX
-        };
-        for pr in rows.iter().take(limit) {
+        for pr in rows {
             if let Some(url) = row(ui, pr, now) {
                 opened = Some(url);
             }
-        }
-        if rows.len() > limit {
-            ui.label(
-                RichText::new(format!("and {} more", rows.len() - limit))
-                    .size(11.5)
-                    .color(theme::FG_SOFT()),
-            );
         }
     }
     if !any {

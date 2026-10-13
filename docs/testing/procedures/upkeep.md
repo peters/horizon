@@ -136,6 +136,11 @@ names made-up repositories and one public pull request.
 
    Result: The board shows **Upkeep has not reported yet.** and the path that it reads.
 
+6. Close Horizon. Run `python3 -I docs/testing/procedures/upkeep/board.py <folder>`
+   again.
+
+   Result: `<folder>` holds a new `status.json` for the next tasks.
+
 ### 6.5 UPK-05 — The board comes back with the session
 
 1. Start the candidate with `horizon --config <folder>/board.yaml`, without
