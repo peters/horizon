@@ -50,7 +50,8 @@ def status(now):
         )
     runs.append({"started_at": iso(hour), "finished_at": iso(hour + dt.timedelta(minutes=3)), "outcome": "done", "merged": 1})
     pulls = [
-        pull_request("acme/web", 412, "Bump vite from 7.1.2 to 7.1.4", "ready", "passed", "Merges in the next run", hour),
+        # A public Dependabot pull request, so opening a row shows a real page.
+        pull_request("peters/horizon", 1516, "chore(deps): bump comrak from 0.55.0 to 0.56.0", "ready", "passed", "Merges in the next run", hour),
         pull_request("acme/web", 409, "Bump the eslint group with 3 updates", "fixing", "failed", "A lint rule changed; fixing on the branch", hour),
         pull_request("acme/api", 88, "Bump serde from 1.0.226 to 1.0.228", "waiting_checks", "running", "", hour),
         pull_request("acme/api", 86, "Bump tokio from 1.47.1 to 1.48.0", "blocked", "passed", "Needs a deployed preview that CI skips for bots", hour - dt.timedelta(hours=2)),
@@ -61,7 +62,7 @@ def status(now):
     ]
     activity = [
         (0, "Run started"),
-        (1, "Read 4 repositories with 7 open Dependabot pull requests"),
+        (1, "Read 5 repositories with 6 open Dependabot pull requests before the run"),
         (1, "acme/docs#17: every gate passed; squash-merged"),
         (2, "acme/web#409: lint failed after the update; fixing on the branch"),
         (3, "Run finished: 1 merged, 1 fixing, 1 waiting on checks"),
@@ -71,7 +72,7 @@ def status(now):
         "agent": "codex",
         "worker": {"name": "Hetzner cx23", "location": "Helsinki", "state": "connected"},
         "schedule": {"every_minutes": 60, "next_run_at": iso(hour + dt.timedelta(hours=1)), "paused": False},
-        "repositories": ["acme/api", "acme/docs", "acme/mobile", "acme/web"],
+        "repositories": ["acme/api", "acme/docs", "acme/mobile", "acme/web", "peters/horizon"],
         "runs": runs,
         "pull_requests": pulls,
         "activity": [{"at": iso(hour + dt.timedelta(minutes=m)), "text": t} for m, t in activity],
@@ -79,7 +80,7 @@ def status(now):
 
 
 def config(path):
-    return f"""version: 9
+    return f"""version: 11
 window:
   width: 1600.0
   height: 1000.0

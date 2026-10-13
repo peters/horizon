@@ -52,6 +52,17 @@ impl<'a> UpkeepView<'a> {
                         return;
                     };
                     header::show(ui, &status);
+                    if let Some(error) = board.error.as_deref() {
+                        // The last status stays, marked as old, until a valid one arrives.
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!("{error} The board shows the last status it read."))
+                                    .size(12.0)
+                                    .color(theme::PALETTE_YELLOW()),
+                            )
+                            .wrap(),
+                        );
+                    }
                     ui.add_space(4.0);
                     runs::show(ui, &status, now);
                     ui.add_space(10.0);
@@ -211,7 +222,11 @@ mod tests {
         );
         let now = parse_time("2026-10-13T12:00:00Z").unwrap();
         let shown: Vec<u64> = shown_pull_requests(&status, now).iter().map(|pr| pr.number).collect();
-        assert_eq!(shown, [3, 2, 5], "older than a week or with no merge time leaves the board");
+        assert_eq!(
+            shown,
+            [3, 2, 5],
+            "older than a week or with no merge time leaves the board"
+        );
     }
 
     #[test]

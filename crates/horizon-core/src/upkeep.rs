@@ -231,6 +231,9 @@ impl UpkeepBoard {
                 self.status = Some(status);
                 self.error = None;
             }
+            Err(_) if modified.is_none() && self.status.is_some() => {
+                self.error = Some("The Upkeep status file is gone.".into());
+            }
             Err(error) => self.error = Some(error),
         }
         true
@@ -359,6 +362,32 @@ mod tests {
                 .is_some_and(|error| error.starts_with("The Upkeep status is not valid"))
         );
         assert!(board.status.is_none());
+    }
+
+    #[test]
+    fn a_status_that_breaks_or_goes_stays_with_the_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("status.json");
+        std::fs::write(&path, r#"{"agent":"codex"}"#).unwrap();
+        let mut board = UpkeepBoard::new(Some(path.clone()));
+        assert!(board.poll());
+        assert!(board.error.is_none());
+        std::fs::write(&path, "{").unwrap();
+        board.checked = None;
+        board.modified = None;
+        assert!(board.poll());
+        assert!(
+            board
+                .error
+                .as_deref()
+                .is_some_and(|error| error.starts_with("The Upkeep status is not valid"))
+        );
+        assert_eq!(board.status.as_ref().map(|status| status.agent.as_str()), Some("codex"));
+        std::fs::remove_file(&path).unwrap();
+        board.checked = None;
+        assert!(board.poll());
+        assert_eq!(board.error.as_deref(), Some("The Upkeep status file is gone."));
+        assert!(board.status.is_some());
     }
 
     #[test]
