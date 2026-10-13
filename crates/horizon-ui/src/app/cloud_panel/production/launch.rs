@@ -216,11 +216,17 @@ impl HorizonApp {
             let quiet = std::mem::take(&mut form.launch.reread.quiet);
             // A quiet result that would change what the person started from is dropped; the
             // change is read again once they are done.
-            let result = if quiet && reread::busy(form) {
-                None
+            let (result, stale) = if quiet && reread::busy(form) {
+                (None, false)
             } else {
-                Some(result)
+                (Some(result), form.launch.reread.finished())
             };
+            if stale {
+                // The checkout changed during the read, so the result may mix the commit of one
+                // moment with the file of another: it is never shown, the read runs again.
+                self.start_cloud_profiles_read(ctx, quiet);
+                return;
+            }
             match result {
                 None => {}
                 Some(Ok(loaded)) => {
@@ -231,7 +237,6 @@ impl HorizonApp {
                     apply(form, loaded, quiet);
                 }
                 Some(Err(error)) => {
-                    form.launch.reread.finished();
                     form.launch.notes.clear();
                     if quiet {
                         // This error replaces the shown one; the shown storage waits for the next save.
@@ -299,7 +304,6 @@ impl HorizonApp {
 /// the person chose while they still apply.
 fn apply(form: &mut super::Production, loaded: Loaded, quiet: bool) {
     let mut prepared = loaded.prepared;
-    form.launch.reread.finished();
     form.launch.unconfigured = false;
     form.launch.read_error = None;
     if quiet {
@@ -308,6 +312,10 @@ fn apply(form: &mut super::Production, loaded: Loaded, quiet: bool) {
     }
     form.launch.notes = prepared.notes;
     let shown = form.profiles.take().or_else(|| form.launch.reread.hidden.take());
+    let provider_before = shown
+        .as_ref()
+        .and_then(|config| config.profiles.get(&form.selected_profile))
+        .map(|profile| super::creation::provider::current(form.provider, profile));
     reread::keep_edits(&mut form.launch.reread, shown.as_ref(), &mut prepared.config);
     form.launch.ready_profiles = loaded.ready_profiles;
     form.repository = prepared.repository.to_string_lossy().into_owned();
@@ -335,6 +343,15 @@ fn apply(form: &mut super::Production, loaded: Loaded, quiet: bool) {
         .is_some_and(|chosen| profile.is_none_or(|profile| !chosen.supports(profile)))
     {
         form.provider = None;
+        form.placement = Placement::default();
+    }
+    // A place chosen on the provider the profile named before, such as a Hetzner location
+    // for a profile that now names RunPod, is not one of the new provider's.
+    let provider_after = profile.map(|profile| super::creation::provider::current(form.provider, profile));
+    if provider_before
+        .zip(provider_after)
+        .is_some_and(|(before, after)| !std::ptr::eq(before, after))
+    {
         form.placement = Placement::default();
     }
     // A reread profile keeps a chosen size only while the chosen provider
@@ -648,6 +665,39 @@ mod tests {
         let form = &app.cloud_prototype.production;
         assert!(form.provider.is_none(), "Hetzner has no GPU workers");
         assert!(form.placement.data_centers.is_empty());
+        // The profile itself moves to another provider: its place goes too.
+        let (sender, receiver) = channel();
+        app.cloud_prototype.production.launch.receiver = Some(receiver);
+        app.cloud_prototype.production.placement.data_centers = vec!["EU-RO-1".into()];
+        let mut result = loaded(temp.path());
+        result.prepared.config.profiles.get_mut("dev").unwrap().provider = "hetzner".into();
+        sender.send(Ok(result)).unwrap();
+        app.poll_cloud_launch(&ctx);
+        assert!(app.cloud_prototype.production.placement.data_centers.is_empty());
+    }
+
+    #[test]
+    fn a_read_during_which_the_checkout_changed_is_not_shown_and_runs_again() {
+        let (temp, mut app) = test_app();
+        let ctx = Context::default();
+        let (sender, receiver) = channel();
+        app.cloud_prototype.production.launch.receiver = Some(receiver);
+        sender.send(Ok(loaded(temp.path()))).unwrap();
+        app.poll_cloud_launch(&ctx);
+        let form = &mut app.cloud_prototype.production;
+        form.repository = temp.path().to_string_lossy().into_owned();
+        let (sender, receiver) = channel();
+        form.launch.receiver = Some(receiver);
+        form.launch.reread.quiet = true;
+        *form.launch.reread.read.lock().unwrap() = Some(reread::ReadOf::Changed);
+        let mut changed = loaded(temp.path());
+        changed.prepared.config.profiles.get_mut("dev").unwrap().cpu = 64;
+        sender.send(Ok(changed)).unwrap();
+        app.poll_cloud_launch(&ctx);
+        let form = &app.cloud_prototype.production;
+        assert_eq!(form.profiles.as_ref().unwrap().profiles["dev"].cpu, 4, "not shown");
+        assert!(form.launch.receiver.is_some(), "read again");
+        assert!(!form.launch.loading(), "quietly, as the read it replaces");
     }
 
     #[test]

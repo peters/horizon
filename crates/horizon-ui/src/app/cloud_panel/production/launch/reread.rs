@@ -46,8 +46,9 @@ pub(super) enum ReadOf {
 }
 
 impl State {
-    /// Records the fingerprint of the read that just ended.
-    pub fn finished(&mut self) {
+    /// Records the fingerprint of the read that just ended; true when the checkout changed
+    /// during that read.
+    pub fn finished(&mut self) -> bool {
         let read = self
             .read
             .lock()
@@ -60,6 +61,7 @@ impl State {
                 ReadOf::Changed => None,
             });
         }
+        self.stale
     }
 }
 
