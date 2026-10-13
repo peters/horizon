@@ -27,6 +27,11 @@ narrow window.
     [New cloud dialog procedure](cloud-panels/c-new-cloud-dialog.md) tests it.
   - The machine and hourly price under **Cloud**. Task C33 of the New cloud
     dialog procedure tests them with a cloud account.
+  - A build or computer where cloud workspaces are not ready. Then the button
+    shows **PC ▾**, makes a workspace on this computer, and the **Cloud** row is
+    dimmed. The unit tests of the place menu cover it.
+  - The words that a screen reader speaks. The unit tests of the menu rows
+    check that a row gives its title, description, note and shortcut.
 
 ## 3. Safety
 
@@ -150,6 +155,44 @@ Give each result to the report with the task ID.
 
    Result: The toolbar shows the tagline again.
 
+### 6.4 KEYS — Keyboard focus
+
+1. Click **Cloud ▾**, then press Escape.
+
+   Result: The place menu closes.
+
+2. Press Tab.
+
+   Result: A focus ring shows around **+ New workspace** only.
+
+3. Press Tab.
+
+   Result: The focus ring moves to **Cloud ▾** only.
+
+4. Press Tab.
+
+   Result: The focus ring moves to **Menu**.
+
+5. Press Enter.
+
+   Result: The Menu opens. Press Escape.
+
+### 6.5 LIGHT — Light theme
+
+1. Open **Menu › Settings**. Under **Appearance**, choose **Light**.
+
+   Result: The board uses the light theme. The text on **+ New workspace** stays
+   readable on the accent color.
+
+2. Open **Menu**, then the place menu.
+
+   Result: Both menus use light colors. All titles, descriptions and shortcut
+   chips are readable.
+
+3. Under **Appearance**, choose the first theme again. Close Settings.
+
+   Result: The board uses the first theme.
+
 ## 7. Pass criteria
 
 - NEW makes a workspace on this computer from **This PC**, opens New cloud from
@@ -157,6 +200,9 @@ Give each result to the report with the task ID.
   on each row.
 - MENU opens each action from its row and shows the captions, descriptions and
   shortcuts as written.
+- KEYS moves a focus ring over each part of the button and **Menu**, and Enter
+  opens the focused menu.
+- LIGHT shows readable controls and menus in the light theme.
 - NARROW keeps **+ New workspace** and **Menu** in the toolbar in a narrow
   window.
 
