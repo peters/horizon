@@ -526,11 +526,18 @@ fn send(
     }
 }
 
-/// Polls until every provider API reports `target`, within the profile's readiness
-/// budget. A third image or a lost worker fails closed and keeps the journal.
+/// Polls until every provider API reports `target`, within the longer readiness budget
+/// of the bound and the replacement profile. A third image or a lost worker fails
+/// closed and keeps the journal.
 fn await_image(steps: &impl Provider, state: &Deployment, target: Observed, emit: &dyn Fn(Event)) -> Result<()> {
     emit(activity("Waiting for the provider to report the switched image"));
-    let deadline = Instant::now() + Duration::from_secs(u64::from(state.profile.bootstrap.readiness_seconds));
+    // A rebuild that raises the readiness timeout gets the longer one for its own switch.
+    let seconds = state
+        .profile
+        .bootstrap
+        .readiness_seconds
+        .max(state.replacement_profile().bootstrap.readiness_seconds);
+    let deadline = Instant::now() + Duration::from_secs(u64::from(seconds));
     loop {
         match steps.observe(state, Some(deadline)) {
             Ok(observed) if observed == target => return Ok(()),
