@@ -1430,8 +1430,8 @@ local Docker shows it, with the container disk of the cloud's worker. On Hetzner
 container disk is the system disk requirement, the smallest system disk that the new
 server can have. The deployment output shows the two sizes. If the image is larger,
 Horizon refuses the rebuild with the field `storage.container_gb`. The worker keeps its
-image, and nothing stays pending. The pushed image stays in the registry. Horizon does not compare the
-pinned base image, because it builds nothing.
+image, and nothing stays pending. The pushed image stays in the registry. Horizon does
+not compare the pinned base image, because it builds nothing.
 
 Horizon then releases any hosted devices and switches the existing worker to the
 new image through the provider's pod update, which keeps the worker ID. A Hetzner
