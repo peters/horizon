@@ -237,6 +237,7 @@ impl Account {
                         self.stale = None;
                         self.kept = false;
                         self.listed_for = login;
+                        self.retry_at = None;
                     }
                     return (purpose == Purpose::Clone).then_some(token);
                 }
@@ -283,10 +284,12 @@ impl Account {
                 // Signed out after all: a kept list is not shown, and the sign-in button is.
                 Ok(Answer::Quiet) => {
                     self.finish();
-                    if std::mem::take(&mut self.kept) {
-                        self.repositories = None;
-                        self.listed_for = None;
-                    }
+                    // Not signed in: no list of any account stays, confirmed or kept.
+                    self.repositories = None;
+                    self.listed_for = None;
+                    self.stale = None;
+                    self.kept = false;
+                    self.retry_at = None;
                     return None;
                 }
                 Err(TryRecvError::Empty) => return None,

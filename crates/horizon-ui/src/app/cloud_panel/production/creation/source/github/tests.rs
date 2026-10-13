@@ -412,3 +412,15 @@ fn an_out_of_date_list_tries_again_and_goes_when_another_account_is_signed_in() 
     assert!(account.poll().is_none());
     assert!(account.repositories.is_none(), "octo-cat's names are gone");
 }
+
+#[test]
+fn a_refresh_that_finds_no_sign_in_drops_also_a_confirmed_list() {
+    let (mut account, sender) = waiting(Purpose::Refresh);
+    account.repositories = Some(vec!["acme/web".into()]);
+    account.listed_for = Some("octo-cat".into());
+    account.retry_at = Some(std::time::Instant::now());
+    sender.send(Answer::Quiet).unwrap();
+    assert!(account.poll().is_none());
+    assert!(account.repositories.is_none());
+    assert!(account.retry_at.is_none());
+}
