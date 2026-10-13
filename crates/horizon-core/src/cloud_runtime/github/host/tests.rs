@@ -174,9 +174,9 @@ fn sign_in_as(root: &Path, login: &str) {
     stored::save(&path(root, &settings(42)), login, &chain, false).unwrap();
 }
 
-fn keep(root: &Path, login: &str, names: &[&str], cancel: &Cancellation) {
+fn keep(root: &Path, login: &str, names: &[&str], cancel: &Cancellation) -> bool {
     let names: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
-    keep_repositories(root, &settings(42), login, &names, cancel).unwrap();
+    keep_repositories(root, &settings(42), login, &names, cancel).unwrap()
 }
 
 #[test]
@@ -189,7 +189,10 @@ fn a_list_is_kept_for_the_signed_in_account_only() {
         "no sign-in, so nothing is kept"
     );
     sign_in_as(root.path(), "octo-cat");
-    keep(root.path(), "someone-else", &["acme/other"], &Cancellation::default());
+    assert!(
+        !keep(root.path(), "someone-else", &["acme/other"], &Cancellation::default()),
+        "a list of an account that is not signed in is not shown either"
+    );
     assert!(
         !listed(root.path(), &settings(42)).exists(),
         "a list for an account that is not signed in is not kept"
@@ -254,4 +257,23 @@ fn a_replaced_or_outdated_request_never_drops_a_newer_list() {
         "signed out, so the list goes"
     );
     assert_eq!(kept_repositories(root.path(), &settings(42)), None);
+}
+
+#[test]
+fn a_list_too_large_to_read_back_is_not_kept() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("settings.json"), r#"{"github":{"app_id":42}}"#).unwrap();
+    sign_in_as(root.path(), "octo-cat");
+    keep(root.path(), "octo-cat", &["acme/small"], &Cancellation::default());
+    let long = format!("acme/{}", "x".repeat(100));
+    let many: Vec<&str> = std::iter::repeat_n(long.as_str(), 12_000).collect();
+    assert!(
+        keep(root.path(), "octo-cat", &many, &Cancellation::default()),
+        "still this account's list"
+    );
+    assert_eq!(
+        kept_repositories(root.path(), &settings(42)),
+        None,
+        "the older list is not shown instead"
+    );
 }

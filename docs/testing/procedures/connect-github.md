@@ -421,6 +421,9 @@ this task and G11 use.
    `stat -c '%a' ~/.horizon/cloud/credentials/github-host-*-repositories.json`
    shows `600`, and the file holds the listed names.
 
+> **CAUTION:** THE NEXT STEP TURNS OFF THE NETWORK OF THIS COMPUTER. Running clouds,
+> remote panels and other sessions lose their connection until step 8 turns it on.
+
 7. Close the dialog. Turn off the network of this computer, then open **New cloud**
    again.
 

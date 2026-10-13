@@ -179,7 +179,11 @@ pub fn kept_repositories(root: &Path, settings: &Settings) -> Option<(String, Ve
 /// beside the sign-in and under its lock. A Disconnect forgets them with it, and a list
 /// that arrives after one, after a sign-in as another account, or for a request that was
 /// `cancel`led and replaced, is not kept: checked under the lock, so a newer list written
-/// after the cancel is never overwritten by an older one.
+/// after the cancel is never overwritten by an older one. A list too large to read back is
+/// not kept, and replaces no older one.
+///
+/// Returns whether `login` is still this computer's sign-in, so a list of an account that
+/// another window replaced in the meantime is not shown either.
 /// # Errors
 /// A file that cannot be written.
 pub fn keep_repositories(
@@ -188,20 +192,24 @@ pub fn keep_repositories(
     login: &str,
     repositories: &[String],
     cancel: &Cancellation,
-) -> Result<()> {
+) -> Result<bool> {
     let _lock = lock(root, settings)?;
-    if cancel.is_cancelled() || !configured(root, settings) {
-        return Ok(());
+    let current =
+        configured(root, settings) && stored::load(&path(root, settings)).is_some_and(|chain| chain.login == login);
+    if !current || cancel.is_cancelled() {
+        return Ok(current);
     }
-    let Some(chain) = stored::load(&path(root, settings)).filter(|chain| chain.login == login) else {
-        return Ok(());
-    };
     let kept = Listed {
-        login: chain.login,
+        login: login.to_owned(),
         repositories: repositories.to_vec(),
     };
     let bytes = serde_json::to_vec(&kept).map_err(|_| Error::Json)?;
-    stored::write_private(&root.join("credentials"), &listed_name(settings.app_id), &bytes)
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > stored::MAX_FILE {
+        stored::forget(&listed(root, settings))?;
+        return Ok(true);
+    }
+    stored::write_private(&root.join("credentials"), &listed_name(settings.app_id), &bytes)?;
+    Ok(true)
 }
 
 /// Forgets the kept list when this computer turns out not to be signed in. Checked again

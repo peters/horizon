@@ -365,3 +365,18 @@ fn a_sign_in_as_another_account_never_shows_the_first_ones_list() {
         "the fresh list is the account's"
     );
 }
+
+#[test]
+fn a_list_of_an_account_that_another_window_replaced_is_never_shown() {
+    for purpose in [Purpose::Refresh, Purpose::List] {
+        let (mut account, sender) = waiting(purpose);
+        account.repositories = Some(vec!["acme/kept".into()]);
+        account.listed_for = Some("octo-cat".into());
+        sender.send(Answer::SignedIn("octo-cat".into())).unwrap();
+        sender.send(Answer::Replaced).unwrap();
+        assert!(account.poll().is_none());
+        assert!(account.repositories.is_none(), "{:?}", account.repositories);
+        assert!(account.stale.is_none());
+        assert_eq!(account.failed.as_deref(), Some(ANOTHER_ACCOUNT));
+    }
+}

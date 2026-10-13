@@ -20,6 +20,9 @@ use zeroize::Zeroize as _;
 /// At most this many repositories show at once; typing narrows them.
 const SHOWN: usize = 8;
 
+/// Said when this computer signed in as another account while a list was on its way.
+const ANOTHER_ACCOUNT: &str = "This computer signed in to GitHub as another account meanwhile. Try again.";
+
 /// What a finished exchange with GitHub is for.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Purpose {
@@ -46,6 +49,9 @@ enum Answer {
     },
     /// The account this computer is signed in as, once that is known.
     SignedIn(String),
+    /// Another window signed this computer in as another account while the list was on its
+    /// way: no list of the earlier account is shown.
+    Replaced,
     /// A refresh found no sign-in to use.
     Quiet,
 }
@@ -230,6 +236,15 @@ impl Account {
                     }
                     self.signed_in_as = Some(login);
                 }
+                Ok(Answer::Replaced) => {
+                    self.finish();
+                    self.repositories = None;
+                    self.stale = None;
+                    self.kept = false;
+                    self.listed_for = None;
+                    self.failed = Some(ANOTHER_ACCOUNT.into());
+                    return None;
+                }
                 // Signed out after all: a kept list is not shown, and the sign-in button is.
                 Ok(Answer::Quiet) => {
                     self.finish();
@@ -409,9 +424,12 @@ fn exchange(
         Purpose::List | Purpose::Refresh => match host::repositories(&token) {
             Ok(found) => {
                 // Kept for the account it was listed for; losing it only costs the next
-                // dialog its head start.
-                if let Err(error) = host::keep_repositories(root, settings, &login, &found, cancel) {
-                    tracing::debug!(%error, "could not keep the GitHub repository list");
+                // dialog its head start. A list of an account that another window replaced
+                // meanwhile is not shown.
+                match host::keep_repositories(root, settings, &login, &found, cancel) {
+                    Ok(true) => {}
+                    Ok(false) => return Answer::Replaced,
+                    Err(error) => tracing::debug!(%error, "could not keep the GitHub repository list"),
                 }
                 Some(found)
             }
