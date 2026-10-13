@@ -17,6 +17,8 @@ fn account() -> Account {
         failed: None,
         stale: None,
         kept: false,
+        listed_for: None,
+        signed_in_as: None,
         refreshed: true,
     }
 }
@@ -260,7 +262,12 @@ fn the_kept_list_shows_until_a_refresh_replaces_it() {
     let (mut account, sender) = waiting(Purpose::Refresh);
     assert!(!account.busy(), "a quiet refresh is no request of the person's");
     assert!(account.refreshing());
-    sender.send(Answer::Cached(vec!["acme/old".into()])).unwrap();
+    sender
+        .send(Answer::Cached {
+            login: "octo-cat".into(),
+            repositories: vec!["acme/old".into()],
+        })
+        .unwrap();
     assert!(account.poll().is_none());
     assert_eq!(account.repositories.as_deref(), Some(&["acme/old".to_owned()][..]));
     assert!(account.refreshing(), "the refresh goes on behind the kept list");
@@ -303,7 +310,12 @@ fn a_failed_refresh_keeps_the_list_and_marks_it_out_of_date() {
 fn a_refresh_without_a_sign_in_shows_no_kept_list() {
     let (mut account, sender) = waiting(Purpose::Refresh);
     // Read just before the sign-in turned out to be gone.
-    sender.send(Answer::Cached(vec!["acme/kept".into()])).unwrap();
+    sender
+        .send(Answer::Cached {
+            login: "octo-cat".into(),
+            repositories: vec!["acme/kept".into()],
+        })
+        .unwrap();
     sender.send(Answer::Quiet).unwrap();
     assert!(account.poll().is_none());
     assert!(account.repositories.is_none(), "the sign-in button stays in view");
@@ -320,4 +332,36 @@ fn a_failed_refresh_the_person_asked_for_keeps_the_way_to_try_again() {
     assert!(account.poll().is_none());
     assert!(account.stale.is_some(), "Refresh from GitHub stays in view");
     assert_eq!(account.failed.as_deref(), Some("Still offline."));
+}
+
+#[test]
+fn a_sign_in_as_another_account_never_shows_the_first_ones_list() {
+    let (mut account, sender) = waiting(Purpose::List);
+    account.repositories = Some(vec!["acme/private".into()]);
+    account.listed_for = Some("octo-cat".into());
+    account.stale = Some("old".into());
+    sender.send(Answer::SignedIn("other-account".into())).unwrap();
+    sender
+        .send(Answer::Failed("GitHub could not be reached.".into()))
+        .unwrap();
+    assert!(account.poll().is_none());
+    assert!(account.repositories.is_none(), "octo-cat's names are gone");
+    assert!(account.stale.is_none());
+    assert_eq!(account.failed.as_deref(), Some("GitHub could not be reached."));
+    let (mut account, sender) = waiting(Purpose::List);
+    account.repositories = Some(vec!["acme/web".into()]);
+    account.listed_for = Some("octo-cat".into());
+    sender.send(Answer::SignedIn("octo-cat".into())).unwrap();
+    sender
+        .send(Answer::Done {
+            token: Secret::new("ghu_synthetic".into()),
+            repositories: Some(vec!["acme/new".into()]),
+        })
+        .unwrap();
+    assert!(account.poll().is_none());
+    assert_eq!(
+        account.listed_for.as_deref(),
+        Some("octo-cat"),
+        "the fresh list is the account's"
+    );
 }

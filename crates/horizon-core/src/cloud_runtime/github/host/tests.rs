@@ -49,7 +49,7 @@ fn a_disconnect_forgets_the_sign_in_and_a_later_use_finds_the_app_gone() {
     .unwrap();
     assert_eq!(
         kept_repositories(root.path(), &settings(42)),
-        Some(vec!["acme/private".to_owned()])
+        Some(("octo-cat".to_owned(), vec!["acme/private".to_owned()]))
     );
     let saved = disconnect(root.path(), &settings(42), || {
         std::fs::write(root.path().join("settings.json"), "{}")?;
@@ -197,7 +197,7 @@ fn a_list_is_kept_for_the_signed_in_account_only() {
     keep(root.path(), "octo-cat", &["acme/web"], &Cancellation::default());
     assert_eq!(
         kept_repositories(root.path(), &settings(42)),
-        Some(vec!["acme/web".to_owned()])
+        Some(("octo-cat".to_owned(), vec!["acme/web".to_owned()]))
     );
     assert_eq!(
         kept_repositories(root.path(), &settings(43)),
@@ -232,7 +232,7 @@ fn a_replaced_or_outdated_request_never_drops_a_newer_list() {
     keep(root.path(), "octo-cat", &["acme/old"], &replaced);
     assert_eq!(
         kept_repositories(root.path(), &settings(42)),
-        Some(vec!["acme/new".to_owned()]),
+        Some(("octo-cat".to_owned(), vec!["acme/new".to_owned()])),
         "a replaced request does not overwrite the newer list"
     );
     std::fs::remove_file(path(root.path(), &settings(42))).unwrap();

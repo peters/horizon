@@ -160,19 +160,19 @@ struct Listed {
     repositories: Vec<String>,
 }
 
-/// The repositories last listed with this computer's sign-in for the app of `settings`,
-/// so **New cloud** shows them before GitHub answers again. `None` while this computer is
-/// not signed in to that app, when the list belongs to another account, or when no list
-/// was kept or it cannot be read.
+/// The account and the repositories last listed with this computer's sign-in for the app
+/// of `settings`, so **New cloud** shows them before GitHub answers again. `None` while
+/// this computer is not signed in to that app, when the list belongs to another account,
+/// or when no list was kept or it cannot be read.
 #[must_use]
-pub fn kept_repositories(root: &Path, settings: &Settings) -> Option<Vec<String>> {
+pub fn kept_repositories(root: &Path, settings: &Settings) -> Option<(String, Vec<String>)> {
     if !configured(root, settings) {
         return None;
     }
     let login = stored::load(&path(root, settings))?.login;
     let bytes = stored::read_private(&listed(root, settings)).ok()??;
     let kept: Listed = serde_json::from_slice(&bytes).ok()?;
-    (kept.login == login).then_some(kept.repositories)
+    (kept.login == login).then_some((kept.login, kept.repositories))
 }
 
 /// Keeps `repositories`, listed for the account `login`, for the next **New cloud**: private

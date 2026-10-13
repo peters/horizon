@@ -39,8 +39,13 @@ enum Answer {
         repositories: Option<Vec<String>>,
     },
     Failed(String),
-    /// The names kept from the last list, read before a refresh asks GitHub.
-    Cached(Vec<String>),
+    /// The account and the names kept from its last list, read before a refresh asks GitHub.
+    Cached {
+        login: String,
+        repositories: Vec<String>,
+    },
+    /// The account this computer is signed in as, once that is known.
+    SignedIn(String),
     /// A refresh found no sign-in to use.
     Quiet,
 }
@@ -74,6 +79,10 @@ pub(super) struct Account {
     pub(super) stale: Option<String>,
     /// The shown list is the one kept from last time, not yet confirmed by GitHub.
     kept: bool,
+    /// The account the shown list belongs to.
+    listed_for: Option<String>,
+    /// The account the running request signed in as.
+    signed_in_as: Option<String>,
     refreshed: bool,
 }
 
@@ -90,6 +99,8 @@ impl Account {
             failed: None,
             stale: None,
             kept: false,
+            listed_for: None,
+            signed_in_as: None,
             refreshed: false,
         })
     }
@@ -139,9 +150,9 @@ impl Account {
         std::thread::spawn(move || {
             // The names kept from last time show while GitHub is asked.
             if purpose == Purpose::Refresh
-                && let Some(listed) = host::kept_repositories(&root, &settings)
+                && let Some((login, repositories)) = host::kept_repositories(&root, &settings)
             {
-                let _ = sender.send(Answer::Cached(listed));
+                let _ = sender.send(Answer::Cached { login, repositories });
                 ctx.request_repaint();
             }
             let shown = sender.clone();
@@ -150,7 +161,11 @@ impl Account {
                 let _ = shown.send(Answer::Prompt(prompt));
                 repaint.request_repaint();
             };
-            let answer = exchange(&root, &settings, &cancel, &show, purpose);
+            let told = sender.clone();
+            let signed = move |login: &str| {
+                let _ = told.send(Answer::SignedIn(login.to_owned()));
+            };
+            let answer = exchange(&root, &settings, &cancel, &show, &signed, purpose);
             // Without a sign-in no list stays on this computer.
             if matches!(answer, Answer::Quiet)
                 && let Err(error) = host::forget_repositories(&root, &settings, &cancel)
@@ -177,11 +192,13 @@ impl Account {
                     self.prompt = Some(prompt);
                 }
                 Ok(Answer::Done { token, repositories }) => {
+                    let login = self.signed_in_as.take();
                     self.finish();
                     if repositories.is_some() {
                         self.repositories = repositories;
                         self.stale = None;
                         self.kept = false;
+                        self.listed_for = login;
                     }
                     return (purpose == Purpose::Clone).then_some(token);
                 }
@@ -196,17 +213,29 @@ impl Account {
                     }
                     return None;
                 }
-                Ok(Answer::Cached(listed)) => {
+                Ok(Answer::Cached { login, repositories }) => {
                     if self.repositories.is_none() {
-                        self.repositories = Some(listed);
+                        self.repositories = Some(repositories);
                         self.kept = true;
+                        self.listed_for = Some(login);
                     }
+                }
+                // Another account's list is not this one's, even when its own list fails.
+                Ok(Answer::SignedIn(login)) => {
+                    if self.listed_for.as_ref().is_some_and(|listed| *listed != login) {
+                        self.repositories = None;
+                        self.stale = None;
+                        self.kept = false;
+                        self.listed_for = None;
+                    }
+                    self.signed_in_as = Some(login);
                 }
                 // Signed out after all: a kept list is not shown, and the sign-in button is.
                 Ok(Answer::Quiet) => {
                     self.finish();
                     if std::mem::take(&mut self.kept) {
                         self.repositories = None;
+                        self.listed_for = None;
                     }
                     return None;
                 }
@@ -222,6 +251,7 @@ impl Account {
     fn finish(&mut self) {
         self.job = None;
         self.prompt = None;
+        self.signed_in_as = None;
     }
 
     /// The sign-in box while this computer signs in, with a way out.
@@ -351,8 +381,13 @@ fn exchange(
     settings: &github::Settings,
     cancel: &Cancellation,
     show: &dyn Fn(Prompt),
+    signed: &dyn Fn(&str),
     purpose: Purpose,
 ) -> Answer {
+    // A request replaced before it starts asks GitHub nothing.
+    if cancel.is_cancelled() {
+        return Answer::Quiet;
+    }
     let (login, token) = match host::current(root, settings) {
         Ok(Some(signed_in)) => signed_in,
         Ok(None) if purpose == Purpose::Refresh => return Answer::Quiet,
@@ -363,6 +398,11 @@ fn exchange(
         },
         Err(error) => return Answer::Failed(error.to_string()),
     };
+    signed(&login);
+    // Replaced while the sign-in was checked: the request that took over lists instead.
+    if cancel.is_cancelled() {
+        return Answer::Quiet;
+    }
     let repositories = match purpose {
         Purpose::Clone => None,
         Purpose::List | Purpose::Refresh => match host::repositories(&token) {
