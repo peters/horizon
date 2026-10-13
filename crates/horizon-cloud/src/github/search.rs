@@ -6,12 +6,17 @@ use std::collections::BTreeMap;
 /// GitHub's search answers at most 1,000 results: ten pages of 100.
 const MAX_PAGES: u32 = 10;
 
+/// The longest search query GitHub takes, in characters.
+const MAX_QUERY: usize = 256;
+
 impl Client {
     /// The open pull requests that `author` (such as `app/dependabot`) opened in repositories
     /// of `owners`, counted per lowercase `owner/name`. Only repositories in `reachable`
-    /// count, so a repository the app cannot reach is never offered. The counts order a list
-    /// and may be a lower bound: GitHub answers at most 1,000 results per search, and it
-    /// can end a slow search early with `incomplete_results`.
+    /// count, so a repository the app cannot reach is never offered. One search covers as
+    /// many owners as its query holds, which keeps the number of searches under GitHub's
+    /// search rate limit. The counts order a list and may be a lower bound: GitHub answers
+    /// at most 1,000 results per search, and it can end a slow search early with
+    /// `incomplete_results`.
     /// # Errors
     /// An invalid author or owner, transport failures, a refused token, or a malformed answer.
     pub fn open_pull_requests_by(
@@ -37,13 +42,10 @@ impl Client {
         // Each owner is searched once, however often it is named.
         let owners: std::collections::BTreeSet<String> =
             owners.iter().map(|owner| owner.to_ascii_lowercase()).collect();
-        for owner in &owners {
+        for query in queries(author, &owners) {
             let mut read = 0_u64;
             for page in 1..=MAX_PAGES {
-                let path = format!(
-                    "/search/issues?q=is%3Apr+is%3Aopen+author%3A{}+user%3A{owner}&per_page=100&page={page}",
-                    author.replace('/', "%2F")
-                );
+                let path = format!("/search/issues?q={query}&per_page=100&page={page}");
                 let answer: Answer = self.get_search(token, &path)?;
                 read += answer.items.len() as u64;
                 let last = answer.items.len() < 100 || read >= answer.total_count;
@@ -65,6 +67,28 @@ impl Client {
         }
         Ok(counts)
     }
+}
+
+/// The search queries for `owners`, URL-encoded, each within GitHub's query length.
+/// Several `user:` qualifiers in one query match any of them.
+fn queries(author: &str, owners: &std::collections::BTreeSet<String>) -> Vec<String> {
+    let base = format!("is:pr is:open author:{author}");
+    let mut queries: Vec<String> = Vec::new();
+    let mut current = base.clone();
+    for owner in owners {
+        let qualifier = format!(" user:{owner}");
+        if current.len() + qualifier.len() > MAX_QUERY && current != base {
+            queries.push(std::mem::replace(&mut current, base.clone()));
+        }
+        current.push_str(&qualifier);
+    }
+    if current != base {
+        queries.push(current);
+    }
+    queries
+        .iter()
+        .map(|query| query.replace(':', "%3A").replace('/', "%2F").replace(' ', "+"))
+        .collect()
 }
 
 /// A GitHub login or app slug.
@@ -96,8 +120,7 @@ mod tests {
         first.push("acme/hidden");
         let (client, requests, task) = github(vec![
             (200, page(102, &first)),
-            (200, page(102, &["acme/web", "acme/api"])),
-            (200, page(1, &["other/tool"])),
+            (200, page(102, &["acme/web", "acme/api", "other/tool"])),
         ]);
         let counts = client
             .open_pull_requests_by(
@@ -121,9 +144,8 @@ mod tests {
         assert_eq!(
             lines,
             [
-                "GET /search/issues?q=is%3Apr+is%3Aopen+author%3Aapp%2Fdependabot+user%3Aacme&per_page=100&page=1 HTTP/1.1",
-                "GET /search/issues?q=is%3Apr+is%3Aopen+author%3Aapp%2Fdependabot+user%3Aacme&per_page=100&page=2 HTTP/1.1",
-                "GET /search/issues?q=is%3Apr+is%3Aopen+author%3Aapp%2Fdependabot+user%3Aother&per_page=100&page=1 HTTP/1.1",
+                "GET /search/issues?q=is%3Apr+is%3Aopen+author%3Aapp%2Fdependabot+user%3Aacme+user%3Aother&per_page=100&page=1 HTTP/1.1",
+                "GET /search/issues?q=is%3Apr+is%3Aopen+author%3Aapp%2Fdependabot+user%3Aacme+user%3Aother&per_page=100&page=2 HTTP/1.1",
             ]
         );
     }
@@ -145,6 +167,25 @@ mod tests {
             .unwrap();
         task.join().unwrap();
         assert_eq!(counts["acme/web"], 100, "6 MB of release notes is one page");
+    }
+
+    #[test]
+    fn many_owners_share_few_searches_within_the_query_length() {
+        let owners: std::collections::BTreeSet<String> = (0..60).map(|n| format!("owner-number-{n:02}")).collect();
+        let queries = queries("app/dependabot", &owners);
+        assert_eq!(queries.len(), 6, "60 owners of 21 characters in queries of at most 256");
+        let decoded: Vec<String> = queries
+            .iter()
+            .map(|query| query.replace("%3A", ":").replace("%2F", "/").replace('+', " "))
+            .collect();
+        assert!(decoded.iter().all(|query| query.len() <= MAX_QUERY && query.starts_with("is:pr is:open author:app/dependabot user:")));
+        assert_eq!(
+            decoded
+                .iter()
+                .map(|query| query.matches(" user:").count())
+                .sum::<usize>(),
+            60
+        );
     }
 
     #[test]
