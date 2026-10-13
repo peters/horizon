@@ -44,12 +44,15 @@ pub struct Rate {
 
 impl Rate {
     /// The rate rounded down to the decimals [`format_rate`] shows, so that a lower
-    /// bound never says more than it is.
+    /// bound never says more than it is. A sum of decimal prices can land just
+    /// below a shown unit in binary, such as `0.0001 + 0.0003`, so it is first
+    /// rounded to a millionth of that unit.
     #[must_use]
     pub fn floored(self) -> Self {
         let scale = 10_f64.powi(i32::from(rate_decimals(self.currency)));
+        let units = (self.hourly * scale * 1e6).round() / 1e6;
         Self {
-            hourly: (self.hourly * scale).floor() / scale,
+            hourly: units.floor() / scale,
             ..self
         }
     }
@@ -770,6 +773,11 @@ mod tests {
         let lower = |hourly, currency| Rate { hourly, currency }.floored().hourly;
         assert!((lower(0.03629, "EUR") - 0.0362).abs() < 1e-12);
         assert!((lower(0.0129, "USD") - 0.012).abs() < 1e-12);
+        let binary = sum_by_currency([0.0001, 0.0003].map(|hourly| Rate {
+            hourly,
+            currency: "EUR",
+        }));
+        assert!((binary[0].floored().hourly - 0.0004).abs() < 1e-12, "{binary:?}");
     }
 
     #[test]

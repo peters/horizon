@@ -81,6 +81,29 @@ fn an_agent_lists_only_the_clouds_of_its_workspace() {
 }
 
 #[test]
+fn each_listed_hourly_rate_names_its_currency() {
+    let (_temp, mut app, actor) = cloud_with_agent();
+    let ctx = egui::Context::default();
+    let listed = |app: &mut HorizonApp| {
+        let answer = app.answer_cloud_list(&request(&actor, "list", None), &ctx).unwrap();
+        (
+            answer["clouds"][0]["hourly_rate"].clone(),
+            answer["clouds"][0]["currency"].clone(),
+        )
+    };
+    let state = runtime(&mut app).state.as_mut().unwrap();
+    state.worker.as_mut().unwrap().cost_per_hr = None;
+    assert_eq!(listed(&mut app), (json!(null), json!(null)), "no rate, no currency");
+    let state = runtime(&mut app).state.as_mut().unwrap();
+    state.worker.as_mut().unwrap().cost_per_hr = Some(0.69);
+    assert_eq!(listed(&mut app), (json!(0.69), json!("USD")));
+    let state = runtime(&mut app).state.as_mut().unwrap();
+    state.profile.provider = "hetzner".into();
+    state.worker.as_mut().unwrap().cost_per_hr = Some(0.024);
+    assert_eq!(listed(&mut app), (json!(0.024), json!("EUR")));
+}
+
+#[test]
 fn attach_brings_the_cloud_into_view_with_its_first_member_focused() {
     let (_temp, mut app, actor) = cloud_with_agent();
     let ctx = egui::Context::default();
