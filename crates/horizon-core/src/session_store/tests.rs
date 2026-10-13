@@ -297,3 +297,56 @@ fn a_queued_save_is_durable_on_disk_even_after_its_file_was_removed() {
     );
     assert!(RuntimeState::load(&created.runtime_state_path).unwrap().is_some());
 }
+
+#[test]
+fn a_session_create_never_waits_for_the_index_lock_and_reads_see_its_change() {
+    let root_dir = test_root("index-lock");
+    let home = HorizonHome::from_root(root_dir.path().into());
+    let store = SessionStore::new(home.clone(), home.config_path());
+    let first = store.create_session_from_runtime(RuntimeState::default()).unwrap();
+    assert!(store.flush_runtime_states(std::time::Duration::from_secs(30)));
+    // Another Horizon process holds the index lock, so the writer cannot change the index.
+    let held = std::fs::File::create(home.sessions_dir().join("index.lock")).unwrap();
+    held.lock().unwrap();
+    let started = std::time::Instant::now();
+    let second = store.create_session_from_runtime(RuntimeState::default()).unwrap();
+    let waited = started.elapsed();
+    let listed = store.list_profile_sessions().unwrap();
+    drop(held);
+    assert!(waited < std::time::Duration::from_secs(2), "the create took {waited:?}");
+    assert_eq!(listed[0].session_id, second.session_id, "a read sees the queued change");
+    assert!(store.flush_runtime_states(std::time::Duration::from_secs(30)));
+    let index = super::IndexFile::at(&home.session_index_path()).load().unwrap();
+    let profile = index.profile(store.profile_id()).unwrap();
+    assert_eq!(profile.last_session_id.as_deref(), Some(second.session_id.as_str()));
+    assert!(index.names(store.profile_id(), &first.session_id));
+}
+
+#[test]
+fn an_index_change_that_fails_is_tried_again() {
+    let root_dir = test_root("index-retry");
+    let home = HorizonHome::from_root(root_dir.path().into());
+    let store = SessionStore::new(home.clone(), home.config_path());
+    store.create_session_from_runtime(RuntimeState::default()).unwrap();
+    assert!(store.flush_runtime_states(std::time::Duration::from_secs(30)));
+    // A damaged index refuses each change until it is repaired.
+    let saved = std::fs::read(home.session_index_path()).unwrap();
+    std::fs::write(home.session_index_path(), "\0").unwrap();
+    let second = store.create_session_from_runtime(RuntimeState::default()).unwrap();
+    assert!(
+        !store.flush_runtime_states(std::time::Duration::from_secs(30)),
+        "the change failed and is still queued"
+    );
+    std::fs::write(home.session_index_path(), saved).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let index_path = home.session_index_path();
+    let index = super::IndexFile::at(&index_path);
+    while !index.load().unwrap().names(store.profile_id(), &second.session_id) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the change is written once it can be"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(store.flush_runtime_states(std::time::Duration::from_secs(30)));
+}
