@@ -25,7 +25,9 @@ pub(super) fn show(ui: &mut Ui, state: &mut State) -> Option<Pick> {
     if let Some(account) = state.account.as_mut() {
         account.refresh_once(ui.ctx());
         if account.repositories.is_none() {
-            if account.busy() || account.refreshing() {
+            // A quiet refresh shows nothing until it has a list: the button stays, and a
+            // click on it takes over.
+            if account.busy() {
                 account.sign_in_box(ui);
             } else if ui.add(chrome_button("Show your GitHub repositories")).clicked() {
                 account.request(super::super::github::Purpose::List, ui.ctx());
