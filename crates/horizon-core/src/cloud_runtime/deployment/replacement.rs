@@ -149,8 +149,9 @@ enum Driven {
 /// Refuses unless the cloud is ready with nothing pending and the committed profile named
 /// `profile_name` matches the bound one apart from the choices bound at creation, such
 /// as the provider and the storage. Refuses a built image that the worker's container
-/// disk cannot hold before anything changes on the worker. After a failure the journal
-/// stays, so the replacement can be continued or cancelled.
+/// disk cannot hold before anything changes on the worker, and drops its unsent journal,
+/// so nothing stays pending. After any other failure the journal stays, so the
+/// replacement can be continued or cancelled.
 pub fn rebuild(
     request: &Request,
     profile_name: &str,
@@ -179,7 +180,8 @@ pub fn rebuild(
 /// verifies its image again and that the worker's container disk holds it, and a
 /// requested one is sent again only while the provider still reports the previous image.
 /// # Errors
-/// Refuses without a pending replacement; keeps the journal after a failure.
+/// Refuses without a pending replacement; keeps the journal after a failure, except that
+/// a built image the worker's container disk cannot hold drops the unsent journal.
 pub fn continue_replacement(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) -> Result<Deployment> {
     emit(Event::stage(Stage::Validate));
     let (store, mut state) = open(request)?;
