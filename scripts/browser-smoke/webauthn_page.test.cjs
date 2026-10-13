@@ -106,6 +106,20 @@ test('a create without a required member is a TypeError and never posts', async 
     assert.deepEqual(posted[0].options.algorithms, []);
 });
 
+test('requests that no platform credential can satisfy never post', async () => {
+    const {credentials, posted} = install();
+    await assert.rejects(credentials.get({publicKey: {challenge,
+        allowCredentials: [{type: 'password', id: new Uint8Array([1])}]}}), {name: 'NotAllowedError'});
+    await assert.rejects(credentials.create({publicKey: {challenge, rp: {name: 'x'}, user, pubKeyCredParams,
+        authenticatorSelection: {authenticatorAttachment: 'cross-platform'}}}), {name: 'NotAllowedError'});
+    assert.equal(posted.length, 0);
+    credentials.get({publicKey: {challenge, allowCredentials: []}});
+    credentials.create({publicKey: {challenge, rp: {name: 'x'}, user, pubKeyCredParams,
+        authenticatorSelection: {authenticatorAttachment: 'platform'}}});
+    assert.equal(posted.length, 2);
+    assert.deepEqual(posted[0].options.allow_credentials, []);
+});
+
 test('other credential types keep the native API', async () => {
     const {credentials, posted} = install();
     assert.equal(await credentials.get({password: true}), 'native get');

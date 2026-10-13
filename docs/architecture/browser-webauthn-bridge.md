@@ -163,7 +163,12 @@ The page script refuses a `create` without `rp.name`, `user.name`,
 `user.displayName` or `pubKeyCredParams` with a `TypeError`, as a browser
 does. These members are required in the WebAuthn options. A
 `pubKeyCredParams` list with entries but no `public-key` entry gets
-`NotSupportedError`; an empty list gets the default algorithms.
+`NotSupportedError`; an empty list gets the default algorithms. The command
+answers as a platform authenticator, so a `create` that asks for
+`authenticatorAttachment: "cross-platform"` gets `NotAllowedError`. A `get`
+whose `allowCredentials` has entries but none of type `public-key` gets
+`NotAllowedError`; an empty `allowCredentials` asks for any discoverable
+credential.
 
 The page options `userVerification` and `residentKey` are strings, not
 fixed lists. The WebAuthn specification tells clients to ignore an unknown

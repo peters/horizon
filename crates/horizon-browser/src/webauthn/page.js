@@ -61,13 +61,21 @@
     const failure = (name, message) =>
         name === "TypeError" ? new TypeError(message) : new DOMException(message || NOT_ALLOWED, name || "NotAllowedError");
 
-    const getOptions = (publicKey) => ({
-        challenge: challengeOf(publicKey.challenge),
-        rp_id: text(publicKey.rpId),
-        allow_credentials: credentialIds(publicKey.allowCredentials),
-        user_verification: text(publicKey.userVerification),
-        timeout: timeoutOf(publicKey.timeout),
-    });
+    const getOptions = (publicKey) => {
+        const allowed = credentialIds(publicKey.allowCredentials);
+        // A list with entries but none of type public-key allows no
+        // credential; an empty list would mean "any discoverable one".
+        if (!allowed.length && Array.from(publicKey.allowCredentials || []).length) {
+            throw new DOMException(NOT_ALLOWED, "NotAllowedError");
+        }
+        return {
+            challenge: challengeOf(publicKey.challenge),
+            rp_id: text(publicKey.rpId),
+            allow_credentials: allowed,
+            user_verification: text(publicKey.userVerification),
+            timeout: timeoutOf(publicKey.timeout),
+        };
+    };
     const createOptions = (publicKey) => {
         const rp = publicKey.rp;
         const user = publicKey.user;
@@ -77,6 +85,11 @@
             || user.displayName === undefined || publicKey.pubKeyCredParams === undefined;
         if (missing) throw new TypeError("publicKey is missing a required member");
         const selection = publicKey.authenticatorSelection || {};
+        // The command answers as a platform authenticator, so a request for a
+        // roaming one has no authenticator here.
+        if (selection.authenticatorAttachment === "cross-platform") {
+            throw new DOMException(NOT_ALLOWED, "NotAllowedError");
+        }
         const parameters = Array.from(publicKey.pubKeyCredParams);
         const algorithms = parameters.filter((parameter) => parameter && parameter.type === "public-key").map(algorithmOf);
         // An empty list asks for the defaults; a list of only unknown types
