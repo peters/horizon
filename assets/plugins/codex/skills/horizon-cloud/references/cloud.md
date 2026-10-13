@@ -261,6 +261,12 @@ GitHub and chooses its repositories; agents cannot set it up.
   instead of a new request.
 - Ask only for a repository the task needs, with a short, true reason. A
   repository where the person's GitHub App is not installed cannot be allowed.
+- The access covers contents, pull requests, check runs, commit statuses, Actions
+  (job logs, rerun or cancel a run) and workflow files. An app that an older Horizon
+  created may lack the last four. Then `gh run rerun`, reading check runs, or a push
+  that changes `.github/workflows` is refused, and the person must add those
+  permissions in the app's settings on GitHub and accept them on each installation.
+  Tell the person; agents cannot do it.
 - For an organization's repository, the person installs their GitHub App on that
   organization too. Apps that Connect GitHub creates are public so that an
   organization can install them; an app only reaches repositories where it is

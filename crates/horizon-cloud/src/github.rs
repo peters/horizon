@@ -16,6 +16,7 @@ use std::{
 use zeroize::Zeroizing;
 
 mod api;
+mod search;
 pub use api::{User, valid_repository};
 #[cfg(test)]
 mod tests;
@@ -409,20 +410,26 @@ fn encode(output: &mut String, value: &str) {
 }
 
 fn read(response: std::result::Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> Result<Answer> {
+    read_limited(response, RESPONSE_LIMIT)
+}
+
+/// As [`read`], with another limit: a search page carries whole pull request descriptions.
+fn read_limited(
+    response: std::result::Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+    limit: u64,
+) -> Result<Answer> {
     let mut response = response.map_err(|_| Error::Transport)?;
     let status = response.status().as_u16();
     // The whole limit is reserved first, so no part of a secret is left behind in a
     // buffer that a growing read freed.
-    let mut body = Zeroizing::new(Vec::with_capacity(
-        usize::try_from(RESPONSE_LIMIT + 1).unwrap_or(usize::MAX),
-    ));
+    let mut body = Zeroizing::new(Vec::with_capacity(usize::try_from(limit + 1).unwrap_or(usize::MAX)));
     response
         .body_mut()
         .as_reader()
-        .take(RESPONSE_LIMIT + 1)
+        .take(limit + 1)
         .read_to_end(&mut body)
         .map_err(|_| Error::Transport)?;
-    if body.len() as u64 > RESPONSE_LIMIT {
+    if body.len() as u64 > limit {
         return Err(Error::InvalidResponse);
     }
     Ok(Answer { status, body })
@@ -523,10 +530,12 @@ fn safe_https_url(url: &str) -> bool {
 }
 
 /// The manifest for an app that can read and write repository contents and pull
-/// requests as its user. It is public because a private app installs only on the
-/// account that owns it, never on an organization; public only lets another account
-/// install it, and it reaches nothing until installed. GitHub shows `description` on
-/// the app's page. GitHub sends the manifest flow's code to `redirect_url`; user
+/// requests as its user, read check runs and commit statuses, re-run workflow runs, and
+/// change workflow files: Dependabot updates to GitHub Actions edit them, and Upkeep
+/// reads failed checks before it fixes them. It is public because a private app
+/// installs only on the account that owns it, never on an organization; public only
+/// lets another account install it, and it reaches nothing until installed. GitHub
+/// shows `description` on the app's page. GitHub sends the manifest flow's code to `redirect_url`; user
 /// sign-ins return to `callback_url`. Device Flow and expiring tokens are app settings
 /// the manifest cannot set; GitHub turns expiring tokens on for new apps.
 #[must_use]
@@ -550,6 +559,10 @@ pub fn manifest(
             "contents": "write",
             "pull_requests": "write",
             "metadata": "read",
+            "checks": "read",
+            "statuses": "read",
+            "actions": "write",
+            "workflows": "write",
         },
         "default_events": [],
     })

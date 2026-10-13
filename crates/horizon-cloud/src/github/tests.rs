@@ -8,10 +8,10 @@ use std::{
 };
 
 /// Each request, as its request line and its body.
-type Requests = Arc<Mutex<Vec<(String, String)>>>;
+pub(super) type Requests = Arc<Mutex<Vec<(String, String)>>>;
 
 /// A fake GitHub answering each connection with the next scripted response.
-fn github(responses: Vec<(u16, Value)>) -> (Client, Requests, thread::JoinHandle<()>) {
+pub(super) fn github(responses: Vec<(u16, Value)>) -> (Client, Requests, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let client = Client::loopback(listener.local_addr().unwrap()).unwrap();
     let requests = Requests::default();
@@ -290,7 +290,7 @@ fn an_expired_manifest_code_is_a_refusal() {
 }
 
 #[test]
-fn the_manifest_asks_for_contents_and_pull_requests_only() {
+fn the_manifest_asks_for_what_clouds_and_upkeep_use() {
     let manifest = manifest(
         "Horizon (example)",
         "Gives clouds access.",
@@ -304,7 +304,15 @@ fn the_manifest_asks_for_contents_and_pull_requests_only() {
     assert_eq!(manifest["hook_attributes"]["active"], false);
     assert_eq!(
         manifest["default_permissions"],
-        json!({"contents": "write", "pull_requests": "write", "metadata": "read"})
+        json!({
+            "contents": "write",
+            "pull_requests": "write",
+            "metadata": "read",
+            "checks": "read",
+            "statuses": "read",
+            "actions": "write",
+            "workflows": "write",
+        })
     );
     assert_eq!(manifest["redirect_url"], "http://127.0.0.1:1234/manifest");
     assert_eq!(manifest["callback_urls"], json!(["http://127.0.0.1/callback"]));
@@ -454,6 +462,24 @@ fn installed_repositories_reads_every_page_of_every_installation() {
         lines[4],
         "GET /user/installations/2/repositories?per_page=100&page=2 HTTP/1.1"
     );
+}
+
+#[test]
+fn a_page_of_full_repository_objects_is_read_beyond_the_small_answer_limit() {
+    // GitHub sends whole repository objects: 100 of them pass the 64 KiB limit for small answers.
+    let padding = "x".repeat(2000);
+    let repositories: Vec<Value> = (0..40)
+        .map(|n| json!({"full_name": format!("acme/r-{n}"), "description": padding}))
+        .collect();
+    let (client, _requests, task) = github(vec![
+        (200, json!({"installations": [{"id": 1}]})),
+        (200, json!({"total_count": 40, "repositories": repositories})),
+    ]);
+    let names = client
+        .installed_repositories(&Secret::new("ghu_synthetic".into()))
+        .unwrap();
+    task.join().unwrap();
+    assert_eq!(names.len(), 40);
 }
 
 #[test]

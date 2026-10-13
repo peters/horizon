@@ -10,6 +10,14 @@ use zeroize::Zeroizing;
 /// entries each. Beyond it the answer is an error, never partial data.
 const MAX_PAGES: u32 = 20;
 
+/// The largest page of 100 full repository objects read, in bytes.
+const PAGE_LIMIT: u64 = 4 * 1024 * 1024;
+
+/// The largest search page read, in bytes: 50 pull requests with their whole descriptions,
+/// which reach 65,536 characters each when Dependabot quotes release notes. A character
+/// takes at most six bytes in the JSON answer (`\u0001`), so a page stays under 20 MiB.
+const SEARCH_LIMIT: u64 = 24 * 1024 * 1024;
+
 /// The account a token acts as. `email` is GitHub's private commit address, so a
 /// commit never shows the person's own address.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -70,7 +78,8 @@ impl Client {
         }
         let mut ids = Vec::new();
         for page in 1..=MAX_PAGES {
-            let answer: Installations = self.get(token, &format!("/user/installations?per_page=100&page={page}"))?;
+            let answer: Installations =
+                self.get_large(token, &format!("/user/installations?per_page=100&page={page}"))?;
             let last = answer.installations.len() < 100;
             ids.extend(answer.installations.into_iter().map(|installation| installation.id));
             if last {
@@ -85,7 +94,7 @@ impl Client {
             let mut read = 0_u64;
             for page in 1..=MAX_PAGES {
                 let path = format!("/user/installations/{id}/repositories?per_page=100&page={page}");
-                let answer: Repositories = self.get(token, &path)?;
+                let answer: Repositories = self.get_large(token, &path)?;
                 let last = answer.repositories.len() < 100;
                 read += answer.repositories.len() as u64;
                 for repository in answer.repositories {
@@ -175,7 +184,26 @@ impl Client {
         self.request(Some(token), path)
     }
 
+    /// As `get`, for a page of 100 full repository objects.
+    fn get_large<T: serde::de::DeserializeOwned>(&self, token: &Secret, path: &str) -> Result<T> {
+        self.request_limited(Some(token), path, PAGE_LIMIT)
+    }
+
+    /// As `get`, for a search page whose items carry whole pull request descriptions.
+    pub(super) fn get_search<T: serde::de::DeserializeOwned>(&self, token: &Secret, path: &str) -> Result<T> {
+        self.request_limited(Some(token), path, SEARCH_LIMIT)
+    }
+
     fn request<T: serde::de::DeserializeOwned>(&self, token: Option<&Secret>, path: &str) -> Result<T> {
+        self.request_limited(token, path, super::RESPONSE_LIMIT)
+    }
+
+    fn request_limited<T: serde::de::DeserializeOwned>(
+        &self,
+        token: Option<&Secret>,
+        path: &str,
+        limit: u64,
+    ) -> Result<T> {
         let mut request = self
             .agent
             .get(format!("{}{path}", self.api))
@@ -186,7 +214,7 @@ impl Client {
             request = request.header("Authorization", auth.as_str());
         }
         let response = request.call();
-        let answer = read(response)?;
+        let answer = super::read_limited(response, limit)?;
         match answer.status {
             200 => answer.parse(),
             401 => Err(Error::Revoked),
