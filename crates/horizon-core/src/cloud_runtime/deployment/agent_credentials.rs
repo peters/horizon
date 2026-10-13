@@ -1,4 +1,5 @@
-//! Agent API credentials validated before allocation and installed on the worker.
+//! Agent API credentials validated before allocation and installed on the worker, and
+//! this computer's `ChatGPT` login for Codex given to it.
 use super::{Connection, Result, Runner, Settings};
 use std::time::Duration;
 
@@ -45,6 +46,10 @@ pub(super) fn configure_agent_auth(
             &mut connection.command("umask 077; if [ -f /run/horizon-tailnet/agent-isolation ]; then exec horizon-worker-tailnet agent codex login --with-api-key; else HOME=/workspace/home codex login --with-api-key; fi"),
             path,
         )?;
+    } else if capabilities.permits_agent("codex")
+        && let Some(home) = &settings.codex_home
+    {
+        crate::cloud_runtime::codex_login::give(home, connection, runner)?;
     }
     if capabilities.permits_agent("claude")
         && let Some(workspace) = &settings.anthropic_workspace_id

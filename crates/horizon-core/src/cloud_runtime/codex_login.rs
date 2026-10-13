@@ -1,0 +1,347 @@
+//! Sign in with `ChatGPT` for Codex: one login this computer owns and gives to each cloud.
+//!
+//! The Codex CLI itself signs in, into a private Codex home beside the cloud settings, so
+//! the person's own `~/.codex` login is never used or replaced. Each deployment, reconnect
+//! and rebuild copies the login to the worker, unless the worker holds a later renewal of
+//! the same account; that renewal then comes back here, because `ChatGPT` refresh tokens
+//! are single use and the copy here would otherwise be spent.
+use super::{Error, Event, Result, command::Runner, ssh::Connection};
+use std::{
+    cell::RefCell,
+    fs::{File, OpenOptions},
+    io::{Read, Write},
+    path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
+};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use zeroize::Zeroizing;
+
+/// The private Codex home of the login, under the cloud root.
+const DIRECTORY: &str = "credentials/codex";
+const FILE: &str = "auth.json";
+/// Larger than any login Codex writes, and within a private worker exchange.
+const MAX_FILE: u64 = 64 * 1024;
+/// How long the browser sign-in may take before it is given up.
+const SIGN_IN: Duration = Duration::from_mins(15);
+const CODEX: &str = "codex";
+
+/// The Codex home that holds the `ChatGPT` login of the cloud root `root`.
+#[must_use]
+pub fn home(root: &Path) -> PathBuf {
+    root.join(DIRECTORY)
+}
+
+/// The signed-in account, as the settings show it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Account {
+    pub email: Option<String>,
+    /// The `ChatGPT` plan, such as `plus` or `pro`.
+    pub plan: Option<String>,
+}
+
+/// Why a sign-in did not finish.
+#[derive(Debug, thiserror::Error)]
+pub enum SignInError {
+    #[error("Install the Codex CLI on this computer to sign in with ChatGPT")]
+    NoCodex,
+    #[error("{0}")]
+    Codex(String),
+    #[error(transparent)]
+    Cloud(#[from] Error),
+}
+
+/// The account of the login in `home`, or `None` when there is no `ChatGPT` login.
+/// # Errors
+/// The login file is not a private file, or it could not be read.
+pub fn account(home: &Path) -> Result<Option<Account>> {
+    Ok(read(home)?.map(|login| login.account))
+}
+
+/// Signs in with the system browser through `codex login` and returns the account. A
+/// sign-in replaces the earlier login of `home`, which Codex revokes, so clouds holding
+/// it get the new one when they next connect. Blocks until the browser flow ends; run it
+/// off the UI thread.
+/// # Errors
+/// Codex is missing, the person cancelled, or Codex reported that the sign-in failed.
+pub fn sign_in(home: &Path, cancel: &super::Cancellation) -> std::result::Result<Account, SignInError> {
+    sign_in_with(CODEX, home, cancel)
+}
+
+fn sign_in_with(program: &str, home: &Path, cancel: &super::Cancellation) -> std::result::Result<Account, SignInError> {
+    private_directory(home)?;
+    let mut command = codex(program, home);
+    // Codex keeps the login in the file, never the system keyring, so it can be copied.
+    command.args(["login", "-c", "cli_auth_credentials_store=\"file\""]);
+    run(&mut command, cancel, "ChatGPT sign-in", SIGN_IN)?;
+    account(home)?.ok_or_else(|| SignInError::Codex("Codex finished without a ChatGPT login".into()))
+}
+
+/// Signs out: `codex logout` revokes the login at `OpenAI` when it can, and the login
+/// leaves this computer in any case. Clouds keep working until their current access ends.
+/// # Errors
+/// The login file could not be read or removed.
+pub fn sign_out(home: &Path) -> Result<()> {
+    sign_out_with(CODEX, home)
+}
+
+fn sign_out_with(program: &str, home: &Path) -> Result<()> {
+    if !home.is_dir() {
+        return Ok(());
+    }
+    // A cloud connecting now cannot bring the login back after it is gone.
+    let _lock = lock(home)?;
+    if read(home)?.is_none() {
+        return Ok(());
+    }
+    let mut command = codex(program, home);
+    command.arg("logout");
+    // Revocation is a courtesy to the account; without Codex or OpenAI the login still goes.
+    if let Err(error) = run(
+        &mut command,
+        &super::Cancellation::default(),
+        "ChatGPT sign-out",
+        Duration::from_secs(30),
+    ) {
+        tracing::warn!(%error, "codex logout did not revoke the ChatGPT login");
+    }
+    match std::fs::remove_file(home.join(FILE)) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
+        _ => Ok(()),
+    }
+}
+
+/// Gives the login in `home` to the worker behind `connection`, as its Codex login, and
+/// keeps the worker's own login when it is a later renewal of the same account. That later
+/// renewal replaces the one here. Without a `ChatGPT` login in `home`, nothing changes: the
+/// worker keeps any login made in its own terminal.
+/// # Errors
+/// The local login could not be read or written, or the worker refused it.
+pub(super) fn give(home: &Path, connection: &Connection, runner: &Runner<'_>) -> Result<()> {
+    if !home.is_dir() {
+        return Ok(());
+    }
+    exchange(home, &mut connection.command(&install_command()), runner)
+}
+
+/// Sends the login to `install`, the worker's install script, and keeps what it returns.
+fn exchange(home: &Path, install: &mut Command, runner: &Runner<'_>) -> Result<()> {
+    let _lock = lock(home)?;
+    let Some(local) = read(home)? else {
+        return Ok(());
+    };
+    let reply = runner.private_exchange(install, &local.bytes, Duration::from_secs(30))?;
+    adopt(home, &Zeroizing::new(reply))
+}
+
+/// Keeps `reply`, the login the worker holds now, when it renews the login here. The login
+/// here is read again: a sign-in that finished meanwhile is newer and stays.
+fn adopt(home: &Path, reply: &[u8]) -> Result<()> {
+    let remote = Login::parse(reply).ok_or(Error::Invalid("The worker returned an invalid ChatGPT login"))?;
+    if read(home)?.is_some_and(|current| remote.renews(&current)) {
+        write_private(home, reply)?;
+    }
+    Ok(())
+}
+
+fn quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\"'\"'"))
+}
+
+/// The script that installs a login from standard input as the Codex login of `home` and
+/// prints the one it keeps.
+fn install_script(home: &str) -> String {
+    format!(
+        "python3 -c {} {}",
+        quote(include_str!("codex_login/install.py")),
+        quote(home)
+    )
+}
+
+/// The worker command that runs [`install_script`] as the agent user, for its home.
+fn install_command() -> String {
+    let command = install_script("/workspace/home");
+    format!(
+        "if [ -f /run/horizon-tailnet/agent-isolation ]; then exec horizon-worker-tailnet agent /bin/sh -c {}; else exec /bin/sh -c {}; fi",
+        quote(&command),
+        quote(&command),
+    )
+}
+
+/// A `ChatGPT` login as Codex stores it: its bytes and what decides which one is newer.
+struct Login {
+    bytes: Zeroizing<Vec<u8>>,
+    account_id: String,
+    refreshed: Option<OffsetDateTime>,
+    account: Account,
+}
+
+impl Login {
+    fn parse(bytes: &[u8]) -> Option<Self> {
+        let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+        if value.get("auth_mode")?.as_str()? != "chatgpt" {
+            return None;
+        }
+        let tokens = value.get("tokens")?;
+        let text = |name: &str| tokens.get(name)?.as_str().filter(|text| !text.is_empty());
+        text("access_token")?;
+        text("refresh_token")?;
+        let account_id = text("account_id")?.to_owned();
+        let refreshed = value
+            .get("last_refresh")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|text| OffsetDateTime::parse(text, &Rfc3339).ok());
+        Some(Self {
+            account: text("id_token").map(claims).unwrap_or_default(),
+            bytes: Zeroizing::new(bytes.to_vec()),
+            account_id,
+            refreshed,
+        })
+    }
+
+    /// Whether this login is a later renewal of `other`'s account.
+    fn renews(&self, other: &Self) -> bool {
+        self.account_id == other.account_id
+            && match (self.refreshed, other.refreshed) {
+                (Some(this), Some(that)) => this > that,
+                (Some(_), None) => true,
+                (None, _) => false,
+            }
+    }
+}
+
+/// The account an ID token names, for display only. Codex checked the token when it
+/// signed in; nothing here relies on these claims for access.
+fn claims(token: &str) -> Account {
+    use base64::Engine as _;
+    let payload = token
+        .split('.')
+        .nth(1)
+        .and_then(|part| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(part).ok())
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    let Some(payload) = payload else {
+        return Account::default();
+    };
+    let text = |value: Option<&serde_json::Value>| value.and_then(serde_json::Value::as_str).map(str::to_owned);
+    Account {
+        email: text(payload.get("email")),
+        plan: text(payload.pointer("/https:~1~1api.openai.com~1auth/chatgpt_plan_type")),
+    }
+}
+
+fn read(home: &Path) -> Result<Option<Login>> {
+    let path = home.join(FILE);
+    let file = match File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let metadata = file.metadata()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(Error::Invalid("The ChatGPT login file must be private (0600)"));
+        }
+    }
+    if !metadata.is_file() || metadata.len() > MAX_FILE {
+        return Err(Error::Invalid("The ChatGPT login is not a private file"));
+    }
+    // Sized for the whole read up front, so no reallocation frees an unwiped copy.
+    let mut bytes = Zeroizing::new(Vec::with_capacity(usize::try_from(MAX_FILE).unwrap_or(0) + 1));
+    file.take(MAX_FILE).read_to_end(&mut bytes)?;
+    // Codex rewrites the file in place, so a sign-in finishing now can leave it half
+    // written for a moment; that reads as no login rather than an error.
+    Ok(Login::parse(&bytes))
+}
+
+/// Replaces the login in one rename, readable only by this user.
+fn write_private(home: &Path, bytes: &[u8]) -> Result<()> {
+    let mut file = tempfile::Builder::new().prefix(".auth-").tempfile_in(home)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.as_file().set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    file.write_all(bytes)?;
+    file.as_file().sync_all()?;
+    file.persist(home.join(FILE)).map_err(|error| error.error)?;
+    #[cfg(unix)]
+    File::open(home)?.sync_all()?;
+    Ok(())
+}
+
+/// Creates `home` readable only by this user; an existing link is refused.
+fn private_directory(home: &Path) -> Result<()> {
+    std::fs::create_dir_all(home)?;
+    if std::fs::symlink_metadata(home)?.file_type().is_symlink() {
+        return Err(Error::Invalid("The ChatGPT login directory must not be a link"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(home, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+/// Holds the login while one cloud exchanges it, so two clouds connecting at once never
+/// both spend the same renewal.
+fn lock(home: &Path) -> Result<File> {
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(home.join(".horizon.lock"))?;
+    file.lock()?;
+    Ok(file)
+}
+
+fn codex(program: &str, home: &Path) -> Command {
+    let mut command = Command::new(program);
+    command
+        .env("CODEX_HOME", home)
+        // A key or access token in Horizon's environment must not decide the login.
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("CODEX_API_KEY")
+        .env_remove("CODEX_ACCESS_TOKEN")
+        .stdin(std::process::Stdio::null());
+    command
+}
+
+/// Runs a Codex login command and turns its failure into the message Codex printed.
+fn run(
+    command: &mut Command,
+    cancel: &super::Cancellation,
+    name: &'static str,
+    timeout: Duration,
+) -> std::result::Result<(), SignInError> {
+    let reported = RefCell::new(None);
+    // Codex prints the sign-in address and progress; only its error line is kept.
+    let emit = |event: Event| {
+        if let Event::Output(output) = event
+            && let Some(line) = output.lines().map(str::trim).rfind(|line| line.starts_with("Error"))
+        {
+            *reported.borrow_mut() = Some(format!("Codex: {line}"));
+        }
+    };
+    let runner = Runner {
+        cancel,
+        emit: &emit,
+        secrets: Vec::new(),
+    };
+    match runner.run(name, command, timeout) {
+        Ok(_) => Ok(()),
+        Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Err(SignInError::NoCodex),
+        Err(Error::Command(_)) => Err(SignInError::Codex(
+            reported
+                .into_inner()
+                .unwrap_or_else(|| format!("{name} did not finish. Try again.")),
+        )),
+        Err(error) => Err(error.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests;

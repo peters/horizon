@@ -1,4 +1,4 @@
-"""Reconnecting applies unbound API credentials while retaining subscription login."""
+"""Reconnecting applies unbound API credentials while retaining ChatGPT and subscription logins."""
 import json
 from pathlib import Path
 import runpy
@@ -15,6 +15,9 @@ class AgentAuthRemovalTests(unittest.TestCase):
         for auth in ({"auth_mode": "apikey", "OPENAI_API_KEY": "synthetic"},
                      {"OPENAI_API_KEY": "synthetic"},
                      {"auth_mode": "chatgpt", "OPENAI_API_KEY": None,
+                      "tokens": {"access_token": "synthetic-subscription"}},
+                     # A ChatGPT login whose token exchange also gave it an API key.
+                     {"auth_mode": "chatgpt", "OPENAI_API_KEY": "synthetic-exchanged",
                       "tokens": {"access_token": "synthetic-subscription"}}):
             with tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
