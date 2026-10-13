@@ -38,6 +38,7 @@ pub(in super::super) fn step(ui: &mut Ui, form: &mut Production, refocus: bool) 
     }
     // The results answer the arrow keys, Enter and Tab before the field sees them.
     let focused = ui.memory(|memory| memory.has_focus(id));
+    form.source.update_rows();
     let keyed = form.source.finder_keys(ui, focused);
     // Only while results show: a hidden list never keeps Tab in the field.
     let tab = form.source.searching() && form.source.finder.takes_tab() && ui.input(|input| input.modifiers.is_none());
@@ -109,7 +110,8 @@ impl State {
         }
         let Some(remote) = self.remote().cloned() else {
             // A name that narrows the connected account's list is no unknown link.
-            if self.unrecognised() && !self.filters_the_list() && self.finder.current_rows().is_empty() {
+            // While the finder shows, it says itself when nothing matches.
+            if self.unrecognised() && !self.filters_the_list() && !self.searching() {
                 ui.label(
                     RichText::new("That is neither a repository link nor a folder that exists.")
                         .size(13.0)

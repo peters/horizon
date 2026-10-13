@@ -56,9 +56,9 @@ pub(super) struct Finder {
     scan: Option<Receiver<Vec<Checkout>>>,
     /// The typed path folders were last listed for, and their answer: each folder and
     /// whether it holds a repository.
-    lookup: Option<(String, Receiver<Vec<(PathBuf, bool)>>)>,
+    lookup: Option<(String, Receiver<Folders>)>,
     folders_for: String,
-    folders: Vec<(PathBuf, bool)>,
+    folders: Folders,
     /// What the rows were made from.
     made_for: Option<Made>,
     rows: Vec<Row>,
@@ -81,9 +81,12 @@ fn digest(names: &[String]) -> u64 {
     hasher.finish()
 }
 
+/// Folders of a typed path, each with whether it holds a repository.
+type Folders = Vec<(PathBuf, bool)>;
+
 /// Lists the folders of a typed path on a thread, with whether each holds a repository,
 /// so no folder is read while a frame is drawn.
-fn spawn_folders(query: String) -> Receiver<Vec<(PathBuf, bool)>> {
+fn spawn_folders(query: String) -> Receiver<Folders> {
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let found = dir_search::spawn_lookup(query).recv().unwrap_or_default();
@@ -102,7 +105,9 @@ fn spawn_folders(query: String) -> Receiver<Vec<(PathBuf, bool)>> {
 /// Text that names a folder rather than a repository or a search.
 pub(super) fn is_path(text: &str) -> bool {
     let text = text.trim_start();
-    text.starts_with(['/', '~', '.', '\\']) || (cfg!(windows) && text.len() >= 2 && text.as_bytes()[1] == b':')
+    // `.github` is a name to search for; `./`, `../`, `.` and `..` are places.
+    let relative = matches!(text, "." | "..") || text.starts_with("./") || text.starts_with("../");
+    relative || text.starts_with(['/', '~', '\\']) || (cfg!(windows) && text.len() >= 2 && text.as_bytes()[1] == b':')
 }
 
 impl Finder {
@@ -122,7 +127,7 @@ impl Finder {
                     self.scan = None;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    ctx.request_repaint_after(std::time::Duration::from_millis(100))
+                    ctx.request_repaint_after(std::time::Duration::from_millis(100));
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.checkouts = Some(Vec::new());
@@ -252,23 +257,23 @@ fn github_name(url: &str) -> Option<String> {
 
 /// The title a checkout is known by: where it came from, or its folder's name.
 fn checkout_title(checkout: &Checkout) -> String {
+    let folder = || {
+        checkout.path.file_name().map_or_else(
+            || checkout.path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        )
+    };
     checkout
         .origin
         .as_deref()
         .and_then(source::parse)
-        .map(|remote| {
+        .map_or_else(folder, |remote| {
             let path = format!("{}/{}", remote.owner, remote.name);
             if remote.host == "github.com" {
                 path
             } else {
                 format!("{}/{path}", remote.host)
             }
-        })
-        .unwrap_or_else(|| {
-            checkout.path.file_name().map_or_else(
-                || checkout.path.display().to_string(),
-                |name| name.to_string_lossy().into_owned(),
-            )
         })
 }
 
@@ -314,7 +319,10 @@ fn search_rows(query: &str, checkouts: &[Checkout], repositories: &[String]) -> 
         } else if let Some(found) = fuzzy::score(query, &title) {
             // Being on this computer already is worth a little.
             (found.score + 8, found.positions)
-        } else if detail.to_lowercase().contains(&query.to_lowercase()) {
+        } else if dir_search::abbreviate_home(&checkout.path)
+            .to_lowercase()
+            .contains(&query.to_lowercase())
+        {
             // Typed letters that only appear scattered over a path are noise; a run of them
             // in the path, such as `projects/tool`, is not.
             (-40, Vec::new())
@@ -352,7 +360,7 @@ fn search_rows(query: &str, checkouts: &[Checkout], repositories: &[String]) -> 
         scored.push((score, row));
     }
     // A stable sort keeps recent checkouts and the account's order among equals.
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
     scored.into_iter().take(LISTED).map(|(_, row)| row).collect()
 }
 
@@ -415,6 +423,17 @@ impl super::State {
         }
         let picked = view::show(ui, self)?;
         self.apply(picked)
+    }
+
+    /// Makes the rows for what the field holds now, before keys and the focus lock use them.
+    pub(super) fn update_rows(&mut self) {
+        let typed = self.input.trim().to_owned();
+        let repositories = self
+            .account
+            .as_ref()
+            .and_then(|account| account.repositories.as_deref())
+            .unwrap_or_default();
+        let _ = self.finder.rows(&typed, repositories);
     }
 
     /// Arrow keys, Enter and Tab for the results, taken before the field sees them.

@@ -112,7 +112,7 @@ mod tests {
     #[test]
     fn the_name_meant_ranks_first() {
         let rank = |query: &str| {
-            let mut names = vec!["acme/hello-world", "acme/web", "acme/website-old", "acme/awebsome"];
+            let mut names = ["acme/hello-world", "acme/web", "acme/website-old", "acme/awebsome"];
             names.sort_by_key(|name| -score(query, name).map_or(i32::MIN + 1, |found| found.score));
             names[0]
         };

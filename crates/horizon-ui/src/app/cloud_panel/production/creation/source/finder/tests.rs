@@ -18,12 +18,13 @@ fn names(list: &[&str]) -> Vec<String> {
 
 #[test]
 fn paths_links_and_words_are_told_apart() {
-    for path in ["~", "~/code", "/srv/repo", "./here", "../there"] {
+    for path in ["~", "~/code", "/srv/repo", "./here", "../there", ".", ".."] {
         assert!(is_path(path), "{path}");
     }
     for words in [
         "acme/web",
         "web",
+        ".github",
         "https://github.com/acme/web",
         "git@github.com:acme/web.git",
     ] {
@@ -165,4 +166,12 @@ fn shift_tab_keeps_its_way_back() {
     let (chosen, left) = press(&mut state, egui::Key::Tab, egui::Modifiers::SHIFT);
     assert_eq!(chosen, None);
     assert!(left, "Shift+Tab is not taken by the results");
+}
+
+#[test]
+fn a_branch_or_an_age_finds_no_checkout() {
+    let mut checkout = checkout("/home/x/code/tool", None);
+    checkout.touched = Some(std::time::SystemTime::now() - std::time::Duration::from_secs(600));
+    assert!(search_rows("main", std::slice::from_ref(&checkout), &[]).is_empty());
+    assert!(search_rows("ago", std::slice::from_ref(&checkout), &[]).is_empty());
 }

@@ -116,9 +116,8 @@ fn read(path: &Path) -> Option<Checkout> {
     };
     let head = std::fs::read_to_string(git.join("HEAD")).unwrap_or_default();
     let branch = head.trim().strip_prefix("ref: refs/heads/").map(str::to_owned);
-    let common = std::fs::read_to_string(git.join("commondir"))
-        .map(|common| git.join(common.trim()))
-        .unwrap_or_else(|_| git.clone());
+    let common =
+        std::fs::read_to_string(git.join("commondir")).map_or_else(|_| git.clone(), |common| git.join(common.trim()));
     let config = std::fs::read_to_string(common.join("config")).unwrap_or_default();
     let modified = |name: &str| std::fs::metadata(git.join(name)).and_then(|meta| meta.modified()).ok();
     Some(Checkout {

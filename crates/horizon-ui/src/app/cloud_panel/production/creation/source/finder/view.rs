@@ -8,6 +8,8 @@ use crate::{
     },
     theme,
 };
+use std::fmt::Write as _;
+
 use egui::{
     Align2, Color32, FontId, Painter, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Ui, Vec2,
     text::{LayoutJob, TextFormat},
@@ -20,56 +22,81 @@ const LIST_HEIGHT: f32 = 300.0;
 pub(super) fn show(ui: &mut Ui, state: &mut State) -> Option<Pick> {
     let typed = state.input.trim().to_owned();
     state.finder.poll(ui.ctx(), &typed);
-    let mut repositories: &[String] = &[];
-    let mut refreshing = false;
-    if let Some(account) = state.account.as_mut() {
-        account.refresh_once(ui.ctx());
-        if account.repositories.is_none() {
-            // A quiet refresh shows nothing until it has a list: the button stays, and a
-            // click on it takes over.
-            if account.busy() {
-                account.sign_in_box(ui);
-            } else if ui.add(chrome_button("Show your GitHub repositories")).clicked() {
-                account.request(super::super::github::Purpose::List, ui.ctx());
-            }
-        }
-        refreshing = account.refreshing();
-        if let Some(failed) = &account.failed {
-            ui.label(RichText::new(failed).size(13.0).color(theme::PALETTE_RED()));
-        }
-        // A list that could not be refreshed says so, with a way to sign in again, shown here.
-        if account.repositories.is_some() {
-            if let Some(stale) = account.stale.clone() {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        RichText::new(format!("This list may be out of date: {stale}"))
-                            .size(12.5)
-                            .color(theme::PALETTE_YELLOW()),
-                    );
-                    if ui.add(chrome_button("Refresh from GitHub")).clicked() {
-                        account.request(super::super::github::Purpose::List, ui.ctx());
-                    }
-                });
-            }
-            if account.busy() {
-                account.sign_in_box(ui);
-            }
-        }
-    }
-    if let Some(listed) = state
+    let refreshing = account_status(ui, state);
+    let repositories = state
         .account
         .as_ref()
         .and_then(|account| account.repositories.as_deref())
-    {
-        repositories = listed;
-    }
+        .unwrap_or_default();
     let github_count = repositories.len();
     let rows = state.finder.rows(&typed, repositories).to_vec();
     let path = is_path(&typed);
+    let busy = refreshing || state.finder.scanning();
     ui.add_space(2.0);
+    caption_row(ui, state, &rows, &typed, github_count, busy);
+    if rows.is_empty() {
+        let text = if path {
+            "No folders here. Keep typing, or go up a level."
+        } else if typed.is_empty() && busy {
+            "Looking for repositories…"
+        } else if typed.is_empty() {
+            "No repositories here yet. Type a path or paste a link."
+        } else {
+            "Nothing matches. Paste a link to clone any repository."
+        };
+        ui.label(RichText::new(text).size(13.0).color(theme::FG_DIM()));
+        return None;
+    }
+    let clicked = list(ui, state, &rows);
+    hint_row(ui, state, path);
+    clicked
+}
+
+/// The connected account's sign-in, errors and out-of-date list. True while a quiet
+/// refresh runs.
+fn account_status(ui: &mut Ui, state: &mut State) -> bool {
+    let Some(account) = state.account.as_mut() else {
+        return false;
+    };
+    account.refresh_once(ui.ctx());
+    if account.repositories.is_none() {
+        // A quiet refresh shows nothing until it has a list: the button stays, and a
+        // click on it takes over.
+        if account.busy() {
+            account.sign_in_box(ui);
+        } else if ui.add(chrome_button("Show your GitHub repositories")).clicked() {
+            account.request(super::super::github::Purpose::List, ui.ctx());
+        }
+    }
+    if let Some(failed) = &account.failed {
+        ui.label(RichText::new(failed).size(13.0).color(theme::PALETTE_RED()));
+    }
+    // A list that could not be refreshed says so, with a way to sign in again, shown here.
+    if account.repositories.is_some() {
+        if let Some(stale) = account.stale.clone() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(format!("This list may be out of date: {stale}"))
+                        .size(12.5)
+                        .color(theme::PALETTE_YELLOW()),
+                );
+                if ui.add(chrome_button("Refresh from GitHub")).clicked() {
+                    account.request(super::super::github::Purpose::List, ui.ctx());
+                }
+            });
+        }
+        if account.busy() {
+            account.sign_in_box(ui);
+        }
+    }
+    account.refreshing()
+}
+
+/// What the results are, and how many there are of each kind.
+fn caption_row(ui: &mut Ui, state: &State, rows: &[Row], typed: &str, github_count: usize, busy: bool) {
     ui.horizontal(|ui| {
         let count = |one: &str, many: &str| format!("{} {}", rows.len(), if rows.len() == 1 { one } else { many });
-        let caption = if path {
+        let caption = if is_path(typed) {
             count("FOLDER", "FOLDERS")
         } else if typed.is_empty() && state.account.is_some() {
             "RECENT ON THIS COMPUTER, THEN GITHUB".to_owned()
@@ -82,27 +109,18 @@ pub(super) fn show(ui: &mut Ui, state: &mut State) -> Option<Pick> {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let mut counts = format!("{} on this computer", state.finder.local_count());
             if state.account.is_some() {
-                counts.push_str(&format!("  ·  {github_count} on GitHub"));
+                let _ = write!(counts, "  ·  {github_count} on GitHub");
             }
             ui.label(RichText::new(counts).size(11.0).color(theme::FG_DIM()));
-            if refreshing || state.finder.scanning() {
+            if busy {
                 ui.add(egui::Spinner::new().size(11.0));
             }
         });
     });
-    if rows.is_empty() {
-        let text = if path {
-            "No folders here. Keep typing, or go up a level."
-        } else if typed.is_empty() && (refreshing || state.finder.scanning()) {
-            "Looking for repositories…"
-        } else if typed.is_empty() {
-            "No repositories here yet. Type a path or paste a link."
-        } else {
-            "Nothing matches. Paste a link to clone any repository."
-        };
-        ui.label(RichText::new(text).size(13.0).color(theme::FG_DIM()));
-        return None;
-    }
+}
+
+/// The results in a scrolling frame. Returns a result clicked.
+fn list(ui: &mut Ui, state: &mut State, rows: &[Row]) -> Option<Pick> {
     let mut clicked = None;
     let highlighted = state.finder.highlighted;
     let mut hovered = None;
@@ -139,6 +157,11 @@ pub(super) fn show(ui: &mut Ui, state: &mut State) -> Option<Pick> {
     {
         state.finder.highlighted = index;
     }
+    clicked
+}
+
+/// The keys that work the results, and the way to add repositories to the app.
+fn hint_row(ui: &mut Ui, state: &State, path: bool) {
     ui.horizontal(|ui| {
         let hint = if path {
             "↑ ↓ move  ·  Enter uses a repository  ·  Tab opens a folder"
@@ -168,7 +191,6 @@ pub(super) fn show(ui: &mut Ui, state: &mut State) -> Option<Pick> {
             });
         }
     });
-    clicked
 }
 
 /// A result row. It takes clicks but not focus: the arrow keys in the field move through
