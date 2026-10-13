@@ -135,10 +135,13 @@ fn bars(ui: &mut Ui, status: &Status, now: OffsetDateTime) {
             let runs = &day[from..to];
             let summary = Hour::of(runs);
             paint_bar(ui, bar, summary);
-            ui.interact(bar, ui.id().with(("upkeep-hour", slot)), Sense::hover())
-                .on_hover_ui(|ui| {
-                    ui.label(tooltip(hour, runs, summary));
-                });
+            let response = ui.interact(bar, ui.id().with(("upkeep-hour", slot)), Sense::hover());
+            // Screen readers get the same words as the tooltip; both are made only when asked.
+            response
+                .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, tooltip(hour, runs, summary)));
+            response.on_hover_ui(|ui| {
+                ui.label(tooltip(hour, runs, summary));
+            });
         }
         ui.horizontal(|ui| {
             ui.label(

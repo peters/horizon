@@ -54,7 +54,10 @@ impl Reader {
     /// The bytes are read at every look and compared by fingerprint, so any change counts;
     /// a failure is sent once until the file changes again.
     pub(super) fn check(&mut self) -> Option<Reading> {
-        let reading = if std::fs::symlink_metadata(&self.path).is_err() {
+        // Only a file that is not there is missing; any other failure is reported as it is.
+        let missing =
+            std::fs::symlink_metadata(&self.path).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+        let reading = if missing {
             if self.missing {
                 return None;
             }
@@ -324,6 +327,24 @@ mod tests {
         );
         std::fs::write(&path, r#"{"agent":"codex"}"#).unwrap();
         assert_eq!(reader.check().unwrap().unwrap().agent, "codex");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_folder_is_a_read_error_not_a_missing_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let inner = dir.path().join("inner");
+        std::fs::create_dir(&inner).unwrap();
+        std::fs::write(inner.join("status.json"), "{}").unwrap();
+        std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let mut reader = Reader::new(inner.join("status.json"));
+        let reading = reader.check();
+        std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o700)).unwrap();
+        // Root reads anything; only an ordinary account sees the refusal.
+        if let Some(Err(error)) = reading {
+            assert!(error.starts_with("The Upkeep status cannot be read"), "{error}");
+        }
     }
 
     #[test]

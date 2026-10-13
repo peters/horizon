@@ -114,8 +114,9 @@ pub(super) fn show(ui: &mut Ui, shown: &[&PullRequest], filter: Filter, now: Off
         if !filter.admits(state) {
             continue;
         }
-        let rows: Vec<_> = shown.iter().filter(|pr| pr.state == state).collect();
-        if rows.is_empty() {
+        // Counted and then drawn from the same slice: no list is built per frame.
+        let count = shown.iter().filter(|pr| pr.state == state).count();
+        if count == 0 {
             continue;
         }
         any = true;
@@ -123,13 +124,13 @@ pub(super) fn show(ui: &mut Ui, shown: &[&PullRequest], filter: Filter, now: Off
         ui.horizontal(|ui| {
             pill(ui, state.label(), state_color(state));
             ui.label(
-                RichText::new(rows.len().to_string())
+                RichText::new(count.to_string())
                     .size(11.0)
                     .monospace()
                     .color(theme::FG_DIM()),
             );
         });
-        for pr in rows {
+        for pr in shown.iter().filter(|pr| pr.state == state) {
             if let Some(url) = row(ui, pr, now) {
                 opened = Some(url);
             }
