@@ -46,6 +46,8 @@ LISTINGS = {
     "volume": ["volume", "ls", "--format", "{{.Name}}"],
     "network": ["network", "ls", "--format", "{{.Name}}"],
 }
+# How long one removal command may take.
+REMOVAL_SECONDS = 15 * 60
 # In this order: a container holds its image, volume and network.
 REMOVALS = (
     ("container", ["rm", "--force", "--volumes"]),
@@ -353,7 +355,8 @@ def remove_resources(record):
     found = leftover_names(record, listings)
     for kind, args in REMOVALS:
         if found[kind]:
-            docker([*args, *found[kind]])
+            # A volume of a large Git LFS repository can take minutes to delete.
+            docker([*args, *found[kind]], timeout=REMOVAL_SECONDS)
     after = docker_listings()
     if after is None:
         return [], [f"Docker did not answer; look for names that end in {record['run']}"]
