@@ -35,6 +35,8 @@ pub fn home(root: &Path) -> PathBuf {
 /// The signed-in account, as the settings show it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Account {
+    /// The `ChatGPT` account ID, which tells two accounts apart.
+    pub id: String,
     pub email: Option<String>,
     /// The `ChatGPT` plan, such as `plus` or `pro`.
     pub plan: Option<String>,
@@ -164,15 +166,17 @@ fn revoke(program: &str, home: &Path) {
     }
 }
 
-/// Signs out: `codex logout` revokes the login at `OpenAI` when it can, and the login
-/// leaves this computer in any case. Clouds keep working until their current access ends.
+/// Signs out of `shown`, the account the person saw: `codex logout` revokes the login at
+/// `OpenAI` when it can, and the login leaves this computer in any case. Clouds keep
+/// working until their current access ends.
 /// # Errors
-/// The login file could not be read or removed.
-pub fn sign_out(home: &Path) -> Result<()> {
-    sign_out_with(CODEX, home)
+/// Another Horizon window signed in to another account since, or the login file could
+/// not be read or removed.
+pub fn sign_out(home: &Path, shown: &Account) -> Result<()> {
+    sign_out_with(CODEX, home, shown)
 }
 
-fn sign_out_with(program: &str, home: &Path) -> Result<()> {
+fn sign_out_with(program: &str, home: &Path, shown: &Account) -> Result<()> {
     if !home.is_dir() {
         return Ok(());
     }
@@ -182,6 +186,12 @@ fn sign_out_with(program: &str, home: &Path) -> Result<()> {
     // A login file that cannot be read, such as one with open permissions, goes too.
     match read(home) {
         Ok(None) if !home.join(FILE).exists() => return Ok(()),
+        // A later renewal of the same account is the login shown; another account is not.
+        Ok(Some(login)) if login.account_id != shown.id => {
+            return Err(Error::Invalid(
+                "Another Horizon window signed in to another ChatGPT account, shown here now. Nothing was signed out.",
+            ));
+        }
         Ok(Some(_)) => revoke(program, home),
         _ => {}
     }
@@ -274,7 +284,10 @@ impl Login {
             .and_then(serde_json::Value::as_str)
             .and_then(|text| OffsetDateTime::parse(text, &Rfc3339).ok());
         Some(Self {
-            account: text("id_token").map(claims).unwrap_or_default(),
+            account: Account {
+                id: account_id.clone(),
+                ..text("id_token").map(claims).unwrap_or_default()
+            },
             bytes: Zeroizing::new(bytes.to_vec()),
             account_id,
             refreshed,
@@ -306,6 +319,7 @@ fn claims(token: &str) -> Account {
     };
     let text = |value: Option<&serde_json::Value>| value.and_then(serde_json::Value::as_str).map(str::to_owned);
     Account {
+        id: String::new(),
         email: text(payload.get("email")),
         plan: text(payload.pointer("/https:~1~1api.openai.com~1auth/chatgpt_plan_type")),
     }

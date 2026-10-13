@@ -52,6 +52,7 @@ fn only_a_complete_chatgpt_login_counts() {
     assert_eq!(
         parsed.account,
         Account {
+            id: "synthetic-account".into(),
             email: Some("person@example.test".into()),
             plan: Some("plus".into()),
         }
@@ -83,7 +84,13 @@ fn an_unreadable_id_token_still_counts_without_an_account_name() {
     let mut value: serde_json::Value = serde_json::from_slice(&login("synthetic-account", None, "a")).unwrap();
     value["tokens"]["id_token"] = "not-a-token".into();
     let parsed = Login::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
-    assert_eq!(parsed.account, Account::default());
+    assert_eq!(
+        parsed.account,
+        Account {
+            id: "synthetic-account".into(),
+            ..Account::default()
+        }
+    );
 }
 
 #[test]
@@ -220,7 +227,7 @@ mod codex_cli {
         std::fs::write(
             &path,
             format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nprintf '%s' \"${{OPENAI_API_KEY-unset}}\" > '{}'\n[ \"$1\" = login ] || {{ {logout} }}\n{body}\n",
+                "#!/bin/sh\n[ \"$1\" = probe ] && exit 0\nprintf '%s\\n' \"$*\" >> '{}'\nprintf '%s' \"${{OPENAI_API_KEY-unset}}\" > '{}'\n[ \"$1\" = login ] || {{ {logout} }}\n{body}\n",
                 calls.display(),
                 env.display(),
                 logout = if body.contains("exit 1") { "echo 'Error revoking: synthetic' >&2; exit 1;" } else { "exit 0;" },
@@ -228,7 +235,39 @@ mod codex_cli {
         )
         .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Another test thread that forks while this file is open for writing keeps it busy
+        // until that child execs; wait for that before a test runs it.
+        for _ in 0..200 {
+            match std::process::Command::new(&path).arg("probe").status() {
+                Err(error) if error.raw_os_error() == Some(26) => std::thread::sleep(Duration::from_millis(10)),
+                _ => break,
+            }
+        }
         path.to_str().unwrap().to_owned()
+    }
+
+    /// The account the settings show for account ID `id`.
+    fn shown(id: &str) -> Account {
+        Account {
+            id: id.into(),
+            ..Account::default()
+        }
+    }
+
+    #[test]
+    fn sign_out_refuses_an_account_another_window_signed_in_to() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("codex");
+        private_directory(&home).unwrap();
+        let other = login("b", Some("2026-10-02T08:00:00Z"), "synthetic-other");
+        stored(&home, &other);
+        let program = fake(root.path(), "exit 0");
+        assert!(sign_out_with(&program, &home, &shown("a")).is_err());
+        assert_eq!(std::fs::read(home.join(FILE)).unwrap(), other);
+        assert!(calls(root.path()).is_empty(), "nothing is revoked");
+        // A later renewal of the account shown signs out.
+        sign_out_with(&program, &home, &shown("b")).unwrap();
+        assert_eq!(account(&home).unwrap(), None);
     }
 
     fn calls(directory: &Path) -> Vec<String> {
@@ -343,15 +382,15 @@ mod codex_cli {
         stored(&home, &login("a", None, "synthetic"));
         // A failed revocation leaves the file to Horizon; the sign-out still ends here.
         let program = fake(root.path(), "exit 1");
-        sign_out_with(&program, &home).unwrap();
+        sign_out_with(&program, &home, &shown("a")).unwrap();
         assert_eq!(calls(root.path()), ["logout"]);
         assert_eq!(account(&home).unwrap(), None);
         // Without Codex the login goes too.
         stored(&home, &login("a", None, "synthetic"));
-        sign_out_with(root.path().join("no-codex").to_str().unwrap(), &home).unwrap();
+        sign_out_with(root.path().join("no-codex").to_str().unwrap(), &home, &shown("a")).unwrap();
         assert_eq!(account(&home).unwrap(), None);
         // Without a login there is nothing to run.
-        sign_out_with(&program, &home).unwrap();
+        sign_out_with(&program, &home, &shown("a")).unwrap();
         assert_eq!(calls(root.path()), ["logout"]);
     }
 
@@ -376,7 +415,7 @@ mod codex_cli {
             .unwrap()
             .set_modified(old)
             .unwrap();
-        sign_out_with(root.path().join("no-codex").to_str().unwrap(), &home).unwrap();
+        sign_out_with(root.path().join("no-codex").to_str().unwrap(), &home, &shown("a")).unwrap();
         assert!(!abandoned.exists() && !unfinished.exists());
         assert!(current.join(FILE).exists());
     }
@@ -388,7 +427,7 @@ mod codex_cli {
         private_directory(&home).unwrap();
         stored(&home, &login("a", None, "synthetic"));
         std::fs::set_permissions(home.join(FILE), std::fs::Permissions::from_mode(0o644)).unwrap();
-        sign_out_with(root.path().join("no-codex").to_str().unwrap(), &home).unwrap();
+        sign_out_with(root.path().join("no-codex").to_str().unwrap(), &home, &shown("a")).unwrap();
         assert!(!home.join(FILE).exists());
     }
 }

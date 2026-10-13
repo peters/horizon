@@ -18,12 +18,44 @@ use std::{
 /// What the sign-in section waits for and what it last learned.
 #[derive(Default)]
 pub(in crate::app::cloud_panel) struct Card {
-    /// A sign-in or sign-out under way; it ends with the account now on this computer.
-    pending: Option<Receiver<Result<Option<Account>, String>>>,
+    /// A sign-in or sign-out under way.
+    pending: Option<Receiver<Outcome>>,
     signing_in: bool,
     message: Option<String>,
     /// Ends a sign-in under way when the card goes, such as on Cancel.
     abort: Option<Abort>,
+}
+
+/// What a sign-in or sign-out left behind.
+struct Outcome {
+    /// The login now on this computer. Read after a failure too, so the card never keeps
+    /// showing an account that another window replaced.
+    account: Now,
+    /// Why the sign-in or sign-out failed, if it did.
+    message: Option<String>,
+}
+
+/// The account signed in on this computer, if Horizon could read its login.
+enum Now {
+    Known(Option<Account>),
+    Unreadable,
+}
+
+impl Outcome {
+    fn done(account: Option<Account>) -> Self {
+        Self {
+            account: Now::Known(account),
+            message: None,
+        }
+    }
+
+    /// The login that is on this computer now, with `message` when the operation failed.
+    fn now(home: &Path, message: Option<String>) -> Self {
+        Self {
+            account: codex_login::account(home).map_or(Now::Unreadable, Now::Known),
+            message,
+        }
+    }
 }
 
 /// Cancels its sign-in when dropped, which stops `codex login` and its local server.
@@ -52,23 +84,22 @@ impl Card {
         self.abort = Some(Abort(cancel.clone()));
         self.signing_in = true;
         self.start(ctx, move || match codex_login::sign_in(&home, &cancel) {
-            Ok(account) => Ok(Some(account)),
+            Ok(account) => Outcome::done(Some(account)),
             // Cancel sign-in is no failure; the card shows whatever login is left.
-            Err(_) if cancel.is_cancelled() => codex_login::account(&home).map_err(|error| error.to_string()),
-            Err(error) => Err(error.to_string()),
+            Err(_) if cancel.is_cancelled() => Outcome::now(&home, None),
+            Err(error) => Outcome::now(&home, Some(error.to_string())),
         });
     }
 
-    fn sign_out(&mut self, ctx: &egui::Context, home: std::path::PathBuf) {
+    fn sign_out(&mut self, ctx: &egui::Context, home: std::path::PathBuf, shown: Account) {
         self.signing_in = false;
-        self.start(ctx, move || {
-            codex_login::sign_out(&home)
-                .map(|()| None)
-                .map_err(|error| error.to_string())
+        self.start(ctx, move || match codex_login::sign_out(&home, &shown) {
+            Ok(()) => Outcome::done(None),
+            Err(error) => Outcome::now(&home, Some(error.to_string())),
         });
     }
 
-    fn start(&mut self, ctx: &egui::Context, job: impl FnOnce() -> Result<Option<Account>, String> + Send + 'static) {
+    fn start(&mut self, ctx: &egui::Context, job: impl FnOnce() -> Outcome + Send + 'static) {
         let (tx, rx) = channel();
         self.pending = Some(rx);
         self.message = None;
@@ -87,12 +118,11 @@ impl Card {
             return;
         };
         match rx.try_recv() {
-            Ok(Ok(account)) => {
-                *signed_in = account;
-                self.pending = None;
-            }
-            Ok(Err(message)) => {
-                self.message = Some(message);
+            Ok(outcome) => {
+                if let Now::Known(account) = outcome.account {
+                    *signed_in = account;
+                }
+                self.message = outcome.message;
                 self.pending = None;
             }
             Err(TryRecvError::Empty) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(250)),
@@ -120,7 +150,11 @@ pub(super) fn section(ui: &mut egui::Ui, root: &Path, signed_in: &mut Option<Acc
         }
     } else if let Some(account) = signed_in.clone() {
         let name = account.email.as_deref().unwrap_or("your ChatGPT account");
-        let plan = account.plan.map(|plan| format!(" ({plan})")).unwrap_or_default();
+        let plan = account
+            .plan
+            .as_deref()
+            .map(|plan| format!(" ({plan})"))
+            .unwrap_or_default();
         ui.label(
             RichText::new(format!("Signed in as {name}{plan}"))
                 .size(12.0)
@@ -132,7 +166,7 @@ pub(super) fn section(ui: &mut egui::Ui, root: &Path, signed_in: &mut Option<Acc
              This is not your own Codex login on this computer.",
         );
         if ui.add_enabled(!card.busy(), chrome_button("Sign out")).clicked() {
-            card.sign_out(ui.ctx(), home);
+            card.sign_out(ui.ctx(), home, account);
         }
     } else {
         caption(
@@ -156,7 +190,7 @@ pub(super) fn section(ui: &mut egui::Ui, root: &Path, signed_in: &mut Option<Acc
 
 #[cfg(test)]
 mod tests {
-    use super::{Abort, Card};
+    use super::{Abort, Card, Now, Outcome};
     use crate::test_egui::DiscardTextures as _;
     use horizon_core::cloud_runtime::codex_login::Account;
 
@@ -178,10 +212,11 @@ mod tests {
             ..Card::default()
         };
         let account = Account {
+            id: "synthetic-account".into(),
             email: Some("person@example.test".into()),
             plan: Some("plus".into()),
         };
-        sender.send(Ok(Some(account.clone()))).unwrap();
+        sender.send(Outcome::done(Some(account.clone()))).unwrap();
         poll(&mut card, &mut signed_in);
         assert_eq!(signed_in, Some(account));
         assert!(cancel.is_cancelled(), "codex login ends with the attempt");
@@ -213,11 +248,42 @@ mod tests {
             pending: Some(receiver),
             ..Card::default()
         };
-        sender.send(Err("Codex: Error logging in: synthetic".into())).unwrap();
+        sender
+            .send(Outcome {
+                account: Now::Known(Some(Account::default())),
+                message: Some("Codex: Error logging in: synthetic".into()),
+            })
+            .unwrap();
         poll(&mut card, &mut signed_in);
         assert_eq!(signed_in, Some(Account::default()));
         assert_eq!(card.message.as_deref(), Some("Codex: Error logging in: synthetic"));
         assert!(!card.busy());
+    }
+
+    #[test]
+    fn a_refused_sign_out_shows_the_account_now_signed_in() {
+        let mut signed_in = Some(Account {
+            id: "synthetic-a".into(),
+            ..Account::default()
+        });
+        let other = Account {
+            id: "synthetic-b".into(),
+            ..Account::default()
+        };
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut card = Card {
+            pending: Some(receiver),
+            ..Card::default()
+        };
+        sender
+            .send(Outcome {
+                account: Now::Known(Some(other.clone())),
+                message: Some("Another Horizon window signed in to another ChatGPT account.".into()),
+            })
+            .unwrap();
+        poll(&mut card, &mut signed_in);
+        assert_eq!(signed_in, Some(other));
+        assert!(card.message.is_some());
     }
 
     #[test]
@@ -228,7 +294,7 @@ mod tests {
             pending: Some(receiver),
             ..Card::default()
         };
-        sender.send(Ok(None)).unwrap();
+        sender.send(Outcome::done(None)).unwrap();
         poll(&mut card, &mut signed_in);
         assert_eq!(signed_in, None);
     }

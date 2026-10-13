@@ -40,7 +40,7 @@ class CodexLoginInstallTests(unittest.TestCase):
 
     def test_first_install_writes_a_private_login(self):
         incoming = login()
-        self.assertEqual(install(self.home, incoming), incoming)
+        self.assertEqual(install(self.home, incoming, settle=lambda: None), incoming)
         self.assertEqual(self.path.read_bytes(), incoming)
         self.assertEqual(stat.S_IMODE(self.path.parent.stat().st_mode) & 0o077, 0)
         self.assertEqual(list(self.path.parent.glob(".auth-*")), [])
@@ -49,7 +49,7 @@ class CodexLoginInstallTests(unittest.TestCase):
         # Nanoseconds decide: Codex writes them, and Python's own parser does not read them.
         renewed = login(refreshed="2026-10-01T08:00:00.123456790Z", token="synthetic-b")
         self.existing(renewed)
-        self.assertEqual(install(self.home, login()), renewed)
+        self.assertEqual(install(self.home, login(), settle=lambda: None), renewed)
         self.assertEqual(self.path.read_bytes(), renewed)
 
     def test_an_older_same_or_other_login_is_replaced(self):
@@ -64,13 +64,66 @@ class CodexLoginInstallTests(unittest.TestCase):
         ):
             with self.subTest(current=current[:40]):
                 self.existing(current)
-                self.assertEqual(install(self.home, incoming), incoming)
+                self.assertEqual(install(self.home, incoming, settle=lambda: None), incoming)
                 self.assertEqual(self.path.read_bytes(), incoming)
+
+    def test_a_renewal_that_codex_writes_during_the_install_is_kept(self):
+        current = login()
+        self.existing(current)
+        renewed = login(refreshed="2026-10-02T08:00:00Z", token="synthetic-b")
+        incoming = login(refreshed="2026-10-01T09:00:00Z", token="synthetic-c")
+        # Codex opened its login before the rename and writes the renewal into it after.
+        codex = self.path.open("r+b")
+        try:
+            def renew_in_place():
+                codex.seek(0)
+                codex.truncate()
+                codex.write(renewed)
+                codex.flush()
+            self.assertEqual(install(self.home, incoming, settle=renew_in_place), renewed)
+            self.assertEqual(self.path.read_bytes(), renewed)
+        finally:
+            codex.close()
+
+    def test_an_unchanged_or_unfinished_write_after_the_rename_keeps_the_new_login(self):
+        incoming = login(refreshed="2026-10-05T08:00:00Z", token="synthetic-c")
+        for written in (None, b"{half", login(refreshed="2026-09-01T08:00:00Z")):
+            with self.subTest(written=written and written[:20]):
+                self.existing(login())
+                codex = self.path.open("r+b")
+                try:
+                    def write():
+                        if written is not None:
+                            codex.seek(0)
+                            codex.truncate()
+                            codex.write(written)
+                            codex.flush()
+                    self.assertEqual(install(self.home, incoming, settle=write), incoming)
+                    self.assertEqual(self.path.read_bytes(), incoming)
+                finally:
+                    codex.close()
+
+    def test_a_renewal_that_codex_is_still_writing_is_waited_for(self):
+        self.existing(login())
+        renewed = login(refreshed="2026-10-02T08:00:00Z", token="synthetic-b")
+        incoming = login(refreshed="2026-10-01T09:00:00Z", token="synthetic-c")
+        codex = self.path.open("r+b")
+        steps = iter((b"", renewed[:20], renewed))
+        try:
+            def write_in_steps():
+                codex.seek(0)
+                codex.truncate()
+                codex.write(next(steps))
+                codex.flush()
+            self.assertEqual(install(self.home, incoming, settle=write_in_steps), renewed)
+            self.assertEqual(self.path.read_bytes(), renewed)
+        finally:
+            codex.close()
 
     def test_time_zones_compare_as_instants(self):
         self.existing(login(refreshed="2026-10-01T10:00:01+02:00", token="synthetic-b"))
         incoming = login(refreshed="2026-10-01T08:00:00Z")
-        self.assertNotEqual(install(self.home, incoming), incoming)
+        self.assertNotEqual(install(self.home, incoming, settle=lambda: None), incoming)
 
     def test_invalid_input_changes_nothing(self):
         current = login()
@@ -84,7 +137,7 @@ class CodexLoginInstallTests(unittest.TestCase):
         ):
             with self.subTest(incoming=incoming[:40]):
                 with self.assertRaises(ValueError):
-                    install(self.home, incoming)
+                    install(self.home, incoming, settle=lambda: None)
                 self.assertEqual(self.path.read_bytes(), current)
 
 

@@ -11,8 +11,12 @@ from pathlib import Path
 import re
 import sys
 import tempfile
+import time
 
 LIMIT = 64 * 1024
+# How long a write that Codex started on the replaced file is given to finish.
+SETTLE = 0.2
+ATTEMPTS = 5
 STAMP = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?(Z|[+-]\d\d:\d\d)")
 
 
@@ -52,37 +56,73 @@ def renews(current, incoming):
     return incoming[1] is None or current[1] > incoming[1]
 
 
-def install(home, incoming_bytes):
-    """Installs the incoming login unless the worker's renews it; returns the login kept."""
-    incoming = login(incoming_bytes)
-    if len(incoming_bytes) > LIMIT or incoming is None:
-        raise ValueError("Invalid ChatGPT login")
-    directory = home / ".codex"
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    path = directory / "auth.json"
-    try:
-        with path.open("rb") as current_file:
-            current_bytes = current_file.read(LIMIT + 1)
-    except FileNotFoundError:
-        current_bytes = None
-    if current_bytes is not None and len(current_bytes) <= LIMIT and renews(login(current_bytes), incoming):
-        return current_bytes
+def bounded(handle):
+    """The whole file behind `handle`, or None when it is too large to be a login."""
+    handle.seek(0)
+    data = handle.read(LIMIT + 1)
+    return data if len(data) <= LIMIT else None
+
+
+def replace(directory, path, data):
+    """Replaces `path` with `data` in one durable rename."""
     fd, pending = tempfile.mkstemp(dir=directory, prefix=".auth-")
     try:
         with os.fdopen(fd, "wb") as output:
-            output.write(incoming_bytes)
+            output.write(data)
             output.flush()
             os.fsync(output.fileno())
         os.replace(pending, path)
-        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-        handle = os.open(directory, flags)
+        handle = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try:
             os.fsync(handle)
         finally:
             os.close(handle)
     finally:
         Path(pending).unlink(missing_ok=True)
-    return incoming_bytes
+
+
+def install(home, incoming_bytes, settle=lambda: time.sleep(SETTLE)):
+    """Installs the incoming login unless the worker's renews it; returns the login kept.
+
+    Codex rewrites its login in place when it renews it. A renewal written while this runs
+    is never lost: a file that changed before the rename is read again, and a renewal that
+    Codex wrote into the replaced file right after the rename is put back.
+    """
+    incoming = login(incoming_bytes)
+    if len(incoming_bytes) > LIMIT or incoming is None:
+        raise ValueError("Invalid ChatGPT login")
+    directory = home / ".codex"
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = directory / "auth.json"
+    for _ in range(ATTEMPTS):
+        try:
+            current = path.open("rb")
+        except FileNotFoundError:
+            current = None
+        try:
+            before = bounded(current) if current else None
+            if before is not None and renews(login(before), incoming):
+                return before
+            if current is not None and bounded(current) != before:
+                continue
+            replace(directory, path, incoming_bytes)
+            if current is None:
+                return incoming_bytes
+            after = before
+            # Codex truncates before it writes, so an empty or partial file is read again.
+            for _ in range(ATTEMPTS):
+                settle()
+                after = bounded(current)
+                if after == before or (after is not None and login(after) is not None):
+                    break
+            if after != before and after is not None and renews(login(after), incoming):
+                replace(directory, path, after)
+                return after
+            return incoming_bytes
+        finally:
+            if current is not None:
+                current.close()
+    raise RuntimeError("The Codex login kept changing while Horizon installed it")
 
 
 if __name__ == "__main__":
