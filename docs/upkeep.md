@@ -116,7 +116,8 @@ the repositories that did not change.
 - The repositories in the order list run one at a time first. Then the other
   repositories run side by side. The number of agents that run side by side
   depends on the processor cores, the memory and the peak memory of earlier runs.
-- The loop stops an agent and all of its processes after 90 minutes.
+- The loop stops an agent and its child processes after 90 minutes. A process
+  that the agent detached from its process tree continues.
 - The loop records the number of pull requests that each run merged. A pull
   request counts when the status shows it as merged after the run and not before.
 - The pause signal stops the schedule. The runs that the pause covers do not
