@@ -63,9 +63,11 @@ pub(super) fn render(ui: &mut egui::Ui, form: &mut Production, output_beside: bo
     if let Some(error) = error {
         return fix(ui, form, error);
     }
-    ui.collapsing("No cloud configuration yet?", |ui| setup_agent(ui, form, "Set up"))
-        .body_returned
-        .unwrap_or(Choice::None)
+    ui.collapsing("No cloud configuration yet?", |ui| {
+        setup_agent(ui, form, "Set up", false)
+    })
+    .body_returned
+    .unwrap_or(Choice::None)
 }
 
 /// Settings that do not load: the agent starts from the error instead of from nothing.
@@ -84,7 +86,7 @@ fn fix(ui: &mut egui::Ui, form: &mut Production, error: &str) -> Choice {
                 .color(theme::FG_SOFT()),
         );
         ui.add_space(8.0);
-        if setup_agent(ui, form, "Fix with") == Choice::SetupAgent {
+        if setup_agent(ui, form, "Fix with", false) == Choice::SetupAgent {
             form.setup_mode = Mode::Fix(error.to_owned());
             choice = Choice::SetupAgent;
         }
@@ -214,13 +216,14 @@ fn same_folder(run: &run::Run, entered: &str) -> bool {
     run.entered == entered || run.repository == Path::new(entered)
 }
 
-/// The start button, `verb` and the agent's name, with the agent chooser beside it.
 /// Why the setup agent is offered on Linux only: there Horizon starts it in a systemd
 /// user scope, which holds every process it starts as its descendant, so Use can end
 /// them all before it commits. Elsewhere such a process could leave and keep writing.
 pub(super) const PLATFORM_NOTE: &str = "Set up from CI runs on Linux, where Horizon can end every process the agent starts. Elsewhere, use Quick start or write .horizon yourself.";
 
-fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str) -> Choice {
+/// The start button, `verb` and the agent's name, `wide` across its column, with the
+/// agent chips below.
+fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str, wide: bool) -> Choice {
     if !cfg!(target_os = "linux") {
         ui.label(RichText::new(PLATFORM_NOTE).size(12.5).color(theme::FG_SOFT()));
         return Choice::None;
@@ -248,7 +251,10 @@ fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str) -> Choice {
         let primary = egui::Button::new(RichText::new(label).size(14.0).strong().color(theme::BG()))
             .fill(theme::ACCENT())
             .corner_radius(10)
-            .min_size(Vec2::new(ui.available_width().max(120.0), 40.0));
+            .min_size(Vec2::new(
+                if wide { ui.available_width().max(120.0) } else { 120.0 },
+                40.0,
+            ));
         open = ui.add_enabled(!form.repository.trim().is_empty(), primary).clicked();
     });
     // The agent presets of the New Workspace menu, as chips: no popup to hide behind the

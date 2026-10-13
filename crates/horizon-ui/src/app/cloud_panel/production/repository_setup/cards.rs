@@ -5,8 +5,11 @@ use crate::theme;
 use egui::{Color32, Frame, Id, Painter, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Ui, Vec2};
 use horizon_core::cloud_runtime::repository::launch::quick_start;
 
-/// The cards' content is this tall at least.
+/// Side by side the cards' content is this tall at least.
 const CARD_HEIGHT: f32 = 190.0;
+
+/// The cards stand side by side from this width; each line then fits its column.
+const SIDE_BY_SIDE: f32 = 640.0;
 
 fn card_id(key: &str) -> Id {
     Id::new(("cloud-setup-card", key))
@@ -27,15 +30,15 @@ pub(super) fn unconfigured(ui: &mut Ui, form: &mut Production) -> Choice {
     );
     ui.add_space(6.0);
     // Side by side when both cards fit with their buttons; stacked in a narrow dialog.
-    if ui.available_width() >= 520.0 {
+    if ui.available_width() >= SIDE_BY_SIDE {
         ui.columns(2, |columns| {
-            quick_start_card(&mut columns[0], &mut choice);
-            setup_card(&mut columns[1], form, &mut choice);
+            quick_start_card(&mut columns[0], &mut choice, true);
+            setup_card(&mut columns[1], form, &mut choice, true);
         });
     } else {
-        quick_start_card(ui, &mut choice);
+        quick_start_card(ui, &mut choice, false);
         ui.add_space(10.0);
-        setup_card(ui, form, &mut choice);
+        setup_card(ui, form, &mut choice, false);
     }
     choice
 }
@@ -101,9 +104,9 @@ fn list(items: &[String]) -> String {
     }
 }
 
-fn quick_start_card(ui: &mut Ui, choice: &mut Choice) {
+fn quick_start_card(ui: &mut Ui, choice: &mut Choice, paired: bool) {
     let facts = quick_start_facts();
-    card(ui, "quick-start", theme::PALETTE_CYAN(), |ui, tint| {
+    card(ui, "quick-start", theme::PALETTE_CYAN(), paired, |ui, tint| {
         header(ui, tint, bolt_mark, "Quick start", "No build needed");
         ui.add_space(4.0);
         for fact in facts {
@@ -128,10 +131,10 @@ fn quick_start_card(ui: &mut Ui, choice: &mut Choice) {
     });
 }
 
-fn setup_card(ui: &mut Ui, form: &mut Production, choice: &mut Choice) {
+fn setup_card(ui: &mut Ui, form: &mut Production, choice: &mut Choice, paired: bool) {
     // Files an earlier setup left uncommitted are where the agent continues.
     let earlier = prompt::setup_files_seen(ui.ctx(), form.repository.trim());
-    card(ui, "setup-from-ci", theme::ACCENT(), |ui, tint| {
+    card(ui, "setup-from-ci", theme::ACCENT(), paired, |ui, tint| {
         let badge = if earlier {
             "Continues your files"
         } else {
@@ -157,15 +160,16 @@ fn setup_card(ui: &mut Ui, form: &mut Production, choice: &mut Choice) {
         }
         ui.add_space(10.0);
         let verb = if earlier { "Continue with" } else { "Set up with" };
-        if setup_agent(ui, form, verb) == Choice::SetupAgent {
+        if setup_agent(ui, form, verb, true) == Choice::SetupAgent {
             form.setup_mode = Mode::New;
             *choice = Choice::SetupAgent;
         }
     });
 }
 
-/// A card tinted by `tint` that lights up under the pointer.
-fn card(ui: &mut Ui, key: &str, tint: Color32, add: impl FnOnce(&mut Ui, Color32)) {
+/// A card tinted by `tint` that lights up under the pointer. A `paired` card is as tall
+/// as the one beside it.
+fn card(ui: &mut Ui, key: &str, tint: Color32, paired: bool, add: impl FnOnce(&mut Ui, Color32)) {
     let id = card_id(key);
     let hovered = ui
         .data(|data| data.get_temp::<Rect>(id))
@@ -186,8 +190,10 @@ fn card(ui: &mut Ui, key: &str, tint: Color32, add: impl FnOnce(&mut Ui, Color32
             } else {
                 "quick-start"
             };
-            let beside = ui.data(|data| data.get_temp::<f32>(card_id(other).with("content")));
-            ui.set_min_height(CARD_HEIGHT.max(beside.unwrap_or_default()));
+            if paired {
+                let beside = ui.data(|data| data.get_temp::<f32>(card_id(other).with("content")));
+                ui.set_min_height(CARD_HEIGHT.max(beside.unwrap_or_default()));
+            }
             let content = ui
                 .with_layout(egui::Layout::top_down(egui::Align::Min), |ui| add(ui, tint))
                 .response
@@ -213,31 +219,40 @@ fn card(ui: &mut Ui, key: &str, tint: Color32, add: impl FnOnce(&mut Ui, Color32
         .rect_filled(top, 1, theme::alpha(tint, (90.0 + 110.0 * strength) as u8));
 }
 
-/// The mark, the title and a small pill on the right.
+/// The mark, the title and a small pill on the right, which steps aside when the card is
+/// too narrow for it.
 fn header(ui: &mut Ui, tint: Color32, mark: fn(&Painter, Rect, Color32), title: &str, pill: &str) {
+    // The card's own width: the row lays out within it, whatever the window around it.
+    let width = ui.available_width();
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 10.0;
+        let left = ui.min_rect().left();
         let (rect, _) = ui.allocate_exact_size(Vec2::splat(30.0), Sense::hover());
         ui.painter().rect_filled(rect, 9, theme::alpha(tint, 34));
         ui.painter()
             .rect_stroke(rect, 9, Stroke::new(1.0, theme::alpha(tint, 90)), StrokeKind::Inside);
         mark(ui.painter(), rect.shrink(7.0), tint);
-        ui.label(RichText::new(title).size(16.0).strong().color(theme::FG()));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            Frame::new()
-                .fill(theme::alpha(tint, 26))
-                .corner_radius(10)
-                .inner_margin(egui::Margin::symmetric(8, 3))
-                .show(ui, |ui| {
-                    ui.label(RichText::new(pill).size(11.0).strong().color(tint));
-                });
-        });
+        ui.add(egui::Label::new(RichText::new(title).size(16.0).strong().color(theme::FG())).truncate());
+        let text = ui.fonts_mut(|fonts| fonts.layout_no_wrap(pill.to_owned(), egui::FontId::proportional(11.0), tint));
+        let pill_width = text.size().x + 16.0;
+        let room = width - (ui.min_rect().right() - left) - ui.spacing().item_spacing.x;
+        if room < pill_width {
+            return;
+        }
+        ui.add_space(room - pill_width);
+        Frame::new()
+            .fill(theme::alpha(tint, 26))
+            .corner_radius(10)
+            .inner_margin(egui::Margin::symmetric(8, 3))
+            .show(ui, |ui| {
+                ui.label(RichText::new(pill).size(11.0).strong().color(tint));
+            });
     });
 }
 
 /// One thing the choice gives, behind a small check.
 fn fact_row(ui: &mut Ui, tint: Color32, text: &str) {
-    ui.horizontal(|ui| {
+    ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
         let (rect, _) = ui.allocate_exact_size(Vec2::new(16.0, 16.0), Sense::hover());
         let c = rect.center();
@@ -246,7 +261,8 @@ fn fact_row(ui: &mut Ui, tint: Color32, text: &str) {
             .line_segment([c + Vec2::new(-4.0, 0.0), c + Vec2::new(-1.0, 3.0)], stroke);
         ui.painter()
             .line_segment([c + Vec2::new(-1.0, 3.0), c + Vec2::new(4.5, -3.5)], stroke);
-        ui.label(RichText::new(text).size(13.0).color(theme::FG_SOFT()));
+        // A narrow card wraps the line instead of running past its edge.
+        ui.add(egui::Label::new(RichText::new(text).size(13.0).color(theme::FG_SOFT())).wrap());
     });
 }
 
@@ -288,4 +304,74 @@ fn pipeline_mark(painter: &Painter, rect: Rect, color: Color32) {
         [end + Vec2::new(-0.5, 1.5), end + Vec2::new(2.2, -1.6)],
         Stroke::new(1.2, theme::BG()),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Production, card_id, unconfigured};
+    use crate::test_egui::DiscardTextures as _;
+    use egui::{Rect, Shape};
+
+    /// Draws the cards in a column `width` wide; returns each text's rect and the cards'.
+    fn draw(width: f32) -> (Vec<(String, Rect)>, [Rect; 2]) {
+        let ctx = egui::Context::default();
+        let mut form = Production::default();
+        let mut cards = [Rect::NOTHING; 2];
+        let mut texts = Vec::new();
+        // The second pass draws with the heights the first one measured.
+        for _ in 0..2 {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width + 40.0, 1200.0))),
+                ..Default::default()
+            };
+            let output = ctx
+                .run_ui(input, |ui| {
+                    ui.set_max_width(width);
+                    let _ = unconfigured(ui, &mut form);
+                })
+                .discard_textures();
+            texts = output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    Shape::Text(text) => Some((
+                        text.galley.job.text.clone(),
+                        Rect::from_min_size(text.pos, text.galley.size()),
+                    )),
+                    _ => None,
+                })
+                .collect();
+            for (index, key) in ["quick-start", "setup-from-ci"].into_iter().enumerate() {
+                cards[index] = ctx.data(|data| data.get_temp::<Rect>(card_id(key))).unwrap();
+            }
+        }
+        (texts, cards)
+    }
+
+    #[test]
+    fn every_line_stays_inside_its_card_at_any_width() {
+        for width in [280.0, 540.0, 660.0, 900.0] {
+            let (texts, cards) = draw(width);
+            for (text, rect) in &texts {
+                let Some(card) = cards
+                    .iter()
+                    .find(|card| card.contains(rect.left_top() + egui::vec2(1.0, 1.0)))
+                else {
+                    continue;
+                };
+                assert!(
+                    card.expand(0.5).contains_rect(*rect),
+                    "{width}: {text:?} at {rect:?} leaves its card {card:?}"
+                );
+            }
+            let side_by_side = (cards[0].top() - cards[1].top()).abs() < 0.5;
+            assert_eq!(side_by_side, width >= super::SIDE_BY_SIDE, "{width}");
+            if side_by_side {
+                assert!(
+                    (cards[0].bottom() - cards[1].bottom()).abs() < 0.5,
+                    "{width}: the pair ends on one line"
+                );
+            }
+        }
+    }
 }
