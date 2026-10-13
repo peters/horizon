@@ -39,11 +39,16 @@ ROOT = Path(__file__).resolve().parents[1]
 LABEL = "merge-queue"
 MARKER = "<!-- merge-queue v1 -->"
 DEQUEUED = "<!-- merge-queue dequeued -->"
-TRUSTED = {"OWNER", "MEMBER", "COLLABORATOR"}
+# Only peters may give merge permission, and agents act with that account.
+TRUSTED = {"OWNER"}
+BASE_BRANCH = "main"
 GOOD_CONCLUSIONS = {"success", "skipped", "neutral"}
-SKIP_MARKER = "[" + "skip ci]"
-CLOSING = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b:?\s+(?:[\w.-]+/[\w.-]+)?#\d+",
-                     re.I)
+# Every form that makes GitHub skip workflows for a push.
+SKIP_FORMS = re.compile(r"\[(?:skip ci|ci skip|no ci|skip actions|actions skip)\]"
+                        r"|^skip-checks:\s*true", re.I | re.M)
+CLOSING = re.compile(
+    r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b:?\s+"
+    r"(?:(?:[\w.-]+/[\w.-]+)?#\d+|GH-\d+|https?://\S+/(?:issues|pull)/\d+)", re.I)
 ENTRY_JSON = re.compile(r"^```json\n(\{[^\n]*\})\n```$", re.M)
 TIMEOUT = 120
 
@@ -93,8 +98,10 @@ def message_problems(subject, body):
         problems.append("the subject is empty")
     if "\n" in subject:
         problems.append("the subject has more than one line")
-    if SKIP_MARKER in text:
-        problems.append(f"it contains {SKIP_MARKER}: main would skip CI for the squash commit")
+    skip = SKIP_FORMS.search(text)
+    if skip:
+        problems.append(f"it contains {skip.group(0)!r}: main would skip CI for the squash "
+                        "commit")
     if re.search(r"co-authored-by", text, re.I):
         problems.append("it contains a Co-authored-by trailer")
     match = CLOSING.search(text)
@@ -124,6 +131,8 @@ def parse_entry(body):
                                            for k in ("head", "subject", "body"))):
         return None
     if not re.fullmatch(r"[0-9a-f]{40}", data["head"]):
+        return None
+    if message_problems(data["subject"], data["body"]):
         return None
     return {"head": data["head"], "subject": data["subject"], "body": data["body"]}
 
@@ -176,13 +185,13 @@ def drifted(entry, current_head):
 # Git work on a private detached worktree, so no checkout of the user's changes.
 
 def apply_batch(repo, base, entries, fetch_head):
-    """Squash each entry's head onto base in order. Returns (tip, applied, skipped).
+    """Squash each entry's head onto base in order. Returns (tip, applied, skipped); each
+    applied entry gains "commit", its squash commit in the batch.
     fetch_head(entry) makes the head commit available in repo and returns nothing."""
-    state = state_dir()
-    work = Path(tempfile.mkdtemp(prefix="batch-", dir=state))
-    git("worktree", "add", "--detach", str(work), base, cwd=repo)
+    work = Path(tempfile.mkdtemp(prefix="batch-", dir=state_dir()))
     applied, skipped = [], []
     try:
+        git("worktree", "add", "--detach", str(work), base, cwd=repo)
         for entry in entries:
             try:
                 fetch_head(entry)
@@ -201,16 +210,21 @@ def apply_batch(repo, base, entries, fetch_head):
                 continue
             message = entry["subject"] + (f"\n\n{entry['body']}" if entry["body"].strip() else "")
             run(["git", "commit", "-q", "--no-verify", "-F", "-"], cwd=work, stdin=message)
-            applied.append(entry)
+            applied.append({**entry, "commit": git("rev-parse", "HEAD", cwd=work).stdout.strip()})
         tip = git("rev-parse", "HEAD", cwd=work).stdout.strip()
     finally:
         git("worktree", "remove", "--force", str(work), cwd=repo, check=False)
         shutil.rmtree(work, ignore_errors=True)
+        git("worktree", "prune", cwd=repo, check=False)
     return tip, applied, skipped
 
 
+def tree(repo, commit):
+    return git("rev-parse", f"{commit}^{{tree}}", cwd=repo).stdout.strip()
+
+
 def trees_match(repo, left, right):
-    return git("diff", "--quiet", left, right, cwd=repo, check=False).returncode == 0
+    return tree(repo, left) == tree(repo, right)
 
 
 # GitHub access.
@@ -235,13 +249,13 @@ def load_plan():
 
 def pull(repo, number):
     return gh_json("pr", "view", str(number), "--repo", repo, "--json",
-                   "number,state,isDraft,headRefOid,title,labels")
+                   "number,state,isDraft,headRefOid,baseRefName,title,labels")
 
 
 def queued(repo):
     """Open labeled PRs with a valid entry, oldest entry first."""
     prs = gh_json("pr", "list", "--repo", repo, "--label", LABEL, "--state", "open",
-                  "--limit", "100", "--json", "number,headRefOid,title,isDraft")
+                  "--limit", "100", "--json", "number,headRefOid,baseRefName,title,isDraft")
     entries = []
     for pr in prs:
         entry = latest_entry(gh_pages(f"repos/{repo}/issues/{pr['number']}/comments"))
@@ -249,7 +263,8 @@ def queued(repo):
             print(f"#{pr['number']}: labeled but has no valid entry comment; ignored")
             continue
         entries.append({**entry, "number": pr["number"], "title": pr["title"],
-                        "current_head": pr["headRefOid"], "draft": pr["isDraft"]})
+                        "current_head": pr["headRefOid"], "draft": pr["isDraft"],
+                        "base_branch": pr["baseRefName"]})
     return queue_order(entries)
 
 
@@ -296,6 +311,8 @@ def cmd_enqueue(args):
         raise QueueError(f"#{args.pr} is not an open, ready PR")
     if pr["headRefOid"] != args.head:
         raise QueueError(f"#{args.pr} head is {pr['headRefOid']}, not {args.head}")
+    if pr["baseRefName"] != BASE_BRANCH:
+        raise QueueError(f"#{args.pr} targets {pr['baseRefName']}, not {BASE_BRANCH}")
     created = run(["gh", "label", "create", LABEL, "--repo", repo, "--color", "0e8a16",
                    "--description", "Approved head waiting for a merge-queue batch"],
                   check=False)
@@ -328,9 +345,16 @@ def cmd_list(_args):
 
 def cmd_build(args):
     repo = repo_name()
-    entries = [e for e in queued(repo) if not e["draft"]]
+    entries = queued(repo)
+    for entry in entries:
+        if entry["draft"] or entry["base_branch"] != BASE_BRANCH:
+            print(f"#{entry['number']}: draft or not based on {BASE_BRANCH}; skipped")
+    entries = [e for e in entries if not e["draft"] and e["base_branch"] == BASE_BRANCH]
     if args.only:
-        wanted = {int(n) for n in args.only.split(",")}
+        try:
+            wanted = {int(n) for n in args.only.split(",")}
+        except ValueError:
+            raise QueueError(f"--only takes PR numbers separated by commas, not {args.only!r}")
         entries = [e for e in entries if e["number"] in wanted]
     drift = [e for e in entries if drifted(e, e["current_head"])]
     for entry in drift:
@@ -339,8 +363,8 @@ def cmd_build(args):
     if not entries:
         print("Nothing to build: the merge queue has no ready entry.")
         return
-    git("fetch", "-q", "origin", "main", timeout=300)
-    base = git("rev-parse", "origin/main").stdout.strip()
+    git("fetch", "-q", "origin", BASE_BRANCH, timeout=300)
+    base = git("rev-parse", f"origin/{BASE_BRANCH}").stdout.strip()
 
     def fetch_head(entry):
         git("fetch", "-q", "origin", f"pull/{entry['number']}/head", timeout=300)
@@ -361,7 +385,8 @@ def cmd_build(args):
         return
     git("push", "-q", "origin", f"{tip}:refs/heads/{branch}", timeout=300)
     plan = {"branch": branch, "base": base, "tip": tip,
-            "prs": [{k: e[k] for k in ("number", "head", "subject", "body")} for e in applied]}
+            "prs": [{k: e[k] for k in ("number", "head", "subject", "body", "commit")}
+                    for e in applied]}
     plan_path().write_text(json.dumps(plan, indent=2) + "\n")
     print(f"pushed {branch}; CI runs on {tip}")
 
@@ -371,14 +396,16 @@ def blockers(repo, plan):
     found = []
     _passed, problems = ci_on(repo, plan["tip"])
     found += [f"CI on the batch tip: {p}" for p in problems]
-    git("fetch", "-q", "origin", "main", timeout=300)
-    main = git("rev-parse", "origin/main").stdout.strip()
+    git("fetch", "-q", "origin", BASE_BRANCH, timeout=300)
+    main = git("rev-parse", f"origin/{BASE_BRANCH}").stdout.strip()
     if main != plan["base"]:
         found.append(f"main moved from {plan['base'][:9]} to {main[:9]}: build again")
     for entry in plan["prs"]:
         pr = pull(repo, entry["number"])
         if pr["state"] != "OPEN" or pr["isDraft"]:
             found.append(f"#{entry['number']} is not open and ready")
+        if pr["baseRefName"] != BASE_BRANCH:
+            found.append(f"#{entry['number']} targets {pr['baseRefName']}, not {BASE_BRANCH}")
         if drifted(entry, pr["headRefOid"]):
             found.append(f"#{entry['number']} head drifted to {pr['headRefOid'][:9]}")
         if LABEL not in {label["name"] for label in pr["labels"]}:
@@ -407,22 +434,33 @@ def cmd_land(args):
     if args.dry_run:
         print("dry run: would land " + ", ".join(f"#{e['number']}" for e in plan["prs"]))
         return
+    expected = plan["base"]
     for entry in plan["prs"]:
+        # Each merge must land on the commit the previous one made. Another push to main
+        # in between would put this PR on an untested base.
+        git("fetch", "-q", "origin", BASE_BRANCH, timeout=300)
+        main_now = git("rev-parse", f"origin/{BASE_BRANCH}").stdout.strip()
+        if main_now != expected:
+            raise QueueError(f"main moved to {main_now[:9]} outside the batch before "
+                             f"#{entry['number']}; it and later PRs were not merged")
         run(["gh", "pr", "merge", str(entry["number"]), "--repo", repo, "--squash",
              "--match-head-commit", entry["head"], "--subject", entry["subject"],
              "--body", entry["body"]], timeout=300)
         merged = gh_json("pr", "view", str(entry["number"]), "--repo", repo, "--json",
                          "state,mergeCommit")
-        if merged["state"] != "MERGED":
+        commit = (merged.get("mergeCommit") or {}).get("oid")
+        if merged["state"] != "MERGED" or not commit:
             raise QueueError(f"#{entry['number']} did not merge; later PRs were not merged")
-        print(f"#{entry['number']} merged as {merged['mergeCommit']['oid']}")
-    git("fetch", "-q", "origin", "main", timeout=300)
-    if not trees_match(ROOT, "origin/main", plan["tip"]):
-        raise QueueError("MISMATCH: main does not have the tested tree. Another merge may "
-                         "have landed during the batch. Check main CI now.")
+        git("fetch", "-q", "origin", BASE_BRANCH, timeout=300)
+        if not trees_match(ROOT, commit, entry["commit"]):
+            raise QueueError(f"MISMATCH: #{entry['number']} merged as {commit}, but its tree "
+                             "is not the tested batch tree. Another merge may have landed "
+                             "first. Later PRs were not merged. Check main CI now.")
+        print(f"#{entry['number']} merged as {commit}")
+        expected = commit
     git("push", "-q", "origin", "--delete", plan["branch"], timeout=300, check=False)
     plan_path().rename(state_dir() / f"landed-{plan['branch'][3:]}.json")
-    print("main has the tested tree; batch landed")
+    print("each merge has its tested tree; batch landed")
 
 
 def main(argv=None):

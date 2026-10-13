@@ -23,6 +23,7 @@ GIT_ENV = {
     "GIT_CONFIG_SYSTEM": os.devnull,
 }
 HEAD_A = "a" * 40
+SKIP = "[" + "skip ci]"
 
 
 def comment(body, created_at="2026-10-13T08:00:00Z", association="OWNER"):
@@ -35,16 +36,24 @@ class MessageTests(unittest.TestCase):
 
     def test_refused_messages_name_the_reason(self):
         cases = [
-            ("ci: tidy", "Body " + mq.SKIP_MARKER, "skip ci"),
+            ("ci: tidy", "Body " + SKIP, "skip the ci"),
+            ("ci: tidy [ci skip]", "", "skip the ci"),
+            ("ci: tidy", "[No CI] please", "skip the ci"),
+            ("ci: tidy", "[skip actions]", "skip the ci"),
+            ("ci: tidy", "text\nskip-checks: true", "skip the ci"),
             ("ci: tidy", "Co-Authored-By: someone", "co-authored-by"),
             ("ci: tidy", "This Fixes #12.", "closing keyword"),
             ("ci: tidy", "resolves peters/horizon#7", "closing keyword"),
+            ("ci: tidy", "Closes GH-7", "closing keyword"),
+            ("ci: tidy", "fixed https://github.com/peters/horizon/issues/7", "closing keyword"),
             ("  ", "body", "empty"),
             ("a\nb", "", "more than one line"),
         ]
         for subject, body, reason in cases:
             with self.subTest(reason=reason, body=body):
                 problems = mq.message_problems(subject, body)
+                if reason == "skip the ci":
+                    reason = "skip ci for the squash commit"
                 self.assertTrue(any(reason in p.lower() for p in problems), problems)
 
     def test_words_that_only_look_like_keywords_pass(self):
@@ -67,6 +76,7 @@ class EntryTests(unittest.TestCase):
             mq.MARKER + '\n```json\n{"head": "abc", "subject": "s", "body": ""}\n```',
             mq.MARKER + '\n```json\n{"head": "' + HEAD_A + '", "subject": 3, "body": ""}\n```',
             mq.MARKER + "\n```json\n{not json}\n```",
+            mq.entry_comment(HEAD_A, "ci: tidy", "Fixes #3"),
         ]
         for body in bad:
             with self.subTest(body=body):
@@ -80,6 +90,8 @@ class EntryTests(unittest.TestCase):
             comment(new, "2026-10-13T09:00:00Z"),
             comment(old, "2026-10-13T08:00:00Z"),
             comment(forged, "2026-10-13T10:00:00Z", association="NONE"),
+            comment(forged, "2026-10-13T11:00:00Z", association="COLLABORATOR"),
+            comment(forged, "2026-10-13T12:00:00Z", association="MEMBER"),
         ])
         self.assertEqual((entry["subject"], entry["queued_at"]), ("new", "2026-10-13T09:00:00Z"))
 
@@ -172,6 +184,8 @@ class BatchTests(unittest.TestCase):
             lambda entry: None)
         self.assertEqual([e["number"] for e in applied], [1, 2])
         self.assertEqual(skipped, [])
+        self.assertEqual(applied[1]["commit"], tip)
+        self.assertEqual(applied[0]["commit"], self.git("rev-parse", f"{tip}~1"))
         self.assertEqual(self.git("log", "-1", "--format=%B", tip), "fix: b\n\nBody of 2.")
         self.assertEqual(self.git("log", "-1", "--format=%s", f"{tip}~1"), "feat: a")
         self.assertEqual(self.git("rev-list", "--count", f"{self.base}..{tip}"), "2")
