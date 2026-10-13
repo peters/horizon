@@ -78,6 +78,18 @@ fn ready_gap(runtime: &Runtime) -> Option<RunGap> {
     cloud_runtime::cost::run_gap(runtime.state.as_ref()?.worker.as_ref()?)
 }
 
+/// A Ready worker that may bill but whose provider reported no rate. The rate is named
+/// as missing even when the worker's status has a gap of its own.
+fn rate_not_reported(runtime: &Runtime) -> bool {
+    runtime.stage == Some(Stage::Ready)
+        && !compute_idle(runtime)
+        && runtime
+            .state
+            .as_ref()
+            .and_then(|state| state.worker.as_ref())
+            .is_some_and(|worker| cloud_runtime::cost::hourly_rate(worker).is_none())
+}
+
 /// What a cloud whose provider reports no billing per worker shows instead of a total.
 pub(super) fn history_unavailable(runtime: &Runtime) -> String {
     format!(
@@ -157,7 +169,7 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
     let total = runtime.total_cost(now);
     let idle = compute_idle(runtime);
     let deleted = worker_deleted(runtime);
-    let gap = ready_gap(runtime);
+    let unpriced = rate_not_reported(runtime);
     let mut parts = Vec::new();
     // A deleted worker bills no compute; its history can still follow.
     if let Some(deleted) = deleted {
@@ -188,7 +200,7 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
     } else if idle {
         // Known stopped: missing rate data does not make the worker billable again.
         "compute stopped".to_owned()
-    } else if gap == Some(RunGap::NoRate) {
+    } else if unpriced {
         // A Ready worker without a rate is billing; nothing more will arrive without a new read.
         "Worker billing · rate not reported".to_owned()
     } else if worker.is_some() || worker_requested(runtime) {
@@ -217,7 +229,7 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
                 "The rate is the worker's last reported hourly price; the provider has not reported billed periods yet."
                     .into()
             }
-            None if gap == Some(RunGap::NoRate) => {
+            None if unpriced => {
                 "The worker is ready, but the provider reported no hourly rate for it, so Horizon cannot estimate \
                  its cost. Reconnect to read the worker again."
                     .into()
@@ -266,7 +278,7 @@ fn rate_metric(runtime: &Runtime, rate: Option<f64>) -> (String, &'static str) {
     match rate {
         Some(rate) if provider.net_of_vat => (format_rate(rate, provider.currency), "compute, net of VAT"),
         Some(rate) => (format_rate(rate, provider.currency), "last reported worker rate"),
-        None if ready_gap(runtime) == Some(RunGap::NoRate) => ("—".into(), "no rate reported"),
+        None if rate_not_reported(runtime) => ("—".into(), "no rate reported"),
         None if worker_requested(runtime) || runtime.state.as_ref().is_some_and(|state| state.worker.is_some()) => {
             ("—".into(), "rate pending")
         }
@@ -854,6 +866,22 @@ mod tests {
         let mut runpod = runtime();
         runpod.state.as_mut().unwrap().worker.as_mut().unwrap().cost_per_hr = None;
         assert!(has(&texts(&runpod), "no rate reported"), "on every provider");
+
+        // A status gap does not hide the missing rate of a worker that may still bill.
+        for status in ["UNKNOWN", "EXITED"] {
+            let unpriced = hetzner(
+                Stage::Ready,
+                &server(&serde_json::json!({"desiredStatus": status, "costPerHr": null})),
+            );
+            assert_eq!(
+                spend(&unpriced, now).line,
+                "Worker billing · rate not reported",
+                "{status}"
+            );
+            let shown = texts(&unpriced);
+            assert!(has(&shown, "no rate reported"), "{status}: {shown:?}");
+            assert!(!has(&shown, "rate pending"), "{status}: {shown:?}");
+        }
 
         let unstarted = hetzner(Stage::Ready, &server(&serde_json::json!({"lastStartedAt": null})));
         assert_eq!(spend(&unstarted, now).line, "€0.0240/h");
