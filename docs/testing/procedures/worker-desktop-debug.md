@@ -1,0 +1,307 @@
+---
+procedure: worker-desktop-debug
+feature: Debug Horizon on the cloud worker desktop (serve.py --worker-desktop)
+platforms: [linux]
+cost: rents compute
+destructive: yes
+secrets: [Hetzner API token file, SSH identity file]
+owner: peters
+---
+
+# Worker desktop debug test procedure
+
+## 1. Purpose
+
+This procedure makes sure that `serve.py --worker-desktop` builds and starts a
+debug Horizon on the desktop of a real cloud worker. It also makes sure of
+these items:
+
+- The low build priority keeps the browser panels of the cloud usable.
+- The debug Horizon writes nothing in `/workspace/home`, also not in
+  `/workspace/home/.horizon`.
+- The debug Horizon has no worker identity variables.
+- **Add desktop viewer** shows the debug Horizon, and the stop is clean.
+
+## 2. Applicability
+
+- Candidate: each change to `scripts/device-smoke/worker_desktop.py`,
+  `scripts/device-smoke/x11_windows.py`, the `--worker-desktop` branch of
+  `serve.py`, the `HORIZON_HOME` override or `HORIZON_AGENT_INTEGRATIONS`.
+- Platforms: a Hetzner quick start cloud, watched from a client Horizon in the
+  local fixture.
+- This procedure does not test: a RunPod worker, a GPU worker or a worker image
+  with a Rust toolchain. Task W02 installs the toolchain on the quick start worker.
+
+## 3. Safety
+
+> **CAUTION:** TASKS W01 TO W08 RENT A HETZNER SERVER AND A VOLUME. Hetzner
+> bills them until you delete them in W09.
+
+> **CAUTION:** DELETE ONLY THE CLOUD THAT THIS RUN MADE. Other clouds in the
+> same project can hold the work of other people.
+
+> **CAUTION:** DO NOT SHOW THE SETTINGS FILE, THE TOKEN FILE OR THE SSH KEY IN
+> EVIDENCE. Do not put the server address in public evidence.
+
+## 4. Equipment and preconditions
+
+- The [local device smoke fixture](../../../scripts/device-smoke/README.md),
+  started as a persistent launcher without `--ephemeral`, as in
+  [S02](cloud-panels/s-test-fixture.md#62-s02--start-the-persistent-launcher).
+- A Device panel that shows a live view of the fixture.
+- A client candidate in the fixture, with a cloud settings file that has a
+  Hetzner token file, the server type `cx43` and an SSH identity file.
+- A synthetic repository without `.horizon`, for example a clone of
+  `https://github.com/octocat/Hello-World`, in the private home of the fixture.
+- The candidate worktree, `<worktree>`, of the Horizon repository with its Git
+  LFS files.
+- A private evidence directory, `<evidence>`, and a private resource ledger.
+
+These names apply in the steps:
+
+| Name | Value |
+|---|---|
+| `<worker>` | The public address of the server, from the deployment record. |
+| `<identity>` | The SSH identity file of the cloud settings. |
+| `<tree>` | The copy of the candidate on the worker, `/workspace/worktrees/horizon-candidate`. |
+| `<state>` | The `state` value in the manifest of W04. |
+| `<second>` | The `started_at` value in the manifest of W08. |
+
+## 5. Setup
+
+1. Start the persistent launcher and the Device panel.
+
+   Result: The Device panel shows the client candidate.
+
+## 6. Tasks
+
+### 6.1 W01: Start a quick start cloud
+
+> **CAUTION:** THIS STEP RENTS A HETZNER SERVER AND A VOLUME. Hetzner bills
+> them until you delete them in W09.
+
+1. In the client, open **Cloud**, then **New cloud**. Select the synthetic
+   repository, **Quick start** and Hetzner. Start the cloud.
+
+   Result: The cloud card shows **Ready**. Write the server in the ledger.
+
+### 6.2 W02: Prepare the worker
+
+1. Install the build packages, the libraries that the window needs at run
+   time, and Rust as root.
+
+   ```sh
+   ssh -i <identity> root@<worker> 'apt-get update -qq && apt-get install -y -qq build-essential pkg-config libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev libgl-dev cmake nasm libxkbcommon-x11-0 libx11-xcb1 mesa-vulkan-drivers libgl1-mesa-dri libegl1 && curl -fsSL https://sh.rustup.rs | RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo sh -s -- -y --profile minimal --no-modify-path'
+   ```
+
+   Result: `/usr/local/cargo/bin/cargo` exists. Without `libxkbcommon-x11-0`,
+   the debug Horizon stops at start and the command reports that Horizon exited
+   before its window showed.
+
+2. Install the toolchain and the components that `rust-toolchain.toml` asks
+   for. The agent account cannot write `/usr/local/rustup`.
+
+   ```sh
+   ssh -i <identity> root@<worker> 'export RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo; /usr/local/cargo/bin/rustup default stable && /usr/local/cargo/bin/rustup component add rustfmt clippy && chmod -R a+rX /usr/local/rustup /usr/local/cargo'
+   ```
+
+   Result: The command shows no error.
+
+3. Give the sessions the toolchain.
+
+   ```sh
+   ssh -i <identity> root@<worker> 'printf "PATH_PREPEND=/usr/local/cargo/bin\nRUSTUP_HOME=/usr/local/rustup\nCARGO_HOME=/workspace/home/.cargo\n" > /etc/horizon-worker/session-env.d/20-rust.env && horizon-worker-session-env apply > /dev/null && echo valid'
+   ```
+
+   Result: The output is `valid`. If the image has no
+   `/etc/horizon-worker/session-env.d`, set `PATH`, `RUSTUP_HOME` and
+   `CARGO_HOME` with these values in the Shell panel of W04 before the command.
+
+4. Copy the candidate worktree without `target` and `.git` to `<tree>`, owned by
+   the agent account.
+
+   ```sh
+   tar -C <worktree> --exclude=./target --exclude=./.git -czf - . | ssh -i <identity> root@<worker> 'mkdir -p <tree> && tar -C <tree> -xzf - && chown -R 10001:10001 <tree>'
+   ```
+
+   Result: `<tree>/scripts/device-smoke/serve.py` exists on the worker.
+
+### 6.3 W03: Measure the browser panels before and during the build
+
+1. On the cloud card, add a Shell panel. In it, start the browser probe of the
+   evidence directory. The probe uses `horizon-browser mcp --connect`. It opens
+   a browser panel and measures `browser_navigate` and `browser_snapshot` every
+   two seconds.
+
+   Result: The probe writes one line for each measurement.
+
+2. Let the probe run for 60 seconds before the build.
+
+   Result: The baseline shows the normal times.
+
+### 6.4 W04: Start the worker desktop mode
+
+1. On the cloud card, add a second Shell panel. In it, start the command.
+
+   ```sh
+   cd <tree> && python3 scripts/device-smoke/serve.py --worker-desktop
+   ```
+
+   Result: The build starts. The probe continues. Most times stay near the
+   baseline. While the build writes to the workspace volume, some actions can
+   stop for some seconds, and one or two can fail with `host coordination timed
+   out`.
+
+2. Examine the priority of the build.
+
+   ```sh
+   ps -o pid,cls,cmd -C rustc | head; for p in $(pgrep -x rustc | head -3); do awk '{print $1, "nice=" $19}' /proc/$p/stat; ionice -p $p; done
+   ```
+
+   Result: `CLS` is `IDL`, each process shows `nice=19`, and `ionice` shows
+   `idle`. `ps` shows the nice value of the idle class as `-`.
+
+3. Wait for the manifest line.
+
+   Result: The Shell panel shows one JSON line. `window` is `true`. `build`
+   names `$HORIZON_SESSION_DIR/target/device-smoke`.
+
+4. Stop the probe and keep its output in `<evidence>`.
+
+   Result: The probe output covers the baseline and the full build.
+
+### 6.5 W05: Examine the debug Horizon
+
+Do these steps in a Shell panel of the cloud. With agent isolation, root over
+SSH cannot read `/proc/<pid>` of the agent account's processes.
+
+1. Compare the hash of the running executable with the manifest.
+
+   ```sh
+   sha256sum /proc/<pid>/exe; cat <state>/bin/SHA256SUMS
+   ```
+
+   Result: The two hashes are the same.
+
+2. Examine the environment of the debug Horizon.
+
+   ```sh
+   tr '\0' '\n' < /proc/<pid>/environ | cut -d= -f1 | grep -E '^(HORIZON|ANTHROPIC|WAYLAND|HOME|DISPLAY)' | sort
+   ```
+
+   Result: The names are `DISPLAY`, `HOME`, `HORIZON_AGENT_INTEGRATIONS`,
+   `HORIZON_HOME` and `HORIZON_SESSION_DIR`. With agent isolation,
+   `HORIZON_UNPRIVILEGED` and `HORIZON_WORKER_SELF_STOP_AVAILABLE` can also
+   show; the worker scripts read them, Horizon does not. No worker identity
+   name and no `ANTHROPIC` or `WAYLAND` name shows.
+
+3. Examine the value of the switch.
+
+   ```sh
+   tr '\0' '\n' < /proc/<pid>/environ | grep '^HORIZON_AGENT_INTEGRATIONS='
+   ```
+
+   Result: The output is `HORIZON_AGENT_INTEGRATIONS=off`.
+
+### 6.6 W06: Take the screenshots
+
+1. Call the MCP tool `device_screenshot` of the `horizon-device` server in
+   `/workspace/agent-mcp.json`. Its target is `cloud-desktop`.
+
+   Result: The image shows the debug Horizon window.
+
+2. On the cloud card, choose **Add desktop viewer**.
+
+   Result: The viewer in the client shows the debug Horizon window. Clicks in
+   the viewer do nothing, because the cloud desktop is read-only.
+
+### 6.7 W07: Stop the debug Horizon
+
+1. Press Ctrl-C in the second Shell panel.
+
+   Result: The debug Horizon window closes in less than 15 seconds. The command
+   ends. No process from `<state>/bin/horizon` runs.
+
+### 6.8 W08: Make sure that a launch writes nothing in the home
+
+The browser probe of W03 changes `/workspace/home/.horizon` itself. For this
+reason, this task starts the frozen binary again after the probe stopped. Do
+not use other panels or agents of the cloud during this task, because they can
+also write in `/workspace/home`.
+
+1. Record the worker home.
+
+   ```sh
+   ssh -i <identity> root@<worker> 'find /workspace/home -printf "%P %y %s %T@\n" | sort; find /workspace/home/.horizon -type f -print0 | sort -z | xargs -0 sha256sum' > <evidence>/home-before.txt
+   ```
+
+   Result: The file lists the worker home and the hashes of
+   `/workspace/home/.horizon`.
+
+2. In the second Shell panel, start the frozen binary of W04 without a build.
+
+   ```sh
+   cd <tree> && python3 scripts/device-smoke/serve.py --worker-desktop --horizon <state>/bin/horizon
+   ```
+
+   Result: The Shell panel shows one JSON line. `build` is `null`. Write its
+   `started_at` value as `<second>`.
+
+3. Wait 30 seconds, then press Ctrl-C.
+
+   Result: The window closes and the command ends.
+
+4. Look for changed files in the worker home.
+
+   ```sh
+   ssh -i <identity> root@<worker> 'find /workspace/home -newermt "<second>"'
+   ```
+
+   Result: The output is empty. The debug Horizon wrote no Horizon skill,
+   plugin, lease, MCP registration, desktop entry or shell history, and no file
+   in `/workspace/home/.horizon`.
+
+5. Record the worker home again into `<evidence>/home-after.txt` with the
+   command of step 1, and compare the two files.
+
+   ```sh
+   diff <evidence>/home-before.txt <evidence>/home-after.txt
+   ```
+
+   Result: The output is empty.
+
+### 6.9 W09: Delete the cloud
+
+> **CAUTION:** DELETE ONLY THE CLOUD OF THIS RUN.
+
+1. On the cloud card, open **Manage** and choose **Delete cloud resources**.
+
+   Result: The card shows that the cloud is deleted.
+
+2. List the servers, volumes, SSH keys and networks of the Hetzner project.
+
+   Result: No resource of this run shows.
+
+## 7. Pass criteria
+
+- The build runs at nice 19 in the idle classes, in `$HORIZON_SESSION_DIR`.
+- During the build, most browser probe times stay near the baseline. Stops of
+  some seconds while the build writes to the volume are known.
+- The running executable has the frozen hash. No worker identity variable shows.
+- `device_screenshot` and **Add desktop viewer** show the debug Horizon.
+- With the probe stopped, a launch of the debug Horizon changed nothing in
+  `/workspace/home`.
+- Ctrl-C closes the window and ends the command.
+- No resource of the run stays in the Hetzner project.
+
+## 8. Cleanup
+
+1. Stop the persistent launcher with Ctrl-C.
+
+   Result: The fixture removes its private data.
+
+## 9. Record of results
+
+If the run must be kept, write a report in `docs/testing/reports/` with
+[the report template](../reports/TEMPLATE.md). If not, put the results in the
+pull request. Keep private evidence out of the repository.

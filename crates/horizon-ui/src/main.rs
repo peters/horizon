@@ -1,5 +1,6 @@
 #![deny(unsafe_code)]
 
+mod agent_integrations;
 mod agent_work_hook;
 mod app;
 mod badge;
@@ -32,6 +33,7 @@ mod usage_widget;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
+use agent_integrations::AgentIntegrations;
 use app::HorizonApp;
 use std::sync::Arc;
 
@@ -65,7 +67,8 @@ fn main() -> eframe::Result {
         return Ok(());
     }
 
-    let _agent_plugin_host = plugin_install::install_agent_plugins(&horizon_home);
+    let agent_integrations = AgentIntegrations::from_environment();
+    let _agent_plugin_host = agent_integrations.install_plugins(&horizon_home);
 
     let cli_args = match parse_cli_args(std::env::args().skip(1)) {
         Ok(args) => args,
@@ -82,7 +85,7 @@ fn main() -> eframe::Result {
         plugin_install::exit_after_releasing_plugins(code);
     }
     #[cfg(target_os = "linux")]
-    linux_desktop::install();
+    agent_integrations.install_desktop_entry();
     let config = load_config_or_default(&resolved_config_path);
     let session_store = SessionStore::new(horizon_home.clone(), resolved_config_path.clone());
     let startup = prepare_startup(&session_store, &config, &cli_args);

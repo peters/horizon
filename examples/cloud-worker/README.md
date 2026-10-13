@@ -681,6 +681,24 @@ private between the sessions of one worker, because all agents run as the same u
 The person who drops the files supplies their names, sizes and contents. Horizon does
 not examine the contents.
 
+### A debug Horizon on the worker desktop
+
+To build Horizon in a session and show it on the worker desktop, run
+`python3 scripts/device-smoke/serve.py --worker-desktop` in the Horizon checkout.
+The [worker desktop runbook](../../scripts/device-smoke/README.md#horizon-on-a-cloud-worker-desktop)
+gives the details. The command builds into `$HORIZON_SESSION_DIR/target/device-smoke`
+at idle priority and starts the frozen binary on `:99`. The app keeps its state in
+`$HORIZON_SESSION_DIR/worker-desktop/`, through `HORIZON_HOME`. It never writes
+`/workspace/home/.horizon`, which is the root of the browser service. With
+`HORIZON_AGENT_INTEGRATIONS=off` it installs no agent skills, plugins, MCP
+registrations or desktop entry in `/workspace/home`, which the worker's own agents
+use. The build writes to the workspace volume and can stop browser panels for some
+seconds; the runbook shows how to build on the container's own disk. The command
+removes the worker identity variables from the app's environment. A person watches
+the app through **Add desktop viewer**, which an agent cannot create. The desktop is
+shared by all sessions and is read-only: x11vnc runs with `-viewonly`, so the person
+cannot click in the app.
+
 ## Claude Code first-run dialogs
 
 A worker is a disposable container whose person has already chosen to run Claude Code in
