@@ -46,7 +46,8 @@ pub enum Renewal {
     NotDue,
     Renewed,
     /// `OpenAI` refused the refresh token for good, for example because a worker spent it
-    /// while this computer was away; the login was removed and needs a new sign-in.
+    /// while this computer was away. The login stays on this computer, marked unusable and
+    /// never given to a worker, until a later renewal from a worker or a new sign-in.
     SignInAgain,
 }
 

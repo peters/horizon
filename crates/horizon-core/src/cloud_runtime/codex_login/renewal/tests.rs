@@ -303,3 +303,41 @@ fn a_sync_without_a_login_asks_no_cloud_and_forgets_removed_ones() {
     assert_eq!(renewal, Renewal::NoLogin);
     assert_eq!(delivered.keys().collect::<Vec<_>>(), ["cloud-a"]);
 }
+
+/// Runs the real install script against a local stand-in for the worker's home.
+#[cfg(unix)]
+#[test]
+fn a_refused_login_is_not_given_but_a_worker_renewal_still_comes_back() {
+    use std::process::Command;
+    let home = home_with(&login(NOW, NOW + 3600));
+    let (url, _request) = server(400, r#"{"error":"invalid_grant"}"#);
+    renew_with(home.path(), &url, at(NOW + 3500), &Cancellation::default()).unwrap();
+    let worker = tempfile::tempdir().unwrap();
+    let installed = worker.path().join(".codex/auth.json");
+    let cancel = Cancellation::default();
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &|_| {},
+        secrets: Vec::new(),
+    };
+    let install = || {
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg(super::super::install_script(worker.path().to_str().unwrap()));
+        command
+    };
+    // A worker without a login gets nothing.
+    super::super::exchange(home.path(), &mut install(), &runner).unwrap();
+    assert!(!installed.exists());
+    // A worker's own later renewal is not replaced, and it makes the login here usable.
+    let mut value: serde_json::Value = serde_json::from_slice(&login(NOW + 3000, NOW + 3000 + 10 * DAY)).unwrap();
+    value["last_refresh"] = "2027-01-15T09:00:00Z".into();
+    let renewal = serde_json::to_vec(&value).unwrap();
+    std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
+    std::fs::write(&installed, &renewal).unwrap();
+    super::super::exchange(home.path(), &mut install(), &runner).unwrap();
+    assert_eq!(std::fs::read(&installed).unwrap(), renewal);
+    assert_eq!(std::fs::read(home.path().join(FILE)).unwrap(), renewal);
+    assert!(super::super::account(home.path()).unwrap().is_some());
+}

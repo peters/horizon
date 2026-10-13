@@ -120,6 +120,44 @@ class CodexLoginInstallTests(unittest.TestCase):
         finally:
             codex.close()
 
+    def test_without_an_incoming_login_the_worker_login_is_only_returned(self):
+        self.assertEqual(install(self.home, b""), b"")
+        self.assertFalse(self.path.exists())
+        current = login()
+        self.existing(current)
+        self.path.chmod(0o644)
+        self.assertEqual(install(self.home, b""), current)
+        self.assertEqual(self.path.read_bytes(), current)
+        self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
+        self.existing(b"{half")
+        self.assertEqual(install(self.home, b""), b"")
+
+    def test_a_kept_worker_renewal_is_made_private(self):
+        renewed = login(refreshed="2026-10-02T08:00:00Z", token="synthetic-b")
+        self.existing(renewed)
+        self.path.chmod(0o644)
+        self.assertEqual(install(self.home, login(), settle=lambda: None), renewed)
+        self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
+
+    def test_a_renewal_that_codex_starts_writing_late_is_kept(self):
+        self.existing(login())
+        renewed = login(refreshed="2026-10-02T08:00:00Z", token="synthetic-b")
+        incoming = login(refreshed="2026-10-01T09:00:00Z", token="synthetic-c")
+        codex = self.path.open("r+b")
+        calls = []
+        try:
+            def write_on_the_fourth_wait():
+                calls.append(None)
+                if len(calls) == 4:
+                    codex.seek(0)
+                    codex.truncate()
+                    codex.write(renewed)
+                    codex.flush()
+            self.assertEqual(install(self.home, incoming, settle=write_on_the_fourth_wait), renewed)
+            self.assertEqual(self.path.read_bytes(), renewed)
+        finally:
+            codex.close()
+
     def test_time_zones_compare_as_instants(self):
         self.existing(login(refreshed="2026-10-01T10:00:01+02:00", token="synthetic-b"))
         incoming = login(refreshed="2026-10-01T08:00:00Z")
@@ -129,7 +167,6 @@ class CodexLoginInstallTests(unittest.TestCase):
         current = login()
         self.existing(current)
         for incoming in (
-            b"",
             b"not json",
             json.dumps({"auth_mode": "apikey", "OPENAI_API_KEY": "synthetic"}).encode(),
             json.dumps({"auth_mode": "chatgpt", "tokens": {"access_token": "synthetic"}}).encode(),

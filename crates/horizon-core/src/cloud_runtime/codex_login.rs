@@ -228,13 +228,24 @@ fn exchange(home: &Path, install: &mut Command, runner: &Runner<'_>) -> Result<(
     let Some(local) = read(home)? else {
         return Ok(());
     };
-    let reply = runner.private_exchange(install, &local.bytes, Duration::from_secs(30))?;
+    // A login that OpenAI refused is not given to the worker; the worker only shows its own,
+    // which may be a later renewal that makes the login here usable again.
+    let given: &[u8] = if renewal::marked_refused(home, &local) {
+        &[]
+    } else {
+        &local.bytes
+    };
+    let reply = runner.private_exchange(install, given, Duration::from_secs(30))?;
     adopt(home, &Zeroizing::new(reply))
 }
 
 /// Keeps `reply`, the login the worker holds now, when it renews the login here. The login
 /// here is read again: a sign-in that finished meanwhile is newer and stays.
 fn adopt(home: &Path, reply: &[u8]) -> Result<()> {
+    // A worker asked only to show its login may have none.
+    if reply.is_empty() {
+        return Ok(());
+    }
     let remote = Login::parse(reply).ok_or(Error::Invalid("The worker returned an invalid ChatGPT login"))?;
     if read(home)?.is_some_and(|current| remote.renews(&current)) {
         write_private(home, reply)?;
