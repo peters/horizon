@@ -70,8 +70,8 @@ impl RunPod {
     /// Reports which image of the replacement the provider records for the worker.
     /// A worker with a CPU workspace `volume` is also read through the current API,
     /// and the replacement settles only when both observations report the same image.
-    /// A worker whose environment still selects the other side's capabilities is
-    /// unsettled too. `timeout` bounds the whole observation.
+    /// A worker whose environment still selects the other side's capabilities or idle
+    /// stop is unsettled too. `timeout` bounds the whole observation.
     /// # Errors
     /// `WorkerLost` when the provider no longer returns the worker; `IdentityMismatch`
     /// for a third image, a missing or different operation marker, or another mount.
@@ -92,7 +92,13 @@ impl RunPod {
         let worker = self
             .inspect_with_timeout(worker_id, cancel, timeout)?
             .ok_or(CloudError::WorkerLost)?;
-        let listed = identify(&worker, current, next)?;
+        let listed = match identify(&worker, current, next) {
+            Ok(side) => side,
+            Err(CloudError::IdentityMismatch) if lags_idle_stop(&worker, current, next) => {
+                return Ok(Observed::Unsettled);
+            }
+            Err(error) => return Err(error),
+        };
         // The image and the environment may not change at once; a worker that still
         // carries the other side's capabilities is not settled on this one.
         let spec = if listed == ImageSide::Next { next } else { current };
@@ -135,6 +141,21 @@ fn identify(worker: &Worker, current: &WorkerSpec, next: &WorkerSpec) -> Result<
         return Err(CloudError::IdentityMismatch);
     }
     Ok(side)
+}
+
+/// Whether the worker reports one image of the pair with the other side's idle stop
+/// and is otherwise that side's: the update may switch the image before the environment.
+fn lags_idle_stop(worker: &Worker, current: &WorkerSpec, next: &WorkerSpec) -> bool {
+    let Some(side) = ImageSide::of(&worker.image_name, current, next) else {
+        return false;
+    };
+    let (spec, other) = match side {
+        ImageSide::Previous => (current, next),
+        ImageSide::Next => (next, current),
+    };
+    let mut lagging = spec.clone();
+    lagging.profile.idle_stop_minutes = other.profile.idle_stop_minutes;
+    worker.env.get("HORIZON_CLOUD_OPERATION") == Some(&current.operation_id) && worker.verify(&lagging).is_ok()
 }
 
 /// Whether the worker's environment selects `spec`'s capabilities. A worker created

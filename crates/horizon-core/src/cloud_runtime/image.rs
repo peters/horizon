@@ -292,7 +292,8 @@ pub fn build_arguments(capabilities: &Capabilities, releases: &agents::Releases)
 /// settings (`Profile::with_rebuild_settings`), some of which reach the worker only with
 /// the image's switch. So a rebuild that changes them makes another image, which the
 /// provider tells apart from the worker's current one, while a cached build with the same
-/// settings keeps its digest. Nothing in it is secret: the worker's environment has it too.
+/// settings keeps its digest. It holds only committed profile values: the capabilities
+/// without hosted devices, the readiness timeout, the idle stop and the build paths.
 fn settings_label(profile: &Profile) -> [String; 2] {
     // Hosted devices are fixed at creation, and their names stay out of public metadata.
     let capabilities = Capabilities {

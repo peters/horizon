@@ -402,6 +402,36 @@ fn a_worker_on_the_new_image_with_the_previous_capabilities_is_not_settled() {
 }
 
 #[test]
+fn a_worker_on_one_image_with_the_other_idle_stop_is_not_settled() {
+    let current = spec();
+    let mut next = next(&current);
+    next.profile.idle_stop_minutes = Some(30);
+    let idle = |on: &WorkerSpec, minutes: Option<&str>| {
+        let mut value = pod(&current, on);
+        if let Some(minutes) = minutes {
+            value["env"]["HORIZON_IDLE_STOP_MINUTES"] = json!(minutes);
+        }
+        value
+    };
+    for (inspected, expected) in [
+        (idle(&next, None), Ok(Observed::Unsettled)),
+        (idle(&next, Some("30")), Ok(Observed::Next)),
+        (idle(&current, None), Ok(Observed::Previous)),
+        (idle(&current, Some("30")), Ok(Observed::Unsettled)),
+        // An idle stop of neither side is not this replacement's.
+        (idle(&next, Some("45")), Err(())),
+    ] {
+        let (provider, _requests, task) = server(vec![(200, inspected.to_string())]);
+        let observed = observe(&provider, &current, &next, None);
+        task.join().unwrap();
+        match expected {
+            Ok(expected) => assert_eq!(observed.unwrap(), expected),
+            Err(()) => assert!(matches!(observed, Err(CloudError::IdentityMismatch)), "{observed:?}"),
+        }
+    }
+}
+
+#[test]
 fn observation_reports_the_recorded_image_of_the_pair() {
     let current = spec();
     let next = next(&current);
