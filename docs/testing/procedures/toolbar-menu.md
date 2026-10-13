@@ -29,7 +29,7 @@ narrow window.
     dialog procedure tests them with a cloud account.
   - A build or computer where cloud workspaces are not ready. Then the button
     shows **PC ▾**, makes a workspace on this computer, and the **Cloud** row is
-    dimmed. The unit tests of the place menu cover it.
+    dimmed. The unit tests of the toolbar cover it.
   - The words that a screen reader speaks. The unit tests of the menu rows
     check that a row gives its title, description, note and shortcut.
 

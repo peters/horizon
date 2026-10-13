@@ -113,3 +113,48 @@ fn the_toolbar_split_button_makes_a_cloud_workspace_or_opens_the_place_menu() {
     assert!(!app.cloud_prototype.production.creating, "This PC opens no dialog");
     assert_eq!(app.board.workspaces.len(), workspaces + 1);
 }
+
+#[test]
+fn without_cloud_workspaces_the_toolbar_makes_a_this_pc_workspace_and_offers_no_cloud() {
+    let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    app.root_viewport_stabilizer = None;
+    let _existing = app.board.create_workspace("existing workspace");
+    for _ in 0..2 {
+        frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    }
+    // Startup makes cloud workspaces ready; this computer has none.
+    app.cloud_prototype.ready = false;
+    let workspaces = app.board.workspaces.len();
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    let create = label_position(&output, "+  New workspace");
+    let place = label_position(&output, "PC");
+    click(&ctx, &mut app, create);
+    assert!(
+        !app.cloud_prototype.production.creating,
+        "no New cloud without cloud workspaces"
+    );
+    assert_eq!(app.board.workspaces.len(), workspaces + 1, "a This PC workspace");
+
+    click(&ctx, &mut app, place);
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    let cloud = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            Shape::Text(text) if text.galley.job.text == "Cloud" => {
+                Some(Rect::from_min_size(text.pos, text.galley.size()).center())
+            }
+            _ => None,
+        })
+        // Below the toolbar: the place menu's row.
+        .find(|position| position.y > place.y + 20.0)
+        .expect("a Cloud row in the place menu");
+    click(&ctx, &mut app, cloud);
+    assert!(
+        !app.cloud_prototype.production.creating,
+        "the dimmed Cloud row does nothing"
+    );
+    assert_eq!(app.board.workspaces.len(), workspaces + 1);
+}
