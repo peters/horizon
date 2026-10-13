@@ -236,7 +236,10 @@ impl Host {
                     ..CloudViewResponse::default()
                 },
             },
-            CloudViewRequest::Poll { id, after, commands } => {
+            // This service predates uploads, so it ignores upload polls and refuses parts.
+            CloudViewRequest::Poll {
+                id, after, commands, ..
+            } => {
                 if commands.len() > 128 {
                     return CloudViewResponse {
                         error: Some("Too many browser inputs".into()),
@@ -258,6 +261,10 @@ impl Host {
                 }
                 self.snapshot(&id, after)
             }
+            CloudViewRequest::Stage(_) => CloudViewResponse {
+                error: Some("This cloud browser does not accept uploads".into()),
+                ..CloudViewResponse::default()
+            },
             CloudViewRequest::Close { id } => match self.close(&id) {
                 Ok(()) => CloudViewResponse {
                     closed: vec![id],
@@ -508,9 +515,24 @@ mod tests {
             id: "lost".into(),
             after: 0,
             commands: Vec::new(),
+            uploads: Some(horizon_browser_protocol::cloud_view::CloudUploadPoll::default()),
         });
         assert!(polled.error.is_none());
         assert!(polled.browsers[0].lost);
+        assert!(polled.browsers[0].uploads.is_none());
+        let staged = host.request(CloudViewRequest::Stage(
+            horizon_browser_protocol::cloud_view::CloudStageChunk {
+                id: "lost".into(),
+                batch: "b1".into(),
+                name: "notes.txt".into(),
+                size: 0,
+                offset: 0,
+                data: String::new(),
+                sha256: None,
+            },
+        ));
+        assert!(staged.error.as_deref().unwrap().contains("does not accept uploads"));
+        assert!(staged.staged.is_none());
         assert!(
             host.request(CloudViewRequest::Open {
                 id: "../lost".into(),
