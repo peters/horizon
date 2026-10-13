@@ -448,7 +448,7 @@ class Lane:
         return time.monotonic() - self.begun > ENTRY_LIMIT_SECONDS * len(self.entries)
 
     def stop(self, reason):
-        if self.running():
+        if self.process is None or self.running():
             self.reason = self.reason or reason
         if self.process is not None:
             stop_session(self.process)
