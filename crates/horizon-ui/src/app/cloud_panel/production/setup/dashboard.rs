@@ -70,7 +70,8 @@ pub(super) fn hetzner_key(draft: &Draft) -> Key {
     }
 }
 
-/// The key a selected agent needs, or `None` when it signs in with its own subscription.
+/// The key a selected agent needs, or `None` when it signs in instead: Codex with this
+/// computer's `ChatGPT` login, Claude with its own subscription on the worker.
 pub(super) fn agent_key(draft: &Draft, agent: Agent) -> Option<Key> {
     let (mode, typed, file) = match agent {
         Agent::Codex => (
@@ -125,6 +126,8 @@ pub(super) fn agents_status(draft: &Draft, fixed_agents: bool) -> (Tone, &'stati
         }
     } else if keys.iter().any(|(_, key)| *key == Key::Missing) {
         (Tone::Attention, "Needs a key")
+    } else if draft.needs_chatgpt() {
+        (Tone::Attention, "Sign in to ChatGPT")
     } else if keys.iter().any(|(_, key)| *key == Key::Unsaved) {
         (Tone::Attention, "Unsaved key")
     } else {
@@ -161,9 +164,17 @@ impl Readiness {
         let agents = agent_keys(draft);
         if let Some((agent, _)) = agents.iter().find(|(_, key)| *key == Key::Missing) {
             return attention(format!(
-                "Paste the {} API key, or choose subscription login.",
-                agent_name(*agent)
+                "Paste the {} API key, or choose {}.",
+                agent_name(*agent),
+                if *agent == Agent::Codex {
+                    "ChatGPT sign-in"
+                } else {
+                    "subscription login"
+                },
             ));
+        }
+        if draft.needs_chatgpt() {
+            return attention("Sign in with ChatGPT so each cloud starts Codex signed in.".into());
         }
         if runpod == Key::Unsaved || hetzner == Key::Unsaved || agents.iter().any(|(_, key)| *key == Key::Unsaved) {
             return attention("Save settings to keep the new key on this computer.".into());
@@ -348,6 +359,7 @@ pub(super) fn page(ui: &mut Ui, state: &mut State) -> Option<Action> {
         ssh_ready,
         required_agents,
         github,
+        chatgpt,
         needed,
         ..
     } = state;
@@ -358,7 +370,7 @@ pub(super) fn page(ui: &mut Ui, state: &mut State) -> Option<Action> {
     ui.spacing_mut().item_spacing = vec2(GAP, GAP);
     if ui.available_width() < STACKED_BELOW {
         fields::providers(ui, draft, edits);
-        fields::agents(ui, draft, edits, fixed_agents);
+        fields::agents(ui, draft, edits, chatgpt, fixed_agents);
         super::github::card(ui, draft, github);
         action = registry::card(ui, draft, verified, needed);
         fields::workspace(ui, draft, *ssh_ready, &readiness);
@@ -367,7 +379,7 @@ pub(super) fn page(ui: &mut Ui, state: &mut State) -> Option<Action> {
             columns[0].spacing_mut().item_spacing.y = GAP;
             columns[1].spacing_mut().item_spacing.y = GAP;
             fields::providers(&mut columns[0], draft, edits);
-            fields::agents(&mut columns[0], draft, edits, fixed_agents);
+            fields::agents(&mut columns[0], draft, edits, chatgpt, fixed_agents);
             super::github::card(&mut columns[1], draft, github);
             action = registry::card(&mut columns[1], draft, verified, needed);
             fields::workspace(&mut columns[1], draft, *ssh_ready, &readiness);

@@ -1,4 +1,5 @@
 //! Machine account form; filesystem work and key generation run outside rendering.
+mod chatgpt;
 mod dashboard;
 mod fields;
 mod github;
@@ -94,6 +95,7 @@ pub(in crate::app::cloud_panel) struct State {
     /// Whether the dialog has been measured since it opened, in case the window changed size.
     measured: bool,
     github: github::Card,
+    chatgpt: chatgpt::Card,
     needed: needed::Needed,
 }
 
@@ -161,9 +163,13 @@ impl State {
             |ui| {
                 let save = ui
                     .add_enabled(
-                        // A Connect GitHub flow under way saves the app itself; Save would close
-                        // the form before its outcome shows. Cancel ends that flow.
-                        self.draft.is_some() && self.receiver.is_none() && !self.github.connecting(),
+                        // A Connect GitHub flow under way saves the app itself, and a ChatGPT
+                        // sign-in keeps its own login; Save would close the form before their
+                        // outcome shows. Cancel ends them.
+                        self.draft.is_some()
+                            && self.receiver.is_none()
+                            && !self.github.connecting()
+                            && !self.chatgpt.busy(),
                         egui::Button::new(if self.continue_creation {
                             "Save and start"
                         } else {

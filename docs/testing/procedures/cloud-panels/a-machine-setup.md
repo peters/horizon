@@ -210,8 +210,8 @@ setting must open a repair form.
 
 2. Select **Codex** and **Claude**.
 
-   Result: The card shows a sign-in choice for each agent: **API key** or
-   **Subscription login**.
+   Result: The card shows a sign-in choice for each agent: **API key**, and
+   **ChatGPT sign-in** for Codex or **Subscription login** for Claude.
 
 3. For Claude, select **API key**.
 
@@ -224,7 +224,9 @@ setting must open a repair form.
 
    Result: The field shows a masked value.
 
-5. For Codex, select **API key** or **Subscription login**, as the test plan tells you.
+5. For Codex, select **API key** or **ChatGPT sign-in**, as the test plan tells you.
+   For **ChatGPT sign-in**, do the
+   [Sign in with ChatGPT procedure](../codex-chatgpt-sign-in.md) task C03.
 
    Result: The card shows the choice.
 

@@ -1,4 +1,4 @@
-"""Remove unbound worker API credentials without deleting subscription login state."""
+"""Remove unbound worker API credentials without deleting ChatGPT or subscription logins."""
 import json
 from pathlib import Path
 import sys
@@ -18,7 +18,10 @@ def clear_api_auth(root, anthropic, openai, workspace):
             return
         if not isinstance(auth, dict):
             raise ValueError("Invalid agent authentication record")
-        if auth.get("auth_mode") == "apikey" or auth.get("OPENAI_API_KEY"):
+        # A ChatGPT login can carry an API key from its own token exchange; it stays. Any
+        # other record with an API key is an unbound key and goes.
+        mode = auth.get("auth_mode")
+        if mode == "apikey" or (mode != "chatgpt" and auth.get("OPENAI_API_KEY")):
             path.unlink()
 
 

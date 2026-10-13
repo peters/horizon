@@ -133,7 +133,14 @@ fn keep_saved(ui: &mut Ui) -> bool {
     clicked
 }
 
-pub(super) fn agents(ui: &mut Ui, draft: &mut Draft, edits: &mut Edits, fixed_agents: bool) {
+pub(super) fn agents(
+    ui: &mut Ui,
+    draft: &mut Draft,
+    edits: &mut Edits,
+    chatgpt: &mut super::chatgpt::Card,
+    fixed_agents: bool,
+) {
+    chatgpt.poll(ui, &mut draft.chatgpt);
     let status = dashboard::agents_status(draft, fixed_agents);
     surface(ui, |ui| {
         header(
@@ -143,6 +150,7 @@ pub(super) fn agents(ui: &mut Ui, draft: &mut Draft, edits: &mut Edits, fixed_ag
             Some(status),
         );
         let selected_agents = draft.selected_agents().to_vec();
+        let root = draft.root().to_owned();
         let [codex, claude] = &mut edits.agents;
         for (agent, name, mode, value, saved, replacing) in [
             (
@@ -185,13 +193,24 @@ pub(super) fn agents(ui: &mut Ui, draft: &mut Draft, edits: &mut Edits, fixed_ag
                     }
                 }
                 if !selected {
+                    if agent == Agent::Codex {
+                        chatgpt.cancel_sign_in();
+                    }
                     return;
                 }
                 ui.horizontal_wrapped(|ui| {
                     ui.selectable_value(mode, Authentication::ApiKey, "API key");
-                    ui.selectable_value(mode, Authentication::Subscription, "Subscription login");
+                    let sign_in = if agent == Agent::Codex {
+                        "ChatGPT sign-in"
+                    } else {
+                        "Subscription login"
+                    };
+                    ui.selectable_value(mode, Authentication::Subscription, sign_in);
                 });
                 if *mode == Authentication::ApiKey {
+                    if agent == Agent::Codex {
+                        chatgpt.cancel_sign_in();
+                    }
                     if saved && value.is_empty() && !*replacing {
                         *replacing = saved_key(ui);
                     } else {
@@ -201,6 +220,8 @@ pub(super) fn agents(ui: &mut Ui, draft: &mut Draft, edits: &mut Edits, fixed_ag
                             *replacing = false;
                         }
                     }
+                } else if agent == Agent::Codex {
+                    super::chatgpt::section(ui, &root, &mut draft.chatgpt, chatgpt);
                 } else {
                     caption(
                         ui,

@@ -5,6 +5,7 @@ pub mod billing;
 pub mod bootstrap_initialization;
 pub mod bootstrap_recovery;
 pub mod browser_auth;
+pub mod codex_login;
 pub mod command;
 pub mod companions;
 pub mod cost;

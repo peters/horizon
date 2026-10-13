@@ -235,11 +235,13 @@ link, and how long it has run. No time left is shown for the whole clone: on
 that are known only at the end.
 
 Missing account settings open a repair form without losing the title or target
-workspace. Enter the compute API key and choose API-key or subscription login for
-the profile's agents. **Save and start** continues the submitted launch. A dedicated
+workspace. Enter the compute API key and choose how the profile's agents sign in:
+an API key, **ChatGPT sign-in** for Codex or subscription login for Claude.
+**Save and start** continues the submitted launch. A dedicated
 SSH identity is created when needed and keys stay in private machine-local files.
-Blank replacement fields preserve saved keys. Subscription login happens through
-the actual agent on the worker; worker readiness does not prove authentication.
+Blank replacement fields preserve saved keys. Subscription login for Claude happens
+through the actual agent on the worker; worker readiness does not prove authentication.
+See [Sign in with ChatGPT for Codex](#sign-in-with-chatgpt-for-codex).
 Open **Cloud > Cloud settings** to change machine defaults without launching.
 On narrow windows, Cloud appears in the toolbar overflow.
 
@@ -289,10 +291,10 @@ use a null `registry_pull_auth_id`. Optional `anthropic_api_key_file`,
 otherwise agents use their own interactive login. OpenAI authentication uses the
 agent CLI's supported `login --with-api-key` command with SSH stdin; credentials
 and login output are never included in command arguments or progress logs.
-Agent login state stays on the worker. Workspaces
-and profile names do not create separate credential sets.
+Agent login state stays on the worker, except the ChatGPT login that Horizon gives
+to Codex. Workspaces and profile names do not create separate credential sets.
 Reconnect removes unbound API-key files, including interrupted-upload staging
-files, while retaining supported subscription login state. Existing agent
+files, while retaining ChatGPT and subscription login state. Existing agent
 processes can retain authentication already loaded into memory or their
 environment; start a new session to apply the changed authentication choice.
 
@@ -300,6 +302,36 @@ Optional repository Git authentication uses explicit `git_credentials` bindings.
 With [Connect GitHub](#connect-github), a binding is a fallback for the
 repositories that the app does not reach. See the [worker credential setup](../examples/cloud-worker/README.md#optional-git-credentials)
 for private file permissions, repository matching, removal and token-scope limits.
+
+### Sign in with ChatGPT for Codex
+
+**ChatGPT sign-in** replaces the subscription login of Codex. In **Cloud settings**,
+choose **ChatGPT sign-in** for Codex and click **Sign in with ChatGPT** once. Horizon
+runs `codex login` from the Codex CLI on this computer, which opens the ChatGPT sign-in
+page in the browser. The login goes to a private Codex home,
+`~/.horizon/cloud/credentials/codex`, with file storage. Your own Codex login in
+`~/.codex` is not used or changed. The Codex CLI must be installed on this computer.
+
+Every deployment, reconnect, resume and rebuild of a cloud that runs Codex, without a
+bound OpenAI API key, then gives this login to the worker as
+`/workspace/home/.codex/auth.json`, mode 0600. The agent user owns it on a worker that
+isolates agents, and `root` owns it on a worker that does not. Codex on the worker
+starts signed in. The login goes over SSH standard input, never in a command line or a
+log.
+
+ChatGPT refresh tokens are single use. A worker that renewed its login while it was
+not connected keeps that renewal, and the renewal comes back to this computer and
+replaces the spent copy, so the next cloud gets it. Only a later renewal of the same
+account wins; a new sign-in here, also of another account, replaces the worker's login.
+When several clouds renew the same login at the same time, all but one fail with
+"refresh token was already used"; sign in again in **Cloud settings**, then reconnect
+those clouds. Do not run `codex logout` or `codex login` on a worker: both revoke the
+login that every cloud shares. **Sign out** in **Cloud settings** removes the login from
+this computer and revokes it when OpenAI can be reached; clouds keep working until their
+current access ends.
+
+Without a sign-in, Codex on a new cloud asks you to sign in in its own terminal, as
+before. A bound OpenAI API key takes precedence over the ChatGPT login.
 
 ### Connect GitHub
 

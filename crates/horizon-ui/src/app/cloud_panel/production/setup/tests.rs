@@ -425,6 +425,27 @@ fn registry_setup_rotation_and_status_share_the_machine_policy() {
     assert_eq!(rotated.retired, [original.generation]);
 }
 
+/// Gives the cloud root `root` a synthetic `ChatGPT` login for Codex, as a sign-in leaves it.
+fn sign_in_to_chatgpt(root: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let home = horizon_core::cloud_runtime::codex_login::home(root);
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let login = serde_json::json!({
+        "auth_mode": "chatgpt",
+        "tokens": {
+            "id_token": "synthetic",
+            "access_token": "synthetic-access",
+            "refresh_token": "synthetic-refresh",
+            "account_id": "synthetic-account",
+        },
+        "last_refresh": "2026-10-01T08:00:00Z",
+    });
+    let path = home.join("auth.json");
+    std::fs::write(&path, serde_json::to_vec(&login).unwrap()).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+
 fn bound_registry_draft(root: &std::path::Path) -> Draft {
     let mut draft = Draft::load(root).unwrap();
     *draft.runpod_key = "synthetic-compute".into();
@@ -454,6 +475,7 @@ fn validation() -> horizon_core::cloud_runtime::registry::Validation {
 fn readiness_names_the_first_thing_left_to_do() {
     use super::dashboard::{Readiness, Tone, Verified};
     let temp = tempfile::tempdir().unwrap();
+    sign_in_to_chatgpt(temp.path());
     let mut verified = Verified::new();
     let mut draft = Draft::load(temp.path()).unwrap();
     let first = Readiness::of(&draft, None, &verified, false);
@@ -509,6 +531,7 @@ fn an_agent_api_key_holds_the_banner_until_it_is_saved() {
     use super::dashboard::{Readiness, Tone, Verified, agents_status};
     use horizon_core::cloud_runtime::setup::Authentication;
     let temp = tempfile::tempdir().unwrap();
+    sign_in_to_chatgpt(temp.path());
     let mut first = Draft::load(temp.path()).unwrap();
     *first.runpod_key = "synthetic-compute".into();
     first.save().unwrap();
@@ -538,6 +561,40 @@ fn an_agent_api_key_holds_the_banner_until_it_is_saved() {
 }
 
 #[test]
+fn codex_on_chatgpt_sign_in_holds_the_banner_until_this_computer_signs_in() {
+    use super::dashboard::{Readiness, Tone, Verified, agents_status};
+    use horizon_core::cloud_runtime::setup::{Agent, Authentication};
+    let temp = tempfile::tempdir().unwrap();
+    let mut first = Draft::load(temp.path()).unwrap();
+    *first.runpod_key = "synthetic-compute".into();
+    first.save().unwrap();
+    let verified = Verified::new();
+    let mut draft = Draft::load(temp.path()).unwrap();
+    assert!(draft.openai_auth == Authentication::Subscription);
+    assert!(draft.needs_chatgpt());
+    let unsigned = Readiness::of(&draft, Some(true), &verified, false);
+    assert_eq!(unsigned.tone, Tone::Attention);
+    assert!(unsigned.cause.contains("Sign in with ChatGPT"));
+    assert_eq!(agents_status(&draft, false), (Tone::Attention, "Sign in to ChatGPT"));
+    // Not a Save error: a cloud without the login still lets Codex sign in on the worker.
+    assert!(draft.validate().is_ok());
+    // An API key, or no Codex at all, needs no sign-in.
+    draft.openai_auth = Authentication::ApiKey;
+    assert!(!draft.needs_chatgpt());
+    draft.openai_auth = Authentication::Subscription;
+    draft.settings.default_agents.retain(|agent| *agent != Agent::Codex);
+    assert!(!draft.needs_chatgpt());
+    sign_in_to_chatgpt(temp.path());
+    let signed_in = Draft::load(temp.path()).unwrap();
+    assert!(signed_in.chatgpt.is_some());
+    assert_eq!(
+        Readiness::of(&signed_in, Some(true), &verified, false).tone,
+        Tone::Ready
+    );
+    assert_eq!(agents_status(&signed_in, false), (Tone::Ready, "Ready"));
+}
+
+#[test]
 fn an_agentless_profile_needs_no_agent_to_be_ready() {
     use super::dashboard::{Readiness, Tone, Verified, agents_status};
     let temp = tempfile::tempdir().unwrap();
@@ -560,6 +617,7 @@ fn an_agentless_profile_needs_no_agent_to_be_ready() {
 fn a_registry_edit_or_a_lost_credential_holds_the_banner_even_with_a_saved_proof() {
     use super::dashboard::{Readiness, Tone, Verified};
     let temp = tempfile::tempdir().unwrap();
+    sign_in_to_chatgpt(temp.path());
     let mut draft = bound_registry_draft(temp.path());
     let binding = draft.registries[0].original.clone().unwrap();
     let mut verified = Verified::new();

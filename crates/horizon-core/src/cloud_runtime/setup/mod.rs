@@ -32,8 +32,12 @@ pub struct Draft {
     pub runpod_key: Zeroizing<String>,
     pub openai_key: Zeroizing<String>,
     pub anthropic_key: Zeroizing<String>,
+    /// `Subscription` signs Codex in with this computer's `ChatGPT` login, Claude in its own
+    /// terminal on the worker.
     pub openai_auth: Authentication,
     pub anthropic_auth: Authentication,
+    /// The account of this computer's `ChatGPT` login for Codex, if it has one.
+    pub chatgpt: Option<super::codex_login::Account>,
     pub registries: Vec<super::registry::draft::Draft>,
     /// Optional: Hetzner as a second provider for CPU clouds.
     pub hetzner: HetznerDraft,
@@ -71,6 +75,10 @@ impl Draft {
             profile_agents: None,
             openai_auth: authentication(settings.openai_api_key_file.as_ref()),
             anthropic_auth: authentication(settings.anthropic_api_key_file.as_ref()),
+            chatgpt: super::codex_login::account(&super::codex_login::home(root)).unwrap_or_else(|error| {
+                tracing::warn!(%error, "could not read the ChatGPT login for Codex");
+                None
+            }),
             registries: settings.registries.as_ref().map_or_else(Vec::new, |config| {
                 config
                     .bindings
@@ -85,6 +93,14 @@ impl Draft {
             openai_key: Zeroizing::new(String::new()),
             anthropic_key: Zeroizing::new(String::new()),
         })
+    }
+
+    /// Whether Codex is selected to sign in with `ChatGPT` and this computer has no login yet.
+    #[must_use]
+    pub fn needs_chatgpt(&self) -> bool {
+        self.selected_agents().contains(&Agent::Codex)
+            && self.openai_auth == Authentication::Subscription
+            && self.chatgpt.is_none()
     }
 
     /// Limit this repair to repository capabilities without replacing machine defaults.
@@ -297,7 +313,7 @@ fn authentication(binding: Option<&PathBuf>) -> Authentication {
 fn validate_input(value: &str, saved: Option<&PathBuf>) -> Result<()> {
     if value.is_empty() {
         return settings::validate_private_key_file(
-            saved.ok_or(Error::Invalid("Enter an API key or choose subscription login"))?,
+            saved.ok_or(Error::Invalid("Enter an API key or choose a sign-in instead"))?,
         );
     }
     let value = value.trim();
@@ -331,5 +347,6 @@ fn defaults(root: &Path) -> Settings {
         hetzner: None,
         github: None,
         placement: None,
+        codex_home: None,
     }
 }
