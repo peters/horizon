@@ -179,7 +179,7 @@ fn page_html(shared: &Shared, page: &str) -> String {
             rp: {{ name: "Horizon test relying party" }},
             user: {{ id: unb64u("{USER_ID}"), name: "user@localhost", displayName: "Test user" }},
             pubKeyCredParams: [{{ type: "public-key", alg: -7 }}],
-            authenticatorSelection: {{ residentKey: "required", userVerification: "preferred" }},
+            authenticatorSelection: {{ residentKey: "unknown-value", requireResidentKey: true, userVerification: "preferred" }},
             timeout: 60000,
         }} }});
         await report("create", {{

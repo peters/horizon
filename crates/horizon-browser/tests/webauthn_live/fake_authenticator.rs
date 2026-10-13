@@ -33,7 +33,12 @@ pub(crate) fn run(state: &Path) -> i32 {
         .append(true)
         .open(state.join("calls.log"))
     {
-        let _ = writeln!(log, "{op} {}", request["origin"].as_str().unwrap_or_default());
+        let _ = writeln!(
+            log,
+            "{op} {} {}",
+            request["origin"].as_str().unwrap_or_default(),
+            request["resident_key"].as_str().unwrap_or("-")
+        );
     }
     match std::fs::read_to_string(state.join("mode")).unwrap_or_default().trim() {
         "hang" => {

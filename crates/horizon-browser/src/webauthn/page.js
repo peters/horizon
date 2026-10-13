@@ -40,6 +40,7 @@
         for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
         return bytes.buffer;
     };
+    const residentKeys = ["discouraged", "preferred", "required"];
     const text = (value) => (value === undefined || value === null ? undefined : String(value));
     const timeoutOf = (value) =>
         Number.isFinite(value) && value >= 0 ? Math.min(Math.floor(value), 0xffffffff) : undefined;
@@ -76,7 +77,10 @@
                 .filter((parameter) => parameter && parameter.type === "public-key")
                 .map(algorithmOf),
             exclude_credentials: credentialIds(publicKey.excludeCredentials),
-            resident_key: text(selection.residentKey) || (selection.requireResidentKey ? "required" : undefined),
+            // An unknown residentKey counts as absent, so requireResidentKey applies.
+            resident_key: residentKeys.includes(selection.residentKey)
+                ? selection.residentKey
+                : selection.requireResidentKey ? "required" : undefined,
             user_verification: text(selection.userVerification),
             timeout: timeoutOf(publicKey.timeout),
         };

@@ -100,6 +100,11 @@ fn run_engine(backend: BackendKind) {
     navigate(&session, &rp.url("/create"));
     let created = rp.wait_report("create", REPORT_TIMEOUT, &session);
     assert_eq!(created.verdict, "verified", "create: {created:?}");
+    let log = std::fs::read_to_string(state.join("calls.log")).unwrap_or_default();
+    assert!(
+        log.lines().next().is_some_and(|line| line.ends_with(" required")),
+        "an unknown residentKey must fall back to requireResidentKey: {log}"
+    );
 
     navigate(&session, &rp.url("/get"));
     let asserted = rp.wait_report("get", REPORT_TIMEOUT, &session);
