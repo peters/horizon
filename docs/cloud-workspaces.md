@@ -782,9 +782,11 @@ For the default launch path, commit `.horizon/cloud.yml` using the
 
 ### Settings from the working copy
 
-**New cloud** reads `.horizon/cloud.yml` when it opens. It reads the file again
-when you save it, and when the checked-out commit changes. You do not have to
-commit an edit of the size or the provider before you start a cloud.
+**New cloud** reads `.horizon/cloud.yml` when it opens. While **Committed base
+revision** is empty, it reads the file again when you save it, and when the
+checked-out commit changes. You do not have to commit an edit of the size or the
+provider before you start a cloud. If a read fails for a cause outside the file,
+for example a Git lock, click **Try again**.
 
 When **Committed base revision** is the checked-out commit (`HEAD` is the
 default), **New cloud** uses the working copy of the file, also when the file is
@@ -809,6 +811,9 @@ These rules apply:
   used until you commit them.`
 - When the working copy has no `.horizon/cloud.yml`, or the file is not valid,
   **New cloud** uses the committed file and says so.
+- When the committed file is not valid, **New cloud** shows the error, also if
+  the working copy is valid. The worker gets its source settings from the
+  commit, thus commit a valid file first.
 - When the working copy changes a profile in a way that does not agree with the
   committed build settings, for example hosted devices on a Hetzner profile,
   **New cloud** uses the committed file and says so.

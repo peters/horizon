@@ -601,6 +601,13 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
         ui.add_space(12.0);
         machine(ui, form)
     } else {
+        // A read that failed for a reason outside the file, such as a Git lock, is retried
+        // here: the checkout may not change again to start one.
+        let failed =
+            !form.launch.unconfigured && form.launch.read_error.is_none() && !form.repository.trim().is_empty();
+        if failed && ui.button("Try again").clicked() {
+            action = RepositoryAction::Load;
+        }
         false
     };
     // Siblings can hold back Start, so they stay in view.
@@ -670,16 +677,6 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production) -> RepositoryAction {
     )
     .changed();
     ui.label(RichText::new(REVISION_NOTE).size(12.0).color(theme::FG_SOFT()));
-    // A read that failed for a reason outside the file, such as a Git lock, is retried
-    // here: the checkout may not change again to start one.
-    let failed = form.profiles.is_none()
-        && !form.launch.loading()
-        && !form.launch.unconfigured
-        && form.launch.read_error.is_none()
-        && !form.repository.trim().is_empty();
-    if failed && ui.button("Try again").clicked() {
-        return RepositoryAction::Load;
-    }
     if changed {
         RepositoryAction::Load
     } else {

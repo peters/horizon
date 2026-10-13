@@ -481,3 +481,35 @@ fn a_read_that_failed_outside_the_file_can_be_tried_again() {
     finish_read(&ctx, &mut app);
     assert!(app.cloud_prototype.error.is_some());
 }
+
+/// An editor that saves a half-written file fails a quiet read; the choices come back with
+/// the next valid save.
+#[test]
+fn a_half_saved_working_copy_keeps_the_choices_for_the_next_save() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    fixture(temp.path());
+    let yaml = format!(
+        "{CONFIG}  other:\n    provider: runpod\n    image: example.invalid/other\n    cpu: 4\n    memory_gb: 8\n"
+    );
+    let path = temp.path().join(".horizon/cloud.yml");
+    std::fs::write(&path, &yaml).unwrap();
+    let form = &mut app.cloud_prototype.production;
+    form.creating = true;
+    form.repository = temp.path().to_string_lossy().into();
+    app.read_cloud_profiles(&ctx);
+    finish_read(&ctx, &mut app);
+    app.cloud_prototype.production.selected_profile = "other".into();
+    std::fs::write(&path, "version: 1\ndefault: test-image\nprofiles: [").unwrap();
+    wait_until(&ctx, &mut app, |app| app.cloud_prototype.production.profiles.is_none());
+    assert_eq!(app.cloud_prototype.production.selected_profile, "other");
+    std::fs::write(
+        &path,
+        yaml.replace("cpu: 4\n    memory_gb: 8\n", "cpu: 6\n    memory_gb: 8\n"),
+    )
+    .unwrap();
+    wait_until(&ctx, &mut app, |app| app.cloud_prototype.production.profiles.is_some());
+    assert_eq!(app.cloud_prototype.production.selected_profile, "other");
+    assert!(app.cloud_prototype.error.is_none(), "the earlier read error goes");
+}

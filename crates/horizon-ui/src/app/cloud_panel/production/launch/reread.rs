@@ -88,7 +88,8 @@ impl HorizonApp {
     pub(super) fn reread_cloud_profiles_on_change(&mut self, ctx: &Context) {
         let form = &mut self.cloud_prototype.production;
         let reread = &mut form.launch.reread;
-        if !form.creating || form.repository.trim().is_empty() {
+        // A typed revision is read when it is typed; only the default follows the checkout.
+        if !form.creating || form.repository.trim().is_empty() || !form.revision.trim().is_empty() {
             reread.watcher = None;
             return;
         }

@@ -218,11 +218,14 @@ impl HorizonApp {
                     form.profiles = None;
                     form.launch.revision = None;
                     form.launch.submitted = false;
-                    form.selected_profile.clear();
-                    form.size = None;
-                    form.placement = Placement::default();
-                    form.provider = None;
-                    form.launch.siblings = super::creation::siblings::State::default();
+                    // A half-saved file fails a quiet read; the choices wait for the next save.
+                    if !quiet {
+                        form.selected_profile.clear();
+                        form.size = None;
+                        form.placement = Placement::default();
+                        form.provider = None;
+                        form.launch.siblings = super::creation::siblings::State::default();
+                    }
                     form.launch.unconfigured = cloud_runtime::repository::launch::is_missing_config(&error);
                     if form.launch.configuration == Configuration::QuickStart
                         && cloud_runtime::repository::launch::quick_start::is_refused(&error)
