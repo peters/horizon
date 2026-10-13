@@ -124,11 +124,19 @@ main and a stopped land.
 
    Result: The script prints "main moved ... build again". `land` refuses.
 
-2. If a `land` stops after some merges, for example because a later pull request
-   gets a new review thread, run `python3 scripts/merge-queue.py status`.
+2. If a `land` stops after some merges on a blocker, for example a new review
+   thread on a later pull request or "did not merge ... Run land again to
+   resume", run `python3 scripts/merge-queue.py status`.
 
-   Result: The script names the blocker. After you remove the blocker, `land`
-   continues from the last merge and does not merge a pull request twice.
+   Result: The script records a merge that GitHub made but `land` did not
+   confirm, if its tree is the tested tree, and names each blocker. After you
+   remove the blocker, `land` continues from the last merge and does not merge a
+   pull request twice.
+
+3. If a `land` stops with "MISMATCH", run `python3 scripts/merge-queue.py status`.
+
+   Result: The script prints "an earlier land stopped on a mismatch". `land`
+   refuses until a new `build`. Check main CI before you build again.
 
 ## 7. Pass criteria
 
@@ -136,7 +144,8 @@ main and a stopped land.
 - The tree of `main` after the batch is the tree that CI tested.
 - A conflict, a moved head or a dequeue keeps a pull request out of the batch.
 - A moved `main` stops `build` results from landing.
-- A stopped `land` continues from its last merge.
+- A `land` that stops on a blocker continues from its last merge. A `land` that
+  stops on a mismatch refuses until a new `build`.
 
 ## 8. Cleanup
 

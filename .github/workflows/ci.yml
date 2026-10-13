@@ -12,8 +12,10 @@ on:
 permissions:
   contents: read
 
+# Each push to main gets its own group: a merge-queue batch lands several commits in
+# seconds, and one shared group would cancel the pending run of a middle merge.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || (github.ref == 'refs/heads/main' && github.sha) || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
