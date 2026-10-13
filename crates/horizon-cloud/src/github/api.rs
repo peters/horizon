@@ -10,8 +10,12 @@ use zeroize::Zeroizing;
 /// entries each. Beyond it the answer is an error, never partial data.
 const MAX_PAGES: u32 = 20;
 
-/// The largest search page read, in bytes: 100 pull requests with their descriptions.
-const SEARCH_LIMIT: u64 = 4 * 1024 * 1024;
+/// The largest page of 100 full repository objects read, in bytes.
+const PAGE_LIMIT: u64 = 4 * 1024 * 1024;
+
+/// The largest search page read, in bytes: 100 pull requests with their whole descriptions,
+/// which reach 65,536 characters each when Dependabot quotes release notes.
+const SEARCH_LIMIT: u64 = 16 * 1024 * 1024;
 
 /// The account a token acts as. `email` is GitHub's private commit address, so a
 /// commit never shows the person's own address.
@@ -175,13 +179,17 @@ impl Client {
         }
     }
 
-    pub(super) fn get<T: serde::de::DeserializeOwned>(&self, token: &Secret, path: &str) -> Result<T> {
+    fn get<T: serde::de::DeserializeOwned>(&self, token: &Secret, path: &str) -> Result<T> {
         self.request(Some(token), path)
     }
 
-    /// As `get`, for a page of 100 full objects: repositories, or search items that carry whole
-    /// pull request descriptions.
-    pub(super) fn get_large<T: serde::de::DeserializeOwned>(&self, token: &Secret, path: &str) -> Result<T> {
+    /// As `get`, for a page of 100 full repository objects.
+    fn get_large<T: serde::de::DeserializeOwned>(&self, token: &Secret, path: &str) -> Result<T> {
+        self.request_limited(Some(token), path, PAGE_LIMIT)
+    }
+
+    /// As `get`, for a search page whose items carry whole pull request descriptions.
+    pub(super) fn get_search<T: serde::de::DeserializeOwned>(&self, token: &Secret, path: &str) -> Result<T> {
         self.request_limited(Some(token), path, SEARCH_LIMIT)
     }
 

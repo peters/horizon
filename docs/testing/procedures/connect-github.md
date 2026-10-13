@@ -96,6 +96,12 @@ after one approval.
 
    Result: The command shows `600`.
 
+8. On GitHub, open the app's settings and select **Permissions & events**.
+
+   Result: Under **Repository permissions**, Actions, Contents, Pull requests and
+   Workflows show **Read and write**; Checks, Commit statuses and Metadata show
+   **Read-only**. All others show **No access**.
+
 ### 6.2 G02 — Turn on the device sign-in
 
 1. Look at the GitHub card.

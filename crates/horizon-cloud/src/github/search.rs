@@ -9,8 +9,9 @@ const MAX_PAGES: u32 = 10;
 impl Client {
     /// The open pull requests that `author` (such as `app/dependabot`) opened in repositories
     /// of `owners`, counted per lowercase `owner/name`. Only repositories in `reachable`
-    /// count, so a repository the app cannot reach is never offered. GitHub answers at most
-    /// 1,000 results per search, so beyond that an owner's counts are a lower bound.
+    /// count, so a repository the app cannot reach is never offered. The counts order a list
+    /// and may be a lower bound: GitHub answers at most 1,000 results per search, and it
+    /// can end a slow search early with `incomplete_results`.
     /// # Errors
     /// An invalid author or owner, transport failures, a refused token, or a malformed answer.
     pub fn open_pull_requests_by(
@@ -40,7 +41,7 @@ impl Client {
                     "/search/issues?q=is%3Apr+is%3Aopen+author%3A{}+user%3A{owner}&per_page=100&page={page}",
                     author.replace('/', "%2F")
                 );
-                let answer: Answer = self.get_large(token, &path)?;
+                let answer: Answer = self.get_search(token, &path)?;
                 read += answer.items.len() as u64;
                 let last = answer.items.len() < 100 || read >= answer.total_count;
                 for item in answer.items {
@@ -121,6 +122,25 @@ mod tests {
                 "GET /search/issues?q=is%3Apr+is%3Aopen+author%3Aapp%2Fdependabot+user%3Aother&per_page=100&page=1 HTTP/1.1",
             ]
         );
+    }
+
+    #[test]
+    fn reads_a_page_of_long_descriptions() {
+        let body = "r".repeat(60_000);
+        let items: Vec<Value> = (0..100)
+            .map(|_| json!({"repository_url": "https://api.github.com/repos/acme/web", "body": body}))
+            .collect();
+        let (client, _requests, task) = github(vec![(200, json!({"total_count": 100, "items": items}))]);
+        let counts = client
+            .open_pull_requests_by(
+                &Secret::new("ghu_synthetic".into()),
+                "app/dependabot",
+                &["acme".into()],
+                &["acme/web".into()],
+            )
+            .unwrap();
+        task.join().unwrap();
+        assert_eq!(counts["acme/web"], 100, "6 MB of release notes is one page");
     }
 
     #[test]

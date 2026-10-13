@@ -322,6 +322,24 @@ with no token to create or copy.
    it reaches only the repositories where it is installed. An app that an older
    Horizon created is private: select **Make public** in its **Advanced**
    settings first.
+
+   The app asks for these repository permissions, and a token acts with them only
+   in the repositories where the app is installed:
+
+   | Permission | Access | Why |
+   |---|---|---|
+   | Contents | Read and write | Clone, commit and push |
+   | Pull requests | Read and write | Open, review and merge pull requests |
+   | Checks, Commit statuses | Read | Read why CI failed on a pull request |
+   | Actions | Read and write | Read job logs and rerun a failed job; this also allows cancelling a run |
+   | Workflows | Write | Push a commit that changes `.github/workflows`, as Dependabot updates to GitHub Actions do |
+   | Metadata | Read | Required by GitHub for every app |
+
+   With Actions and Workflows, an agent that holds the cloud's token can change
+   what CI runs on a branch and rerun it. Branch protection and required reviews
+   still apply to merges. An app that an older Horizon created has only Contents,
+   Pull requests and Metadata: add the others under **Permissions & events** in its
+   settings, then accept the new permissions on each installation.
 3. GitHub does not let a new app turn on its device sign-in. When the card says
    so, open the app's settings, select **Enable Device Flow** and save. This is
    needed once, for the default mode.
