@@ -113,12 +113,18 @@ fn get(state: &Path, request: &Value) -> Result<Value, String> {
     let client_data = URL_SAFE_NO_PAD
         .decode(request["client_data_json"].as_str().ok_or("client data")?)
         .map_err(|error| error.to_string())?;
-    let Some((id, pkcs8)) = request["allow_credentials"]
+    let allowed: Vec<String> = request["allow_credentials"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
-        .find_map(|id| std::fs::read(state.join(format!("{id}.key"))).ok().map(|key| (id.to_string(), key)))
+        .map(str::to_string)
+        .collect();
+    // An empty allow list asks for a discoverable credential: use any key.
+    let candidates = if allowed.is_empty() { stored_ids(state) } else { allowed };
+    let Some((id, pkcs8)) = candidates
+        .into_iter()
+        .find_map(|id| std::fs::read(state.join(format!("{id}.key"))).ok().map(|key| (id, key)))
     else {
         return Ok(json!({ "version": 1, "status": "not_found", "message": "no matching credential" }));
     };
@@ -139,4 +145,13 @@ fn get(state: &Path, request: &Value) -> Result<Value, String> {
         "signature": URL_SAFE_NO_PAD.encode(signature.as_ref()),
         "user_handle": user_handle,
     }))
+}
+
+fn stored_ids(state: &Path) -> Vec<String> {
+    std::fs::read_dir(state)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.strip_suffix(".key").map(str::to_string))
+        .collect()
 }
