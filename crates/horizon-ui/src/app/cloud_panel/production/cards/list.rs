@@ -34,14 +34,19 @@ pub(in crate::app::cloud_panel::production) fn condition(
     (condition, line, status.primary == Some(Primary::Stop))
 }
 
-/// What the worker of `runtime` bills each hour now: nothing while it is stopped or deleted.
-pub(in crate::app::cloud_panel::production) fn hourly_rate(runtime: &Runtime) -> Option<f64> {
+/// What the worker of `runtime` bills each hour now, in its provider's currency:
+/// nothing while it is stopped or deleted.
+pub(in crate::app::cloud_panel::production) fn hourly_rate(runtime: &Runtime) -> Option<cloud_runtime::cost::Rate> {
     if cost::compute_idle(runtime) || cost::worker_deleted(runtime).is_some() {
         return None;
     }
-    runtime
+    let hourly = runtime
         .state
         .as_ref()
         .and_then(|state| state.worker.as_ref())
-        .and_then(cloud_runtime::cost::hourly_rate)
+        .and_then(cloud_runtime::cost::hourly_rate)?;
+    Some(cloud_runtime::cost::Rate {
+        hourly,
+        currency: cost::provider(runtime).currency,
+    })
 }

@@ -82,7 +82,7 @@ whose session ends goes to **Needs you**.
 2. Look at the header line of **Cloud**.
 
    Result: At the right of the header line, the hourly rate of the worker shows
-   in secondary text, for example `$0.006/h`.
+   in secondary text in euros, for example `€0.0088/h`.
 
 3. Look at the header line of **This PC**.
 
@@ -161,7 +161,7 @@ whose session ends goes to **Needs you**.
 2. Click **Stop idle…**.
 
    Result: A dialog shows the cloud with a selected check box, its workspace and
-   its hourly rate, the line `Saves $<rate>/h`, and the buttons **Stop 1 worker**
+   its hourly rate, the line `Saves €<rate>/h`, and the buttons **Stop 1 worker**
    and **Keep running**. When the provider reports no rate, the row shows
    `no reported rate` and the line is `Saving unknown`.
 

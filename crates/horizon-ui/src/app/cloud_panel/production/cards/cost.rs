@@ -1,10 +1,16 @@
 //! What a cloud costs: the header's one-line spend and the drawer's Cost tab. A
 //! figure that is not known yet says why instead of reading "Unavailable".
+//! Amounts are in the provider's own currency.
 use super::super::Runtime;
 use super::strip::Spend;
 use crate::theme;
 use egui::{RichText, Sense, vec2};
-use horizon_core::cloud_runtime::{self, billing::BillingBucket};
+use horizon_core::cloud_runtime::{
+    self,
+    billing::BillingBucket,
+    cost::{format_amount, format_rate},
+    provider::{self, Description},
+};
 use std::time::{Instant, SystemTime};
 
 /// Billing periods drawn in the Cost tab, newest last.
@@ -31,6 +37,14 @@ pub(super) fn compute_idle(runtime: &Runtime) -> bool {
                 .state
                 .as_ref()
                 .is_some_and(|state| matches!(state.operation, cloud_runtime::CreateState::Terminated { .. })))
+}
+
+/// The provider of the cloud's deployment; a cloud without one has no worker to price.
+pub(super) fn provider(runtime: &Runtime) -> &'static Description {
+    runtime
+        .state
+        .as_ref()
+        .map_or(&provider::RUNPOD, |state| Description::of(&state.profile))
 }
 
 /// What is left of a deleted worker: nothing, or its workspace storage while cleanup is
@@ -85,7 +99,7 @@ pub(super) fn teaser(runtime: &Runtime) -> String {
     if compute_idle(runtime) {
         return "stopped".into();
     }
-    rate.map_or_else(|| "—".into(), |rate| format!("${rate:.2}/h"))
+    rate.map_or_else(|| "—".into(), |rate| format_rate(rate, provider(runtime).currency))
 }
 
 pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
@@ -96,6 +110,7 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
                 .into(),
         };
     }
+    let currency = provider(runtime).currency;
     let worker = runtime.state.as_ref().and_then(|state| state.worker.as_ref());
     let rate = worker.and_then(cloud_runtime::cost::hourly_rate);
     let run = runtime.current_run_cost(now);
@@ -112,18 +127,18 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
     } else {
         match rate {
             Some(_) if idle => parts.push("compute stopped".to_owned()),
-            Some(rate) => parts.push(cloud_runtime::cost::format_rate(rate)),
+            Some(rate) => parts.push(format_rate(rate, currency)),
             None => {}
         }
     }
     if let Some(run) = &run {
-        parts.push(format!("{} run", horizon_core::format_cost(run.amount)));
+        parts.push(format!("{} run", format_amount(run.amount, currency)));
     }
     match &total {
         Some(total) if total.excludes_before.is_some() => {
-            parts.push(format!("{} 12 mo", horizon_core::format_cost(total.total())));
+            parts.push(format!("{} 12 mo", format_amount(total.total(), currency)));
         }
-        Some(total) => parts.push(format!("{} total", horizon_core::format_cost(total.total()))),
+        Some(total) => parts.push(format!("{} total", format_amount(total.total(), currency))),
         None if runtime.billing.error().is_some() => parts.push("total unavailable".into()),
         None => {}
     }
@@ -182,8 +197,10 @@ fn rate_metric(runtime: &Runtime, rate: Option<f64>) -> (String, &'static str) {
     if compute_idle(runtime) {
         return ("Stopped".into(), "compute stopped; storage may still bill");
     }
+    let provider = provider(runtime);
     match rate {
-        Some(rate) => (cloud_runtime::cost::format_rate(rate), "last reported worker rate"),
+        Some(rate) if provider.net_of_vat => (format_rate(rate, provider.currency), "compute, net of VAT"),
+        Some(rate) => (format_rate(rate, provider.currency), "last reported worker rate"),
         None if worker_requested(runtime) || runtime.state.as_ref().is_some_and(|state| state.worker.is_some()) => {
             ("—".into(), "rate pending")
         }
@@ -193,6 +210,7 @@ fn rate_metric(runtime: &Runtime, rate: Option<f64>) -> (String, &'static str) {
 
 pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) {
     let now = SystemTime::now();
+    let provider = provider(runtime);
     let worker = runtime.state.as_ref().and_then(|state| state.worker.as_ref());
     let rate = worker.and_then(cloud_runtime::cost::hourly_rate);
     let run = runtime.current_run_cost(now);
@@ -204,13 +222,13 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) {
             "Rate",
             &rate_value,
             rate_note,
-            "Last reported worker hourly rate. Storage and other provider charges may be additional.",
+            cloud_runtime::cost::rate_coverage(provider),
         );
         metric(
             &mut columns[1],
             "This run",
             &run.as_ref()
-                .map_or_else(|| "—".into(), |run| horizon_core::format_cost(run.amount)),
+                .map_or_else(|| "—".into(), |run| format_amount(run.amount, provider.currency)),
             run_note(runtime, run.is_some()),
             "Estimate from the last observed worker start and rate. Reconnect or check the provider to refresh worker state.",
         );
@@ -221,7 +239,7 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) {
                 } else {
                     "Since creation"
                 },
-                horizon_core::format_cost(total.total()),
+                format_amount(total.total(), provider.currency),
                 "billed + estimated",
                 runtime.billing.explanation(total, Instant::now()),
             ),
@@ -261,7 +279,7 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) {
     ui.add_space(6.0);
     if let Some(sample) = runtime.billing.sample() {
         ui.label(RichText::new("Billed per period").size(12.0).color(theme::FG_DIM()));
-        bars(ui, &sample.history.buckets);
+        bars(ui, &sample.history.buckets, provider.currency);
     }
     ui.add_space(8.0);
     ui.label(RichText::new(billing_note(runtime)).size(13.0).color(theme::FG_DIM()));
@@ -296,7 +314,7 @@ fn ratio(part: f64, whole: f64) -> f32 {
 }
 
 /// The newest billed periods as bars, scaled to the largest.
-fn bars(ui: &mut egui::Ui, buckets: &[BillingBucket]) {
+fn bars(ui: &mut egui::Ui, buckets: &[BillingBucket], currency: &str) {
     let shown = &buckets[buckets.len().saturating_sub(BARS)..];
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 90.0), Sense::hover());
     let painter = ui.painter();
@@ -343,11 +361,7 @@ fn bars(ui: &mut egui::Ui, buckets: &[BillingBucket]) {
         }
     }
     if let Some(bucket) = hovered {
-        response.on_hover_text_at_pointer(format!(
-            "{} · {}",
-            bucket.time,
-            horizon_core::format_cost(bucket.amount)
-        ));
+        response.on_hover_text_at_pointer(format!("{} · {}", bucket.time, format_amount(bucket.amount, currency)));
     }
 }
 
@@ -617,5 +631,130 @@ mod tests {
             runtime().current_run_cost(SystemTime::now()).is_some(),
             "a running worker still accrues"
         );
+    }
+
+    /// When the synthetic Hetzner server was created, and so when its billed run began.
+    const CREATED: &str = "2026-10-12T08:30:00+00:00";
+
+    /// [`CREATED`] as a time.
+    fn created() -> SystemTime {
+        SystemTime::UNIX_EPOCH + std::time::Duration::from_mins(29_863_230)
+    }
+
+    /// The worker record `horizon_cloud::hetzner::cloud::worker` makes of a running
+    /// cx33 server in hel1, with `fields` replaced.
+    fn server(fields: &serde_json::Value) -> serde_json::Value {
+        let mut worker = serde_json::json!({
+            "id":"42","name":"horizon-cloud-fixture","imageName":"registry.example/worker","desiredStatus":"RUNNING",
+            "publicIp":"192.0.2.10","portMappings":{"22":22},"vcpuCount":4,"memoryInGb":8,"dataCenterId":"hel1",
+            "costPerHr":0.024,"lastStartedAt":CREATED
+        });
+        for (key, value) in fields.as_object().unwrap() {
+            worker[key] = value.clone();
+        }
+        worker
+    }
+
+    fn hetzner(stage: Stage, worker: &serde_json::Value) -> Runtime {
+        Runtime {
+            stage: Some(stage),
+            state: Some(
+                serde_json::from_value(serde_json::json!({
+                    "version":1,"cloud_id":"hetzner-cost-fixture","repository":"/synthetic","revision":"a",
+                    "profile":{"provider":"hetzner","image":"registry.example/worker","cpu":4,"memory_gb":8,"gpu":false},
+                    "stage":stage,"operation":{"state":"bound","worker_id":"42"},
+                    "spec":null,"sessions":[],"worker":worker
+                }))
+                .unwrap(),
+            ),
+            ..Default::default()
+        }
+    }
+
+    /// The card's cost lines at `now`.
+    fn card(runtime: &Runtime, now: SystemTime) -> Vec<String> {
+        use crate::test_egui::DiscardTextures;
+        egui::Context::default()
+            .run_ui(egui::RawInput::default(), |ui| {
+                super::super::worker_cost(ui, runtime, now);
+            })
+            .discard_textures()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_ready_hetzner_worker_shows_its_euro_rate_and_run_in_the_card_header_and_list() {
+        let ready = hetzner(Stage::Ready, &server(&serde_json::json!({})));
+        let now = created() + std::time::Duration::from_mins(45);
+        assert_eq!(spend(&ready, now).line, "€0.0240/h · €0.02 run");
+        assert_eq!(ready.cost_badge(now).as_deref(), Some("€0.02 run"));
+        assert_eq!(card(&ready, now)[0], "This run · 45m 00s · €0.02 · €0.0240/h");
+        assert_eq!(teaser(&ready), "€0.0240/h");
+        let listed = super::super::list::hourly_rate(&ready).unwrap();
+        assert_eq!((listed.hourly, listed.currency), (0.024, "EUR"));
+        assert_eq!(horizon_core::cloud_list::rate_text(listed), "€0.0240/h");
+        let shown = texts(&ready);
+        assert!(shown.iter().any(|text| text == "€0.0240/h"), "{shown:?}");
+        assert!(shown.iter().any(|text| text == "compute, net of VAT"), "{shown:?}");
+        assert!(
+            shown.iter().any(|text| text.starts_with('€')),
+            "the run, in euros: {shown:?}"
+        );
+        assert!(
+            shown.iter().any(|text| text == "estimate since the last start"),
+            "{shown:?}"
+        );
+        assert!(!shown.iter().any(|text| text.contains('$')), "never dollars: {shown:?}");
+    }
+
+    #[test]
+    fn a_hetzner_run_keeps_its_start_across_reconnect_restart_and_resume() {
+        let worker = server(&serde_json::json!({}));
+        let now = created() + std::time::Duration::from_mins(95);
+        let elapsed = |runtime: &Runtime| runtime.current_run_cost(now).map(|run| run.elapsed);
+        assert_eq!(
+            elapsed(&hetzner(Stage::Ready, &worker)),
+            Some(std::time::Duration::from_mins(95))
+        );
+
+        // A reconnect pauses the estimate until Ready, then describes the same server again.
+        let reconnecting = hetzner(Stage::Readiness, &worker);
+        assert_eq!(elapsed(&reconnecting), None);
+        assert!(
+            texts(&reconnecting)
+                .iter()
+                .any(|text| text == "estimate pending until ready")
+        );
+        assert_eq!(
+            elapsed(&hetzner(Stage::Ready, &worker)),
+            Some(std::time::Duration::from_mins(95))
+        );
+
+        // A restart reads the saved deployment record.
+        let saved = serde_json::to_string(hetzner(Stage::Ready, &worker).state.as_ref().unwrap()).unwrap();
+        let restarted = Runtime {
+            stage: Some(Stage::Ready),
+            state: Some(serde_json::from_str(&saved).unwrap()),
+            ..Default::default()
+        };
+        assert_eq!(elapsed(&restarted), Some(std::time::Duration::from_mins(95)));
+
+        // A stop deletes the server: no compute bills, and nothing is estimated.
+        let stopped = hetzner(Stage::Stopped, &server(&serde_json::json!({"desiredStatus": "EXITED"})));
+        assert_eq!(elapsed(&stopped), None);
+        assert_eq!(spend(&stopped, now).line, "compute stopped");
+        assert!(super::super::list::hourly_rate(&stopped).is_none());
+        // A resume creates a new server, whose creation starts the next run.
+        let resumed = hetzner(
+            Stage::Ready,
+            &server(&serde_json::json!({"id": "43", "lastStartedAt": "2026-10-12T10:00:00Z"})),
+        );
+        assert_eq!(elapsed(&resumed), Some(std::time::Duration::from_mins(5)));
     }
 }

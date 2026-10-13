@@ -79,6 +79,61 @@ fn a_running_server_is_described_as_a_verified_worker() {
     assert!(off.ssh_address().is_none());
 }
 
+/// The fixture server as Hetzner describes it, with its creation time and the
+/// type's prices in `prices`.
+fn priced_server(prices: &serde_json::Value) -> Server {
+    let mut value = serde_json::to_value(server("running", Some("192.0.2.10"))).unwrap();
+    value["created"] = "2026-10-12T08:30:00+00:00".into();
+    value["server_type"]["prices"] = prices.clone();
+    serde_json::from_value(value).unwrap()
+}
+
+fn hourly(location: &str, net: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "location": location, "price_hourly": {"net": net, "gross": "0.0300"},
+        "price_monthly": {"net": "14.8700", "gross": "18.5900"},
+        "included_traffic": 21_990_232_555_520_u64, "price_per_tb_traffic": {"net": "1.0000", "gross": "1.2400"}
+    })
+}
+
+#[test]
+fn a_worker_bills_its_type_price_where_it_runs_from_the_creation_of_its_server() {
+    let spec = spec();
+    let prices = serde_json::json!([hourly("nbg1", &"0.0300".into()), hourly("hel1", &"0.0240".into())]);
+    let described = worker(&priced_server(&prices), &spec, &volume()).unwrap();
+    described.verify(&spec).unwrap();
+    assert_eq!(described.cost_per_hr, Some(0.024), "the price of hel1, not nbg1");
+    assert_eq!(described.adjusted_cost_per_hr, None);
+    assert_eq!(described.last_started_at.as_deref(), Some("2026-10-12T08:30:00+00:00"));
+    let saved = serde_json::to_value(&described).unwrap();
+    assert_eq!(
+        (saved["costPerHr"].clone(), saved["lastStartedAt"].clone()),
+        (serde_json::json!(0.024), serde_json::json!("2026-10-12T08:30:00+00:00")),
+        "both are kept in the saved worker record"
+    );
+
+    // Price data never breaks the server's description; an unreadable price is no rate.
+    for unreadable in [
+        serde_json::json!([hourly("nbg1", &"0.0300".into())]),
+        serde_json::json!([hourly("hel1", &"free".into())]),
+        serde_json::json!([hourly("hel1", &"-0.0240".into())]),
+        serde_json::json!([{"location": "hel1", "price_hourly": 0.024}]),
+        serde_json::json!({"hel1": "0.0240"}),
+        serde_json::json!(null),
+    ] {
+        let described = worker(&priced_server(&unreadable), &spec, &volume()).unwrap();
+        assert_eq!(described.cost_per_hr, None, "{unreadable}");
+        assert!(described.last_started_at.is_some());
+    }
+    let mixed = serde_json::json!([{"location": "hel1"}, hourly("hel1", &"0.0240".into())]);
+    assert_eq!(
+        worker(&priced_server(&mixed), &spec, &volume()).unwrap().cost_per_hr,
+        Some(0.024)
+    );
+    let unpriced = worker(&server("running", Some("192.0.2.10")), &spec, &volume()).unwrap();
+    assert_eq!((unpriced.cost_per_hr, unpriced.last_started_at), (None, None));
+}
+
 #[test]
 fn a_worker_with_an_idle_period_is_described_with_it() {
     let mut spec = spec();

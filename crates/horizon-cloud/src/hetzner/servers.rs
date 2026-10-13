@@ -53,6 +53,10 @@ pub struct Server {
     pub volumes: Vec<u64>,
     #[serde(default)]
     pub private_net: Vec<PrivateNet>,
+    /// The RFC 3339 time Hetzner created the server. Hetzner bills a server from its
+    /// creation until its deletion, powered off or not, and a stop deletes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<String>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct PrivateNet {
@@ -75,6 +79,31 @@ pub struct ServerType {
     pub memory: f64,
     /// Gigabytes of local disk.
     pub disk: u32,
+    /// The type's prices per location. Prices only inform cost displays, so an entry
+    /// that cannot be read is left out rather than failing the server's description.
+    #[serde(default, deserialize_with = "readable_prices", skip_serializing_if = "Vec::is_empty")]
+    pub prices: Vec<TypePrice>,
+}
+/// A server type's hourly price in one location, in the project's currency, which
+/// Hetzner's pricing endpoint states as euros.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct TypePrice {
+    pub location: String,
+    pub price_hourly: Price,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct Price {
+    /// A decimal amount without VAT, such as `0.0240`.
+    pub net: String,
+}
+fn readable_prices<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<TypePrice>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|price| TypePrice::deserialize(price).ok())
+        .collect())
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Location {
@@ -99,6 +128,21 @@ impl Server {
             "off" => WorkerStatus::Stopped,
             _ => WorkerStatus::Lost,
         }
+    }
+    /// The server type's hourly price in the server's location, in euros net of VAT.
+    #[must_use]
+    pub fn hourly_net(&self) -> Option<f64> {
+        let price = self
+            .server_type
+            .prices
+            .iter()
+            .find(|price| price.location == self.location.name)?;
+        price
+            .price_hourly
+            .net
+            .parse::<f64>()
+            .ok()
+            .filter(|amount| amount.is_finite() && *amount >= 0.0)
     }
     /// # Errors
     /// Prevents adopting, powering or deleting a server another operation owns.
