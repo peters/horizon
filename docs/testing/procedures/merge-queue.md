@@ -118,8 +118,9 @@ main and a stopped land.
 
 ### 6.6 STOP — Moved main and stopped land
 
-1. After a `build`, merge another pull request into `main` outside the queue, or
-   wait for one. Run `python3 scripts/merge-queue.py status`.
+1. Do not merge into `main` to cause this test. If a merge that `peters`
+   approved separately, or a Dependabot merge, reaches `main` after a `build`,
+   run `python3 scripts/merge-queue.py status`.
 
    Result: The script prints "main moved ... build again". `land` refuses.
 

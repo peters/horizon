@@ -6,24 +6,19 @@ same guarantee by hand: main plus the queued PRs is tested once on an `mq/*` bra
 and only that tested result lands.
 
 - enqueue: the PR's agent queues one exact head after every merge gate in AGENTS.md
-  passed for it. The entry is a PR comment by the repository owner, plus the
-  `merge-queue` label.
+  passed for it: an owner PR comment plus the `merge-queue` label.
 - build: applies each queued head to a fresh origin/main as one squash commit, in
   queue order, and pushes the result as `mq/<UTC time>`. CI runs on that branch.
 - land: when CI on the batch tip passed, main has not moved and no head drifted,
   squash-merges each PR with its head guard, then checks that each merge commit has
   the tested tree.
 
-GitHub cannot guard the base of a squash merge, so the tree check runs after each
-merge: a push to main by someone else during `land` is found and stops the batch, but
-is not prevented. Only the batch tip is tested; if `land` stops partway, main holds an
-untested prefix of the batch until the next batch or a fix lands, and main CI checks it.
+Limits: GitHub cannot guard the base of a squash merge, so a push to main during `land`
+is found and stops the batch but is not prevented. Only the batch tip is tested.
 
 Usage: merge-queue.py enqueue PR --head SHA --subject TEXT --body-file FILE
-       merge-queue.py dequeue PR --reason TEXT
-       merge-queue.py list | status
-       merge-queue.py build [--only N,M] [--dry-run]
-       merge-queue.py land [--dry-run]
+       merge-queue.py dequeue PR --reason TEXT | list | status
+       merge-queue.py build [--only N,M] [--dry-run] | land [--dry-run]
 
 The batch plan is private state under $XDG_STATE_HOME/horizon-merge-queue (default
 ~/.local/state/horizon-merge-queue), never in the repository.
@@ -462,9 +457,31 @@ def pr_blockers(repo, entry):
     return found
 
 
+def reconcile(repo, plan):
+    """Record a merge that GitHub made but `land` could not verify, for example after a
+    network error. Only a merge whose tree is the tested batch tree counts."""
+    git("fetch", "-q", "origin", BASE_BRANCH, timeout=300)
+    for entry in plan["prs"]:
+        if entry.get("merged"):
+            continue
+        merged = gh_json("pr", "view", str(entry["number"]), "--repo", repo, "--json",
+                         "state,mergeCommit")
+        commit = (merged.get("mergeCommit") or {}).get("oid")
+        if merged["state"] != "MERGED" or not commit:
+            return
+        if not trees_match(ROOT, commit, entry["commit"]):
+            plan["stopped"] = f"#{entry['number']} merged as {commit} without the tested tree"
+        else:
+            entry["merged"] = commit
+        plan_path().write_text(json.dumps(plan, indent=2) + "\n")
+        if plan.get("stopped"):
+            return
+
+
 def cmd_status(_args):
     repo = repo_name()
     plan = load_plan()
+    reconcile(repo, plan)
     print(f"batch {plan['branch']}: base {plan['base'][:9]}, tip {plan['tip'][:9]}, PRs "
           + ", ".join(f"#{e['number']}" for e in plan["prs"]))
     found = blockers(repo, plan)
@@ -474,6 +491,7 @@ def cmd_status(_args):
 def cmd_land(args):
     repo = repo_name()
     plan = load_plan()
+    reconcile(repo, plan)
     found = blockers(repo, plan)
     if found:
         raise QueueError("the batch cannot land:\n" + "\n".join(f"- {i}" for i in found))
@@ -524,6 +542,7 @@ def cmd_land(args):
             raise QueueError(f"#{entry['number']} did not merge ({reason}); later PRs were not "
                              "merged. Run land again to resume.")
         print(f"#{entry['number']} merged as {commit}")
+        # If this check fails, `land` again verifies the merge through reconcile().
         git("fetch", "-q", "origin", BASE_BRANCH, timeout=300)
         main_now = git("rev-parse", f"origin/{BASE_BRANCH}").stdout.strip()
         if not trees_match(ROOT, commit, entry["commit"]) or main_now != commit:
@@ -537,10 +556,14 @@ def cmd_land(args):
         entry["merged"] = commit
         plan_path().write_text(json.dumps(plan, indent=2) + "\n")
         expected = commit
-    git("push", "-q", "origin", "--delete", plan["branch"], timeout=300, check=False)
+    deleted = git("push", "-q", "origin", "--delete", plan["branch"], timeout=300, check=False)
     git("update-ref", "-d", f"refs/merge-queue/{plan['branch']}", check=False)
     plan_path().rename(state_dir() / f"landed-{plan['branch'][3:]}.json")
     print("each merge has its tested tree; batch landed")
+    if deleted.returncode != 0 and "remote ref does not exist" not in deleted.stderr:
+        raise QueueError(f"the batch landed, but deleting {plan['branch']} failed "
+                         f"({deleted.stderr.strip()}); run git push origin --delete "
+                         f"{plan['branch']}")
 
 
 def main(argv=None):
