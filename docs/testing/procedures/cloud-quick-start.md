@@ -118,11 +118,20 @@ items:
 
 3. Examine the dialog below the cloud title.
 
-   Result: The section **No cloud setup yet** shows the cards **Quick start**, with
+   Result: The section **No cloud setup yet** says that the repository has no
+   `.horizon/cloud.yml`. It shows the cards **Quick start**, with
    **Start on the base image**, and **Set up from CI**, with **Set up with** and
-   one chip for each agent.
+   one chip for each agent. Each card shows a mark, a tag and three lines with a
+   check. The Quick start lines name the worker size and provider and the tools of
+   the built-in profile. The two buttons are on one line, and the two cards end on
+   one line.
 
-4. Examine the dialog for a red error.
+4. Move the pointer over each card.
+
+   Result: The border and the top line of the card under the pointer become
+   brighter. The other card does not change.
+
+5. Examine the dialog for a red error.
 
    Result: The dialog shows no red error. **Start cloud** stays unavailable.
 
