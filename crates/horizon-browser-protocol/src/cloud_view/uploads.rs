@@ -112,7 +112,7 @@ pub struct CloudStageReceipt {
 }
 
 /// What a worker browser offers for uploads.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct CloudUploadState {
     pub version: u32,
     pub limits: CloudUploadLimits,
@@ -129,6 +129,20 @@ pub struct CloudUploadState {
     /// The newest failure that the worker browser reported, such as a failed drop.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notice: Option<CloudBrowserNotice>,
+}
+
+impl Default for CloudUploadState {
+    fn default() -> Self {
+        Self {
+            version: CLOUD_UPLOAD_VERSION,
+            limits: CloudUploadLimits::default(),
+            file_chooser: false,
+            drops: false,
+            request: None,
+            error: None,
+            notice: None,
+        }
+    }
 }
 
 /// A page file chooser. `accept` and `origin` come from the page.
@@ -278,6 +292,8 @@ mod tests {
         };
         let decoded: CloudUploadState = serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
         assert_eq!(decoded, state);
+        assert_eq!(CloudUploadState::default().version, CLOUD_UPLOAD_VERSION);
+        assert_eq!(CloudUploadPoll::default().version, CLOUD_UPLOAD_VERSION);
     }
 
     #[test]
