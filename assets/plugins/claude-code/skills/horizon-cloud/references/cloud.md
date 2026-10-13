@@ -239,7 +239,8 @@ GitHub and chooses its repositories; agents cannot set it up.
 it opens, from a list kept privately beside that computer's own GitHub sign-in, and
 refreshes it in the background without asking to sign in. A list that could not be
 refreshed says it may be out of date, offers **Refresh from GitHub** and is tried
-again every 30 seconds; Disconnect forgets it. The list is the person's choice of repository in the UI: no MCP tool
+again every 30 seconds; a shown list goes when another window signs in as another
+account or disconnects; Disconnect forgets it. The list is the person's choice of repository in the UI: no MCP tool
 reads or changes it, and agents work only with the repositories the cloud was given.
 
 - Git and `gh` work without a token in the environment. The worker's root service

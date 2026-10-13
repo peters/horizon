@@ -20,6 +20,7 @@ fn account() -> Account {
         listed_for: None,
         signed_in_as: None,
         retry_at: None,
+        check_at: None,
         refreshed: true,
     }
 }
@@ -262,7 +263,7 @@ fn waiting(purpose: Purpose) -> (Account, std::sync::mpsc::Sender<Answer>) {
 fn the_kept_list_shows_until_a_refresh_replaces_it() {
     let (mut account, sender) = waiting(Purpose::Refresh);
     assert!(!account.busy(), "a quiet refresh is no request of the person's");
-    assert!(account.refreshing());
+    assert!(account.job.as_ref().is_some_and(|job| job.purpose == Purpose::Refresh));
     sender
         .send(Answer::Cached {
             login: "octo-cat".into(),
@@ -271,7 +272,10 @@ fn the_kept_list_shows_until_a_refresh_replaces_it() {
         .unwrap();
     assert!(account.poll().is_none());
     assert_eq!(account.repositories.as_deref(), Some(&["acme/old".to_owned()][..]));
-    assert!(account.refreshing(), "the refresh goes on behind the kept list");
+    assert!(
+        account.job.as_ref().is_some_and(|job| job.purpose == Purpose::Refresh),
+        "the refresh goes on behind the kept list"
+    );
     sender
         .send(Answer::Done {
             token: Secret::new("ghu_synthetic".into()),
@@ -280,7 +284,7 @@ fn the_kept_list_shows_until_a_refresh_replaces_it() {
         .unwrap();
     assert!(account.poll().is_none(), "a refresh hands no token over");
     assert_eq!(account.repositories.as_deref(), Some(&["acme/new".to_owned()][..]));
-    assert!(!account.refreshing());
+    assert!(account.job.as_ref().is_none_or(|job| job.purpose != Purpose::Refresh));
 }
 
 #[test]
@@ -423,4 +427,24 @@ fn a_refresh_that_finds_no_sign_in_drops_also_a_confirmed_list() {
     assert!(account.poll().is_none());
     assert!(account.repositories.is_none());
     assert!(account.retry_at.is_none());
+}
+
+#[test]
+fn a_shown_list_is_checked_against_the_signed_in_account_again() {
+    let (mut account, sender) = waiting(Purpose::Check);
+    assert!(!account.busy(), "a check is no request of the person's");
+    account.repositories = Some(vec!["acme/web".into()]);
+    account.listed_for = Some("octo-cat".into());
+    sender.send(Answer::SignedIn("octo-cat".into())).unwrap();
+    sender.send(Answer::Checked).unwrap();
+    assert!(account.poll().is_none());
+    assert!(account.repositories.is_some(), "the same account keeps its list");
+    assert!(account.check_at.is_some(), "and is checked again later");
+    let (mut account, sender) = waiting(Purpose::Check);
+    account.repositories = Some(vec!["acme/web".into()]);
+    account.listed_for = Some("octo-cat".into());
+    sender.send(Answer::SignedIn("other-account".into())).unwrap();
+    sender.send(Answer::Checked).unwrap();
+    assert!(account.poll().is_none());
+    assert!(account.repositories.is_none(), "another window's sign-in clears it");
 }

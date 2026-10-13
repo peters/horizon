@@ -37,6 +37,17 @@ pub(super) enum Purpose {
     /// A fresh list behind the one kept from last time, only when this computer is
     /// already signed in: nothing is asked of the person for it.
     Refresh,
+    /// Which account this computer is signed in as, read without the network, so a shown
+    /// list of an account that another window replaced or signed out goes.
+    Check,
+}
+
+impl Purpose {
+    /// A refresh or check that runs by itself: it shows nothing and gives way to the
+    /// person's requests.
+    fn quiet(self) -> bool {
+        matches!(self, Self::Refresh | Self::Check)
+    }
 }
 
 enum Answer {
@@ -53,6 +64,8 @@ enum Answer {
     },
     /// The account this computer is signed in as, once that is known.
     SignedIn(String),
+    /// A check found this computer still signed in.
+    Checked,
     /// Another window signed this computer in as another account while the list was on its
     /// way: no list of the earlier account is shown.
     Replaced,
@@ -95,6 +108,8 @@ pub(super) struct Account {
     signed_in_as: Option<String>,
     /// When a quiet refresh that failed tries again, while its list is out of date.
     retry_at: Option<std::time::Instant>,
+    /// When the account of a shown list is checked again.
+    check_at: Option<std::time::Instant>,
     refreshed: bool,
 }
 
@@ -114,6 +129,7 @@ impl Account {
             listed_for: None,
             signed_in_as: None,
             retry_at: None,
+            check_at: None,
             refreshed: false,
         })
     }
@@ -123,14 +139,9 @@ impl Account {
         self.settings.installation_url()
     }
 
-    /// Whether a request the person made is under way; a quiet refresh is not one.
+    /// Whether a request the person made is under way; a quiet refresh or check is not one.
     pub(super) fn busy(&self) -> bool {
-        self.job.as_ref().is_some_and(|job| job.purpose != Purpose::Refresh)
-    }
-
-    /// Whether a fresh list is on its way behind the one shown.
-    pub(super) fn refreshing(&self) -> bool {
-        self.job.as_ref().is_some_and(|job| job.purpose == Purpose::Refresh)
+        self.job.as_ref().is_some_and(|job| !job.purpose.quiet())
     }
 
     /// Asks for a fresh list when the dialog opens, when this computer is already signed in,
@@ -145,13 +156,23 @@ impl Account {
             self.request(Purpose::Refresh, ctx);
             return;
         }
-        if let Some(at) = self.retry_at
-            && self.job.is_none()
-        {
-            let now = std::time::Instant::now();
+        if self.job.is_some() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        if let Some(at) = self.retry_at {
             if now >= at {
                 self.retry_at = None;
                 self.request(Purpose::Refresh, ctx);
+                return;
+            }
+            ctx.request_repaint_after(at - now);
+        }
+        // A shown list is checked against the signed-in account every little while.
+        if let Some(at) = self.check_at.filter(|_| self.repositories.is_some()) {
+            if now >= at {
+                self.check_at = None;
+                self.request(Purpose::Check, ctx);
             } else {
                 ctx.request_repaint_after(at - now);
             }
@@ -161,8 +182,8 @@ impl Account {
     /// Asks GitHub for a token, signing this computer in first when it has none, and for
     /// the repositories too when they are to be listed.
     pub(super) fn request(&mut self, purpose: Purpose, ctx: &Context) {
-        // A quiet refresh gives way to what the person asked for.
-        if self.refreshing() && purpose != Purpose::Refresh {
+        // A quiet refresh or check gives way to what the person asked for.
+        if self.job.as_ref().is_some_and(|job| job.purpose.quiet()) && !purpose.quiet() {
             self.finish();
         }
         if self.job.is_some() {
@@ -176,7 +197,7 @@ impl Account {
             _abort: Abort(cancel.clone()),
         });
         // A quiet retry leaves an error that the person is reading in place.
-        if purpose != Purpose::Refresh {
+        if !purpose.quiet() {
             self.failed = None;
         }
         let (root, settings, ctx) = (self.root.clone(), self.settings.clone(), ctx.clone());
@@ -206,7 +227,17 @@ impl Account {
             let signed = move |login: &str| {
                 let _ = told.send(Answer::SignedIn(login.to_owned()));
             };
-            let answer = exchange(&root, &settings, &cancel, &show, &signed, purpose);
+            let answer = if purpose == Purpose::Check {
+                match host::stored_login(&root, &settings) {
+                    Some(login) => {
+                        signed(&login);
+                        Answer::Checked
+                    }
+                    None => Answer::Quiet,
+                }
+            } else {
+                exchange(&root, &settings, &cancel, &show, &signed, purpose)
+            };
             // Without a sign-in no list stays on this computer.
             if matches!(answer, Answer::Quiet)
                 && let Err(error) = host::forget_repositories(&root, &settings, &cancel)
@@ -241,6 +272,7 @@ impl Account {
                         self.kept = false;
                         self.listed_for = login;
                         self.retry_at = None;
+                        self.check_at = Some(std::time::Instant::now() + RETRY);
                     }
                     return (purpose == Purpose::Clone).then_some(token);
                 }
@@ -263,7 +295,13 @@ impl Account {
                         self.repositories = Some(repositories);
                         self.kept = true;
                         self.listed_for = Some(login);
+                        self.check_at = Some(std::time::Instant::now() + RETRY);
                     }
+                }
+                Ok(Answer::Checked) => {
+                    self.finish();
+                    self.check_at = Some(std::time::Instant::now() + RETRY);
+                    return None;
                 }
                 // Another account's list is not this one's, even when its own list fails.
                 Ok(Answer::SignedIn(login)) => {
@@ -461,7 +499,7 @@ fn exchange(
         return Answer::Quiet;
     }
     let repositories = match purpose {
-        Purpose::Clone => None,
+        Purpose::Clone | Purpose::Check => None,
         Purpose::List | Purpose::Refresh => match host::repositories(&token) {
             Ok(found) => {
                 // Kept for the account it was listed for; losing it only costs the next

@@ -461,7 +461,9 @@ immediately, without a click, and Horizon gets a new list in the background to
 replace it. If that refresh fails, the list stays with a note that it may be out
 of date and a **Refresh from GitHub** button, and Horizon tries again every 30
 seconds. Each try first checks which account this computer is signed in as, so a
-list of another account goes also without the network. **Disconnect** forgets the list
+list of another account goes also without the network. While a list shows, Horizon
+also checks that account every 30 seconds, without the network: a sign-in as
+another account or a Disconnect in another window removes the list. **Disconnect** forgets the list
 together with the sign-in.
 
 For this, this computer signs in once to your GitHub App, the way the app's
