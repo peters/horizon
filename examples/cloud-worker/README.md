@@ -240,6 +240,12 @@ The page, the agents and the worker are not trusted by the host:
 - The control service writes the limits, the errors and the notices. A changed
   worker can send any text or number in them.
 
+The control service cannot tell a host from a process on the worker, because
+the agents use the same loopback endpoint without a credential. A process on the
+worker can send uploads as a host does, for example keep a chooser waiting for
+at most 20 minutes. It gets no new power from this: the agents control the same
+browsers through that endpoint.
+
 The control service guarantees these conditions to the host and the page:
 
 - A batch ID is 1 to 64 ASCII letters, digits, `-` or `_`. A file name is one

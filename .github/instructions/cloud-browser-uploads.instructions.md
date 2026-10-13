@@ -24,6 +24,14 @@ The host is the person's Horizon. It reaches the control service only through
 the cloud's authenticated SSH connection. The control service checks each
 upload request to keep the files in their folder, not to limit the host.
 
+The control service cannot tell a host from a process on the worker: its
+loopback endpoint also serves the browser tools of the agents, without a
+credential. A process on the worker can therefore send the polls, parts and
+answers of a host. It can keep a chooser waiting for at most 20 minutes, or
+answer it with files that it staged. This gives an agent no new power: it
+controls the same browsers through the same endpoint, and `set_files` attaches
+its own files.
+
 ## Untrusted: the page and the agents of the worker
 
 A page or an agent can open a file chooser at any time, and the page writes the
