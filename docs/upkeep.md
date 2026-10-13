@@ -175,9 +175,14 @@ The exchange and the loop guarantee these items:
   - A cloud ID of letters, digits, `-` and `_`, and a revision of 40 or 64
     lowercase hexadecimal characters.
 - The loop merges the reports of the agents into one status. It keeps only list
-  entries that are objects of at most 2 KiB, at most 400 pull requests and the
-  newest 80 activity lines. Thus the status stays below the 1 MiB that the
-  exchange reads.
+  entries that are valid JSON objects of at most 2 KiB, at most 300 pull requests
+  and the newest 80 activity lines. Thus the status stays below the 1 MiB that
+  the exchange reads.
+- When a repository has no open pull requests from the bots, the loop removes
+  its open pull requests from the status. It keeps the merged pull requests.
+- The live panel of the loop shows lines from the logs of the agents. The loop
+  removes control characters from these lines. Thus text from a pull request
+  cannot send a control sequence to the terminal panel.
 - The loop examines the repositories and the bots in `config.json` again. It
   leaves out the names that Horizon does not accept. Thus no name can start an
   option of `gh`, or change a file name or the agent instructions.

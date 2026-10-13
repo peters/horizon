@@ -26,7 +26,7 @@ DIR = '/workspace/home/upkeep'
 APPROVALS = '/run/horizon-worker/agent-approvals'
 HOST_INSTANCE = '/run/horizon-worker/browser-host-instance'
 # What the merged status may hold, so it stays far below what the exchange reads (1 MiB).
-PULL_REQUESTS = 400
+PULL_REQUESTS = 300
 ENTRY_LIMIT = 2048
 ACTIVITY = 80
 LOG_LIMIT = 8 * 1024 * 1024
@@ -39,11 +39,15 @@ REPOSITORY = re.compile(r'(?!-)[A-Za-z0-9-]{1,39}(?<!-)/(?!\.\.?$)[A-Za-z0-9._-]
 AUTHOR = re.compile(r'(app/)?(?!-)[A-Za-z0-9-]{1,39}(?<!-)(\[bot\])?')
 
 
+def refuse_constant(name):
+    raise ValueError(f'{name} is not JSON that Horizon reads')
+
+
 def load(path, default):
     try:
         with open(path) as handle:
-            return json.load(handle)
-    except (OSError, ValueError):
+            return json.load(handle, parse_constant=refuse_constant)
+    except (OSError, ValueError, RecursionError):
         return default
 
 
@@ -174,7 +178,7 @@ def open_pull_requests(repository, authors):
         try:
             result = subprocess.run(
                 ['gh', 'pr', 'list', '--repo', repository, '--author', author, '--state', 'open',
-                 '--json', 'number,headRefOid,statusCheckRollup,reviewDecision,mergeable'],
+                 '--limit', '200', '--json', 'number,headRefOid,statusCheckRollup,reviewDecision,mergeable'],
                 capture_output=True, text=True, timeout=60)
             page = json.loads(result.stdout or '[]') if result.returncode == 0 else None
         except (OSError, ValueError, subprocess.TimeoutExpired):
@@ -242,7 +246,10 @@ class Job:
             with open(self.log, 'rb') as handle:
                 handle.seek(0, os.SEEK_END)
                 handle.seek(max(0, handle.tell() - 4096))
-                lines = [line.strip() for line in handle.read().decode('utf-8', 'replace').splitlines() if line.strip()]
+                text = handle.read().decode('utf-8', 'replace')
+            # The log holds text from pull requests: no control sequence reaches the terminal.
+            lines = [''.join(c for c in line if c.isprintable()).strip() for line in text.splitlines()]
+            lines = [line for line in lines if line]
             return lines[-1][:90] if lines else ''
         except OSError:
             return ''
@@ -307,11 +314,20 @@ def heavy(costs, repository, memory):
     return cost.get('minutes', 0) >= 20 or cost.get('peak_mb', 0) >= memory * 0.35
 
 
+def entry_size(value):
+    """The size of an entry as Horizon gets it, or None when Horizon could not read it."""
+    try:
+        return len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode())
+    except (ValueError, RecursionError):
+        return None
+
+
 def entries(report, key):
     """The entries of one list in an agent's report that are objects of a reasonable size."""
     values = report.get(key) if isinstance(report, dict) else None
-    return [value for value in values if isinstance(value, dict)
-            and len(json.dumps(value)) <= ENTRY_LIMIT] if isinstance(values, list) else []
+    if not isinstance(values, list):
+        return []
+    return [value for value in values if isinstance(value, dict) and (entry_size(value) or ENTRY_LIMIT + 1) <= ENTRY_LIMIT]
 
 
 def merge_status(repositories):
@@ -322,7 +338,21 @@ def merge_status(repositories):
         pull_requests += entries(report, 'pull_requests')
         activity += entries(report, 'activity')
     activity.sort(key=lambda entry: str(entry.get('at', '')))
-    save(DIR + '/status.json', {'pull_requests': pull_requests[:PULL_REQUESTS], 'activity': activity[-ACTIVITY:]})
+    status = {'pull_requests': pull_requests[:PULL_REQUESTS], 'activity': activity[-ACTIVITY:]}
+    with open(DIR + '/status.json.tmp', 'w') as handle:
+        json.dump(status, handle, ensure_ascii=False, separators=(',', ':'))
+    os.replace(DIR + '/status.json.tmp', DIR + '/status.json')
+
+
+def forget_open(repository):
+    """Keeps only the merged pull requests in a repository's report once it has no open ones,
+    so the board does not show pull requests that closed without an agent."""
+    path = DIR + '/status.d/' + repository.replace('/', '__') + '.json'
+    report = load(path, None)
+    if isinstance(report, dict) and isinstance(report.get('pull_requests'), list):
+        report['pull_requests'] = [pr for pr in report['pull_requests']
+                                   if isinstance(pr, dict) and pr.get('state') == 'merged']
+        save(path, report)
 
 
 def trim(path):
@@ -394,6 +424,7 @@ def run_once(cfg, forced):
             todo.append(repository)
             continue
         if not found:
+            forget_open(repository)
             continue
         prints[repository] = fingerprint(found, template)
         # Nothing moved since the last run: the agent would only reach the same answer.
@@ -420,21 +451,26 @@ def run_once(cfg, forced):
         thread.start()
         running.append((job, thread))
 
-    while queue or running:
-        running[:] = [(job, thread) for job, thread in running if thread.is_alive()]
-        merge_status(repositories)
-        if queue:
-            job = queue[0]
-            ordered = job.repository in first
-            alone = ordered or heavy(costs, job.repository, memory)
-            if (alone and not running) or (not alone and len(running) < capacity
-                                            and not any(heavy(costs, other.repository, memory) or other.repository in first
-                                                        for other, _ in running)):
-                queue.pop(0)
-                start(job)
-                continue
-        draw(started, jobs, [job.repository for job in queue], capacity)
-        time.sleep(REFRESH)
+    try:
+        while queue or running:
+            running[:] = [(job, thread) for job, thread in running if thread.is_alive()]
+            merge_status(repositories)
+            if queue:
+                job = queue[0]
+                ordered = job.repository in first
+                alone = ordered or heavy(costs, job.repository, memory)
+                if (alone and not running) or (not alone and len(running) < capacity
+                                                and not any(heavy(costs, other.repository, memory)
+                                                            or other.repository in first for other, _ in running)):
+                    queue.pop(0)
+                    start(job)
+                    continue
+            draw(started, jobs, [job.repository for job in queue], capacity)
+            time.sleep(REFRESH)
+    finally:
+        # When the run fails here, its agents still end before the next run can start.
+        for _, thread in running:
+            thread.join()
     merge_status(repositories)
     for job in jobs:
         cost = costs.get(job.repository, {})
@@ -476,10 +512,6 @@ def main():
             upcoming = next_slot(cfg)
             with open(DIR + '/next-run', 'w') as handle:
                 handle.write(str(upcoming))
-        # Between runs only, so an update never stops an agent in the middle of its work.
-        if sources() != installed:
-            print('\nAn exchange installed a new loop; starting it.', flush=True)
-            os.execv('/bin/bash', ['/bin/bash', '--noprofile', '--norc', DIR + '/run.sh', *sys.argv[1:]])
         if os.path.exists(DIR + '/paused'):
             time.sleep(10)
             continue
@@ -510,6 +542,11 @@ def main():
             with open(DIR + '/next-run', 'w') as handle:
                 handle.write(str(upcoming))
             print(f'\nUpkeep waits for its next run at {time.strftime("%H:%M", time.gmtime(upcoming))} UTC.', flush=True)
+        # Between runs only, and never when one is due, so an update stops no agent and skips
+        # no run.
+        elif sources() != installed:
+            print('\nAn exchange installed a new loop; starting it.', flush=True)
+            os.execv('/bin/bash', ['/bin/bash', '--noprofile', '--norc', DIR + '/run.sh', *sys.argv[1:]])
         time.sleep(10)
 
 

@@ -297,13 +297,33 @@ class SchedulerTests(unittest.TestCase):
     def test_reports_of_any_shape_merge_into_a_bounded_status(self):
         (self.dir / 'status.d' / 'acme__web.json').write_text('[]')
         (self.dir / 'status.d' / 'acme__api.json').write_text(json.dumps({
-            'pull_requests': [{'number': n, 'note': 'x' * (5000 if n == 0 else 10)} for n in range(600)] + [7],
-            'activity': None}))
+            'pull_requests': [{'number': n, 'note': 'x' * (5000 if n == 0 else 2000)} for n in range(600)] + [7],
+            'activity': [{'at': 'b', 'text': '\ud800'}, {'at': 'a', 'text': 'kept'}]}))
         RUN['merge_status'](['acme/web', 'acme/api'])
-        status = json.loads((self.dir / 'status.json').read_text())
+        text = (self.dir / 'status.json').read_bytes()
+        self.assertLess(len(text), EXCHANGE['STATUS_LIMIT'])
+        status = json.loads(text)
         self.assertEqual(len(status['pull_requests']), RUN['PULL_REQUESTS'])
         self.assertEqual(status['pull_requests'][0]['number'], 1)
-        self.assertEqual(status['activity'], [])
+        self.assertEqual(status['activity'], [{'at': 'a', 'text': 'kept'}])
+        # A report Horizon could not read at all is left out.
+        (self.dir / 'status.d' / 'acme__api.json').write_text('{"pull_requests": [{"number": NaN}]}')
+        RUN['merge_status'](['acme/web', 'acme/api'])
+        self.assertEqual(json.loads((self.dir / 'status.json').read_text())['pull_requests'], [])
+
+    def test_a_repository_without_open_pull_requests_keeps_only_its_merges(self):
+        report = self.dir / 'status.d' / 'acme__web.json'
+        report.write_text(json.dumps({'pull_requests': [{'number': 1, 'state': 'ready'},
+                                                        {'number': 2, 'state': 'merged'}]}))
+        self.pulls.write_text('[]')
+        self.assertTrue(self.run_once())
+        self.assertEqual(self.agents_started(), 0)
+        self.assertEqual(json.loads(report.read_text())['pull_requests'], [{'number': 2, 'state': 'merged'}])
+
+    def test_the_panel_never_gets_a_control_sequence_from_a_log(self):
+        job = RUN['Job']('acme/web')
+        Path(job.log).write_text('first\n\x1b]52;c;ZXZpbA==\x07Fixed the build\n')
+        self.assertEqual(job.last_line(), ']52;c;ZXZpbA==Fixed the build')
 
     def test_a_run_the_loop_did_not_finish_is_closed_as_failed(self):
         RUN['record']({'started_at': 100, 'outcome': 'running'})
