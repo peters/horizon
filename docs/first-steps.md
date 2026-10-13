@@ -347,7 +347,7 @@ from `origin` before deploy. Commit and update the branch before you start.
 
 1. Open a workspace in a Git repository.
 2. Click **Menu** in the toolbar.
-3. Click **New cloud**.
+3. Click **Add cloud here**.
 
    Result: The **Where is your code?** step opens.
 

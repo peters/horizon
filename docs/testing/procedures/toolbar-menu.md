@@ -128,7 +128,7 @@ Give each result to the report with the task ID.
 
    Result: The cloud settings open. Close them.
 
-7. Open **Menu** and click **New cloud**.
+7. Open **Menu** and click **Add cloud here**.
 
    Result: The New cloud dialog opens for the current workspace. Click
    **Cancel**.

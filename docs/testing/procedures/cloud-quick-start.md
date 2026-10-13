@@ -112,7 +112,7 @@ items:
 
    Result: The Menu opens.
 
-2. Click **New cloud**.
+2. Click **Add cloud here**.
 
    Result: The New cloud dialog opens and reads `<plain>`.
 

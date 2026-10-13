@@ -111,10 +111,10 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 
 4. Click **Menu** in the toolbar.
 
-   Result: The Menu opens. Under the caption **CLOUD**, it shows **New cloud**,
-   **Cloud settings** and **Fit all clouds**.
+   Result: The Menu opens. Under the caption **CLOUD**, it shows
+   **Add cloud here**, **Cloud settings** and **Fit all clouds**.
 
-5. Click **New cloud**.
+5. Click **Add cloud here**.
 
    Result: The New cloud dialog opens.
 
@@ -995,27 +995,26 @@ This task starts no cloud. `<local>` is a new repository whose committed
 
    Result: `git -C <data-home>/smoke/local log --oneline` shows one commit.
 
-2. Click **New** in the sidebar.
+2. Move the pointer onto **+ New cloud** in the toolbar.
 
-   Result: A menu shows **Cloud** and **This PC**, in that order. Each row has a
-   one-line description. **Cloud GPU** is not in this menu. Under the description
-   of **Cloud**, the text `Checking machine prices…` changes in some seconds to
-   the machine of a quick start and its hourly price, for example
+   Result: A tooltip says that the new workspace gets a cloud worker. Under it,
+   the text `Checking machine prices…` changes in some seconds to the machine of
+   a quick start and its hourly price, for example
    `from €0.0088/h · 2 vCPU · 4 GB · Hetzner`. The price is the cheapest offer that
    **New cloud** shows for a quick start.
 
-3. Click **This PC**.
+3. Click **+ Workspace** in the toolbar.
 
    Result: A new empty workspace shows. No dialog opens.
 
-4. Click **New**, then **Cloud**. Then click **Cancel** in **New cloud**.
+4. Click **+ New cloud**. Then click **Cancel** in **New cloud**.
 
    Result: **New cloud** opens for a new workspace. After **Cancel**, that
    workspace is gone and the sidebar shows the same workspaces as before.
 
 5. Double-click an empty part of the canvas.
 
-   Result: This menu is the preset picker, not the menu of step 2. It shows the
+   Result: The preset picker opens. It shows the
    cloud choices **Cloud** and **Cloud GPU** first, then the heading **This PC**
    above the presets that make a workspace on this computer.
 
@@ -1035,14 +1034,14 @@ This task starts no cloud. `<local>` is a new repository whose committed
    Result: The dialog closes. The workspace has a terminal whose directory is
    `<home>/smoke/local`.
 
-9. Click **New**, then **Cloud**. Type `<home>/smoke/local` in the repository field.
+9. Click **+ New cloud**. Type `<home>/smoke/local` in the repository field.
    Select **Keep my choice for this repository**, then click **Open on This PC**.
 
    Result: The dialog closes, and a terminal opens in the repository.
    `<data-home>/.horizon/cloud/repository-choices.json` holds the path of `<local>`
    with `"local"`.
 
-10. Click **New**, then **Cloud**, and type `<home>/smoke/local` again.
+10. Click **+ New cloud** and type `<home>/smoke/local` again.
 
     Result: The dialog shows **You keep This PC for this repository.** with
     **Forget**, and **This repository runs on This PC** with **Open on This PC**.

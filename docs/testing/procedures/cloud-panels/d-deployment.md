@@ -206,7 +206,7 @@ fixture terminal.
 
 ### 6.2 D02 — Deploy a RunPod CPU cloud on a network volume
 
-1. Click **New** in the sidebar, then click **Cloud**.
+1. Click **+ New cloud** in the toolbar.
 
    Result: The New cloud dialog opens for a new workspace. The workspace of
    `smoke-a` is not the workspace of the new cloud.

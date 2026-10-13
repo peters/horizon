@@ -92,7 +92,7 @@ setup** commits `.horizon` and reads it as the repository profile.
 
 ### 6.1 S01 — Offer the setup choices
 
-1. Click **Menu**, then **New cloud**, and type `<home>/smoke/ci-app` as the
+1. Click **Menu**, then **Add cloud here**, and type `<home>/smoke/ci-app` as the
    repository.
 
    Result: The dialog shows **No cloud setup yet** with two cards: **Quick start**
