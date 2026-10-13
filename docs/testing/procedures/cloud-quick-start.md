@@ -397,7 +397,8 @@ key file.
 1. Open the panel picker of the cloud and click **Claude Code**.
 
    Result: A Claude Code panel opens and shows its prompt. It shows no first-run
-   dialog and no warning about the bypass of permissions.
+   dialog, no question about the trust of the folder and no warning about the
+   bypass of permissions.
 
 2. Type this task in the Claude Code panel and press Enter:
 

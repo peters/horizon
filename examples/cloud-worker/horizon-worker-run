@@ -86,7 +86,7 @@ if [ "$agent" = claude ] || [ "$agent" = shell ]; then
     # Isolated mode: the current folder is the repository, and none of its files may be
     # imported here.
     SEED_BYPASS="$([ "$approvals" = auto ] && echo 1)" python3 -I - <<'PY' || true
-import fcntl, json, os
+import fcntl, glob, json, os
 home = os.environ['HOME']
 bypass = os.environ.get('SEED_BYPASS') == '1'
 path = home + '/.claude.json'
@@ -94,6 +94,11 @@ key = os.environ.get('ANTHROPIC_API_KEY', '').strip()
 # Claude keeps approvals by the last 20 characters. A key no longer than that would be copied
 # whole, so it is not approved here and Claude asks about it as usual.
 tail = key[-20:] if len(key) > 20 else ''
+# Claude keeps the trust of a Git worktree under its repository, and here all worktrees of a
+# repository share one bare repository: the checkout, each session's worktree, the worktrees
+# an agent adds, and for a sibling its own. A person's answer is saved there too. Trust for
+# /workspace stops at a repository, so it covers only the folders outside one.
+trusted = ['/workspace', '/workspace/repository.git', *sorted(glob.glob('/workspace/siblings/*/repository.git'))]
 
 
 def current():
@@ -111,17 +116,18 @@ def seeded(raw):
         config = {}
     if not isinstance(config, dict):
         config = {}
+    # Claude saves only the settings that differ from its defaults, so no theme is recorded:
+    # dark is its default. Nor is the project onboarding flag, which Claude no longer reads
+    # and drops. A key that Claude removes would make every launch write the file again.
     config['hasCompletedOnboarding'] = True
-    config.setdefault('theme', 'dark')
     projects = config.get('projects')
     if not isinstance(projects, dict):
         projects = config['projects'] = {}
-    # Trust covers the folders below it: the checkout, the worktrees agents add, siblings.
-    entry = projects.get('/workspace')
-    if not isinstance(entry, dict):
-        entry = projects['/workspace'] = {}
-    entry['hasTrustDialogAccepted'] = True
-    entry['hasCompletedProjectOnboarding'] = True
+    for folder in trusted:
+        entry = projects.get(folder)
+        if not isinstance(entry, dict):
+            entry = projects[folder] = {}
+        entry['hasTrustDialogAccepted'] = True
     if tail:
         answers = config.get('customApiKeyResponses')
         if not isinstance(answers, dict):
