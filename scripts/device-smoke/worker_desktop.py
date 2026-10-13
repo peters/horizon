@@ -234,6 +234,7 @@ def main(argv=None):
     previous = {number: signal.getsignal(number) for number in (signal.SIGTERM, signal.SIGINT)}
     signal.signal(signal.SIGTERM, interrupted)
     process = None
+    launched = False
     try:
         built = None
         binary = args.horizon
@@ -272,13 +273,15 @@ def main(argv=None):
         }
         (state / 'worker-desktop.json').write_text(json.dumps(manifest, indent=2))
         print(json.dumps(manifest), flush=True)
+        launched = True
         code = process.wait()
         if code != 0:
             print(f'Horizon exited with code {code}; read {log_path}', file=sys.stderr)
             return 1
         return 0
     except KeyboardInterrupt:
-        return 0
+        # A stop after the manifest is the normal end; before it, nothing ran.
+        return 0 if launched else 130
     finally:
         # A second signal must not interrupt the stop.
         signal.signal(signal.SIGTERM, signal.SIG_IGN)

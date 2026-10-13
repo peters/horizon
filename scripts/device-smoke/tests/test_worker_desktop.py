@@ -207,6 +207,12 @@ class FreezeAndStopTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'Horizon exited with code 101 before its window showed'):
                     worker_desktop.main(arguments)
 
+    def test_an_interrupt_before_the_launch_is_not_a_success(self):
+        with tempfile.TemporaryDirectory() as raw:
+            arguments = ['--target-dir', str(Path(raw) / 'target'), '--state', str(Path(raw) / 'state')]
+            with mock.patch.object(worker_desktop, 'build', side_effect=KeyboardInterrupt):
+                self.assertEqual(worker_desktop.main(arguments), 130)
+
     def test_an_unreadable_display_is_named(self):
         process = subprocess.Popen(['sleep', '60'], start_new_session=True)
         self.addCleanup(worker_desktop.end_group, process)

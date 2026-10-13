@@ -358,6 +358,9 @@ To stop, press Ctrl-C, or send `SIGTERM` to `launcher_pid`. A command that runs
 in the background ignores `SIGINT`. The command sends `WM_DELETE_WINDOW` to the
 windows of `pid`, as a window manager does, so Horizon exits normally. After
 15 seconds it stops the process group. The state directory and the logs stay.
+The exit code is 0 after a stop of a running Horizon. A stop before the
+manifest, for example during the build, gives exit code 130. A failed build or
+launch gives a non-zero exit code and names the log to read.
 
 Options:
 
