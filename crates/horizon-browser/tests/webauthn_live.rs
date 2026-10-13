@@ -73,28 +73,30 @@ fn run_engine(backend: BackendKind) {
     let rp = RelyingParty::start();
     let exe = std::env::current_exe().expect("current exe");
     let frame_slot = Arc::new(FrameSlot::new());
-    let session = start_session(BrowserSessionConfig {
-        browser: BrowserConfig {
-            backend,
-            profile_root: Some(profiles.clone()),
-            webauthn_command: vec![
-                exe.display().to_string(),
-                FAKE_AUTHENTICATOR_FLAG.to_string(),
-                state.display().to_string(),
-            ],
-            ..BrowserConfig::default()
-        },
-        panel_local_id: "webauthn-live".into(),
-        initial_url: None,
-        width: 900,
-        height: 700,
-        frame_slot: Arc::clone(&frame_slot),
-        coordination: None,
-        capture_directory: None,
-        video: Arc::new(horizon_browser::VideoCaptureHandle::default()),
-        remote: None,
-    })
-    .expect("start session");
+    let session = LiveSession(Some(
+        start_session(BrowserSessionConfig {
+            browser: BrowserConfig {
+                backend,
+                profile_root: Some(profiles.clone()),
+                webauthn_command: vec![
+                    exe.display().to_string(),
+                    FAKE_AUTHENTICATOR_FLAG.to_string(),
+                    state.display().to_string(),
+                ],
+                ..BrowserConfig::default()
+            },
+            panel_local_id: "webauthn-live".into(),
+            initial_url: None,
+            width: 900,
+            height: 700,
+            frame_slot: Arc::clone(&frame_slot),
+            coordination: None,
+            capture_directory: None,
+            video: Arc::new(horizon_browser::VideoCaptureHandle::default()),
+            remote: None,
+        })
+        .expect("start session"),
+    ));
     wait_ready(&session);
 
     navigate(&session, &rp.url("/create"));
@@ -114,6 +116,7 @@ fn run_engine(backend: BackendKind) {
     navigate(&session, &rp.url("/refusals"));
     for (scenario, expected) in [
         ("foreign_rp_id", "SecurityError"),
+        ("empty_challenge", "TypeError"),
         ("malformed_options", "TypeError"),
         ("aborted_by_options", "AbortError"),
         ("conditional_available", "false"),
@@ -132,16 +135,7 @@ fn run_engine(backend: BackendKind) {
 
     check_hanging_requests(&session, &rp, &frame_slot, &state);
 
-    assert!(session.send(BrowserCommand::Stop));
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < deadline {
-        if matches!(
-            session.event_rx.recv_timeout(Duration::from_millis(100)),
-            Ok(BrowserEvent::Stopped { .. })
-        ) {
-            break;
-        }
-    }
+    drop(session);
     if std::env::var_os("HORIZON_LIVE_PROFILE_ROOT").is_some() {
         let _ = std::fs::remove_dir_all(profiles);
     }
@@ -197,6 +191,30 @@ fn check_hanging_requests(session: &BrowserSession, rp: &RelyingParty, frame_slo
         !frame_slot.passkey_pending()
     });
     assert_eq!(calls(state), 4);
+}
+
+/// Owns the browser session so a failing assertion still stops the browser:
+/// the drop during unwinding waits until the driver killed and reaped it.
+struct LiveSession(Option<BrowserSession>);
+
+impl std::ops::Deref for LiveSession {
+    type Target = BrowserSession;
+
+    fn deref(&self) -> &BrowserSession {
+        self.0.as_ref().expect("live session")
+    }
+}
+
+impl Drop for LiveSession {
+    fn drop(&mut self) {
+        let Some(session) = self.0.take() else {
+            return;
+        };
+        let shutdown = session.shutdown_signal();
+        if !(shutdown.wait(Duration::from_secs(15)) || shutdown.force_cleanup(Duration::from_secs(5))) {
+            eprintln!("webauthn_live: the browser did not stop; it may still run");
+        }
+    }
 }
 
 fn wait_ready(session: &BrowserSession) {
