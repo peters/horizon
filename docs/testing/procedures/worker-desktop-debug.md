@@ -77,6 +77,9 @@ These names apply in the steps:
 
 ### 6.1 W01: Start a quick start cloud
 
+> **CAUTION:** THIS STEP RENTS A HETZNER SERVER AND A VOLUME. Hetzner bills
+> them until you delete them in W09.
+
 1. In the client, open **Cloud**, then **New cloud**. Select the synthetic
    repository, **Quick start** and Hetzner. Start the cloud.
 

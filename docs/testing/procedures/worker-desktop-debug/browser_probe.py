@@ -72,11 +72,14 @@ def main():
     base = f'http://127.0.0.1:{server.server_address[1]}/'
     mcp = Mcp()
     panel = mcp.tool('browser_create', {'url': base})['panel']['panel_id']
-    stopping = []
-    signal.signal(signal.SIGTERM, lambda *_: stopping.append(True))
+    def stop(*_):
+        # Also interrupts a call that waits for a stalled browser service.
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, stop)
     try:
         sample = 0
-        while not stopping:
+        while True:
             sample += 1
             record = {'time': round(time.time(), 1), 'sample': sample}
             started = time.monotonic()
@@ -97,6 +100,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         mcp.tool('browser_close', {'panel_id': panel})
         mcp.process.stdin.close()
         mcp.process.wait(10)
