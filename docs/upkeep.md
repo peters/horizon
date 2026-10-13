@@ -208,7 +208,8 @@ started also starts agents for the repositories that did not change.
   exchange fails and Horizon does not know whether the worker got **Run now**, it
   sends the same token again. Thus one token starts one run at most. A loop that
   stops after it recorded the token and before the run started loses that run;
-  the next planned run follows. A value that is not a token asks for a run each
+  the next planned run follows. A loop that cannot record the token starts no
+  run for it. A value that is not a token asks for a run each
   time, as before.
 - When the schedule changes, the loop calculates the next run again.
 - Before an exchange writes a new loop, it writes an installing signal. After
@@ -290,6 +291,9 @@ The exchange and the loop guarantee these items:
 - The loop examines the repositories and the bots in `config.json` again. It
   leaves out the names that Horizon does not accept. Thus no name can start an
   option of `gh`, or change a file name or the agent instructions.
+- The loop reads `run-now` and `run-now-token` only as regular files, without
+  following a link and without waiting on a pipe, and at most 64 bytes of each.
+  It writes `run-now-token` through a new temporary file with a random name.
 - The loop gives the instructions to Codex on the standard input. Thus
   instructions that start with `-` are not options.
 - The loop starts Codex without approvals only when the worker lets agents run

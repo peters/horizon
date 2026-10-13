@@ -88,6 +88,8 @@ pub(in crate::app) struct Form {
     pub(in crate::app) find_error: Option<String>,
     /// The bots the catalog counted pull requests for.
     searched: BTreeSet<Bot>,
+    /// Try again was pressed: the next frame searches, whatever the bots.
+    retrying: bool,
     pub(in crate::app) codex_login: Option<bool>,
     pub(in crate::app) selected: BTreeSet<String>,
     /// The owner tab of the repository list; `None` shows the first owner.
@@ -114,6 +116,7 @@ impl Default for Form {
             finding: None,
             find_error: None,
             searched: BTreeSet::new(),
+            retrying: false,
             codex_login: None,
             selected: BTreeSet::new(),
             owner: None,
@@ -175,18 +178,33 @@ impl Form {
 
     /// Whether the catalog counts pull requests of other bots than the chosen ones.
     pub(in crate::app) fn stale(&self) -> bool {
-        self.finding.is_none() && !self.bots.is_empty() && self.searched != self.bots
+        self.finding.is_none() && (self.retrying || (!self.bots.is_empty() && self.searched != self.bots))
+    }
+
+    /// Forgets the counts when no bot is chosen: they belong to bots that are not chosen,
+    /// also when a search that started before arrives later.
+    pub(in crate::app) fn forget_counts_without_bots(&mut self) {
+        if !self.bots.is_empty() {
+            return;
+        }
+        self.searched.clear();
+        if self.catalog.repositories.iter().any(|repository| repository.open > 0) {
+            for repository in &mut self.catalog.repositories {
+                repository.open = 0;
+            }
+        }
     }
 
     /// Makes the next frame search again, after a search failed.
     pub(in crate::app) fn retry(&mut self) {
-        self.searched.clear();
+        self.retrying = true;
     }
 
     /// Starts a search for repositories with the GitHub sign-in of the cloud root `root`.
     pub(in crate::app) fn find(&mut self, root: PathBuf, ctx: &egui::Context) {
         let authors = self.authors();
         self.searched.clone_from(&self.bots);
+        self.retrying = false;
         let (tx, rx) = std::sync::mpsc::channel();
         let repaint = ctx.clone();
         std::thread::spawn(move || {
@@ -312,6 +330,8 @@ mod tests {
         assert!(!form.stale());
         form.retry();
         assert!(form.stale());
+        form.bots.clear();
+        assert!(form.stale(), "Try again searches also without a bot");
     }
 
     #[test]
@@ -322,5 +342,22 @@ mod tests {
         assert!(!form.stale());
         form.bots.insert(Bot::Renovate);
         assert!(form.stale());
+    }
+
+    #[test]
+    fn without_bots_no_counts_remain() {
+        use horizon_core::upkeep::CatalogRepository;
+        let mut form = Form::default();
+        form.searched.clone_from(&form.bots);
+        form.catalog.repositories.push(CatalogRepository {
+            name: "acme/web".into(),
+            open: 5,
+        });
+        form.selected.insert("acme/web".into());
+        form.bots.clear();
+        form.forget_counts_without_bots();
+        assert_eq!(form.catalog.open_in(&form.selected), 0);
+        form.bots.insert(Bot::Dependabot);
+        assert!(form.stale(), "a bot chosen again searches again");
     }
 }

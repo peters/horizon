@@ -206,30 +206,31 @@ fn row(ui: &mut Ui, repository: &CatalogRepository, chosen: bool) -> bool {
         Pos2::new(square.max.x + 10.0, rect.min.y),
         Pos2::new(rect.max.x - 10.0, rect.max.y),
     );
+    // The count is laid out first, so a long name is cut instead of the count.
     ui.scope_builder(
         UiBuilder::new()
             .max_rect(inner)
-            .layout(Layout::left_to_right(Align::Center)),
+            .layout(Layout::right_to_left(Align::Center)),
         |ui| {
-            ui.add(
-                egui::Label::new(
-                    RichText::new(repository.short_name())
-                        .size(12.5)
-                        .monospace()
-                        .color(theme::FG()),
-                )
-                .truncate()
-                .selectable(false),
-            );
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if repository.open > 0 {
-                    crate::upkeep_widget::pill(ui, &format!("{} open", repository.open), theme::PALETTE_GREEN());
-                } else {
-                    ui.add(
-                        egui::Label::new(RichText::new("no open pull requests").size(11.0).color(theme::FG_DIM()))
-                            .selectable(false),
-                    );
-                }
+            if repository.open > 0 {
+                crate::upkeep_widget::pill(ui, &format!("{} open", repository.open), theme::PALETTE_GREEN());
+            } else {
+                ui.add(
+                    egui::Label::new(RichText::new("no open pull requests").size(11.0).color(theme::FG_DIM()))
+                        .selectable(false),
+                );
+            }
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(repository.short_name())
+                            .size(12.5)
+                            .monospace()
+                            .color(theme::FG()),
+                    )
+                    .truncate()
+                    .selectable(false),
+                );
             });
         },
     );

@@ -56,6 +56,7 @@ impl HorizonApp {
             return;
         };
         form.receive();
+        form.forget_counts_without_bots();
         // The counts are those of the chosen bots: another choice searches again.
         if form.stale()
             && let Some(root) = self.upkeep_root()

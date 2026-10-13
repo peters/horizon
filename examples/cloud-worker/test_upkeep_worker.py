@@ -139,12 +139,20 @@ class ExchangeTests(unittest.TestCase):
             self.assertEqual((upkeep / 'run-now').read_text(), '')
             self.assertTrue(take())
             self.assertFalse(take(), 'no signal, no run')
-            # A token that cannot be recorded still runs, and the loop goes on.
-            (upkeep / 'run-now-token.tmp').mkdir()
+            # A token that cannot be recorded starts no run, and the loop goes on.
             (upkeep / 'run-now').write_text('d' * 32)
-            with contextlib.redirect_stdout(io.StringIO()):
-                self.assertTrue(take())
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    mock.patch('tempfile.mkstemp', side_effect=OSError('disk full')):
+                self.assertFalse(take())
             self.assertFalse((upkeep / 'run-now').exists())
+            # Pipes the agent planted never block the loop.
+            os.mkfifo(upkeep / 'run-now')
+            self.assertFalse(take())
+            (upkeep / 'run-now-token').unlink()
+            os.mkfifo(upkeep / 'run-now-token')
+            (upkeep / 'run-now').write_text('e' * 32)
+            self.assertTrue(take())
+            self.assertEqual((upkeep / 'run-now-token').read_text(), 'e' * 32)
 
     def test_a_planted_link_is_replaced_and_never_written_through(self):
         self.worker.upkeep.mkdir()

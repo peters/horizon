@@ -301,12 +301,13 @@ fn allow_chosen(connection: &Connection, runner: &Runner<'_>, cloud_id: &str, co
 /// Puts back the signals of a failed exchange: the worker may not have them. One the board
 /// asked for meanwhile is newer and wins.
 fn requeue(pending: &mut Signals, sent: Signals) {
-    pending.run_now |= sent.run_now;
-    pending.paused = pending.paused.or(sent.paused);
-    // The same token, so a worker that applied it already does not run twice.
-    if sent.run_now {
+    // The same token, so a worker that applied it already does not run twice; a Run now the
+    // board asked for meanwhile is a new one and keeps its own.
+    if sent.run_now && !pending.run_now {
         pending.run_token = sent.run_token;
     }
+    pending.run_now |= sent.run_now;
+    pending.paused = pending.paused.or(sent.paused);
 }
 
 /// Whether Upkeep allows `request` without the person: from the loop's own session, for a
@@ -349,6 +350,12 @@ mod tests {
         requeue(&mut pending, sent);
         assert_eq!(pending, sent, "the same Run now, with its token, goes again");
         assert!(pending.run_token.is_some());
+        let mut newer = Signals {
+            run_now: true,
+            ..Signals::default()
+        };
+        requeue(&mut newer, sent);
+        assert_eq!(newer.run_token, None, "a Run now asked for again gets a new token");
         let mut pending = Signals {
             run_now: false,
             paused: Some(false),

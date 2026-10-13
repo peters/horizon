@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -142,34 +143,42 @@ def codex_command(environment):
 
 
 def read_small(path):
+    """At most 64 bytes of the regular file `path`, or None. The folder is the agent's, so a
+    link, a pipe or a device there is never followed or opened in a way that blocks."""
     try:
-        with open(path, 'rb') as handle:
-            return handle.read(64)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
         return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        return os.read(fd, 64)
+    finally:
+        os.close(fd)
 
 
 def take_run_now():
     """Takes the Run now signal. Returns whether it asks for a run: a signal whose token the
     loop took before asks for none, since Horizon sends a token again when it did not learn
     whether an earlier exchange delivered it. The signal is moved aside first, so a new one
-    that an exchange writes meanwhile stays, and the token is recorded before the signal
-    goes, so a loop that stops in between never runs it twice."""
+    that an exchange writes meanwhile stays, and its token is recorded before the signal
+    goes: a loop that stops in between, or cannot record the token, never runs it twice."""
     taking = DIR + '/run-now.taking'
     try:
         os.replace(DIR + '/run-now', taking)
     except OSError:
         return False
     token = read_small(taking)
-    fresh = not token or token != read_small(DIR + '/run-now-token')
+    fresh = token is not None and (not token or token != read_small(DIR + '/run-now-token'))
     if token and fresh:
-        temporary = DIR + '/run-now-token.tmp'
         try:
-            with open(temporary, 'wb') as handle:
+            fd, temporary = tempfile.mkstemp(prefix='.run-now-token.', dir=DIR)
+            with os.fdopen(fd, 'wb') as handle:
                 handle.write(token)
             os.replace(temporary, DIR + '/run-now-token')
-        except OSError as error:  # a full disk must not end the loop
-            print(f'Could not record the Run now token: {error}', flush=True)
+        except OSError as error:  # a full disk must not end the loop, nor run a token twice
+            print(f'Could not record the Run now token, so it starts no run: {error}', flush=True)
+            fresh = False
     try:
         os.remove(taking)
     except OSError:
