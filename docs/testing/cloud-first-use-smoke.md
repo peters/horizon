@@ -13,7 +13,7 @@ functions. Keep the application's existing proportional font: 26 px modal title,
 14–15 px field text and 12–13 px supporting text. Left-align the form, with clear
 groups and one primary action. Do not add an issue or device picker.
 
-The toolbar **Menu** holds New cloud, Cloud settings and Fit all clouds. Remove the
+The toolbar shows **+ New cloud**, and its **Menu** holds Add cloud here, Cloud settings and Fit all clouds. Remove the
 floating Cloud/RunPod control strip from the canvas. Settings uses a compact
 modal sharing the New cloud surface, with RunPod access followed by individual
 agent choices and API-key/subscription options. Advanced paths and registry
@@ -21,7 +21,7 @@ bindings remain available without making them the first-use experience.
 
 ```text
 Menu (Cloud group)          Cloud settings
-  New cloud                 RunPod access       [masked key]
+  Add cloud here            RunPod access       [masked key]
   Cloud settings            Coding agents       [choices]
   Fit all clouds            Authentication       [API key | Login]
                             Advanced             [collapsed]
@@ -47,7 +47,7 @@ capabilities and missing authentication plainly.
 
 ## Acceptance scenarios
 
-1. Open Cloud from a fresh instance. New cloud leads to the missing-account
+1. Click **+ New cloud** in a fresh instance. New cloud leads to the missing-account
    setup route without a hidden-file prerequisite. Cancel and Escape allocate
    nothing; keyboard focus stays contained and returns to the previous view.
 2. Enter a compute key and choose one or both supported agents. Configure API
@@ -66,7 +66,7 @@ capabilities and missing authentication plainly.
    time, transfer speed and ETA only when measurable. Ready retains the measured
    time to worker readiness; it is not called application-visible startup time.
 6. Verify narrow and 4K viewports, scaling, resize/fit, nested fullscreen and
-   Escape. The cloud actions stay in the toolbar **Menu** at each width, settings
+   Escape. **+ New cloud** and the cloud actions of the toolbar **Menu** stay at each width, settings
    scroll without hiding their actions, and no controls overlap.
 7. Restart only the task-owned instance. Settings bindings, authentication modes,
    cloud membership and worker/session identities survive. Repeat failure,
