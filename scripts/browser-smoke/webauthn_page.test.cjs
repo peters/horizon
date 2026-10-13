@@ -22,7 +22,7 @@ function install() {
     class AuthenticatorAttestationResponse {}
     const context = vm.createContext({
         CredentialsContainer, PublicKeyCredential, AuthenticatorAssertionResponse, AuthenticatorAttestationResponse,
-        DOMException, TextEncoder, AbortController, btoa, atob,
+        DOMException, TextEncoder, AbortController, AbortSignal, btoa, atob,
     });
     context.navigator = {credentials: new CredentialsContainer()};
     vm.runInContext(`(${source})`, context)((message) => posted.push(JSON.parse(message)));
@@ -112,6 +112,17 @@ test('requests that no platform credential can satisfy never post', async () => 
         allowCredentials: [{type: 'password', id: new Uint8Array([1])}]}}), {name: 'NotAllowedError'});
     await assert.rejects(credentials.create({publicKey: {challenge, rp: {name: 'x'}, user, pubKeyCredParams,
         authenticatorSelection: {authenticatorAttachment: 'cross-platform'}}}), {name: 'NotAllowedError'});
+    assert.equal(posted.length, 0);
+    // Malformed options stay TypeErrors and an aborted signal wins over a refusal.
+    await assert.rejects(credentials.get({publicKey: {challenge: new Uint8Array(0),
+        allowCredentials: [{type: 'password', id: new Uint8Array([1])}]}}), {name: 'TypeError'});
+    await assert.rejects(credentials.get({publicKey: {challenge,
+        allowCredentials: [{type: 'password', id: 'not-a-buffer'}]}}), {name: 'TypeError'});
+    await assert.rejects(credentials.create({publicKey: {challenge, rp: {name: 'x'}, user,
+        pubKeyCredParams: [{type: 'public-key'}], authenticatorSelection: {authenticatorAttachment: 'cross-platform'}}}),
+        {name: 'TypeError'});
+    await assert.rejects(credentials.get({signal: AbortSignal.abort(), publicKey: {challenge,
+        allowCredentials: [{type: 'password', id: new Uint8Array([1])}]}}), {name: 'AbortError'});
     assert.equal(posted.length, 0);
     credentials.get({publicKey: {challenge, allowCredentials: []}});
     credentials.create({publicKey: {challenge, rp: {name: 'x'}, user, pubKeyCredParams,

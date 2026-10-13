@@ -54,26 +54,33 @@
         if (!Number.isInteger(alg)) throw new TypeError("pubKeyCredParams[].alg must be an integer");
         return alg;
     };
-    const credentialIds = (list) =>
-        Array.from(list || [])
-            .filter((entry) => entry && entry.type === "public-key")
-            .map((entry) => encode(entry.id));
+    // Converts every descriptor, as WebIDL does, so a bad id is a TypeError
+    // even in an entry of another type; then keeps the public-key ones.
+    const credentialIds = (list) => {
+        const descriptors = Array.from(list || []);
+        const ids = descriptors.map((entry) => ({ type: entry && entry.type, id: encode(entry && entry.id) }));
+        return { offered: descriptors.length, ids: ids.filter((entry) => entry.type === "public-key").map((entry) => entry.id) };
+    };
     const failure = (name, message) =>
         name === "TypeError" ? new TypeError(message) : new DOMException(message || NOT_ALLOWED, name || "NotAllowedError");
 
+    // Each builder throws TypeError for malformed options and returns a
+    // `refusal` for valid options that no platform credential can satisfy.
+    // The caller checks the abort signal between the two.
     const getOptions = (publicKey) => {
+        const challenge = challengeOf(publicKey.challenge);
         const allowed = credentialIds(publicKey.allowCredentials);
-        // A list with entries but none of type public-key allows no
-        // credential; an empty list would mean "any discoverable one".
-        if (!allowed.length && Array.from(publicKey.allowCredentials || []).length) {
-            throw new DOMException(NOT_ALLOWED, "NotAllowedError");
-        }
         return {
-            challenge: challengeOf(publicKey.challenge),
-            rp_id: text(publicKey.rpId),
-            allow_credentials: allowed,
-            user_verification: text(publicKey.userVerification),
-            timeout: timeoutOf(publicKey.timeout),
+            options: {
+                challenge,
+                rp_id: text(publicKey.rpId),
+                allow_credentials: allowed.ids,
+                user_verification: text(publicKey.userVerification),
+                timeout: timeoutOf(publicKey.timeout),
+            },
+            // Entries but none of type public-key allow no credential; an
+            // empty list would mean "any discoverable credential".
+            refusal: allowed.offered && !allowed.ids.length ? new DOMException(NOT_ALLOWED, "NotAllowedError") : null,
         };
     };
     const createOptions = (publicKey) => {
@@ -85,31 +92,36 @@
             || user.displayName === undefined || publicKey.pubKeyCredParams === undefined;
         if (missing) throw new TypeError("publicKey is missing a required member");
         const selection = publicKey.authenticatorSelection || {};
-        // The command answers as a platform authenticator, so a request for a
-        // roaming one has no authenticator here.
-        if (selection.authenticatorAttachment === "cross-platform") {
-            throw new DOMException(NOT_ALLOWED, "NotAllowedError");
-        }
+        const challenge = challengeOf(publicKey.challenge);
+        const userId = encode(user.id);
         const parameters = Array.from(publicKey.pubKeyCredParams);
         const algorithms = parameters.filter((parameter) => parameter && parameter.type === "public-key").map(algorithmOf);
-        // An empty list asks for the defaults; a list of only unknown types
-        // offers nothing that a public-key credential can use.
+        const excluded = credentialIds(publicKey.excludeCredentials);
+        let refusal = null;
         if (parameters.length && !algorithms.length) {
-            throw new DOMException("No supported public key algorithm", "NotSupportedError");
+            // An empty list asks for the defaults; a list of only unknown
+            // types offers nothing that a public-key credential can use.
+            refusal = new DOMException("No supported public key algorithm", "NotSupportedError");
+        } else if (selection.authenticatorAttachment === "cross-platform") {
+            // The command answers as a platform authenticator.
+            refusal = new DOMException(NOT_ALLOWED, "NotAllowedError");
         }
         return {
-            challenge: challengeOf(publicKey.challenge),
-            rp_id: text(rp.id),
-            rp_name: text(rp.name),
-            user: { id: encode(user.id), name: text(user.name), display_name: text(user.displayName) },
-            algorithms,
-            exclude_credentials: credentialIds(publicKey.excludeCredentials),
-            // An unknown residentKey counts as absent, so requireResidentKey applies.
-            resident_key: residentKeys.includes(selection.residentKey)
-                ? selection.residentKey
-                : selection.requireResidentKey ? "required" : undefined,
-            user_verification: text(selection.userVerification),
-            timeout: timeoutOf(publicKey.timeout),
+            options: {
+                challenge,
+                rp_id: text(rp.id),
+                rp_name: text(rp.name),
+                user: { id: userId, name: text(user.name), display_name: text(user.displayName) },
+                algorithms,
+                exclude_credentials: excluded.ids,
+                // An unknown residentKey counts as absent, so requireResidentKey applies.
+                resident_key: residentKeys.includes(selection.residentKey)
+                    ? selection.residentKey
+                    : selection.requireResidentKey ? "required" : undefined,
+                user_verification: text(selection.userVerification),
+                timeout: timeoutOf(publicKey.timeout),
+            },
+            refusal,
         };
     };
 
@@ -173,18 +185,21 @@
         nextId += 1;
         const id = nextId;
         let message;
+        let refusal;
         try {
-            const options = op === "get" ? getOptions(publicKey) : createOptions(publicKey);
-            message = stringify({ kind: "request", id, op, options });
+            const built = op === "get" ? getOptions(publicKey) : createOptions(publicKey);
+            refusal = built.refusal;
+            message = stringify({ kind: "request", id, op, options: built.options });
         } catch (error) {
-            const known = error instanceof TypeError || error instanceof DOMException;
-            return Promise.reject(known ? error : new TypeError(String(error)));
+            return Promise.reject(error instanceof TypeError ? error : new TypeError(String(error)));
         }
         if (encoder.encode(message).length > maxMessageBytes) {
             return Promise.reject(new TypeError("The publicKey options are too large"));
         }
-        // An options getter can abort the signal; check it after reading them.
+        // An options getter can abort the signal; check it after reading them,
+        // and before a refusal, as a browser does.
         if (signal?.aborted) return Promise.reject(signal.reason);
+        if (refusal) return Promise.reject(refusal);
         return new Promise((resolve, reject) => {
             const onAbort = () => {
                 if (!pending.delete(id)) return;
