@@ -516,6 +516,10 @@ mod tests {
     #[test]
     fn the_command_runs_as_the_agent_where_the_worker_isolates_it() {
         let remote = command("abc-123", &"a".repeat(40), &config(), Signals::default()).unwrap();
+        // The worker procedure in docs/testing/procedures/upkeep.md runs this exact command.
+        if let Some(path) = std::env::var_os("HORIZON_TEST_UPKEEP_COMMAND") {
+            std::fs::write(path, &remote).unwrap();
+        }
         assert!(remote.starts_with(
             "launcher=python3; if [ -f /run/horizon-tailnet/agent-isolation ]; then launcher='horizon-worker-tailnet agent python3'; fi;"
         ));

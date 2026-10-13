@@ -1,6 +1,6 @@
 ---
 procedure: upkeep
-feature: Upkeep board (status of the dependency pull request agent)
+feature: Upkeep board and worker loop (the dependency pull request agent)
 platforms: [linux]
 cost: none
 destructive: no
@@ -21,8 +21,9 @@ board.
 
 - Candidate: a Horizon build with the `upkeep` panel kind.
 - Platforms: Linux host.
-- This procedure does not test: the Upkeep agent, its worker or its schedule. The
-  board reads a synthetic status document.
+- This procedure does not test: the Upkeep agent or its schedule. The board reads a
+  synthetic status document. UPK-07 runs the worker exchange in a local container,
+  not on a cloud worker.
 
 ## 3. Safety
 
@@ -34,6 +35,8 @@ names made-up repositories and one public pull request.
 - An isolated test desktop that a native VNC Device panel shows (see the AGENTS.md
   UI test rules).
 - Network access to github.com for task UPK-03.
+- For task UPK-07: Docker, a Rust toolchain for this repository, and a Horizon
+  worker image (`ghcr.io/peters/horizon-worker-base`) on this computer.
 
 ## 5. Setup
 
@@ -183,9 +186,32 @@ names made-up repositories and one public pull request.
 
    Result: **Next run** shows **Paused** and **No runs until resumed**.
 
+### 6.7 UPK-07 — The worker exchange keeps root out of the agent folders
+
+1. Run `HORIZON_TEST_UPKEEP_COMMAND=<folder>/command.sh cargo test -p horizon-core --lib upkeep::worker`.
+   Use a new, empty folder outside the repository.
+
+   Result: The tests pass. `<folder>/command.sh` holds the remote command of one
+   exchange, as Horizon builds it.
+
+2. Run `docs/testing/procedures/upkeep/worker.sh <image> <folder>/command.sh`.
+   `<image>` is the worker image. The script starts a container without network. In
+   the container, the agent account puts links to `/etc/hostname` and `/etc/shadow`
+   in its Upkeep folders. Then root runs the command two times: first without the
+   agent isolation, then with it.
+
+   Result: The script shows `PASS` for each of these items, and it stops with exit
+   status 0:
+   - `root without isolation is refused`
+   - `the exchange answers`
+   - `no file outside the folders changed`
+   - `the links are replaced by files`
+   - `the agent account owns every written path`
+   - `the loop runs as the agent account`
+
 ## 7. Pass criteria
 
-- UPK-01 to UPK-06 give the results above.
+- UPK-01 to UPK-07 give the results above.
 
 ## 8. Cleanup
 
