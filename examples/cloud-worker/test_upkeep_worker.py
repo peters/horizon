@@ -64,7 +64,7 @@ class ExchangeTests(unittest.TestCase):
         self.worker = Worker(directory.name)
 
     def test_installs_the_loop_and_binding_and_starts_the_session(self):
-        answer = self.worker.exchange(payload(run_now=True, paused=True))
+        answer = self.worker.exchange(payload(run_now=True))
         upkeep = self.worker.upkeep
         self.assertEqual(json.loads((upkeep / 'config.json').read_text()), {'repositories': ['acme/web']})
         self.assertEqual(stat.S_IMODE(upkeep.stat().st_mode), 0o700)
@@ -77,11 +77,16 @@ class ExchangeTests(unittest.TestCase):
         self.assertTrue((binding / 'launch-requested').is_file())
         self.assertTrue((self.worker.data / SESSION).is_dir())
         self.assertEqual(answer, {'loop': True, 'settled': False, 'runs': [], 'next_run': None,
-                                  'paused': True, 'status': None})
+                                  'paused': False, 'status': None})
         started = self.worker.calls[-1]
         self.assertEqual(started[:4], ('new-session', '-d', '-s', SESSION))
         self.assertEqual(started[-2:], (str(upkeep) + '/run.sh', SESSION))
         self.assertEqual([name for name in os.listdir(upkeep) if name.startswith('.')], [])
+        # A pause drops Run now, and Run now while paused is not kept for the resume.
+        self.assertTrue(self.worker.exchange(payload(paused=True))['paused'])
+        self.assertFalse((upkeep / 'run-now').exists())
+        self.worker.exchange(payload(run_now=True))
+        self.assertFalse((upkeep / 'run-now').exists())
         # Resume clears the pause; an unchanged file is left as it is.
         before = (upkeep / 'config.json').stat().st_ino
         self.assertFalse(self.worker.exchange(payload(paused=False))['paused'])
@@ -98,8 +103,9 @@ class ExchangeTests(unittest.TestCase):
         self.worker.exchange(payload(run_now=True, paused=True))
         self.assertEqual(self.worker.outside.read_text(), 'untouched')
         self.assertFalse((self.worker.root / 'created-through-link').exists())
+        self.assertFalse(os.path.lexists(self.worker.upkeep / 'run-now'))
         for path in (self.worker.upkeep / 'config.json', self.worker.upkeep / 'run.sh',
-                     self.worker.upkeep / 'run-now', binding / 'revision'):
+                     self.worker.upkeep / 'paused', binding / 'revision'):
             self.assertFalse(path.is_symlink(), path)
             self.assertTrue(path.is_file(), path)
 
@@ -142,15 +148,16 @@ class ExchangeTests(unittest.TestCase):
 
     def test_a_run_file_of_the_agent_cannot_make_the_answer_invalid(self):
         self.worker.upkeep.mkdir(mode=0o700)
-        lines = ['{"started_at": 1, "x": NaN, "outcome": "done"}', '[' * 100000,
+        lines = ['{"started_at": 1, "x": NaN, "outcome": "done", "merged": 2}', '[' * 100000,
                  '{"started_at": 3, "outcome": "\\ud800"}',
                  '{"started_at": 99999999999999999999}', '{"started_at": true}',
-                 '{"started_at": 2, "finished_at": 1e400, "outcome": {"deep": [[[]]]}}']
+                 '{"started_at": 2, "finished_at": 1e400, "outcome": {"deep": [[[]]]}, "merged": -1}']
         (self.worker.upkeep / 'runs.jsonl').write_text('\n'.join(lines) + '\n')
         (self.worker.upkeep / 'next-run').write_text('99999999999999999999')
         os.mkdir(self.worker.upkeep / 'status.json')
         answer = self.worker.exchange()
-        self.assertEqual(answer['runs'], [{'started_at': 1, 'outcome': 'done'}, {'started_at': 3, 'outcome': '?'},
+        self.assertEqual(answer['runs'], [{'started_at': 1, 'merged': 2, 'outcome': 'done'},
+                                          {'started_at': 3, 'outcome': '?'},
                                           {'started_at': 2}])
         self.assertIsNone(answer['next_run'])
         self.assertIsNone(answer['status'])
@@ -307,7 +314,15 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(len(status['pull_requests']), RUN['PULL_REQUESTS'])
         self.assertEqual(status['pull_requests'][0]['number'], 1)
         self.assertEqual(status['activity'], [{'at': 'a', 'text': 'kept'}])
+        # Open pull requests of every repository come before merged ones, in turn.
+        (self.dir / 'status.d' / 'acme__web.json').write_text(json.dumps({'pull_requests': [
+            {'number': n, 'state': 'merged' if n < 3 else 'blocked'} for n in range(5)]}))
+        RUN['merge_status'](['acme/web', 'acme/api'])
+        numbers = [pr['number'] for pr in json.loads((self.dir / 'status.json').read_text())['pull_requests']]
+        self.assertEqual(numbers[:4], [3, 1, 4, 2])
+        self.assertEqual(len(numbers), RUN['PULL_REQUESTS'])
         # A report Horizon could not read at all is left out.
+        (self.dir / 'status.d' / 'acme__web.json').write_text('[]')
         (self.dir / 'status.d' / 'acme__api.json').write_text('{"pull_requests": [{"number": NaN}]}')
         RUN['merge_status'](['acme/web', 'acme/api'])
         self.assertEqual(json.loads((self.dir / 'status.json').read_text())['pull_requests'], [])

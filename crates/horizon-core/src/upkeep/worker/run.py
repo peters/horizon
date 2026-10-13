@@ -11,6 +11,7 @@ starts where the worker keeps agent approvals (ask): an Upkeep agent has nobody 
 """
 import glob
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -341,12 +342,18 @@ def entries(report, key):
 
 def merge_status(repositories):
     """One status document from the jobs' own reports, which the agents write as they like."""
-    pull_requests, activity = [], []
+    reports, activity = [], []
     for repository in repositories:
         report = load(DIR + '/status.d/' + repository.replace('/', '__') + '.json', {})
-        pull_requests += entries(report, 'pull_requests')
+        reports.append(entries(report, 'pull_requests'))
         activity += entries(report, 'activity')
     activity.sort(key=lambda entry: str(entry.get('at', '')))
+    # Open pull requests first, taken from every repository in turn, so a cut leaves out merged
+    # ones before open ones and never all of a late repository.
+    pull_requests = []
+    for merged_now in (False, True):
+        lists = [[pr for pr in report if (pr.get('state') == 'merged') == merged_now] for report in reports]
+        pull_requests += [pr for row in itertools.zip_longest(*lists) for pr in row if pr is not None]
     status = {'pull_requests': pull_requests[:PULL_REQUESTS], 'activity': activity[-ACTIVITY:]}
     with open(DIR + '/status.json.tmp', 'w') as handle:
         json.dump(status, handle, ensure_ascii=False, separators=(',', ':'))
@@ -377,6 +384,21 @@ def trim(path):
         os.replace(path + '.tmp', path)
     except OSError:
         pass
+
+
+def write_next(upcoming):
+    """Replaces next-run in one step, so the exchange never reads it half written."""
+    with open(DIR + '/next-run.tmp', 'w') as handle:
+        handle.write(str(upcoming))
+    os.replace(DIR + '/next-run.tmp', DIR + '/next-run')
+
+
+def merged():
+    """The pull requests that the status shows as merged."""
+    status = load(DIR + '/status.json', {})
+    pull_requests = status.get('pull_requests') if isinstance(status, dict) else None
+    return {(pr.get('repository'), pr.get('number')) for pr in pull_requests or []
+            if isinstance(pr, dict) and pr.get('state') == 'merged'} if isinstance(pull_requests, list) else set()
 
 
 def close_interrupted():
@@ -466,11 +488,10 @@ def run_once(cfg, forced):
         while queue or running:
             for job, thread in [entry for entry in running if not entry[1].is_alive()]:
                 running.remove((job, thread))
-                # Remembered as seen only after a clean finish, as the agent left it, so a change
-                # later in the run is not taken for one the agent saw.
-                found = open_pull_requests(job.repository, authors) if job.code == 0 else None
-                if found is not None:
-                    seen[job.repository] = fingerprint(found, template)
+                # Remembered as seen only after a clean finish, as the agent found it: whatever
+                # moved while it worked, its own pushes included, is looked at again next run.
+                if job.code == 0 and job.repository in prints:
+                    seen[job.repository] = prints[job.repository]
             merge_status(repositories)
             if queue:
                 job = queue[0]
@@ -511,8 +532,7 @@ def main():
     cfg = config()
     minutes = every(cfg)
     upcoming = next_slot(cfg)
-    with open(DIR + '/next-run', 'w') as handle:
-        handle.write(str(upcoming))
+    write_next(upcoming)
     print(f'Upkeep waits for its next run at {time.strftime("%H:%M", time.gmtime(upcoming))} UTC.', flush=True)
     installed = sources()
     while True:
@@ -522,8 +542,7 @@ def main():
         if every(cfg) != minutes or (paused and time.time() >= upcoming):
             minutes = every(cfg)
             upcoming = next_slot(cfg)
-            with open(DIR + '/next-run', 'w') as handle:
-                handle.write(str(upcoming))
+            write_next(upcoming)
         forced = not paused and os.path.exists(DIR + '/run-now')
         if not paused and (forced or time.time() >= upcoming):
             try:
@@ -533,6 +552,7 @@ def main():
             cfg = config()
             begun = int(time.time())
             record({'started_at': begun, 'outcome': 'running'})
+            before = merged()
             try:
                 ok = run_once(cfg, forced)
             except Exception as error:  # noqa: BLE001 - one failed run must not end the loop
@@ -540,7 +560,7 @@ def main():
                 ok = False
             ended = int(time.time())
             record({'started_at': begun, 'finished_at': ended, 'outcome': 'done' if ok else 'failed',
-                    'exit': 0 if ok else 1})
+                    'exit': 0 if ok else 1, 'merged': len(merged() - before)})
             # Run now during this run asked for the run that just ended.
             try:
                 os.remove(DIR + '/run-now')
@@ -553,8 +573,7 @@ def main():
                 slot += every(cfg) * 60
             minutes = every(cfg)
             upcoming = next_slot(cfg)
-            with open(DIR + '/next-run', 'w') as handle:
-                handle.write(str(upcoming))
+            write_next(upcoming)
             print(f'\nUpkeep waits for its next run at {time.strftime("%H:%M", time.gmtime(upcoming))} UTC.', flush=True)
         # Between runs only, and never when one is due, so an update stops no agent and skips
         # no run.

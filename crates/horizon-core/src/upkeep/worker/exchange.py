@@ -147,19 +147,27 @@ def install(payload, upkeep):
         os.close(data)
 
 
+def remove(parent, name):
+    try:
+        os.unlink(name, dir_fd=parent)
+    except FileNotFoundError:
+        pass
+    except IsADirectoryError as error:
+        raise Refused(f'{name} is a folder') from error
+
+
 def signal(payload, upkeep):
-    if payload.get('run_now'):
-        write(upkeep, 'run-now', '')
+    """Pause and resume first: Run now while paused is dropped, so a resume never starts a
+    run that was asked for long before."""
     paused = payload.get('paused')
     if paused is True:
         write(upkeep, 'paused', '')
     elif paused is False:
-        try:
-            os.unlink('paused', dir_fd=upkeep)
-        except FileNotFoundError:
-            pass
-        except IsADirectoryError as error:
-            raise Refused('paused is a folder') from error
+        remove(upkeep, 'paused')
+    if read(upkeep, 'paused', 0) is not None:
+        remove(upkeep, 'run-now')
+    elif payload.get('run_now'):
+        write(upkeep, 'run-now', '')
 
 
 def tmux(*args):
@@ -207,6 +215,8 @@ def run_record(line):
     record = {'started_at': run['started_at']}
     if moment(run.get('finished_at')) is not None:
         record['finished_at'] = run['finished_at']
+    if type(run.get('merged')) is int and 0 <= run['merged'] < 2 ** 31:
+        record['merged'] = run['merged']
     if isinstance(run.get('outcome'), str):
         # A lone surrogate from a \ud800 escape is not valid JSON for Horizon.
         record['outcome'] = run['outcome'][:40].encode('utf-8', 'replace').decode()

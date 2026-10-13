@@ -137,12 +137,13 @@ fn the_document_keeps_the_last_record_of_each_run() {
         r#"{"loop": true, "paused": false, "next_run": 1800000000,
             "status": "{\"pull_requests\": [{\"repository\": \"acme/web\"}]}",
             "runs": [{"started_at": 1799996400, "outcome": "running"},
-                     {"started_at": 1799996400, "finished_at": 1799997000, "outcome": "done"}]}"#,
+                     {"started_at": 1799996400, "finished_at": 1799997000, "outcome": "done", "merged": 2}]}"#,
     )
     .unwrap();
     let document = exchange.document(&config());
     assert_eq!(document["runs"].as_array().unwrap().len(), 1);
     assert_eq!(document["runs"][0]["outcome"], "done");
+    assert_eq!(document["runs"][0]["merged"], 2);
     assert_eq!(document["pull_requests"][0]["repository"], "acme/web");
     assert_eq!(document["schedule"]["every_minutes"], 60);
 }

@@ -410,6 +410,9 @@ impl Exchange {
             if let Some(finished) = record.get("finished_at").and_then(serde_json::Value::as_i64) {
                 run["finished_at"] = rfc3339(finished).into();
             }
+            if let Some(merged) = record.get("merged").and_then(serde_json::Value::as_u64) {
+                run["merged"] = merged.into();
+            }
             if let Some(slot) = runs.iter_mut().find(|(at, _)| *at == started) {
                 slot.1 = run;
             } else {

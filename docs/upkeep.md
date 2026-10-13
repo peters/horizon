@@ -107,20 +107,27 @@ exchange yet. The exchange does these steps:
    not run the loop.
 5. It reads back the runs, the next run time and the status that the agents wrote.
 
-The loop starts one run on the schedule, or sooner after **Run now**. It starts no
-run while the loop has the pause signal. A run lists the open pull requests of the
-bots in each repository. It starts one Codex agent for each repository that has
-pull requests that changed since the last clean run. The repositories in the
-order list run one at a time first. Then the other repositories run side by side.
-The number of agents that run side by side depends on the processor cores, the
-memory and the peak memory of earlier runs. The loop stops an agent and all of its
-processes after 90 minutes. A run that **Run now** started also starts agents for
-the repositories that did not change. **Run now** during a run starts no second
-run. A pause skips the runs on the schedule while it continues. When an exchange
-installed a new loop, the loop starts the new loop between two runs. When the schedule changes, the loop
-calculates the next run again. When the loop starts, it records a run that did not
-end (for example, because the loop was stopped) as failed. The loop keeps the last
-1 MiB of a log of an agent that grew to more than 8 MiB.
+The loop starts one run on the schedule, or sooner after **Run now**. A run lists
+the open pull requests of the bots in each repository. It starts one Codex agent
+for each repository whose pull requests changed after the start of its last agent
+that ended without an error. A run that **Run now** started also starts agents for
+the repositories that did not change.
+
+- The repositories in the order list run one at a time first. Then the other
+  repositories run side by side. The number of agents that run side by side
+  depends on the processor cores, the memory and the peak memory of earlier runs.
+- The loop stops an agent and all of its processes after 90 minutes.
+- The loop records the number of pull requests that each run merged. A pull
+  request counts when the status shows it as merged after the run and not before.
+- The pause signal stops the schedule. The runs that the pause covers do not
+  occur. **Run now** has no effect while the schedule stops or while a run
+  continues.
+- When the schedule changes, the loop calculates the next run again.
+- When an exchange installed a new loop, the loop starts the new loop between two
+  runs.
+- When the loop starts, it records a run that did not end (for example, because
+  the loop was stopped) as failed.
+- The loop keeps the last 1 MiB of an agent log that grew to more than 8 MiB.
 
 ## Trust boundary of the worker loop
 
@@ -177,8 +184,9 @@ The exchange and the loop guarantee these items:
     lowercase hexadecimal characters.
 - The loop merges the reports of the agents into one status. It keeps only list
   entries that are valid JSON objects of at most 2 KiB and 32 levels. It keeps at
-  most 300 pull requests and the newest 80 activity lines. Thus the status stays
-  below the 1 MiB that the exchange reads, and Horizon can parse it.
+  most 300 pull requests and the newest 80 activity lines. Open pull requests come
+  first, one from each repository in turn, then the merged pull requests. Thus the
+  status stays below the 1 MiB that the exchange reads, and Horizon can parse it.
 - When a repository has no open pull requests from the bots, the loop removes
   its open pull requests from the status. It keeps the merged pull requests.
 - The live panel of the loop shows lines from the logs of the agents. The loop
