@@ -181,10 +181,12 @@ def signal(payload, upkeep):
         remove(upkeep, 'run-now')
     elif run_now:
         token = run_now if isinstance(run_now, str) and RUN_TOKEN.fullmatch(run_now) else None
-        if token is None or read(upkeep, 'run-now-token', 64) != token.encode():
+        if token is None:
             write(upkeep, 'run-now', '')
-            if token is not None:
-                write(upkeep, 'run-now-token', token)
+        elif token.encode() not in (read(upkeep, 'run-now', 64), read(upkeep, 'run-now-token', 64)):
+            # The signal holds its token. The loop records the token when it takes the signal,
+            # so a token sent again is pending or taken, and never asks for a second run.
+            write(upkeep, 'run-now', token)
 
 
 def tmux(*args):

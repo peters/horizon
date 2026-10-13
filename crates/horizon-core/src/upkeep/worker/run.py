@@ -141,6 +141,42 @@ def codex_command(environment):
             '--dangerously-bypass-approvals-and-sandbox', '-']
 
 
+def read_small(path):
+    try:
+        with open(path, 'rb') as handle:
+            return handle.read(64)
+    except OSError:
+        return None
+
+
+def take_run_now():
+    """Takes the Run now signal. Returns whether it asks for a run: a signal whose token the
+    loop took before asks for none, since Horizon sends a token again when it did not learn
+    whether an earlier exchange delivered it. The signal is moved aside first, so a new one
+    that an exchange writes meanwhile stays, and the token is recorded before the signal
+    goes, so a loop that stops in between never runs it twice."""
+    taking = DIR + '/run-now.taking'
+    try:
+        os.replace(DIR + '/run-now', taking)
+    except OSError:
+        return False
+    token = read_small(taking)
+    fresh = not token or token != read_small(DIR + '/run-now-token')
+    if token and fresh:
+        temporary = DIR + '/run-now-token.tmp'
+        try:
+            with open(temporary, 'wb') as handle:
+                handle.write(token)
+            os.replace(temporary, DIR + '/run-now-token')
+        except OSError as error:  # a full disk must not end the loop
+            print(f'Could not record the Run now token: {error}', flush=True)
+    try:
+        os.remove(taking)
+    except OSError:
+        pass
+    return fresh
+
+
 def every(cfg):
     try:
         return max(15, int(cfg.get('every_minutes', 60)))
@@ -604,12 +640,10 @@ def main():
             minutes = every(cfg)
             upcoming = next_slot(cfg)
             write_next(upcoming, minutes)
-        forced = not paused and os.path.exists(DIR + '/run-now')
+        forced = not paused and take_run_now()
         if not paused and (forced or time.time() >= upcoming):
-            try:
-                os.remove(DIR + '/run-now')
-            except OSError:
-                pass
+            # A Run now that came since is taken too, with its token: it asked for this run.
+            take_run_now()
             cfg = config()
             begun = int(time.time())
             record({'started_at': begun, 'outcome': 'running'})
@@ -622,11 +656,9 @@ def main():
             ended = int(time.time())
             record({'started_at': begun, 'finished_at': ended, 'outcome': 'done' if ok else 'failed',
                     'exit': 0 if ok else 1, 'merged': len(merged() - before)})
-            # Run now during this run asked for the run that just ended.
-            try:
-                os.remove(DIR + '/run-now')
-            except OSError:
-                pass
+            # Run now during this run asked for the run that just ended. Its token is
+            # recorded, so the same Run now sent again starts no run either.
+            take_run_now()
             # Slots that passed while the run was busy were skipped, never run beside it.
             slot = (begun // (every(cfg) * 60) + 1) * every(cfg) * 60
             while slot < ended:

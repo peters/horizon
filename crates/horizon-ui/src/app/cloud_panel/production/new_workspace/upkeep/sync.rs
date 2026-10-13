@@ -83,12 +83,14 @@ impl HorizonApp {
                 continue;
             };
             // The card never offers a request that this Upkeep allowed, also when the card's
-            // own poll listed it just before the exchange allowed it.
+            // own poll listed it just before the exchange allowed it. The id comes from the
+            // worker, so a request must also be one Upkeep would allow to be hidden.
             if !sync.allowed.is_empty() {
+                let session = worker::session(cloud_id);
                 runtime
                     .github_requests
                     .list
-                    .retain(|request| !sync.allowed.contains(&request.id));
+                    .retain(|request| !(sync.allowed.contains(&request.id) && allowed(request, &session, config)));
             }
             let Some(state) = runtime
                 .state

@@ -117,17 +117,34 @@ class ExchangeTests(unittest.TestCase):
         upkeep = self.worker.upkeep
         token = 'b' * 32
         self.worker.exchange(payload(run_now=token))
-        self.assertTrue((upkeep / 'run-now').is_file())
-        # The loop took it; a retry of the same Run now must not ask for another run.
-        (upkeep / 'run-now').unlink()
-        self.worker.exchange(payload(run_now=token))
-        self.assertFalse((upkeep / 'run-now').exists())
-        self.worker.exchange(payload(run_now='c' * 32))
-        self.assertTrue((upkeep / 'run-now').is_file())
-        # A value that is not a token still asks for a run, as before.
-        (upkeep / 'run-now').unlink()
-        self.worker.exchange(payload(run_now='../x'))
-        self.assertTrue((upkeep / 'run-now').is_file())
+        self.assertEqual((upkeep / 'run-now').read_text(), token)
+        take = RUN['take_run_now']
+        with mock.patch.dict(take.__globals__, DIR=str(upkeep)):
+            # Sent again while pending: still one signal.
+            self.worker.exchange(payload(run_now=token))
+            self.assertTrue(take())
+            self.assertFalse((upkeep / 'run-now').exists())
+            self.assertEqual((upkeep / 'run-now-token').read_text(), token)
+            # Taken already: sending it again asks for nothing.
+            self.worker.exchange(payload(run_now=token))
+            self.assertFalse((upkeep / 'run-now').exists())
+            # A loop that stopped after it recorded the token never runs it twice.
+            (upkeep / 'run-now').write_text(token)
+            self.assertFalse(take())
+            self.assertFalse((upkeep / 'run-now').exists())
+            self.worker.exchange(payload(run_now='c' * 32))
+            self.assertTrue(take())
+            # A value that is not a token still asks for a run each time, as before.
+            self.worker.exchange(payload(run_now='../x'))
+            self.assertEqual((upkeep / 'run-now').read_text(), '')
+            self.assertTrue(take())
+            self.assertFalse(take(), 'no signal, no run')
+            # A token that cannot be recorded still runs, and the loop goes on.
+            (upkeep / 'run-now-token.tmp').mkdir()
+            (upkeep / 'run-now').write_text('d' * 32)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertTrue(take())
+            self.assertFalse((upkeep / 'run-now').exists())
 
     def test_a_planted_link_is_replaced_and_never_written_through(self):
         self.worker.upkeep.mkdir()

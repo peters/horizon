@@ -57,7 +57,10 @@ made-up repositories and one public pull request.
   of Codex. Bind the full credentials folder into the fixture, not single token
   files: Horizon saves a renewed GitHub sign-in with an atomic rename.
 - For task UPK-10: a repository `<repo>` with at least one open Dependabot pull
-  request, where you are permitted to merge Dependabot pull requests.
+  request, and a second repository `<second>`, both where you are permitted to merge
+  Dependabot pull requests.
+- A browser that is signed in to the GitHub account of Cloud settings. Each new
+  cloud asks for one GitHub authorization.
 
 ## 5. Setup
 
@@ -230,6 +233,12 @@ made-up repositories and one public pull request.
    - `the agent account owns every written path`
    - `the loop runs as the agent account`
 
+3. Run `python3 -B -m unittest discover -s examples/cloud-worker -p test_upkeep_worker.py`.
+
+   Result: The tests pass. They include
+   `test_a_run_now_sent_again_with_its_token_starts_one_run`: a **Run now** that is
+   sent again with its token starts one run only.
+
 ### 6.8 UPK-08 — Upkeep in the New workspace menu
 
 1. Start the candidate in the fixture. Click the arrow of **New workspace**.
@@ -267,54 +276,89 @@ made-up repositories and one public pull request.
    Result: The dialog searches again. The counts are the open pull requests of
    Dependabot and Renovate.
 
-5. Click **Renovate** again, then click the row of `<repo>`.
+5. Click **Renovate** again.
+
+   Result: The dialog searches again for Dependabot only.
+
+6. Click the row of `<repo>`.
 
    Result: The row is selected. The owner tab shows `1`. The summary shows
    **1 repository** and the open pull requests of `<repo>`. **Start Upkeep** is
    available.
 
-6. Click **Clear**.
+7. Click **Clear**.
 
    Result: The row is not selected. **Start Upkeep** is unavailable and the footer
    shows **Choose at least one repository.**
 
 ### 6.10 UPK-10 — Start Upkeep on Hetzner
 
-1. Select `<repo>` again. Click **Start Upkeep**.
+> **CAUTION:** THE NEXT STEP RENTS A HETZNER SERVER AND A VOLUME, AND GIVES THE AGENT
+> PUSH ACCESS TO `<repo>` AND `<second>`. The agent can merge their Dependabot pull
+> requests.
+
+1. Select `<repo>` and `<second>`.
+
+   Result: The summary shows **2 repositories**.
+
+2. Click **Start Upkeep**.
 
    Result: The footer shows **Starting Upkeep...** with a spinner. When the
    checkout of `<repo>` is not on this computer, Horizon clones it first.
 
-2. Wait until the dialog closes.
+3. Wait until the dialog closes.
 
    Result: The workspace **Upkeep** shows the cloud card and the board. The card
    shows `Hetzner / quick-start`. The board shows **Upkeep has not reported
    yet.**
 
-3. Wait until the card shows **Ready**.
+4. Close Horizon while the card shows **Provision worker** or **Check readiness**.
+
+   Result: Horizon closes. The cloud start stops on this computer.
+
+5. Start Horizon again in the same session.
+
+   Result: The card continues the start.
+
+> **CAUTION:** THE NEXT STEP GIVES THE CLOUD ACCESS TO THE GITHUB ACCOUNT OF CLOUD
+> SETTINGS.
+
+6. When the card asks to connect GitHub, finish the authorization in the browser
+   that is signed in to GitHub.
+
+   Result: The card shows that GitHub is signed in for 1 repository.
+
+7. Wait until the card shows **Ready**.
 
    Result: Within one minute, the board shows the agent, **every hour**, the worker
-   **Hetzner, always on** and **1 repository**. The panel **Upkeep agent** opens
+   **Hetzner, always on** and **2 repositories**. The panel **Upkeep agent** opens
    in the workspace and shows the tmux session of the loop.
 
-4. On the worker, examine `/workspace/home/upkeep/runs.jsonl`.
+8. Open the panel picker of the cloud and click **Shell**.
 
-   Result: Within two minutes after **Ready**, the file has a run record. The
-   first run does not wait for the next full hour. The run started an agent for
-   `<repo>`.
+   Result: A shell panel on the worker opens.
 
-5. Wait until the agent asks for GitHub access to `<repo>`.
+9. In the shell panel, type `cat /workspace/home/upkeep/runs.jsonl`.
+
+   Result: Within two minutes after **Ready**, the file shows exactly one run that
+   started, also after the restart of steps 4 and 5. The first run does not wait for the
+   next full hour. The run started an agent for each repository.
+
+10. Wait until the agent of `<second>` asks for GitHub access to it.
 
    Result: Horizon allows the request without a prompt. The cloud card shows no
-   request. The agent log shows that it can reach `<repo>`.
+   request. The agent log shows that it can reach `<second>`.
 
-6. Wait until the run ends.
+11. Wait until the run ends.
 
    Result: The board shows the pull requests of `<repo>` with their states, and
    **Latest run** shows the lines of the agent. Each pull request that the agent
    worked on has one comment that starts with `<!-- upkeep -->`.
 
 ### 6.11 UPK-11 — Remove the Upkeep cloud
+
+> **CAUTION:** THE NEXT STEP DELETES THE SERVER, THE VOLUME AND THE SSH KEY OF THE
+> CLOUD. Delete only the cloud that UPK-10 made.
 
 1. On the card, delete the cloud.
 
