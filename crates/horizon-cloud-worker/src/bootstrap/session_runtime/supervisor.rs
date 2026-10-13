@@ -222,7 +222,7 @@ impl Terminal {
             OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
             Mode::RUSR | Mode::WUSR,
         )?);
-        config.write_all(b"set-option -g exit-empty off\nset-option -g remain-on-exit on\nset-option -g history-limit 2000\nset-option -g default-shell /bin/sh\nset-option -g update-environment ''\nset-option -g status off\nset-option -g window-size smallest\nset-option -g prefix None\nset-option -g prefix2 None\nunbind-key -a\nunbind-key -a -T root\n")?;
+        config.write_all(b"set-option -g exit-empty off\nset-option -g remain-on-exit on\nset-option -g history-limit 10000\nset-option -g default-shell /bin/sh\nset-option -g update-environment ''\nset-option -g status off\nset-option -g window-size smallest\nset-option -g prefix None\nset-option -g prefix2 None\nunbind-key -a\nunbind-key -a -T root\n")?;
         config.sync_all()?;
         directory.sync_all()?;
         parent.sync_all()?;

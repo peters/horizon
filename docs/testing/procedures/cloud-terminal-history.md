@@ -198,6 +198,12 @@ next attach, one time only.
    Result: The agent draws its screen again at the new width. The history
    indicator still shows the history.
 
+4. Open a cloud Codex panel, or start another program on the alternate screen
+   that does not turn on mouse reports. Turn the mouse wheel up on the panel.
+
+   Result: The program gets arrow keys from the wheel, as in a local panel
+   with the same program. Codex, for example, shows an earlier prompt.
+
 ### 6.7 LOCAL — Keep the scrolling of other panels
 
 1. In a local Claude panel and in an SSH panel of **Remote Hosts**, write more
@@ -214,7 +220,8 @@ next attach, one time only.
 - 6.4 shows the alternate screen after an attach, and the normal history after
   the program ends.
 - 6.5 brackets a paste only for a program that asked for it.
-- 6.6 scrolls the history of an agent panel.
+- 6.6 scrolls the history of an agent panel. A program on the alternate
+  screen without mouse reports gets arrow keys from the wheel.
 - 6.7 shows no change for local and SSH panels.
 
 ## 8. Cleanup

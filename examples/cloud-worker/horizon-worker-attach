@@ -2,6 +2,11 @@
 """Attach this terminal to one agent session and pass the session's own output through.
 
   horizon-worker-attach SESSION
+  horizon-worker-attach --socket PATH PANE
+
+The first form attaches a session of the agent user's tmux server. The second form attaches the
+session of one pane on the tmux server at PATH and never starts a server there; the signed project
+sessions of horizon-cloud-worker use it through their private socket proxy.
 
 A plain tmux client redraws its screen instead of passing output on, so the terminal that
 shows a session kept no history of its own. This helper attaches tmux in control mode, which
@@ -347,8 +352,8 @@ def unescape(text):
 class Control:
     """One tmux control mode client: commands in, replies and session output out."""
 
-    def __init__(self, session):
-        self.process = subprocess.Popen(TMUX + ['-C', 'attach-session', '-t', '=' + session],
+    def __init__(self, tmux, session):
+        self.process = subprocess.Popen(tmux + ['-C', 'attach-session', '-t', session],
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         self.partial = b''
         self.block = None
@@ -488,11 +493,23 @@ def write(fd, data):
     return True
 
 
+def targets(argv):
+    """The tmux command, the session target and the pane target that the arguments name; None
+    when they name none."""
+    if len(argv) == 2 and SESSION.fullmatch(argv[1]):
+        return TMUX, '=' + argv[1], '=%s:' % argv[1]
+    if len(argv) == 4 and argv[1] == '--socket' and os.path.isabs(argv[2]) and PANE.fullmatch(argv[3]):
+        # A pane ID names the session that contains the pane too.
+        return ['tmux', '-u', '-N', '-S', argv[2]], argv[3], argv[3]
+    return None
+
+
 class Attachment:
-    def __init__(self, session, terminal):
-        self.session = session
+    def __init__(self, tmux, session, target, terminal):
+        self.tmux = tmux
+        self.target = target
         self.terminal = terminal
-        self.control = Control(session)
+        self.control = Control(tmux, session)
         self.output = Output()
         self.input = None
         self.pane = None
@@ -512,8 +529,20 @@ class Attachment:
             raise SystemExit('horizon-worker-attach: tmux refused to read the session')
         return [body for _, body in replies], later
 
+    def discard(self, name):
+        """Deletes a tmux buffer through this client; False when tmux did not confirm it."""
+        marker = ('horizon-discarded-%s' % name).encode()
+        self.control.send(['delete-buffer -b %s' % name, "display-message -p '%s'" % marker.decode()])
+        deadline = time.monotonic() + REPLY_SECONDS
+        while not any(body == [marker] for _, body in self.control.replies):
+            if self.control.ended or not select.select([self.control.process.stdout], [], [],
+                                                       max(0, deadline - time.monotonic()))[0]:
+                return False
+            self.control.read()
+        return True
+
     def synchronize(self):
-        target = '=%s:' % self.session
+        target = self.target
         self.control.send(['refresh-client -C %dx%d' % window_size(self.terminal)])
         self.wait(1)
         query = ' '.join('#{%s}' % name for name in STATE)
@@ -578,8 +607,9 @@ class Attachment:
 
 
 def main(argv):
-    if len(argv) != 2 or not SESSION.fullmatch(argv[1]):
-        sys.stderr.write('Usage: horizon-worker-attach SESSION\n')
+    named = targets(argv)
+    if named is None:
+        sys.stderr.write('Usage: horizon-worker-attach SESSION | --socket PATH PANE\n')
         return 2
     terminal = 0
     if not (os.isatty(terminal) and os.isatty(terminal + 1)):
@@ -599,7 +629,7 @@ def main(argv):
     try:
         # TCSANOW keeps keys typed while the connection opened.
         tty.setraw(terminal, termios.TCSANOW)
-        attachment = Attachment(argv[1], terminal)
+        attachment = Attachment(*named, terminal)
         attachment.run()
     finally:
         if attachment is not None and attachment.pane is not None and attachment.connected:
@@ -609,9 +639,12 @@ def main(argv):
             termios.tcsetattr(terminal, termios.TCSANOW, saved)
         except termios.error:
             pass
+        # A paste that did not end left its tmux buffer, which nothing else pastes or deletes. When
+        # tmux ended this client first, a second client deletes it; the private socket of a project
+        # session takes no second client.
         if attachment is not None and attachment.input is not None and attachment.input.paste is not None \
-                and attachment.input.buffered:
-            # A paste that did not end left its tmux buffer, which nothing else pastes or deletes.
+                and attachment.input.buffered and not attachment.discard(attachment.input.name()) \
+                and attachment.tmux == TMUX:
             with contextlib.suppress(OSError, subprocess.SubprocessError):
                 subprocess.run(TMUX + ['delete-buffer', '-b', attachment.input.name()], timeout=5,
                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

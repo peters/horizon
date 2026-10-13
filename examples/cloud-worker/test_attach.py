@@ -151,6 +151,18 @@ class InputTests(unittest.TestCase):
         self.assertEqual(typed.feed(b'more\x1b[201~x'), ['send-keys -H -t %3 6d 6f 72 65', 'send-keys -H -t %3 78'])
 
 
+class TargetTests(unittest.TestCase):
+    def test_a_session_name_or_a_socket_and_pane_name_the_target(self):
+        self.assertEqual(attach.targets(['attach', 'a-1']), (attach.TMUX, '=a-1', '=a-1:'))
+        self.assertEqual(attach.targets(['attach', '--socket', '/proc/7/fd/3/s', '%12']),
+                         (['tmux', '-u', '-N', '-S', '/proc/7/fd/3/s'], '%12', '%12'))
+        for arguments in (['attach'], ['attach', 'a;b'], ['attach', '--socket', 'relative/s', '%1'],
+                          ['attach', '--socket', '/s', '1'], ['attach', '--socket', '/s', '%1', 'extra'],
+                          ['attach', '--socket', '/s']):
+            with self.subTest(arguments=arguments):
+                self.assertIsNone(attach.targets(arguments))
+
+
 class ControlTests(unittest.TestCase):
     def test_output_that_comes_with_the_last_reply_is_kept(self):
         # The reply to attach-session itself (flags 0) is no reply to a command of the helper.
@@ -251,15 +263,23 @@ class TmuxTests(unittest.TestCase):
                 raise AssertionError('condition not met in time')
             time.sleep(0.05)
 
-    def attach(self, session='a', cols=80, rows=24):
+    def attach(self, session='a', cols=80, rows=24, arguments=None):
+        terminal = self.start(arguments or [session], cols, rows)
+        terminal.read_until(lambda data: data.endswith(b'\x1b[?2004h'))
+        return terminal
+
+    def start(self, arguments, cols=80, rows=24):
         pid, fd = pty.fork()
         if pid == 0:
             fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
-            os.execve(sys.executable, [sys.executable, str(SCRIPT), session], self.env)
+            os.execve(sys.executable, [sys.executable, str(SCRIPT), *arguments], self.env)
         terminal = Terminal(pid, fd)
         self.addCleanup(terminal.close)
-        terminal.read_until(lambda data: data.endswith(b'\x1b[?2004h'))
         return terminal
+
+    def private(self, socket, *args):
+        result = subprocess.run(['tmux', '-S', socket, *args], env=self.env, capture_output=True, text=True, timeout=10)
+        return result.stdout if result.returncode == 0 else None
 
     def test_history_and_later_output_reach_the_terminal_in_full(self):
         self.tmux('send-keys', '-t', '=a:', 'seq 1 3000', 'Enter')
@@ -359,6 +379,35 @@ class TmuxTests(unittest.TestCase):
         self.wait_for(lambda: 'horizon-paste-' in (self.tmux('list-buffers', '-F', '#{buffer_name}') or ''))
         terminal.close()
         self.assertEqual(self.tmux('list-buffers', '-F', '#{buffer_name}'), '')
+
+    def test_a_pane_on_a_private_socket_attaches_with_its_history(self):
+        # How a signed project session attaches: its own server, reached by socket path and pane.
+        socket = str(self.root / 'private')
+        self.private(socket, '-f', '/dev/null', 'set-option', '-g', 'history-limit', '10000', ';',
+                     'new-session', '-d', '-s', 'p', '-x', '80', '-y', '24', 'sh')
+        self.addCleanup(self.private, socket, 'kill-server')
+        pane = self.private(socket, 'display-message', '-p', '-t', '=p:', '#{pane_id}').strip()
+        self.wait_for(lambda: self.private(socket, 'capture-pane', '-p', '-t', pane).strip() == '$')
+        self.private(socket, 'send-keys', '-t', pane, 'seq 1 3000', 'Enter')
+        self.wait_for(lambda: '3000' in self.private(socket, 'capture-pane', '-p', '-t', pane))
+        terminal = self.attach(arguments=['--socket', socket, pane])
+        self.assertEqual(numbers(terminal.data), list(range(1, 3001)))
+        terminal.write(b'echo private-socket\r')
+        terminal.read_until(lambda data: b'\r\nprivate-socket\r\n' in data)
+        # A paste cut off by a disconnect is deleted through the attach itself.
+        terminal.write(b'\x1b[200~' + b'p' * (2 * attach.PASTE_CHUNK))
+        self.wait_for(lambda: 'horizon-paste-' in (self.private(socket, 'list-buffers', '-F', '#{buffer_name}') or ''))
+        terminal.close()
+        self.assertEqual(terminal.status, 0)
+        self.assertEqual(self.private(socket, 'list-buffers', '-F', '#{buffer_name}'), '')
+        self.assertEqual(self.private(socket, 'list-clients'), '')
+
+    def test_a_private_socket_without_a_server_gets_no_server(self):
+        socket = self.root / 'absent'
+        terminal = self.start(['--socket', str(socket), '%0'])
+        terminal.wait()
+        self.assertNotEqual(terminal.status, 0)
+        self.assertFalse(socket.exists())
 
     def test_the_session_follows_the_terminal_size(self):
         terminal = self.attach(cols=100, rows=30)

@@ -217,12 +217,13 @@ pub(super) fn child() -> io::Result<()> {
     rustix::process::setsid()?;
     rustix::process::ioctl_tiocsctty(io::stdin())?;
     let terminal = File::from(io::stdin().as_fd().try_clone_to_owned()?);
-    let error = Command::new(super::super::policy::TMUX)
+    // The helper's tmux control client is the one peer that the proxy accepts.
+    let error = Command::new(super::super::policy::ATTACH)
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
         .env("HOME", "/nonexistent")
         .env("TERM", "xterm-256color")
-        .args(["-N", "-S", &permit.proxy, "attach-session", "-t", &permit.target])
+        .args(["--socket", &permit.proxy, &permit.target])
         .stdin(Stdio::from(terminal.try_clone()?))
         .stdout(Stdio::from(terminal.try_clone()?))
         .stderr(Stdio::from(terminal))
