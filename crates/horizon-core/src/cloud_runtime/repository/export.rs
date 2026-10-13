@@ -117,11 +117,14 @@ fn name_refs(repository: &Path, neutral: &Path, borrowed: &Path, scratch: &Path,
 fn copy_refs(repository: &Path, neutral: &Path, borrowed: &Path, scratch: &Path, runner: &Runner<'_>) -> Result<()> {
     let listing = scratch.join("packed-refs");
     list_refs(repository, &listing, runner, REF_LISTING_LIMIT)?;
+    // HEAD first: with the private HEAD left at `git init`'s default, a copied branch of
+    // that name would read as checked out, so the refs are installed only after it.
+    mirror_head(repository, neutral, borrowed, runner)?;
     // Only a complete listing becomes the private repository's refs; a partial one from a
     // timeout, a crash or the size limit stays in the scratch directory, so `git archive`
     // runs with no packed refs rather than failing on a truncated file.
     std::fs::rename(&listing, borrowed.join("packed-refs"))?;
-    mirror_head(repository, neutral, borrowed, runner)
+    Ok(())
 }
 
 /// The most the ref listing may hold: about 200,000 refs of ordinary length. A repository
@@ -261,7 +264,7 @@ fn isolated<'c>(neutral: &Path, command: &'c mut Command) -> &'c mut Command {
 
 #[cfg(test)]
 mod tests {
-    use super::{alternate_line, isolated, list_refs, source_branch};
+    use super::{alternate_line, isolated, list_refs};
     use std::process::Command;
 
     #[test]
@@ -351,6 +354,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_branch_name_that_is_not_utf8_is_read_byte_for_byte() {
+        use super::source_branch;
         use std::os::unix::ffi::OsStrExt;
         let scratch = tempfile::tempdir().unwrap();
         let repository = scratch.path();
