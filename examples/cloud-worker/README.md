@@ -486,13 +486,14 @@ it drops lines when output is fast. The signed project sessions of
 At each attach, the helper does these steps:
 
 1. It sets the size of the session to the size of the terminal.
-2. In one tmux command line, it reads the history, the screen, the cursor, the
+2. It asks the panel for its colors and gives them to tmux (see below).
+3. In one tmux command line, it reads the history, the screen, the cursor, the
    terminal modes and the title of the session. tmux reads no output of the session
    between these commands.
-3. It clears the screen and the scrollback of the panel. Then it writes the
+4. It clears the screen and the scrollback of the panel. Then it writes the
    history and the screen. Output that the session wrote while no panel was
    attached is thus in the scrollback, and no line of an earlier attach stays.
-4. It writes the output that the session writes after step 2.
+5. It writes the output that the session writes after step 3.
 
 tmux keeps the last 10000 lines of each session that starts on an image with
 this helper. A session that started before keeps the tmux default of 2000 lines
@@ -503,9 +504,23 @@ limit.
 tmux stays the terminal of the session:
 
 - tmux answers the terminal queries of the session. The helper removes these
-  queries from the output, so the panel does not send a second answer. tmux 3.4
-  cannot get the colors of the panel from a control mode client, so it answers
-  a color query with its default colors.
+  queries from the output, so the panel does not send a second answer.
+- tmux 3.4 cannot get the colors of the panel from a control mode client. At
+  each attach, the helper asks the panel for its foreground and background
+  colors (OSC 10 and 11). It sets them as the window style of the pane and as
+  the default window style of the tmux server, and tmux answers the color
+  queries of the session from that style. The helper waits up to ten seconds
+  for the answer before it shows the session, so keys typed meanwhile, and the
+  programs that they start, reach the session after tmux has the colors. An
+  answer that comes later is removed from the input when it comes, also in
+  pieces, and then gives tmux the colors. A session that starts later gets the colors of the panel that attached
+  last to its tmux server, before its own first attach. A program that asks
+  before the first attach to a new tmux server gets no answer or black. tmux
+  does not answer palette queries (OSC 4). If the panel colors change while a
+  panel is attached, the session gets the new colors at the next attach. A
+  panel that reports no colors removes these styles, so the session does not
+  get the colors of an earlier panel. A plain tmux client that attaches by hand also draws the pane in these colors,
+  and the style replaces a `window-style` from a tmux configuration.
 - The session cannot read or change the clipboard of the computer, because the
   helper removes its clipboard requests (OSC 52), as tmux did.
 - The panel always brackets a paste. The helper gives the paste to tmux, and

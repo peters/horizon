@@ -16,7 +16,8 @@ This procedure makes sure that the scrollback of a cloud shell panel and a cloud
 agent panel operates as in a local panel. The history indicator, the scroll
 bar, the mouse wheel and the selection must show the output of the session. The
 output that the session writes while no panel is attached must come back at the
-next attach, one time only.
+next attach, one time only. A color query of the session must get the colors of
+the panel.
 
 ## 2. Applicability
 
@@ -246,6 +247,38 @@ with synthetic agents.
 
    Result: The last output line shows `"passed": true`.
 
+### 6.9 COLORS — Answer color queries with the panel colors
+
+1. In a local shell panel of the fixture, type this command. Then push Enter.
+
+   ```bash
+   printf '\033]11;?\033\\'; read -rs -t 2 -d '\' r; echo "${r#*;}"
+   ```
+
+   Result: The panel shows the background color of the panel, for example
+   `rgb:1e1e/1e1e/2e2e`. This is the baseline.
+
+2. Type the same command in the cloud shell panel. Push Enter.
+
+   Result: The cloud panel shows the same value as the local panel, not
+   `rgb:0000/0000/0000`.
+
+3. Open a new cloud shell panel and type the same command again.
+
+   Result: The new panel shows the same value.
+
+4. On the same cloud as step 2, open a cloud Codex panel.
+
+   Result: The composer of Codex has a background that matches the panel
+   colors, as in a local Codex panel.
+
+5. In **Settings**, **General**, **Appearance**, select **Light**. Do step 1
+   again in the local panel. Then open a new cloud shell panel and do step 2
+   in it.
+
+   Result: The local panel shows the light background color. The new cloud
+   panel shows the same light value.
+
 ## 7. Pass criteria
 
 - 6.1 scrolls to the first line of the output, and the mouse wheel sends no
@@ -260,6 +293,7 @@ with synthetic agents.
 - 6.7 shows no change for local and SSH panels.
 - 6.8 attaches a signed project session with its history, and the race
   scenario passes.
+- 6.9 answers color queries with the colors of the panel.
 
 ## 8. Cleanup
 

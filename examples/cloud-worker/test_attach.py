@@ -28,6 +28,9 @@ _loader.exec_module(attach)
 # mode on a worker.
 CLAUDE_QUERIES = (b'\x1b[c', b'\x1b[>0q', b'\x1b[?u', b'\x1b[>5u', b'\x1b[<u', b'\x1b[>4;2m', b'\x1b[?2026$p',
                   b'\x1b]7501;?\x07')
+# How the terminal of a panel answers the color query of the helper.
+PANEL_COLORS = b'\x1b]10;rgb:a1a1/b2b2/c3c3\x1b\\\x1b]11;rgb:1010/2020/3030\x1b\\\x1b[?62;22c'
+ANSWERED = rb'\x1b\]10;rgb:a1a1/b2b2/c3c3(\x07|\x1b\\)\x1b\]11;rgb:1010/2020/3030(\x07|\x1b\\)'
 
 
 class OutputTests(unittest.TestCase):
@@ -150,6 +153,26 @@ class InputTests(unittest.TestCase):
         # Its closing bracket, when it comes after all, is no key for the session.
         self.assertEqual(typed.feed(b'more\x1b[201~x'), ['send-keys -H -t %3 6d 6f 72 65', 'send-keys -H -t %3 78'])
 
+    def test_an_answer_that_comes_after_the_wait_is_removed_and_still_gives_the_colors(self):
+        attachment = types.SimpleNamespace(outstanding=True, target='%3', colors={}, pending=b'')
+        commands, typed = attach.Attachment.answered(attachment, b'a\x1b]10;rgb:a1a1/b2b2/c3c3\x1b\\')
+        self.assertEqual(typed, b'a')
+        self.assertIn("set-option -wg window-style 'fg=#a1b2c3'", commands)
+        self.assertTrue(attachment.outstanding)
+        # A read can end inside the answer.
+        self.assertEqual(attach.Attachment.answered(attachment, b'\x1b]11;rgb:10'), ([], b''))
+        commands, typed = attach.Attachment.answered(attachment, b'10/2020/3030\x07\x1b[?62cb')
+        self.assertEqual((commands[0], typed), ("set-option -p -t %3 window-style 'fg=#a1b2c3,bg=#102030'", b'b'))
+        self.assertFalse(attachment.outstanding)
+        # Once the answer is complete, input is keys again.
+        self.assertEqual(attach.Attachment.answered(attachment, b'\x1b[?62c'), ([], b'\x1b[?62c'))
+
+    def test_the_answer_to_the_color_query_is_never_typed(self):
+        found, typed = attach.colors(b'a\x1b]11;rgba:1/2/3/4\x1b\\b\x1b]10;rgb:ff/0/8080\x07\x1b[?62;22cc')
+        # A color in a form tmux does not take is left out, but its answer is no key either.
+        self.assertEqual((found, typed), ({'fg': '#ff0080'}, b'abc'))
+        self.assertEqual(attach.colors(b'\x1b]11;rgb:1010/2020/3030\x1b\\'), ({'bg': '#102030'}, b''))
+
 
 class TargetTests(unittest.TestCase):
     def test_a_session_name_or_a_socket_and_pane_name_the_target(self):
@@ -263,8 +286,10 @@ class TmuxTests(unittest.TestCase):
                 raise AssertionError('condition not met in time')
             time.sleep(0.05)
 
-    def attach(self, session='a', cols=80, rows=24, arguments=None):
+    def attach(self, session='a', cols=80, rows=24, arguments=None, answer=PANEL_COLORS):
         terminal = self.start(arguments or [session], cols, rows)
+        terminal.read_until(lambda data: attach.COLOR_QUERY in data)
+        terminal.write(answer)
         terminal.read_until(lambda data: data.endswith(b'\x1b[?2004h'))
         return terminal
 
@@ -328,14 +353,71 @@ class TmuxTests(unittest.TestCase):
                 pasted = received.read_bytes()
                 received.unlink()
                 terminal.close()
-                self.assertNotIn(b'\x1b[c', terminal.data)
-                self.assertNotIn(b'\x1b]11;?', terminal.data)
+                # The color query of the helper itself comes first.
+                shown = terminal.data.split(attach.COLOR_QUERY, 1)[1]
+                self.assertNotIn(b'\x1b[c', shown)
+                self.assertNotIn(b'\x1b]11;?', shown)
                 if asked == 'yes':
                     # tmux's own answers, once each, then the paste in the brackets the session asked for.
                     self.assertRegex(pasted, rb'\A\x1b\[\?[0-9;]*c\x1b\]11;rgb:[0-9a-f/]+(\x07|\x1b\\)'
                                              + re.escape('\x1b[200~-rf één\n日本\x1b[201~øend'.encode()) + rb'\Z')
                 else:
                     self.assertEqual(pasted, '-rf één\n日本øend'.encode())
+
+    def test_color_queries_get_the_colors_of_the_panel(self):
+        received = self.root / 'colors'
+        # Asks for the colors once attached, as an agent does when it starts or redraws.
+        reader = ("import os, sys, tty\ntty.setraw(0); os.write(1, b'waiting\\r\\n'); os.read(0, 1)\n"
+                  "os.write(1, b'\\x1b]10;?\\x07\\x1b]11;?\\x07\\x1b[c'); data = b''\n"
+                  "while not data.endswith(b'c'): data += os.read(0, 100)\n"
+                  "open(sys.argv[1], 'wb').write(data)")
+        self.tmux('new-session', '-d', '-s', 'colors', '-x', '80', '-y', '24', sys.executable, '-c', reader, str(received))
+        self.wait_for(lambda: 'waiting' in (self.tmux('capture-pane', '-p', '-t', '=colors:') or ''))
+        terminal = self.attach('colors')
+        terminal.write(b'q')
+        self.wait_for(received.exists)
+        self.assertRegex(received.read_bytes(), rb'\A' + ANSWERED)
+        self.assertNotIn(b'\x1b]11;?', terminal.data.split(attach.COLOR_QUERY, 1)[1])
+        # A session that starts later answers with them before its first attach.
+        received.unlink()
+        self.tmux('new-session', '-d', '-s', 'later', '-x', '80', '-y', '24', sys.executable, '-c',
+                  reader.replace("os.read(0, 1)", "None"), str(received))
+        self.wait_for(received.exists)
+        self.assertRegex(received.read_bytes(), rb'\A' + ANSWERED)
+
+    def test_keys_typed_before_a_slow_answer_reach_the_session_after_the_colors(self):
+        terminal = self.start(['a'])
+        terminal.read_until(lambda data: attach.COLOR_QUERY in data)
+        terminal.write(b'echo $((6*7))\r')
+        time.sleep(3)
+        # The session is not shown yet, and the keys did not reach it.
+        self.assertFalse(terminal.data.endswith(b'\x1b[?2004h'))
+        self.assertNotIn('42', self.tmux('capture-pane', '-p', '-t', '=a:'))
+        terminal.write(PANEL_COLORS)
+        terminal.read_until(lambda data: b'\r\n42\r\n' in data)
+        self.assertIn('fg=#a1b2c3,bg=#102030', self.tmux('show-options', '-wg', 'window-style'))
+
+    def test_an_answer_after_the_wait_is_removed_also_in_pieces(self):
+        terminal = self.start(['a'])
+        terminal.read_until(lambda data: attach.COLOR_QUERY in data)
+        terminal.read_until(lambda data: data.endswith(b'\x1b[?2004h'), seconds=attach.COLOR_SECONDS + 10)
+        terminal.write(b'echo before\r\x1b]11;rgb:10')
+        time.sleep(0.5)
+        terminal.write(b'10/2020/3030\x1b\\\x1b[?62;22cecho after\r')
+        terminal.read_until(lambda data: b'\r\nafter\r\n' in data)
+        shown = self.tmux('capture-pane', '-p', '-t', '=a:')
+        self.assertIn('before', shown)
+        self.assertNotIn('rgb', shown)
+        self.wait_for(lambda: 'bg=#102030' in self.tmux('show-options', '-wg', 'window-style'))
+
+    def test_a_panel_that_reports_no_colors_sets_no_style_and_keeps_typed_keys(self):
+        # The colors of an earlier panel do not stay.
+        self.attach().close()
+        self.assertIn('bg=#102030', self.tmux('show-options', '-wg', 'window-style'))
+        terminal = self.attach(answer=b'echo early\r\x1b[?1;2c')
+        terminal.read_until(lambda data: b'\r\nearly\r\n' in data)
+        self.assertEqual(self.tmux('show-options', '-p', '-t', '=a:', 'window-style'), '')
+        self.assertEqual(self.tmux('show-options', '-wg', 'window-style').strip(), 'window-style default')
 
     def test_an_alternate_screen_comes_back_above_the_normal_history_and_screen(self):
         script = ("seq -f 'normal %g' 1 40; printf '\\033[?1049h\\033[Hfull screen'; read x; printf '\\033[?1049l'; "
