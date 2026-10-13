@@ -95,7 +95,12 @@
         const challenge = challengeOf(publicKey.challenge);
         const userId = encode(user.id);
         const parameters = Array.from(publicKey.pubKeyCredParams);
-        const algorithms = parameters.filter((parameter) => parameter && parameter.type === "public-key").map(algorithmOf);
+        // Every entry is converted, so a missing or bad alg is a TypeError
+        // whatever its type; then only public-key entries are kept.
+        const algorithms = parameters
+            .map((parameter) => ({ type: parameter.type, alg: algorithmOf(parameter) }))
+            .filter((parameter) => parameter.type === "public-key")
+            .map((parameter) => parameter.alg);
         const excluded = credentialIds(publicKey.excludeCredentials);
         let refusal = null;
         if (parameters.length && !algorithms.length) {
@@ -191,7 +196,9 @@
             refusal = built.refusal;
             message = stringify({ kind: "request", id, op, options: built.options });
         } catch (error) {
-            return Promise.reject(error instanceof TypeError ? error : new TypeError(String(error)));
+            // A builder throws TypeError; an exception from a page getter
+            // propagates unchanged, as WebIDL does.
+            return Promise.reject(error);
         }
         if (encoder.encode(message).length > maxMessageBytes) {
             return Promise.reject(new TypeError("The publicKey options are too large"));

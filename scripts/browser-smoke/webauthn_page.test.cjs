@@ -121,6 +121,10 @@ test('requests that no platform credential can satisfy never post', async () => 
     await assert.rejects(credentials.create({publicKey: {challenge, rp: {name: 'x'}, user,
         pubKeyCredParams: [{type: 'public-key'}], authenticatorSelection: {authenticatorAttachment: 'cross-platform'}}}),
         {name: 'TypeError'});
+    await assert.rejects(credentials.create({publicKey: {challenge, rp: {name: 'x'}, user,
+        pubKeyCredParams: [{type: 'password'}]}}), {name: 'TypeError'});
+    await assert.rejects(credentials.get({publicKey: {get challenge() { throw new RangeError('page'); }}}),
+        {name: 'RangeError'});
     await assert.rejects(credentials.get({signal: AbortSignal.abort(), publicKey: {challenge,
         allowCredentials: [{type: 'password', id: new Uint8Array([1])}]}}), {name: 'AbortError'});
     assert.equal(posted.length, 0);
