@@ -82,6 +82,7 @@ fn cloud_gpu_takes_the_first_gpu_profile_of_each_repository_or_its_default() {
     form.profiles = Some(config(CPU_ONLY));
     let (_, shown) = texts(form);
     assert!(shown.iter().any(|text| text.contains("no GPU profile")), "{shown:?}");
+    assert_eq!(gpu_profile(form, &config(CPU_ONLY)), None, "a reread keeps the pick");
     // Another repository, although it also has `dev`, gets its own GPU profile.
     form.repository = "/synthetic/gpu-too".into();
     assert_eq!(gpu_profile(form, &config(GPU_TOO)).as_deref(), Some("gpu"));
@@ -90,6 +91,14 @@ fn cloud_gpu_takes_the_first_gpu_profile_of_each_repository_or_its_default() {
     assert!(!shown.iter().any(|text| text.contains("no GPU profile")), "{shown:?}");
     // A reread of the same repository keeps the person's pick.
     assert_eq!(gpu_profile(form, &config(GPU_TOO)), None);
+    // A GPU profile saved after the dialog found none is taken on the reread.
+    form.repository = "/synthetic/cpu-only".into();
+    form.new_workspace = Some(intent(true));
+    assert_eq!(gpu_profile(form, &config(CPU_ONLY)).as_deref(), Some("dev"));
+    assert_eq!(gpu_profile(form, &config(GPU_TOO)).as_deref(), Some("gpu"));
+    form.profiles = Some(config(GPU_TOO));
+    let (_, shown) = texts(form);
+    assert!(!shown.iter().any(|text| text.contains("no GPU profile")), "{shown:?}");
     // Plain Cloud asks for nothing.
     form.new_workspace = Some(intent(false));
     assert_eq!(gpu_profile(form, &config(GPU_TOO)), None);
