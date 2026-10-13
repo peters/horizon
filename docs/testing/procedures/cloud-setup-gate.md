@@ -256,5 +256,5 @@ Each gate lane runs one process of the ignored test
 `crates/horizon-ui/src/app/cloud_panel/production/repository_setup/proof/gate.rs`.
 The runner gives it `GATE_LIST`, `GATE_OUT`, `GATE_PREFIX` and a `TMPDIR` of its own.
 Each process is in a new session, so the runner stops each process of the gate lane by
-its exact PID. The run names have the form `gate-<token>-<lane>-<index>`. `<token>` is
-the six hexadecimal digits at the end of the run folder name.
+its exact PID. The run names have the form `gate-<hex>-<lane>-<index>`. `<hex>` is the
+six hexadecimal digits at the end of the run folder name.
