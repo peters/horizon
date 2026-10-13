@@ -104,15 +104,26 @@ fn supervise(argv: &[String], input: Vec<u8>, timeout: Duration, cancel: &Atomic
         let _ = std::thread::Builder::new()
             .name("browser-webauthn-stdout".into())
             .spawn(move || {
-                let mut limited = stdout.take(MAX_STDOUT_BYTES + 1);
+                // Read one byte past the limit and stop; dropping the pipe
+                // ends the read side, so memory stays bounded. The thread
+                // ends when the last writer closes stdout.
                 let mut bytes = Vec::new();
-                let read = limited.read_to_end(&mut bytes);
-                let _ = std::io::copy(&mut limited.into_inner(), &mut std::io::sink());
+                let read = stdout.take(MAX_STDOUT_BYTES + 1).read_to_end(&mut bytes);
                 let _ = stdout_tx.send(read.map(|_| bytes));
             });
     }
     let deadline = Instant::now() + timeout;
+    let mut output = None;
     loop {
+        if output.is_none()
+            && let Ok(read) = stdout_rx.try_recv()
+        {
+            if read.as_ref().is_ok_and(|bytes| bytes.len() as u64 > MAX_STDOUT_BYTES) {
+                stop(&mut child);
+                return CommandOutcome::Failed("the command printed too much output".to_string());
+            }
+            output = Some(read);
+        }
         if cancel.load(Ordering::Acquire) {
             stop(&mut child);
             return CommandOutcome::Failed("cancelled".to_string());
@@ -130,7 +141,11 @@ fn supervise(argv: &[String], input: Vec<u8>, timeout: Duration, cancel: &Atomic
             }
         }
     }
-    match stdout_rx.recv_timeout(OUTPUT_GRACE) {
+    let output = match output {
+        Some(read) => Ok(read),
+        None => stdout_rx.recv_timeout(OUTPUT_GRACE),
+    };
+    match output {
         Ok(Ok(bytes)) if bytes.len() as u64 > MAX_STDOUT_BYTES => {
             CommandOutcome::Failed("the command printed too much output".to_string())
         }
@@ -197,6 +212,11 @@ mod tests {
             wait(&noisy, Duration::from_secs(5)),
             Some(CommandOutcome::Failed(_))
         ));
+        let endless = CommandRun::start(&shell("exec cat /dev/zero"), Vec::new(), Duration::from_secs(30));
+        assert!(
+            matches!(wait(&endless, Duration::from_secs(5)), Some(CommandOutcome::Failed(_))),
+            "a command that never stops writing fails at the output limit, not at the deadline"
+        );
     }
 
     #[test]

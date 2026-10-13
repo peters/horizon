@@ -139,7 +139,6 @@
     };
 
     const request = (op, publicKey, signal) => {
-        if (signal?.aborted) return Promise.reject(signal.reason);
         nextId += 1;
         const id = nextId;
         let message;
@@ -152,6 +151,8 @@
         if (encoder.encode(message).length > maxMessageBytes) {
             return Promise.reject(new TypeError("The publicKey options are too large"));
         }
+        // An options getter can abort the signal; check it after reading them.
+        if (signal?.aborted) return Promise.reject(signal.reason);
         return new Promise((resolve, reject) => {
             const onAbort = () => {
                 if (!pending.delete(id)) return;

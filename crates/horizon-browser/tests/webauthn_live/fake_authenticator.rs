@@ -72,6 +72,7 @@ fn create(state: &Path, request: &Value) -> Result<Value, String> {
     let user_handle = request["user"]["id"].as_str().ok_or("user id")?;
     std::fs::write(state.join(format!("{id}.key")), pkcs8.as_ref()).map_err(|error| error.to_string())?;
     std::fs::write(state.join(format!("{id}.user")), user_handle).map_err(|error| error.to_string())?;
+    std::fs::write(state.join(format!("{id}.rp")), rp_id).map_err(|error| error.to_string())?;
 
     let point = key.public_key().as_ref();
     let mut auth_data = Sha256::digest(rp_id.as_bytes()).to_vec();
@@ -131,10 +132,11 @@ fn get(state: &Path, request: &Value) -> Result<Value, String> {
         .filter_map(Value::as_str)
         .map(str::to_string)
         .collect();
-    // An empty allow list asks for a discoverable credential: use any key.
+    // An empty allow list asks for a discoverable credential of this RP.
     let candidates = if allowed.is_empty() { stored_ids(state) } else { allowed };
     let Some((id, pkcs8)) = candidates
         .into_iter()
+        .filter(|id| std::fs::read_to_string(state.join(format!("{id}.rp"))).is_ok_and(|rp| rp == rp_id))
         .find_map(|id| std::fs::read(state.join(format!("{id}.key"))).ok().map(|key| (id, key)))
     else {
         return Ok(json!({ "version": 1, "status": "not_found", "message": "no matching credential" }));

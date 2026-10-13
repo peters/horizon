@@ -205,31 +205,7 @@ fn page_html(shared: &Shared, page: &str) -> String {
 }})();"#
             )
         }
-        "/refusals" => format!(
-            r#"(async () => {{
-    await outcome("foreign_rp_id", navigator.credentials.get({{ publicKey: {{ challenge: anyChallenge(), rpId: "example.com", timeout: 1e21 }} }}));
-    await outcome("malformed_options", navigator.credentials.create({{ publicKey: {{
-        challenge: anyChallenge(), rp: {{ name: "x" }}, user: {{ id: anyChallenge(), name: "u", displayName: "u" }},
-        pubKeyCredParams: [{{ type: "public-key" }}],
-    }} }}));
-    await report("conditional_available", {{ verdict: String(await PublicKeyCredential.isConditionalMediationAvailable()) }});
-    const controller = new AbortController();
-    const conditional = navigator.credentials.get({{ mediation: "conditional", publicKey: {{ challenge: anyChallenge() }}, signal: controller.signal }});
-    setTimeout(() => controller.abort(), 300);
-    await outcome("conditional", conditional);
-    const createController = new AbortController();
-    const conditionalCreate = navigator.credentials.create({{ mediation: "conditional", publicKey: {{
-        challenge: anyChallenge(), rp: {{ name: "x" }}, user: {{ id: anyChallenge(), name: "u", displayName: "u" }},
-        pubKeyCredParams: [{{ type: "public-key", alg: -7 }}], timeout: 1e21,
-    }}, signal: createController.signal }});
-    setTimeout(() => createController.abort(), 300);
-    await outcome("conditional_create", conditionalCreate);
-    const frame = document.createElement("iframe");
-    frame.src = "http://localhost:{}/frame";
-    document.body.appendChild(frame);
-}})();"#,
-            shared.frame_port
-        ),
+        "/refusals" => refusals_script(shared.frame_port),
         "/frame" => r#"outcome("cross_origin_iframe", navigator.credentials.get({ publicKey: { challenge: anyChallenge() } }));"#
             .to_string(),
         "/insecure" => r#"outcome("insecure_origin", navigator.credentials.get({ publicKey: { challenge: anyChallenge() } }));"#
@@ -246,6 +222,39 @@ outcome("abort", pending);"#
     };
     format!(
         "<!doctype html><title>passkey bridge test</title><body><p>{page}</p><script>{PRELUDE}\n{script}</script></body>"
+    )
+}
+
+/// Each refusal reports its own scenario; the cross-origin frame comes last.
+fn refusals_script(frame_port: u16) -> String {
+    format!(
+        r#"(async () => {{
+    await outcome("foreign_rp_id", navigator.credentials.get({{ publicKey: {{ challenge: anyChallenge(), rpId: "example.com", timeout: 1e21 }} }}));
+    await outcome("malformed_options", navigator.credentials.create({{ publicKey: {{
+        challenge: anyChallenge(), rp: {{ name: "x" }}, user: {{ id: anyChallenge(), name: "u", displayName: "u" }},
+        pubKeyCredParams: [{{ type: "public-key" }}],
+    }} }}));
+    const getterController = new AbortController();
+    await outcome("aborted_by_options", navigator.credentials.get({{
+        publicKey: {{ get challenge() {{ getterController.abort(); return anyChallenge(); }} }},
+        signal: getterController.signal,
+    }}));
+    await report("conditional_available", {{ verdict: String(await PublicKeyCredential.isConditionalMediationAvailable()) }});
+    const controller = new AbortController();
+    const conditional = navigator.credentials.get({{ mediation: "conditional", publicKey: {{ challenge: anyChallenge() }}, signal: controller.signal }});
+    setTimeout(() => controller.abort(), 300);
+    await outcome("conditional", conditional);
+    const createController = new AbortController();
+    const conditionalCreate = navigator.credentials.create({{ mediation: "conditional", publicKey: {{
+        challenge: anyChallenge(), rp: {{ name: "x" }}, user: {{ id: anyChallenge(), name: "u", displayName: "u" }},
+        pubKeyCredParams: [{{ type: "public-key", alg: -7 }}], timeout: 1e21,
+    }}, signal: createController.signal }});
+    setTimeout(() => createController.abort(), 300);
+    await outcome("conditional_create", conditionalCreate);
+    const frame = document.createElement("iframe");
+    frame.src = "http://localhost:{frame_port}/frame";
+    document.body.appendChild(frame);
+}})();"#
     )
 }
 

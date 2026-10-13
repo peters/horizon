@@ -110,6 +110,7 @@ fn run_engine(backend: BackendKind) {
     for (scenario, expected) in [
         ("foreign_rp_id", "SecurityError"),
         ("malformed_options", "TypeError"),
+        ("aborted_by_options", "AbortError"),
         ("conditional_available", "false"),
         ("conditional", "AbortError"),
         ("conditional_create", "AbortError"),

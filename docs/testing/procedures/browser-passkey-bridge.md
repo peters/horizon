@@ -134,30 +134,82 @@ applies the origin rules, and that the panel shows a waiting request.
 
 ### 6.4 P04 — Local Keycloak
 
-1. Start Keycloak 26 with `start-dev` on `127.0.0.1:18080`.
+> **CAUTION:** BIND KEYCLOAK TO `127.0.0.1` ONLY. The test realm has a known
+> password, so other computers must not reach it.
 
-2. Make a realm, a synthetic user with a password and the required action
-   `webauthn-register-passwordless`.
+1. Make a random administrator password and keep it in a private file:
 
-3. Make a browser flow with `auth-username-form` and
-   `webauthn-authenticator-passwordless`, both `REQUIRED`. Do not bind it yet.
+   ```sh
+   head -c 18 /dev/urandom | base64 > <private>/kc-admin.txt
+   ```
 
-4. Open `http://localhost:18080/realms/<realm>/account` in the browser panel.
+2. Start Keycloak 26.4.0:
 
-5. Sign in with the password and click **Register**.
+   ```sh
+   docker run -d --name passkey-keycloak -p 127.0.0.1:18080:8080 \
+     -e KC_BOOTSTRAP_ADMIN_USERNAME=admin \
+     -e KC_BOOTSTRAP_ADMIN_PASSWORD="$(cat <private>/kc-admin.txt)" \
+     quay.io/keycloak/keycloak:26.4.0 start-dev
+   ```
 
-   Result: Keycloak shows the account console. The user has a
+   Result: `http://127.0.0.1:18080/realms/master` answers after about 30 seconds.
+
+3. Make the realm, the user and the flow. `K` is the admin command in the
+   container:
+
+   ```sh
+   K="docker exec passkey-keycloak /opt/keycloak/bin/kcadm.sh"
+   $K config credentials --server http://localhost:8080 --realm master \
+     --user admin --password "$(cat <private>/kc-admin.txt)"
+   $K create realms -s realm=passkey-test -s enabled=true
+   $K create users -r passkey-test -s username=demo -s enabled=true \
+     -s email=demo@example.test -s firstName=Demo -s lastName=User \
+     -s emailVerified=true -s 'requiredActions=["webauthn-register-passwordless"]'
+   $K set-password -r passkey-test --username demo --new-password demo-pass-1
+   $K create authentication/flows -r passkey-test -s alias=passkey-login \
+     -s providerId=basic-flow -s topLevel=true -s builtIn=false
+   $K create authentication/flows/passkey-login/executions/execution \
+     -r passkey-test -s provider=auth-username-form
+   $K create authentication/flows/passkey-login/executions/execution \
+     -r passkey-test -s provider=webauthn-authenticator-passwordless
+   ```
+
+   Result: The realm uses the default WebAuthn passwordless policy: `ES256`
+   and `RS256`, an empty relying party ID, resident key `Yes` and user
+   verification `required`.
+
+4. Get the ID of the `webauthn-authenticator-passwordless` execution. Set it
+   to `REQUIRED`:
+
+   ```sh
+   $K get authentication/flows/passkey-login/executions -r passkey-test --fields id,providerId
+   $K update authentication/flows/passkey-login/executions -r passkey-test \
+     -b '{"id":"<execution id>","requirement":"REQUIRED"}'
+   ```
+
+5. Open `http://localhost:18080/realms/passkey-test/account` in the browser panel.
+
+6. Sign in as `demo` with `demo-pass-1` and click **Register**.
+
+   Result: Keycloak shows the account console. The command
+   `$K get users/<user id>/credentials -r passkey-test` shows a
    `webauthn-passwordless` credential.
 
-6. Bind the new flow as the browser flow of the realm. Click **Sign out**.
+7. Bind the new flow:
 
-7. Type the username and click **Sign in with Passkey**.
+   ```sh
+   $K update realms/passkey-test -s browserFlow=passkey-login
+   ```
+
+8. Click **Demo User**, then **Sign out**.
+
+9. Type `demo` and click **Sign in with Passkey**.
 
    Result: Keycloak shows the account console again.
 
-8. Write `deny` in `authenticator/mode`. Sign out and do step 7 again.
+10. Write `deny` in `authenticator/mode`. Sign out and do step 9 again.
 
-   Result: Keycloak shows `Failed to authenticate by the Passkey.`
+    Result: Keycloak shows `Failed to authenticate by the Passkey.`
 
 ### 6.5 P05 — Origin rules and abort
 
@@ -184,7 +236,7 @@ applies the origin rules, and that the panel shows a waiting request.
 
 1. Close the Device panel with `device_panel`.
 2. Stop the fixture with its exact process ID.
-3. Remove the Keycloak container.
+3. Remove the Keycloak container with `docker rm -f passkey-keycloak`.
 
    Result: No process or container of this run continues.
 
