@@ -98,8 +98,9 @@ one SSH command. The code is in `crates/horizon-core/src/upkeep/worker.rs` and
 `crates/horizon-core/src/upkeep/worker/`. No part of the Horizon window starts an
 exchange yet. The exchange does these steps:
 
-1. It writes the loop (`run.sh` and `run.py`), the settings (`config.json`) and
-   the agent instructions (`prompt.md`) to `/workspace/home/upkeep`.
+1. It writes the loop (`run.sh` and `run.py`), the settings without the
+   instructions (`config.json`) and the agent instructions (`prompt.md`) to
+   `/workspace/home/upkeep`.
 2. It writes the session binding in `/workspace/sessions/upkeep-<cloud>`. Thus
    the agents of the loop can ask for GitHub access and open browser panels.
 3. It writes the Run now and Pause signals.

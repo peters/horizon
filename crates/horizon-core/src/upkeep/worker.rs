@@ -291,10 +291,15 @@ pub fn command(cloud_id: &str, revision: &str, config: &Config, signals: Signals
         return Err(Error::Invalid("Invalid cloud for Upkeep"));
     }
     config.validate()?;
+    // The worker reads the instructions from the prompt only, so they travel once.
+    let mut worker_config = serde_json::to_value(config).map_err(|_| Error::Invalid("Invalid Upkeep settings"))?;
+    if let Some(fields) = worker_config.as_object_mut() {
+        fields.remove("instructions");
+    }
     let payload = serde_json::json!({
         "session": session(cloud_id),
         "revision": revision,
-        "config": config,
+        "config": worker_config,
         "prompt": prompt(config),
         "run": RUN,
         "scheduler": SCHEDULER,

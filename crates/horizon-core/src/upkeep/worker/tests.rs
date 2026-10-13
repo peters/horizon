@@ -101,7 +101,9 @@ fn the_command_runs_as_the_agent_where_the_worker_isolates_it() {
     long.order.clone_from(&long.repositories);
     long.authors = (0..AUTHOR_LIMIT).map(|n| format!("app/{n:0>39}[bot]")).collect();
     assert!(long.validate().is_ok());
-    assert!(command("abc-123", &"a".repeat(40), &long, Signals::default()).is_ok());
+    let longest = command("abc-123", &"a".repeat(40), &long, Signals::default()).unwrap();
+    // Room for the scripts to grow before this limit is a concern.
+    assert!(longest.len() < COMMAND_LIMIT - 12 * 1024, "{}", longest.len());
     assert!(command("abc-123", &"A".repeat(40), &config(), Signals::default()).is_err());
 }
 
