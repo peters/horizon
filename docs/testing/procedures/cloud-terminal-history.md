@@ -267,10 +267,17 @@ with synthetic agents.
 
    Result: The new panel shows the same value.
 
-4. Open a cloud Codex panel.
+4. On the same cloud as step 2, open a cloud Codex panel.
 
    Result: The composer of Codex has a background that matches the panel
    colors, as in a local Codex panel.
+
+5. In **Settings**, **General**, **Appearance**, select **Light**. Do step 1
+   again in the local panel. Then open a new cloud shell panel and do step 2
+   in it.
+
+   Result: The local panel shows the light background color. The new cloud
+   panel shows the same light value.
 
 ## 7. Pass criteria
 
