@@ -314,7 +314,8 @@ page in the browser. The login goes to a private Codex home,
 
 Every deployment, reconnect, resume and rebuild of a cloud that runs Codex, without a
 bound OpenAI API key, then gives this login to the worker as
-`/workspace/home/.codex/auth.json`, mode 0600, owned by the agent user. Codex on the worker
+`/workspace/home/.codex/auth.json`, mode 0600. The agent user owns it on a worker that
+isolates agents, and `root` owns it on a worker that does not. Codex on the worker
 starts signed in. The login goes over SSH standard input, never in a command line or a
 log.
 

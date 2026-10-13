@@ -129,19 +129,21 @@ and that a renewal on a worker comes back to this computer.
 
    Result: You have a time.
 
-2. In the Shell panel on the cloud, set a later `last_refresh` in the worker's login.
-   Use `python3 -c 'import json; p="/workspace/home/.codex/auth.json"; a=json.load(open(p)); a["last_refresh"]="2099-01-01T00:00:00Z"; open(p,"w").write(json.dumps(a))'`.
+2. In the Shell panel on the cloud, set the `last_refresh` of the worker's login to
+   the time now, as a renewal on the worker does. Use
+   `python3 -c 'import json,datetime; p="/workspace/home/.codex/auth.json"; a=json.load(open(p)); a["last_refresh"]=datetime.datetime.now(datetime.timezone.utc).isoformat(); open(p,"w").write(json.dumps(a)); print(a["last_refresh"])'`.
 
-   Result: The command ends without an error.
+   Result: The command shows a time later than the time of step 1.
 
 3. Reconnect the cloud.
 
    Result: The cloud becomes ready. The `last_refresh` of the login on this computer
-   is `2099-01-01T00:00:00Z`.
+   is the time that step 2 showed.
 
 4. Sign out in Cloud settings and sign in again with the same account.
 
-   Result: The login on this computer has a new `last_refresh`, earlier than 2099.
+   Result: The login on this computer has a new `last_refresh`, later than the time
+   that step 2 showed.
 
 5. Reconnect the cloud.
 
