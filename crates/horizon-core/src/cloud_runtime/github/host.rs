@@ -175,17 +175,17 @@ pub fn kept_repositories(root: &Path, settings: &Settings) -> Option<Vec<String>
     (kept.login == login).then_some(kept.repositories)
 }
 
-/// Keeps `repositories` for the next **New cloud**, private beside the sign-in, for its
-/// account and under its lock: a Disconnect forgets them with it, and a list that arrives
-/// after one is not kept.
+/// Keeps `repositories`, listed for the account `login`, for the next **New cloud**: private
+/// beside the sign-in and under its lock. A Disconnect forgets them with it, and a list
+/// that arrives after one, or after a sign-in as another account, is not kept.
 /// # Errors
 /// A file that cannot be written.
-pub fn keep_repositories(root: &Path, settings: &Settings, repositories: &[String]) -> Result<()> {
+pub fn keep_repositories(root: &Path, settings: &Settings, login: &str, repositories: &[String]) -> Result<()> {
     let _lock = lock(root, settings)?;
     if !configured(root, settings) {
         return Ok(());
     }
-    let Some(chain) = stored::load(&path(root, settings)) else {
+    let Some(chain) = stored::load(&path(root, settings)).filter(|chain| chain.login == login) else {
         return Ok(());
     };
     let kept = Listed {

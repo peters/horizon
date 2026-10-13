@@ -39,7 +39,7 @@ fn a_disconnect_forgets_the_sign_in_and_a_later_use_finds_the_app_gone() {
         refresh_expires_at: std::time::SystemTime::now() + std::time::Duration::from_hours(400),
     };
     stored::save(&path(root.path(), &settings(42)), "octo-cat", &chain, false).unwrap();
-    keep_repositories(root.path(), &settings(42), &["acme/private".into()]).unwrap();
+    keep_repositories(root.path(), &settings(42), "octo-cat", &["acme/private".into()]).unwrap();
     assert_eq!(
         kept_repositories(root.path(), &settings(42)),
         Some(vec!["acme/private".to_owned()])
@@ -160,7 +160,7 @@ fn a_disconnected_app_asks_github_for_no_sign_in() {
 fn a_list_is_kept_for_the_signed_in_account_only() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("settings.json"), r#"{"github":{"app_id":42}}"#).unwrap();
-    keep_repositories(root.path(), &settings(42), &["acme/web".into()]).unwrap();
+    keep_repositories(root.path(), &settings(42), "octo-cat", &["acme/web".into()]).unwrap();
     assert!(
         !listed(root.path(), &settings(42)).exists(),
         "no sign-in, so nothing is kept"
@@ -175,7 +175,12 @@ fn a_list_is_kept_for_the_signed_in_account_only() {
         stored::save(&path(root.path(), &settings(42)), login, &chain, false).unwrap();
     };
     chain("octo-cat");
-    keep_repositories(root.path(), &settings(42), &["acme/web".into()]).unwrap();
+    keep_repositories(root.path(), &settings(42), "someone-else", &["acme/other".into()]).unwrap();
+    assert!(
+        !listed(root.path(), &settings(42)).exists(),
+        "a list for an account that is not signed in is not kept"
+    );
+    keep_repositories(root.path(), &settings(42), "octo-cat", &["acme/web".into()]).unwrap();
     assert_eq!(
         kept_repositories(root.path(), &settings(42)),
         Some(vec!["acme/web".to_owned()])

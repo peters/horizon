@@ -310,3 +310,14 @@ fn a_refresh_without_a_sign_in_shows_no_kept_list() {
     assert!(account.failed.is_none() && account.stale.is_none());
     assert!(account.job.is_none());
 }
+
+#[test]
+fn a_failed_refresh_the_person_asked_for_keeps_the_way_to_try_again() {
+    let (mut account, sender) = waiting(Purpose::List);
+    account.repositories = Some(vec!["acme/kept".into()]);
+    account.stale = Some("GitHub could not be reached.".into());
+    sender.send(Answer::Failed("Still offline.".into())).unwrap();
+    assert!(account.poll().is_none());
+    assert!(account.stale.is_some(), "Refresh from GitHub stays in view");
+    assert_eq!(account.failed.as_deref(), Some("Still offline."));
+}

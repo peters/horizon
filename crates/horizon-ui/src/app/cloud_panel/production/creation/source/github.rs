@@ -135,9 +135,6 @@ impl Account {
             _abort: Abort(cancel.clone()),
         });
         self.failed = None;
-        if purpose == Purpose::List {
-            self.stale = None;
-        }
         let (root, settings, ctx) = (self.root.clone(), self.settings.clone(), ctx.clone());
         std::thread::spawn(move || {
             // The names kept from last time show while GitHub is asked.
@@ -159,16 +156,6 @@ impl Account {
                 && let Err(error) = host::forget_repositories(&root, &settings)
             {
                 tracing::debug!(%error, "could not forget the GitHub repository list");
-            }
-            if let Answer::Done {
-                repositories: Some(listed),
-                ..
-            } = &answer
-            {
-                // Losing the kept list only costs the next dialog its head start.
-                if let Err(error) = host::keep_repositories(&root, &settings, listed) {
-                    tracing::debug!(%error, "could not keep the GitHub repository list");
-                }
             }
             let _ = sender.send(answer);
             ctx.request_repaint();
@@ -366,11 +353,11 @@ fn exchange(
     show: &dyn Fn(Prompt),
     purpose: Purpose,
 ) -> Answer {
-    let token = match host::current(root, settings) {
-        Ok(Some((_, token))) => token,
+    let (login, token) = match host::current(root, settings) {
+        Ok(Some(signed_in)) => signed_in,
         Ok(None) if purpose == Purpose::Refresh => return Answer::Quiet,
         Ok(None) => match host::sign_in(root, settings, cancel, show) {
-            Ok(Ok((_, token))) => token,
+            Ok(Ok(signed_in)) => signed_in,
             Ok(Err(reason)) => return Answer::Failed(reason),
             Err(error) => return Answer::Failed(error.to_string()),
         },
@@ -379,7 +366,14 @@ fn exchange(
     let repositories = match purpose {
         Purpose::Clone => None,
         Purpose::List | Purpose::Refresh => match host::repositories(&token) {
-            Ok(found) => Some(found),
+            Ok(found) => {
+                // Kept for the account it was listed for; losing it only costs the next
+                // dialog its head start.
+                if let Err(error) = host::keep_repositories(root, settings, &login, &found) {
+                    tracing::debug!(%error, "could not keep the GitHub repository list");
+                }
+                Some(found)
+            }
             Err(reason) => return Answer::Failed(reason),
         },
     };
