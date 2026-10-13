@@ -82,11 +82,9 @@ COLOR_QUERY = b'\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b[c'
 COLOR_REPLY = re.compile(rb'\x1b\](1[01]);([^\x07\x1b]*)(?:\x07|\x1b\\)')
 RGB = re.compile(rb'rgb:([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})')
 IDENTITY_REPLY = re.compile(rb'\x1b\[\?[0-9;]*c')
-# The attach shows the session after this long without the answer. Input from its first escape
-# sequence on then waits for the rest of the answer until ANSWER_SECONDS after the query, so a late
-# answer never reaches the session.
-COLOR_SECONDS = 2
-ANSWER_SECONDS = 10
+# The attach waits this long for the answer before it shows the session. A later answer is removed
+# from the input when it comes, and gives tmux the colors then.
+COLOR_SECONDS = 10
 LITERAL = frozenset(b'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ,./:=@_+-')
 
 
@@ -540,9 +538,8 @@ class Attachment:
         self.input = None
         self.pane = None
         self.connected = True
-        # This terminal's input since the color query, while its answer is not complete.
-        self.answer = b''
-        self.answer_deadline = None
+        # The answer to the color query did not come yet.
+        self.outstanding = False
 
     def wait(self, count, required=True):
         """The next `count` replies, and the session output that tmux wrote after them. The output
@@ -572,39 +569,32 @@ class Attachment:
         return True
 
     def probe(self):
-        """Asks this terminal for its colors and waits COLOR_SECONDS for the answer; False when it
-        did not come. Until the answer is complete, input collects in `answer`."""
+        """Asks this terminal for its colors and waits COLOR_SECONDS for the answer: the tmux
+        commands that give tmux the colors, and the input typed meanwhile."""
         write(self.terminal + 1, COLOR_QUERY)
-        self.answer, self.answer_deadline = b'', time.monotonic() + ANSWER_SECONDS
+        data = b''
         deadline = time.monotonic() + COLOR_SECONDS
-        while not IDENTITY_REPLY.search(self.answer):
+        while not IDENTITY_REPLY.search(data):
             remaining = deadline - time.monotonic()
             if remaining <= 0 or not select.select([self.terminal], [], [], remaining)[0]:
-                return False
+                break
             try:
                 chunk = os.read(self.terminal, 65536)
             except OSError:
                 chunk = b''
             if not chunk:
-                return False
-            self.answer += chunk
-        return True
+                break
+            data += chunk
+        self.outstanding = True
+        return self.answered(data)
 
-    def hold(self, data):
-        """Holds input from its first escape sequence on, which can be part of the answer; returns
-        the input before it, which was typed."""
-        self.answer += data
-        start = self.answer.find(b'\x1b')
-        if start < 0:
-            start = len(self.answer)
-        typed, self.answer = self.answer[:start], self.answer[start:]
-        return typed
-
-    def answered(self):
-        """Ends the wait for the answer: the tmux commands that give tmux the colors, and the input
-        typed meanwhile."""
-        style, typed = colors(self.answer)
-        self.answer, self.answer_deadline = b'', None
+    def answered(self, data):
+        """Removes the answer to the color query from `data` until the answer is complete: the tmux
+        commands that give tmux the colors it reports, and the input that was typed."""
+        if not self.outstanding:
+            return [], data
+        self.outstanding = not IDENTITY_REPLY.search(data)
+        style, typed = colors(data)
         if not style:
             return [], typed
         # tmux answers the color queries of a pane from its window style. The style of the server
@@ -617,13 +607,11 @@ class Attachment:
         target = self.target
         self.control.send(['refresh-client -C %dx%d' % window_size(self.terminal)])
         self.wait(1)
-        typed = b''
-        if self.probe():
-            commands, typed = self.answered()
-            if commands:
-                self.control.send(commands)
-                # Without the colors, tmux answers as before; the attach goes on.
-                self.wait(len(commands), required=False)
+        commands, typed = self.probe()
+        if commands:
+            self.control.send(commands)
+            # Without the colors, tmux answers as before; the attach goes on.
+            self.wait(len(commands), required=False)
         query = ' '.join('#{%s}' % name for name in STATE)
         # In the alternate screen, the pane's grid holds its normal history above the alternate
         # screen, and the normal screen is saved apart (-a). One command line, so tmux reads no
@@ -657,15 +645,10 @@ class Attachment:
         typed = self.synchronize()
         stdin, stdout, tmux = self.terminal, self.terminal + 1, self.control.process.stdout
         last_input = time.monotonic()
-        if self.answer_deadline is not None:
-            typed += self.hold(b'')
         self.control.send(self.input.feed(typed))
         while not self.control.ended:
             waiting = self.input.waiting()
             timeout = None if waiting is None else max(0, last_input + waiting - time.monotonic())
-            if self.answer_deadline is not None:
-                remaining = max(0, self.answer_deadline - time.monotonic())
-                timeout = remaining if timeout is None else min(timeout, remaining)
             ready = select.select([stdin, tmux, wake_read], [], [], timeout)[0]
             if wake_read in ready:
                 os.read(wake_read, 512)
@@ -687,13 +670,10 @@ class Attachment:
                     self.connected = False
                     break
                 last_input = time.monotonic()
-                self.control.send(self.input.feed(data if self.answer_deadline is None else self.hold(data)))
+                commands, typed = self.answered(data)
+                self.control.send(commands + self.input.feed(typed))
             elif waiting is not None and time.monotonic() >= last_input + waiting:
                 self.control.send(self.input.flush())
-            if self.answer_deadline is not None and (IDENTITY_REPLY.search(self.answer)
-                                                     or time.monotonic() >= self.answer_deadline):
-                commands, typed = self.answered()
-                self.control.send(commands + self.input.feed(typed))
 
 
 def main(argv):

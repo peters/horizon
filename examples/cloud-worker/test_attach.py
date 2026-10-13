@@ -153,6 +153,18 @@ class InputTests(unittest.TestCase):
         # Its closing bracket, when it comes after all, is no key for the session.
         self.assertEqual(typed.feed(b'more\x1b[201~x'), ['send-keys -H -t %3 6d 6f 72 65', 'send-keys -H -t %3 78'])
 
+    def test_an_answer_that_comes_after_the_wait_is_removed_and_still_gives_the_colors(self):
+        attachment = types.SimpleNamespace(outstanding=True, target='%3')
+        commands, typed = attach.Attachment.answered(attachment, b'a\x1b]10;rgb:a1a1/b2b2/c3c3\x1b\\')
+        self.assertEqual(typed, b'a')
+        self.assertIn("set-option -wg window-style 'fg=#a1b2c3'", commands)
+        self.assertTrue(attachment.outstanding)
+        commands, typed = attach.Attachment.answered(attachment, b'\x1b]11;rgb:1010/2020/3030\x07\x1b[?62cb')
+        self.assertEqual((commands[0], typed), ("set-option -p -t %3 window-style 'bg=#102030'", b'b'))
+        self.assertFalse(attachment.outstanding)
+        # Once the answer is complete, input is keys again.
+        self.assertEqual(attach.Attachment.answered(attachment, b'\x1b[?62c'), ([], b'\x1b[?62c'))
+
     def test_the_answer_to_the_color_query_is_never_typed(self):
         style, typed = attach.colors(b'a\x1b]11;rgba:1/2/3/4\x1b\\b\x1b]10;rgb:ff/0/8080\x07\x1b[?62;22cc')
         # A color in a form tmux does not take is left out, but its answer is no key either.
@@ -371,18 +383,17 @@ class TmuxTests(unittest.TestCase):
         self.wait_for(received.exists)
         self.assertRegex(received.read_bytes(), rb'\A' + ANSWERED)
 
-    def test_a_late_answer_still_gives_the_colors_and_never_reaches_the_session(self):
+    def test_keys_typed_before_a_slow_answer_reach_the_session_after_the_colors(self):
         terminal = self.start(['a'])
         terminal.read_until(lambda data: attach.COLOR_QUERY in data)
-        # The attach shows the session without the answer after COLOR_SECONDS.
-        terminal.read_until(lambda data: data.endswith(b'\x1b[?2004h'))
-        # Keys before the first escape sequence reach the session at once.
-        terminal.write(b'echo early\r')
-        terminal.read_until(lambda data: b'\r\nearly\r\n' in data)
-        terminal.write(b'\x1b]10;rgb:a1a1/b2b2/c3c3\x1b\\' + b'echo late\r' + PANEL_COLORS.split(b'\\', 1)[1])
-        terminal.read_until(lambda data: b'\r\nlate\r\n' in data)
-        self.assertNotIn(']1', self.tmux('capture-pane', '-p', '-t', '=a:'))
-        self.wait_for(lambda: 'fg=#a1b2c3,bg=#102030' in self.tmux('show-options', '-wg', 'window-style'))
+        terminal.write(b'echo $((6*7))\r')
+        time.sleep(3)
+        # The session is not shown yet, and the keys did not reach it.
+        self.assertFalse(terminal.data.endswith(b'\x1b[?2004h'))
+        self.assertNotIn('42', self.tmux('capture-pane', '-p', '-t', '=a:'))
+        terminal.write(PANEL_COLORS)
+        terminal.read_until(lambda data: b'\r\n42\r\n' in data)
+        self.assertIn('fg=#a1b2c3,bg=#102030', self.tmux('show-options', '-wg', 'window-style'))
 
     def test_a_panel_that_reports_no_colors_sets_no_style_and_keeps_typed_keys(self):
         terminal = self.attach(answer=b'echo early\r\x1b[?1;2c')
