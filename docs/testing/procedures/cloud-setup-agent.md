@@ -97,7 +97,7 @@ setup** commits `.horizon` and reads it as the repository profile.
 
    Result: The dialog shows **No cloud setup yet** with two cards: **Quick start**
    with **Start on the base image**, and **Set up from CI** with one chip for each
-   agent of the New Workspace menu (for example **Codex** and **Claude**).
+   agent preset (for example **Codex** and **Claude**).
 
 2. Click the **Codex** chip.
 
