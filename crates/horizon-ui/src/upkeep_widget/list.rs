@@ -167,7 +167,8 @@ fn row(ui: &mut Ui, pr: &PullRequest, now: OffsetDateTime) -> Option<String> {
     // The id follows the pull request, not its place in the list, so focus stays on it
     // when a new status reorders the rows.
     let (_, rect) = ui.allocate_space(Vec2::new(ui.available_width(), height));
-    let response = ui.interact(rect, egui::Id::new(("upkeep-pr", &pr.repository, pr.number)), sense);
+    // Scoped to this board's list, so two boards showing one pull request stay apart.
+    let response = ui.interact(rect, ui.id().with(("upkeep-pr", &pr.repository, pr.number)), sense);
     // A row out of view only takes its space: a long list costs nothing per frame.
     if !ui.is_rect_visible(rect) {
         return None;

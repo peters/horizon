@@ -179,8 +179,12 @@ fn fingerprint(bytes: &[u8]) -> u64 {
 }
 
 fn parse_status(bytes: &[u8]) -> Reading {
-    let mut status: Status =
-        serde_json::from_slice(bytes).map_err(|error| format!("The Upkeep status is not valid: {error}"))?;
+    let mut status: Status = serde_json::from_slice(bytes).map_err(|error| {
+        // The parser quotes the document; a quote of 4 MiB must not reach the board.
+        let mut message = format!("The Upkeep status is not valid: {error}");
+        clip(&mut message);
+        message
+    })?;
     bound(&mut status);
     Ok(status)
 }
@@ -225,8 +229,11 @@ impl Bounded for super::PullRequest {
     const KEEP: usize = MAX_PULL_REQUESTS;
 
     /// Open pull requests first, newest first, so a person never misses one for a merged one.
+    /// A pull request listed twice keeps its most important entry.
     fn prune(list: &mut Vec<Self>) {
         list.sort_by_key(|pr| (pr.state == PrState::Merged, std::cmp::Reverse(pr.updated_at)));
+        let mut seen = std::collections::HashSet::new();
+        list.retain(|pr| seen.insert((pr.repository.to_ascii_lowercase(), pr.number)));
         list.truncate(Self::KEEP);
     }
 }
@@ -384,6 +391,23 @@ mod tests {
         if let Some(Err(error)) = reading {
             assert!(error.starts_with("The Upkeep status cannot be read"), "{error}");
         }
+    }
+
+    #[test]
+    fn a_huge_invalid_document_gives_a_short_error_and_duplicates_go() {
+        let quoted = format!("\"{}\"", "x".repeat(1_000_000));
+        let error = parse_status(quoted.as_bytes()).unwrap_err();
+        assert!(
+            error.chars().count() <= MAX_TEXT,
+            "{} characters",
+            error.chars().count()
+        );
+        let status = parse_status(
+            br#"{"pull_requests":[{"repository":"o/r","number":7,"state":"merged"},{"repository":"O/R","number":7,"state":"blocked"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(status.pull_requests.len(), 1);
+        assert_eq!(status.pull_requests[0].state, PrState::Blocked);
     }
 
     #[test]
