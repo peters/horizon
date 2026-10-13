@@ -38,7 +38,9 @@ pub(crate) struct PageOptions {
     rp_id: Option<String>,
     rp_name: Option<String>,
     user: Option<PageUser>,
-    algorithms: Vec<i64>,
+    /// `None` when the page sent no `pubKeyCredParams`; empty asks for the
+    /// defaults.
+    algorithms: Option<Vec<i64>>,
     allow_credentials: Vec<String>,
     exclude_credentials: Vec<String>,
     user_verification: Option<String>,
@@ -50,8 +52,8 @@ pub(crate) struct PageOptions {
 #[serde(default)]
 struct PageUser {
     id: String,
-    name: String,
-    display_name: String,
+    name: Option<String>,
+    display_name: Option<String>,
 }
 
 /// A request that passed every host check and is ready for the command.
@@ -102,20 +104,30 @@ pub(crate) fn prepare(
             input["reason"] = Value::String(format!("Sign in to {rp_id} in a browser panel"));
         }
         Operation::Create => {
+            // The page can post to the channel directly, so the members that
+            // WebAuthn requires are checked here as well as in the page script.
             let user = options.user.as_ref().ok_or_else(PageError::type_error)?;
             let user_id = canonical_b64u(&user.id, 1, MAX_USER_ID_BYTES).ok_or_else(PageError::type_error)?;
-            let algorithms = if options.algorithms.is_empty() {
+            let (Some(rp_name), Some(account_name), Some(display_name), Some(offered)) = (
+                options.rp_name.as_deref(),
+                user.name.as_deref(),
+                user.display_name.as_deref(),
+                options.algorithms.as_ref(),
+            ) else {
+                return Err(PageError::type_error());
+            };
+            let algorithms = if offered.is_empty() {
                 DEFAULT_ALGORITHMS.to_vec()
-            } else if options.algorithms.len() > MAX_ALGORITHMS {
+            } else if offered.len() > MAX_ALGORITHMS {
                 return Err(PageError::type_error());
             } else {
-                options.algorithms.clone()
+                offered.clone()
             };
-            input["rp_name"] = Value::String(bounded_text(options.rp_name.as_deref().unwrap_or(&rp_id)));
+            input["rp_name"] = Value::String(bounded_text(rp_name));
             input["user"] = json!({
                 "id": user_id,
-                "name": bounded_text(&user.name),
-                "display_name": bounded_text(&user.display_name),
+                "name": bounded_text(account_name),
+                "display_name": bounded_text(display_name),
             });
             input["algorithms"] = json!(algorithms);
             input["exclude_credentials"] = json!(credential_list(&options.exclude_credentials)?);
@@ -303,6 +315,14 @@ mod tests {
         }
     }
 
+    fn complete_user() -> PageUser {
+        PageUser {
+            id: "dXNlcg".into(),
+            name: Some("u".into()),
+            display_name: Some("U".into()),
+        }
+    }
+
     fn authenticator_data(rp_id: &str) -> String {
         let mut data = Sha256::digest(rp_id.as_bytes()).to_vec();
         data.extend([0x05, 0, 0, 0, 1]);
@@ -345,9 +365,10 @@ mod tests {
             rp_name: Some("Example".into()),
             user: Some(PageUser {
                 id: "dXNlcg".into(),
-                name: "user@example.com".into(),
-                display_name: "User\u{7}".into(),
+                name: Some("user@example.com".into()),
+                display_name: Some("User\u{7}".into()),
             }),
+            algorithms: Some(Vec::new()),
             resident_key: Some("required".into()),
             user_verification: Some("bogus".into()),
             timeout: Some(1),
@@ -394,6 +415,26 @@ mod tests {
                 .name,
             "TypeError"
         );
+        let complete = || PageOptions {
+            user: Some(complete_user()),
+            rp_name: Some("Example".into()),
+            algorithms: Some(vec![-7]),
+            ..get_options("AAEC")
+        };
+        assert!(prepare(Operation::Create, &complete(), &origin(), None).is_ok());
+        let mut missing = [complete(), complete(), complete(), complete()];
+        missing[0].rp_name = None;
+        missing[1].algorithms = None;
+        if let Some(user) = missing[2].user.as_mut() {
+            user.name = None;
+        }
+        if let Some(user) = missing[3].user.as_mut() {
+            user.display_name = None;
+        }
+        for options in missing {
+            let error = prepare(Operation::Create, &options, &origin(), None).expect_err("missing member");
+            assert_eq!(error.name, "TypeError");
+        }
     }
 
     #[test]
@@ -445,10 +486,9 @@ mod tests {
             );
         }
         let create_options = PageOptions {
-            user: Some(PageUser {
-                id: "dXNlcg".into(),
-                ..PageUser::default()
-            }),
+            user: Some(complete_user()),
+            rp_name: Some("Example".into()),
+            algorithms: Some(vec![-7]),
             ..get_options("AAEC")
         };
         let create = prepare(Operation::Create, &create_options, &origin(), None).expect("create");
@@ -464,10 +504,9 @@ mod tests {
     #[test]
     fn attestation_output_keeps_key_algorithm_and_transports() {
         let options = PageOptions {
-            user: Some(PageUser {
-                id: "dXNlcg".into(),
-                ..PageUser::default()
-            }),
+            user: Some(complete_user()),
+            rp_name: Some("Example".into()),
+            algorithms: Some(vec![-7]),
             ..get_options("AAEC")
         };
         let prepared = prepare(Operation::Create, &options, &origin(), None).expect("prepared");

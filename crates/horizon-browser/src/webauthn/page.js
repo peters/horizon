@@ -46,10 +46,11 @@
         if (!encoded) throw new TypeError("publicKey.challenge must not be empty");
         return encoded;
     };
-    const text = (value) => (value === undefined || value === null ? undefined : String(value));
+    // Only `undefined` is an omitted member; `null` converts to "null".
+    const text = (value) => (value === undefined ? undefined : String(value));
     // `timeout` is a WebIDL number, so "5000" counts; the host clamps it.
     const timeoutOf = (value) => {
-        const millis = value === undefined || value === null ? NaN : Number(value);
+        const millis = value === undefined ? NaN : Number(value);
         return Number.isFinite(millis) && millis >= 0 ? Math.min(Math.floor(millis), 0xffffffff) : undefined;
     };
     // `alg` is a required WebIDL `long`: missing is a TypeError, and a value

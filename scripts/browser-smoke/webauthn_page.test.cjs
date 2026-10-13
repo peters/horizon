@@ -82,6 +82,10 @@ test('options are bounded before they are posted', async () => {
     assert.equal(posted[0].options.timeout, 0xffffffff);
     credentials.get({publicKey: {challenge, timeout: '5000'}});
     assert.equal(posted.pop().options.timeout, 5000);
+    credentials.get({publicKey: {challenge, timeout: null, rpId: null}});
+    const nulls = posted.pop().options;
+    assert.equal(nulls.timeout, 0, 'null is a present member that converts to 0');
+    assert.equal(nulls.rp_id, 'null', 'null is a present member that converts to "null"');
     await assert.rejects(credentials.create({publicKey: {challenge, rp: {name: 'x'}, user,
         pubKeyCredParams: [{type: 'public-key'}]}}), {name: 'TypeError'});
     await assert.rejects(credentials.get({publicKey: {challenge: new Uint8Array(8192)}}), {name: 'TypeError'});
