@@ -14,6 +14,7 @@ mod accept;
 mod access;
 mod agent;
 mod bounded;
+mod cards;
 mod commit;
 mod pins;
 mod preview;
@@ -57,7 +58,7 @@ pub(super) fn render(ui: &mut egui::Ui, form: &mut Production, output_beside: bo
         return run::render(ui, run, &name, output_height).map_or(Choice::None, Choice::Run);
     }
     if form.launch.unconfigured {
-        return unconfigured(ui, form);
+        return cards::unconfigured(ui, form);
     }
     if let Some(error) = error {
         return fix(ui, form, error);
@@ -89,63 +90,6 @@ fn fix(ui: &mut egui::Ui, form: &mut Production, error: &str) -> Choice {
         }
     });
     choice
-}
-
-fn unconfigured(ui: &mut egui::Ui, form: &mut Production) -> Choice {
-    let mut choice = Choice::None;
-    ui.label(
-        RichText::new("No cloud setup yet")
-            .size(15.0)
-            .strong()
-            .color(theme::FG()),
-    );
-    ui.add_space(6.0);
-    // Side by side when both cards fit with their buttons; stacked in a narrow dialog.
-    if ui.available_width() >= 520.0 {
-        ui.columns(2, |columns| {
-            quick_start_card(&mut columns[0], &mut choice);
-            setup_card(&mut columns[1], form, &mut choice);
-        });
-    } else {
-        quick_start_card(ui, &mut choice);
-        ui.add_space(8.0);
-        setup_card(ui, form, &mut choice);
-    }
-    choice
-}
-
-fn quick_start_card(ui: &mut egui::Ui, choice: &mut Choice) {
-    option_card(ui, theme::FG_DIM(), |ui| {
-        ui.label(RichText::new("Quick start").size(15.0).strong().color(theme::FG()));
-        ui.label(RichText::new(QUICK_START_DETAIL).size(12.5).color(theme::FG_SOFT()));
-        ui.add_space(8.0);
-        if ui
-            .add(
-                action_button("Start on the base image")
-                    .min_size(Vec2::new(120.0, 40.0))
-                    .corner_radius(10),
-            )
-            .clicked()
-        {
-            *choice = Choice::QuickStart;
-        }
-    });
-}
-
-fn setup_card(ui: &mut egui::Ui, form: &mut Production, choice: &mut Choice) {
-    // Files an earlier setup left uncommitted are where the agent continues.
-    let earlier = prompt::setup_files_seen(ui.ctx(), form.repository.trim());
-    option_card(ui, theme::ACCENT(), |ui| {
-        ui.label(RichText::new("Set up from CI").size(15.0).strong().color(theme::FG()));
-        let detail = if earlier { CONTINUE_DETAIL } else { SETUP_DETAIL };
-        ui.label(RichText::new(detail).size(12.5).color(theme::FG_SOFT()));
-        ui.add_space(8.0);
-        let verb = if earlier { "Continue with" } else { "Set up with" };
-        if setup_agent(ui, form, verb) == Choice::SetupAgent {
-            form.setup_mode = Mode::New;
-            *choice = Choice::SetupAgent;
-        }
-    });
 }
 
 /// The preparation view's heading: no provider yet, because nothing is rented.
@@ -263,10 +207,6 @@ fn option_card(ui: &mut egui::Ui, tint: Color32, add: impl FnOnce(&mut egui::Ui)
         });
 }
 
-const QUICK_START_DETAIL: &str = "A 2 vCPU, 4 GB RunPod worker with Claude, Codex, Chromium and a desktop. It needs no registry login, no image build and no Docker on this computer.";
-const SETUP_DETAIL: &str = "An agent reads your CI and writes a worker setup; Horizon builds its image and runs your CI jobs in it to prove it.";
-const CONTINUE_DETAIL: &str = "This folder has uncommitted files in .horizon. An agent continues from them against your CI; Horizon builds the image and runs your CI jobs in it to prove them.";
-
 /// Whether `entered`, the repository the person typed, is the run's: as typed when the
 /// run started, or its folder. Read without the disk, since the dialog draws it.
 fn same_folder(run: &run::Run, entered: &str) -> bool {
@@ -308,7 +248,7 @@ fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str) -> Choice {
         let primary = egui::Button::new(RichText::new(label).size(14.0).strong().color(theme::BG()))
             .fill(theme::ACCENT())
             .corner_radius(10)
-            .min_size(Vec2::new(120.0, 40.0));
+            .min_size(Vec2::new(ui.available_width().max(120.0), 40.0));
         open = ui.add_enabled(!form.repository.trim().is_empty(), primary).clicked();
     });
     // The agent presets of the New Workspace menu, as chips: no popup to hide behind the
@@ -482,10 +422,10 @@ mod tests {
     fn the_quick_start_detail_describes_the_builtin_profile() {
         let config = quick_start::builtin().unwrap();
         let profile = &config.profiles[quick_start::PROFILE];
-        let detail = QUICK_START_DETAIL.to_lowercase();
+        let detail = cards::quick_start_facts().join(" ").to_lowercase();
         assert_eq!(profile.provider, "runpod");
         assert!(detail.contains("runpod"));
-        assert!(detail.contains(&format!("{} vcpu, {} gb", profile.cpu, profile.memory_gb)));
+        assert!(detail.contains(&format!("{} vcpu · {} gb", profile.cpu, profile.memory_gb)));
         for agent in &profile.capabilities.agents {
             assert!(detail.contains(agent.as_str()), "{agent:?}");
         }
