@@ -59,7 +59,8 @@ mkdir -- "$drops/$session/.$batch.$4.part"
 
 /// Writes one file from standard input into the private folder, then moves it into the
 /// batch folder after a size check. It never replaces a file. A transfer that ends early,
-/// is cancelled or is cut off by a signal leaves nothing in the batch folder.
+/// is cancelled or is cut off by a signal leaves nothing in the batch folder. The last
+/// file of a drop also removes the empty private folder.
 const WRITE: &str = r#"
 set -eu
 umask 077
@@ -67,6 +68,7 @@ dir="$1/.horizon-drops/$2/$3"
 part="$1/.horizon-drops/$2/.$3.$4.part"
 name=$5
 size=$6
+last=$7
 group=$(id -g)
 if [ -f /run/horizon-tailnet/agent-isolation ]; then group=$(id -g horizon-agent); fi
 for folder in "$dir" "$part"; do
@@ -95,6 +97,7 @@ if [ -e "$file" ] || [ -L "$file" ]; then
 fi
 mv -- "$partial" "$file"
 trap - EXIT HUP INT TERM
+if [ "$last" = 1 ]; then rmdir -- "$part" 2>/dev/null || true; fi
 "#;
 
 /// Removes the folders of one drop, only when its private folder shows that this drop
@@ -218,11 +221,15 @@ impl Batch {
     }
 
     /// Writes standard input to `name` in the batch folder and checks that it has `size` bytes.
+    /// The `last` file of the drop also removes the private folder.
     #[must_use]
-    pub fn write_command(&self, name: &str, size: u64) -> String {
+    pub fn write_command(&self, name: &str, size: u64, last: bool) -> String {
         let size = size.to_string();
         let [workspace, session, id, token] = self.args();
-        command(WRITE, &[workspace, session, id, token, name, &size])
+        command(
+            WRITE,
+            &[workspace, session, id, token, name, &size, if last { "1" } else { "0" }],
+        )
     }
 
     /// Removes the batch folder, its private folder and everything in them, when this

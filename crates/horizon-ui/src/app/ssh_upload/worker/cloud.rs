@@ -81,8 +81,9 @@ fn upload(
         return stopped(exit, progress);
     }
     let mut remote_paths = Vec::with_capacity(total_files);
-    for (file, name) in files.iter().zip(&names) {
-        let mut command = connection.pinned_command(&batch.write_command(name, file.size_bytes));
+    for (index, (file, name)) in files.iter().zip(&names).enumerate() {
+        let last = index + 1 == total_files;
+        let mut command = connection.pinned_command(&batch.write_command(name, file.size_bytes, last));
         let detail = format!("Uploading {} to the cloud worker", file.name);
         if let Err(exit) = stream_file(&mut command, file, &detail, progress, control_rx, progress_tx) {
             *leftover = Some((connection, batch));
@@ -167,22 +168,22 @@ fn remove(connection: &Connection, batch: &Batch) -> bool {
 /// line after known advice, since SSH prints long banners for these failures.
 fn explain(error: &str) -> String {
     let lower = error.to_ascii_lowercase();
+    // Only SSH's own wording: a file name or a local file error can contain the same words.
     let advice = if lower.contains("host key verification failed") || lower.contains("host identification has changed")
     {
         "The worker did not show the host key that Horizon recorded for this cloud, so Horizon sent nothing. Reconnect the cloud, then drop the files again."
-    } else if lower.contains("permission denied (") {
-        // SSH names the refused methods; a file error on the worker does not.
+    } else if lower.contains("permission denied (publickey") {
         "The worker refused the cloud SSH key of this computer. Reconnect the cloud, then drop the files again."
-    } else if [
-        "connection refused",
-        "timed out",
-        "could not resolve",
-        "no route to host",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
+    } else if lower
+        .lines()
+        .any(|line| line.starts_with("ssh: connect to host") || line.starts_with("ssh: could not resolve"))
     {
         "Horizon could not reach the cloud worker. Make sure that the cloud runs, then drop the files again."
+    } else if error.starts_with("failed to read ") {
+        return format!(
+            "Horizon could not read a dropped file on this computer: {}",
+            error.trim()
+        );
     } else {
         return format!("The cloud worker did not take the files: {}", error.trim());
     };
@@ -226,6 +227,14 @@ mod tests {
         assert!(
             explain("mkdir: cannot create directory '/workspace/.horizon-drops': Permission denied")
                 .starts_with("The cloud worker did not take the files: mkdir:")
+        );
+        assert!(
+            explain("failed to read /synthetic/secret.txt: Permission denied (os error 13)")
+                .starts_with("Horizon could not read a dropped file on this computer:")
+        );
+        assert!(
+            explain("The worker received 3 of 10 bytes of timed out.txt, so it kept nothing.")
+                .starts_with("The cloud worker did not take the files:")
         );
         assert_eq!(
             explain("The worker has no session for this panel.\n"),

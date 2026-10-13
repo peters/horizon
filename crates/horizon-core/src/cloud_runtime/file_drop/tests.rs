@@ -132,13 +132,17 @@ mod worker_scripts {
             "only the SSH user sees partial files"
         );
         let png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0xff];
-        for (name, content) in [
+        for (index, (name, content)) in [
             ("screen shot.png", &png[..]),
             ("O'Brien \"notes\" $HOME.txt", b"text\n"),
             ("ærlig 测试.jpeg", b"\xff\xd8\xff"),
             ("-dash", b""),
-        ] {
-            let written = run(&fixture.batch.write_command(name, content.len() as u64), content);
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let last = index == 3;
+            let written = run(&fixture.batch.write_command(name, content.len() as u64, last), content);
             assert!(written.status.success(), "{name}: {written:?}");
             let path = PathBuf::from(fixture.batch.path(name));
             assert_eq!(std::fs::read(&path).unwrap(), content, "{name}");
@@ -148,25 +152,29 @@ mod worker_scripts {
                 std::fs::metadata(&directory).unwrap().gid()
             );
         }
-        assert_eq!(entries(&part(&fixture.batch)), 0);
-        let again = run(&fixture.batch.write_command("screen shot.png", 3), b"new");
+        assert!(
+            !part(&fixture.batch).exists(),
+            "the last file removes the private folder"
+        );
+        let again = run(&fixture.batch.write_command("screen shot.png", 3, true), b"new");
         assert!(!again.status.success(), "an upload never replaces a file");
         assert_eq!(std::fs::read(fixture.batch.path("screen shot.png")).unwrap(), png);
-        assert_eq!(entries(&part(&fixture.batch)), 0);
         assert!(
             !run(&fixture.batch.prepare_command(), b"").status.success(),
             "a batch folder is new"
         );
         assert!(run(&fixture.batch.remove_command(), b"").status.success());
-        assert!(!directory.exists() && !part(&fixture.batch).exists());
-        assert!(run(&fixture.batch.remove_command(), b"").status.success());
+        assert!(
+            directory.exists(),
+            "a finished drop has no private folder, so no cleanup removes it"
+        );
     }
 
     /// Cuts a transfer off with `signal` sent to its process group, as sshd does when the
     /// connection ends, after the worker started to write the file.
     fn cut_off(batch: &Batch, signal: &str) {
         let mut child = Command::new("/bin/sh")
-            .args(["-c", &batch.write_command("cut off.bin", 1 << 20)])
+            .args(["-c", &batch.write_command("cut off.bin", 1 << 20, true)])
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -220,7 +228,7 @@ mod worker_scripts {
         let fixture = fixture();
         assert!(run(&fixture.batch.prepare_command(), b"").status.success());
         for (size, content) in [(10, &b"cut"[..]), (2, b"longer")] {
-            let written = run(&fixture.batch.write_command("partial.bin", size), content);
+            let written = run(&fixture.batch.write_command("partial.bin", size, true), content);
             assert_eq!(written.status.code(), Some(4), "{written:?}");
             assert!(String::from_utf8_lossy(&written.stderr).contains("kept nothing"));
             assert!(!Path::new(&fixture.batch.path("partial.bin")).exists());
@@ -243,7 +251,7 @@ mod worker_scripts {
         assert_eq!(refused.status.code(), Some(3));
         assert!(String::from_utf8_lossy(&refused.stderr).contains("symbolic link"));
         assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
-        let written = run(&fixture.batch.write_command("file.txt", 1), b"x");
+        let written = run(&fixture.batch.write_command("file.txt", 1, true), b"x");
         assert_eq!(written.status.code(), Some(3), "no write follows the link");
         // Folders that look like this drop's, behind the link: the cleanup leaves them.
         let behind = elsewhere.join("session-1");
@@ -259,7 +267,7 @@ mod worker_scripts {
         let fixture = fixture();
         assert!(run(&fixture.batch.prepare_command(), b"").status.success());
         assert!(
-            run(&fixture.batch.write_command("first.txt", 5), b"first")
+            run(&fixture.batch.write_command("first.txt", 5, false), b"first")
                 .status
                 .success()
         );
