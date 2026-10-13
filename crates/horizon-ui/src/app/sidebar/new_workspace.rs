@@ -1,7 +1,5 @@
 //! The New workspace menu: a new workspace runs in the cloud unless the person picks This PC.
-use egui::{Context, Popup, Response, RichText};
-
-use crate::theme;
+use egui::{Context, Popup, Response};
 
 use super::super::HorizonApp;
 
@@ -10,7 +8,8 @@ use super::super::HorizonApp;
 pub(in crate::app) enum NewWorkspace {
     /// A cloud on a CPU worker: the default.
     Cloud,
-    /// A cloud on a worker with a GPU.
+    /// A cloud on a worker with a GPU. Only the canvas picker offers it: from the menu,
+    /// New cloud chooses a GPU profile.
     CloudGpu,
     /// This computer, as before clouds.
     ThisPc,
@@ -18,7 +17,10 @@ pub(in crate::app) enum NewWorkspace {
 
 impl NewWorkspace {
     /// In the order the menu shows them: the default first, and This PC second.
-    pub(in crate::app) const ALL: [Self; 3] = [Self::Cloud, Self::ThisPc, Self::CloudGpu];
+    pub(in crate::app) const ALL: [Self; 2] = [Self::Cloud, Self::ThisPc];
+    /// The cloud choices of the canvas picker.
+    #[cfg(feature = "cloud-workspaces")]
+    pub(in crate::app) const CLOUDS: [Self; 2] = [Self::Cloud, Self::CloudGpu];
 
     pub(in crate::app) fn label(self) -> &'static str {
         match self {
@@ -30,9 +32,9 @@ impl NewWorkspace {
 
     pub(in crate::app) fn detail(self) -> &'static str {
         match self {
-            Self::Cloud => "Default. Runs on a cloud worker.",
+            Self::Cloud => "Agents run on a cloud worker, also while this computer sleeps.",
             Self::CloudGpu => "Runs on a cloud worker with a GPU.",
-            Self::ThisPc => "Runs on this computer.",
+            Self::ThisPc => "Terminals and agents run on this computer.",
         }
     }
 
@@ -50,26 +52,25 @@ pub(in crate::app) fn menu(button: &Response, cloud_ready: bool, machine: Option
     let popup = Popup::menu(button).kind(egui::PopupKind::Tooltip);
     let popup_layer = egui::LayerId::new(egui::Order::Tooltip, popup.get_id());
     let shown = popup.show(|ui| {
-        ui.set_min_width(230.0);
+        ui.set_width(410.0);
+        ui.spacing_mut().item_spacing.y = 2.0;
+        super::rich_menu::caption(ui, "New workspace");
         for choice in NewWorkspace::ALL {
             let enabled = cloud_ready || !choice.is_cloud();
-            let text = RichText::new(choice.label()).size(13.0).color(theme::FG());
-            let row = ui
-                .add_enabled(enabled, egui::Button::new(text).frame(false))
-                .on_hover_text(choice.detail())
-                .on_disabled_hover_text("Cloud workspaces are not ready on this computer.");
+            let note = machine.filter(|_| choice == NewWorkspace::Cloud && enabled);
+            let glyph = match choice {
+                NewWorkspace::Cloud | NewWorkspace::CloudGpu => super::rich_menu::Glyph::Cloud,
+                NewWorkspace::ThisPc => super::rich_menu::Glyph::Screen,
+            };
+            let row = super::rich_menu::row(ui, Some(glyph), choice.label(), choice.detail(), note, None, enabled);
+            let row = if enabled {
+                row
+            } else {
+                row.on_hover_text("Cloud workspaces are not ready on this computer.")
+            };
             if row.clicked() {
                 chosen = Some(choice);
                 ui.close();
-            }
-            if choice == NewWorkspace::Cloud
-                && enabled
-                && let Some(machine) = machine
-            {
-                ui.add(
-                    egui::Label::new(RichText::new(machine).size(11.5).color(theme::FG_DIM()))
-                        .wrap_mode(egui::TextWrapMode::Extend),
-                );
             }
         }
     });
@@ -139,10 +140,7 @@ mod tests {
 
     #[test]
     fn the_cloud_comes_first_and_this_pc_second() {
-        assert_eq!(
-            NewWorkspace::ALL.map(NewWorkspace::label),
-            ["Cloud", "This PC", "Cloud GPU"]
-        );
+        assert_eq!(NewWorkspace::ALL.map(NewWorkspace::label), ["Cloud", "This PC"]);
         assert!(NewWorkspace::Cloud.is_cloud() && NewWorkspace::CloudGpu.is_cloud());
         assert!(!NewWorkspace::ThisPc.is_cloud());
     }

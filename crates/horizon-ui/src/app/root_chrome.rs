@@ -11,13 +11,17 @@ const ROOT_TOOLBAR_CLUSTER_GAP: f32 = 12.0;
 const ROOT_TOOLBAR_SEARCH_MIN_WIDTH: f32 = 180.0;
 const ROOT_TOOLBAR_SEARCH_MAX_WIDTH: f32 = 420.0;
 pub(super) const ROOT_TOOLBAR_FPS_WIDTH: f32 = 72.0;
-const ROOT_TOOLBAR_MORE_WIDTH: f32 = 72.0;
+/// "+ New workspace · Cloud ▾"; the compact form drops "workspace".
+pub(super) const ROOT_TOOLBAR_NEW_WIDTH: f32 = 214.0;
+pub(super) const ROOT_TOOLBAR_NEW_COMPACT_WIDTH: f32 = 140.0;
+pub(super) const ROOT_TOOLBAR_MENU_WIDTH: f32 = 82.0;
 const ROOT_TOOLBAR_NAME_WIDTH: f32 = 72.0;
 const ROOT_TOOLBAR_TAGLINE_WIDTH: f32 = 152.0;
 const SIDEBAR_WIDTH_RATIO: f32 = 0.18;
 
 pub(super) const SIDEBAR_MIN_WIDTH: f32 = 168.0;
 
+/// The actions the toolbar's Menu carries out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ToolbarAction {
     QuickNav,
@@ -28,42 +32,23 @@ pub(super) enum ToolbarAction {
     Settings,
 }
 
-impl ToolbarAction {
-    const SECONDARY: &'static [Self] = &[
-        Self::RemoteHosts,
-        #[cfg(feature = "cloud-workspaces")]
-        Self::Cloud,
-    ];
-
-    pub(super) fn label(self) -> &'static str {
-        match self {
-            Self::QuickNav => "Quick Nav",
-            Self::RemoteHosts => "Remote Hosts",
-            #[cfg(feature = "cloud-workspaces")]
-            Self::Cloud => "Cloud",
-            Self::Sessions => "Sessions",
-            Self::Settings => "Settings",
-        }
-    }
-
-    fn estimated_width(self) -> f32 {
-        estimated_toolbar_button_width(self.label())
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ToolbarItem {
     FpsMeter,
-    Action(ToolbarAction),
-    OverflowMenu,
+    /// The primary New workspace button; `compact` drops the word "workspace".
+    NewWorkspace {
+        compact: bool,
+    },
+    Menu,
 }
 
 impl ToolbarItem {
     fn estimated_width(self) -> f32 {
         match self {
             Self::FpsMeter => ROOT_TOOLBAR_FPS_WIDTH,
-            Self::Action(action) => action.estimated_width(),
-            Self::OverflowMenu => ROOT_TOOLBAR_MORE_WIDTH,
+            Self::NewWorkspace { compact: false } => ROOT_TOOLBAR_NEW_WIDTH,
+            Self::NewWorkspace { compact: true } => ROOT_TOOLBAR_NEW_COMPACT_WIDTH,
+            Self::Menu => ROOT_TOOLBAR_MENU_WIDTH,
         }
     }
 }
@@ -74,7 +59,6 @@ pub(super) struct RootToolbarLayout {
     pub(super) search_rect: Rect,
     pub(super) actions_rect: Rect,
     pub(super) visible_items: Vec<ToolbarItem>,
-    pub(super) overflow_actions: Vec<ToolbarAction>,
     pub(super) show_tagline: bool,
 }
 
@@ -99,17 +83,17 @@ pub(super) fn root_toolbar_layout(viewport: Rect) -> RootToolbarLayout {
         ),
     );
 
+    // (tagline, fps meter, compact New workspace), from roomiest to tightest.
     let states = [
-        (true, ToolbarAction::SECONDARY.len(), true),
-        (false, ToolbarAction::SECONDARY.len(), true),
-        (false, 0_usize, true),
-        (false, 1_usize, false),
-        (false, 0_usize, false),
+        (true, true, false),
+        (false, true, false),
+        (false, false, false),
+        (false, false, true),
     ];
-    let mut fallback = layout_candidate(viewport, content_rect, false, 0, false);
+    let mut fallback = layout_candidate(viewport, content_rect, false, false, true);
 
-    for (show_tagline, secondary_visible, show_fps) in states {
-        let candidate = layout_candidate(viewport, content_rect, show_tagline, secondary_visible, show_fps);
+    for (show_tagline, show_fps, compact) in states {
+        let candidate = layout_candidate(viewport, content_rect, show_tagline, show_fps, compact);
         if candidate.search_available >= ROOT_TOOLBAR_SEARCH_MIN_WIDTH {
             return candidate.layout;
         }
@@ -123,8 +107,8 @@ fn layout_candidate(
     viewport: Rect,
     content_rect: Rect,
     show_tagline: bool,
-    secondary_visible: usize,
     show_fps: bool,
+    compact: bool,
 ) -> RootToolbarCandidate {
     let brand_width = ROOT_TOOLBAR_NAME_WIDTH
         + if show_tagline {
@@ -134,25 +118,12 @@ fn layout_candidate(
         };
     let brand_rect = Rect::from_min_size(content_rect.min, Vec2::new(brand_width, content_rect.height()));
 
-    let mut visible_items = Vec::with_capacity(6);
+    let mut visible_items = Vec::with_capacity(3);
     if show_fps {
         visible_items.push(ToolbarItem::FpsMeter);
     }
-    visible_items.push(ToolbarItem::Action(ToolbarAction::QuickNav));
-    for action in ToolbarAction::SECONDARY.iter().take(secondary_visible).copied() {
-        visible_items.push(ToolbarItem::Action(action));
-    }
-
-    let overflow_actions = ToolbarAction::SECONDARY
-        .iter()
-        .skip(secondary_visible)
-        .copied()
-        .collect::<Vec<_>>();
-    if !overflow_actions.is_empty() {
-        visible_items.push(ToolbarItem::OverflowMenu);
-    }
-    visible_items.push(ToolbarItem::Action(ToolbarAction::Sessions));
-    visible_items.push(ToolbarItem::Action(ToolbarAction::Settings));
+    visible_items.push(ToolbarItem::NewWorkspace { compact });
+    visible_items.push(ToolbarItem::Menu);
 
     let actions_width = visible_items_width(&visible_items);
     let actions_left = content_rect.max.x - actions_width;
@@ -177,7 +148,6 @@ fn layout_candidate(
             search_rect,
             actions_rect,
             visible_items,
-            overflow_actions,
             show_tagline,
         },
         search_available,
@@ -193,16 +163,11 @@ fn visible_items_width(items: &[ToolbarItem]) -> f32 {
     items.iter().map(|item| item.estimated_width()).sum::<f32>() + gaps
 }
 
-fn estimated_toolbar_button_width(label: &str) -> f32 {
-    let chars = u16::try_from(label.chars().count()).map_or(f32::from(u16::MAX), f32::from);
-    34.0 + chars * 7.2
-}
-
 #[cfg(test)]
 mod tests {
     use egui::{Pos2, Rect};
 
-    use super::{ToolbarAction, ToolbarItem, effective_sidebar_width, root_toolbar_layout};
+    use super::{ToolbarItem, effective_sidebar_width, root_toolbar_layout};
     use crate::app::{SIDEBAR_WIDTH, TOOLBAR_HEIGHT};
 
     #[test]
@@ -222,76 +187,35 @@ mod tests {
         assert!(
             layout
                 .visible_items
-                .contains(&ToolbarItem::Action(ToolbarAction::Sessions))
+                .contains(&ToolbarItem::NewWorkspace { compact: false })
         );
         assert!(layout.search_rect.width() >= 180.0);
     }
 
     #[test]
-    fn toolbar_hides_tagline_before_collapsing_actions() {
-        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(960.0, 768.0));
-        let layout = root_toolbar_layout(viewport);
-
-        assert!(!layout.show_tagline);
-        assert!(layout.visible_items.contains(&ToolbarItem::FpsMeter));
-        assert!(layout.search_rect.width() >= 180.0);
-    }
-
-    #[test]
-    fn toolbar_moves_secondary_actions_into_overflow_on_tighter_widths() {
+    fn toolbar_hides_tagline_before_the_fps_meter() {
         let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 768.0));
         let layout = root_toolbar_layout(viewport);
 
         assert!(!layout.show_tagline);
-        assert_eq!(layout.overflow_actions, ToolbarAction::SECONDARY);
         assert!(layout.visible_items.contains(&ToolbarItem::FpsMeter));
-        assert!(layout.visible_items.contains(&ToolbarItem::OverflowMenu));
-        assert!((layout.search_rect.center().y - TOOLBAR_HEIGHT * 0.5).abs() <= f32::EPSILON);
+        assert!(layout.search_rect.width() >= 180.0);
     }
 
     #[test]
-    fn toolbar_keeps_primary_actions_visible_at_min_window_width() {
-        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(760.0, 600.0));
-        let layout = root_toolbar_layout(viewport);
-
-        assert!(
-            layout
-                .visible_items
-                .contains(&ToolbarItem::Action(ToolbarAction::QuickNav))
-        );
-        assert!(
-            layout
-                .visible_items
-                .contains(&ToolbarItem::Action(ToolbarAction::Sessions))
-        );
-        assert!(
-            layout
-                .visible_items
-                .contains(&ToolbarItem::Action(ToolbarAction::Settings))
-        );
-    }
-
-    #[test]
-    fn secondary_and_existing_actions_remain_reachable_at_every_width() {
+    fn toolbar_keeps_new_workspace_and_menu_at_every_width() {
         for width in [760.0, 800.0, 900.0, 1024.0, 1280.0] {
             let layout = root_toolbar_layout(Rect::from_min_max(Pos2::ZERO, Pos2::new(width, 768.0)));
-            for action in [
-                ToolbarAction::RemoteHosts,
-                #[cfg(feature = "cloud-workspaces")]
-                ToolbarAction::Cloud,
-                ToolbarAction::Sessions,
-                ToolbarAction::Settings,
-            ] {
-                let visible = layout
-                    .visible_items
-                    .iter()
-                    .filter(|item| **item == ToolbarItem::Action(action))
-                    .count();
-                let overflow = layout.overflow_actions.iter().filter(|item| **item == action).count();
-                assert_eq!(visible + overflow, 1, "{width}, {action:?}");
-            }
+            let news = layout
+                .visible_items
+                .iter()
+                .filter(|item| matches!(item, ToolbarItem::NewWorkspace { .. }))
+                .count();
+            assert_eq!(news, 1, "{width}");
+            assert_eq!(layout.visible_items.last(), Some(&ToolbarItem::Menu), "{width}");
             assert!(layout.brand_rect.max.x <= layout.search_rect.min.x);
             assert!(layout.search_rect.max.x <= layout.actions_rect.min.x);
+            assert!((layout.search_rect.center().y - TOOLBAR_HEIGHT * 0.5).abs() <= f32::EPSILON);
         }
     }
 }

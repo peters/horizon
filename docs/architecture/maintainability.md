@@ -347,7 +347,10 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
     `remote_hosts/launch.rs`, config-backed
     preferences (the default workspace) in `remote_hosts/preferences.rs`, and
     host shortcuts saved as presets in `remote_hosts/shortcuts.rs`
-  - `sidebar`: sidebar rendering and deferred sidebar actions
+  - `sidebar`: sidebar rendering and deferred sidebar actions, with the root
+    toolbar in `sidebar/toolbar.rs` (its New workspace split button and Menu in
+    `sidebar/toolbar/buttons.rs`), the place menu in `sidebar/new_workspace.rs`
+    and the shared described menu rows in `sidebar/rich_menu.rs`
   - `settings`: settings editor state and save/apply flows
   - `session`: startup bootstrap and session catalog/rebind flows, with startup
     result types in `session/types.rs` and loading/recovery rendering in

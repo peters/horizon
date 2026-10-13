@@ -198,32 +198,6 @@ impl HorizonApp {
         self.cloud_prototype.ready
     }
 
-    pub(in crate::app) fn render_cloud_menu(&mut self, ui: &mut egui::Ui) {
-        if ui
-            .add_enabled(self.cloud_launch_ready(), egui::Button::new("New cloud…"))
-            .clicked()
-        {
-            let workspace = self.board.ensure_workspace();
-            self.open_cloud_for_workspace(ui.ctx(), workspace);
-            ui.close();
-        }
-        if ui.button("Cloud settings…").clicked() {
-            self.open_cloud_accounts(ui.ctx(), false);
-            ui.close();
-        }
-        ui.separator();
-        if ui
-            .add_enabled(
-                !self.cloud_prototype.groups.0.is_empty(),
-                egui::Button::new("Fit all clouds"),
-            )
-            .clicked()
-        {
-            self.cloud_overview(ui.ctx());
-            ui.close();
-        }
-    }
-
     pub(in crate::app) fn open_cloud_for_workspace(&mut self, ctx: &Context, workspace: horizon_core::WorkspaceId) {
         if !self.cloud_launch_ready() {
             return;

@@ -12,7 +12,7 @@ owner: peters
 
 ## 1. Purpose
 
-This procedure proves that the worker picker in the **New cloud…** dialog shows
+This procedure proves that the worker picker in the **New cloud** dialog shows
 the correct offers. It examines the worker list, the filters, the search, the
 estimated totals, the **Cheapest**, **Balanced** and **Most powerful** cards,
 and the data center chips. It also examines the `cloud_offers` MCP tool where
@@ -93,7 +93,7 @@ report. Hetzner counts include current x86 types outside the configured fallback
 
    Result: The Device panel shows a live view of the candidate.
 
-3. In the candidate, open **Cloud settings…**.
+3. In the candidate, open **Menu › Cloud settings**.
 
    Result: The Cloud settings dialog opens.
 
@@ -124,7 +124,7 @@ report. Hetzner counts include current x86 types outside the configured fallback
    Note: If you close the dialog without **Save settings**, Horizon discards
    the key, the token and the lists.
 
-9. Open **Cloud › New cloud…**.
+9. Open **Menu › New cloud**.
 
    Result: The New cloud dialog opens.
 

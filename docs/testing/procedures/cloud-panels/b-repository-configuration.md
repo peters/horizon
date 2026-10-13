@@ -13,7 +13,7 @@ owner: peters
 ## 1. Purpose
 
 This area makes the synthetic repositories for the run. It also makes sure that
-**New cloud…** reads `.horizon/cloud.yml`, refuses YAML that is not valid, offers
+**New cloud** reads `.horizon/cloud.yml`, refuses YAML that is not valid, offers
 the setup agent and reads local image-only settings. It makes sure that
 `check-markers.py` names the contract markers that an image does not report.
 
@@ -107,11 +107,11 @@ bind of S02 alone does not change the socket that the candidate uses.
 
 ### 6.1 B01 — Offer quick start and the setup agent for a repository without cloud.yml
 
-1. Click **Cloud** in the menu bar.
+1. Click **Menu** in the toolbar.
 
-   Result: The Cloud menu opens.
+   Result: The Menu opens.
 
-2. Click **New cloud…**.
+2. Click **New cloud**.
 
    Result: The New cloud dialog opens. Wait 3 seconds before the next click.
 
@@ -237,7 +237,7 @@ bind of S02 alone does not change the socket that the candidate uses.
 
    Result: Each repository has a committed `.horizon` directory.
 
-6. Open **Cloud › New cloud…**.
+6. Open **Menu › New cloud**.
 
    Result: The New cloud dialog opens.
 

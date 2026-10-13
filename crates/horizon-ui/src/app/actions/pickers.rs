@@ -196,10 +196,7 @@ impl HorizonApp {
                         // for This PC.
                         #[cfg(feature = "cloud-workspaces")]
                         if target_workspace.is_none() {
-                            for choice in super::super::sidebar::NewWorkspace::ALL {
-                                if !choice.is_cloud() {
-                                    continue;
-                                }
+                            for choice in super::super::sidebar::NewWorkspace::CLOUDS {
                                 if ui
                                     .add_enabled(
                                         self.cloud_launch_ready(),

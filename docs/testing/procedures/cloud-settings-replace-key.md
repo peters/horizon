@@ -13,7 +13,7 @@ owner: peters
 ## 1. Purpose
 
 This procedure makes sure that **Replace** and **Keep saved key** work on each
-saved key in the **Cloud settings…** dialog. It also makes sure that the card
+saved key in the **Cloud settings** dialog. It also makes sure that the card
 layout stays compact when a replacement field is open. The dialog must not move
 or change size after it opens.
 
@@ -98,11 +98,11 @@ or change size after it opens.
 
 ### 6.1 A01 — Open Cloud settings
 
-1. Click **Cloud** in the menu bar.
+1. Click **Menu** in the toolbar.
 
-   Result: The Cloud menu opens.
+   Result: The Menu opens.
 
-2. Click **Cloud settings…**.
+2. Click **Cloud settings**.
 
    Result: The dialog opens. The RunPod, Hetzner Cloud and Coding agents cards
    show `Key saved`. Each saved key shows **Replace**.

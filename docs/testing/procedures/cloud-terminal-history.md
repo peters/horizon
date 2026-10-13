@@ -67,7 +67,7 @@ next attach, one time only.
    Result: The history indicator shows about 4.9k lines. The panel shows lines
    that are 20 lines older. This is the baseline of a local panel.
 
-3. Open **Cloud › New cloud…**. Type the path of the synthetic repository and a
+3. Open **Menu › New cloud**. Type the path of the synthetic repository and a
    title. Click **Quick start on the public base image**.
 
    Result: The dialog shows a Hetzner offer and three passed checks.

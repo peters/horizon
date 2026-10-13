@@ -72,7 +72,7 @@ full-opacity accent ring.
 
 ### 6.2 LIGHT — Light theme field
 
-1. Open **Settings** in the toolbar. Under Appearance, choose **Light**.
+1. Open **Menu › Settings** in the toolbar. Under Appearance, choose **Light**.
 
    Result: The board uses the light theme.
 
