@@ -1407,7 +1407,11 @@ process groups without replacing them. Stale readiness records
 are rejected after a restart or PID reuse. The `x11-utils` desktop dependency
 provides the bounded X display and window-manager probes. Display startup has a
 30-second deadline and tool configuration has a 120-second deadline; failure
-invalidates readiness and ends the worker. Application readiness
+invalidates readiness and ends the worker. Tool configuration writes the desktop
+target of the `horizon-device` MCP server, `cloud-desktop`, to
+`/workspace/device/target.json`. `horizon-device` creates its lock, controller
+record and resize markers next to that file, so with agent isolation the folder
+belongs to the agent account; `/workspace` itself belongs to root. Application readiness
 and the first displayed frame are separate measurements. Record first and cached
 build/push durations with cache conditions, compressed manifest layer sizes, exact
 digests, fresh worker Ready, app readiness/first frame and same-worker reconnect.
