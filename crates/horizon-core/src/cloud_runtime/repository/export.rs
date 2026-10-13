@@ -198,12 +198,71 @@ fn archive_command(neutral: &Path, borrowed: &Path) -> Command {
 }
 
 /// Neutralizes the host and user git configuration and attributes, so the command reads
-/// only what Horizon sets on it and the committed tree holds. Used for the commands that
-/// run in the private repository, where no `safe.directory` grant is needed; a read of the
-/// source repository keeps that grant.
+/// only what Horizon sets on it and the committed tree holds. Every `GIT_*` variable the
+/// command would inherit or already carries goes first: command-scope configuration
+/// (`GIT_CONFIG_COUNT` with its keys and values, `GIT_CONFIG_PARAMETERS`) would otherwise
+/// reach git as configuration, and others name another repository, object store or
+/// configuration file. Used for the commands that run in the private repository, where no
+/// `safe.directory` grant is needed; a read of the source repository keeps that grant.
 fn isolated<'c>(neutral: &Path, command: &'c mut Command) -> &'c mut Command {
+    let inherited: Vec<std::ffi::OsString> = std::env::vars_os()
+        .map(|(name, _)| name)
+        .chain(command.get_envs().map(|(name, _)| name.to_owned()))
+        // Windows reads environment names without regard to case.
+        .filter(|name| name.to_string_lossy().to_ascii_uppercase().starts_with("GIT_"))
+        .collect();
+    for name in inherited {
+        command.env_remove(name);
+    }
     command
         .env("GIT_CONFIG_GLOBAL", neutral)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_ATTR_NOSYSTEM", "1")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::isolated;
+    use std::process::Command;
+
+    #[test]
+    fn an_isolated_command_reads_no_command_scope_configuration() {
+        let scratch = tempfile::tempdir().unwrap();
+        let neutral = scratch.path().join("empty-config");
+        std::fs::write(&neutral, "").unwrap();
+        // Configuration that reaches git through the environment, as a process that
+        // started Horizon could pass it on.
+        let mut command = Command::new("git");
+        command
+            .current_dir(scratch.path())
+            .env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "horizon.probe")
+            .env("GIT_CONFIG_VALUE_0", "reached")
+            .env("GIT_CONFIG_PARAMETERS", "'horizon.legacy'='reached'")
+            .env("HORIZON_KEPT", "1");
+        isolated(&neutral, &mut command);
+        let removed: Vec<_> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect();
+        for name in [
+            "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_KEY_0",
+            "GIT_CONFIG_VALUE_0",
+            "GIT_CONFIG_PARAMETERS",
+        ] {
+            assert!(removed.iter().any(|removed| removed == name), "{name} is dropped");
+        }
+        assert!(
+            command
+                .get_envs()
+                .any(|(name, value)| name == "HORIZON_KEPT" && value.is_some()),
+            "other variables stay"
+        );
+        // And git itself sees none of it.
+        let listed = command.args(["config", "--list"]).output().unwrap();
+        let listed = String::from_utf8_lossy(&listed.stdout);
+        assert!(!listed.contains("horizon."), "{listed}");
+    }
 }
