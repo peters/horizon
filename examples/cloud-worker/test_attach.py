@@ -154,22 +154,22 @@ class InputTests(unittest.TestCase):
         self.assertEqual(typed.feed(b'more\x1b[201~x'), ['send-keys -H -t %3 6d 6f 72 65', 'send-keys -H -t %3 78'])
 
     def test_an_answer_that_comes_after_the_wait_is_removed_and_still_gives_the_colors(self):
-        attachment = types.SimpleNamespace(outstanding=True, target='%3')
+        attachment = types.SimpleNamespace(outstanding=True, target='%3', colors={})
         commands, typed = attach.Attachment.answered(attachment, b'a\x1b]10;rgb:a1a1/b2b2/c3c3\x1b\\')
         self.assertEqual(typed, b'a')
         self.assertIn("set-option -wg window-style 'fg=#a1b2c3'", commands)
         self.assertTrue(attachment.outstanding)
         commands, typed = attach.Attachment.answered(attachment, b'\x1b]11;rgb:1010/2020/3030\x07\x1b[?62cb')
-        self.assertEqual((commands[0], typed), ("set-option -p -t %3 window-style 'bg=#102030'", b'b'))
+        self.assertEqual((commands[0], typed), ("set-option -p -t %3 window-style 'fg=#a1b2c3,bg=#102030'", b'b'))
         self.assertFalse(attachment.outstanding)
         # Once the answer is complete, input is keys again.
         self.assertEqual(attach.Attachment.answered(attachment, b'\x1b[?62c'), ([], b'\x1b[?62c'))
 
     def test_the_answer_to_the_color_query_is_never_typed(self):
-        style, typed = attach.colors(b'a\x1b]11;rgba:1/2/3/4\x1b\\b\x1b]10;rgb:ff/0/8080\x07\x1b[?62;22cc')
+        found, typed = attach.colors(b'a\x1b]11;rgba:1/2/3/4\x1b\\b\x1b]10;rgb:ff/0/8080\x07\x1b[?62;22cc')
         # A color in a form tmux does not take is left out, but its answer is no key either.
-        self.assertEqual((style, typed), ('fg=#ff0080', b'abc'))
-        self.assertEqual(attach.colors(b'\x1b]11;rgb:1010/2020/3030\x1b\\'), ('bg=#102030', b''))
+        self.assertEqual((found, typed), ({'fg': '#ff0080'}, b'abc'))
+        self.assertEqual(attach.colors(b'\x1b]11;rgb:1010/2020/3030\x1b\\'), ({'bg': '#102030'}, b''))
 
 
 class TargetTests(unittest.TestCase):

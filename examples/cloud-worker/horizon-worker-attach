@@ -494,7 +494,7 @@ def render(state, normal, alternate, cursor_row=()):
 
 
 def colors(data):
-    """The tmux style of the colors that the terminal reported in `data`, and `data` without its
+    """The colors that the terminal reported in `data`, by tmux style name, and `data` without its
     answers: what is left was typed."""
     found = {}
     for match in COLOR_REPLY.finditer(data):
@@ -503,7 +503,7 @@ def colors(data):
             found['fg' if match.group(1) == b'10' else 'bg'] = '#' + ''.join(
                 '%02x' % round(int(value, 16) * 255 / (16 ** len(value) - 1)) for value in rgb.groups())
     typed = IDENTITY_REPLY.sub(b'', COLOR_REPLY.sub(b'', data), count=1)
-    return ','.join('%s=%s' % (name, found[name]) for name in ('fg', 'bg') if name in found), typed
+    return found, typed
 
 
 def write(fd, data):
@@ -538,8 +538,9 @@ class Attachment:
         self.input = None
         self.pane = None
         self.connected = True
-        # The answer to the color query did not come yet.
+        # The answer to the color query did not come yet, and the colors that came of it.
         self.outstanding = False
+        self.colors = {}
 
     def wait(self, count, required=True):
         """The next `count` replies, and the session output that tmux wrote after them. The output
@@ -594,9 +595,12 @@ class Attachment:
         if not self.outstanding:
             return [], data
         self.outstanding = not IDENTITY_REPLY.search(data)
-        style, typed = colors(data)
-        if not style:
+        found, typed = colors(data)
+        if not found:
             return [], typed
+        # An answer can come in pieces, and a style replaces the whole style.
+        self.colors.update(found)
+        style = ','.join('%s=%s' % (name, self.colors[name]) for name in ('fg', 'bg') if name in self.colors)
         # tmux answers the color queries of a pane from its window style. The style of the server
         # also gives the colors to sessions that start later, before their first attach.
         return ["set-option -p -t %s window-style '%s'" % (self.target, style),
