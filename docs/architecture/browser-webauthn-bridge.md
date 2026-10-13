@@ -181,6 +181,8 @@ A failure:
 | `excluded` (on `create`) | `InvalidStateError` |
 
 The driver writes the `message` to the debug log only. The page never gets it.
+The driver reads stdout after the command stops, whatever its exit status.
+On Windows, the command starts without a console window.
 
 ### Limits
 

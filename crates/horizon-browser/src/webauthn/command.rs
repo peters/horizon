@@ -81,13 +81,19 @@ fn supervise(argv: &[String], input: Vec<u8>, timeout: Duration, cancel: &Atomic
     let Some((program, arguments)) = argv.split_first() else {
         return CommandOutcome::Failed("the authenticator command is empty".to_string());
     };
-    let mut child = match Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(arguments)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
+        .stderr(Stdio::null());
+    #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => return CommandOutcome::Failed(format!("could not start {program}: {error}")),
     };
