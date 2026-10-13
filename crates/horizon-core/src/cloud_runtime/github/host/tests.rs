@@ -157,7 +157,7 @@ fn a_disconnected_app_asks_github_for_no_sign_in() {
 }
 
 #[test]
-fn a_list_is_kept_only_while_this_computer_is_signed_in() {
+fn a_list_is_kept_for_the_signed_in_account_only() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("settings.json"), r#"{"github":{"app_id":42}}"#).unwrap();
     keep_repositories(root.path(), &settings(42), &["acme/web".into()]).unwrap();
@@ -165,8 +165,16 @@ fn a_list_is_kept_only_while_this_computer_is_signed_in() {
         !listed(root.path(), &settings(42)).exists(),
         "no sign-in, so nothing is kept"
     );
-    stored::private_directory(&root.path().join("credentials")).unwrap();
-    std::fs::write(path(root.path(), &settings(42)), "{}").unwrap();
+    let chain = |login: &str| {
+        let chain = horizon_cloud::github::Chain {
+            access_token: Secret::new("ghu_synthetic".into()),
+            access_expires_at: std::time::SystemTime::now() + std::time::Duration::from_hours(4),
+            refresh_token: Secret::new("ghr_synthetic".into()),
+            refresh_expires_at: std::time::SystemTime::now() + std::time::Duration::from_hours(400),
+        };
+        stored::save(&path(root.path(), &settings(42)), login, &chain, false).unwrap();
+    };
+    chain("octo-cat");
     keep_repositories(root.path(), &settings(42), &["acme/web".into()]).unwrap();
     assert_eq!(
         kept_repositories(root.path(), &settings(42)),
@@ -186,6 +194,14 @@ fn a_list_is_kept_only_while_this_computer_is_signed_in() {
             .mode();
         assert_eq!(mode & 0o777, 0o600);
     }
+    chain("other-account");
+    assert_eq!(
+        kept_repositories(root.path(), &settings(42)),
+        None,
+        "another account never sees the first one's names"
+    );
+    forget_repositories(root.path(), &settings(42)).unwrap();
+    assert!(!listed(root.path(), &settings(42)).exists());
     std::fs::remove_file(path(root.path(), &settings(42))).unwrap();
     assert_eq!(
         kept_repositories(root.path(), &settings(42)),

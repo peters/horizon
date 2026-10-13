@@ -16,6 +16,7 @@ fn account() -> Account {
         repositories: None,
         failed: None,
         stale: None,
+        kept: false,
         refreshed: true,
     }
 }
@@ -301,6 +302,8 @@ fn a_failed_refresh_keeps_the_list_and_marks_it_out_of_date() {
 #[test]
 fn a_refresh_without_a_sign_in_shows_no_kept_list() {
     let (mut account, sender) = waiting(Purpose::Refresh);
+    // Read just before the sign-in turned out to be gone.
+    sender.send(Answer::Cached(vec!["acme/kept".into()])).unwrap();
     sender.send(Answer::Quiet).unwrap();
     assert!(account.poll().is_none());
     assert!(account.repositories.is_none(), "the sign-in button stays in view");

@@ -72,6 +72,8 @@ pub(super) struct Account {
     pub(super) failed: Option<String>,
     /// Why the shown list could not be refreshed; it may be out of date.
     pub(super) stale: Option<String>,
+    /// The shown list is the one kept from last time, not yet confirmed by GitHub.
+    kept: bool,
     refreshed: bool,
 }
 
@@ -87,6 +89,7 @@ impl Account {
             repositories: None,
             failed: None,
             stale: None,
+            kept: false,
             refreshed: false,
         })
     }
@@ -132,6 +135,9 @@ impl Account {
             _abort: Abort(cancel.clone()),
         });
         self.failed = None;
+        if purpose == Purpose::List {
+            self.stale = None;
+        }
         let (root, settings, ctx) = (self.root.clone(), self.settings.clone(), ctx.clone());
         std::thread::spawn(move || {
             // The names kept from last time show while GitHub is asked.
@@ -148,6 +154,12 @@ impl Account {
                 repaint.request_repaint();
             };
             let answer = exchange(&root, &settings, &cancel, &show, purpose);
+            // Without a sign-in no list stays on this computer.
+            if matches!(answer, Answer::Quiet)
+                && let Err(error) = host::forget_repositories(&root, &settings)
+            {
+                tracing::debug!(%error, "could not forget the GitHub repository list");
+            }
             if let Answer::Done {
                 repositories: Some(listed),
                 ..
@@ -182,6 +194,7 @@ impl Account {
                     if repositories.is_some() {
                         self.repositories = repositories;
                         self.stale = None;
+                        self.kept = false;
                     }
                     return (purpose == Purpose::Clone).then_some(token);
                 }
@@ -197,10 +210,17 @@ impl Account {
                     return None;
                 }
                 Ok(Answer::Cached(listed)) => {
-                    self.repositories.get_or_insert(listed);
+                    if self.repositories.is_none() {
+                        self.repositories = Some(listed);
+                        self.kept = true;
+                    }
                 }
+                // Signed out after all: a kept list is not shown, and the sign-in button is.
                 Ok(Answer::Quiet) => {
                     self.finish();
+                    if std::mem::take(&mut self.kept) {
+                        self.repositories = None;
+                    }
                     return None;
                 }
                 Err(TryRecvError::Empty) => return None,
@@ -519,6 +539,10 @@ impl super::State {
                 if ui.add(chrome_button("Refresh from GitHub")).clicked() {
                     account.request(Purpose::List, ui.ctx());
                 }
+            }
+            // A refresh the person asked for may need a sign-in, shown here.
+            if account.busy() {
+                account.sign_in_box(ui);
             }
             if ui
                 .add(chrome_button("Add repositories on GitHub"))

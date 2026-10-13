@@ -153,29 +153,55 @@ pub fn repositories(token: &Secret) -> std::result::Result<Vec<String>, String> 
     Ok(found)
 }
 
-/// The repositories last listed with this computer's sign-in for the app of `settings`,
-/// so **New cloud** shows them before GitHub answers again. `None` while this computer is
-/// not signed in to that app, or when no list was kept or it cannot be read.
-#[must_use]
-pub fn kept_repositories(root: &Path, settings: &Settings) -> Option<Vec<String>> {
-    if !configured(root, settings) || !path(root, settings).exists() {
-        return None;
-    }
-    let bytes = stored::read_private(&listed(root, settings)).ok()??;
-    serde_json::from_slice(&bytes).ok()
+/// A kept list and the account it was listed for.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Listed {
+    login: String,
+    repositories: Vec<String>,
 }
 
-/// Keeps `repositories` for the next **New cloud**, private beside the sign-in and under its
-/// lock: a Disconnect forgets them with it, and a list that arrives after one is not kept.
+/// The repositories last listed with this computer's sign-in for the app of `settings`,
+/// so **New cloud** shows them before GitHub answers again. `None` while this computer is
+/// not signed in to that app, when the list belongs to another account, or when no list
+/// was kept or it cannot be read.
+#[must_use]
+pub fn kept_repositories(root: &Path, settings: &Settings) -> Option<Vec<String>> {
+    if !configured(root, settings) {
+        return None;
+    }
+    let login = stored::load(&path(root, settings))?.login;
+    let bytes = stored::read_private(&listed(root, settings)).ok()??;
+    let kept: Listed = serde_json::from_slice(&bytes).ok()?;
+    (kept.login == login).then_some(kept.repositories)
+}
+
+/// Keeps `repositories` for the next **New cloud**, private beside the sign-in, for its
+/// account and under its lock: a Disconnect forgets them with it, and a list that arrives
+/// after one is not kept.
 /// # Errors
 /// A file that cannot be written.
 pub fn keep_repositories(root: &Path, settings: &Settings, repositories: &[String]) -> Result<()> {
     let _lock = lock(root, settings)?;
-    if !configured(root, settings) || !path(root, settings).exists() {
+    if !configured(root, settings) {
         return Ok(());
     }
-    let bytes = serde_json::to_vec(repositories).map_err(|_| Error::Json)?;
+    let Some(chain) = stored::load(&path(root, settings)) else {
+        return Ok(());
+    };
+    let kept = Listed {
+        login: chain.login,
+        repositories: repositories.to_vec(),
+    };
+    let bytes = serde_json::to_vec(&kept).map_err(|_| Error::Json)?;
     stored::write_private(&root.join("credentials"), &listed_name(settings.app_id), &bytes)
+}
+
+/// Forgets the kept list, as when this computer turns out not to be signed in.
+/// # Errors
+/// A file that cannot be removed.
+pub fn forget_repositories(root: &Path, settings: &Settings) -> Result<()> {
+    let _lock = lock(root, settings)?;
+    stored::forget(&listed(root, settings)).map(|_| ())
 }
 
 /// Disconnects the app of `settings`: forgets this computer's sign-in for it and runs
