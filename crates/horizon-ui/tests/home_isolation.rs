@@ -67,5 +67,8 @@ fn integrations_off_writes_nothing_outside_the_horizon_home() {
 fn integrations_on_write_into_the_home_directory() {
     // Proves that the check above sees what the integrations write.
     let outside = paths_outside_the_horizon_home("on");
-    assert!(!outside.is_empty(), "the integrations wrote nothing in the home directory");
+    assert!(
+        !outside.is_empty(),
+        "the integrations wrote nothing in the home directory"
+    );
 }

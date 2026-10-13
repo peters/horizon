@@ -4,16 +4,51 @@
 
 use std::ffi::OsStr;
 
-pub(crate) const ENV: &str = "HORIZON_AGENT_INTEGRATIONS";
+use horizon_core::HorizonHome;
+
+use crate::plugin_install::{self, AgentPluginHostGuard};
+
+const ENV: &str = "HORIZON_AGENT_INTEGRATIONS";
+
+pub(crate) struct AgentIntegrations {
+    enabled: bool,
+}
+
+impl AgentIntegrations {
+    /// Reads the switch. An invalid value stops Horizon with exit code 2, as an unusable
+    /// `HORIZON_HOME` does.
+    pub(crate) fn from_environment() -> Self {
+        match enabled() {
+            Ok(enabled) => Self { enabled },
+            Err(problem) => {
+                eprintln!("error: {problem}");
+                std::process::exit(2);
+            }
+        }
+    }
+
+    /// Installs the agent skills and plugins and takes their leases, unless the switch is off.
+    pub(crate) fn install_plugins(&self, horizon_home: &HorizonHome) -> Option<AgentPluginHostGuard> {
+        self.enabled
+            .then(|| plugin_install::install_agent_plugins(horizon_home))
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn install_desktop_entry(&self) {
+        if self.enabled {
+            crate::linux_desktop::install();
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[error("{ENV} must be on or off, not {0:?}")]
-pub(crate) struct InvalidValue(String);
+struct InvalidValue(String);
 
 /// Whether this Horizon installs its integrations into the user's home directory. Unset or
 /// empty means on. Any value other than `on` or `off` is an error, so that a typo such as `0`
 /// cannot write into the home directory that the switch was meant to protect.
-pub(crate) fn enabled() -> Result<bool, InvalidValue> {
+fn enabled() -> Result<bool, InvalidValue> {
     enabled_from(std::env::var_os(ENV).as_deref())
 }
 
