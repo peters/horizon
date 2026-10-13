@@ -329,6 +329,13 @@ class SchedulerTests(unittest.TestCase):
         self.pulls.write_text('[{"number": 1, "headRefOid": "b", "statusCheckRollup": []}]')
         self.assertTrue(self.run_once())
         self.assertEqual(self.agents_started(), 6)
+        # Closed, then opened again unchanged: the agents look at it again.
+        pulls = self.pulls.read_text()
+        self.pulls.write_text('[]')
+        self.assertTrue(self.run_once())
+        self.pulls.write_text(pulls)
+        self.assertTrue(self.run_once())
+        self.assertEqual(self.agents_started(), 8)
 
     def test_reports_of_any_shape_merge_into_a_bounded_status(self):
         (self.dir / 'status.d' / 'acme__web.json').write_text('[]')

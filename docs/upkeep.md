@@ -110,8 +110,9 @@ exchange yet. The exchange does these steps:
 The loop starts one run on the schedule, or sooner after **Run now**. A run lists
 the open pull requests of the bots in each repository. It starts one Codex agent
 for each repository whose pull requests changed after the start of its last agent
-that ended without an error. A run that **Run now** started also starts agents for
-the repositories that did not change.
+that ended without an error. When a repository had no open pull requests from the
+bots in a run, its next pull requests count as changed. A run that **Run now**
+started also starts agents for the repositories that did not change.
 
 - The repositories in the order list run one at a time first. Then the other
   repositories run side by side. The number of agents that run side by side

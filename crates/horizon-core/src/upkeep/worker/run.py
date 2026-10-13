@@ -363,7 +363,7 @@ def entry_size(value):
         if nesting(value) > 32:
             return None
         return len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode())
-    except (ValueError, RecursionError):
+    except (ValueError, UnicodeError, RecursionError):
         return None
 
 
@@ -490,6 +490,8 @@ def run_once(cfg, forced):
             todo.append(repository)
             continue
         if not found:
+            # A pull request that opens again later is new to the agent, even when it is the same.
+            seen.pop(repository, None)
             forget_open(repository)
             continue
         prints[repository] = fingerprint(found, template)
