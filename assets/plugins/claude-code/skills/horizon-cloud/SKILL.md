@@ -16,8 +16,10 @@ server types are fallback preferences; they do not restrict explicit worker choi
 
 Cloud cards show the last-read tailnet device name under Connections > Tailnet.
 Copy includes the MagicDNS domain when the worker reports it. A stable-name
-fallback uses `horizon-tailnet-contract=4`; it does not supply an unknown
-domain. Connect again to refresh names after an administrator rename.
+fallback accepts `horizon-tailnet-contract=2` or `horizon-tailnet-contract=4`;
+it does not supply an unknown domain. Marker 2 qualifies this display fallback
+only; selected-tailnet operations require marker 4. Connect again to refresh
+names after an administrator rename.
 
 A selected tailnet requires `horizon-tailnet-contract=4` and an auth key with
 only `tag:horizon-worker`. The tailnet policy must define this tag in `tagOwners`.

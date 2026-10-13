@@ -342,8 +342,8 @@ bind of S02 alone does not change the socket that the candidate uses.
 
 4. Record the output of each check in the evidence.
 
-   Result: The evidence shows `horizon-tailnet-contract=1` and
-   `horizon-tailnet-contract=2` for the images that the tailnet tests use.
+   Result: The evidence shows `horizon-tailnet-contract=4` for the images that
+   the tailnet tests use.
 
 ## 7. Pass criteria
 

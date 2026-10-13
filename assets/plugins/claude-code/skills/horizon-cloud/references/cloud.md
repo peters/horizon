@@ -172,9 +172,9 @@ enrollment during each deployment or reconnection. The worker needs its existing
 snapshot generations. The second generation excludes an earlier status read that
 was still in progress during reconnection. The read has a 15-second limit and
 can be cancelled. It does not poll the tailnet from the drawer. If freshness
-cannot be confirmed, only an image with
-`horizon-tailnet-contract=4` supplies the derived stable name. Marker 2 also
-supports this display fallback on older images; it does not qualify enrollment.
+cannot be confirmed, an image with `horizon-tailnet-contract=2` or
+`horizon-tailnet-contract=4` supplies the derived stable name. Marker 2 qualifies
+this display fallback only; selected-tailnet operations require marker 4.
 Images without stable-name support do not supply a derived name.
 This fallback is an expected short name; it is not a
 confirmed device identity or full MagicDNS address. No tailnet selection means
