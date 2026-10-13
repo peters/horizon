@@ -125,6 +125,11 @@ test('requests that no platform credential can satisfy never post', async () => 
         pubKeyCredParams: [{type: 'password'}]}}), {name: 'TypeError'});
     await assert.rejects(credentials.get({publicKey: {get challenge() { throw new RangeError('page'); }}}),
         {name: 'RangeError'});
+    let reads = 0;
+    const pending = credentials.get({get publicKey() { reads += 1; throw new RangeError('options'); }});
+    assert.equal(typeof pending.then, 'function', 'a throwing options getter rejects instead of throwing');
+    await assert.rejects(pending, {name: 'RangeError'});
+    assert.equal(reads, 1);
     await assert.rejects(credentials.get({signal: AbortSignal.abort(), publicKey: {challenge,
         allowCredentials: [{type: 'password', id: new Uint8Array([1])}]}}), {name: 'AbortError'});
     assert.equal(posted.length, 0);

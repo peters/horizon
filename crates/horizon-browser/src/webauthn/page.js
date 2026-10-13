@@ -258,15 +258,30 @@
         if (!descriptor) return;
         Object.defineProperty(target, name, { ...descriptor, value: { [name]: implementation }[name] });
     };
-    replace(Container.prototype, "get", function get(options) {
-        if (!options || typeof options !== "object" || !options.publicKey) return nativeGet.apply(this, arguments);
-        if (options.mediation === "conditional") return conditional(options.signal);
-        return request("get", options.publicKey, options.signal);
+    // Reads each member once; an exception from a page getter becomes a
+    // rejected promise, as for a native promise-returning method.
+    const route = (op, native, receiver, args) => {
+        const options = args[0];
+        let publicKey;
+        let mediation;
+        let signal;
+        try {
+            if (!options || typeof options !== "object") return native.apply(receiver, args);
+            publicKey = options.publicKey;
+            if (!publicKey) return native.apply(receiver, args);
+            mediation = options.mediation;
+            signal = options.signal;
+        } catch (error) {
+            return Promise.reject(error);
+        }
+        if (mediation === "conditional") return conditional(signal);
+        return request(op, publicKey, signal);
+    };
+    replace(Container.prototype, "get", function get() {
+        return route("get", nativeGet, this, arguments);
     });
-    replace(Container.prototype, "create", function create(options) {
-        if (!options || typeof options !== "object" || !options.publicKey) return nativeCreate.apply(this, arguments);
-        if (options.mediation === "conditional") return conditional(options.signal);
-        return request("create", options.publicKey, options.signal);
+    replace(Container.prototype, "create", function create() {
+        return route("create", nativeCreate, this, arguments);
     });
     const Credential = globalThis.PublicKeyCredential;
     if (typeof Credential === "function") {
