@@ -37,6 +37,19 @@ pub(super) fn compute_idle(runtime: &Runtime) -> bool {
                 .state
                 .as_ref()
                 .is_some_and(|state| matches!(state.operation, cloud_runtime::CreateState::Terminated { .. })))
+        || ((record_is_current(runtime) || runtime.stage == Some(Stage::Ready)) && reported_stopped(runtime))
+}
+
+/// The worker reports itself stopped on a provider that bills a stopped worker no
+/// compute, as `RunPod` does. A powered-off Hetzner server still bills until a stop
+/// deletes it, so it is not idle.
+fn reported_stopped(runtime: &Runtime) -> bool {
+    provider(runtime).stopped == provider::StoppedCost::WorkerKept
+        && runtime
+            .state
+            .as_ref()
+            .and_then(|state| state.worker.as_ref())
+            .is_some_and(|worker| cloud_runtime::cost::run_gap(worker) == Some(RunGap::Stopped))
 }
 
 /// The provider of the cloud's deployment; a cloud without one has no worker to price.
@@ -228,7 +241,8 @@ fn run_note(runtime: &Runtime, estimated: bool) -> &'static str {
     match ready_gap(runtime) {
         Some(RunGap::NoRate) => "no rate reported",
         Some(RunGap::NoStart) => "no start time reported",
-        Some(RunGap::Stopped) => "not running",
+        // Only a provider that bills a stopped worker gets here; the others are idle.
+        Some(RunGap::Stopped) => "powered off, still billed",
         Some(RunGap::UnknownStatus) => "worker status unknown",
         None if compute_idle(runtime) || !worker_requested(runtime) => "not running",
         None if runtime.stage != Some(Stage::Ready) => "estimate pending until ready",
@@ -846,11 +860,22 @@ mod tests {
         assert!(has(&texts(&unstarted), "no start time reported"));
         let unknown = hetzner(Stage::Ready, &server(&serde_json::json!({"desiredStatus": "UNKNOWN"})));
         assert!(has(&texts(&unknown), "worker status unknown"));
-        let exited = hetzner(Stage::Ready, &server(&serde_json::json!({"desiredStatus": "EXITED"})));
+        // A powered-off Hetzner server still bills until a stop deletes it.
+        let off = hetzner(Stage::Ready, &server(&serde_json::json!({"desiredStatus": "EXITED"})));
+        assert_eq!(spend(&off, now).line, "€0.0240/h");
+        let shown = texts(&off);
         assert!(
-            has(&texts(&exited), "not running"),
-            "a stopped worker's status is known"
+            has(&shown, "powered off, still billed") && has(&shown, "€0.0240/h"),
+            "{shown:?}"
         );
+        // A stopped RunPod worker bills no compute, so every surface says it is stopped.
+        let mut exited = runtime();
+        exited.state.as_mut().unwrap().worker.as_mut().unwrap().desired_status = "EXITED".into();
+        assert!(compute_idle(&exited));
+        assert_eq!(spend(&exited, now).line, "compute stopped");
+        let shown = texts(&exited);
+        assert!(has(&shown, "not running") && has(&shown, "Stopped"), "{shown:?}");
+        assert!(super::super::list::hourly_rate(&exited).is_none());
         // A Ready record without a worker was not read yet; nothing says no rate was reported.
         let unread = hetzner(Stage::Ready, &serde_json::Value::Null);
         assert_eq!(spend(&unread, now).line, "Worker billing · rate pending");
