@@ -17,6 +17,7 @@ import json
 import os
 import re
 import secrets
+import selectors
 import shutil
 import signal
 import subprocess
@@ -46,6 +47,8 @@ LISTINGS = {
     "volume": ["volume", "ls", "--format", "{{.Name}}"],
     "network": ["network", "ls", "--format", "{{.Name}}"],
 }
+# The most output the runner reads from one docker command.
+OUTPUT_LIMIT = 16 * 1024 * 1024
 # How long one removal command may take.
 REMOVAL_SECONDS = 15 * 60
 # How long what a finished entry left in Docker may take to go on its own before it is a leak.
@@ -191,14 +194,35 @@ def build_test_binary():
 
 
 def docker(args, timeout=120):
-    """Runs a docker command; its standard output, or None when it failed."""
+    """Runs a docker command; its standard output, or None when it failed, took longer than
+    `timeout` seconds or wrote more than OUTPUT_LIMIT bytes. A cut listing never passes
+    for a whole one."""
     try:
         # A session of its own, so a Ctrl-C in the terminal never ends a removal midway.
-        done = subprocess.run(["docker", *args], capture_output=True, text=True, timeout=timeout, check=False,
-                              start_new_session=True)
-    except (OSError, subprocess.TimeoutExpired):
+        process = subprocess.Popen(["docker", *args], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                   stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
         return None
-    return done.stdout if done.returncode == 0 else None
+    deadline = time.monotonic() + timeout
+    output = bytearray()
+    with process, selectors.DefaultSelector() as selector:
+        selector.register(process.stdout, selectors.EVENT_READ)
+        while len(output) <= OUTPUT_LIMIT:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if selector.select(remaining):
+                chunk = os.read(process.stdout.fileno(), 65536)
+                if not chunk:
+                    try:
+                        code = process.wait(timeout=max(deadline - time.monotonic(), 0.1))
+                    except subprocess.TimeoutExpired:
+                        break
+                    return output.decode(errors="replace") if code == 0 else None
+                output += chunk
+        process.kill()
+        process.wait()
+    return None
 
 
 def pin_docker():
@@ -224,8 +248,11 @@ def check_preconditions(out, min_free_gb):
     root = docker(["info", "--format", "{{.DockerRootDir}}"], timeout=30)
     if root is None:
         return "Docker does not answer; start Docker and try again"
-    out.mkdir(parents=True, exist_ok=True)
-    if min_free_gb <= 0:
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        return f"cannot make the output folder {out}: {error}"
+    if min_free_gb == 0:
         return None
     for place in (out, Path(root.strip())):
         try:
@@ -627,6 +654,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.lanes < 1:
         parser.error("--lanes must be 1 or more")
+    if args.min_free_gb < 0:
+        parser.error("--min-free-gb must be 0 or more")
     try:
         entries = load_list(args.list, args.only)
     except (OSError, ValueError, ListError) as error:

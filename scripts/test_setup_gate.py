@@ -154,6 +154,26 @@ class CleanupTests(unittest.TestCase):
             with mock.patch.dict(gate.os.environ, {"DOCKER_HOST": refused}):
                 self.assertIn("not a socket of this computer", gate.pin_docker())
 
+    def test_docker_output_is_bounded_in_size_and_time(self):
+        folder = Path(tempfile.mkdtemp(prefix="setup-gate-docker-"))
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        fake = folder / "docker"
+        fake.write_text("#!/bin/sh\ncase $1 in\n"
+                        "  ok) printf 'one\\ntwo\\n' ;;\n"
+                        "  fail) echo partial; exit 1 ;;\n"
+                        "  loud) yes long-line | head -c 4096 ;;\n"
+                        "  slow) sleep 5 ;;\n"
+                        "esac\n")
+        fake.chmod(0o755)
+        with mock.patch.dict(gate.os.environ, {"PATH": f"{folder}:{gate.os.environ['PATH']}"}), \
+                mock.patch.object(gate, "OUTPUT_LIMIT", 1024):
+            self.assertEqual(gate.docker(["ok"]), "one\ntwo\n")
+            self.assertIsNone(gate.docker(["fail"]))
+            self.assertIsNone(gate.docker(["loud"]), "a cut listing never passes for a whole one")
+            begun = gate.time.monotonic()
+            self.assertIsNone(gate.docker(["slow"], timeout=0.5))
+            self.assertLess(gate.time.monotonic() - begun, 4)
+
     def test_stat_lines_with_odd_command_names_parse(self):
         self.assertEqual(gate.parse_stat("4242 (a (b) c) S 1 4242 4100 0 -1 4194560 120"), ("S", 4100))
         self.assertEqual(gate.parse_stat("17 (docker) Z 4242 17 4242 0"), ("Z", 4242))

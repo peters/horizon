@@ -120,16 +120,21 @@ not find.
 
    Result: A PASS row has a time for Build, CI and Fast.
 
-2. If a row shows FAIL, open `logs/<label>.log` in the run folder.
+2. If a row shows FAIL, read its first failure.
+
+   Result: It names the failed phase, a preview failure, why the entry has no result,
+   or "the spec does not parse". A spec that does not parse has no proof log.
+
+3. If the run folder has `logs/<label>.log` for that entry, open it.
 
    Result: The log shows the whole output of the proof and the failure.
 
-3. If a job fails outside Horizon too, add it to `leave_out` of its entry. Then run the
+4. If a job fails outside Horizon too, add it to `leave_out` of its entry. Then run the
    gate again for that entry only, with `--only <label>`.
 
    Result: The summary names the job in a line that starts with "Left out of the spec".
 
-4. Examine the lines under the table.
+5. Examine the lines under the table.
 
    Result: No line starts with "Left behind" or "NOT REMOVED".
 
