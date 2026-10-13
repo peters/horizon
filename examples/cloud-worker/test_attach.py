@@ -153,6 +153,12 @@ class InputTests(unittest.TestCase):
         # Its closing bracket, when it comes after all, is no key for the session.
         self.assertEqual(typed.feed(b'more\x1b[201~x'), ['send-keys -H -t %3 6d 6f 72 65', 'send-keys -H -t %3 78'])
 
+    def test_the_answer_to_the_color_query_is_never_typed(self):
+        style, typed = attach.colors(b'a\x1b]11;rgba:1/2/3/4\x1b\\b\x1b]10;rgb:ff/0/8080\x07\x1b[?62;22cc')
+        # A color in a form tmux does not take is left out, but its answer is no key either.
+        self.assertEqual((style, typed), ('fg=#ff0080', b'abc'))
+        self.assertEqual(attach.colors(b'\x1b]11;rgb:1010/2020/3030\x1b\\'), ('bg=#102030', b''))
+
 
 class TargetTests(unittest.TestCase):
     def test_a_session_name_or_a_socket_and_pane_name_the_target(self):
@@ -364,6 +370,16 @@ class TmuxTests(unittest.TestCase):
                   reader.replace("os.read(0, 1)", "None"), str(received))
         self.wait_for(received.exists)
         self.assertRegex(received.read_bytes(), rb'\A' + ANSWERED)
+
+    def test_a_late_answer_still_gives_the_colors_and_never_reaches_the_session(self):
+        terminal = self.start(['a'])
+        terminal.read_until(lambda data: attach.COLOR_QUERY in data)
+        # The attach shows the session without the answer after COLOR_SECONDS.
+        terminal.read_until(lambda data: data.endswith(b'\x1b[?2004h'))
+        terminal.write(b'echo late\r' + PANEL_COLORS)
+        terminal.read_until(lambda data: b'\r\nlate\r\n' in data)
+        self.assertNotIn(']1', self.tmux('capture-pane', '-p', '-t', '=a:'))
+        self.wait_for(lambda: 'bg=#102030' in self.tmux('show-options', '-wg', 'window-style'))
 
     def test_a_panel_that_reports_no_colors_sets_no_style_and_keeps_typed_keys(self):
         terminal = self.attach(answer=b'echo early\r\x1b[?1;2c')

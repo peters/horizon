@@ -508,8 +508,11 @@ tmux stays the terminal of the session:
   each attach, the helper asks the panel for its foreground and background
   colors (OSC 10 and 11). It sets them as the window style of the pane and as
   the default window style of the tmux server, and tmux answers the color
-  queries of the session from that style. A session that starts later gets
-  these colors before its first attach. A program that asks before the first
+  queries of the session from that style. When the answer takes longer than
+  two seconds, the helper shows the session first and holds the keys typed
+  meanwhile until the answer is complete, for at most ten seconds after the
+  query, so the answer never reaches the session as keys. A session that starts
+  later gets these colors before its first attach. A program that asks before the first
   attach to a new tmux server gets no answer or black. tmux does not answer
   palette queries (OSC 4). If the panel colors change while a panel is
   attached, the session gets the new colors at the next attach.
