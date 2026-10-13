@@ -486,13 +486,14 @@ it drops lines when output is fast. The signed project sessions of
 At each attach, the helper does these steps:
 
 1. It sets the size of the session to the size of the terminal.
-2. In one tmux command line, it reads the history, the screen, the cursor, the
+2. It asks the panel for its colors and gives them to tmux (see below).
+3. In one tmux command line, it reads the history, the screen, the cursor, the
    terminal modes and the title of the session. tmux reads no output of the session
    between these commands.
-3. It clears the screen and the scrollback of the panel. Then it writes the
+4. It clears the screen and the scrollback of the panel. Then it writes the
    history and the screen. Output that the session wrote while no panel was
    attached is thus in the scrollback, and no line of an earlier attach stays.
-4. It writes the output that the session writes after step 2.
+5. It writes the output that the session writes after step 3.
 
 tmux keeps the last 10000 lines of each session that starts on an image with
 this helper. A session that started before keeps the tmux default of 2000 lines
