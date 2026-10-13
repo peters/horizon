@@ -1,22 +1,22 @@
 //! Upkeep: one agent on a cloud worker that keeps dependency pull requests moving.
 //!
 //! The worker's agent writes a status document after every change; the Upkeep board
-//! panel only reads it. The document is external input: it is size-limited, parsed
-//! into a fixed schema and never run.
+//! panel only reads it. The document is external input: it is read off the UI thread,
+//! size-limited, parsed into a fixed schema with bounded lists and texts, and never run.
+//! Unknown fields are ignored, and unknown states show as "Other".
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Receiver;
 
 use serde::Deserialize;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+mod reader;
+
 /// The time crate, so panels that show these times need no dependency of their own.
 pub use ::time;
-
-/// Largest status document the board reads.
-const STATUS_LIMIT: u64 = 4 * 1024 * 1024;
-/// How often the board looks for a newer document.
-const POLL_EVERY: Duration = Duration::from_secs(2);
 
 /// What the agent reports. Unknown fields are ignored so the worker can add some.
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -65,6 +65,9 @@ pub enum RunOutcome {
     Running,
     Skipped,
     Failed,
+    /// An outcome this Horizon does not know.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -94,15 +97,19 @@ pub enum PrState {
     /// Every gate passed; the next run merges it.
     Ready,
     Merged,
+    /// A state this Horizon does not know.
+    #[serde(other)]
+    Other,
 }
 
 impl PrState {
-    pub const ORDER: [Self; 6] = [
+    pub const ORDER: [Self; 7] = [
         Self::Blocked,
         Self::Fixing,
         Self::NeedsReview,
         Self::WaitingChecks,
         Self::Ready,
+        Self::Other,
         Self::Merged,
     ];
 
@@ -115,6 +122,7 @@ impl PrState {
             Self::WaitingChecks => "Checks running",
             Self::Ready => "Ready to merge",
             Self::Merged => "Merged",
+            Self::Other => "Other",
         }
     }
 
@@ -131,7 +139,9 @@ pub enum Checks {
     Passed,
     Failed,
     Running,
+    /// No checks, or a check state this Horizon does not know.
     #[default]
+    #[serde(other)]
     None,
 }
 
@@ -189,11 +199,13 @@ pub enum Request {
 /// Panel content of the Upkeep board.
 pub struct UpkeepBoard {
     path: PathBuf,
-    pub status: Option<Status>,
+    /// The last valid status; it stays while a newer document is broken or gone.
+    pub status: Option<Arc<Status>>,
+    /// Why the document could not be read, the last time it changed.
     pub error: Option<String>,
     pub request: Option<Request>,
-    modified: Option<SystemTime>,
-    checked: Option<Instant>,
+    readings: Option<Receiver<reader::Reading>>,
+    alive: Arc<AtomicBool>,
 }
 
 impl UpkeepBoard {
@@ -204,8 +216,8 @@ impl UpkeepBoard {
             status: None,
             error: None,
             request: None,
-            modified: None,
-            checked: None,
+            readings: None,
+            alive: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -214,39 +226,35 @@ impl UpkeepBoard {
         &self.path
     }
 
-    /// Reads the document again when it changed. Cheap between changes: one `stat`
-    /// at most every two seconds. Returns true when the status changed.
+    /// Takes what the reader thread found since the last call, starting the thread on
+    /// the first call. Never touches the file itself. Returns true when anything changed.
     pub fn poll(&mut self) -> bool {
-        if self.checked.is_some_and(|checked| checked.elapsed() < POLL_EVERY) {
-            return false;
-        }
-        self.checked = Some(Instant::now());
-        let modified = std::fs::metadata(&self.path).and_then(|meta| meta.modified()).ok();
-        if modified.is_some() && modified == self.modified {
-            return false;
-        }
-        self.modified = modified;
-        match read_status(&self.path) {
-            Ok(status) => {
-                self.status = Some(status);
-                self.error = None;
+        if self.readings.is_none() {
+            self.readings = reader::spawn(self.path.clone(), self.alive.clone());
+            if self.readings.is_none() {
+                self.error = Some("The Upkeep status reader could not start.".into());
+                return true;
             }
-            Err(_) if modified.is_none() && self.status.is_some() => {
-                self.error = Some("The Upkeep status file is gone.".into());
-            }
-            Err(error) => self.error = Some(error),
         }
-        true
+        let mut changed = false;
+        while let Some(reading) = self.readings.as_ref().and_then(|readings| readings.try_recv().ok()) {
+            changed = true;
+            match reading {
+                Ok(status) => {
+                    self.status = Some(Arc::new(status));
+                    self.error = None;
+                }
+                Err(error) => self.error = Some(error),
+            }
+        }
+        changed
     }
 }
 
-fn read_status(path: &Path) -> Result<Status, String> {
-    let meta = std::fs::metadata(path).map_err(|_| "Upkeep has not reported yet.".to_string())?;
-    if meta.len() > STATUS_LIMIT {
-        return Err("The Upkeep status is too large to read.".into());
+impl Drop for UpkeepBoard {
+    fn drop(&mut self) {
+        self.alive.store(false, Ordering::Relaxed);
     }
-    let text = std::fs::read_to_string(path).map_err(|error| format!("The Upkeep status cannot be read: {error}"))?;
-    serde_json::from_str(&text).map_err(|error| format!("The Upkeep status is not valid: {error}"))
 }
 
 /// `owner/name` in the characters GitHub allows, with no `.` or `..` segment.
@@ -346,46 +354,35 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_or_broken_document_is_a_message_not_a_panic() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("status.json");
-        let mut board = UpkeepBoard::new(Some(path.clone()));
-        assert!(board.poll());
-        assert_eq!(board.error.as_deref(), Some("Upkeep has not reported yet."));
-        std::fs::write(&path, "{").unwrap();
-        board.checked = None;
-        assert!(board.poll());
-        assert!(
-            board
-                .error
-                .as_deref()
-                .is_some_and(|error| error.starts_with("The Upkeep status is not valid"))
-        );
-        assert!(board.status.is_none());
+    fn unknown_states_parse_as_other() {
+        let status: Status = serde_json::from_str(
+            r#"{"runs":[{"started_at":"2026-10-13T10:00:00Z","outcome":"cancelled"}],
+                "pull_requests":[{"repository":"o/r","number":1,"title":"t","url":"","state":"closed","checks":"stale"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(status.runs[0].outcome, RunOutcome::Other);
+        assert_eq!(status.pull_requests[0].state, PrState::Other);
+        assert_eq!(status.pull_requests[0].checks, Checks::None);
     }
 
     #[test]
-    fn a_status_that_breaks_or_goes_stays_with_the_reason() {
+    fn the_board_keeps_the_last_status_with_the_reason_it_could_not_read_a_newer_one() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("status.json");
         std::fs::write(&path, r#"{"agent":"codex"}"#).unwrap();
         let mut board = UpkeepBoard::new(Some(path.clone()));
-        assert!(board.poll());
-        assert!(board.error.is_none());
-        std::fs::write(&path, "{").unwrap();
-        board.checked = None;
-        board.modified = None;
-        assert!(board.poll());
-        assert!(
-            board
-                .error
-                .as_deref()
-                .is_some_and(|error| error.starts_with("The Upkeep status is not valid"))
-        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while board.status.is_none() && std::time::Instant::now() < deadline {
+            board.poll();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         assert_eq!(board.status.as_ref().map(|status| status.agent.as_str()), Some("codex"));
         std::fs::remove_file(&path).unwrap();
-        board.checked = None;
-        assert!(board.poll());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while board.error.is_none() && std::time::Instant::now() < deadline {
+            board.poll();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         assert_eq!(board.error.as_deref(), Some("The Upkeep status file is gone."));
         assert!(board.status.is_some());
     }

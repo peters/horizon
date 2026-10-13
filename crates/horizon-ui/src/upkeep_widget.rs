@@ -107,7 +107,7 @@ fn shown_pull_requests(status: &Status, now: OffsetDateTime) -> Vec<&horizon_cor
         .iter()
         .filter(|pr| pr.state != PrState::Merged || pr.updated_at.is_some_and(|merged| now - merged <= MERGED_WINDOW))
         .collect();
-    shown.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    shown.sort_by_key(|pr| std::cmp::Reverse(pr.updated_at));
     shown
 }
 
@@ -119,6 +119,7 @@ pub(crate) fn state_color(state: PrState) -> Color32 {
         PrState::WaitingChecks => theme::PALETTE_CYAN(),
         PrState::Ready => theme::PALETTE_GREEN(),
         PrState::Merged => theme::FG_SOFT(),
+        PrState::Other => theme::FG_DIM(),
     }
 }
 

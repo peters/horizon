@@ -58,12 +58,14 @@ fn next_run(ui: &mut Ui, status: &Status, now: OffsetDateTime) {
 fn bars(ui: &mut Ui, status: &Status, now: OffsetDateTime) {
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 4.0;
-        let merged: u32 = status
+        let this_hour = start_of_hour(now);
+        let first = this_hour - time::Duration::hours(HOURS - 1);
+        // The same runs as the bars, summed without overflow: the counts are untrusted.
+        let merged = status
             .runs
             .iter()
-            .filter(|run| now - run.started_at <= time::Duration::hours(HOURS))
-            .map(|run| run.merged)
-            .sum();
+            .filter(|run| run.started_at >= first)
+            .fold(0_u32, |total, run| total.saturating_add(run.merged));
         ui.horizontal(|ui| {
             super::caption(ui, "Last 24 hours");
             ui.label(
@@ -77,7 +79,6 @@ fn bars(ui: &mut Ui, status: &Status, now: OffsetDateTime) {
         let (rect, _) = ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT), Sense::hover());
         let count = f32::from(u8::try_from(HOURS).unwrap_or(24));
         let bar_width = ((width - BAR_GAP * (count - 1.0)) / count).max(2.0);
-        let this_hour = now.replace_minute(0).and_then(|t| t.replace_second(0)).unwrap_or(now);
         for slot in 0..HOURS {
             let hour = this_hour - time::Duration::hours(HOURS - 1 - slot);
             let index = f32::from(u8::try_from(slot).unwrap_or(0));
@@ -93,7 +94,6 @@ fn bars(ui: &mut Ui, status: &Status, now: OffsetDateTime) {
                 .on_hover_text(tip);
         }
         ui.horizontal(|ui| {
-            let first = this_hour - time::Duration::hours(HOURS - 1);
             ui.label(
                 RichText::new(clock(first))
                     .size(10.0)
@@ -107,6 +107,11 @@ fn bars(ui: &mut Ui, status: &Status, now: OffsetDateTime) {
     });
 }
 
+/// The start of the hour of `now`, so a run that starts on the hour falls in its own slot.
+fn start_of_hour(now: OffsetDateTime) -> OffsetDateTime {
+    now.replace_time(time::Time::from_hms(now.hour(), 0, 0).unwrap_or(time::Time::MIDNIGHT))
+}
+
 fn paint_bar(ui: &Ui, bar: Rect, run: Option<&Run>) {
     let painter = ui.painter();
     let radius = CornerRadius::same(3);
@@ -114,7 +119,7 @@ fn paint_bar(ui: &Ui, bar: Rect, run: Option<&Run>) {
         None => {
             painter.rect_filled(bar, radius, theme::alpha(theme::BORDER_SUBTLE(), 120));
         }
-        Some((RunOutcome::Skipped, _)) => {
+        Some((RunOutcome::Skipped | RunOutcome::Other, _)) => {
             painter.rect_stroke(
                 bar.shrink(0.5),
                 radius,
@@ -156,5 +161,18 @@ fn tooltip(hour: OffsetDateTime, run: Option<&Run>) -> String {
         RunOutcome::Running => format!("{at}: running"),
         RunOutcome::Failed => format!("{at}: failed after {length}"),
         RunOutcome::Skipped => format!("{at}: skipped, the previous run was still busy"),
+        RunOutcome::Other => format!("{at}: an outcome this Horizon does not know"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_core::upkeep::parse_time;
+
+    #[test]
+    fn a_run_on_the_hour_belongs_to_that_hour() {
+        let now = parse_time("2026-10-13T14:37:12.345Z").unwrap();
+        assert_eq!(start_of_hour(now), parse_time("2026-10-13T14:00:00Z").unwrap());
     }
 }

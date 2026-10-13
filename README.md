@@ -86,6 +86,7 @@ Workspaces stay visible. There are no hidden tabs. If something is off-screen, p
 | `editor` | Markdown split view (syntax + preview) |
 | `git_changes` | Changed files, diffs, and hunks for the workspace repo |
 | `usage` | Token spend across agent panels |
+| `upkeep` | Read-only board of an Upkeep agent: next run, the last 24 hours of runs, and its dependency pull requests by state. A row opens its pull request in a browser panel. `command` names the status file; see [Upkeep](docs/upkeep.md) |
 | `command` | Run an arbitrary command as a panel |
 | `device` | Native VNC view of a loopback desktop, or of a remote desktop reached through an SSH tunnel (the host's key must already be trusted, for example by opening it over SSH once). Read-only until you turn **Interact** on, which sends your mouse and keyboard to that desktop |
 

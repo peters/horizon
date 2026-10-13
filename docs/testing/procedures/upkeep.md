@@ -24,6 +24,11 @@ board.
 - This procedure does not test: the Upkeep agent, its worker or its schedule. The
   board reads a synthetic status document.
 
+## 3. Safety
+
+No caution applies. The board only reads a local file, and the synthetic status
+names made-up repositories and one public pull request.
+
 ## 4. Equipment and preconditions
 
 - An isolated test desktop that a native VNC Device panel shows (see the AGENTS.md
