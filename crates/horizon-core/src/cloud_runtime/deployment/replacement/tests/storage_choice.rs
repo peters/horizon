@@ -117,3 +117,30 @@ fn an_image_fits_the_container_disk_chosen_in_new_cloud_not_the_committed_one() 
     script.unpacked = Some(30 * BYTES_PER_GB);
     assert_eq!(rebuild_with(&fixture, &script).unwrap(), Driven::Committed);
 }
+
+#[test]
+fn a_built_image_journaled_unchecked_is_refused_when_the_rebuild_continues() {
+    let fixture = Fixture::new();
+    let before = fixture.state();
+    let disk = u64::from(before.profile.storage.container_gb) * BYTES_PER_GB;
+    // The image fits when it is built, and the rebuild stops once it is journaled as built.
+    let mut script = Script::new(&fixture);
+    script.fail_at.set(Some(Boundary::Built));
+    assert!(matches!(rebuild_with(&fixture, &script), Err(Error::Invalid(CRASH))));
+    assert!(matches!(
+        fixture.state().image_replacement.unwrap().phase,
+        ReplacementPhase::Built(_)
+    ));
+    // Continued with an image the disk cannot hold, as one an earlier Horizon version
+    // journaled without the check: nothing reaches the worker, and nothing stays pending.
+    script.fail_at.set(None);
+    script.unpacked = Some(disk + 1);
+    script.calls.borrow_mut().clear();
+    let error = recover(&fixture, &script, Recovery::Continue).unwrap_err().to_string();
+    assert_eq!(error, IMAGE_TOO_LARGE);
+    assert_eq!(*script.calls.borrow(), ["verify"]);
+    let after = fixture.state();
+    assert!(after.image_replacement.is_none());
+    assert_eq!(after.spec, before.spec);
+    assert_eq!(fixture.storage_image(), digest('a'));
+}

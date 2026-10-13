@@ -175,8 +175,8 @@ pub fn rebuild(
 }
 
 /// Resumes a pending replacement from its next step: a prepared one builds, a built one
-/// verifies its image again, and a requested one is sent again only while the provider
-/// still reports the previous image.
+/// verifies its image again and that the worker's container disk holds it, and a
+/// requested one is sent again only while the provider still reports the previous image.
 /// # Errors
 /// Refuses without a pending replacement; keeps the journal after a failure.
 pub fn continue_replacement(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) -> Result<Deployment> {
@@ -451,11 +451,7 @@ fn drive(steps: &impl Steps, store: &Store, state: &mut Deployment, emit: &dyn F
                 return Ok(Driven::Unchanged);
             }
             // Checked before the image is journaled, so every built replacement fits its worker.
-            if !held(steps, state, &journal.tag, emit)? {
-                state.discard_replacement()?;
-                store.save(state)?;
-                return Err(Error::Invalid(compatibility::IMAGE_TOO_LARGE));
-            }
+            require_held(steps, store, state, &journal.tag, emit)?;
             state.replacement_built(image)?;
             store.save(state)?;
             steps.checkpoint(Boundary::Built)?;
@@ -463,6 +459,8 @@ fn drive(steps: &impl Steps, store: &Store, state: &mut Deployment, emit: &dyn F
         ReplacementPhase::Built(image) => {
             emit(activity("Verifying the built image and its pull binding"));
             steps.verify(state, &image)?;
+            // Checked again, as an earlier Horizon version journaled a built image unchecked.
+            require_held(steps, store, state, &journal.tag, emit)?;
         }
         ReplacementPhase::Requested(_) => {
             match steps.server() {
@@ -474,6 +472,23 @@ fn drive(steps: &impl Steps, store: &Store, state: &mut Deployment, emit: &dyn F
     }
     request(steps, store, state, emit)?;
     Ok(Driven::Committed)
+}
+
+/// Refuses an image built under `tag` that the worker's container disk cannot hold, and
+/// drops the replacement, whose update was never sent.
+fn require_held(
+    steps: &impl Steps,
+    store: &Store,
+    state: &mut Deployment,
+    tag: &str,
+    emit: &dyn Fn(Event),
+) -> Result<()> {
+    if held(steps, state, tag, emit)? {
+        return Ok(());
+    }
+    state.discard_replacement()?;
+    store.save(state)?;
+    Err(Error::Invalid(compatibility::IMAGE_TOO_LARGE))
 }
 
 /// Whether the worker's container disk holds the image built under `tag`
