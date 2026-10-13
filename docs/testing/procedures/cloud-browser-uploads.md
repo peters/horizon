@@ -76,8 +76,8 @@ that a person gives to it. It also makes sure of these conditions:
     with `--native-view`, its tools root `<tools>` with `x11vnc`, and a Device
     panel in your Horizon.
   - Python 3 with GTK 3, `xdotool` and ImageMagick.
-  - `drag.py` of the [cloud file drop procedure](cloud-file-drop.md), which
-    drags files as a file manager does.
+  - `docs/testing/procedures/cloud-file-drop/drag.py` of the cloud file drop
+    procedure (pull request #1530), which drags files as a file manager does.
   - New private directories outside the home directory: `<smoke>` for the
     repository and the seed, and `<state>` for the fixture.
 

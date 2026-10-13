@@ -90,11 +90,14 @@ pub(super) fn plan(paths: &[PathBuf], limits: CloudUploadLimits) -> Result<Plan,
     let mut total = 0_u64;
     for path in paths {
         let metadata = std::fs::metadata(path).map_err(|error| format!("Cannot read {}: {error}", path.display()))?;
-        if !metadata.is_file() {
+        if metadata.is_dir() {
             return Err(format!(
                 "{} is a folder. Drop the files in the folder, or an archive of it.",
                 path.display()
             ));
+        }
+        if !metadata.is_file() {
+            return Err(format!("{} is not a regular file", path.display()));
         }
         total = total.saturating_add(metadata.len());
         if total > limits.max_batch_bytes {
@@ -208,7 +211,18 @@ fn upload_name(path: &Path) -> String {
             }
         })
         .collect();
-    let name = truncate_bytes(&name, MAX_UPLOAD_NAME_BYTES);
+    let name = if name.len() > MAX_UPLOAD_NAME_BYTES {
+        // Keep a short extension, so that the `accept` filter of the page still matches.
+        let extension = name.rfind('.').map_or("", |dot| &name[dot..]);
+        let extension = if extension.len() <= 32 { extension } else { "" };
+        let stem = truncate_bytes(
+            &name[..name.len() - extension.len()],
+            MAX_UPLOAD_NAME_BYTES - extension.len(),
+        );
+        format!("{stem}{extension}")
+    } else {
+        name
+    };
     if valid_upload_name(&name) { name } else { "file".into() }
 }
 

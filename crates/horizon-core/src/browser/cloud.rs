@@ -360,8 +360,14 @@ impl BrowserPanelState {
         };
         let mut notices = Vec::new();
         notices.extend(uploads.finish(&chooser));
-        if let Some(state) = state {
-            notices.extend(uploads.apply(state.uploads.clone(), &chooser));
+        match state {
+            // A lost browser or connection says nothing about upload support. A
+            // warning of a live browser still carries its upload state.
+            Some(state) if state.uploads.is_none() && (state.lost || state.error.is_some()) => {
+                uploads.close(&chooser);
+            }
+            Some(state) => notices.extend(uploads.apply(state.uploads.clone(), &chooser)),
+            None => {}
         }
         uploads.take_answer(&chooser, &|paths, limits, purpose| {
             start_transfer(connection, id, waker, paths, limits, purpose)

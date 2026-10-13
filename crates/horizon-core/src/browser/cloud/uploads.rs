@@ -199,11 +199,14 @@ impl Relay {
     }
 
     /// Ends the mirrored request and the transfer before the connection is replaced.
+    /// Also for a lost connection: a drop then waits for the next state.
     pub(super) fn close(&mut self, chooser: &FileChooserHandle) {
         if let Some((_, host)) = self.mirrored.take() {
             chooser.relay_close(host);
         }
         self.transfer = None;
+        self.worker = None;
+        self.connected = false;
     }
 
     /// Bytes sent and bytes in all, while a transfer runs.

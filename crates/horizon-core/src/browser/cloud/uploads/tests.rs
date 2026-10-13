@@ -83,6 +83,14 @@ fn the_worker_request_shows_in_the_panel_picker_until_the_worker_ends_it() {
     relay.apply(Some(state(Some(6))), &chooser);
     relay.close(&chooser);
     assert!(chooser.request().is_none(), "a reconnect mirrors the request again");
+    let starts = Starts::default();
+    let refused = relay.drop_files(vec!["/local/a".into()], 1.0, 2.0, &|paths, limits, purpose| {
+        starts.start(paths, limits, purpose)
+    });
+    assert!(
+        refused.unwrap_err().contains("connected"),
+        "a closed relay waits for the next state"
+    );
 }
 
 #[test]

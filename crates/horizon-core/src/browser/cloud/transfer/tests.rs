@@ -110,12 +110,15 @@ fn plans_bound_counts_sizes_and_folders_and_make_names_valid_on_the_worker() {
     assert_eq!(planned.total, 7);
     assert_eq!(upload_name(Path::new("line\nbreak\u{7f}.txt")), "line_break_.txt");
 
-    let long = format!("{}.txt", "ñ".repeat(200));
-    let taken = [(PathBuf::new(), truncate_bytes(&long, MAX_UPLOAD_NAME_BYTES), 0)];
-    let name = upload_name(Path::new(&long));
+    let long_named = upload_name(Path::new(&format!("{}.pdf", "a".repeat(300))));
+    assert_eq!(Path::new(&long_named).extension(), Some("pdf".as_ref()));
+    assert_eq!(long_named.len(), MAX_UPLOAD_NAME_BYTES);
+    let name = upload_name(Path::new(&format!("{}.txt", "ñ".repeat(200))));
     assert!(valid_upload_name(&name) && name.len() <= MAX_UPLOAD_NAME_BYTES);
+    assert_eq!(Path::new(&name).extension(), Some("txt".as_ref()));
+    let taken = [(PathBuf::new(), name.clone(), 0)];
     let second = unique_name(&taken, &name);
-    assert!(valid_upload_name(&second) && second.ends_with(" (2)"), "{second}");
+    assert!(valid_upload_name(&second) && second.ends_with(" (2).txt"), "{second}");
     assert_eq!(upload_name(Path::new("/")), "file");
 
     let long_extension = format!("a.{}", "b".repeat(MAX_UPLOAD_NAME_BYTES - 2));
