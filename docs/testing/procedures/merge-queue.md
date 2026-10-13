@@ -20,9 +20,10 @@ main and a stopped land.
 
 - Use a checkout of `main` that contains `scripts/merge-queue.py`.
 - Platforms: Linux. The script uses only Python, git and gh.
-- Do tasks 6.1 to 6.4 with real approved pull requests, because `land` merges
-  them. Do tasks 6.5 and 6.6 with `--dry-run` or with pull requests that are not
-  ready to merge.
+- Queue only pull requests that have merge permission and pass every merge gate,
+  in every task. Do tasks 6.5 and 6.6 only with `--dry-run` or by observation
+  when the condition occurs. Do not cause a conflict, a push or a merge to test
+  them.
 
 ## 3. Safety
 
@@ -100,19 +101,20 @@ main and a stopped land.
 
 ### 6.5 SKIP — Conflict and moved head
 
-1. Queue a pull request whose change conflicts with `main`, then run
-   `python3 scripts/merge-queue.py build --dry-run`.
+1. When a queued pull request conflicts with `main` or with an earlier queued
+   pull request, run `python3 scripts/merge-queue.py build --dry-run`.
 
    Result: The script prints "skipped, conflicts with main or an earlier PR in
    the batch". The other pull requests stay in the batch.
 
-2. Push a new commit to a queued pull request, then run
+2. When a queued pull request gets a new commit, for example a review fix, run
    `python3 scripts/merge-queue.py list`.
 
    Result: The script shows "head drifted" for that pull request. `build` skips
    it.
 
-3. Run `python3 scripts/merge-queue.py dequeue <PR> --reason "test"`.
+3. When a queued pull request must leave the queue, run
+   `python3 scripts/merge-queue.py dequeue <PR> --reason "<reason>"`.
 
    Result: The label is gone. `list` does not show the pull request.
 

@@ -16,9 +16,7 @@ and only that tested result lands.
 Limits: GitHub cannot guard the base of a squash merge, so a push to main during `land`
 is found and stops the batch but is not prevented. Only the batch tip is tested.
 
-Usage: merge-queue.py enqueue PR --head SHA --subject TEXT --body-file FILE
-       merge-queue.py dequeue PR --reason TEXT | list | status
-       merge-queue.py build [--only N,M] [--dry-run] | land [--dry-run]
+Run `merge-queue.py <command> --help` for the options of each command.
 
 The batch plan is private state under $XDG_STATE_HOME/horizon-merge-queue (default
 ~/.local/state/horizon-merge-queue), never in the repository.
@@ -408,13 +406,20 @@ def cmd_build(args):
     plan = {"branch": branch, "base": base, "tip": tip,
             "prs": [{k: e[k] for k in ("number", "head", "subject", "body", "commit")}
                     for e in applied]}
-    if plan_path().exists():
-        # The earlier batch is replaced; its branch would otherwise stay on origin.
-        old = json.loads(plan_path().read_text())["branch"]
-        git("push", "-q", "origin", "--delete", old, timeout=300, check=False)
-        git("update-ref", "-d", f"refs/merge-queue/{old}", check=False)
+    old = json.loads(plan_path().read_text())["branch"] if plan_path().exists() else None
     plan_path().write_text(json.dumps(plan, indent=2) + "\n")
     print(f"pushed {branch}; CI runs on {tip}")
+    if old:
+        # The earlier batch is replaced; its branch would otherwise stay on origin.
+        git("update-ref", "-d", f"refs/merge-queue/{old}", check=False)
+        delete_branch(old)
+
+
+def delete_branch(branch):
+    deleted = git("push", "-q", "origin", "--delete", branch, timeout=300, check=False)
+    if deleted.returncode != 0 and "remote ref does not exist" not in deleted.stderr:
+        raise QueueError(f"deleting {branch} failed ({deleted.stderr.strip()}); run "
+                         f"git push origin --delete {branch}")
 
 
 def blockers(repo, plan):
@@ -449,8 +454,9 @@ def pr_blockers(repo, entry):
     if LABEL not in {label["name"] for label in pr["labels"]} or current is None \
             or any(current[k] != entry[k] for k in ("head", "subject", "body")):
         found.append(f"#{entry['number']} left the queue or was queued again")
-    if pr.get("reviewDecision") == "CHANGES_REQUESTED":
-        found.append(f"#{entry['number']} has a review that requests changes")
+    # Empty means the repository requires no review; anything but APPROVED blocks.
+    if pr.get("reviewDecision") not in (None, "", "APPROVED"):
+        found.append(f"#{entry['number']} review decision is {pr['reviewDecision']}")
     threads = unresolved_threads(repo, entry["number"])
     if threads:
         found.append(f"#{entry['number']} has {threads} unresolved review threads")
@@ -556,14 +562,10 @@ def cmd_land(args):
         entry["merged"] = commit
         plan_path().write_text(json.dumps(plan, indent=2) + "\n")
         expected = commit
-    deleted = git("push", "-q", "origin", "--delete", plan["branch"], timeout=300, check=False)
     git("update-ref", "-d", f"refs/merge-queue/{plan['branch']}", check=False)
     plan_path().rename(state_dir() / f"landed-{plan['branch'][3:]}.json")
     print("each merge has its tested tree; batch landed")
-    if deleted.returncode != 0 and "remote ref does not exist" not in deleted.stderr:
-        raise QueueError(f"the batch landed, but deleting {plan['branch']} failed "
-                         f"({deleted.stderr.strip()}); run git push origin --delete "
-                         f"{plan['branch']}")
+    delete_branch(plan["branch"])
 
 
 def main(argv=None):
@@ -571,9 +573,8 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="command", required=True)
     enqueue = sub.add_parser("enqueue", help="queue one approved head")
     enqueue.add_argument("pr", type=int)
-    enqueue.add_argument("--head", required=True)
-    enqueue.add_argument("--subject", required=True)
-    enqueue.add_argument("--body-file", required=True)
+    for option in ("--head", "--subject", "--body-file"):
+        enqueue.add_argument(option, required=True)
     dequeue = sub.add_parser("dequeue", help="remove a PR from the queue")
     dequeue.add_argument("pr", type=int)
     dequeue.add_argument("--reason", required=True)
@@ -582,8 +583,8 @@ def main(argv=None):
     build = sub.add_parser("build", help="build and push a batch branch")
     build.add_argument("--only", help="comma-separated PR numbers")
     build.add_argument("--dry-run", action="store_true")
-    land = sub.add_parser("land", help="merge the tested batch")
-    land.add_argument("--dry-run", action="store_true")
+    sub.add_parser("land", help="merge the tested batch").add_argument("--dry-run",
+                                                                       action="store_true")
     args = parser.parse_args(argv)
     commands = {"enqueue": cmd_enqueue, "dequeue": cmd_dequeue, "list": cmd_list,
                 "status": cmd_status, "build": cmd_build, "land": cmd_land}
