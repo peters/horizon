@@ -189,7 +189,7 @@ pub fn kept_repositories(root: &Path, settings: &Settings) -> Option<(String, Ve
 /// that arrives after one, after a sign-in as another account, or for a request that was
 /// `cancel`led and replaced, is not kept: checked under the lock, so a newer list written
 /// after the cancel is never overwritten by an older one. A list too large to read back is
-/// not kept, and replaces no older one.
+/// not kept, and an older one is forgotten so it is not shown in its place.
 ///
 /// Returns whether `login` is still this computer's sign-in, so a list of an account that
 /// another window replaced in the meantime is not shown either.
