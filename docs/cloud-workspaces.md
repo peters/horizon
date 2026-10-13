@@ -1390,15 +1390,22 @@ changes are not used) and reads `.horizon/cloud.yml` there.
 
 Horizon refuses the rebuild when the cloud's profile is missing in that file. It
 also refuses when the profile is different from the profile of the cloud's worker.
-The refusal names the different field, for example `gpu`, `storage.container_gb`,
-`capabilities`, `image`, the `build` section or `bootstrap`. A rebuild cannot
-change these fields on a running worker.
+The refusal names the different field, for example `gpu`, `capabilities`, `image`,
+the `build` section or `bootstrap`. A rebuild cannot change these fields on a
+running worker.
 
-Some differences are not a change. You choose the provider, and the vCPU and memory
-of a CPU cloud, when you create the cloud. Their committed values are only defaults
-for new clouds, so the rebuild keeps the cloud on its provider and size. The
-committed `storage.volume_gb` is a minimum, so a workspace that grew after creation
-is not a change.
+Some differences are not a change. When you create the cloud, you choose these
+values in **New cloud**:
+
+- the provider;
+- the vCPU and memory of a CPU cloud;
+- the storage: the container disk (`storage.container_gb`, **System disk
+  requirement** on Hetzner), the workspace size (`storage.volume_gb`) and the
+  workspace type (`storage.volume_tier`, on a RunPod CPU cloud only).
+
+Their committed values are only defaults for new clouds. Thus the rebuild keeps the
+cloud on its provider, its size and its storage. A workspace that grew after
+creation is not a change either.
 
 For a profile with a build section, Horizon builds the recipe with the newest agent CLIs
 under a new tag. It then validates the worker contract, pushes the image and verifies
@@ -1417,6 +1424,14 @@ current `quick-start` profile, the contract check uses the kept result, as
 Horizon checks the image in local Docker. The workspace volume, the profile and the
 sessions stay, as in each other rebuild. If the cloud already runs the pin, Horizon
 reports an unchanged image and restarts nothing.
+
+Before Horizon changes the worker, it compares the unpacked size of a built image, as
+local Docker shows it, with the container disk of the cloud's worker. On Hetzner, the
+container disk is the system disk requirement, the smallest system disk that the new
+server can have. The deployment output shows the two sizes. If the image is larger,
+Horizon refuses the rebuild with the field `storage.container_gb`. The worker keeps its
+image, and nothing stays pending. The pushed image stays in the registry. Horizon does not compare the
+pinned base image, because it builds nothing.
 
 Horizon then releases any hosted devices and switches the existing worker to the
 new image through the provider's pod update, which keeps the worker ID. A Hetzner

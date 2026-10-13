@@ -101,6 +101,9 @@ trait Steps: Provider {
     fn build(&self, state: &Deployment, revision: &str, siblings: &[String], tag: &str) -> Result<ReplacementImage>;
     /// Verifies again that a built image and its pull binding are unchanged.
     fn verify(&self, state: &Deployment, image: &ReplacementImage) -> Result<()>;
+    /// The unpacked size in bytes of the image that `build` made under `tag`, as local
+    /// Docker reports it; `None` when nothing was built, as for the pinned base image.
+    fn unpacked_bytes(&self, state: &Deployment, tag: &str) -> Result<Option<u64>>;
     /// Releases hosted devices before the container reset ends the worker's copies.
     fn release_devices(&self, state: &Deployment) -> Result<()>;
     /// For a provider that rebuilds on a new server (`provider::Rebuild::NewServer`),
@@ -144,8 +147,9 @@ enum Driven {
 /// # Errors
 /// Refuses unless the cloud is ready with nothing pending and the committed profile named
 /// `profile_name` matches the bound one apart from the choices bound at creation, such
-/// as the provider. After a failure the journal stays, so the replacement can be
-/// continued or cancelled.
+/// as the provider and the storage. Refuses a built image that the worker's container
+/// disk cannot hold before anything changes on the worker. After a failure the journal
+/// stays, so the replacement can be continued or cancelled.
 pub fn rebuild(
     request: &Request,
     profile_name: &str,
@@ -446,6 +450,12 @@ fn drive(steps: &impl Steps, store: &Store, state: &mut Deployment, emit: &dyn F
                 }
                 return Ok(Driven::Unchanged);
             }
+            // Checked before the image is journaled, so every built replacement fits its worker.
+            if !held(steps, state, &journal.tag, emit)? {
+                state.discard_replacement()?;
+                store.save(state)?;
+                return Err(Error::Invalid(compatibility::IMAGE_TOO_LARGE));
+            }
             state.replacement_built(image)?;
             store.save(state)?;
             steps.checkpoint(Boundary::Built)?;
@@ -464,6 +474,23 @@ fn drive(steps: &impl Steps, store: &Store, state: &mut Deployment, emit: &dyn F
     }
     request(steps, store, state, emit)?;
     Ok(Driven::Committed)
+}
+
+/// Whether the worker's container disk holds the image built under `tag`
+/// ([`compatibility::holds_image`]), after reporting both sizes.
+fn held(steps: &impl Steps, state: &Deployment, tag: &str, emit: &dyn Fn(Event)) -> Result<bool> {
+    let Some(bytes) = steps.unpacked_bytes(state, tag)? else {
+        return Ok(true);
+    };
+    // Rounded up to a tenth, so an image just over the disk never reads as equal to it.
+    let tenths = bytes.div_ceil(compatibility::BYTES_PER_GB / 10);
+    emit(Event::Output(format!(
+        "The rebuilt image is {}.{} GB unpacked; this cloud's container disk (storage.container_gb) is {} GB",
+        tenths / 10,
+        tenths % 10,
+        state.profile.storage.container_gb
+    )));
+    Ok(compatibility::holds_image(&state.profile, bytes))
 }
 
 /// Journals the update as possibly sent, sends it and commits once the provider reports it.

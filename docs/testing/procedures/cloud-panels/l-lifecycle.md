@@ -572,11 +572,13 @@ Use `smoke-r`.
 
    Result: The marker value and the commit are the same as before the stop.
 
-### 6.11 L11: Rebuild a Hetzner cloud from a profile that names RunPod
+### 6.11 L11: Rebuild a Hetzner cloud whose provider and storage differ from its profile
 
-Use the profile `runpod-build`. It sets `provider: runpod`. This task makes the
-cloud `smoke-hb` on Hetzner, then rebuilds it at the same commit
-([issue #1507](https://github.com/peters/horizon/issues/1507)).
+Use the profile `runpod-build`. It sets `provider: runpod` and 20 GB for the
+container disk and the workspace. This task makes the cloud `smoke-hb` on Hetzner
+with other storage values, then rebuilds it at the same commit
+([issue #1507](https://github.com/peters/horizon/issues/1507),
+[issue #1534](https://github.com/peters/horizon/issues/1534)).
 
 1. Record the commit of `<repo>`.
 
@@ -600,8 +602,11 @@ cloud `smoke-hb` on Hetzner, then rebuilds it at the same commit
    Result: The summary shows a RunPod worker.
 
 5. Click **Hetzner**. Select a Hetzner row with 4 vCPU and 8 GB that is in stock.
+   In **Storage**, set **Workspace size** to 10 GB and **System disk requirement**
+   to 30 GB.
 
-   Result: The summary shows a Hetzner worker.
+   Result: The summary shows a Hetzner worker with a 10 GB workspace and a 30 GB
+   system disk requirement.
 
    > **CAUTION:** THIS STEP RENTS COMPUTE AND PUSHES AN IMAGE TO THE REGISTRY.
    > Record the server and the volume in the resource ledger.
@@ -680,7 +685,8 @@ cloud `smoke-hb` on Hetzner, then rebuilds it at the same commit
 - **Check provider** and `cloud_deploy reconcile` show the same worker ID.
 - After **Cancel rebuild**, no rebuild step waits. A full rebuild reaches **Ready**.
 - `smoke-hb` rebuilds on Hetzner at the same commit, although its profile names
-  RunPod. A changed `idle_stop_minutes` gives a refusal that names the field.
+  RunPod and other storage values. A changed `idle_stop_minutes` gives a refusal
+  that names the field.
 - Idle stop stops `smoke-x` after the profile limit.
 - Deletion removes the resources, and redeploy makes new resources.
 - A Hetzner resume makes a new server. The host key from `/workspace` stays, and

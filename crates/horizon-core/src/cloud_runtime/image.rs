@@ -97,7 +97,7 @@ impl Images<'_> {
         }
         require_docker()?;
         let image = if profile.build.is_some() {
-            format!("{}:{tag}", repository_name(&profile.image))
+            built_reference(profile, tag)
         } else {
             profile.image.clone()
         };
@@ -177,6 +177,26 @@ impl Images<'_> {
             self.validate(&digest, operation_id, profile)?;
         }
         Ok(digest)
+    }
+    /// # Errors
+    /// The unpacked size in bytes of `profile`'s image that a build under `tag` left in
+    /// local Docker, as `docker image inspect` reports it. A profile without a build
+    /// section has no such image.
+    pub fn unpacked_bytes(&self, profile: &Profile, tag: &str) -> Result<u64> {
+        if profile.build.is_none() || !valid_tag(tag) {
+            return Err(Error::Invalid("Only an image built under a valid tag has a local size"));
+        }
+        let image = built_reference(profile, tag);
+        self.runner
+            .run_parsed(
+                "local image size",
+                self.docker()
+                    .args(["image", "inspect", "--format", "{{.Size}}", &image]),
+                Duration::from_secs(30),
+            )?
+            .trim()
+            .parse()
+            .map_err(|_| Error::Invalid("Docker reported no size for the built image"))
     }
     fn resolve(&self, image: &str) -> Result<String> {
         let output = self.runner.run(
@@ -268,6 +288,11 @@ fn valid_tag(tag: &str) -> bool {
             .next()
             .is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_')
         && tag.bytes().all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+}
+
+/// The local tag that a build of `profile` under `tag` gets and pushes.
+fn built_reference(profile: &Profile, tag: &str) -> String {
+    format!("{}:{tag}", repository_name(&profile.image))
 }
 
 fn repository_name(image: &str) -> &str {

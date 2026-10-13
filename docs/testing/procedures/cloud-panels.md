@@ -124,7 +124,7 @@ change in the report as a deviation.
 | `smoke-lib` | Hetzner, CPU, companion repository `<lib>` | None | G01, G03–G10, G12 |
 | `smoke-lib0` | Hetzner, CPU, companion repository `<lib>`, no worker (`smoke-lib1` if a retry is necessary) | None | G08 |
 | `smoke-x` | Hetzner, CPU, image-only, idle stop of 10 minutes | None | L07, L08 |
-| `smoke-hb` | Hetzner, CPU, `runpod-build` with Hetzner chosen in New cloud | None | L11 |
+| `smoke-hb` | Hetzner, CPU, `runpod-build` with Hetzner and other storage chosen in New cloud | None | L11 |
 
 ### 4.3 Rules for each step
 

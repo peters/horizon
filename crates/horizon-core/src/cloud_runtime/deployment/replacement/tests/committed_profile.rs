@@ -37,15 +37,6 @@ fn a_changed_or_missing_committed_profile_refuses_with_its_field_before_anything
             |profile| profile.min_gpu_memory_gb = Some(24),
             "in min_cuda_version or min_gpu_memory_gb.",
         ),
-        (|profile| profile.storage.container_gb = 40, "in storage.container_gb."),
-        (
-            |profile| profile.storage.volume_gb = 40,
-            "storage.volume_gb or another storage.volume_tier",
-        ),
-        (
-            |profile| profile.storage.volume_tier = horizon_cloud::runpod::volumes::Tier::HighPerformance,
-            "storage.volume_gb or another storage.volume_tier",
-        ),
         (|profile| profile.capabilities.desktop = true, "in capabilities."),
         (|profile| profile.image = "registry.example/other".into(), "in image."),
         (
@@ -108,16 +99,7 @@ fn a_cloud_created_on_another_provider_than_the_committed_default_rebuilds_where
 fn a_workspace_grown_after_creation_is_not_a_change() {
     let fixture = Fixture::new();
     let committed = fixture.state().profile;
-    fixture.edit(|state| {
-        state.profile.storage.volume_gb *= 2;
-        state.spec.as_mut().unwrap().profile = state.profile.clone();
-    });
-    // As `storage::growth` records it in the storage journal too.
-    let path = fixture.root.join("workspace-volume.json");
-    let mut journal: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    journal["worker"] = serde_json::to_value(fixture.state().spec).unwrap();
-    journal["spec"]["size"] = json!(fixture.state().profile.storage.volume_gb);
-    std::fs::write(&path, journal.to_string()).unwrap();
+    fixture.bind_storage(|storage| storage.volume_gb *= 2);
     let mut script = Script::new(&fixture);
     script.head.config = Some(config(&committed));
     assert_eq!(rebuild_with(&fixture, &script).unwrap(), Driven::Committed);
