@@ -133,6 +133,9 @@ test('requests that no platform credential can satisfy never post', async () => 
     await assert.rejects(credentials.get({signal: AbortSignal.abort(), publicKey: {challenge,
         allowCredentials: [{type: 'password', id: new Uint8Array([1])}]}}), {name: 'AbortError'});
     assert.equal(posted.length, 0);
+    credentials.create({publicKey: {challenge, rp: {name: 'x'}, user,
+        pubKeyCredParams: [{type: 'public-key', alg: '-7'}, {type: 'public-key', alg: -257.9}]}});
+    assert.deepEqual(posted.pop().options.algorithms, [-7, -257]);
     credentials.get({publicKey: {challenge, allowCredentials: []}});
     credentials.create({publicKey: {challenge, rp: {name: 'x'}, user, pubKeyCredParams,
         authenticatorSelection: {authenticatorAttachment: 'platform'}}});

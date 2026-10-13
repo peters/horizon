@@ -49,10 +49,12 @@
     const text = (value) => (value === undefined || value === null ? undefined : String(value));
     const timeoutOf = (value) =>
         Number.isFinite(value) && value >= 0 ? Math.min(Math.floor(value), 0xffffffff) : undefined;
+    // `alg` is a required WebIDL `long`: missing is a TypeError, and a value
+    // converts like ToInt32 (`1.5` is 1, `"abc"` is 0).
     const algorithmOf = (parameter) => {
-        const alg = Number(parameter.alg);
-        if (!Number.isInteger(alg)) throw new TypeError("pubKeyCredParams[].alg must be an integer");
-        return alg;
+        const alg = parameter.alg;
+        if (alg === undefined) throw new TypeError("pubKeyCredParams[].alg is required");
+        return Number(alg) | 0;
     };
     // Converts every descriptor, as WebIDL does, so a bad id is a TypeError
     // even in an entry of another type; then keeps the public-key ones.
