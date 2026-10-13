@@ -82,16 +82,17 @@ impl<'a> IndexFile<'a> {
         fs::rename(&renamed, self.path)?;
         renamed.disable_cleanup(true);
         writer::sync_folder(self.folder())?;
-        // A Horizon from before this lock can still rename its index over this one.
+        // A Horizon from before this lock can still rename its index over this one, so the
+        // file read must be the one written, and the path must still name it after the read.
         let mut named = fs::File::open(self.path)?;
-        if !writer::same_file(&written, &named.metadata()?) {
+        let mut contents = String::new();
+        named.read_to_string(&mut contents)?;
+        if !writer::same_file(&written, &named.metadata()?) || !writer::same_file(&written, &fs::metadata(self.path)?) {
             return Err(Error::State(format!(
                 "another program replaced {} while Horizon wrote it",
                 self.path.display()
             )));
         }
-        let mut contents = String::new();
-        named.read_to_string(&mut contents)?;
         parse(&contents)
     }
 
