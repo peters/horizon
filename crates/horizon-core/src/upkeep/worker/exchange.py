@@ -124,13 +124,16 @@ def create(parent, name):
 
 
 def install(payload, upkeep):
-    """Writes the loop, its settings and the session binding. Returns whether the loop's own
-    files changed."""
+    """Writes the loop, its settings and the session binding. A new loop is marked as being
+    installed first, so an exchange that stops midway leaves the mark for the next one."""
     session = payload['session']
     write(upkeep, 'config.json', json.dumps(payload['config'], indent=1))
     write(upkeep, 'prompt.md', payload['prompt'])
-    changed = write(upkeep, 'run.sh', payload['run'], 0o700)
-    changed = write(upkeep, 'run.py', payload['scheduler']) or changed
+    if (read(upkeep, 'run.sh', len(payload['run'].encode()) + 1) != payload['run'].encode()
+            or read(upkeep, 'run.py', len(payload['scheduler'].encode()) + 1) != payload['scheduler'].encode()):
+        write(upkeep, 'installing', '')
+    write(upkeep, 'run.sh', payload['run'], 0o700)
+    write(upkeep, 'run.py', payload['scheduler'])
     # The binding that makes the session a Codex session to the worker's services: its
     # processes may ask for GitHub access and open browser panels for this cloud.
     sessions = owned_folder(SESSIONS)
@@ -150,7 +153,6 @@ def install(payload, upkeep):
         os.close(folder(data, session))
     finally:
         os.close(data)
-    return changed
 
 
 def remove(parent, name):
@@ -257,12 +259,13 @@ def exchange(payload):
     try:
         upkeep = folder(home, FOLDER)
         try:
-            changed = install(payload, upkeep)
+            install(payload, upkeep)
             signal(payload, upkeep)
             # Last, after every file is in place: a running loop starts the new one between two
             # runs, and only ever sees a complete install.
-            if changed:
+            if read(upkeep, 'installing', 0) is not None:
                 write(upkeep, 'restart', '')
+                remove(upkeep, 'installing')
             loop, settled = keep_loop(session, HOME + '/' + FOLDER)
             return report(upkeep, loop, settled)
         finally:

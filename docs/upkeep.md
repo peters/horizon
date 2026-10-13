@@ -126,9 +126,12 @@ started also starts agents for the repositories that did not change.
   occur. **Run now** has no effect while the schedule stops or while a run
   continues.
 - When the schedule changes, the loop calculates the next run again.
-- When an exchange installed a new loop, it writes the restart signal after all
-  other files. The loop starts the new loop before it starts the next run. A run
-  that was due, or **Run now**, stays for the new loop.
+- Before an exchange writes a new loop, it writes an installing signal. After
+  all other files, it replaces that signal with the restart signal. When an
+  exchange stops before the end, the next exchange completes the change. The loop
+  starts the new loop before it starts the next run, and never while the
+  installing signal is there. A run that was due, or **Run now**, stays for the
+  new loop.
 - When the loop starts, it records a run that did not end (for example, because
   the loop was stopped) as failed.
 - The loop keeps the last 1 MiB of an agent log that grew to more than 8 MiB.

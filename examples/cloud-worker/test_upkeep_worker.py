@@ -71,7 +71,18 @@ class ExchangeTests(unittest.TestCase):
         self.assertFalse((self.worker.upkeep / 'restart').exists())
         self.worker.exchange(payload(scheduler='print(2)\n'))
         self.assertTrue((self.worker.upkeep / 'restart').is_file())
+        self.assertFalse((self.worker.upkeep / 'installing').exists())
         self.assertEqual((self.worker.upkeep / 'run.py').read_text(), 'print(2)\n')
+        # An exchange that stopped after the new loop was written: the next one still asks for
+        # the restart, although the files are already the same.
+        (self.worker.upkeep / 'restart').unlink()
+        with mock.patch.dict(EXCHANGE['exchange'].__globals__, signal=mock.Mock(side_effect=OSError())):
+            with self.assertRaises(OSError):
+                self.worker.exchange(payload(scheduler='print(3)\n'))
+        self.assertTrue((self.worker.upkeep / 'installing').is_file())
+        self.worker.exchange(payload(scheduler='print(3)\n'))
+        self.assertTrue((self.worker.upkeep / 'restart').is_file())
+        self.assertFalse((self.worker.upkeep / 'installing').exists())
 
     def test_installs_the_loop_and_binding_and_starts_the_session(self):
         answer = self.worker.exchange(payload(run_now=True))

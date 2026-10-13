@@ -572,7 +572,7 @@ def main():
     try:
         with open(DIR + '/next-run') as handle:
             earlier = int(handle.read().strip())
-        if upcoming - minutes * 60 <= earlier < upcoming:
+        if upcoming - minutes * 60 <= earlier <= time.time() and earlier % (minutes * 60) == 0:
             upcoming = earlier
     except (OSError, ValueError):
         pass
@@ -581,7 +581,7 @@ def main():
     while True:
         # The exchange asks for a restart after it installed a complete new loop. Here, at the
         # top, no run is going, and a due run or Run now is left for the new loop.
-        if os.path.exists(DIR + '/restart'):
+        if os.path.exists(DIR + '/restart') and not os.path.exists(DIR + '/installing'):
             os.remove(DIR + '/restart')
             print('\nAn exchange installed a new loop; starting it.', flush=True)
             os.execv('/bin/bash', ['/bin/bash', '--noprofile', '--norc', DIR + '/run.sh', *sys.argv[1:]])
