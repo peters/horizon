@@ -9,7 +9,7 @@ use horizon_cloud::{Capabilities, Profile};
 // to put here; docs/release-flow.md describes the update, which also updates CONTRACT.
 macro_rules! image {
     () => {
-        "ghcr.io/peters/horizon-worker-base@sha256:5d831ab73cc11575080ededaca851480fc9539c13916fd9c19e36903962526d8"
+        "ghcr.io/peters/horizon-worker-base@sha256:6550aacb6c60187cd346a795beb3c8bffd998fe9b95ec74f5fb844cf78870bdc"
     };
 }
 
@@ -45,6 +45,7 @@ horizon-capabilities-contract=1
 horizon-session-restart-contract=1
 horizon-shared-checkout-contract=1
 horizon-prepare-checkout-contract=1
+horizon-agent-approvals-contract=1
 ";
 
 /// The worker check report Horizon uses for `image` with `capabilities` instead of a
