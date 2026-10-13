@@ -58,9 +58,25 @@
     };
     // Converts every descriptor, as WebIDL does, so a bad id is a TypeError
     // even in an entry of another type; then keeps the public-key ones.
-    const credentialIds = (list) => {
-        const descriptors = Array.from(list || []);
-        const ids = descriptors.map((entry) => ({ type: entry && entry.type, id: encode(entry && entry.id) }));
+    // A WebIDL sequence: `undefined` is an omitted member, anything that is
+    // not iterable (`null` included) is a TypeError.
+    const sequenceOf = (value, name) => {
+        if (value === undefined) return [];
+        if (value === null || typeof value[Symbol.iterator] !== "function") {
+            throw new TypeError(`${name} must be a sequence`);
+        }
+        return Array.from(value);
+    };
+    // A dictionary entry with a required `type` member.
+    const typeOf = (entry, name) => {
+        if (entry === null || typeof entry !== "object" || entry.type === undefined) {
+            throw new TypeError(`${name} entries need a type`);
+        }
+        return String(entry.type);
+    };
+    const credentialIds = (list, name) => {
+        const descriptors = sequenceOf(list, name);
+        const ids = descriptors.map((entry) => ({ type: typeOf(entry, name), id: encode(entry.id) }));
         return { offered: descriptors.length, ids: ids.filter((entry) => entry.type === "public-key").map((entry) => entry.id) };
     };
     const failure = (name, message) =>
@@ -71,7 +87,7 @@
     // The caller checks the abort signal between the two.
     const getOptions = (publicKey) => {
         const challenge = challengeOf(publicKey.challenge);
-        const allowed = credentialIds(publicKey.allowCredentials);
+        const allowed = credentialIds(publicKey.allowCredentials, "allowCredentials");
         return {
             options: {
                 challenge,
@@ -96,14 +112,14 @@
         const selection = publicKey.authenticatorSelection || {};
         const challenge = challengeOf(publicKey.challenge);
         const userId = encode(user.id);
-        const parameters = Array.from(publicKey.pubKeyCredParams);
+        const parameters = sequenceOf(publicKey.pubKeyCredParams, "pubKeyCredParams");
         // Every entry is converted, so a missing or bad alg is a TypeError
         // whatever its type; then only public-key entries are kept.
         const algorithms = parameters
-            .map((parameter) => ({ type: parameter.type, alg: algorithmOf(parameter) }))
+            .map((parameter) => ({ type: typeOf(parameter, "pubKeyCredParams"), alg: algorithmOf(parameter) }))
             .filter((parameter) => parameter.type === "public-key")
             .map((parameter) => parameter.alg);
-        const excluded = credentialIds(publicKey.excludeCredentials);
+        const excluded = credentialIds(publicKey.excludeCredentials, "excludeCredentials");
         let refusal = null;
         if (parameters.length && !algorithms.length) {
             // An empty list asks for the defaults; a list of only unknown
