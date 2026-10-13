@@ -15,6 +15,8 @@ use crate::theme;
 pub(in crate::app) enum Glyph {
     Cloud,
     Screen,
+    /// Two arrows in a circle: something that runs again and again.
+    Loop,
 }
 
 const TILE: f32 = 30.0;
@@ -158,6 +160,7 @@ pub(in crate::app) fn paint(painter: &Painter, glyph: Glyph, center: Pos2, ink: 
     match glyph {
         Glyph::Cloud => cloud(painter, center, ink),
         Glyph::Screen => screen(painter, center, ink),
+        Glyph::Loop => looping(painter, center, ink),
     }
 }
 
@@ -206,6 +209,23 @@ fn screen(painter: &Painter, center: Pos2, ink: Color32) {
         ],
         Stroke::new(1.4, ink),
     );
+}
+
+fn looping(painter: &Painter, center: Pos2, ink: Color32) {
+    let radius = 5.5;
+    for (from, to) in [(PI * 0.15, PI * 0.95), (PI * 1.15, PI * 1.95)] {
+        let mut points = Vec::new();
+        arc(&mut points, center, radius, from, to);
+        let tip = points.last().copied().unwrap_or(center);
+        painter.add(Shape::line(points, Stroke::new(1.4, ink)));
+        // The head points along the circle at the end of the arc.
+        let along = Vec2::new(-to.sin(), to.cos());
+        let out = Vec2::new(to.cos(), to.sin());
+        painter.add(Shape::line(
+            vec![tip - along * 3.0 + out * 2.2, tip, tip - along * 3.0 - out * 2.2],
+            Stroke::new(1.4, ink),
+        ));
+    }
 }
 
 #[cfg(test)]

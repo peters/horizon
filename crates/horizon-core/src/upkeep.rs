@@ -12,9 +12,14 @@ use serde::Deserialize;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+#[cfg(feature = "cloud-workspaces")]
+mod discover;
 mod reader;
 #[cfg(feature = "cloud-workspaces")]
 pub mod worker;
+
+#[cfg(feature = "cloud-workspaces")]
+pub use discover::{Catalog, CatalogRepository, discover};
 
 /// The time crate, so panels that show these times need no dependency of their own.
 pub use ::time;

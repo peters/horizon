@@ -299,6 +299,7 @@ pub struct HorizonApp {
     config_path: PathBuf,
     transcript_root: Option<PathBuf>,
     template_config: Config,
+    upkeep: upkeep::State,
     shortcuts: AppShortcuts,
     presets: Vec<PresetConfig>,
     window_config: WindowConfig,
@@ -436,6 +437,8 @@ impl HorizonApp {
             }
         }
         self.render_active_view(ui, block_root_interaction);
+        #[cfg(feature = "cloud-workspaces")]
+        self.render_upkeep_dialog(ctx);
         self.apply_upkeep_requests(ctx);
         if block_root_interaction {
             Self::render_root_viewport_stabilizing_overlay(ctx);

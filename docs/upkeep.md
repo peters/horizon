@@ -46,6 +46,67 @@ workspaces:
     command: /path/to/status.json
 ```
 
+## New Upkeep
+
+**New workspace** in the toolbar shows **Upkeep** under **Templates**. The row is
+available when cloud workspaces are ready. It opens the **New Upkeep** dialog:
+
+- **Repositories**: one tab for each owner, a filter, and one row for each
+  repository. Each row shows the open pull requests of the selected bots. By
+  default, the list shows only the repositories with open pull requests.
+- **Bots**: Dependabot and Renovate. A change of bots counts the pull requests
+  again.
+- **Schedule**: every hour, every 4 hours or once a day.
+- **Checkouts**: how the worker gets the code. **Only when needed** is the default.
+- **Instructions**: the text that each run starts from. **Reset to default** puts
+  back the default text.
+- **Summary**: the number of repositories, the open pull requests, and a warning
+  when Codex has no login to give to the worker.
+
+Horizon gets the repositories from GitHub with the GitHub sign-in of Cloud
+settings. The list has only the repositories that the GitHub App can reach. The
+pull request counts come from a GitHub search, on a separate thread. When the
+search fails, the list shows the repositories without counts, a yellow line with the
+cause, and **Try again**.
+
+**Start Upkeep** does these steps:
+
+1. It uses the checkout of the first repository in `<owner>/<name>` of the folder
+   for clones: `~/github` or another code folder in the home folder when it exists,
+   else `~/Horizon`. When the checkout is not there, it clones the repository with
+   the GitHub sign-in. The dialog shows **Starting Upkeep...** until the clone is
+   complete. The clone of a large repository can take minutes. **Cancel** closes
+   the dialog, but the start continues. When the start fails, the dialog shows
+   again with the cause.
+2. It saves the choice in `~/.horizon/upkeep/<cloud>/upkeep.json`.
+3. It makes the workspace **Upkeep** with the cloud card and the board.
+4. It starts a quick-start cloud on Hetzner. The cloud has no idle stop, because
+   the loop must run while this computer sleeps. The first exchange with the
+   worker sends **Run now**, so the first run starts when the loop is installed.
+
+**Start Upkeep** is unavailable until Codex has a login to give to the worker: the
+ChatGPT sign-in or an OpenAI API key in Cloud settings.
+
+Upkeep needs a saved session, a Hetzner project in Cloud settings and a GitHub
+sign-in. The dialog shows the cause when a step fails, and keeps the choice.
+
+## Horizon and the worker
+
+While Horizon runs, it does one exchange with the worker of each ready Upkeep
+cloud every 30 seconds, and every 8 seconds while a run continues. Each exchange
+runs on a separate thread and does these steps:
+
+1. It reads the GitHub access requests on the worker. It allows the requests of
+   the loop, as the section
+   [Trust boundary of the loop's GitHub access](#trust-boundary-of-the-loops-github-access)
+   describes. The cloud card shows all other requests to the person.
+2. It does the exchange of the section [The worker loop](#the-worker-loop).
+3. It writes the status document of the board to
+   `~/.horizon/upkeep/<cloud>/status.json`.
+
+After the loop runs and survived its start, Horizon opens the panel
+**Upkeep agent**. This Codex panel shows the tmux session of the loop.
+
 ## Trust boundary of the status document
 
 The agent on the worker writes the status document. Horizon copies it to this
@@ -95,8 +156,9 @@ agent can make errors. Check a merge on GitHub before you act on it.
 
 Horizon keeps the Upkeep loop on the cloud worker with an exchange. An exchange is
 one SSH command. The code is in `crates/horizon-core/src/upkeep/worker.rs` and
-`crates/horizon-core/src/upkeep/worker/`. No part of the Horizon window starts an
-exchange yet. The exchange does these steps:
+`crates/horizon-core/src/upkeep/worker/`. The section
+[Horizon and the worker](#horizon-and-the-worker) tells when Horizon starts an
+exchange. The exchange does these steps:
 
 1. It writes the loop (`run.sh` and `run.py`), the settings without the
    instructions (`config.json`) and the agent instructions (`prompt.md`) to
@@ -231,3 +293,45 @@ The exchange and the loop do not guarantee these items:
 - They do not make the status true. The board treats it as untrusted input, as
   the section [Trust boundary of the status document](#trust-boundary-of-the-status-document)
   describes.
+
+## Trust boundary of the loop's GitHub access
+
+The agents of the loop ask for GitHub access with the `github_access` tool, as
+other agents on a worker do. The worker records each request with the session of
+the agent. Horizon reads the requests on the worker. A request is untrusted input:
+an agent on the worker can write its reason, and an agent in another session of
+the cloud can ask too.
+
+Horizon allows a request without the person only when all of these are true:
+
+- The request comes from the session `upkeep-<cloud>` of the loop.
+- The request asks for read or push access.
+- The repository is in the list of the Upkeep, with no difference other than
+  the case of letters.
+- The worker can allow the request for that session only (`task` is true).
+
+Horizon then allows the request for that session only (**Allow for this task**).
+The cloud card shows every other request, and the person decides it.
+
+Horizon guarantees these items:
+
+- It never allows admin access, and never access for the whole cloud.
+- It never allows a repository that is not in the list.
+
+Horizon and the worker do not guarantee these items:
+
+- They do not isolate the sessions of the cloud. All agent sessions of a worker
+  run as the same account, so an agent in another session can act in the session
+  of the loop and use its access. Use the Upkeep cloud only for the Upkeep.
+- An agent with push access can push to the branches of the repository. The
+  repository rules on GitHub, such as branch protection, still apply.
+
+## Trust boundary of New Upkeep
+
+The repository names come from the GitHub API through the sign-in of the person.
+Horizon accepts only plain `owner/name` names and refuses the whole answer when a
+name is not valid. The counts of open pull requests can be too low: GitHub search
+gives at most 1,000 results. They only put the list in order.
+
+The settings that **Start Upkeep** saves pass the checks of the worker loop
+(`Config::validate`) before Horizon saves them or sends them to a worker.

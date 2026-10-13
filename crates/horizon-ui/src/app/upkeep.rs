@@ -1,12 +1,103 @@
-//! Carries out what Upkeep boards ask for while they are drawn.
+//! Upkeep in the app: the New Upkeep dialog, and what Upkeep boards ask for while they
+//! are drawn.
 use egui::Context;
 use horizon_core::upkeep::Request;
 use horizon_core::{PanelId, PanelKind, PanelOptions};
 
 use super::HorizonApp;
 
+#[cfg(feature = "cloud-workspaces")]
+mod dialog;
+#[cfg(feature = "cloud-workspaces")]
+pub(super) mod form;
+#[cfg(feature = "cloud-workspaces")]
+mod repositories;
+#[cfg(feature = "cloud-workspaces")]
+mod state;
+
+#[cfg(feature = "cloud-workspaces")]
+pub(super) use state::{Answer, Prepared, Preparing, Saved, State};
+
+/// Without cloud workspaces there is no Upkeep to keep.
+#[cfg(not(feature = "cloud-workspaces"))]
+#[derive(Default)]
+pub(super) struct State;
+
 /// The title of the browser panel that shows pull requests beside a board.
 const PULL_REQUEST_PANEL: &str = "Pull request";
+
+/// What other parts of the app call. They live here so they stay in one place.
+#[cfg(feature = "cloud-workspaces")]
+impl HorizonApp {
+    /// The folder of this computer's cloud settings, once cloud workspaces are ready.
+    pub(super) fn upkeep_root(&self) -> Option<std::path::PathBuf> {
+        self.ready_cloud_root()
+    }
+}
+
+#[cfg(feature = "cloud-workspaces")]
+impl HorizonApp {
+    /// Opens New Upkeep and starts the search for repositories.
+    pub(super) fn open_upkeep_dialog(&mut self, ctx: &Context) {
+        // A start under way shows again, rather than a second dialog.
+        if let Some(form) = self.upkeep.form.as_mut() {
+            form.hidden = false;
+            return;
+        }
+        let mut form = form::Form::default();
+        if let Some(root) = self.upkeep_root() {
+            form.find(root, ctx);
+        }
+        self.upkeep.form = Some(form);
+    }
+
+    pub(super) fn render_upkeep_dialog(&mut self, ctx: &Context) {
+        let Some(form) = self.upkeep.form.as_mut() else {
+            return;
+        };
+        form.receive();
+        // The counts are those of the chosen bots: another choice searches again.
+        if form.stale()
+            && let Some(root) = self.upkeep_root()
+            && let Some(form) = self.upkeep.form.as_mut()
+        {
+            form.find(root, ctx);
+        }
+        let Some(form) = self.upkeep.form.as_mut().filter(|form| !form.hidden) else {
+            return;
+        };
+        match dialog::show(ctx, form) {
+            dialog::Outcome::Open => {}
+            // A start under way goes on: its cloud appears when its repository is ready,
+            // and the dialog shows again if it fails.
+            dialog::Outcome::Cancel if form.starting => form.hidden = true,
+            dialog::Outcome::Cancel => self.upkeep.form = None,
+            dialog::Outcome::Start => {
+                let (config, workspace) = (form.config(), form.workspace);
+                form.error = None;
+                form.starting = true;
+                if let Err(error) = self.start_upkeep(ctx, workspace, config) {
+                    self.upkeep_started(Err(error));
+                }
+            }
+        }
+    }
+
+    /// Closes New Upkeep after its cloud was added, or shows why the start failed.
+    pub(super) fn upkeep_started(&mut self, result: Result<(), String>) {
+        match result {
+            Ok(()) => self.upkeep.form = None,
+            Err(error) => {
+                tracing::warn!(%error, "Upkeep did not start");
+                if let Some(form) = self.upkeep.form.as_mut() {
+                    form.starting = false;
+                    form.hidden = false;
+                    form.error = Some(error);
+                }
+            }
+        }
+    }
+}
 
 impl HorizonApp {
     /// Carries out what Upkeep boards asked for while they were drawn.

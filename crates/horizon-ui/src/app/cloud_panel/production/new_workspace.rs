@@ -223,6 +223,7 @@ mod choice;
 pub(super) mod machine;
 #[cfg(test)]
 mod tests;
+mod upkeep;
 
 impl HorizonApp {
     /// Keeps `placement` for the dialog's repository when the person asked for it, before
