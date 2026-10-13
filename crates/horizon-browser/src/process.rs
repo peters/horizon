@@ -1,6 +1,8 @@
 //! Headless Chrome lifecycle: binary discovery, spawn, ws-url capture, kill.
 
 mod control;
+#[cfg(target_os = "linux")]
+mod locale;
 
 #[cfg(any(windows, test))]
 use std::ffi::OsString;
@@ -355,6 +357,8 @@ pub(super) fn spawn_process(command: Command) -> std::io::Result<ProcessChild> {
     #[cfg(not(windows))]
     {
         let mut command = command;
+        #[cfg(target_os = "linux")]
+        locale::apply(&mut command);
         command.spawn()
     }
 }
