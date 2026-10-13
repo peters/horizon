@@ -221,6 +221,8 @@ applies the origin rules, and that the panel shows a waiting request.
    - `http://127.0.0.1` gets `SecurityError`.
    - A foreign `rpId` gets `SecurityError`.
    - Conditional mediation on `get` and `create` stays pending until an abort.
+   - An unknown `residentKey` with `requireResidentKey: true` gives the command
+     `resident_key: "required"`.
    - An options getter that aborts the signal gets `AbortError`.
    - A navigation that stops before it commits (a `204` answer) kills the
      command, and the page gets `NotAllowedError`.

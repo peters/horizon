@@ -158,6 +158,12 @@ stdout. All binary values are base64url without padding.
 | `exclude_credentials` | create | The credential IDs that must not exist |
 | `resident_key` | create | `"discouraged"`, `"preferred"` or `"required"` |
 
+The page options `userVerification` and `residentKey` are strings, not
+fixed lists. The WebAuthn specification tells clients to ignore an unknown
+value. The bridge does the same: an unknown `userVerification` becomes
+`"preferred"`, and an unknown `residentKey` becomes `"required"` when
+`requireResidentKey` is `true`, or `"discouraged"` when it is not.
+
 ### Output
 
 A successful `get`:
@@ -217,6 +223,9 @@ The page gets an object with the `PublicKeyCredential` prototype. It has
 
 - Unit tests in `crates/horizon-browser/src/webauthn/` cover the origin rules,
   the command contract and the process lifecycle.
+- `scripts/browser-smoke/webauthn_page.test.cjs` runs the page script in
+  Node.js in CI. It covers conditional mediation, abort, option bounds, the
+  unknown-value rule and the credential shape.
 - `crates/horizon-browser/tests/webauthn_live.rs` runs a local relying party
   and a fake authenticator with a test P-256 key in Chromium and Firefox. It
   runs only with `--ignored`.
