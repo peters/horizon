@@ -137,16 +137,36 @@ def freeze(binary, state):
     return frozen, digest, method
 
 
-def end_group(process, timeout=5):
-    if process.poll() is None:
+def group_alive(group):
+    """Whether a process of `group` is left that is not a zombie."""
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit():
+            continue
         try:
-            os.killpg(process.pid, signal.SIGTERM)
-            process.wait(timeout)
-        except subprocess.TimeoutExpired:
+            fields = (entry / 'stat').read_text().rsplit(')', 1)[1].split()
+        except (OSError, IndexError):
+            continue
+        if fields[0] != 'Z' and int(fields[2]) == group:
+            return True
+    return False
+
+
+def end_group(process, timeout=5):
+    """End the process and whatever is left in its group, also after the leader exited."""
+    deadline = time.monotonic() + timeout
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    while group_alive(process.pid) and time.monotonic() < deadline:
+        process.poll()
+        time.sleep(0.1)
+    if group_alive(process.pid):
+        try:
             os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
         except ProcessLookupError:
-            process.wait()
+            pass
+    process.wait()
 
 
 def stop(process, display):
@@ -170,8 +190,8 @@ def wait_for_window(process, display, timeout):
         try:
             if x11_windows.windows_of(display, process.pid):
                 return True
-        except OSError:
-            return False
+        except OSError as error:
+            raise RuntimeError(f'Cannot read the windows of {display}: {error}') from error
         time.sleep(0.5)
     return False
 

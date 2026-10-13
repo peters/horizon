@@ -179,11 +179,35 @@ class FreezeAndStopTests(unittest.TestCase):
             arguments = ['--horizon', str(binary), '--state', str(Path(raw) / 'state'),
                          '--display', ':4242', '--window-timeout', '1']
             with mock.patch.object(worker_desktop.subprocess, 'Popen', side_effect=popen), \
-                    mock.patch.object(worker_desktop, 'sha256', return_value='same'):
+                    mock.patch.object(worker_desktop, 'sha256', return_value='same'), \
+                    mock.patch.object(worker_desktop.x11_windows, 'windows_of', return_value=[]), \
+                    mock.patch.object(worker_desktop.x11_windows, 'request_close', return_value=0):
                 with self.assertRaisesRegex(RuntimeError, 'No window of Horizon'):
                     worker_desktop.main(arguments)
             self.assertFalse((Path(raw) / 'state' / 'worker-desktop.json').exists(), 'no manifest')
         self.assertIsNotNone(started[0].poll(), 'the launcher stopped the candidate')
+
+    def test_an_unreadable_display_is_named(self):
+        process = subprocess.Popen(['sleep', '60'], start_new_session=True)
+        self.addCleanup(worker_desktop.end_group, process)
+        with mock.patch.object(worker_desktop.x11_windows, 'windows_of', side_effect=OSError('cannot open display')):
+            with self.assertRaisesRegex(RuntimeError, 'Cannot read the windows of :4242: cannot open display'):
+                worker_desktop.wait_for_window(process, ':4242', 5)
+
+    def test_stop_ends_what_is_left_after_the_leader_exited(self):
+        process = subprocess.Popen(['sh', '-c', 'sleep 60 & echo $!'], stdout=subprocess.PIPE, text=True,
+                                   start_new_session=True)
+        child = int(process.stdout.readline())
+        process.stdout.close()
+        process.wait(5)
+        self.assertTrue(worker_desktop.group_alive(process.pid), 'the child outlives its leader')
+        worker_desktop.stop(process, ':4242')
+        self.assertFalse(worker_desktop.group_alive(process.pid))
+        try:
+            state = Path(f'/proc/{child}/stat').read_text().rsplit(')', 1)[1].split()[0]
+        except FileNotFoundError:
+            state = 'gone'
+        self.assertIn(state, ('Z', 'gone'), 'only its new parent can reap the ended child')
 
     def test_stop_ends_a_process_that_has_no_window(self):
         process = subprocess.Popen(['sleep', '60'], start_new_session=True)

@@ -201,7 +201,9 @@ These names apply in the steps:
 ### 6.8 W08: Make sure that a launch writes nothing in the home
 
 The browser probe of W03 changes `/workspace/home/.horizon` itself. For this
-reason, this task starts the frozen binary again after the probe stopped.
+reason, this task starts the frozen binary again after the probe stopped. Do
+not use other panels or agents of the cloud during this task, because they can
+also write in `/workspace/home`.
 
 1. Record the worker home.
 
