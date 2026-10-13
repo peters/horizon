@@ -20,6 +20,8 @@ fn load_revision(path: &Path, revision: &str) -> super::super::super::Result<Pre
     super::super::prepare_with_configuration(path.to_str().unwrap(), revision, Configuration::WorkingCopy, &runner)
 }
 
+const PATH: &str = ".horizon/cloud.yml";
+
 fn write(path: &Path, yaml: &str) {
     std::fs::write(path.join(PATH), yaml).unwrap();
 }
@@ -102,6 +104,23 @@ fn a_linked_working_copy_is_not_read() {
     let prepared = load(temp.path()).unwrap();
     assert_eq!(prepared.config.profiles["dev"].cpu, 4);
     assert_eq!(prepared.notes, [INVALID]);
+    // A linked folder is not followed either, and a pipe is not waited on.
+    std::fs::remove_file(temp.path().join(PATH)).unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    std::fs::write(folder.path().join("cloud.yml"), CONFIG.replace("cpu: 4", "cpu: 32")).unwrap();
+    std::fs::remove_dir(temp.path().join(".horizon")).unwrap();
+    std::os::unix::fs::symlink(folder.path(), temp.path().join(".horizon")).unwrap();
+    assert_eq!(load(temp.path()).unwrap().notes, [INVALID]);
+    std::fs::remove_file(temp.path().join(".horizon")).unwrap();
+    std::fs::create_dir(temp.path().join(".horizon")).unwrap();
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(temp.path().join(PATH))
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert_eq!(load(temp.path()).unwrap().notes, [INVALID], "a pipe is refused at once");
 }
 
 #[test]

@@ -320,9 +320,18 @@ fn apply(form: &mut super::Production, loaded: Loaded, quiet: bool) {
         form.placement = Placement::default();
         form.provider = None;
     }
+    let profile = prepared.config.profiles.get(&form.selected_profile);
+    // A provider chosen for the profile as it was, such as Hetzner for a profile that now
+    // asks for a GPU, goes with its place.
+    if form
+        .provider
+        .is_some_and(|chosen| profile.is_none_or(|profile| !chosen.supports(profile)))
+    {
+        form.provider = None;
+        form.placement = Placement::default();
+    }
     // A reread profile keeps a chosen size only while the chosen provider
     // still offers it.
-    let profile = prepared.config.profiles.get(&form.selected_profile);
     form.size = form.size.filter(|&size| {
         profile.is_some_and(|profile| {
             let provider = super::creation::provider::current(form.provider, profile);
@@ -608,6 +617,30 @@ mod tests {
         app.cloud_prototype.production.size = Some((16, 32));
         app.open_workspace_cloud(&ctx, workspace);
         assert_eq!(app.cloud_prototype.production.size, None);
+    }
+
+    #[test]
+    fn a_reread_drops_a_provider_that_no_longer_supports_the_profile() {
+        let (temp, mut app) = test_app();
+        let ctx = Context::default();
+        let reread = |app: &mut HorizonApp, gpu: bool| {
+            let (sender, receiver) = channel();
+            app.cloud_prototype.production.launch.receiver = Some(receiver);
+            let mut result = loaded(temp.path());
+            result.prepared.config.profiles.get_mut("dev").unwrap().gpu = gpu;
+            sender.send(Ok(result)).unwrap();
+            app.poll_cloud_launch(&ctx);
+        };
+        reread(&mut app, false);
+        let form = &mut app.cloud_prototype.production;
+        form.provider = Some(&horizon_core::cloud_runtime::provider::HETZNER);
+        form.placement.data_centers = vec!["hel1".into()];
+        reread(&mut app, false);
+        assert!(app.cloud_prototype.production.provider.is_some(), "still supported");
+        reread(&mut app, true);
+        let form = &app.cloud_prototype.production;
+        assert!(form.provider.is_none(), "Hetzner has no GPU workers");
+        assert!(form.placement.data_centers.is_empty());
     }
 
     #[test]

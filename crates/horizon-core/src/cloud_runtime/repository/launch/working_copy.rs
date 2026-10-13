@@ -14,7 +14,8 @@ use std::{
 };
 
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
-const PATH: &str = ".horizon/cloud.yml";
+const FOLDER: &str = ".horizon";
+const FILE: &str = "cloud.yml";
 
 const MISSING: &str = "The working copy has no .horizon/cloud.yml, so the committed settings apply.";
 const INVALID: &str = "The working copy of .horizon/cloud.yml is not valid, so the committed settings apply.";
@@ -37,7 +38,7 @@ pub(super) fn apply(
     runner: &Runner<'_>,
 ) -> super::super::Result<(CloudConfig, Vec<String>)> {
     runner.cancel.check()?;
-    let file = match contents(&repository.join(PATH)) {
+    let file = match contents(repository) {
         None => WorkingFile::Missing,
         Some(Ok(yaml)) => CloudConfig::parse(&yaml).map_or(WorkingFile::Invalid, WorkingFile::Valid),
         Some(Err(())) => WorkingFile::Invalid,
@@ -165,17 +166,23 @@ fn unoffered_note(names: &[String]) -> String {
     }
 }
 
-/// The text of a regular file of at most 1 MiB at `path`; `None` when there is no file.
-fn contents(path: &Path) -> Option<Result<String, ()>> {
-    match std::fs::symlink_metadata(path) {
+/// The text of `.horizon/cloud.yml` in `repository`, a regular file of at most 1 MiB;
+/// `None` when there is no such file. A setup agent or an editor can swap the file or its
+/// folder while Horizon reads, so both are opened without following a link and the file
+/// without waiting on a pipe, and the opened handle is checked, not the path.
+fn contents(repository: &Path) -> Option<Result<String, ()>> {
+    let file = match open(repository) {
+        Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
-        Ok(metadata) if !metadata.is_file() => return Some(Err(())),
-        _ => {}
-    }
+        Err(_) => return Some(Err(())),
+    };
     let read = || {
+        if !file.metadata().map_err(|_| ())?.is_file() {
+            return Err(());
+        }
         let mut yaml = String::new();
-        File::open(path)
-            .and_then(|file| file.take(MAX_CONFIG_BYTES + 1).read_to_string(&mut yaml))
+        file.take(MAX_CONFIG_BYTES + 1)
+            .read_to_string(&mut yaml)
             .map_err(|_| ())?;
         if yaml.len() as u64 > MAX_CONFIG_BYTES {
             return Err(());
@@ -183,6 +190,35 @@ fn contents(path: &Path) -> Option<Result<String, ()>> {
         Ok(yaml)
     };
     Some(read())
+}
+
+#[cfg(unix)]
+fn open(repository: &Path) -> std::io::Result<File> {
+    use rustix::fs::{Mode, OFlags};
+    let folder = rustix::fs::open(
+        repository.join(FOLDER),
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    let file = rustix::fs::openat(
+        &folder,
+        FILE,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    Ok(File::from(file))
+}
+
+#[cfg(not(unix))]
+fn open(repository: &Path) -> std::io::Result<File> {
+    let folder = repository.join(FOLDER);
+    let path = folder.join(FILE);
+    for part in [&folder, &path] {
+        if std::fs::symlink_metadata(part)?.file_type().is_symlink() {
+            return Err(std::io::Error::other("is a link"));
+        }
+    }
+    File::open(path)
 }
 
 /// What New cloud's settings depend on besides the typed revision: the checked-out commit
@@ -216,7 +252,7 @@ pub fn fingerprint(directory: &str, cancel: &Cancellation) -> Fingerprint {
     let Some(root) = lines.next() else {
         return Fingerprint::default();
     };
-    let file = contents(&Path::new(root).join(PATH)).map(|text| {
+    let file = contents(Path::new(root)).map(|text| {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         text.hash(&mut hasher);
         hasher.finish()
