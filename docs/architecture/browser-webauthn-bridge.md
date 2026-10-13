@@ -158,6 +158,10 @@ stdout. All binary values are base64url without padding.
 | `exclude_credentials` | create | The credential IDs that must not exist |
 | `resident_key` | create | `"discouraged"`, `"preferred"` or `"required"` |
 
+The page script refuses a `create` without `rp.name`, `user.name`,
+`user.displayName` or `pubKeyCredParams` with a `TypeError`, as a browser
+does. These members are required in the WebAuthn options.
+
 The page options `userVerification` and `residentKey` are strings, not
 fixed lists. The WebAuthn specification tells clients to ignore an unknown
 value. The bridge does the same: an unknown `userVerification` becomes

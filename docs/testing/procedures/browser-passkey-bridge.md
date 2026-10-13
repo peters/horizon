@@ -223,6 +223,15 @@ applies the origin rules, and that the panel shows a waiting request.
    - Conditional mediation on `get` and `create` stays pending until an abort.
    - An unknown `residentKey` with `requireResidentKey: true` gives the command
      `resident_key: "required"`.
+
+2. Run the page script tests:
+
+   ```sh
+   node --test scripts/browser-smoke/webauthn_page.test.cjs
+   ```
+
+   Result: All tests pass. They include a `create` without a required member,
+   which gets `TypeError` and never reaches the command.
    - An options getter that aborts the signal gets `AbortError`.
    - A navigation that stops before it commits (a `204` answer) kills the
      command, and the page gets `NotAllowedError`.
