@@ -10,6 +10,8 @@ owner: peters
 
 # Merge queue test procedure
 
+> **Archived 2026-10-13.** The merge queue was removed by #1547, which reverted #1544. This procedure is kept as a record. It does not apply to the repository any more.
+
 ## 1. Purpose
 
 This procedure proves that approved pull requests land through one tested batch.

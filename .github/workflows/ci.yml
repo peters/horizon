@@ -2,18 +2,14 @@ name: CI
 
 on:
   push:
-    # mq/* branches are merge-queue batches built by scripts/merge-queue.py:
-    # each one is main plus the queued PRs, tested once before they land.
-    branches: [main, 'mq/**']
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
-# Pushes to mq/* run queued PR code in a push context, so the token stays read-only.
-permissions:
-  contents: read
-
-# Each push to main gets its own group: a merge-queue batch lands several commits in
-# seconds, and one shared group would cancel the pending run of a middle merge.
+# Each push to main gets its own group. With a shared group, GitHub keeps only one
+# pending run, so when merges land close together the run of a middle merge is
+# dropped, and the next run diffs only its own push and can skip that merge's
+# Snap and release builds.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || (github.ref == 'refs/heads/main' && github.sha) || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -101,8 +97,6 @@ jobs:
         run: python3 -B scripts/test_ci_cargo_test_shard.py -v
       - name: Verify the setup gate runner
         run: python3 -B scripts/test_setup_gate.py -v
-      - name: Verify the merge queue
-        run: python3 -B scripts/test_merge_queue.py -v
       # One diff answers both gated lanes: Snap packaging and the release
       # Artifacts matrix. This job already checks out full history, so the
       # Artifacts gate costs nothing here instead of a second runner and a
@@ -114,7 +108,6 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          REF_NAME: ${{ github.ref }}
           BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: ./scripts/detect-ci-build-inputs.sh "$EVENT_NAME" "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
@@ -445,8 +438,7 @@ jobs:
   # fail, so a release can still be forced on demand.
   rust-artifacts:
     name: Artifacts (${{ matrix.name }})
-    # Release artifacts build for main only; a merge-queue batch is checked like a PR.
-    if: always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.repo-checks.outputs.release_inputs == 'true'))
+    if: always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && needs.repo-checks.outputs.release_inputs == 'true'))
     needs: repo-checks
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
