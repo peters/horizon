@@ -143,6 +143,11 @@ impl Account {
         self.job.as_ref().is_some_and(|job| !job.purpose.quiet())
     }
 
+    /// Whether a fresh list is on its way behind the one shown, for the finder's spinner.
+    pub(super) fn refreshing(&self) -> bool {
+        self.job.as_ref().is_some_and(|job| job.purpose == Purpose::Refresh)
+    }
+
     /// Asks for a fresh list when the dialog opens, when this computer is already signed in,
     /// and again every little while as long as the shown list is out of date: each try
     /// first checks, without the network, which account this computer is signed in as.
