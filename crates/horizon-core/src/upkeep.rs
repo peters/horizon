@@ -247,22 +247,22 @@ impl UpkeepBoard {
                 return true;
             }
         }
-        let reading = self
-            .latest
-            .as_ref()
-            .and_then(|latest| latest.lock().ok().and_then(|mut latest| latest.take()));
-        match reading {
-            None => false,
-            Some(Ok(status)) => {
-                self.status = Some(Arc::new(status));
-                self.error = None;
-                true
-            }
-            Some(Err(error)) => {
-                self.error = Some(error);
-                true
-            }
+        let Some((status, error)) = self.latest.as_ref().and_then(|latest| {
+            let mut pending = latest.lock().ok()?;
+            Some((pending.status.take(), pending.error.take()))
+        }) else {
+            return false;
+        };
+        let changed = status.is_some() || error.is_some();
+        if let Some(status) = status {
+            self.status = Some(Arc::new(status));
         }
+        match error {
+            Some(reader::ErrorChange::Cleared) => self.error = None,
+            Some(reader::ErrorChange::Set(error)) => self.error = Some(error),
+            None => {}
+        }
+        changed
     }
 }
 

@@ -90,7 +90,34 @@ impl Reader {
 
 /// The newest reading the thread found and the board has not taken yet. A newer reading
 /// replaces an older one, so a board that is not drawn holds at most one.
-pub(super) type Latest = Arc<Mutex<Option<Reading>>>;
+pub(super) type Latest = Arc<Mutex<Pending>>;
+
+/// What the thread found and the board has not taken yet: the newest valid status and
+/// the newest error. A later error does not hide a valid status the board has not taken.
+#[derive(Default)]
+pub(super) struct Pending {
+    pub(super) status: Option<Status>,
+    pub(super) error: Option<ErrorChange>,
+}
+
+/// How the board's error line changes.
+pub(super) enum ErrorChange {
+    /// A valid status ended an earlier error.
+    Cleared,
+    Set(String),
+}
+
+impl Pending {
+    fn put(&mut self, reading: Reading) {
+        match reading {
+            Ok(status) => {
+                self.status = Some(status);
+                self.error = Some(ErrorChange::Cleared);
+            }
+            Err(error) => self.error = Some(ErrorChange::Set(error)),
+        }
+    }
+}
 
 /// Starts a thread that puts a reading into the returned slot whenever the document
 /// changes. It ends when `alive` turns false or the board dropped the slot.
@@ -106,9 +133,9 @@ pub(super) fn spawn(path: PathBuf, alive: Arc<AtomicBool>) -> Option<Latest> {
                     return;
                 };
                 if let Some(reading) = reader.check()
-                    && let Ok(mut latest) = slot.lock()
+                    && let Ok(mut pending) = slot.lock()
                 {
-                    *latest = Some(reading);
+                    pending.put(reading);
                 }
                 drop(slot);
                 std::thread::sleep(CHECK_EVERY);
@@ -137,6 +164,9 @@ fn read_status(path: &Path) -> Reading {
 /// Puts runs and activity in time order, keeps the newest entries of each list and
 /// clips each text, so a large document cannot make every frame slow.
 fn bound(status: &mut Status) {
+    // A run dated far ahead cannot push the real ones out.
+    let horizon = time::OffsetDateTime::now_utc() + time::Duration::days(1);
+    status.runs.retain(|run| run.started_at <= horizon);
     status.runs.sort_by_key(|run| run.started_at);
     keep_last(&mut status.runs, MAX_RUNS);
     status.activity.sort_by_key(|entry| entry.at);
@@ -309,24 +339,39 @@ mod tests {
         let alive = Arc::new(AtomicBool::new(true));
         let latest = spawn(path.clone(), alive.clone()).unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        let reading = loop {
-            if let Some(reading) = latest.lock().unwrap().take() {
-                break reading;
+        let status = loop {
+            if let Some(status) = latest.lock().unwrap().status.take() {
+                break status;
             }
             assert!(std::time::Instant::now() < deadline, "no first reading");
             std::thread::sleep(Duration::from_millis(20));
         };
-        assert_eq!(reading.unwrap().agent, "codex");
+        assert_eq!(status.agent, "codex");
         // Two changes while nobody takes them leave only the newer one.
         std::fs::write(&path, r#"{"agent":"one"}"#).unwrap();
         std::thread::sleep(Duration::from_millis(2500));
         std::fs::write(&path, r#"{"agent":"three"}"#).unwrap();
         std::thread::sleep(Duration::from_millis(2500));
-        assert_eq!(latest.lock().unwrap().take().unwrap().unwrap().agent, "three");
+        assert_eq!(latest.lock().unwrap().status.take().unwrap().agent, "three");
+        // A broken document after a valid one that nobody took keeps both.
+        std::fs::write(&path, "{").unwrap();
+        std::thread::sleep(Duration::from_millis(2500));
+        std::fs::write(&path, r#"{"agent":"four"}"#).unwrap();
+        std::thread::sleep(Duration::from_millis(2500));
+        std::fs::write(&path, "{{").unwrap();
+        std::thread::sleep(Duration::from_millis(2500));
+        {
+            let mut pending = latest.lock().unwrap();
+            assert_eq!(pending.status.take().unwrap().agent, "four");
+            let Some(ErrorChange::Set(error)) = pending.error.take() else {
+                panic!("the error is kept");
+            };
+            assert!(error.starts_with("The Upkeep status is not valid"));
+        }
         alive.store(false, Ordering::Relaxed);
         std::thread::sleep(Duration::from_millis(2500));
         std::fs::write(&path, r#"{"agent":"after"}"#).unwrap();
         std::thread::sleep(Duration::from_millis(2500));
-        assert!(latest.lock().unwrap().is_none(), "the thread ended");
+        assert!(latest.lock().unwrap().status.is_none(), "the thread ended");
     }
 }

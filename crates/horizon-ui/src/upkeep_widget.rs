@@ -17,6 +17,8 @@ mod runs;
 
 /// Merged pull requests older than this leave the board.
 const MERGED_WINDOW: time::Duration = time::Duration::days(7);
+/// How far ahead of this computer's clock a time may be and still count.
+const CLOCK_SKEW: time::Duration = time::Duration::minutes(5);
 
 pub struct UpkeepView<'a> {
     panel: &'a mut Panel,
@@ -105,7 +107,12 @@ fn shown_pull_requests(status: &Status, now: OffsetDateTime) -> Vec<&horizon_cor
     let mut shown: Vec<_> = status
         .pull_requests
         .iter()
-        .filter(|pr| pr.state != PrState::Merged || pr.updated_at.is_some_and(|merged| now - merged <= MERGED_WINDOW))
+        .filter(|pr| {
+            pr.state != PrState::Merged
+                || pr
+                    .updated_at
+                    .is_some_and(|merged| merged <= now + CLOCK_SKEW && now - merged <= MERGED_WINDOW)
+        })
         .collect();
     shown.sort_by_key(|pr| std::cmp::Reverse(pr.updated_at));
     shown
@@ -219,6 +226,7 @@ mod tests {
                {"repository":"acme/web","number":2,"title":"b","url":"","state":"merged","updated_at":"2026-10-12T10:00:00Z"},
                {"repository":"acme/web","number":3,"title":"c","url":"","state":"blocked","updated_at":"2026-10-13T09:00:00Z"},
                {"repository":"acme/web","number":4,"title":"d","url":"","state":"merged"},
+               {"repository":"acme/web","number":6,"title":"f","url":"","state":"merged","updated_at":"2099-01-01T00:00:00Z"},
                {"repository":"acme/api","number":5,"title":"e","url":"","state":"ready"}"#,
         );
         let now = parse_time("2026-10-13T12:00:00Z").unwrap();
