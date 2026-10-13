@@ -1,5 +1,7 @@
 """Install Horizon's ChatGPT login as the worker's Codex login, and print the login kept.
 
+With empty input, print the worker's login without changing it.
+
 The worker keeps its own login instead when that login is a later renewal of the same
 account: ChatGPT refresh tokens are single use, so the renewal must not be replaced by the
 copy it spent. Horizon adopts the printed login when it is newer than its own.
@@ -81,13 +83,39 @@ def replace(directory, path, data):
         Path(pending).unlink(missing_ok=True)
 
 
+def keep(current, data):
+    """Returns the worker's own login, made private if it was not."""
+    try:
+        os.fchmod(current.fileno(), 0o600)
+    except OSError:
+        pass
+    return data
+
+
+def look(home):
+    """The worker's login, unchanged, or nothing when it has no ChatGPT login."""
+    try:
+        with (home / ".codex" / "auth.json").open("rb") as current:
+            data = bounded(current)
+            if data is None or login(data) is None:
+                return b""
+            return keep(current, data)
+    except FileNotFoundError:
+        return b""
+
+
 def install(home, incoming_bytes, settle=lambda: time.sleep(SETTLE)):
     """Installs the incoming login unless the worker's renews it; returns the login kept.
 
+    Without an incoming login, only returns the worker's login: Horizon takes a later
+    renewal from it without giving a login it may no longer use.
+
     Codex rewrites its login in place when it renews it. A renewal written while this runs
     is never lost: a file that changed before the rename is read again, and a renewal that
-    Codex wrote into the replaced file right after the rename is put back.
+    Codex writes into the replaced file within the settle time is put back.
     """
+    if not incoming_bytes:
+        return look(home)
     incoming = login(incoming_bytes)
     if len(incoming_bytes) > LIMIT or incoming is None:
         raise ValueError("Invalid ChatGPT login")
@@ -102,18 +130,19 @@ def install(home, incoming_bytes, settle=lambda: time.sleep(SETTLE)):
         try:
             before = bounded(current) if current else None
             if before is not None and renews(login(before), incoming):
-                return before
+                return keep(current, before)
             if current is not None and bounded(current) != before:
                 continue
             replace(directory, path, incoming_bytes)
             if current is None:
                 return incoming_bytes
+            # Watched for the whole settle time: Codex may start its write late, and it
+            # truncates before it writes, so only a complete changed login ends the wait.
             after = before
-            # Codex truncates before it writes, so an empty or partial file is read again.
             for _ in range(ATTEMPTS):
                 settle()
                 after = bounded(current)
-                if after == before or (after is not None and login(after) is not None):
+                if after != before and after is not None and login(after) is not None:
                     break
             if after != before and after is not None and renews(login(after), incoming):
                 replace(directory, path, after)

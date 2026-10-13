@@ -123,6 +123,20 @@ impl State {
         }
     }
 
+    /// Shows the `ChatGPT` login that a background sync found, such as one that `OpenAI`
+    /// refused, unless a sign-in or sign-out of this form is under way.
+    pub(in crate::app::cloud_panel) fn refresh_chatgpt(
+        &mut self,
+        account: Option<horizon_core::cloud_runtime::codex_login::Account>,
+    ) {
+        if self.chatgpt.busy() {
+            return;
+        }
+        if let Some(draft) = self.draft.as_deref_mut() {
+            draft.chatgpt = account;
+        }
+    }
+
     /// Whether these settings resume a cloud creation once they are saved.
     pub(in crate::app::cloud_panel) fn resumes_creation(&self) -> bool {
         self.open && self.continue_creation

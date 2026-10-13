@@ -20,8 +20,9 @@ and that a renewal on a worker comes back to this computer.
 
 - Candidate: a Horizon build with **ChatGPT sign-in** for Codex in Cloud settings.
 - Platforms: Linux and macOS. Provider: RunPod or Hetzner.
-- This procedure does not test: Codex API keys, Claude sign-in or the renewal of a
-  login by Horizon while a cloud stays connected.
+- This procedure does not test: Codex API keys, Claude sign-in, or a renewal at
+  OpenAI. The access token cannot be made to end on purpose; unit tests cover the
+  renewal request with a local stand-in for OpenAI.
 
 ## 3. Safety
 
@@ -150,7 +151,25 @@ and that a renewal on a worker comes back to this computer.
    Result: The worker's `/workspace/home/.codex/auth.json` has the same `last_refresh`
    as the login on this computer. Codex on the cloud still accepts a prompt.
 
-### 6.6 C06 — Sign out
+### 6.6 C06 — A running cloud gets a new sign-in without a reconnect
+
+1. Keep the cloud of task C04 running. In Cloud settings, click **Sign out**, then
+   **Sign in with ChatGPT**, and ask the operator to sign in again.
+
+   Result: The card shows "Signed in as" with the email of the account.
+
+2. Do not reconnect the cloud. Wait six minutes.
+
+3. In the Shell panel on the cloud, show the `last_refresh` of the worker's login. Use
+   `python3 -c 'import json; print(json.load(open("/workspace/home/.codex/auth.json"))["last_refresh"])'`.
+
+   Result: The time is the `last_refresh` of the login on this computer.
+
+4. Open a new Codex panel on the cloud and send a short prompt.
+
+   Result: Codex answers without a sign-in prompt.
+
+### 6.7 C07 — Sign out
 
 1. In Cloud settings, click **Sign out**.
 
