@@ -17,6 +17,9 @@ use crate::webauthn::{Bridge, CallerOrigin, PageError, PageMessage};
 
 use super::{BrowserEventSender, DriverState};
 
+/// Queued page messages handled in one pass of the driver loop.
+const MESSAGES_PER_TICK: usize = 4;
+
 #[derive(Debug)]
 pub(super) struct CdpPasskeys {
     bridge: Bridge<u64>,
@@ -104,7 +107,13 @@ impl DriverState {
                 let context = event.params.get("executionContextId").and_then(Value::as_u64);
                 let payload = event.params.get("payload").and_then(Value::as_str);
                 if let (Some(context), Some(message)) = (context, payload.and_then(PageMessage::parse)) {
-                    self.handle_passkey_message(link, event_tx, frame_slot, context, message);
+                    // An abort only marks state. A request needs protocol
+                    // round trips, so it waits for the driver loop.
+                    if matches!(message, PageMessage::Abort { .. }) {
+                        self.handle_passkey_message(link, event_tx, frame_slot, context, message);
+                    } else if let Some(passkeys) = self.passkeys.as_mut() {
+                        passkeys.bridge.enqueue(context, message);
+                    }
                 }
                 true
             }
@@ -141,7 +150,22 @@ impl DriverState {
         }
     }
 
-    pub(super) fn tick_passkeys(&mut self, link: &mut CdpLink, event_tx: &BrowserEventSender) {
+    pub(super) fn tick_passkeys(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+    ) {
+        for _ in 0..MESSAGES_PER_TICK {
+            let Some((context, message)) = self
+                .passkeys
+                .as_mut()
+                .and_then(|passkeys| passkeys.bridge.next_message())
+            else {
+                break;
+            };
+            self.handle_passkey_message(link, event_tx, frame_slot, context, message);
+        }
         let Some((context, reply)) = self.passkeys.as_mut().and_then(|passkeys| passkeys.bridge.poll()) else {
             return;
         };

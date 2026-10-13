@@ -31,6 +31,10 @@ const PAGE_FUNCTION: &str = include_str!("webauthn/page.js");
 /// person's authenticator with prompts.
 const MAX_STARTS_PER_WINDOW: usize = 6;
 const START_WINDOW: Duration = Duration::from_secs(60);
+/// Requests wait here until the driver loop handles them, outside event
+/// handling, so a page that floods the channel cannot nest protocol
+/// round trips. A flood beyond this bound is dropped.
+const MAX_QUEUED_MESSAGES: usize = 16;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -191,6 +195,7 @@ pub(crate) struct Bridge<T> {
     /// waits here until its own [`Self::start`] call consumes it.
     admitted: Vec<Admitted<T>>,
     next_ticket: u64,
+    inbox: VecDeque<(T, PageMessage)>,
     recent_starts: VecDeque<Instant>,
 }
 
@@ -210,6 +215,7 @@ impl<T: Clone + PartialEq> Bridge<T> {
             active: None,
             admitted: Vec::new(),
             next_ticket: 0,
+            inbox: VecDeque::new(),
             recent_starts: VecDeque::new(),
         })
     }
@@ -243,6 +249,22 @@ impl<T: Clone + PartialEq> Bridge<T> {
         format!(
             "(reply) => {{ const deliver = globalThis[{key}]; if (typeof deliver === \"function\") deliver(reply); }}"
         )
+    }
+
+    /// Queue a request or malformed message for the driver loop. Returns
+    /// `false` when the queue is full and the message was dropped.
+    pub(crate) fn enqueue(&mut self, target: T, message: PageMessage) -> bool {
+        if self.inbox.len() >= MAX_QUEUED_MESSAGES {
+            tracing::warn!(target: "browser", "a page sent too many passkey requests; dropping one");
+            return false;
+        }
+        self.inbox.push_back((target, message));
+        true
+    }
+
+    /// The next queued page message.
+    pub(crate) fn next_message(&mut self) -> Option<(T, PageMessage)> {
+        self.inbox.pop_front()
     }
 
     /// Admit a request before the engine reads its caller origin. Returns
@@ -321,6 +343,9 @@ impl<T: Clone + PartialEq> Bridge<T> {
     /// The page aborted request `page_id`: kill its command. No reply is
     /// sent; the page already rejected the promise.
     pub(crate) fn abort(&mut self, target: &T, page_id: u64) -> bool {
+        self.inbox.retain(|(queued, message)| {
+            !(queued == target && matches!(message, PageMessage::Request { id, .. } if *id == page_id))
+        });
         self.withdraw_where(Withdrawal::Aborted, |admitted| {
             admitted.target == *target && admitted.page_id == page_id
         });
@@ -527,6 +552,27 @@ mod tests {
         assert_eq!(target, 1);
         assert!(ended.contains("NotAllowedError"));
         assert!(!bridge.frame_slot.passkey_pending());
+    }
+
+    #[test]
+    fn queued_requests_are_bounded_and_an_abort_removes_its_request() {
+        let mut bridge = bridge(vec!["authenticator".into()]).expect("bridge");
+        for page_id in 0..MAX_QUEUED_MESSAGES as u64 {
+            assert!(bridge.enqueue(1, PageMessage::Malformed { id: page_id }));
+        }
+        assert!(
+            !bridge.enqueue(1, PageMessage::Malformed { id: 99 }),
+            "a flood is dropped"
+        );
+        while bridge.next_message().is_some() {}
+        assert!(bridge.enqueue(1, get_request()));
+        assert!(bridge.enqueue(2, get_request()));
+        bridge.abort(&1, 7);
+        assert!(matches!(
+            bridge.next_message(),
+            Some((2, PageMessage::Request { id: 7, .. }))
+        ));
+        assert!(bridge.next_message().is_none());
     }
 
     #[test]

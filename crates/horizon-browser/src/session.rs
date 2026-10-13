@@ -464,7 +464,7 @@ fn run_loop(
         }
 
         state.tick_file_chooser(link, event_tx, frame_slot);
-        state.tick_passkeys(link, event_tx);
+        state.tick_passkeys(link, event_tx, frame_slot);
 
         // 3. Flush a pending throttled manifest write (the loop always
         //    iterates, so a quiet page still gets its url/title flushed).

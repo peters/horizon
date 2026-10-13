@@ -219,6 +219,7 @@ On Windows, the command starts without a console window.
 | Credential ID | 1 to 1023 bytes |
 | User ID | 1 to 64 bytes |
 | Credential lists | 64 entries |
+| Queued page requests | 16 for each panel. The driver loop handles them, not the event handler. More are dropped. |
 
 When the time limit ends, the driver kills the command and the page gets
 `NotAllowedError`.

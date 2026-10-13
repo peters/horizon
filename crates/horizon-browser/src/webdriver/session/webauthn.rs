@@ -5,6 +5,8 @@
 //! origin, and the origin of every ancestor context, from `script.getRealms`
 //! and `browsingContext.getTree`.
 
+use std::collections::VecDeque;
+
 use serde_json::{Value, json};
 
 use crate::session::BrowserEventSender;
@@ -23,13 +25,21 @@ pub(super) struct Source {
 pub(super) struct BidiPasskeys {
     bridge: Bridge<Source>,
     channel: String,
+    /// Replies decided during event handling. A reply is a blocking
+    /// `script.callFunction`, so the driver loop sends them.
+    outbox: VecDeque<(Source, String)>,
 }
+
+/// Queued page messages handled in one pass of the driver loop.
+const MESSAGES_PER_TICK: usize = 4;
+const MAX_QUEUED_REPLIES: usize = 32;
 
 impl BidiPasskeys {
     pub(super) fn from_config(config: &crate::BrowserSessionConfig) -> Option<Self> {
         Bridge::from_config(config).map(|bridge| Self {
             bridge,
             channel: format!("horizon-passkey-{}", uuid::Uuid::new_v4().simple()),
+            outbox: VecDeque::new(),
         })
     }
 }
@@ -79,9 +89,11 @@ impl Driver {
             // The old realm gets the reply until a navigation commits; a
             // navigation that stops before it commits still settles it.
             if let Some(context) = params.get("context").and_then(Value::as_str)
-                && let Some((source, reply)) = passkeys.bridge.cancel_for(|source| source.context == context)
+                && let Some(reply) = passkeys.bridge.cancel_for(|source| source.context == context)
             {
-                self.deliver_passkey_reply(&source, &reply, events);
+                if passkeys.outbox.len() < MAX_QUEUED_REPLIES {
+                    passkeys.outbox.push_back(reply);
+                }
                 self.note_passkey_change(events);
             }
             return false;
@@ -101,12 +113,31 @@ impl Driver {
             && !source.realm.is_empty()
             && !source.context.is_empty()
         {
-            self.handle_passkey_message(&source, message, events);
+            // An abort only marks state. A request needs `BiDi` round trips,
+            // whose replies carry more events, so it waits for the loop.
+            if matches!(message, PageMessage::Abort { .. }) {
+                self.handle_passkey_message(&source, message, events);
+            } else if let Some(passkeys) = self.passkeys.as_mut() {
+                passkeys.bridge.enqueue(source, message);
+            }
         }
         true
     }
 
     pub(super) fn tick_passkeys(&mut self, events: &BrowserEventSender) {
+        while let Some((source, reply)) = self.passkeys.as_mut().and_then(|passkeys| passkeys.outbox.pop_front()) {
+            self.deliver_passkey_reply(&source, &reply, events);
+        }
+        for _ in 0..MESSAGES_PER_TICK {
+            let Some((source, message)) = self
+                .passkeys
+                .as_mut()
+                .and_then(|passkeys| passkeys.bridge.next_message())
+            else {
+                break;
+            };
+            self.handle_passkey_message(&source, message, events);
+        }
         let Some((source, reply)) = self.passkeys.as_mut().and_then(|passkeys| passkeys.bridge.poll()) else {
             return;
         };
