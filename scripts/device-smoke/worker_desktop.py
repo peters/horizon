@@ -73,6 +73,15 @@ def build_command():
     return (['ionice', '-c', '3'] if shutil.which('ionice') else []) + command
 
 
+def observed_priority(pid):
+    """The priority the build child actually runs at, as the manifest reports it."""
+    try:
+        idle = os.sched_getscheduler(pid) == os.SCHED_IDLE
+        return {'nice': os.getpriority(os.PRIO_PROCESS, pid), 'scheduler': 'idle' if idle else 'other'}
+    except (AttributeError, OSError):
+        return {'nice': None, 'scheduler': None}
+
+
 def build(target_dir, log_path):
     env = dict(os.environ, CARGO_TARGET_DIR=str(target_dir))
     started = time.monotonic()
@@ -80,6 +89,7 @@ def build(target_dir, log_path):
         process = subprocess.Popen(build_command(), cwd=CHECKOUT, env=env, stdin=subprocess.DEVNULL,
                                    stdout=log, stderr=subprocess.STDOUT, preexec_fn=lower_priority,
                                    start_new_session=True)
+        priority = observed_priority(process.pid)
         try:
             code = process.wait()
         except BaseException:
@@ -88,7 +98,7 @@ def build(target_dir, log_path):
     if code != 0:
         raise SystemExit(f'The build failed with exit code {code}; read {log_path}')
     return {'target_dir': str(target_dir), 'log': str(log_path),
-            'seconds': round(time.monotonic() - started), 'nice': 19, 'scheduler': 'idle',
+            'seconds': round(time.monotonic() - started), **priority,
             'io_class': 'idle' if shutil.which('ionice') else 'default'}
 
 
@@ -101,14 +111,25 @@ def sha256(path):
 
 
 def freeze(binary, state):
+    """Keep the binary as `<state>/bin/horizon` and record its hash; return how it was kept.
+
+    A hard link writes nothing: on a worker, copying the 1 GB debug binary to the workspace volume
+    stalls the browser service's own writes there. The linker writes the next build to a new file,
+    and Linux refuses writes to a running executable, so the linked file stays this build.
+    """
     directory = state / 'bin'
     directory.mkdir(mode=0o700)
     frozen = directory / 'horizon'
-    shutil.copyfile(binary, frozen)
-    frozen.chmod(0o700)
+    try:
+        os.link(binary, frozen)
+        method = 'link'
+    except OSError:
+        shutil.copyfile(binary, frozen)
+        frozen.chmod(0o700)
+        method = 'copy'
     digest = sha256(frozen)
     (directory / 'SHA256SUMS').write_text(f'{digest}  horizon\n')
-    return frozen, digest
+    return frozen, digest, method
 
 
 def end_group(process, timeout=5):
@@ -193,7 +214,7 @@ def main(argv=None):
         if binary is None:
             built = build(args.target_dir.resolve(), state / 'build.log')
             binary = args.target_dir / 'debug' / 'horizon'
-        frozen, digest = freeze(binary.resolve(strict=True), state)
+        frozen, digest, frozen_by = freeze(binary.resolve(strict=True), state)
         config = args.config.resolve(strict=True) if args.config else state / 'horizon.yaml'
         if args.config is None:
             config.write_text(json.dumps(application_document(str(state))))  # JSON is a YAML subset.
@@ -212,7 +233,7 @@ def main(argv=None):
             raise RuntimeError(f'The running executable {running} is not the frozen binary {digest}')
         manifest = {
             'display': args.display, 'pid': process.pid, 'launcher_pid': os.getpid(),
-            'binary': str(frozen), 'sha256': digest, 'state': str(state),
+            'binary': str(frozen), 'frozen_by': frozen_by, 'sha256': digest, 'state': str(state),
             'horizon_home': env['HORIZON_HOME'], 'log': str(log_path), 'config': str(config),
             'started_at': started_at, 'build': built, 'removed_environment': removed,
             'window': wait_for_window(process, args.display, args.window_timeout),
@@ -220,7 +241,10 @@ def main(argv=None):
         (state / 'worker-desktop.json').write_text(json.dumps(manifest, indent=2))
         print(json.dumps(manifest), flush=True)
         code = process.wait()
-        return 0 if code == 0 else 1
+        if code != 0:
+            print(f'Horizon exited with code {code}; read {log_path}', file=sys.stderr)
+            return 1
+        return 0
     except KeyboardInterrupt:
         return 0
     finally:

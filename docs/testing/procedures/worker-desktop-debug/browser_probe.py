@@ -78,16 +78,21 @@ def main():
         sample = 0
         while not stopping:
             sample += 1
+            record = {'time': round(time.time(), 1), 'sample': sample}
             started = time.monotonic()
-            mcp.tool('browser_navigate', {'panel_id': panel, 'url': f'{base}?{sample}',
-                                          'wait': 'domcontentloaded'})
-            navigated = time.monotonic()
-            mcp.tool('browser_snapshot', {'panel_id': panel, 'max_nodes': 50})
-            done = time.monotonic()
-            print(json.dumps({'time': round(time.time(), 1), 'sample': sample,
-                              'navigate_ms': round((navigated - started) * 1000),
-                              'snapshot_ms': round((done - navigated) * 1000),
-                              'load1': os.getloadavg()[0]}), flush=True)
+            try:
+                mcp.tool('browser_navigate', {'panel_id': panel, 'url': f'{base}?{sample}',
+                                              'wait': 'domcontentloaded'})
+                navigated = time.monotonic()
+                mcp.tool('browser_snapshot', {'panel_id': panel, 'max_nodes': 50})
+                done = time.monotonic()
+                record.update(navigate_ms=round((navigated - started) * 1000),
+                              snapshot_ms=round((done - navigated) * 1000))
+            except RuntimeError as error:
+                # A timed-out action is the starvation this probe looks for; keep measuring.
+                record.update(error=str(error), failed_after_ms=round((time.monotonic() - started) * 1000))
+            record['load1'] = os.getloadavg()[0]
+            print(json.dumps(record), flush=True)
             time.sleep(2)
     except KeyboardInterrupt:
         pass

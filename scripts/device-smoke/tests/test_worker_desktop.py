@@ -81,6 +81,18 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(int(scheduler), os.SCHED_IDLE)
         self.assertEqual(os.nice(0), before, 'the launcher keeps its own priority')
 
+    @unittest.skipUnless(hasattr(os, 'SCHED_IDLE'), 'Linux scheduler classes')
+    def test_the_build_reports_the_priority_it_runs_at(self):
+        with tempfile.TemporaryDirectory() as raw:
+            original = worker_desktop.build_command
+            worker_desktop.build_command = lambda: [sys.executable, '-c', 'import time; time.sleep(0.5)']
+            try:
+                built = worker_desktop.build(Path(raw) / 'target', Path(raw) / 'build.log')
+            finally:
+                worker_desktop.build_command = original
+        self.assertEqual((built['nice'], built['scheduler']), (19, 'idle'))
+        self.assertEqual(built['target_dir'], str(Path(raw) / 'target'))
+
     def test_the_build_failure_names_its_log(self):
         with tempfile.TemporaryDirectory() as raw:
             log = Path(raw) / 'build.log'
@@ -118,15 +130,34 @@ class PathTests(unittest.TestCase):
 
 
 class FreezeAndStopTests(unittest.TestCase):
-    def test_freeze_copies_the_binary_and_records_its_hash(self):
+    def test_freeze_links_the_binary_and_records_its_hash(self):
         with tempfile.TemporaryDirectory() as raw:
             source = Path(raw) / 'horizon'
             source.write_bytes(b'synthetic binary')
-            frozen, digest = worker_desktop.freeze(source, Path(raw))
+            frozen, digest, method = worker_desktop.freeze(source, Path(raw))
+            self.assertEqual(method, 'link', 'the same file system needs no copy')
             self.assertEqual(digest, hashlib.sha256(b'synthetic binary').hexdigest())
-            self.assertEqual(frozen.read_bytes(), b'synthetic binary')
-            self.assertEqual(frozen.stat().st_mode & 0o777, 0o700)
+            self.assertTrue(os.path.samefile(frozen, source))
             self.assertEqual((Path(raw) / 'bin' / 'SHA256SUMS').read_text(), f'{digest}  horizon\n')
+            # The next build replaces the file; the frozen link keeps this build.
+            source.unlink()
+            source.write_bytes(b'next build')
+            self.assertEqual(frozen.read_bytes(), b'synthetic binary')
+
+    def test_freeze_copies_when_a_link_is_impossible(self):
+        with tempfile.TemporaryDirectory() as raw:
+            source = Path(raw) / 'horizon'
+            source.write_bytes(b'synthetic binary')
+            original = os.link
+            os.link = lambda *_args: (_ for _ in ()).throw(OSError(18, 'Invalid cross-device link'))
+            try:
+                frozen, digest, method = worker_desktop.freeze(source, Path(raw))
+            finally:
+                os.link = original
+            self.assertEqual(method, 'copy')
+            self.assertFalse(os.path.samefile(frozen, source))
+            self.assertEqual(frozen.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(digest, hashlib.sha256(b'synthetic binary').hexdigest())
 
     def test_stop_ends_a_process_that_has_no_window(self):
         process = subprocess.Popen(['sleep', '60'], start_new_session=True)
