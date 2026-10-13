@@ -7,6 +7,7 @@ import re
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -135,6 +136,16 @@ class CleanupTests(unittest.TestCase):
         self.assertFalse(gate.valid_record(dict(record, volume="postgres-data"), prefixes))
         self.assertFalse(gate.valid_record(dict(record, image="ubuntu:24.04"), prefixes))
         self.assertFalse(gate.valid_record(dict(record, checks="horizon-"), prefixes))
+
+    def test_only_a_socket_of_this_computer_is_pinned(self):
+        with mock.patch.dict(gate.os.environ, {"DOCKER_HOST": "unix:///run/user/1000/docker.sock",
+                                                "DOCKER_CONTEXT": "remote"}):
+            self.assertIsNone(gate.pin_docker())
+            self.assertEqual(gate.os.environ["DOCKER_HOST"], "unix:///run/user/1000/docker.sock")
+            self.assertNotIn("DOCKER_CONTEXT", gate.os.environ)
+        for refused in ("tcp://10.0.0.5:2376", "ssh://builder@build.example"):
+            with mock.patch.dict(gate.os.environ, {"DOCKER_HOST": refused}):
+                self.assertIn("not a socket of this computer", gate.pin_docker())
 
     def test_stat_lines_with_odd_command_names_parse(self):
         self.assertEqual(gate.parse_stat("4242 (a (b) c) S 1 4242 4100 0 -1 4194560 120"), ("S", 4100))

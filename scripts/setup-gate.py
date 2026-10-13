@@ -180,6 +180,7 @@ def build_test_binary():
     except OSError as error:
         print(f"setup-gate: {error}", file=sys.stderr)
         return None
+    # Cargo renders the compiler's diagnostics on stderr, which reaches the terminal.
     if built.returncode != 0:
         return None
     return find_test_binary(built.stdout.splitlines())
@@ -194,6 +195,22 @@ def docker(args, timeout=120):
     return done.stdout if done.returncode == 0 else None
 
 
+def pin_docker():
+    """Pins the runner and every lane to the Docker daemon that the Docker CLI uses now,
+    as the proof pins its own, so a context switched during a long run changes nothing.
+    Why it cannot, or None."""
+    host = os.environ.get("DOCKER_HOST") or ""
+    if not host:
+        host = (docker(["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"], timeout=30) or "").strip()
+    # The proof mounts files of this computer, so it accepts only a socket of this computer.
+    if not host.startswith("unix://"):
+        return (f"Docker here uses {host or 'no daemon that docker context inspect names'}, not a socket of "
+                "this computer; switch to a local Docker context")
+    os.environ["DOCKER_HOST"] = host
+    os.environ.pop("DOCKER_CONTEXT", None)
+    return None
+
+
 def check_preconditions(out, min_free_gb):
     """Why the gate cannot start here, or None."""
     if out == Path("/tmp") or Path("/tmp") in out.parents:
@@ -202,11 +219,13 @@ def check_preconditions(out, min_free_gb):
     if root is None:
         return "Docker does not answer; start Docker and try again"
     out.mkdir(parents=True, exist_ok=True)
+    if min_free_gb <= 0:
+        return None
     for place in (out, Path(root.strip())):
         try:
             free = shutil.disk_usage(place).free / 1e9
-        except OSError:
-            continue
+        except OSError as error:
+            return f"cannot read the free disk of {place} ({error}); examine it yourself, then use --min-free-gb 0"
         if free < min_free_gb:
             return f"{place} has {free:.0f} GB free, less than {min_free_gb} GB; free disk or use --min-free-gb"
     return None
@@ -582,8 +601,11 @@ def main(argv=None):
     except (OSError, ValueError, ListError) as error:
         print(f"setup-gate: {error}", file=sys.stderr)
         return 2
+    if args.binary and not (Path(args.binary).is_file() and os.access(args.binary, os.X_OK)):
+        print(f"setup-gate: {args.binary} is not an executable file", file=sys.stderr)
+        return 2
     out = args.out.resolve()
-    problem = check_preconditions(out, args.min_free_gb)
+    problem = pin_docker() or check_preconditions(out, args.min_free_gb)
     if problem:
         print(f"setup-gate: {problem}", file=sys.stderr)
         return 2

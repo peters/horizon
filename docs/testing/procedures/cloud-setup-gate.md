@@ -41,7 +41,10 @@ not find.
 
 ## 4. Equipment and preconditions
 
-- Docker on the host. The runner does not start when Docker does not answer.
+- Docker on the host, through a socket of this computer. The runner does not start
+  when Docker does not answer or uses a daemon on another computer. At the start, the
+  runner sets `DOCKER_HOST` for itself and for each gate lane, so a Docker context that
+  changes during the run changes nothing.
 - Free disk. The runner does not start when the output folder or the Docker root folder
   has less than 100 GB free. A large Git LFS repository needs tens of GB for its
   snapshot and its volume.
@@ -202,7 +205,7 @@ that is not a folder or a `leave_out` job that `spec.jobs` does not name.
 |---|---|---|
 | `--out DIR` | `/var/tmp/horizon-setup-gate` | The output folder. Each run makes a run folder in it. The runner refuses a folder below `/tmp`, because `/tmp` can be a RAM file system. |
 | `--lanes N` | `2` | The number of gate lanes in parallel. More lanes increase the load. |
-| `--min-free-gb N` | `100` | The free disk, in GB, that the runner needs to start. |
+| `--min-free-gb N` | `100` | The free disk, in GB, that the runner needs to start. If the runner cannot read the free disk, it does not start. `0` stops the check. |
 | `--only PATTERN` | all entries | Run only the entries whose label or repo agrees with the shell pattern. Use it more than one time for more patterns. |
 | `--binary PATH` | a new build | Use this horizon test binary, and do not build. |
 
