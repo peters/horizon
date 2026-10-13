@@ -18,6 +18,7 @@ const BUILD: &str = "This cloud's profile in the latest commit's .horizon/cloud.
 const BOOTSTRAP: &str = "This cloud's profile in the latest commit's .horizon/cloud.yml differs from its worker in bootstrap (contract_version or readiness_seconds). Create a new cloud to use it.";
 const IDLE_STOP: &str = "This cloud's profile in the latest commit's .horizon/cloud.yml differs from its worker in idle_stop_minutes. A rebuild keeps the worker's idle stop; create a new cloud to use it.";
 pub(super) const IMAGE_TOO_LARGE: &str = "The rebuilt image is larger than this cloud's container disk (storage.container_gb), so its worker cannot hold it. A rebuild keeps the worker's container disk; make the image smaller, or create a new cloud with a larger container disk.";
+pub(super) const BUILT_IMAGE_TOO_LARGE: &str = "The built image is larger than this cloud's container disk (storage.container_gb), so its worker cannot hold it. Cancel the rebuild; then make the image smaller, or create a new cloud with a larger container disk.";
 pub(super) const BYTES_PER_GB: u64 = 1_000_000_000;
 
 /// Refuses, naming the field, when the profile `name` of the latest commit's `config`

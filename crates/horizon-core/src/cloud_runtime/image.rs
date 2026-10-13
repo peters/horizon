@@ -191,12 +191,21 @@ impl Images<'_> {
             return Err(Error::Invalid("Only an image built under a valid tag has a local size"));
         }
         let image = built_reference(profile, tag);
-        let output = self.runner.run_parsed(
-            "local image size",
-            self.docker()
-                .args(["image", "inspect", "--format", "{{.Id}} {{.Size}}", &image]),
-            Duration::from_secs(30),
-        )?;
+        let output = self
+            .runner
+            .run_parsed(
+                "local image size",
+                self.docker()
+                    .args(["image", "inspect", "--format", "{{.Id}} {{.Size}}", &image]),
+                Duration::from_secs(30),
+            )
+            .map_err(|error| match error {
+                // Docker's own message is in the output; the hint names the way out.
+                Error::Command(_) => Error::Invalid(
+                    "Local Docker cannot report the size of the built image. If the image is gone, cancel the replacement and rebuild",
+                ),
+                other => other,
+            })?;
         let (local_id, size) = output
             .trim()
             .split_once(' ')

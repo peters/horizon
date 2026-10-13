@@ -150,8 +150,8 @@ enum Driven {
 /// `profile_name` matches the bound one apart from the choices bound at creation, such
 /// as the provider and the storage. Refuses a built image that the worker's container
 /// disk cannot hold before anything changes on the worker, and drops its unsent journal,
-/// so nothing stays pending. After any other failure the journal stays, so the
-/// replacement can be continued or cancelled.
+/// so nothing stays pending. After a failure the journal stays, so the replacement can
+/// be continued or cancelled.
 pub fn rebuild(
     request: &Request,
     profile_name: &str,
@@ -180,8 +180,8 @@ pub fn rebuild(
 /// verifies its image again and that the worker's container disk holds it, and a
 /// requested one is sent again only while the provider still reports the previous image.
 /// # Errors
-/// Refuses without a pending replacement; keeps the journal after a failure, except that
-/// a built image the worker's container disk cannot hold drops the unsent journal.
+/// Refuses without a pending replacement, and a built image that the worker's container
+/// disk cannot hold; keeps the journal after a failure, so it can be cancelled.
 pub fn continue_replacement(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) -> Result<Deployment> {
     emit(Event::stage(Stage::Validate));
     let (store, mut state) = open(request)?;
@@ -463,7 +463,11 @@ fn drive(steps: &impl Steps, store: &Store, state: &mut Deployment, emit: &dyn F
             emit(activity("Verifying the built image and its pull binding"));
             steps.verify(state, &image)?;
             // Checked again, as an earlier Horizon version journaled a built image unchecked.
-            require_held(steps, store, state, &journal.tag, &image.digest, emit)?;
+            // The journal stays: hosted devices may already be released, and cancelling the
+            // replacement arms them again.
+            if !held(steps, state, &journal.tag, &image.digest, emit)? {
+                return Err(Error::Invalid(compatibility::BUILT_IMAGE_TOO_LARGE));
+            }
         }
         ReplacementPhase::Requested(_) => {
             match steps.server() {

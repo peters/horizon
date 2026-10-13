@@ -1,7 +1,7 @@
 //! The storage New cloud lets a person choose, the container disk and the workspace
 //! volume's size and type, stays the worker's, as its provider and size do. Only the
 //! rebuilt image must still fit on the worker's container disk.
-use super::super::compatibility::{BYTES_PER_GB, IMAGE_TOO_LARGE};
+use super::super::compatibility::{BUILT_IMAGE_TOO_LARGE, BYTES_PER_GB, IMAGE_TOO_LARGE};
 use super::*;
 use horizon_cloud::runpod::volumes::Tier;
 
@@ -119,7 +119,7 @@ fn an_image_fits_the_container_disk_chosen_in_new_cloud_not_the_committed_one() 
 }
 
 #[test]
-fn a_built_image_journaled_unchecked_is_refused_when_the_rebuild_continues() {
+fn a_built_image_journaled_unchecked_is_refused_and_can_be_cancelled_when_the_rebuild_continues() {
     let fixture = Fixture::new();
     let before = fixture.state();
     let disk = u64::from(before.profile.storage.container_gb) * BYTES_PER_GB;
@@ -132,15 +132,18 @@ fn a_built_image_journaled_unchecked_is_refused_when_the_rebuild_continues() {
         ReplacementPhase::Built(_)
     ));
     // Continued with an image the disk cannot hold, as one an earlier Horizon version
-    // journaled without the check: nothing reaches the worker, and nothing stays pending.
+    // journaled without the check: nothing reaches the worker, and the journal stays for
+    // Cancel rebuild, which arms released hosted devices again.
     script.fail_at.set(None);
     script.unpacked = Some(disk + 1);
     script.calls.borrow_mut().clear();
     let error = recover(&fixture, &script, Recovery::Continue).unwrap_err().to_string();
-    assert_eq!(error, IMAGE_TOO_LARGE);
+    assert_eq!(error, BUILT_IMAGE_TOO_LARGE);
     assert_eq!(*script.calls.borrow(), ["verify"]);
     let after = fixture.state();
-    assert!(after.image_replacement.is_none());
+    assert!(!after.image_replacement.unwrap().requested());
     assert_eq!(after.spec, before.spec);
     assert_eq!(fixture.storage_image(), digest('a'));
+    recover(&fixture, &script, Recovery::Cancel).unwrap();
+    assert!(fixture.state().image_replacement.is_none());
 }
