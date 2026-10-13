@@ -145,7 +145,8 @@ pub fn keep_cloud_current(root: &Path, cloud: &str, cancel: &Cancellation) -> Re
 }
 
 /// Keeps the login current everywhere: first takes over any renewal a worker made on its
-/// own, then renews the login here when it is due, then gives the renewal to every cloud.
+/// own, then renews the login here when it is due, then gives the login now here to every
+/// cloud that does not have it.
 /// Every cloud under `root` counts, also those of other Horizon sessions, so none is left
 /// with a refresh token this renewal spent. A cloud is asked again when the login changed
 /// since it last got it, or after [`RESEND`].
@@ -161,7 +162,7 @@ pub fn sync(root: &Path, delivered: &mut Delivered, cancel: &Cancellation) -> Re
         .ok()
         .flatten()
         .is_some_and(|login| due(&login, OffsetDateTime::now_utc()));
-    deliver(root, &clouds, delivered, renewing, cancel);
+    let unreachable = deliver(root, &clouds, delivered, renewing, &[], cancel);
     let renewal = match renew(root, cancel) {
         Ok(renewal) => renewal,
         Err(error) => {
@@ -169,21 +170,30 @@ pub fn sync(root: &Path, delivered: &mut Delivered, cancel: &Cancellation) -> Re
             return Ok(Renewal::NotDue);
         }
     };
-    if renewal == Renewal::Renewed {
-        deliver(root, &clouds, delivered, false, cancel);
-    }
+    // Also without a renewal here: a renewal taken over from one worker in the first pass
+    // reaches the clouds asked before it. Clouds that have it already are skipped.
+    deliver(root, &clouds, delivered, false, &unreachable, cancel);
     Ok(renewal)
 }
 
 /// Asks the clouds that do not have the login now here, or were asked longer ago than
-/// [`RESEND`]; every cloud when `all`.
-fn deliver(root: &Path, clouds: &[String], delivered: &mut Delivered, all: bool, cancel: &Cancellation) {
-    for cloud in clouds {
+/// [`RESEND`]; every cloud when `all`. Clouds in `skip` failed already in this sync.
+/// Returns the clouds that failed, so a second pass does not wait for them again.
+fn deliver(
+    root: &Path,
+    clouds: &[String],
+    delivered: &mut Delivered,
+    all: bool,
+    skip: &[String],
+    cancel: &Cancellation,
+) -> Vec<String> {
+    let mut failed = Vec::new();
+    for cloud in clouds.iter().filter(|cloud| !skip.contains(cloud)) {
         if cancel.is_cancelled() {
-            return;
+            break;
         }
         let Ok(Some(current)) = fingerprint(root) else {
-            return;
+            break;
         };
         if !all && current_on(delivered, cloud, &current) {
             continue;
@@ -196,9 +206,13 @@ fn deliver(root: &Path, clouds: &[String], delivered: &mut Delivered, all: bool,
                 }
             }
             Ok(Kept::Skipped) => {}
-            Err(error) => tracing::warn!(%error, cloud, "could not give the ChatGPT login to a cloud"),
+            Err(error) => {
+                tracing::warn!(%error, cloud, "could not give the ChatGPT login to a cloud");
+                failed.push(cloud.clone());
+            }
         }
     }
+    failed
 }
 
 /// Whether `cloud` got the login `current` less than [`RESEND`] ago.
@@ -340,9 +354,9 @@ fn request(url: &str, login: &Login) -> Result<Answer> {
             }
             Ok(Answer::Tokens(bytes))
         }
-        // Only an answer that says so is permanent: the refresh token is spent, expired or
-        // revoked. Anything else, such as a proxy's bare 401, is tried again later.
-        400 | 401 if refused(&bytes) => Ok(Answer::Refused),
+        // Only an answer that says so is permanent, whatever its status: the refresh token is
+        // spent, expired or revoked. Anything else, such as a proxy's bare 401, is tried again.
+        _ if refused(&bytes) => Ok(Answer::Refused),
         _ => Err(Error::Invalid(
             "OpenAI could not renew the ChatGPT login now; Horizon tries again later",
         )),

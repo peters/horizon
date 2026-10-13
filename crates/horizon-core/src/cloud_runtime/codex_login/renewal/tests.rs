@@ -185,6 +185,7 @@ fn a_refused_refresh_token_asks_for_a_new_sign_in_and_keeps_the_login() {
         ),
         (400, r#"{"error":"invalid_grant"}"#),
         (401, r#"{"error":{"code":"refresh_token_invalidated"}}"#),
+        (403, r#"{"error":{"code":"refresh_token_invalidated"}}"#),
     ] {
         let home = home_with(&login(NOW, NOW + 3600));
         let (url, _request) = server(status, body);

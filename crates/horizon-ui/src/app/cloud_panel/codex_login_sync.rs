@@ -5,7 +5,7 @@
 use super::HorizonApp;
 use horizon_core::cloud_runtime::{
     Cancellation,
-    codex_login::{self, Delivered, Renewal},
+    codex_login::{self, Account, Delivered, Renewal},
 };
 use std::{
     path::PathBuf,
@@ -21,8 +21,22 @@ const EVERY: Duration = Duration::from_mins(5);
 pub(super) struct State {
     delivered: Delivered,
     /// A sync under way; it hands the deliveries back when it ends.
-    job: Option<Receiver<Delivered>>,
+    job: Option<Receiver<Synced>>,
     next: Option<Instant>,
+    /// The login a finished sync found, for an open settings form to show.
+    found: Option<Found>,
+}
+
+/// What a sync hands back.
+pub(super) struct Synced {
+    delivered: Delivered,
+    found: Found,
+}
+
+/// The login on this computer after a sync.
+enum Found {
+    Account(Option<Account>),
+    Unreadable,
 }
 
 impl State {
@@ -31,12 +45,13 @@ impl State {
         &mut self,
         root: Option<PathBuf>,
         now: Instant,
-        start: impl FnOnce(PathBuf, Delivered) -> Receiver<Delivered>,
+        start: impl FnOnce(PathBuf, Delivered) -> Receiver<Synced>,
     ) -> Option<Duration> {
         if let Some(job) = &self.job {
             match job.try_recv() {
-                Ok(delivered) => {
-                    self.delivered = delivered;
+                Ok(synced) => {
+                    self.delivered = synced.delivered;
+                    self.found = Some(synced.found);
                     self.job = None;
                 }
                 // The job wakes the UI when it ends.
@@ -76,10 +91,14 @@ impl HorizonApp {
         if let Some(wake) = wake {
             ctx.request_repaint_after(wake);
         }
+        // An open settings form shows what the sync found, such as a login OpenAI refused.
+        if let Some(Found::Account(account)) = self.cloud_prototype.codex_login.found.take() {
+            self.cloud_prototype.production.setup.refresh_chatgpt(account);
+        }
     }
 }
 
-fn sync(root: &std::path::Path, mut delivered: Delivered) -> Delivered {
+fn sync(root: &std::path::Path, mut delivered: Delivered) -> Synced {
     match codex_login::sync(root, &mut delivered, &Cancellation::default()) {
         Ok(Renewal::SignInAgain) => {
             tracing::warn!("OpenAI refused the ChatGPT login for Codex; sign in again in Cloud settings");
@@ -87,7 +106,8 @@ fn sync(root: &std::path::Path, mut delivered: Delivered) -> Delivered {
         Ok(_) => {}
         Err(error) => tracing::warn!(%error, "could not keep the ChatGPT login for Codex current"),
     }
-    delivered
+    let found = codex_login::account(&codex_login::home(root)).map_or(Found::Unreadable, Found::Account);
+    Synced { delivered, found }
 }
 
 #[cfg(test)]
@@ -112,12 +132,18 @@ mod tests {
         assert_eq!(state.step(root.clone(), start + EVERY * 2, &mut begin), None);
         let mut back = Delivered::new();
         back.insert("synthetic-cloud".into(), ("synthetic".into(), start));
-        sender.send(back).unwrap();
+        sender
+            .send(Synced {
+                delivered: back,
+                found: Found::Account(None),
+            })
+            .unwrap();
         // Ended: the next is due only after the interval.
         let wait = state.step(root.clone(), start + Duration::from_secs(1), &mut begin);
         assert_eq!(wait, Some(EVERY.saturating_sub(Duration::from_secs(1))));
         assert_eq!(started.get(), 1);
         assert!(state.delivered.contains_key("synthetic-cloud"));
+        assert!(matches!(state.found, Some(Found::Account(None))));
         // Without a cloud root nothing starts.
         let mut fresh = State::default();
         assert_eq!(fresh.step(None, start, &mut begin), None);
