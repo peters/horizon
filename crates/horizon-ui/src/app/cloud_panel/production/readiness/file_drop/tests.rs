@@ -112,3 +112,17 @@ fn a_failed_cloud_upload_shows_the_failure_and_inserts_nothing() {
         "Failed: Host key verification failed."
     );
 }
+
+#[test]
+fn finished_paths_keep_a_focus_the_person_moved_during_the_upload() {
+    let (temp, mut app) = attached_cloud();
+    let (one, two) = (member(&app, "one"), member(&app, "two"));
+    let paths = vec!["/workspace/.horizon-drops/one/0123456789ab/notes.txt".to_string()];
+    assert!(app.maybe_start_ssh_file_drop(one, &[upload(&temp)], ViewportId::ROOT));
+    assert_eq!(app.board.focused, Some(one), "a drop focuses its panel");
+    app.board.focus(two);
+    app.ssh_upload_flow.as_mut().unwrap().test_finish(Ok(paths));
+    app.poll_ssh_upload_flow();
+    assert!(app.ssh_upload_flow.is_none(), "the paths went to the panel");
+    assert_eq!(app.board.focused, Some(two));
+}

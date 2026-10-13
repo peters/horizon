@@ -115,9 +115,11 @@ impl HorizonApp {
             return;
         };
         let recipient = self.cloud_file_drop_recipient(&drop);
-        // The drop focused the panel; keys typed elsewhere since must stay where they go.
+        // The drop focused the panel, and the upload window held the keys since. Give
+        // them back to it, as a local drop does, unless the person chose another panel.
+        let refocus = recipient.is_some() && self.board.focused == recipient;
         if let Some(panel_id) = recipient
-            && self.paste_native_text_into_terminal(panel_id, &cloud_terminal_text(&outcome.remote_paths), false)
+            && self.paste_native_text_into_terminal(panel_id, &cloud_terminal_text(&outcome.remote_paths), refocus)
         {
             self.ssh_upload_flow = None;
             return;
