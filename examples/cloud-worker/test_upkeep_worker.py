@@ -417,6 +417,12 @@ class SchedulerTests(unittest.TestCase):
             {'repository': 'acme/web', 'number': 3, 'state': 'ready'}]}))
         self.assertEqual(len(RUN['merged']() - before), 1)
 
+    def test_the_last_start_is_read_from_the_run_records(self):
+        self.assertEqual(RUN['last_start'](), 0)
+        RUN['record']({'started_at': 3600, 'outcome': 'running'})
+        RUN['record']({'started_at': 3600, 'finished_at': 3700, 'outcome': 'failed'})
+        self.assertEqual(RUN['last_start'](), 3600)
+
     def test_a_run_the_loop_did_not_finish_is_closed_as_failed(self):
         RUN['record']({'started_at': 100, 'outcome': 'running'})
         RUN['close_interrupted']()

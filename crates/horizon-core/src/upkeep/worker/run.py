@@ -435,6 +435,16 @@ def merged():
             if isinstance(pr, dict) and pr.get('state') == 'merged'} if isinstance(pull_requests, list) else set()
 
 
+def last_start():
+    """When the last recorded run started, or 0."""
+    try:
+        with open(DIR + '/runs.jsonl') as handle:
+            started = json.loads(handle.readlines()[-1]).get('started_at')
+        return started if type(started) is int else 0
+    except (OSError, IndexError, ValueError, AttributeError):
+        return 0
+
+
 def close_interrupted():
     """A run the loop did not see to its end (the loop was stopped) is recorded as failed, so
     the board never shows it running forever."""
@@ -568,11 +578,12 @@ def main():
     cfg = config()
     minutes = every(cfg)
     upcoming = next_slot(cfg)
-    # A run that was due when a new loop replaced this one still runs.
+    # A run that was due, but had not started, when a new loop replaced this one still runs.
     try:
         with open(DIR + '/next-run') as handle:
             earlier = int(handle.read().strip())
-        if upcoming - minutes * 60 <= earlier <= time.time() and earlier % (minutes * 60) == 0:
+        if (upcoming - minutes * 60 <= earlier <= time.time() and earlier % (minutes * 60) == 0
+                and last_start() < earlier):
             upcoming = earlier
     except (OSError, ValueError):
         pass
