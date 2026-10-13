@@ -762,3 +762,209 @@ fn a_replace_ref_does_not_change_the_exported_commit() {
     let export = snapshot(&repo, &real, &out, &runner).unwrap();
     assert_eq!(std::fs::read_to_string(export.join("file.txt")).unwrap(), "committed\n");
 }
+
+/// Writes the repository configuration and `info/attributes` a setup agent can write: a
+/// `filter.evil` driver whose smudge would create `marker` and replace committed bytes,
+/// named on `payload.txt` by both a committed `.gitattributes` and `info/attributes`.
+#[cfg(unix)]
+fn configure_filter(repo: &Path, marker: &Path) {
+    let smudge = format!("sh -c 'touch {}; sed s/committed/SMUDGED/'", marker.display());
+    git(repo, &["config", "filter.evil.smudge", &smudge]);
+    git(repo, &["config", "filter.evil.required", "false"]);
+    std::fs::write(repo.join(".git/info/attributes"), "payload.txt filter=evil\n").unwrap();
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "a git content filter is driven by a Unix shell")]
+#[cfg(unix)]
+fn a_repository_configured_filter_never_runs_while_snapshotting() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init(&repo);
+    let module = repo.join("module");
+    init(&module);
+    // A committed file in each repository that a committed filter attribute names.
+    std::fs::write(module.join("payload.txt"), "committed module payload\n").unwrap();
+    std::fs::write(module.join(".gitattributes"), "payload.txt filter=evil\n").unwrap();
+    git(&module, &["add", "."]);
+    git(&module, &["commit", "-m", "Pin module payload"]);
+    let module_sha = git(&module, &["rev-parse", "HEAD"]);
+    std::fs::write(repo.join("payload.txt"), "committed payload\n").unwrap();
+    std::fs::write(repo.join(".gitattributes"), "payload.txt filter=evil\n").unwrap();
+    git(&repo, &["add", ".gitattributes", "payload.txt"]);
+    git(
+        &repo,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{module_sha},module"),
+        ],
+    );
+    git(&repo, &["commit", "-m", "Pin payload with a submodule"]);
+    // The driver and info/attributes a setup agent can write, in both repositories.
+    let marker = temp.path().join("marker");
+    let module_marker = temp.path().join("module-marker");
+    configure_filter(&repo, &marker);
+    configure_filter(&module, &module_marker);
+    let cancel = horizon_cloud::Cancellation::default();
+    let emit = |_| {};
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &emit,
+        secrets: vec![],
+    };
+    let out = temp.path().join("out");
+    std::fs::create_dir(&out).unwrap();
+    let export = snapshot(&repo, "HEAD", &out, &runner).unwrap();
+    assert!(!marker.exists(), "the repository filter ran while snapshotting");
+    assert!(!module_marker.exists(), "the submodule filter ran while snapshotting");
+    assert_eq!(
+        std::fs::read_to_string(export.join("payload.txt")).unwrap(),
+        "committed payload\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(export.join("module/payload.txt")).unwrap(),
+        "committed module payload\n"
+    );
+}
+
+#[test]
+fn the_snapshot_keeps_export_ignore_export_subst_and_pinned_eol() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init(&repo);
+    std::fs::write(
+        repo.join(".gitattributes"),
+        "* text=auto\n*.bat text eol=crlf\ndropped.txt export-ignore\narchival.txt export-subst\n",
+    )
+    .unwrap();
+    std::fs::write(repo.join("build.sh"), "echo committed\n").unwrap();
+    std::fs::write(repo.join("setup.bat"), "echo windows\r\n").unwrap();
+    std::fs::write(repo.join("dropped.txt"), "never exported\n").unwrap();
+    std::fs::write(
+        repo.join("archival.txt"),
+        "commit: $Format:%H$\nref-names: $Format:%D$\ndescribe: $Format:%(describe:tags=true)$\n",
+    )
+    .unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "Pin an export-subst version stamp"]);
+    git(&repo, &["tag", "-a", "v9.9", "-m", "release"]);
+    let sha = git(&repo, &["rev-parse", "HEAD"]);
+    // A dangling remote-tracking ref: a well-formed object name the store does not hold.
+    // Copying refs one at a time would abort on it and drop them all, so the tag and the
+    // describe below must still come through.
+    let gone = repo.join(".git/refs/remotes/origin/gone");
+    std::fs::create_dir_all(gone.parent().unwrap()).unwrap();
+    std::fs::write(&gone, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n").unwrap();
+    // Windows checkout defaults on the source, which the snapshot must override.
+    git(&repo, &["config", "core.autocrlf", "true"]);
+    git(&repo, &["config", "core.eol", "crlf"]);
+    let cancel = horizon_cloud::Cancellation::default();
+    let emit = |_| {};
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &emit,
+        secrets: vec![],
+    };
+    let out = temp.path().join("out");
+    std::fs::create_dir(&out).unwrap();
+    let export = snapshot(&repo, "HEAD", &out, &runner).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(export.join("build.sh")).unwrap(),
+        "echo committed\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(export.join("setup.bat")).unwrap(),
+        "echo windows\r\n"
+    );
+    assert!(!export.join("dropped.txt").exists(), "export-ignore keeps the file out");
+    let archival = std::fs::read_to_string(export.join("archival.txt")).unwrap();
+    assert!(
+        archival.contains(&format!("commit: {sha}")),
+        "export-subst expands commit metadata"
+    );
+    assert!(
+        archival.contains("tag: v9.9"),
+        "copied refs let export-subst name the tag: {archival}"
+    );
+    assert!(
+        archival.contains("describe: v9.9"),
+        "copied refs let export-subst describe: {archival}"
+    );
+}
+
+#[test]
+fn a_detached_head_does_not_name_a_branch_in_export_subst() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    // The branch is `master`, the name the private repository's own default HEAD takes, so
+    // a snapshot that did not take the source's detached HEAD would read it as checked out.
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-b", "master"]);
+    git(&repo, &["config", "user.name", "Fixture"]);
+    git(&repo, &["config", "user.email", "fixture@example.invalid"]);
+    std::fs::write(repo.join(".gitattributes"), "refs.txt export-subst\n").unwrap();
+    std::fs::write(repo.join("refs.txt"), "ref-names: $Format:%D$\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "Pin a decoration stamp"]);
+    // Detach HEAD at the commit, with the branch still there.
+    git(&repo, &["checkout", "--detach"]);
+    let out = temp.path().join("out");
+    std::fs::create_dir(&out).unwrap();
+    let cancel = horizon_cloud::Cancellation::default();
+    let emit = |_| {};
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &emit,
+        secrets: vec![],
+    };
+    let export = snapshot(&repo, "HEAD", &out, &runner).unwrap();
+    let refs = std::fs::read_to_string(export.join("refs.txt")).unwrap();
+    assert!(refs.contains("master"), "the branch ref is still copied: {refs}");
+    assert!(
+        !refs.contains("HEAD ->"),
+        "a detached HEAD names no branch in the decoration: {refs}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_checkout_whose_path_holds_a_newline_is_snapshotted() {
+    let temp = tempfile::tempdir().unwrap();
+    // A newline, and on Linux a byte that is not UTF-8: names that other systems refuse.
+    #[cfg(target_os = "linux")]
+    let name = <std::ffi::OsString as std::os::unix::ffi::OsStringExt>::from_vec(b"repo\nline\xff".to_vec());
+    #[cfg(not(target_os = "linux"))]
+    let name = std::ffi::OsString::from("repo\nline");
+    let repo = temp.path().join(name);
+    std::fs::create_dir_all(&repo).unwrap();
+    // Quiet, since git names the folder in what it prints, which the helper reads as UTF-8.
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("file.txt"), "committed\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(
+        &repo,
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-q",
+            "-m",
+            "Commit in an unusual folder",
+        ],
+    );
+    let cancel = horizon_cloud::Cancellation::default();
+    let emit = |_| {};
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &emit,
+        secrets: vec![],
+    };
+    let out = temp.path().join("out");
+    std::fs::create_dir(&out).unwrap();
+    let export = snapshot(&repo, "HEAD", &out, &runner).unwrap();
+    assert_eq!(std::fs::read_to_string(export.join("file.txt")).unwrap(), "committed\n");
+}

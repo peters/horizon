@@ -1,6 +1,7 @@
 //! Export only the selected committed tree and its Git history.
 mod archive;
 mod attributes;
+mod export;
 pub mod launch;
 mod material;
 pub mod source;
@@ -76,11 +77,7 @@ pub fn snapshot(repository: &Path, revision: &str, root: &Path, runner: &Runner<
     }
     std::fs::create_dir(&path)?;
     let archive = root.join("source.tar");
-    runner.run(
-        "git archive",
-        archive_command(repository).arg(&archive).arg(&sha),
-        SNAPSHOT_STEP,
-    )?;
+    export::committed_tree(repository, &sha, &archive, runner, SNAPSHOT_STEP)?;
     runner.run(
         "extract committed source",
         Command::new("tar").arg("-xpf").arg(&archive).arg("-C").arg(&path),
@@ -90,11 +87,7 @@ pub fn snapshot(repository: &Path, revision: &str, root: &Path, runner: &Runner<
         let archive = root.join(format!("module-{index}.tar"));
         let destination = path.join(&module.path);
         std::fs::create_dir_all(&destination)?;
-        runner.run(
-            "Export committed submodule",
-            archive_command(&module.repository).arg(&archive).arg(&module.revision),
-            SNAPSHOT_STEP,
-        )?;
+        export::committed_tree(&module.repository, &module.revision, &archive, runner, SNAPSHOT_STEP)?;
         runner.run(
             "Extract committed submodule",
             Command::new("tar").arg("-xpf").arg(archive).arg("-C").arg(destination),
@@ -103,31 +96,6 @@ pub fn snapshot(repository: &Path, revision: &str, root: &Path, runner: &Runner<
     }
     material.hydrate(&path, runner)?;
     Ok(path)
-}
-/// `git archive` converts line endings the way a checkout on this host would.
-/// The Linux worker builds the snapshot, so pin the conversion to a Linux
-/// checkout's: Windows defaults (`core.autocrlf=true`, a CRLF `core.eol`) would
-/// otherwise turn committed LF text into CRLF. Explicit `eol` attributes still
-/// apply. The file modes are pinned too: git keeps only whether a file is
-/// executable, so the archive holds 0644 and 0755, which extraction keeps (`-p`)
-/// whatever this computer's umask, and the image copies the committed modes.
-/// The caller appends the output path and revision.
-fn archive_command(repository: &Path) -> Command {
-    let mut command = Command::new("git");
-    command
-        .arg("--no-replace-objects")
-        .args([
-            "-c",
-            "core.autocrlf=false",
-            "-c",
-            "core.eol=lf",
-            "-c",
-            "tar.umask=0022",
-            "-C",
-        ])
-        .arg(repository)
-        .args(["archive", "--format=tar", "--output"]);
-    command
 }
 /// # Errors
 /// Packs only objects reachable from the selected commit; no branch mutation/push.

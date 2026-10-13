@@ -181,7 +181,6 @@ impl Runner<'_> {
         Ok(output)
     }
 
-    #[cfg(target_os = "linux")]
     pub(super) fn bounded_file(
         &self,
         command: &mut Command,
