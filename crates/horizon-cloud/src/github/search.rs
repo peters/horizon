@@ -51,6 +51,7 @@ impl Client {
                     let name = item
                         .repository_url
                         .strip_prefix("https://api.github.com/repos/")
+                        .filter(|name| super::valid_repository(name))
                         .ok_or(Error::InvalidResponse)?
                         .to_ascii_lowercase();
                     if reachable.iter().any(|known| known.eq_ignore_ascii_case(&name)) {
@@ -181,18 +182,24 @@ mod tests {
     }
 
     #[test]
-    fn an_item_outside_the_api_is_a_malformed_answer() {
-        let (client, _requests, task) = github(vec![(
-            200,
-            json!({"total_count": 1, "items": [{"repository_url": "https://example.com/repos/acme/web"}]}),
-        )]);
-        let result = client.open_pull_requests_by(
-            &Secret::new("ghu_synthetic".into()),
-            "app/dependabot",
-            &["acme".into()],
-            &["acme/web".into()],
-        );
-        task.join().unwrap();
-        assert_eq!(result, Err(Error::InvalidResponse));
+    fn an_item_that_is_not_a_repository_of_the_api_is_a_malformed_answer() {
+        for url in [
+            "https://example.com/repos/acme/web",
+            "https://api.github.com/repos/acme/web/issues",
+            "https://api.github.com/repos/acme",
+        ] {
+            let (client, _requests, task) = github(vec![(
+                200,
+                json!({"total_count": 1, "items": [{"repository_url": url}]}),
+            )]);
+            let result = client.open_pull_requests_by(
+                &Secret::new("ghu_synthetic".into()),
+                "app/dependabot",
+                &["acme".into()],
+                &["acme/web".into()],
+            );
+            task.join().unwrap();
+            assert_eq!(result, Err(Error::InvalidResponse), "{url}");
+        }
     }
 }
