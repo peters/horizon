@@ -5,8 +5,6 @@
 //! origin, and the origin of every ancestor context, from `script.getRealms`
 //! and `browsingContext.getTree`.
 
-use std::collections::HashSet;
-
 use serde_json::{Value, json};
 
 use crate::session::BrowserEventSender;
@@ -25,9 +23,6 @@ pub(super) struct Source {
 pub(super) struct BidiPasskeys {
     bridge: Bridge<Source>,
     channel: String,
-    /// Contexts that navigated or closed while a caller's origin was read;
-    /// `None` when no read is in progress.
-    navigated: Option<HashSet<String>>,
 }
 
 impl BidiPasskeys {
@@ -35,7 +30,6 @@ impl BidiPasskeys {
         Bridge::from_config(config).map(|bridge| Self {
             bridge,
             channel: format!("horizon-passkey-{}", uuid::Uuid::new_v4().simple()),
-            navigated: None,
         })
     }
 }
@@ -82,13 +76,10 @@ impl Driver {
             method,
             "browsingContext.navigationStarted" | "browsingContext.contextDestroyed"
         ) {
-            if let Some(context) = params.get("context").and_then(Value::as_str) {
-                if let Some(navigated) = passkeys.navigated.as_mut() {
-                    navigated.insert(context.to_string());
-                }
-                if passkeys.bridge.cancel_for(|source| source.context == context) {
-                    events.wake_ui();
-                }
+            if let Some(context) = params.get("context").and_then(Value::as_str)
+                && passkeys.bridge.cancel_for(|source| source.context == context)
+            {
+                self.note_passkey_change(events);
             }
             return false;
         }
@@ -117,7 +108,7 @@ impl Driver {
             return;
         };
         self.deliver_passkey_reply(&source, &reply, events);
-        events.wake_ui();
+        self.note_passkey_change(events);
     }
 
     fn handle_passkey_message(&mut self, source: &Source, message: PageMessage, events: &BrowserEventSender) {
@@ -128,7 +119,7 @@ impl Driver {
                     .as_mut()
                     .is_some_and(|passkeys| passkeys.bridge.abort(source, id))
                 {
-                    events.wake_ui();
+                    self.note_passkey_change(events);
                 }
             }
             PageMessage::Malformed { id } => {
@@ -138,38 +129,30 @@ impl Driver {
                 let Some(passkeys) = self.passkeys.as_mut() else {
                     return;
                 };
-                if let Some(reply) = passkeys.bridge.admit(id) {
+                if let Some(reply) = passkeys.bridge.admit(source.clone(), id) {
                     self.deliver_passkey_reply(source, &reply, events);
                     return;
                 }
-                // Only one admitted request reads an origin at a time.
-                passkeys.navigated = Some(HashSet::new());
+                // The realm reads drain events. An abort or a navigation of
+                // the caller in that time withdraws the admitted request.
                 let origin = self.passkey_caller_origin(source, events);
                 let agent = self.owner_seen.clone();
                 let Some(passkeys) = self.passkeys.as_mut() else {
                     return;
                 };
-                // The realm reads drain events: the caller can be gone.
-                let origin = origin.and_then(|origin| {
-                    if passkeys
-                        .navigated
-                        .take()
-                        .is_some_and(|navigated| navigated.contains(&source.context))
-                    {
-                        Err(PageError::not_allowed())
-                    } else {
-                        Ok(origin)
-                    }
-                });
-                if let Some(reply) = passkeys
-                    .bridge
-                    .start(source.clone(), id, op, &options, origin, agent.as_deref())
-                {
-                    self.deliver_passkey_reply(source, &reply, events);
+                if let Some((source, reply)) = passkeys.bridge.start(op, &options, origin, agent.as_deref()) {
+                    self.deliver_passkey_reply(&source, &reply, events);
                 }
-                events.wake_ui();
+                self.note_passkey_change(events);
             }
         }
+    }
+
+    /// The waiting state changed: repaint the chip and publish it to the
+    /// coordination manifest.
+    fn note_passkey_change(&mut self, events: &BrowserEventSender) {
+        self.coordination_dirty = true;
+        events.wake_ui();
     }
 
     /// The origin of the source realm, when the source context and every

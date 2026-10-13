@@ -755,7 +755,8 @@ browser:
 Horizon, not the page, decides which site is asking. It refuses cross-origin
 iframes, plain `http` sites other than `http://localhost`, and relying party IDs
 that do not belong to the site. While the command waits for you (up to two
-minutes), the panel shows **passkey request waiting**. Leave the key out and
+minutes), the panel shows **passkey request waiting** and agents see
+`passkey_pending` in `browser_panel`. Leave the key out and
 nothing changes. Safari, BrowserStack and standalone `horizon-browser` CLI
 sessions keep the browser's own behavior. The command's JSON contract and the
 full set of rules are in

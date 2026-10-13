@@ -51,6 +51,8 @@ the bridge is off in them.
    rejects it.
 
 The panel chip shows **passkey request waiting** while the command runs.
+The `browser_panel` and `browser_list` MCP results report
+`passkey_pending: true` at the same time.
 
 ## Trust boundary
 

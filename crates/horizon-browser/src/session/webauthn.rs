@@ -128,7 +128,7 @@ impl DriverState {
             return;
         };
         self.deliver_passkey_reply(link, context, &reply);
-        event_tx.wake_ui();
+        self.note_passkey_change(event_tx);
     }
 
     fn handle_passkey_message(
@@ -146,37 +146,32 @@ impl DriverState {
                     .as_mut()
                     .is_some_and(|passkeys| passkeys.bridge.abort(&context, id))
                 {
-                    event_tx.wake_ui();
+                    self.note_passkey_change(event_tx);
                 }
             }
             PageMessage::Malformed { id } => {
                 self.deliver_passkey_reply(link, context, &crate::webauthn::malformed_reply(id));
             }
             PageMessage::Request { id, op, options } => {
-                if let Some(reply) = self.passkeys.as_mut().and_then(|passkeys| passkeys.bridge.admit(id)) {
+                if let Some(reply) = self
+                    .passkeys
+                    .as_mut()
+                    .and_then(|passkeys| passkeys.bridge.admit(context, id))
+                {
                     self.deliver_passkey_reply(link, context, &reply);
                     return;
                 }
+                // The frame-tree read drains events. An abort or the end of
+                // the context in that time withdraws the admitted request.
                 let origin = self.passkey_caller_origin(link, event_tx, frame_slot, context);
                 let agent = self.owner_seen.clone();
                 let Some(passkeys) = self.passkeys.as_mut() else {
                     return;
                 };
-                // The frame-tree read drains events: the context can be gone.
-                let origin = origin.and_then(|origin| {
-                    if passkeys.contexts.contains_key(&context) {
-                        Ok(origin)
-                    } else {
-                        Err(PageError::not_allowed())
-                    }
-                });
-                if let Some(reply) = passkeys
-                    .bridge
-                    .start(context, id, op, &options, origin, agent.as_deref())
-                {
+                if let Some((context, reply)) = passkeys.bridge.start(op, &options, origin, agent.as_deref()) {
                     self.deliver_passkey_reply(link, context, &reply);
                 }
-                event_tx.wake_ui();
+                self.note_passkey_change(event_tx);
             }
         }
     }
@@ -230,6 +225,13 @@ impl DriverState {
         }
     }
 
+    /// The waiting state changed: repaint the chip and publish it to the
+    /// coordination manifest.
+    fn note_passkey_change(&mut self, event_tx: &BrowserEventSender) {
+        self.manifest_dirty = true;
+        event_tx.wake_ui();
+    }
+
     fn note_passkey_context(&mut self, params: &Value) {
         let Some(passkeys) = self.passkeys.as_mut() else {
             return;
@@ -253,7 +255,7 @@ impl DriverState {
         };
         passkeys.contexts.retain(|id, _| !matches(*id));
         if passkeys.bridge.cancel_for(|context| matches(*context)) {
-            event_tx.wake_ui();
+            self.note_passkey_change(event_tx);
         }
     }
 }

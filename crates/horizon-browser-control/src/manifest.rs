@@ -147,6 +147,9 @@ pub struct BrowserManifest {
     pub remote_orientation: Option<horizon_browser::remote::RemoteOrientationState>,
     #[serde(default)]
     pub file_chooser: horizon_browser::FileChooserStatus,
+    /// A page's passkey request waits for the external authenticator command.
+    #[serde(default)]
+    pub passkey_pending: bool,
     /// Negotiated CDP/BiDi WebSocket endpoint, or empty for classic-only
     /// Safari. The MCP adapter uses the validated action queue instead.
     pub browser_ws: String,
@@ -748,6 +751,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
             manifest.remote_file_upload = state.remote_file_upload;
             manifest.remote_orientation = state.remote_orientation;
             manifest.file_chooser = state.file_chooser;
+            manifest.passkey_pending = state.passkey_pending;
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
             manifest.url.clone_from(&state.url);
@@ -769,6 +773,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
             manifest.remote_file_upload = state.remote_file_upload;
             manifest.remote_orientation = state.remote_orientation;
             manifest.file_chooser = state.file_chooser;
+            manifest.passkey_pending = state.passkey_pending;
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
             manifest.url.clone_from(&state.url);
@@ -1001,6 +1006,7 @@ mod tests {
             remote_file_upload: false,
             remote_orientation: None,
             file_chooser: horizon_browser::FileChooserStatus::Unsupported,
+            passkey_pending: false,
             browser_ws: "ws://127.0.0.1:1/devtools/browser/x".to_string(),
             target_id: "T1".to_string(),
             url: "https://example.com".to_string(),

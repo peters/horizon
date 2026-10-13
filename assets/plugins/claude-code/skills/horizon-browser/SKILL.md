@@ -154,8 +154,8 @@ Chromium and Firefox panels send a page's passkey request to that external
 authenticator command, and the person approves it there. Click the site's
 passkey button as usual, then wait for the signed-in page with `browser_wait`.
 A human approval can take up to two minutes, so wait again after a
-`wait_timeout`. The panel chip shows **passkey request waiting** meanwhile;
-`browser_panel` does not report it. Do not retry in a
+`wait_timeout`. Meanwhile `browser_panel` reports `passkey_pending: true`
+and the panel chip shows **passkey request waiting**. Do not retry in a
 loop: the bridge allows six requests a minute per panel. Without the setting,
 or on Safari and remote sessions, the browser's own passkey behavior applies,
 so ask the user to sign in with `browser_handoff` instead.

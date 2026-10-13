@@ -94,6 +94,9 @@ pub(crate) struct BrowserPanel {
     pub(crate) manual_file_chooser: bool,
     /// A human must select or cancel files in the Horizon dialog.
     pub(crate) file_chooser_pending: bool,
+    /// A page's passkey request waits for the person to approve it in the
+    /// configured external authenticator command.
+    pub(crate) passkey_pending: bool,
     pub(crate) capabilities: Vec<String>,
     pub(crate) network_capture: NetworkCaptureCapability,
     pub(crate) video_capture: VideoCaptureCapability,
@@ -147,6 +150,7 @@ impl BrowserPanel {
             },
             manual_file_chooser: value.file_chooser.supported(),
             file_chooser_pending: value.file_chooser.pending(),
+            passkey_pending: value.passkey_pending,
             capabilities: semantic_capabilities(
                 value.backend,
                 remote,
@@ -1131,6 +1135,16 @@ mod tests {
         assert!(local.capabilities.iter().any(|capability| capability == "set_files"));
         let local_json = serde_json::to_string(&local).expect("json");
         assert!(!local_json.contains("remote_target") && !local_json.contains("remote_device"));
+        assert!(local_json.contains("\"passkey_pending\":false"));
+
+        let waiting = BrowserPanel::from_manifest(
+            BrowserManifest {
+                passkey_pending: true,
+                ..BrowserManifest::default()
+            },
+            "agent",
+        );
+        assert!(waiting.passkey_pending);
     }
 
     #[test]

@@ -28,6 +28,8 @@ pub struct CoordinationState {
     pub remote_file_upload: bool,
     pub remote_orientation: Option<crate::remote::RemoteOrientationState>,
     pub file_chooser: crate::FileChooserStatus,
+    /// A page's passkey request waits for the external authenticator command.
+    pub passkey_pending: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
