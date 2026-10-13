@@ -555,7 +555,7 @@ Horizon keeps its config, sessions, browser profiles, cloud settings and runtime
 HORIZON_HOME=/path/to/private-horizon horizon
 ```
 
-- If the folder is missing, Horizon creates it, readable only by you (mode `700` on Linux and macOS). Horizon refuses to start when the path is relative or is not a folder. On Linux and macOS it also refuses a folder that belongs to another user or whose permission bits let other users in. Horizon does not examine ACLs, so on macOS an ACL can still give other users access.
+- If the folder is missing, Horizon creates it, readable only by you (mode `700` on Linux and macOS). Horizon refuses to start when the path is relative, is not a folder or is a symbolic link. On Linux and macOS it also refuses a folder that belongs to another user or whose permission bits let other users in. Horizon does not examine ACLs, so on macOS an ACL can still give other users access.
 - With `HORIZON_HOME` set, Horizon looks for its config only in that folder (`config.yaml` or `config.yml`), never in `~/.horizon`, `$XDG_CONFIG_HOME/horizon` or the working directory. `--config` still wins.
 - `HOME` stays the same, so terminals in this Horizon keep your normal home directory. They inherit `HORIZON_HOME`, which is how agents in them find this Horizon's browser panels.
 - Horizon still adds its agent skills to the usual folders of Claude Code, Codex and the other agents in your home directory.

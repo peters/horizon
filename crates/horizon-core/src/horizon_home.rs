@@ -16,6 +16,8 @@ pub enum HorizonHomeError {
     Create { path: PathBuf, source: std::io::Error },
     #[error("HORIZON_HOME {} is not a directory", .0.display())]
     NotDirectory(PathBuf),
+    #[error("HORIZON_HOME {} is a symbolic link; name the folder it points to", .0.display())]
+    Symlink(PathBuf),
     #[error("HORIZON_HOME {} belongs to another user", .0.display())]
     NotOwned(PathBuf),
     #[error("HORIZON_HOME {} is open to other users; make it private with chmod 700", .0.display())]
@@ -33,8 +35,9 @@ impl HorizonHome {
 
     /// Resolve the home of a process that keeps its state there. A `HORIZON_HOME` override
     /// must be an absolute path. Horizon creates it with owner-only permissions when it is
-    /// missing; an existing one must be a directory whose permission bits admit only its
-    /// owner. ACLs are not examined: on macOS an ACL can still grant other users access.
+    /// missing; an existing one must be a directory, not a symbolic link, whose permission
+    /// bits admit only its owner. ACLs are not examined: on macOS an ACL can still grant
+    /// other users access.
     ///
     /// # Errors
     ///
@@ -179,6 +182,9 @@ impl HorizonHome {
 }
 
 fn prepare_private_root(root: &Path) -> Result<(), HorizonHomeError> {
+    // Without trailing separators, so that `lstat` examines a symbolic link and not its target.
+    let root = root.components().collect::<PathBuf>();
+    let root = root.as_path();
     if let Err(source) = create_private_dirs(root) {
         if std::fs::metadata(root).is_ok_and(|metadata| !metadata.is_dir()) {
             return Err(HorizonHomeError::NotDirectory(root.to_path_buf()));
@@ -188,10 +194,14 @@ fn prepare_private_root(root: &Path) -> Result<(), HorizonHomeError> {
             source,
         });
     }
-    let metadata = std::fs::metadata(root).map_err(|source| HorizonHomeError::Create {
+    // A symbolic link could lead the instance to another state folder, such as `~/.horizon`.
+    let metadata = std::fs::symlink_metadata(root).map_err(|source| HorizonHomeError::Create {
         path: root.to_path_buf(),
         source,
     })?;
+    if metadata.file_type().is_symlink() {
+        return Err(HorizonHomeError::Symlink(root.to_path_buf()));
+    }
     if !metadata.is_dir() {
         return Err(HorizonHomeError::NotDirectory(root.to_path_buf()));
     }
@@ -408,6 +418,30 @@ mod tests {
             HorizonHome::prepare_with(Some(file.join("child"))),
             Err(HorizonHomeError::Create { .. })
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_override_that_is_a_symbolic_link_is_rejected() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let target = temp.path().join("target");
+        let link = temp.path().join("link");
+        HorizonHome::prepare_with(Some(target.clone())).expect("private target");
+        std::os::unix::fs::symlink(&target, &link).expect("symbolic link");
+
+        for root in [link.clone(), link.join(""), link.join(".")] {
+            assert!(
+                matches!(
+                    HorizonHome::prepare_with(Some(root.clone())),
+                    Err(HorizonHomeError::Symlink(path)) if path == link
+                ),
+                "{} is accepted",
+                root.display()
+            );
+        }
+        // A link among the ancestors is the system's business, as `/tmp` is on macOS.
+        HorizonHome::prepare_with(Some(link.join("child"))).expect("a folder below a linked ancestor");
+        assert!(target.join("child").is_dir());
     }
 
     #[cfg(unix)]

@@ -91,15 +91,15 @@ These names apply in the steps:
    Result: The output is `exit 0`. The hook does not use the Horizon home, and
    its exit codes control the turn of the agent.
 
-### 6.2 H02: Horizon rejects a file and a shared folder
+### 6.2 H02: Horizon rejects a file, a shared folder and a link
 
-1. Make a file and a folder that other users can read.
+1. Make a file, a folder that other users can read, and a link to a private folder.
 
    ```sh
-   touch <run>/file && mkdir -m 755 <run>/shared
+   touch <run>/file && mkdir -m 755 <run>/shared && mkdir -m 700 <run>/private && ln -s private <run>/link
    ```
 
-   Result: The file and the folder exist.
+   Result: The file, the folders and the link exist.
 
 2. Start the candidate with the file.
 
@@ -116,6 +116,14 @@ These names apply in the steps:
    ```
 
    Result: The output says that the folder `is open to other users`, and `exit 2`.
+
+4. Start the candidate with the link, also with a trailing `/`.
+
+   ```sh
+   for root in <run>/link <run>/link/; do env -u DISPLAY -u WAYLAND_DISPLAY HOME=<home> HORIZON_HOME=$root <bin>/horizon; echo "exit $?"; done
+   ```
+
+   Result: Each output says that the path `is a symbolic link`, and `exit 2`.
 
 ### 6.3 H03: Horizon makes a missing folder private
 

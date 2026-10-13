@@ -366,8 +366,8 @@ panels, with the existing actor/host scoping rules preserved.
 
 The browser engine remains in `horizon-browser`; it does not depend on this
 server or an async runtime. The MCP adapter owns Tokio and protocol transport.
-The default coordination root remains `HOME/.horizon`; configurable runtime
-roots are a separate follow-up in #693.
+Without `HORIZON_BROWSER_ROOT`, the coordination root is the path in
+`HORIZON_HOME` when that is set and not empty, else `HOME/.horizon`.
 
 ## Shared provider usage
 
