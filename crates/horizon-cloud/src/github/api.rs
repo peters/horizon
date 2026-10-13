@@ -13,9 +13,10 @@ const MAX_PAGES: u32 = 20;
 /// The largest page of 100 full repository objects read, in bytes.
 const PAGE_LIMIT: u64 = 4 * 1024 * 1024;
 
-/// The largest search page read, in bytes: 100 pull requests with their whole descriptions,
-/// which reach 65,536 characters each when Dependabot quotes release notes.
-const SEARCH_LIMIT: u64 = 16 * 1024 * 1024;
+/// The largest search page read, in bytes: 50 pull requests with their whole descriptions,
+/// which reach 65,536 characters each when Dependabot quotes release notes. A character
+/// takes at most six bytes in the JSON answer (`\u0001`), so a page stays under 20 MiB.
+const SEARCH_LIMIT: u64 = 24 * 1024 * 1024;
 
 /// The account a token acts as. `email` is GitHub's private commit address, so a
 /// commit never shows the person's own address.

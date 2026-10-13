@@ -3,11 +3,18 @@ use super::{Client, Error, Result, Secret};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
-/// GitHub's search answers at most 1,000 results: ten pages of 100.
-const MAX_PAGES: u32 = 10;
+/// Pull requests per search page. A page of 50 stays within the read limit even when
+/// every description is as long and as escaped as GitHub allows.
+const PAGE: usize = 50;
+
+/// GitHub's search answers at most 1,000 results: twenty pages of 50.
+const MAX_PAGES: u32 = 20;
 
 /// The longest search query GitHub takes, in characters.
 const MAX_QUERY: usize = 256;
+
+/// The most owners in one query; GitHub refuses a query with too many `user:` qualifiers.
+const MAX_OWNERS: usize = 10;
 
 impl Client {
     /// The open pull requests that `author` (such as `app/dependabot`) opened in repositories
@@ -45,10 +52,10 @@ impl Client {
         for query in queries(author, &owners) {
             let mut read = 0_u64;
             for page in 1..=MAX_PAGES {
-                let path = format!("/search/issues?q={query}&per_page=100&page={page}");
+                let path = format!("/search/issues?q={query}&per_page={PAGE}&page={page}");
                 let answer: Answer = self.get_search(token, &path)?;
                 read += answer.items.len() as u64;
-                let last = answer.items.len() < 100 || read >= answer.total_count;
+                let last = answer.items.len() < PAGE || read >= answer.total_count;
                 for item in answer.items {
                     let name = item
                         .repository_url
@@ -75,12 +82,15 @@ fn queries(author: &str, owners: &std::collections::BTreeSet<String>) -> Vec<Str
     let base = format!("is:pr is:open author:{author}");
     let mut queries: Vec<String> = Vec::new();
     let mut current = base.clone();
+    let mut count = 0;
     for owner in owners {
         let qualifier = format!(" user:{owner}");
-        if current.len() + qualifier.len() > MAX_QUERY && current != base {
+        if (current.len() + qualifier.len() > MAX_QUERY || count == MAX_OWNERS) && current != base {
             queries.push(std::mem::replace(&mut current, base.clone()));
+            count = 0;
         }
         current.push_str(&qualifier);
+        count += 1;
     }
     if current != base {
         queries.push(current);
@@ -116,7 +126,7 @@ mod tests {
 
     #[test]
     fn counts_open_pull_requests_per_reachable_repository_on_every_page() {
-        let mut first = vec!["Acme/Web"; 99];
+        let mut first = vec!["Acme/Web"; PAGE - 1];
         first.push("acme/hidden");
         let (client, requests, task) = github(vec![
             (200, page(102, &first)),
@@ -135,7 +145,7 @@ mod tests {
             counts,
             BTreeMap::from([
                 ("acme/api".into(), 1),
-                ("acme/web".into(), 100),
+                ("acme/web".into(), 50),
                 ("other/tool".into(), 1)
             ]),
             "lowercased, each owner searched once, and the repository the app cannot reach is left out"
@@ -144,19 +154,20 @@ mod tests {
         assert_eq!(
             lines,
             [
-                "GET /search/issues?q=is%3Apr+is%3Aopen+author%3Aapp%2Fdependabot+user%3Aacme+user%3Aother&per_page=100&page=1 HTTP/1.1",
-                "GET /search/issues?q=is%3Apr+is%3Aopen+author%3Aapp%2Fdependabot+user%3Aacme+user%3Aother&per_page=100&page=2 HTTP/1.1",
+                "GET /search/issues?q=is%3Apr+is%3Aopen+author%3Aapp%2Fdependabot+user%3Aacme+user%3Aother&per_page=50&page=1 HTTP/1.1",
+                "GET /search/issues?q=is%3Apr+is%3Aopen+author%3Aapp%2Fdependabot+user%3Aacme+user%3Aother&per_page=50&page=2 HTTP/1.1",
             ]
         );
     }
 
     #[test]
     fn reads_a_page_of_long_descriptions() {
-        let body = "r".repeat(60_000);
-        let items: Vec<Value> = (0..100)
+        // Control characters are escaped as six bytes each: the largest page GitHub sends.
+        let body = "\u{1}".repeat(65_536);
+        let items: Vec<Value> = (0..PAGE)
             .map(|_| json!({"repository_url": "https://api.github.com/repos/acme/web", "body": body}))
             .collect();
-        let (client, _requests, task) = github(vec![(200, json!({"total_count": 100, "items": items}))]);
+        let (client, _requests, task) = github(vec![(200, json!({"total_count": PAGE, "items": items}))]);
         let counts = client
             .open_pull_requests_by(
                 &Secret::new("ghu_synthetic".into()),
@@ -166,14 +177,27 @@ mod tests {
             )
             .unwrap();
         task.join().unwrap();
-        assert_eq!(counts["acme/web"], 100, "6 MB of release notes is one page");
+        assert_eq!(
+            counts["acme/web"], 50,
+            "a page of the longest escaped descriptions is read"
+        );
     }
 
     #[test]
     fn many_owners_share_few_searches_within_the_query_length() {
         let owners: std::collections::BTreeSet<String> = (0..60).map(|n| format!("owner-number-{n:02}")).collect();
         let queries = queries("app/dependabot", &owners);
-        assert_eq!(queries.len(), 6, "60 owners of 21 characters in queries of at most 256");
+        assert_eq!(
+            queries.len(),
+            6,
+            "60 owners in queries of at most 256 characters and 10 owners"
+        );
+        let short: std::collections::BTreeSet<String> = (b'a'..=b'q').map(|c| char::from(c).to_string()).collect();
+        assert_eq!(
+            super::queries("app/dependabot", &short).len(),
+            2,
+            "17 short owners exceed the owner cap, not the length"
+        );
         let decoded: Vec<String> = queries
             .iter()
             .map(|query| query.replace("%3A", ":").replace("%2F", "/").replace('+', " "))
@@ -190,7 +214,7 @@ mod tests {
 
     #[test]
     fn stops_at_the_last_page_github_answers() {
-        let full = vec!["acme/web"; 100];
+        let full = vec!["acme/web"; PAGE];
         let (client, requests, task) = github((0..MAX_PAGES).map(|_| (200, page(5000, &full))).collect());
         let counts = client
             .open_pull_requests_by(
