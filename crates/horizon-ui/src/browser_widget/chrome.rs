@@ -111,8 +111,10 @@ pub fn show(
     {
         let message = if browser.accepts_cloud_drops() {
             "Upload selection is unavailable in this cloud browser. Drop the files on the page instead."
+        } else if browser.is_cloud() && browser.remote_target().is_some() {
+            "A remote device of a provider cannot take files from this computer."
         } else if browser.is_cloud() {
-            "This cloud browser cannot take files from this computer. A provider device never can; for a worker browser, rebuild the cloud with a newer image."
+            "This cloud browser cannot take files from this computer. Rebuild the cloud with a newer image."
         } else {
             "Manual upload selection is unavailable. Use local Chromium, or update local Firefox to a build with file-dialog support."
         };

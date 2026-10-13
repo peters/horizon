@@ -381,8 +381,12 @@ impl BrowserPanelState {
             connection,
             id,
             waker,
+            target,
             ..
         } = self.cloud.as_mut().ok_or("This browser is not a cloud browser")?;
+        if target.is_some() {
+            return Err("A remote device of a provider cannot take files from this computer.".into());
+        }
         uploads.drop_files(paths, x, y, &|paths, limits, purpose| {
             start_transfer(connection, id, waker, paths, limits, purpose)
         })

@@ -221,7 +221,12 @@ impl Relay {
     }
 
     fn start(&mut self, paths: Vec<PathBuf>, purpose: Purpose, start: Start<'_>) -> Result<(), String> {
-        if self.transfer.is_some() {
+        // A finished answer or drop that waits for the next poll is busy too: one slot each.
+        let queued = {
+            let outgoing = self.outgoing.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            outgoing.answer.is_some() || outgoing.drop.is_some()
+        };
+        if self.transfer.is_some() || queued {
             return Err("Wait for the current upload to finish, then try again.".into());
         }
         let limits = self

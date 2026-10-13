@@ -186,6 +186,13 @@ fn drops_carry_the_page_that_the_person_saw_and_report_failures() {
     );
     starts.complete(Ok(staged("b1")));
     assert!(relay.finish(&chooser).is_none());
+    assert!(
+        relay
+            .drop_files(vec!["/local/b".into()], 1.0, 2.0, &start)
+            .unwrap_err()
+            .contains("current upload"),
+        "a finished drop that waits for the next poll is never replaced"
+    );
     let drop = outgoing(&relay).drop.unwrap();
     assert_eq!((drop.page, drop.x, drop.y, drop.files), (7, 1.0, 2.0, staged("b1")));
 

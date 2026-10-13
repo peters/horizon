@@ -701,6 +701,12 @@ fn a_cloud_panel_mirrors_the_worker_chooser_and_takes_drops_only_from_a_relaying
     let panel = &mut fixture.panel;
     assert!(panel.is_cloud() && !panel.accepts_cloud_drops());
     let refused = panel.drop_cloud_files(vec!["/local/a.txt".into()], 1.0, 2.0);
+    assert!(
+        refused.unwrap_err().contains("provider"),
+        "the fixture shows a provider device"
+    );
+    panel.cloud.as_mut().unwrap().target = None;
+    let refused = panel.drop_cloud_files(vec!["/local/a.txt".into()], 1.0, 2.0);
     assert!(refused.unwrap_err().contains("connected"), "no state arrived yet");
     let state = |request: Option<u64>| CloudViewState {
         ready: true,
