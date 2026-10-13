@@ -100,8 +100,9 @@ impl<'a> IndexFile<'a> {
     }
 
     /// Makes the folder of the index and takes its file lock, which is held until the
-    /// returned file is dropped. A file system that cannot lock a file gives no lock; then
-    /// only [`INDEX_UPDATE`] keeps out other changes, as before this lock.
+    /// returned file is dropped. A file system that refuses the lock, for example an NFS mount
+    /// without a lock service, gives no lock; then only [`INDEX_UPDATE`] keeps out other
+    /// changes, as before this lock.
     fn lock(&self) -> Result<Option<fs::File>> {
         fs::create_dir_all(self.folder())?;
         let lock_path = self.path.with_extension("lock");
@@ -124,14 +125,13 @@ impl<'a> IndexFile<'a> {
                         lock_path.display()
                     )));
                 }
-                Err(fs::TryLockError::Error(error)) if error.kind() == ErrorKind::Unsupported => {
+                Err(fs::TryLockError::Error(error)) => {
                     static WARNED: Once = Once::new();
                     WARNED.call_once(|| {
                         tracing::warn!(%error, "cannot lock the session index; another Horizon can overwrite it");
                     });
                     return Ok(None);
                 }
-                Err(fs::TryLockError::Error(error)) => return Err(error.into()),
             }
         }
     }
