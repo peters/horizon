@@ -36,6 +36,7 @@ WORKER_ENVIRONMENT = {
     'ANTHROPIC_CUSTOM_HEADERS': 'anthropic-workspace-id: synthetic-workspace',
     'HORIZON_HOME': '/operator/horizon-home',
     'CODEX_HOME': '/workspace/home/.codex',
+    'CLAUDE_CONFIG_DIR': '/workspace/home/.claude',
     'XDG_CONFIG_HOME': '/workspace/home/.config',
     'HORIZON_AGENT_INTEGRATIONS': 'on',
 }
@@ -60,7 +61,7 @@ class ChildEnvironmentTests(unittest.TestCase):
         self.assertEqual(self.env['HORIZON_HOME'], str(self.state / 'horizon-home'))
         self.assertEqual(self.env['HORIZON_AGENT_INTEGRATIONS'], 'off', 'nothing is installed in HOME')
         self.assertEqual(self.env['HISTFILE'], str(self.state / 'shell-history'), 'its terminals keep no history in HOME')
-        for key in ('CODEX_HOME', 'GROK_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME'):
+        for key in ('CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'GROK_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME'):
             self.assertTrue(Path(self.env[key]).is_relative_to(self.state), key)
 
     def test_only_present_variables_are_reported(self):

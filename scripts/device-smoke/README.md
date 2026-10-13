@@ -315,9 +315,10 @@ The debug Horizon gets a changed environment:
   skills, plugins, MCP registrations or a desktop entry in `HOME`, and takes no
   skill leases there. The worker's own agents use those folders. Claude Code
   panels in the debug app therefore start without the Horizon plugin.
-- `CODEX_HOME`, `GROK_HOME`, `XDG_DATA_HOME`, `XDG_CONFIG_HOME` and
-  `XDG_CACHE_HOME` go to the state directory. The agents and tools that the
-  debug app starts keep their files there.
+- `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`, `XDG_DATA_HOME`,
+  `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` go to the state directory. The agents
+  and tools that the debug app starts keep their files there. These agents are
+  not signed in, so start one only to test the panel itself.
 - `HISTFILE` is `<state>/shell-history`, so the shells in the debug app's
   terminals write no history to `HOME`.
 - `HOME` does not change. Terminals in the debug app keep `/workspace/home`.

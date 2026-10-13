@@ -33,7 +33,7 @@ WORKER_IDENTITY_KEYS = (
 )
 CREDENTIAL_KEYS = ('ANTHROPIC_API_KEY', 'ANTHROPIC_WORKSPACE_ID', 'ANTHROPIC_CUSTOM_HEADERS')
 STRIPPED_KEYS = WORKER_IDENTITY_KEYS + CREDENTIAL_KEYS + ('WAYLAND_DISPLAY',)
-REPLACED_KEYS = ('DISPLAY', 'HORIZON_HOME', 'HORIZON_AGENT_INTEGRATIONS', 'HISTFILE', 'CODEX_HOME', 'GROK_HOME',
+REPLACED_KEYS = ('DISPLAY', 'HORIZON_HOME', 'HORIZON_AGENT_INTEGRATIONS', 'HISTFILE', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'GROK_HOME',
                  'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME')
 STOP_SECONDS = 15
 
@@ -44,7 +44,7 @@ def child_environment(environ, state, display):
     HOME stays, so terminals in the debug app keep the worker home. Horizon's state goes to
     HORIZON_HOME, and HORIZON_AGENT_INTEGRATIONS=off stops it from installing agent skills,
     plugins, MCP registrations and a desktop entry in that home, which the worker's own agents
-    use. The Codex and Grok homes, the XDG directories and the shell history of its terminals
+    use. The Claude, Codex and Grok homes, the XDG directories and the shell history of its terminals
     go to the state directory too, so the agents and tools that the debug app starts keep
     their files there.
     """
@@ -54,6 +54,7 @@ def child_environment(environ, state, display):
                HORIZON_HOME=str(state / 'horizon-home'),
                HORIZON_AGENT_INTEGRATIONS='off',
                HISTFILE=str(state / 'shell-history'),
+               CLAUDE_CONFIG_DIR=str(state / 'agents' / 'claude'),
                CODEX_HOME=str(state / 'agents' / 'codex'),
                GROK_HOME=str(state / 'agents' / 'grok'),
                XDG_DATA_HOME=str(state / 'xdg' / 'data'),
