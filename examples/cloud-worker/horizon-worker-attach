@@ -1,0 +1,628 @@
+#!/usr/bin/python3
+"""Attach this terminal to one agent session and pass the session's own output through.
+
+  horizon-worker-attach SESSION
+
+A plain tmux client redraws its screen instead of passing output on, so the terminal that
+shows a session kept no history of its own. This helper attaches tmux in control mode, which
+reports every byte that the session writes, and writes those bytes to this terminal. At each
+attach it first prints the history and the screen that tmux kept, so output written while no
+terminal was attached appears too, and nothing of an earlier attach stays above it.
+
+tmux stays the terminal of the session: it answers the session's terminal queries and it adds
+paste brackets only when the session asked for them. This terminal therefore never sees those
+queries, and it never reports focus or color scheme changes, which tmux does not pass on. tmux
+3.4 cannot learn the colors of a control mode client, so it answers color queries with its default
+colors. It does not report the current text style of a pane either, so a style that a program set
+before the attach and did not use yet is not restored.
+"""
+import contextlib
+import fcntl
+import os
+import re
+import select
+import signal
+import struct
+import subprocess
+import sys
+import termios
+import time
+import tty
+
+TMUX = ['tmux', '-u', '-L', 'horizon-cloud']
+SESSION = re.compile(r'[a-zA-Z0-9_-]{1,100}')
+REPLY_SECONDS = 10
+# A key that may start a paste bracket waits this long for the rest of the bracket, and a
+# paste whose closing bracket does not come is sent after this long without input. A slow
+# connection can pause a paste, so that limit is generous.
+MARKER_SECONDS = 0.05
+PASTE_SECONDS = 10
+KEY_CHUNK = 256
+PASTE_CHUNK = 1024
+# Read at attach, in this order, from the active pane of the session.
+STATE = ('pane_id', 'pane_width', 'pane_height', 'history_size', 'cursor_x', 'cursor_y', 'cursor_flag', 'alternate_on',
+         'alternate_saved_x', 'alternate_saved_y', 'keypad_cursor_flag', 'keypad_flag', 'insert_flag',
+         'origin_flag', 'wrap_flag', 'scroll_region_upper', 'scroll_region_lower', 'mouse_standard_flag',
+         'mouse_button_flag', 'mouse_any_flag', 'mouse_sgr_flag', 'mouse_utf8_flag', 'host', 'host_short',
+         # Last, because a title can contain spaces.
+         'pane_title')
+PANE = re.compile(r'%[0-9]{1,9}')
+NUMBERS = ('_width', '_height', '_size', '_x', '_y', '_flag', '_on', '_upper', '_lower')
+# Private modes that this terminal keeps in its own state: tmux adds paste brackets itself and
+# does not pass focus, color scheme or in-band resize reports on.
+OWNED_MODES = {b'1004', b'2004', b'2031', b'2048'}
+# Window operations that ask for a report.
+WINDOW_REPORTS = {b'11', b'13', b'14', b'15', b'16', b'18', b'19', b'20', b'21'}
+CSI = re.compile(rb'\x1b\[([0-?]*)([ -/]*)([@-~])')
+ALTERNATE_MODES = {b'47', b'1047', b'1049'}
+# How the terminal of the panel (vte 0.15) reads sequences: it executes these C0 controls inside
+# an escape or control sequence, and ignores the ones listed for strings.
+EXECUTED = frozenset(range(0x18)) | {0x19} | frozenset(range(0x1C, 0x20))
+OSC_IGNORED = bytes(sorted(EXECUTED - {0x07}))
+DCS_IGNORED = bytes(sorted(EXECUTED | {0x7F} | set(range(0x80, 0x100))))
+# What ends a string: BEL (commands only), CAN, SUB, ESC, and 8-bit ST (device control only).
+OSC_END = re.compile(rb'[\x07\x18\x1a\x1b]')
+DCS_END = re.compile(rb'[\x18\x1a\x1b\x9c]')
+SGR = re.compile(rb'\x1b\[([0-9;:]*)m')
+PASTE_START, PASTE_END = b'\x1b[200~', b'\x1b[201~'
+# This terminal always brackets pastes, so a reset of the session turns that on again.
+KEEP_BRACKETS = b'\x1b[?2004h'
+# Leaves no mouse report, paste bracket or key mode on in the panel after the attach ends.
+RESET_MODES = b'\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?2004l\x1b[?1l\x1b>\x1b[?25h\x1b[0m'
+LITERAL = frozenset(b'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ,./:=@_+-')
+
+
+def csi(sequence, parameters, intermediates, final):
+    """The part of one control sequence that reaches this terminal; empty to drop it."""
+    private = parameters[:1] if parameters[:1] in (b'?', b'>', b'<', b'=') else b''
+    first = parameters.split(b';', 1)[0]
+    if final == b'p' and intermediates == b'!':
+        return sequence + KEEP_BRACKETS
+    if (final in b'cn'
+            or (final == b'q' and private == b'>' and not intermediates)
+            or (final == b'p' and intermediates == b'$')
+            or (final == b'u' and private)
+            or (final == b'm' and private in (b'>', b'?'))
+            or (final == b't' and not private and first in WINDOW_REPORTS)
+            or (final == b'x' and not private and parameters in (b'', b'0', b'1'))
+            or (final == b'y' and intermediates == b'*')):
+        return b''
+    if final in b'hl' and private == b'?' and not intermediates:
+        modes = parameters[1:].split(b';')
+        kept = [mode for mode in modes if mode not in OWNED_MODES]
+        if len(kept) == len(modes):
+            return sequence
+        return b'\x1b[?' + b';'.join(kept) + final if kept else b''
+    return sequence
+
+
+def string(kind, payload):
+    """Whether an operating system command (]) or device control string (P) reaches this
+    terminal. A query does not, because tmux answers it. Neither does the clipboard: as with a
+    plain tmux client, the session can neither read nor change the clipboard of this computer."""
+    if kind == 0x50:
+        return not payload.startswith((b'+q', b'$q'))
+    fields = payload.split(b';')
+    if fields[0] == b'52':
+        return False
+    return fields[0] in (b'0', b'1', b'2', b'8') or b'?' not in fields[1:]
+
+
+def plain(kind, payload):
+    """A string as the terminal reads it: it ignores these control bytes in it."""
+    return payload.translate(None, OSC_IGNORED if kind == 0x5D else DCS_IGNORED)
+
+
+class Output:
+    """Drops the session's terminal queries and owned modes, and passes everything else.
+    It reads each sequence as the terminal of the panel (vte) does, so that control bytes
+    in a sequence cannot hide what the terminal will do with it."""
+
+    LIMIT = 1 << 20
+
+    def __init__(self):
+        self.pending = b''
+        # Whether the session shows its alternate screen in this terminal.
+        self.alternate = False
+        # The kind of a dropped string longer than LIMIT whose end has not come yet.
+        self.skipping = None
+
+    def feed(self, data):
+        data = self.pending + data
+        self.pending = b''
+        out = bytearray()
+        index = self.skip(data) if self.skipping else 0
+        if index is None:
+            return b''
+        while index < len(data):
+            start = data.find(b'\x1b', index)
+            if start < 0:
+                out += data[index:]
+                break
+            out += data[index:start]
+            end, kept = self.sequence(data, start)
+            if end is None:
+                # A sequence longer than LIMIT is not held: one that would be dropped is
+                # dropped up to its end, and any other is passed on.
+                body = self.introducer(data, start) + 1
+                kind = data[body - 1] if body <= len(data) else None
+                if len(data) - start <= self.LIMIT:
+                    self.pending = data[start:]
+                elif kind in (0x5D, 0x50) and not string(kind, plain(kind, data[body:])):
+                    self.skipping = kind
+                    index = self.skip(data, body)
+                    if index is not None:
+                        continue
+                else:
+                    out += data[start:]
+                break
+            out += kept
+            index = end
+        return bytes(out)
+
+    @staticmethod
+    def introducer(data, start):
+        """Where the byte that names the sequence after the ESC at `start` is. The terminal
+        executes C0 controls there and ignores ESC, DEL and 8-bit bytes."""
+        index = start + 1
+        while index < len(data) and (data[index] in EXECUTED or data[index] in (0x1B, 0x7F) or data[index] >= 0x80):
+            index += 1
+        return index
+
+    def sequence(self, data, start):
+        """The end of the escape sequence at `start` and what of it to write; no end while incomplete."""
+        index = self.introducer(data, start)
+        if index >= len(data):
+            return None, b''
+        executed = bytes(byte for byte in data[start + 1:index] if byte in EXECUTED)
+        kind = data[index]
+        if kind == 0x5B:
+            return self.control(data, start, index + 1, executed)
+        if kind in (0x5D, 0x50):
+            match = (OSC_END if kind == 0x5D else DCS_END).search(data, index + 1)
+            if not match or (data[match.start()] == 0x1B and match.start() + 1 >= len(data)):
+                return None, b''
+            stop = match.start()
+            end = stop + (2 if data[stop:stop + 2] == b'\x1b\\' else 0 if data[stop] == 0x1B else 1)
+            return end, data[start:end] if string(kind, plain(kind, data[index + 1:stop])) else executed
+        if kind == 0x63:
+            self.alternate = False
+            return index + 1, data[start:index + 1] + KEEP_BRACKETS
+        if kind == 0x5A:
+            # DECID asks the terminal to identify itself. A plain tmux client never passed it on,
+            # so this terminal does not answer it either.
+            return index + 1, executed
+        # Any other sequence reaches the terminal unchanged.
+        return start + 1, b'\x1b'
+
+    def control(self, data, start, index, executed):
+        """A control sequence, read as the terminal reads it."""
+        executed = bytearray(executed)
+        parameters, intermediates = bytearray(), bytearray()
+        for position in range(index, len(data)):
+            byte = data[position]
+            if byte in EXECUTED:
+                executed.append(byte)
+            elif byte in (0x18, 0x1A, 0x1B):
+                # The terminal abandons the sequence here, so it gets the same bytes.
+                return position, data[start:position]
+            elif 0x30 <= byte <= 0x3F:
+                parameters.append(byte)
+            elif 0x20 <= byte <= 0x2F:
+                intermediates.append(byte)
+            elif 0x40 <= byte <= 0x7E:
+                final = bytes([byte])
+                sequence = b'\x1b[' + parameters + intermediates + final
+                kept = csi(sequence, bytes(parameters), bytes(intermediates), final)
+                self.follow(kept)
+                if kept == sequence:
+                    return position + 1, data[start:position + 1]
+                return position + 1, bytes(executed) + kept
+            # The terminal ignores DEL and 8-bit bytes in a control sequence.
+        return None, b''
+
+    def skip(self, data, index=0):
+        """Where the output after the dropped string goes on; None while it has not ended."""
+        match = (OSC_END if self.skipping == 0x5D else DCS_END).search(data, index)
+        if not match:
+            return None
+        stop = match.start()
+        if data[stop] == 0x1B and stop + 1 >= len(data):
+            self.pending = b'\x1b'
+            return None
+        self.skipping = None
+        return stop + (2 if data[stop:stop + 2] == b'\x1b\\' else 0 if data[stop] == 0x1B else 1)
+
+    def follow(self, kept):
+        match = CSI.fullmatch(kept)
+        if match and match.group(3) in b'hl' and match.group(1)[:1] == b'?' and not match.group(2):
+            if ALTERNATE_MODES & set(match.group(1)[1:].split(b';')):
+                self.alternate = match.group(3) == b'h'
+
+
+def escape(chunk):
+    """`chunk` as a double-quoted tmux argument that tmux decodes back byte for byte."""
+    return '"' + ''.join(chr(byte) if byte in LITERAL else '\\%03o' % byte for byte in chunk) + '"'
+
+
+def partial(data, marker):
+    """How many bytes at the end of `data` begin `marker`."""
+    for size in range(min(len(marker) - 1, len(data)), 0, -1):
+        if marker.startswith(data[-size:]):
+            return size
+    return 0
+
+
+class Input:
+    """Turns this terminal's input into tmux commands: keys byte for byte, pastes through tmux.
+    A paste goes to a tmux buffer piece by piece as it arrives, so the helper holds at most one
+    piece of it."""
+
+    def __init__(self, pane):
+        self.pane = pane
+        self.held = b''
+        self.paste = None
+        self.buffered = False
+        self.count = 0
+
+    def feed(self, data):
+        commands = []
+        data = self.held + data
+        self.held = b''
+        while data:
+            marker = PASTE_START if self.paste is None else PASTE_END
+            found = data.find(marker)
+            late = data.find(PASTE_END) if self.paste is None else -1
+            if late >= 0 and (found < 0 or late < found):
+                # The rest of a paste that waited too long and was sent without it.
+                commands += self.keys(data[:late])
+                data = data[late + len(PASTE_END):]
+                continue
+            if found < 0:
+                size = partial(data, marker)
+                body, self.held = data[:len(data) - size], data[len(data) - size:]
+                commands += self.keys(body) if self.paste is None else self.collect(body)
+                break
+            if self.paste is None:
+                commands += self.keys(data[:found])
+                self.count += 1
+                self.paste, self.buffered = bytearray(), False
+            else:
+                commands += self.collect(data[:found]) + self.finish()
+            data = data[found + len(marker):]
+        return commands
+
+    def waiting(self):
+        """How long input may wait for the rest of a paste bracket; None when nothing waits."""
+        if self.paste is not None:
+            return PASTE_SECONDS
+        return MARKER_SECONDS if self.held else None
+
+    def flush(self):
+        """Sends what waited for the rest of a paste bracket that did not come."""
+        held, self.held = self.held, b''
+        if self.paste is None:
+            return self.keys(held)
+        return self.collect(held) + self.finish()
+
+    def keys(self, data):
+        return ['send-keys -H -t %s %s' % (self.pane, ' '.join('%02x' % byte for byte in data[offset:offset + KEY_CHUNK]))
+                for offset in range(0, len(data), KEY_CHUNK)]
+
+    def name(self):
+        return 'horizon-paste-%d-%d' % (os.getpid(), self.count)
+
+    def collect(self, data):
+        """Adds pasted text; each full piece goes to the tmux buffer at once."""
+        self.paste += data
+        commands = []
+        while len(self.paste) >= PASTE_CHUNK:
+            commands += self.buffer(bytes(self.paste[:PASTE_CHUNK]))
+            del self.paste[:PASTE_CHUNK]
+        return commands
+
+    def buffer(self, chunk):
+        # tmux ends a string at NUL, so a NUL would cut the paste short.
+        chunk = chunk.replace(b'\0', b'')
+        if not chunk:
+            return []
+        # -- keeps text that starts with "-" from being read as options.
+        command = 'set-buffer %s-b %s -- %s' % ('-a ' if self.buffered else '', self.name(), escape(chunk))
+        self.buffered = True
+        return [command]
+
+    def finish(self):
+        commands = self.buffer(bytes(self.paste))
+        self.paste = None
+        if not self.buffered:
+            return commands
+        # -p brackets the text only when the session asked for brackets; -r keeps its line ends.
+        return commands + ['paste-buffer -p -r -d -b %s -t %s' % (self.name(), self.pane)]
+
+
+def unescape(text):
+    return re.sub(rb'\\([0-7]{3})', lambda match: bytes([int(match.group(1), 8)]), text)
+
+
+class Control:
+    """One tmux control mode client: commands in, replies and session output out."""
+
+    def __init__(self, session):
+        self.process = subprocess.Popen(TMUX + ['-C', 'attach-session', '-t', '=' + session],
+                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        self.partial = b''
+        self.block = None
+        self.replies = []
+        self.ended = False
+
+    def send(self, commands):
+        if commands and not self.ended:
+            try:
+                self.process.stdin.write(''.join(command + '\n' for command in commands).encode())
+                self.process.stdin.flush()
+            except BrokenPipeError:
+                # tmux ended with the session. Closing drops the unsent commands.
+                with contextlib.suppress(OSError):
+                    self.process.stdin.close()
+                self.ended = True
+
+    def read(self):
+        """Reads what tmux wrote: a list of (replies before it, pane, output); replies are
+        collected in order."""
+        data = os.read(self.process.stdout.fileno(), 65536)
+        if not data:
+            self.ended = True
+            return []
+        lines = (self.partial + data).split(b'\n')
+        self.partial = lines.pop()
+        output = []
+        for line in lines:
+            if self.block is not None:
+                guard, mine, body = self.block
+                if line.split(b' ')[1:3] == guard and line.startswith((b'%end ', b'%error ')):
+                    if mine:
+                        self.replies.append((line.startswith(b'%end '), body))
+                    else:
+                        sys.stderr.buffer.write(b''.join(text + b'\r\n' for text in body))
+                    self.block = None
+                else:
+                    body.append(line)
+            elif line.startswith(b'%begin '):
+                fields = line.split(b' ')
+                # Flags 1 mark the reply to a command of this client, not to its attach-session.
+                self.block = (fields[1:3], fields[3:4] == [b'1'], [])
+            elif line.startswith(b'%output '):
+                fields = line.split(b' ', 2)
+                if len(fields) == 3:
+                    output.append((len(self.replies), fields[1].decode('ascii', 'replace'), unescape(fields[2])))
+            elif line == b'%exit' or line.startswith(b'%exit '):
+                self.ended = True
+        return output
+
+
+def window_size(fd):
+    rows, cols = struct.unpack('HHHH', fcntl.ioctl(fd, termios.TIOCGWINSZ, b'\0' * 8))[:2]
+    return (cols or 80, rows or 24)
+
+
+def lines(text, carried):
+    """Rows of a capture as terminal output. Each row ends with its attributes reset, so a
+    background color never fills the new row, and the next row sets them again."""
+    out = bytearray()
+    for index, line in enumerate(text):
+        if index:
+            out += b'\r\n'
+        styled = bool(carried)
+        out += b''.join(carried) + line
+        for match in SGR.finditer(line):
+            styled = True
+            parameters = match.group(1)
+            if parameters in (b'', b'0'):
+                carried = []
+            elif parameters.startswith(b'0;'):
+                carried = [match.group(0)]
+            else:
+                carried = (carried + [match.group(0)])[-512:]
+        if styled:
+            out += b'\x1b[0m'
+    return bytes(out), carried
+
+
+def captured(captures):
+    """The rows of several captures as terminal output. Each capture starts with default
+    attributes, so the attributes of one never continue into the next."""
+    return b'\r\n'.join(lines(rows, [])[0] for rows in captures if rows)
+
+
+def render(state, normal, alternate, cursor_row=()):
+    """What makes an empty terminal show the pane: its history, screen, cursor and modes.
+    `normal` and `alternate` are lists of captures; `cursor_row` is the row of the cursor."""
+    number = {key: int(value) if value.isdigit() else 0 for key, value in state.items() if key.endswith(NUMBERS)}
+    out = bytearray(b'\x1b[?1049l\x1b[r\x1b[0m\x1b[?1l\x1b>\x1b[?6l\x1b[?7h\x1b[4l'
+                    b'\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?25h\x1b[H\x1b[2J\x1b[3J')
+    out += captured(normal)
+    if number['alternate_on']:
+        # Leaving the alternate screen puts the cursor back where the pane saved it.
+        if state['alternate_saved_x'].isdigit() and number['alternate_saved_y'] < number['pane_height']:
+            out += b'\x1b[%d;%dH' % (number['alternate_saved_y'] + 1, number['alternate_saved_x'] + 1)
+        out += b'\x1b[?1049h\x1b[H' + captured(alternate)
+    upper, lower = number['scroll_region_upper'], number['scroll_region_lower']
+    if (upper, lower) != (0, number['pane_height'] - 1) and lower > upper:
+        out += b'\x1b[%d;%dr' % (upper + 1, lower + 1)
+    for name, sequence in (('keypad_cursor_flag', b'\x1b[?1h'), ('keypad_flag', b'\x1b='), ('insert_flag', b'\x1b[4h'),
+                           ('mouse_standard_flag', b'\x1b[?1000h'), ('mouse_button_flag', b'\x1b[?1002h'),
+                           ('mouse_any_flag', b'\x1b[?1003h'), ('mouse_utf8_flag', b'\x1b[?1005h'),
+                           ('mouse_sgr_flag', b'\x1b[?1006h')):
+        if number[name]:
+            out += sequence
+    if not number['wrap_flag']:
+        out += b'\x1b[?7l'
+    row = number['cursor_y']
+    if number['origin_flag']:
+        out += b'\x1b[?6h'
+        row -= upper
+    if 0 < number['pane_width'] <= number['cursor_x'] and cursor_row:
+        # The row is full and the next character wraps. Writing the row again leaves the
+        # terminal in that state too; a cursor move would not.
+        out += b'\x1b[%d;1H' % (max(row, 0) + 1) + captured([list(cursor_row)])
+    else:
+        out += b'\x1b[%d;%dH' % (max(row, 0) + 1, number['cursor_x'] + 1)
+    if not number['cursor_flag']:
+        out += b'\x1b[?25l'
+    # The title that the session set, also while no panel was attached. tmux gives a pane the host
+    # name until the session sets one, and that is no title of the session.
+    title = state['pane_title']
+    if title in (state['host'], state['host_short']) or any(ord(character) < 0x20 or 0x7F <= ord(character) < 0xA0 for character in title):
+        title = ''
+    return bytes(out + b'\x1b]2;' + title.encode() + b'\x07\x1b[?2004h')
+
+
+def write(fd, data):
+    """Writes all of `data`; False when the terminal is gone."""
+    view = memoryview(data)
+    try:
+        while view:
+            view = view[os.write(fd, view):]
+    except OSError:
+        return False
+    return True
+
+
+class Attachment:
+    def __init__(self, session, terminal):
+        self.session = session
+        self.terminal = terminal
+        self.control = Control(session)
+        self.output = Output()
+        self.input = None
+        self.pane = None
+        self.connected = True
+
+    def wait(self, count):
+        """The next `count` replies, and the session output that tmux wrote after them. The output
+        that came before them is already in what they read."""
+        deadline = time.monotonic() + REPLY_SECONDS
+        later = []
+        while len(self.control.replies) < count:
+            if self.control.ended or not select.select([self.control.process.stdout], [], [], max(0, deadline - time.monotonic()))[0]:
+                raise SystemExit('horizon-worker-attach: tmux did not attach the session')
+            later = [(pane, data) for replies, pane, data in self.control.read() if replies >= count]
+        replies, self.control.replies = self.control.replies[:count], self.control.replies[count:]
+        if not all(ok for ok, _ in replies):
+            raise SystemExit('horizon-worker-attach: tmux refused to read the session')
+        return [body for _, body in replies], later
+
+    def synchronize(self):
+        target = '=%s:' % self.session
+        self.control.send(['refresh-client -C %dx%d' % window_size(self.terminal)])
+        self.wait(1)
+        query = ' '.join('#{%s}' % name for name in STATE)
+        # In the alternate screen, the pane's grid holds its normal history above the alternate
+        # screen, and the normal screen is saved apart (-a). One command line, so tmux reads no
+        # session output between the state and the captures.
+        captures = ('-S - -E -', '-S - -E -1', '-S 0 -E -', '-a -q -S - -E -', "-N -S '#{cursor_y}' -E '#{cursor_y}'")
+        self.control.send([' ; '.join(["display-message -p -t %s '%s'" % (target, query)]
+                                      + ['capture-pane -p -e -J %s -t %s' % (lines, target) for lines in captures])])
+        (described, whole, history, screen, saved, cursor_row), later = self.wait(1 + len(captures))
+        values = described[0].decode('utf-8', 'replace').split(' ', len(STATE) - 1) if described else []
+        if len(values) != len(STATE) or not PANE.fullmatch(values[0]):
+            raise SystemExit('horizon-worker-attach: tmux described the session unexpectedly')
+        state = dict(zip(STATE, values))
+        self.pane = state['pane_id']
+        self.output.alternate = state['alternate_on'] == '1'
+        self.input = Input(self.pane)
+        if state['alternate_on'] == '1':
+            # With no history, -E -1 names the first screen row instead.
+            normal, alternate = [history if state['history_size'] != '0' else [], saved], [screen]
+        else:
+            normal, alternate = [whole], []
+        shown = render(state, normal, alternate, cursor_row)
+        write(self.terminal + 1, shown + b''.join(self.output.feed(data) for pane, data in later if pane == self.pane))
+
+    def run(self):
+        wake_read, wake_write = os.pipe()
+        os.set_blocking(wake_write, False)
+        signal.set_wakeup_fd(wake_write)
+        resized = []
+        signal.signal(signal.SIGWINCH, lambda *_: resized.append(True))
+        self.synchronize()
+        stdin, stdout, tmux = self.terminal, self.terminal + 1, self.control.process.stdout
+        last_input = time.monotonic()
+        while not self.control.ended:
+            waiting = self.input.waiting()
+            timeout = None if waiting is None else max(0, last_input + waiting - time.monotonic())
+            ready = select.select([stdin, tmux, wake_read], [], [], timeout)[0]
+            if wake_read in ready:
+                os.read(wake_read, 512)
+            if resized:
+                resized.clear()
+                self.control.send(['refresh-client -C %dx%d' % window_size(stdin)])
+            if tmux in ready:
+                for _, pane, data in self.control.read():
+                    if pane == self.pane and not write(stdout, self.output.feed(data)):
+                        self.connected = False
+                        return
+                self.control.replies.clear()
+            if stdin in ready:
+                try:
+                    data = os.read(stdin, 65536)
+                except OSError:
+                    data = b''
+                if not data:
+                    self.connected = False
+                    break
+                last_input = time.monotonic()
+                self.control.send(self.input.feed(data))
+            elif waiting is not None and time.monotonic() >= last_input + waiting:
+                self.control.send(self.input.flush())
+
+
+def main(argv):
+    if len(argv) != 2 or not SESSION.fullmatch(argv[1]):
+        sys.stderr.write('Usage: horizon-worker-attach SESSION\n')
+        return 2
+    terminal = 0
+    if not (os.isatty(terminal) and os.isatty(terminal + 1)):
+        sys.stderr.write('horizon-worker-attach: needs a terminal\n')
+        return 2
+    saved = termios.tcgetattr(terminal)
+    attachment = None
+
+    def hangup(*_):
+        # The connection is gone, so nothing more is written to it.
+        if attachment is not None:
+            attachment.connected = False
+        sys.exit(0)
+
+    signal.signal(signal.SIGHUP, hangup)
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    try:
+        # TCSANOW keeps keys typed while the connection opened.
+        tty.setraw(terminal, termios.TCSANOW)
+        attachment = Attachment(argv[1], terminal)
+        attachment.run()
+    finally:
+        if attachment is not None and attachment.pane is not None and attachment.connected:
+            # Like a plain tmux client, leave the panel on its normal screen and history.
+            write(terminal + 1, (b'\x1b[?1049l' if attachment.output.alternate else b'') + RESET_MODES)
+        try:
+            termios.tcsetattr(terminal, termios.TCSANOW, saved)
+        except termios.error:
+            pass
+        if attachment is not None and attachment.input is not None and attachment.input.paste is not None \
+                and attachment.input.buffered:
+            # A paste that did not end left its tmux buffer, which nothing else pastes or deletes.
+            with contextlib.suppress(OSError, subprocess.SubprocessError):
+                subprocess.run(TMUX + ['delete-buffer', '-b', attachment.input.name()], timeout=5,
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if attachment is not None and attachment.control.process.poll() is None:
+            attachment.control.process.stdin.close()
+            try:
+                attachment.control.process.wait(5)
+            except subprocess.TimeoutExpired:
+                attachment.control.process.kill()
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv))

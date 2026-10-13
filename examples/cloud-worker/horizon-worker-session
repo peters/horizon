@@ -227,12 +227,14 @@ prepare() {
 session_data() { mkdir -p "/workspace/session-data/$id"; chmod 700 "/workspace/session-data/$id"; }
 # The persisted binding fully determines the launch, so a relaunch reproduces it exactly.
 # The tmux server must not inherit the session lock (fd 9), or a crash before the unlock
-# would hold it for the server's lifetime.
+# would hold it for the server's lifetime. Each new pane keeps the last 10000 lines of its
+# output, which every attach prints before the live output (horizon-worker-attach).
 launch() {
     # A previous agent can change the shared server's environment and default shell.
     # Use this SSH invocation's PATH, not the server's mutable copy, then apply the image's session env.
     # Execute the protected launcher directly so the server's default shell cannot run startup code.
-    tmux -L horizon-cloud new-session -d -s "$id" -c "$worktree" \
+    tmux -L horizon-cloud set-option -g history-limit 10000 \; \
+        new-session -d -s "$id" -c "$worktree" \
         -e "PATH=$PATH" -e BASH_ENV= -e ENV= \
         -e LD_PRELOAD= -e LD_LIBRARY_PATH= -e LD_AUDIT= \
         /bin/bash --noprofile --norc -p /usr/local/bin/horizon-worker-run "$id" "$agent" 9>&-
@@ -368,4 +370,6 @@ if ! running; then
 fi
 flock -u 9
 exec 9>&-
-exec tmux -L horizon-cloud attach-session -t "=$id"
+# Not a plain tmux client: that client redraws the screen, so the terminal of the panel would
+# keep no history of its own.
+exec horizon-worker-attach "$id"

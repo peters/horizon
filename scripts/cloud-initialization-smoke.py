@@ -170,7 +170,7 @@ def run(options):
     if not sshd.is_absolute() or not sshd.is_file() or not os.access(sshd, os.X_OK):
         raise ValueError("Provide an actual OpenSSH server executable with --sshd")
     (root / "bin").mkdir(mode=0o700)
-    for name in ["horizon-worker-check", "horizon-worker-session", "horizon-worker-import", "horizon-worker-source", "horizon-worker-supervise"]:
+    for name in ["horizon-worker-check", "horizon-worker-session", "horizon-worker-attach", "horizon-worker-import", "horizon-worker-source", "horizon-worker-supervise"]:
         shutil.copy2(checker_root / name, root / "bin" / name)
         (root / "bin" / name).chmod(0o700)
     shutil.copy2(sshd, root / "bin/sshd")

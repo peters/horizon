@@ -210,7 +210,7 @@ try:
         if args.agent != 'shell' and args.agent not in selected['agents']:
             raise ValueError('Agent is disabled by this cloud profile')
         sys.exit(0)
-    for binary in ['sshd', 'ssh', 'tmux', 'git', 'flock', 'python3', 'horizon-cloud-worker', 'horizon-worker-session', 'horizon-worker-import', 'horizon-worker-source', 'horizon-worker-supervise']:
+    for binary in ['sshd', 'ssh', 'tmux', 'git', 'flock', 'python3', 'horizon-cloud-worker', 'horizon-worker-session', 'horizon-worker-attach', 'horizon-worker-import', 'horizon-worker-source', 'horizon-worker-supervise']:
         require(binary)
     # The shell scripts run as #!/bin/bash and read NUL-separated lists with mapfile -d (Bash 4.4).
     try:

@@ -24,6 +24,11 @@ args = sys.argv[1:]
 if args[:2] != ['-L', 'horizon-cloud']:
     sys.exit(90)
 command, rest = args[2], args[3:]
+# Each launch first raises the history that every attach prints.
+if command == 'set-option':
+    if rest[:4] != ['-g', 'history-limit', '10000', ';']:
+        sys.exit(94)
+    command, rest = rest[4], rest[5:]
 if command == 'has-session':
     sys.exit(0 if (state / 'running' / rest[1].removeprefix('=')).exists() else 1)
 if command == 'new-session':
@@ -40,9 +45,10 @@ if command == 'new-session':
     (state / 'running').mkdir(exist_ok=True)
     (state / 'running' / rest[2]).touch()
     sys.exit(0)
-if command == 'attach-session':
-    sys.exit(0)
 sys.exit(92)
+'''
+ATTACH = '''import sys
+sys.exit(0 if len(sys.argv) == 2 else 95)
 '''
 CHECK = '''import os, sys
 with open(os.environ['CHECK_LOG'], 'a') as log:
@@ -71,7 +77,8 @@ class SessionRelaunchTests(unittest.TestCase):
         tools = self.root / 'bin'
         tools.mkdir()
         self.tools = tools
-        for name, body in [('tmux', TMUX), ('horizon-worker-check', CHECK), ('horizon-worker-source', SOURCE)]:
+        for name, body in [('tmux', TMUX), ('horizon-worker-check', CHECK), ('horizon-worker-source', SOURCE),
+                           ('horizon-worker-attach', ATTACH)]:
             (tools / name).write_text('#!' + sys.executable + '\n' + body)
             (tools / name).chmod(0o700)
         self.install('horizon-worker-siblings')

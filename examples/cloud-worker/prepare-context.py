@@ -12,7 +12,7 @@ import subprocess
 WORKER_SCRIPTS = (
     'horizon-worker-tailnet', 'horizon-worker-start', 'horizon-worker-check', 'horizon-worker-configure', 'horizon-worker-supervise',
     'horizon-worker-idle', 'horizon-worker-stop',
-    'horizon-worker-run', 'horizon-worker-session', 'horizon-worker-source',
+    'horizon-worker-run', 'horizon-worker-session', 'horizon-worker-attach', 'horizon-worker-source',
     'horizon-worker-import', 'horizon-worker-siblings', 'horizon-worker-session-env', 'horizon-worker-gpu-lock',
     'horizon-worker-git-auth', 'horizon-worker-github', 'horizon-worker-github-common', 'horizon-worker-github-agents',
     'horizon-worker-github-git', 'horizon-worker-github-http', 'horizon-worker-github-api',
