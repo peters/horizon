@@ -1,3 +1,4 @@
+mod codex_login_sync;
 mod fullscreen;
 mod new_cloud_view;
 mod ownership;
@@ -22,6 +23,7 @@ type SetupResult = Result<(Vec<PathBuf>, Option<PrototypeSnapshot>, cloud_panel:
 #[derive(Default)]
 pub(super) struct CloudPrototype {
     production: production::Production,
+    codex_login: codex_login_sync::State,
     pub groups: CloudGroups,
     root: Option<PathBuf>,
     setup: Option<Receiver<SetupResult>>,
@@ -72,6 +74,7 @@ impl HorizonApp {
     pub(super) fn prepare_cloud_prototype(&mut self, ctx: &egui::Context) {
         if std::env::var_os("HORIZON_CLOUD_MOCK_DIR").is_none() {
             self.prepare_production_clouds(ctx);
+            self.keep_codex_login_current(ctx);
             return;
         }
         self.start_cloud_setup(ctx);

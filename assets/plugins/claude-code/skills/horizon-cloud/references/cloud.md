@@ -73,8 +73,11 @@ The worker gets the login as `/workspace/home/.codex/auth.json`, mode 0600, so C
 there starts signed in. `codex login status` as the agent user says "Logged in using
 ChatGPT".
 
-ChatGPT refresh tokens are single use. A worker that renewed the login on its own keeps
-that renewal, and the renewal comes back to this computer at the next connect. Never run
+ChatGPT refresh tokens are single use, so this computer renews the login. While Horizon
+runs, it renews the login before the access token ends and gives the renewal to every
+cloud within five minutes; Codex on a worker takes the newer file instead of renewing.
+A worker that renewed the login on its own while Horizon was closed keeps that renewal,
+and the renewal comes back to this computer at the next sync or connect. Never run
 `codex login` or `codex logout` on a worker: both revoke the login that every cloud
 shares. Without a sign-in, Codex asks for a sign-in in its own terminal on the worker.
 

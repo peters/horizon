@@ -5,7 +5,10 @@
 //! and rebuild copies the login to the worker, unless the worker holds a later renewal of
 //! the same account; that renewal then comes back here, because `ChatGPT` refresh tokens
 //! are single use and the copy here would otherwise be spent.
+mod renewal;
+
 use super::{Error, Event, Result, command::Runner, ssh::Connection};
+pub use renewal::{Delivered, Kept, Renewal, fingerprint, keep_cloud_current, renew, sync};
 use std::{
     cell::RefCell,
     fs::{File, OpenOptions},
@@ -53,11 +56,14 @@ pub enum SignInError {
     Cloud(#[from] Error),
 }
 
-/// The account of the login in `home`, or `None` when there is no `ChatGPT` login.
+/// The account of the login in `home`, or `None` when there is no usable `ChatGPT` login.
 /// # Errors
 /// The login file is not a private file, or it could not be read.
 pub fn account(home: &Path) -> Result<Option<Account>> {
-    Ok(read(home)?.map(|login| login.account))
+    // A login that `OpenAI` refused for good needs a new sign-in, so it shows as none.
+    Ok(read(home)?
+        .filter(|login| !renewal::marked_refused(home, login))
+        .map(|login| login.account))
 }
 
 /// Signs in with the system browser through `codex login` and returns the account. A
@@ -290,6 +296,9 @@ struct Login {
     account_id: String,
     refreshed: Option<OffsetDateTime>,
     account: Account,
+    refresh_token: Zeroizing<String>,
+    /// When the access token was issued and when it ends, if its claims say so.
+    access: Option<(OffsetDateTime, OffsetDateTime)>,
 }
 
 impl Login {
@@ -300,8 +309,8 @@ impl Login {
             return None;
         }
         let tokens = stored.tokens?;
-        present(tokens.access_token)?;
-        present(tokens.refresh_token)?;
+        let access = present(tokens.access_token)?;
+        let refresh_token = Zeroizing::new(present(tokens.refresh_token)?.to_owned());
         let account_id = present(tokens.account_id)?.to_owned();
         let refreshed = stored
             .last_refresh
@@ -311,10 +320,20 @@ impl Login {
                 id: account_id.clone(),
                 ..present(tokens.id_token).map(claims).unwrap_or_default()
             },
+            access: lifetime(access),
             bytes: Zeroizing::new(bytes.to_vec()),
             account_id,
             refreshed,
+            refresh_token,
         })
+    }
+
+    fn access_lifetime(&self) -> Option<(OffsetDateTime, OffsetDateTime)> {
+        self.access
+    }
+
+    fn refresh_token(&self) -> &str {
+        &self.refresh_token
     }
 
     /// Whether this login is a later renewal of `other`'s account.
@@ -333,17 +352,30 @@ fn present(value: Option<&str>) -> Option<&str> {
     value.filter(|text| !text.is_empty())
 }
 
-/// The account an ID token names, for display only. Codex checked the token when it
-/// signed in; nothing here relies on these claims for access.
-fn claims(token: &str) -> Account {
+/// The claims of a token, unverified: Horizon reads them only to show the account and to
+/// time renewals, as Codex does.
+fn payload(token: &str) -> Option<serde_json::Value> {
     use base64::Engine as _;
-    let payload = token
+    token
         .split('.')
         .nth(1)
         .and_then(|part| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(part).ok())
         .map(Zeroizing::new)
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
-    let Some(payload) = payload else {
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+}
+
+/// When an access token was issued and when it ends.
+fn lifetime(token: &str) -> Option<(OffsetDateTime, OffsetDateTime)> {
+    let payload = payload(token)?;
+    let time = |name: &str| OffsetDateTime::from_unix_timestamp(payload.get(name)?.as_i64()?).ok();
+    let (issued, expires) = (time("iat")?, time("exp")?);
+    (issued < expires).then_some((issued, expires))
+}
+
+/// The account an ID token names, for display only. Codex checked the token when it
+/// signed in; nothing here relies on these claims for access.
+fn claims(token: &str) -> Account {
+    let Some(payload) = payload(token) else {
         return Account::default();
     };
     let text = |value: Option<&serde_json::Value>| value.and_then(serde_json::Value::as_str).map(str::to_owned);

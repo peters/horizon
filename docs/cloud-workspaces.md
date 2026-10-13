@@ -319,13 +319,26 @@ isolates agents, and `root` owns it on a worker that does not. Codex on the work
 starts signed in. The login goes over SSH standard input, never in a command line or a
 log.
 
-ChatGPT refresh tokens are single use. A worker that renewed its login while it was
-not connected keeps that renewal, and the renewal comes back to this computer and
-replaces the spent copy, so the next cloud gets it. Only a later renewal of the same
-account wins; a new sign-in here, also of another account, replaces the worker's login.
-When several clouds renew the same login at the same time, all but one fail with
-"refresh token was already used"; sign in again in **Cloud settings**, then reconnect
-those clouds. Do not run `codex logout` or `codex login` on a worker: both revoke the
+ChatGPT refresh tokens are single use, so one owner renews the login: this computer.
+While Horizon runs, it checks the login every five minutes. It renews the login when
+less than two days, or less than half the life of the access token, is left, with the
+same request that Codex uses, and gives the renewal to every cloud with a record under
+`~/.horizon/cloud`, also clouds of other sessions. Codex on a worker renews its own login
+only five minutes before the access token ends, and it first reads its login file again
+and takes a newer login that it finds there, so the workers use the login that this
+computer renewed. Each ready cloud is also asked every half hour, and when the login here
+changes.
+
+A worker that renewed its login while Horizon was closed keeps that renewal, and the
+renewal comes back to this computer and replaces the spent copy, so the next cloud gets
+it. Only a later renewal of the same account wins; a new sign-in here, also of another
+account, replaces the worker's login. When the login is due, Horizon first asks every
+cloud for a renewal it made on its own, also a cloud it asked recently. If OpenAI still
+refuses the refresh token, for example because two clouds renewed the same login at the
+same moment while Horizon was closed, Horizon stops sending it and **Cloud settings** asks
+you to sign in again. The login stays on this computer until then, so a later renewal
+that a cloud returns makes it usable again. Clouds get a new login when they next
+connect or within five minutes. Do not run `codex logout` or `codex login` on a worker: both revoke the
 login that every cloud shares. **Sign out** in **Cloud settings** removes the login from
 this computer and revokes it when OpenAI can be reached; clouds keep working until their
 current access ends.
