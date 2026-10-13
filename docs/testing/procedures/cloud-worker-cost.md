@@ -110,7 +110,8 @@ that Horizon cannot know says why, and that a Ready worker never shows
 8. Hold the pointer on the hourly rate in the header of the card.
 
    Result: A tooltip says that Hetzner reports no billing per worker. It says
-   that the run estimate is not a total since creation.
+   that the run estimate covers only the current run, and that earlier runs,
+   stopped periods and kept storage are not in it.
 
 9. Look at the lines under the three figures of the section **Cost**.
 
