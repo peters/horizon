@@ -45,6 +45,8 @@ pub(super) fn show(ui: &mut Ui, state: &mut State) -> Option<Pick> {
             "Nothing matches. Paste a link to clone any repository."
         };
         ui.label(RichText::new(text).size(13.0).color(theme::FG_DIM()));
+        // The way to reach more repositories matters most when nothing matches.
+        hint_row(ui, state, path);
         return None;
     }
     let clicked = list(ui, state, &rows);

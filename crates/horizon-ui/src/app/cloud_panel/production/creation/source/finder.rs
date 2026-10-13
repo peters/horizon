@@ -55,6 +55,8 @@ pub(super) struct Finder {
     checkouts: Option<Vec<Checkout>>,
     /// Each checkout's title and detail, made once when the checkouts arrive.
     labels: Vec<(String, String)>,
+    /// The search for checkouts started; it runs once per dialog.
+    scanned: bool,
     scan: Option<Receiver<Vec<Checkout>>>,
     /// The typed path folders were last listed for, and their answer: each folder and
     /// whether it holds a repository.
@@ -121,26 +123,36 @@ impl Finder {
         if cfg!(test) && self.checkouts.is_none() {
             self.checkouts = Some(Vec::new());
         }
-        if self.checkouts.is_none() && self.scan.is_none() {
+        if self.checkouts.is_none() && self.scan.is_none() && !self.scanned {
             self.scan = Some(dir_search::spawn_checkouts());
+            self.scanned = true;
         }
+        // What the search found so far shows at once; the search is done when it closes.
         if let Some(scan) = &self.scan {
-            match scan.try_recv() {
-                Ok(found) => {
-                    self.labels = found
-                        .iter()
-                        .map(|checkout| (checkout_title(checkout), checkout_detail(checkout)))
-                        .collect();
-                    self.checkouts = Some(found);
-                    self.scan = None;
+            let mut latest = None;
+            let mut done = false;
+            loop {
+                match scan.try_recv() {
+                    Ok(found) => latest = Some(found),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        done = true;
+                        break;
+                    }
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    ctx.request_repaint_after(std::time::Duration::from_millis(100));
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.checkouts = Some(Vec::new());
-                    self.scan = None;
-                }
+            }
+            if let Some(found) = latest {
+                self.labels = found
+                    .iter()
+                    .map(|checkout| (checkout_title(checkout), checkout_detail(checkout)))
+                    .collect();
+                self.checkouts = Some(found);
+            }
+            if done {
+                self.checkouts.get_or_insert_with(Vec::new);
+                self.scan = None;
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
             }
         }
         let typed = typed.trim();
@@ -218,8 +230,11 @@ impl Finder {
             if self.made_for.as_ref().is_none_or(|made| made.0 != key.0) {
                 self.highlighted = 0;
                 self.moved = false;
-            } else if let Some(kind) = previous {
+            } else if let Some(kind) = previous.filter(|_| self.moved) {
                 self.highlighted = self.rows.iter().position(|row| row.kind.same_place(&kind)).unwrap_or(0);
+            } else {
+                // Not chosen by the person: the best result leads.
+                self.highlighted = 0;
             }
             self.highlighted = self.highlighted.min(self.rows.len().saturating_sub(1));
             self.made_for = Some(key);
