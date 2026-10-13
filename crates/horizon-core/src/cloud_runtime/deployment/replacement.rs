@@ -45,7 +45,7 @@ const UNSETTLED: &str =
     "The provider has not reported the switched image yet; the replacement stays pending. Continue or cancel it.";
 const ADDS_CREDENTIAL: &str = "The rebuilt image needs a registry credential that this worker was created without, and a switch that adds one cannot be undone. Create a new cloud to use it.";
 const CONFIRMED_OTHER: &str = "The latest commit changes this cloud's settings differently from what was confirmed; review the changes and rebuild again";
-const SAME_IMAGE: &str = "The rebuilt image is the worker's current image, so the changed settings cannot reach the worker; cancel the rebuild";
+const SAME_IMAGE: &str = "The rebuilt image is the worker's current image, so the changed settings cannot reach the worker. Nothing changed on the worker and nothing is pending; rebuild again";
 
 /// Durable writes of a replacement, where tests inject crashes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

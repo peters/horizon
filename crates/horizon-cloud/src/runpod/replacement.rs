@@ -101,8 +101,7 @@ impl RunPod {
         };
         // The image and the environment may not change at once; a worker that still
         // carries the other side's capabilities is not settled on this one.
-        let spec = if listed == ImageSide::Next { next } else { current };
-        if !carries_capabilities(&worker, spec) {
+        if !carries_capabilities(&worker, listed, current, next) {
             return Ok(Observed::Unsettled);
         }
         let Some(volume) = volume else {
@@ -158,13 +157,19 @@ fn lags_idle_stop(worker: &Worker, current: &WorkerSpec, next: &WorkerSpec) -> b
     worker.env.get("HORIZON_CLOUD_OPERATION") == Some(&current.operation_id) && worker.verify(&lagging).is_ok()
 }
 
-/// Whether the worker's environment selects `spec`'s capabilities. A worker created
-/// before Horizon recorded them in the environment carries none, which any spec accepts.
-fn carries_capabilities(worker: &Worker, spec: &WorkerSpec) -> bool {
-    worker.env.get("HORIZON_WORKER_CAPABILITIES").is_none_or(|selected| {
-        serde_json::from_str::<crate::Capabilities>(selected)
-            .is_ok_and(|selected| selected == spec.profile.capabilities)
-    })
+/// Whether the worker's environment selects the capabilities of the `side` it reports.
+/// A worker created before Horizon recorded them carries none: that is its previous
+/// environment, and on the new image it is settled only when the capabilities do not
+/// change, since an update that changes them sends them.
+fn carries_capabilities(worker: &Worker, side: ImageSide, current: &WorkerSpec, next: &WorkerSpec) -> bool {
+    let spec = if side == ImageSide::Next { next } else { current };
+    worker.env.get("HORIZON_WORKER_CAPABILITIES").map_or_else(
+        || side == ImageSide::Previous || current.profile.capabilities == next.profile.capabilities,
+        |selected| {
+            serde_json::from_str::<crate::Capabilities>(selected)
+                .is_ok_and(|selected| selected == spec.profile.capabilities)
+        },
+    )
 }
 
 /// Sends only the fields that change, relying on the update to keep omitted ones. A

@@ -394,6 +394,10 @@ fn a_worker_on_the_new_image_with_the_previous_capabilities_is_not_settled() {
         (carrying(&next, &next.profile.capabilities), Observed::Next),
         (carrying(&current, &current.profile.capabilities), Observed::Previous),
         (carrying(&current, &next.profile.capabilities), Observed::Unsettled),
+        // A worker created before the variable existed: its previous environment has none,
+        // and an update that changes the capabilities sends them.
+        (pod(&current, &current), Observed::Previous),
+        (pod(&current, &next), Observed::Unsettled),
     ] {
         let (provider, _requests, task) = server(vec![(200, inspected.to_string())]);
         assert_eq!(observe(&provider, &current, &next, None).unwrap(), expected);
