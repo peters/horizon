@@ -108,7 +108,7 @@ class CleanupTests(unittest.TestCase):
             "run": run,
             "image": f"{volume}:candidate",
             "volume": volume,
-            "checks": "horizon-contract-horizon-setup-check-0badf00d-",
+            "checks": gate.check_prefix(volume),
             "network": f"{volume}-preview",
         }
 
@@ -136,6 +136,13 @@ class CleanupTests(unittest.TestCase):
         self.assertFalse(gate.valid_record(dict(record, volume="postgres-data"), prefixes))
         self.assertFalse(gate.valid_record(dict(record, image="ubuntu:24.04"), prefixes))
         self.assertFalse(gate.valid_record(dict(record, checks="horizon-"), prefixes))
+        other = self.record("gate-3fa9c1-1-0002")["checks"]
+        self.assertFalse(gate.valid_record(dict(record, checks=other), prefixes))
+
+    def test_the_check_prefix_is_the_one_horizon_makes(self):
+        # gate.rs checks the same pair against check_operations in proof/resources.rs.
+        self.assertEqual(gate.check_prefix("horizon-setup-example-cli-c357f1-gate-312b8e-1-0000"),
+                         "horizon-contract-horizon-setup-check-8c80ce35-")
 
     def test_only_a_socket_of_this_computer_is_pinned(self):
         with mock.patch.dict(gate.os.environ, {"DOCKER_HOST": "unix:///run/user/1000/docker.sock",

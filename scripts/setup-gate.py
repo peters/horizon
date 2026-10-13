@@ -304,14 +304,23 @@ class JsonLines:
         return records
 
 
+def check_prefix(volume):
+    """The start of the worker-check container names of the run whose volume is `volume`,
+    as `check_operations` in proof/resources.rs makes it: a 32-bit FNV-1a hash."""
+    value = 0xCBF29CE484222325
+    for byte in volume.encode():
+        value = ((value ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return f"horizon-contract-horizon-setup-check-{value & 0xFFFFFFFF:08x}-"
+
+
 def valid_record(record, prefixes):
     """Whether a started record names only resources of a run of this gate run."""
-    run, volume, checks = record.get("run"), record.get("volume"), record.get("checks")
-    return (isinstance(run, str) and isinstance(volume, str) and isinstance(checks, str)
+    run, volume = record.get("run"), record.get("volume")
+    return (isinstance(run, str) and isinstance(volume, str)
             and any(run.startswith(prefix) for prefix in prefixes)
             and volume.startswith("horizon-setup-") and volume.endswith("-" + run)
             and record.get("image") == volume + ":candidate" and record.get("network") == volume + "-preview"
-            and checks.startswith("horizon-contract-horizon-setup-check-") and checks.endswith("-"))
+            and record.get("checks") == check_prefix(volume))
 
 
 def leftover_names(record, listings):

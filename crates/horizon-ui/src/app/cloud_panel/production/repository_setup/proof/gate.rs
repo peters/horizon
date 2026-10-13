@@ -228,3 +228,13 @@ fn show_preview(
     let _ = preview.stop().join();
     outcome
 }
+
+#[test]
+fn the_runner_names_the_worker_checks_as_the_proof_does() {
+    // scripts/test_setup_gate.py checks the same pair against the runner's copy of the hash,
+    // with which it refuses a started record that names another run's check containers.
+    assert_eq!(
+        resources::check_operations("horizon-setup-example-cli-c357f1-gate-312b8e-1-0000"),
+        "horizon-setup-check-8c80ce35"
+    );
+}
