@@ -459,7 +459,9 @@ While this computer is signed in, Horizon keeps the last list privately beside
 the sign-in in its credentials folder. The next **New cloud** shows it
 immediately, without a click, and Horizon gets a new list in the background to
 replace it. If that refresh fails, the list stays with a note that it may be out
-of date and a **Refresh from GitHub** button. **Disconnect** forgets the list
+of date and a **Refresh from GitHub** button, and Horizon tries again every 30
+seconds. Each try first checks which account this computer is signed in as, so a
+list of another account goes also without the network. **Disconnect** forgets the list
 together with the sign-in.
 
 For this, this computer signs in once to your GitHub App, the way the app's

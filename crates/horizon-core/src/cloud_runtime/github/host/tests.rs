@@ -217,7 +217,12 @@ fn a_list_is_kept_for_the_signed_in_account_only() {
         assert_eq!(mode & 0o777, 0o600);
     }
     assert!(still_signed_in_as(root.path(), &settings(42), "octo-cat"));
+    assert_eq!(stored_login(root.path(), &settings(42)).as_deref(), Some("octo-cat"));
     sign_in_as(root.path(), "other-account");
+    assert_eq!(
+        stored_login(root.path(), &settings(42)).as_deref(),
+        Some("other-account")
+    );
     assert!(!still_signed_in_as(root.path(), &settings(42), "octo-cat"));
     assert_eq!(
         kept_repositories(root.path(), &settings(42)),

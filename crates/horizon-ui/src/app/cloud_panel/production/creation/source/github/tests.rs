@@ -19,6 +19,7 @@ fn account() -> Account {
         kept: false,
         listed_for: None,
         signed_in_as: None,
+        retry_at: None,
         refreshed: true,
     }
 }
@@ -379,4 +380,35 @@ fn a_list_of_an_account_that_another_window_replaced_is_never_shown() {
         assert!(account.stale.is_none());
         assert_eq!(account.failed.as_deref(), Some(ANOTHER_ACCOUNT));
     }
+}
+
+#[test]
+fn an_out_of_date_list_tries_again_and_goes_when_another_account_is_signed_in() {
+    let (mut account, sender) = waiting(Purpose::Refresh);
+    sender
+        .send(Answer::Cached {
+            login: "octo-cat".into(),
+            repositories: vec!["acme/kept".into()],
+        })
+        .unwrap();
+    sender.send(Answer::SignedIn("octo-cat".into())).unwrap();
+    sender
+        .send(Answer::Failed("GitHub could not be reached.".into()))
+        .unwrap();
+    assert!(account.poll().is_none());
+    assert!(account.stale.is_some());
+    assert!(account.retry_at.is_some(), "a later try is planned");
+    // The later try finds another account signed in, without the network.
+    let (sender, receiver) = channel();
+    account.job = Some(Job {
+        receiver,
+        purpose: Purpose::Refresh,
+        _abort: Abort(Cancellation::default()),
+    });
+    sender.send(Answer::SignedIn("other-account".into())).unwrap();
+    sender
+        .send(Answer::Failed("GitHub could not be reached.".into()))
+        .unwrap();
+    assert!(account.poll().is_none());
+    assert!(account.repositories.is_none(), "octo-cat's names are gone");
 }

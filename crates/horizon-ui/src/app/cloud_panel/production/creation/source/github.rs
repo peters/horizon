@@ -20,6 +20,9 @@ use zeroize::Zeroize as _;
 /// At most this many repositories show at once; typing narrows them.
 const SHOWN: usize = 8;
 
+/// How long an out-of-date list waits before a quiet refresh tries again.
+const RETRY: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Said when this computer's sign-in changed or ended, in another window, while a list was on
 /// its way.
 const ANOTHER_ACCOUNT: &str = "This computer's GitHub sign-in changed while the list was on its way. Try again.";
@@ -90,6 +93,8 @@ pub(super) struct Account {
     listed_for: Option<String>,
     /// The account the running request signed in as.
     signed_in_as: Option<String>,
+    /// When a quiet refresh that failed tries again, while its list is out of date.
+    retry_at: Option<std::time::Instant>,
     refreshed: bool,
 }
 
@@ -108,6 +113,7 @@ impl Account {
             kept: false,
             listed_for: None,
             signed_in_as: None,
+            retry_at: None,
             refreshed: false,
         })
     }
@@ -127,11 +133,28 @@ impl Account {
         self.job.as_ref().is_some_and(|job| job.purpose == Purpose::Refresh)
     }
 
-    /// Asks once per dialog for a fresh list, when this computer is already signed in.
+    /// Asks for a fresh list when the dialog opens, when this computer is already signed in,
+    /// and again every little while as long as the shown list is out of date: each try
+    /// first checks, without the network, which account this computer is signed in as.
     pub(super) fn refresh_once(&mut self, ctx: &Context) {
         // Tests never reach GitHub, or the machine's own list, by themselves.
-        if !std::mem::replace(&mut self.refreshed, true) && !cfg!(test) {
+        if cfg!(test) {
+            return;
+        }
+        if !std::mem::replace(&mut self.refreshed, true) {
             self.request(Purpose::Refresh, ctx);
+            return;
+        }
+        if let Some(at) = self.retry_at
+            && self.job.is_none()
+        {
+            let now = std::time::Instant::now();
+            if now >= at {
+                self.retry_at = None;
+                self.request(Purpose::Refresh, ctx);
+            } else {
+                ctx.request_repaint_after(at - now);
+            }
         }
     }
 
@@ -160,6 +183,14 @@ impl Account {
                 && let Some((login, repositories)) = host::kept_repositories(&root, &settings)
             {
                 let _ = sender.send(Answer::Cached { login, repositories });
+                ctx.request_repaint();
+            }
+            // Which account this computer is signed in as, read without the network, so a list
+            // of another account goes also while GitHub cannot be reached.
+            if purpose == Purpose::Refresh
+                && let Some(login) = host::stored_login(&root, &settings)
+            {
+                let _ = sender.send(Answer::SignedIn(login));
                 ctx.request_repaint();
             }
             let shown = sender.clone();
@@ -214,7 +245,10 @@ impl Account {
                     // The list kept from last time still stands when a refresh fails, marked
                     // as possibly out of date.
                     if purpose == Purpose::Refresh {
-                        self.stale = Some(reason);
+                        if self.repositories.is_some() {
+                            self.stale = Some(reason);
+                            self.retry_at = Some(std::time::Instant::now() + RETRY);
+                        }
                     } else {
                         self.failed = Some(reason);
                     }

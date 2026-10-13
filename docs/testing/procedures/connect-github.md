@@ -430,7 +430,7 @@ this task and G11 use.
    Result: The list shows with the yellow line **This list may be out of date:**
    and a **Refresh from GitHub** button. The dialog shows no red error.
 
-8. Turn the network on again and click **Refresh from GitHub**.
+8. Turn the network on again and wait 30 seconds, or click **Refresh from GitHub**.
 
    Result: The yellow line goes away and the list stays.
 

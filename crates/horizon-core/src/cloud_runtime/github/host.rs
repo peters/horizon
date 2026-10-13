@@ -233,6 +233,18 @@ pub fn still_signed_in_as(root: &Path, settings: &Settings, login: &str) -> bool
     configured(root, settings) && stored::load(&path(root, settings)).is_some_and(|chain| chain.login == login)
 }
 
+/// The account this computer is signed in as for the app of `settings`, read from the
+/// stored sign-in under its lock and without the network; `None` when it is not signed in
+/// or the lock cannot be taken.
+#[must_use]
+pub fn stored_login(root: &Path, settings: &Settings) -> Option<String> {
+    let _lock = lock(root, settings).ok()?;
+    if !configured(root, settings) {
+        return None;
+    }
+    stored::load(&path(root, settings)).map(|chain| chain.login)
+}
+
 /// Forgets the kept list when this computer turns out not to be signed in. Checked again
 /// under the lock: a request that was `cancel`led and replaced, or a sign-in that another
 /// window finished since, keeps the list.
