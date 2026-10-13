@@ -119,15 +119,36 @@ pub(crate) enum PageMessage {
     Abort {
         id: u64,
     },
+    /// A request whose options do not parse. It gets a `TypeError` reply,
+    /// so the page's promise settles.
+    #[serde(skip)]
+    Malformed {
+        id: u64,
+    },
 }
 
 impl PageMessage {
     pub(crate) fn parse(raw: &str) -> Option<Self> {
+        #[derive(Deserialize)]
+        struct Header {
+            kind: String,
+            id: u64,
+        }
         if raw.len() > MAX_PAGE_MESSAGE_BYTES {
             return None;
         }
-        serde_json::from_str(raw).ok()
+        serde_json::from_str(raw).ok().or_else(|| {
+            serde_json::from_str::<Header>(raw)
+                .ok()
+                .filter(|header| header.kind == "request")
+                .map(|header| Self::Malformed { id: header.id })
+        })
     }
+}
+
+/// The reply for a request that the host could not read.
+pub(crate) fn malformed_reply(page_id: u64) -> String {
+    error_reply(page_id, PageError::type_error())
 }
 
 #[derive(Debug)]
@@ -175,7 +196,9 @@ impl<T: Clone + PartialEq> Bridge<T> {
     /// `(send) => ...`: installs the bridge with `send` as the channel.
     pub(crate) fn page_function(&self) -> String {
         let key = serde_json::Value::String(self.deliver_key.clone()).to_string();
-        PAGE_FUNCTION.replace("__DELIVER_KEY__", &key)
+        PAGE_FUNCTION
+            .replace("__DELIVER_KEY__", &key)
+            .replace("__MAX_MESSAGE_BYTES__", &MAX_PAGE_MESSAGE_BYTES.to_string())
     }
 
     /// A CDP new-document source that takes the binding off the global
@@ -327,6 +350,7 @@ mod tests {
         let bridge = bridge(vec!["authenticator".into()]).expect("bridge");
         assert!(bridge.page_function().contains(&bridge.deliver_key));
         assert!(!bridge.page_function().contains("__DELIVER_KEY__"));
+        assert!(!bridge.page_function().contains("__MAX_MESSAGE_BYTES__"));
         assert!(bridge.binding_source().contains(bridge.binding()));
     }
 
@@ -344,7 +368,15 @@ mod tests {
             PageMessage::parse(r#"{"kind":"abort","id":3}"#),
             Some(PageMessage::Abort { id: 3 })
         ));
-        assert!(PageMessage::parse(r#"{"kind":"request","id":1,"op":"delete"}"#).is_none());
+        assert!(matches!(
+            PageMessage::parse(r#"{"kind":"request","id":1,"op":"delete"}"#),
+            Some(PageMessage::Malformed { id: 1 })
+        ));
+        assert!(matches!(
+            PageMessage::parse(r#"{"kind":"request","id":2,"op":"create","options":{"algorithms":[null]}}"#),
+            Some(PageMessage::Malformed { id: 2 })
+        ));
+        assert!(PageMessage::parse(r#"{"kind":"abort"}"#).is_none());
         assert!(PageMessage::parse(&" ".repeat(MAX_PAGE_MESSAGE_BYTES + 1)).is_none());
     }
 

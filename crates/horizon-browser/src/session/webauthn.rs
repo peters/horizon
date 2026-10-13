@@ -149,12 +149,23 @@ impl DriverState {
                     event_tx.wake_ui();
                 }
             }
+            PageMessage::Malformed { id } => {
+                self.deliver_passkey_reply(link, context, &crate::webauthn::malformed_reply(id));
+            }
             PageMessage::Request { id, op, options } => {
                 let origin = self.passkey_caller_origin(link, event_tx, frame_slot, context);
                 let agent = self.owner_seen.clone();
                 let Some(passkeys) = self.passkeys.as_mut() else {
                     return;
                 };
+                // The frame-tree read drains events: the context can be gone.
+                let origin = origin.and_then(|origin| {
+                    if passkeys.contexts.contains_key(&context) {
+                        Ok(origin)
+                    } else {
+                        Err(PageError::not_allowed())
+                    }
+                });
                 if let Some(reply) = passkeys
                     .bridge
                     .start(context, id, op, &options, origin, agent.as_deref())

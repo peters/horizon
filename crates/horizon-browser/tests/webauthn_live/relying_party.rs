@@ -208,6 +208,10 @@ fn page_html(shared: &Shared, page: &str) -> String {
         "/refusals" => format!(
             r#"(async () => {{
     await outcome("foreign_rp_id", navigator.credentials.get({{ publicKey: {{ challenge: anyChallenge(), rpId: "example.com" }} }}));
+    await outcome("malformed_options", navigator.credentials.create({{ publicKey: {{
+        challenge: anyChallenge(), rp: {{ name: "x" }}, user: {{ id: anyChallenge(), name: "u", displayName: "u" }},
+        pubKeyCredParams: [{{ type: "public-key" }}],
+    }} }}));
     await report("conditional_available", {{ verdict: String(await PublicKeyCredential.isConditionalMediationAvailable()) }});
     const controller = new AbortController();
     const conditional = navigator.credentials.get({{ mediation: "conditional", publicKey: {{ challenge: anyChallenge() }}, signal: controller.signal }});

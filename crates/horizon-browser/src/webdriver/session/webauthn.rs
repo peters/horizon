@@ -5,6 +5,8 @@
 //! origin, and the origin of every ancestor context, from `script.getRealms`
 //! and `browsingContext.getTree`.
 
+use std::collections::HashSet;
+
 use serde_json::{Value, json};
 
 use crate::session::BrowserEventSender;
@@ -23,6 +25,9 @@ pub(super) struct Source {
 pub(super) struct BidiPasskeys {
     bridge: Bridge<Source>,
     channel: String,
+    /// Contexts that navigated or closed while a caller's origin was read;
+    /// `None` when no read is in progress.
+    navigated: Option<HashSet<String>>,
 }
 
 impl BidiPasskeys {
@@ -30,6 +35,7 @@ impl BidiPasskeys {
         Bridge::from_config(config).map(|bridge| Self {
             bridge,
             channel: format!("horizon-passkey-{}", uuid::Uuid::new_v4().simple()),
+            navigated: None,
         })
     }
 }
@@ -76,10 +82,13 @@ impl Driver {
             method,
             "browsingContext.navigationStarted" | "browsingContext.contextDestroyed"
         ) {
-            if let Some(context) = params.get("context").and_then(Value::as_str)
-                && passkeys.bridge.cancel_for(|source| source.context == context)
-            {
-                events.wake_ui();
+            if let Some(context) = params.get("context").and_then(Value::as_str) {
+                if let Some(navigated) = passkeys.navigated.as_mut() {
+                    navigated.insert(context.to_string());
+                }
+                if passkeys.bridge.cancel_for(|source| source.context == context) {
+                    events.wake_ui();
+                }
             }
             return false;
         }
@@ -122,12 +131,30 @@ impl Driver {
                     events.wake_ui();
                 }
             }
+            PageMessage::Malformed { id } => {
+                self.deliver_passkey_reply(source, &crate::webauthn::malformed_reply(id), events);
+            }
             PageMessage::Request { id, op, options } => {
+                if let Some(passkeys) = self.passkeys.as_mut() {
+                    passkeys.navigated = Some(HashSet::new());
+                }
                 let origin = self.passkey_caller_origin(source, events);
                 let agent = self.owner_seen.clone();
                 let Some(passkeys) = self.passkeys.as_mut() else {
                     return;
                 };
+                // The realm reads drain events: the caller can be gone.
+                let origin = origin.and_then(|origin| {
+                    if passkeys
+                        .navigated
+                        .take()
+                        .is_some_and(|navigated| navigated.contains(&source.context))
+                    {
+                        Err(PageError::not_allowed())
+                    } else {
+                        Ok(origin)
+                    }
+                });
                 if let Some(reply) = passkeys
                     .bridge
                     .start(source.clone(), id, op, &options, origin, agent.as_deref())

@@ -109,6 +109,7 @@ fn run_engine(backend: BackendKind) {
     navigate(&session, &rp.url("/refusals"));
     for (scenario, expected) in [
         ("foreign_rp_id", "SecurityError"),
+        ("malformed_options", "TypeError"),
         ("conditional_available", "false"),
         ("conditional", "AbortError"),
         ("cross_origin_iframe", "NotAllowedError"),

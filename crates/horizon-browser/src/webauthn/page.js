@@ -1,6 +1,7 @@
 (send) => {
     "use strict";
     const deliverKey = __DELIVER_KEY__;
+    const maxMessageBytes = __MAX_MESSAGE_BYTES__;
     const existing = Object.getOwnPropertyDescriptor(globalThis, deliverKey);
     if (existing) {
         if (typeof send === "function" && typeof existing.value?.rebind === "function") existing.value.rebind(send);
@@ -14,6 +15,7 @@
     const nativeGet = Container.prototype.get;
     const nativeCreate = Container.prototype.create;
     const toStringTag = Object.prototype.toString;
+    const encoder = new TextEncoder();
     const NOT_ALLOWED = "The operation either timed out or was not allowed.";
     const pending = new Map();
     let post = send;
@@ -39,6 +41,12 @@
         return bytes.buffer;
     };
     const text = (value) => (value === undefined || value === null ? undefined : String(value));
+    const timeoutOf = (value) => (Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined);
+    const algorithmOf = (parameter) => {
+        const alg = Number(parameter.alg);
+        if (!Number.isInteger(alg)) throw new TypeError("pubKeyCredParams[].alg must be an integer");
+        return alg;
+    };
     const credentialIds = (list) =>
         Array.from(list || [])
             .filter((entry) => entry && entry.type === "public-key")
@@ -51,7 +59,7 @@
         rp_id: text(publicKey.rpId),
         allow_credentials: credentialIds(publicKey.allowCredentials),
         user_verification: text(publicKey.userVerification),
-        timeout: typeof publicKey.timeout === "number" ? publicKey.timeout : undefined,
+        timeout: timeoutOf(publicKey.timeout),
     });
     const createOptions = (publicKey) => {
         const rp = publicKey.rp;
@@ -65,11 +73,11 @@
             user: { id: encode(user.id), name: text(user.name) || "", display_name: text(user.displayName) || "" },
             algorithms: Array.from(publicKey.pubKeyCredParams || [])
                 .filter((parameter) => parameter && parameter.type === "public-key")
-                .map((parameter) => Number(parameter.alg)),
+                .map(algorithmOf),
             exclude_credentials: credentialIds(publicKey.excludeCredentials),
             resident_key: text(selection.residentKey) || (selection.requireResidentKey ? "required" : undefined),
             user_verification: text(selection.userVerification),
-            timeout: typeof publicKey.timeout === "number" ? publicKey.timeout : undefined,
+            timeout: timeoutOf(publicKey.timeout),
         };
     };
 
@@ -131,15 +139,19 @@
 
     const request = (op, publicKey, signal) => {
         if (signal?.aborted) return Promise.reject(signal.reason);
-        let options;
+        nextId += 1;
+        const id = nextId;
+        let message;
         try {
-            options = op === "get" ? getOptions(publicKey) : createOptions(publicKey);
+            const options = op === "get" ? getOptions(publicKey) : createOptions(publicKey);
+            message = stringify({ kind: "request", id, op, options });
         } catch (error) {
             return Promise.reject(error instanceof TypeError ? error : new TypeError(String(error)));
         }
+        if (encoder.encode(message).length > maxMessageBytes) {
+            return Promise.reject(new TypeError("The publicKey options are too large"));
+        }
         return new Promise((resolve, reject) => {
-            nextId += 1;
-            const id = nextId;
             const onAbort = () => {
                 if (!pending.delete(id)) return;
                 try { post(stringify({ kind: "abort", id })); } catch (_) {}
@@ -149,7 +161,7 @@
             pending.set(id, { op, resolve, reject, cleanup });
             signal?.addEventListener("abort", onAbort, { once: true });
             try {
-                post(stringify({ kind: "request", id, op, options }));
+                post(message);
             } catch (_) {
                 pending.delete(id);
                 cleanup();
