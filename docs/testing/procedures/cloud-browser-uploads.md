@@ -102,9 +102,11 @@ Give each task an ID. A report uses the ID to give a result.
      --symlink usr/lib /lib --symlink usr/lib64 /lib64 --symlink usr/bin /bin \
      --bind "$state/workspace" /workspace --die-with-parent --unshare-pid \
      "$PWD/target/debug/horizon-cloud-worker" serve &
+   service=$!
    ```
 
-   Result: The control service answers on `127.0.0.1:47280`.
+   Result: The control service answers on `127.0.0.1:47280`. `$service` is
+   the PID of its `bwrap`.
 
 2. Run the driver.
 
@@ -139,12 +141,15 @@ Give each task an ID. A report uses the ID to give a result.
 1. Stop the control service of U02.
 
    ```sh
-   kill %1
+   kill "$service"
    ```
 
    Result: The control service and its browsers stop.
 
 2. Remove the state directory of U02.
+
+   > **CAUTION:** THIS STEP DELETES A DIRECTORY. Make sure that `$state` is the
+   > directory that `mktemp -d` made in U02 before you delete it.
 
    ```sh
    rm -rf "$state"
