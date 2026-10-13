@@ -93,7 +93,9 @@ Do not change production keys, policy, nodes or the computer's Tailscale daemon.
    Result: Synthetic enrollment requests only `tag:horizon-worker`.
    The helper accepts exactly that tag after `up` and once at each resume.
    Missing, malformed, untagged and extra-tag status fails.
-   Refused nodes attempt logout. The error names the tag and `tagOwners`.
+   Refused nodes attempt logout. Unreadable status, command failures and timeouts
+   also attempt logout. Unconfirmed cleanup keeps the selection and does not use
+   another key. The error names the tag and `tagOwners`.
    The helper and checker report only `horizon-tailnet-contract=4`.
 
 2. Examine the synthetic key and persistent identity test results.

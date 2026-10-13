@@ -225,6 +225,16 @@ class TailnetTests(unittest.TestCase):
                 with self.assertRaises(ValueError): self.configure('work', KEY)
                 self.assertFalse(any(args[0] in {'up', 'set'} for args in self.calls))
 
+    def test_invalid_name_does_not_mask_a_running_untagged_identity(self):
+        (self.state / 'selection').write_text('work')
+        (self.runtime / 'device-name').write_text('invalid name')
+        self.joined, self.tags = True, []
+        self.assertEqual(self.configure('work', None), 'tag_required\n')
+        self.assertIn(('logout',), self.calls)
+        self.assertFalse(self.joined)
+        self.assertFalse((self.state / 'selection').exists())
+        self.assertFalse(any(args[0] in {'up', 'set'} for args in self.calls))
+
     def test_helper_declares_only_the_tagged_enrollment_contract(self):
         with patch.object(worker.sys, 'argv', ['worker', '--tagged-enrollment-contract']), \
                 patch('sys.stdout', new_callable=io.StringIO) as output:
@@ -483,15 +493,76 @@ class TailnetTests(unittest.TestCase):
             for key in [None, KEY]:
                 with self.subTest(state=state, key_supplied=key is not None):
                     with patch.object(worker, 'call', return_value=json.dumps({'BackendState': state}).encode()) as call, \
-                            patch.object(worker.time, 'monotonic', side_effect=[0, 6]), \
+                            patch.object(worker.time, 'monotonic', side_effect=[0, 6, 6, 12]), \
                             patch('sys.stdout', new_callable=io.StringIO) as output:
-                        with self.assertRaises(ValueError): self.configure('work', key)
+                        self.assertEqual(self.configure('work', key), 'tag_required\n')
                     self.assertEqual(output.getvalue(), '')
-                    self.assertEqual([args.args for args in call.call_args_list], [('status', '--json')])
+                    self.assertEqual([args.args for args in call.call_args_list],
+                                     [('status', '--json'), ('logout',), ('status', '--json')])
                     self.assertEqual((self.state / 'selection').read_text(), 'work')
         self.joined = True
         self.assertEqual(self.configure('work', None), 'ready\n')
         self.assertFalse(any(args[0] in {'up', 'logout'} for args in self.calls))
+
+    def test_initial_status_command_failures_reject_configure_and_resume_and_reconcile_logout(self):
+        original = self.call
+        failures = [OSError('Synthetic daemon unavailable'),
+                    subprocess.CalledProcessError(1, ['status'], stderr=KEY.encode()),
+                    subprocess.TimeoutExpired(['status'], 35, stderr=KEY.encode())]
+        for operation in ['configure', 'resume']:
+            for failure in failures:
+                for cleanup in ['confirmed', 'logout_failure', 'status_failure', 'bad_backend']:
+                    with self.subTest(operation=operation, failure=type(failure).__name__, cleanup=cleanup):
+                        (self.state / 'selection').write_text('work')
+                        self.joined = True
+                        self.calls.clear()
+                        worker.write_devices([{'name': 'stale'}])
+                        status_reads = 0
+                        clock = 0
+
+                        def monotonic():
+                            nonlocal clock
+                            clock += 6
+                            return clock
+
+                        def reply(*args, **kwargs):
+                            nonlocal status_reads
+                            if args[0] == 'status':
+                                status_reads += 1
+                                if status_reads == 1 or cleanup == 'status_failure':
+                                    self.calls.append(args)
+                                    raise failure
+                                if cleanup == 'bad_backend':
+                                    self.calls.append(args)
+                                    return b'{"BackendState":"Stopped"}'
+                            if args[0] == 'logout' and cleanup == 'logout_failure':
+                                self.calls.append(args)
+                                raise subprocess.CalledProcessError(1, args, stderr=KEY.encode())
+                            return original(*args, **kwargs)
+
+                        with patch.object(worker, 'call', reply), \
+                                patch.object(worker.time, 'monotonic', side_effect=monotonic), \
+                                patch('sys.stderr', new_callable=io.StringIO) as errors:
+                            if operation == 'configure':
+                                self.assertEqual(self.configure('work', KEY), 'tag_required\n')
+                            else:
+                                with self.assertRaises(worker.WorkerTagRequired): self.resume()
+                        self.assertNotIn(KEY, errors.getvalue())
+                        self.assertIn(('logout',), self.calls)
+                        self.assertFalse(any(args[0] in {'up', 'set'} for args in self.calls))
+                        self.assertEqual((self.state / 'selection').exists(), cleanup != 'confirmed')
+                        self.assertEqual(json.loads((worker.PUBLIC / 'devices.json').read_text()), {'devices': []})
+
+    def test_resume_backend_wait_failure_rejects_and_attempts_logout_without_requesting_a_key(self):
+        for backend in ['Starting', 'NoState', 'Stopped', 'NeedsMachineAuth', 'InUseOtherUser', 'Unknown']:
+            with self.subTest(backend=backend):
+                (self.state / 'selection').write_text('work')
+                with patch.object(worker, 'call', return_value=json.dumps({'BackendState': backend}).encode()) as call, \
+                        patch.object(worker.time, 'monotonic', side_effect=[0, 6, 6, 12]):
+                    with self.assertRaises(worker.WorkerTagRequired): self.resume()
+                self.assertEqual([args.args for args in call.call_args_list],
+                                 [('status', '--json'), ('logout',), ('status', '--json')])
+                self.assertEqual((self.state / 'selection').read_text(), 'work')
 
     def test_explicit_login_required_state_can_request_a_key_after_resume(self):
         (self.state / 'selection').write_text('work')

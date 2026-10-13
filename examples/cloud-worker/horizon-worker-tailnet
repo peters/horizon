@@ -126,7 +126,7 @@ def status_report(wait=False):
     while True:
         try:
             result = json.loads(call('status', '--json'))
-        except (ValueError, UnicodeError) as error:
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
             raise InvalidStatus() from error
         if not isinstance(result, dict):
             raise InvalidStatus()
@@ -136,7 +136,7 @@ def status_report(wait=False):
         if state in {'Running', 'NeedsLogin'}:
             return result
         if time.monotonic() >= deadline:
-            raise ValueError()
+            raise InvalidStatus()
         time.sleep(0.1)
 
 
@@ -241,9 +241,10 @@ def configure_request():
         except InvalidStatus:
             reject_enrollment()
         backend = report['BackendState']
+        if backend == 'Running':
+            require_worker_tag(report)
         name = recorded_name()
         if old == identity and backend == 'Running':
-            require_worker_tag(report)
             rename(name)
             print('ready')
             return
