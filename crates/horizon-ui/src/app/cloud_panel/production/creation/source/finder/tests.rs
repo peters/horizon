@@ -195,3 +195,22 @@ fn new_rows_for_the_same_query_keep_the_highlighted_row() {
         "still the row chosen"
     );
 }
+
+#[test]
+fn arrows_choose_a_row_for_a_typed_owner_and_name() {
+    let mut state = searching("rust-lang/rust");
+    let _ = press(&mut state, egui::Key::ArrowDown, egui::Modifiers::NONE);
+    let (chosen, left) = press(&mut state, egui::Key::Enter, egui::Modifiers::NONE);
+    assert_eq!(
+        chosen,
+        Some(PathBuf::from("/home/x/code/rust-analyzer")),
+        "the row picked with the arrows"
+    );
+    assert!(!left);
+}
+
+#[test]
+fn letters_that_lower_to_more_than_one_still_light_their_own_place() {
+    let found = super::fuzzy::score("w", "İacme/web").unwrap();
+    assert_eq!(found.positions, [6]);
+}

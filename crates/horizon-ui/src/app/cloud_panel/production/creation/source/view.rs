@@ -255,7 +255,8 @@ impl State {
                         .hint_text("Access token"),
                 );
                 super::super::forget_undo(ui.ctx(), field.id);
-                if !std::mem::replace(&mut self.token_focused, true) {
+                // Never while the field is a search: typing goes on there.
+                if !self.searching() && !std::mem::replace(&mut self.token_focused, true) {
                     field.request_focus();
                 }
                 ui.horizontal(|ui| {

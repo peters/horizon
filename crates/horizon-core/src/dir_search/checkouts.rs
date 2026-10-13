@@ -46,7 +46,8 @@ pub fn spawn_checkouts() -> mpsc::Receiver<Vec<Checkout>> {
 pub fn checkouts(root: &Path) -> Vec<Checkout> {
     let mut found = Vec::new();
     let mut queue = VecDeque::from([(root.to_owned(), 0)]);
-    let mut seen = std::collections::HashSet::new();
+    // The home folder itself counts as read, so a link back to it is not followed.
+    let mut seen = std::collections::HashSet::from([std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned())]);
     let mut visits = 0;
     while let Some((folder, depth)) = queue.pop_front() {
         visits += 1;

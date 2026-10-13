@@ -11,13 +11,14 @@ pub(super) struct Match {
 
 /// Matches every word of `query` in `text`, ignoring case. `None` when a word is missing.
 pub(super) fn score(query: &str, text: &str) -> Option<Match> {
-    let text: Vec<char> = text.chars().flat_map(char::to_lowercase).collect();
+    // One lowercase letter per letter, so a position lights the letter it came from.
+    let text: Vec<char> = text.chars().map(lower).collect();
     let mut total = Match {
         score: 0,
         positions: Vec::new(),
     };
     for word in query.split_whitespace() {
-        let word: Vec<char> = word.chars().flat_map(char::to_lowercase).collect();
+        let word: Vec<char> = word.chars().map(lower).collect();
         let found = word_match(&word, &text)?;
         total.score += found.score;
         total.positions.extend(found.positions);
@@ -25,6 +26,10 @@ pub(super) fn score(query: &str, text: &str) -> Option<Match> {
     total.positions.sort_unstable();
     total.positions.dedup();
     Some(total)
+}
+
+fn lower(letter: char) -> char {
+    letter.to_lowercase().next().unwrap_or(letter)
 }
 
 fn word_match(word: &[char], text: &[char]) -> Option<Match> {

@@ -65,6 +65,8 @@ pub(super) struct Finder {
     pub highlighted: usize,
     /// The highlight moved by key, so the list scrolls to it.
     pub scroll_to_highlight: bool,
+    /// The person moved the highlight with the arrow keys since the query changed.
+    moved: bool,
     /// The rows are an earlier path's while this one's folders are read; keys wait.
     stale: bool,
 }
@@ -201,6 +203,7 @@ impl Finder {
             // the row it was on, wherever that row moved.
             if self.made_for.as_ref().is_none_or(|made| made.0 != key.0) {
                 self.highlighted = 0;
+                self.moved = false;
             } else if let Some(kind) = previous {
                 self.highlighted = self.rows.iter().position(|row| row.kind == kind).unwrap_or(0);
             }
@@ -216,6 +219,7 @@ impl Finder {
 
     pub fn move_highlight(&mut self, down: bool) {
         self.scroll_to_highlight = true;
+        self.moved = true;
         let last = self.rows.len().saturating_sub(1);
         self.highlighted = if down {
             (self.highlighted + 1).min(last)
@@ -456,14 +460,14 @@ impl super::State {
         if !focused || !plain || !self.searching() || !self.finder.settled() || self.finder.current_rows().is_empty() {
             return None;
         }
-        // A typed `owner/name` that the account does not list, or with no account list, is a
-        // repository to clone: Enter is Continue's. A part of a listed name is a search.
-        let listed = self
-            .account
-            .as_ref()
-            .and_then(|account| account.repositories.as_ref())
-            .map(|names| names.iter().any(|name| name.eq_ignore_ascii_case(self.input.trim())));
-        let takes_enter = self.remote.is_none() || listed == Some(false);
+        // Enter on a typed `owner/name` clones what was typed, unless the person picked a row
+        // with the arrow keys or the highlighted row is exactly what was typed.
+        let exact = self
+            .finder
+            .current_rows()
+            .get(self.finder.highlighted)
+            .is_some_and(|row| row.title.eq_ignore_ascii_case(self.input.trim()));
+        let takes_enter = self.remote.is_none() || self.finder.moved || exact;
         let (down, up, enter, tab) = ui.input_mut(|input| {
             (
                 input.consume_key(Modifiers::NONE, Key::ArrowDown),
