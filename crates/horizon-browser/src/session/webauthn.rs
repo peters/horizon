@@ -75,7 +75,9 @@ impl DriverState {
     pub(super) fn reset_passkeys(&mut self) {
         if let Some(passkeys) = self.passkeys.as_mut() {
             passkeys.contexts.clear();
-            passkeys.bridge.cancel_for(|_| true);
+            if passkeys.bridge.cancel_for(|_| true) {
+                self.manifest_dirty = true;
+            }
         }
     }
 

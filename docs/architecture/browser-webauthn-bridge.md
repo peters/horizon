@@ -121,6 +121,9 @@ The `browser_panel` and `browser_list` MCP results report
   browser's own WebAuthn behavior and never reaches the command.
 - When the driver kills the command, child processes of the command can
   continue.
+- When Chromium detaches the page session during a request, the driver
+  kills the command, but it cannot reply to the old session. The page
+  promise then stays pending until the page aborts it or navigates.
 
 ## Command contract
 

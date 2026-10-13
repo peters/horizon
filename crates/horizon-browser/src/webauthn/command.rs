@@ -16,6 +16,9 @@ const POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// How long stdout may stay open after the process exited, for example
 /// when a child process of the command inherited it.
 const OUTPUT_GRACE: Duration = Duration::from_secs(2);
+/// How long a drop waits for the supervisor to kill the process, so the
+/// command does not outlive a driver thread that ends right after.
+const DROP_GRACE: Duration = Duration::from_secs(1);
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CommandOutcome {
@@ -70,6 +73,7 @@ impl CommandRun {
 impl Drop for CommandRun {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Release);
+        let _ = self.outcome.recv_timeout(DROP_GRACE);
     }
 }
 
@@ -213,10 +217,9 @@ mod tests {
         }
         let pid = std::fs::read_to_string(&pid_file).expect("pid");
         drop(run);
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while process_exists(pid.trim()) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert!(!process_exists(pid.trim()), "dropped command still runs");
+        assert!(
+            !process_exists(pid.trim()),
+            "the command must be gone when the drop returns"
+        );
     }
 }
