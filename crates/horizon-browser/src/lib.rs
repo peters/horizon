@@ -41,6 +41,7 @@ mod video;
 #[path = "video_disabled.rs"]
 mod video;
 mod wait;
+mod webauthn;
 mod webdriver;
 mod websocket;
 
@@ -146,6 +147,11 @@ pub struct BrowserConfig {
     /// configured; parsing never allocates a device.
     #[serde(skip_serializing_if = "RemoteBrowserConfig::is_empty")]
     pub remote: RemoteBrowserConfig,
+    /// Argv of an external WebAuthn authenticator command. When set, local
+    /// Chromium and Firefox panels forward a page's passkey requests to it;
+    /// empty leaves the browser's own WebAuthn behavior unchanged.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub webauthn_command: Vec<String>,
 }
 
 impl Default for BrowserConfig {
@@ -166,6 +172,7 @@ impl Default for BrowserConfig {
             profile_root: None,
             video: BrowserVideoCaptureOptions::default(),
             remote: RemoteBrowserConfig::default(),
+            webauthn_command: Vec::new(),
         }
     }
 }

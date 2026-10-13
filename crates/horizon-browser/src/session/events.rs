@@ -102,7 +102,9 @@ impl DriverState {
         message: CdpMsg,
     ) {
         if let Some(event) = message.event() {
-            self.handle_event(link, event_tx, frame_slot, event);
+            if !self.handle_passkey_event(link, event_tx, frame_slot, &event) {
+                self.handle_event(link, event_tx, frame_slot, event);
+            }
             return;
         }
         let CdpMsg::Response { id, result, error, .. } = message else {

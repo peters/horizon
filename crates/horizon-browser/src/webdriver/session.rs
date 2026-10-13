@@ -36,6 +36,7 @@ mod shutdown;
 mod startup;
 mod viewport;
 mod wait;
+mod webauthn;
 
 use frames::AdaptiveFrames;
 use handshake::{NewSession, create_webdriver_session, initial_safari_input};
@@ -132,6 +133,7 @@ struct Driver {
     panel_slot: Arc<FrameSlot>,
     native_select: native_select::NativeSelectState,
     file_chooser: file_chooser::ChooserState,
+    passkeys: Option<webauthn::BidiPasskeys>,
 }
 
 struct PendingHistoryStart {
@@ -235,6 +237,7 @@ pub(crate) fn run_webdriver(
             }
         }
         driver.tick_firefox_http_response_bodies(event_tx);
+        driver.tick_passkeys(event_tx);
         if let Some(message) = driver.challenge_loop.take_rejection() {
             let _ = event_tx.send(BrowserEvent::NavigationFailed(message.to_string()));
         }
@@ -286,6 +289,7 @@ impl Driver {
             return !self.reject_explicit_start_orientation(false, true, event_tx);
         }
         self.enable_file_chooser(event_tx);
+        self.install_passkey_bridge(event_tx);
         if self.firefox_bidi() {
             self.set_viewport(config.width, config.height, event_tx);
         }
@@ -484,6 +488,7 @@ impl Driver {
             panel_slot: Arc::clone(frame_slot),
             native_select: native_select::NativeSelectState::default(),
             file_chooser: file_chooser::ChooserState::default(),
+            passkeys: webauthn::BidiPasskeys::from_config(config),
         })
     }
 
