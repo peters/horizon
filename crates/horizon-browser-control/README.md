@@ -35,9 +35,11 @@ instances.
 
 The standalone CLI and MCP server initialize from `HORIZON_BROWSER_ROOT` before
 discovery, pruning or serving. Relative values resolve against the startup
-directory; empty values are rejected. Without the variable they retain the
-existing `HOME/.horizon` default, including the relative fallback when HOME is
-absent. Library hosts that use legacy default helpers without initialization
+directory; empty values are rejected. Without the variable the root is the
+application home: the path in `HORIZON_HOME` when it is set and not empty, else
+`HOME/.horizon`, including the relative fallback when HOME is absent. A relative
+`HORIZON_HOME` is rejected at initialization, even when `HORIZON_BROWSER_ROOT`
+is set. Library hosts that use legacy default helpers without initialization
 retain the existing default behavior. Application config
 and terminal sessions continue using the application home independently.
 

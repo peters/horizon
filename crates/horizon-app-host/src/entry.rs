@@ -97,8 +97,24 @@ pub fn run_if_requested() -> bool {
 }
 /// Standalone and packaged modes share identical ownership and error behavior.
 pub fn execute(arguments: &[String]) {
+    // The other modes read the config and keep state in the Horizon home. A guard only cleans
+    // up the resource it guards, so an unusable `HORIZON_HOME` must not stop it.
+    let guard = matches!(
+        arguments.first().map(String::as_str),
+        Some("--guard" | "--tunnel-guard")
+    );
+    // `--run` reports progress and errors as NDJSON on stderr.
+    let run_mode = arguments.first().is_some_and(|argument| argument == "--run");
+    if !guard && let Err(problem) = horizon_core::HorizonHome::prepare() {
+        if run_mode {
+            crate::cli::report_message(&problem.to_string());
+        } else {
+            eprintln!("error: {problem}");
+        }
+        std::process::exit(2);
+    }
     if let Err(error) = run(arguments) {
-        if arguments.first().is_some_and(|argument| argument == "--run") {
+        if run_mode {
             if error != crate::Error::RunFailed {
                 crate::cli::report_error(&error);
             }

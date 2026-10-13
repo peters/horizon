@@ -690,7 +690,7 @@ fn horizon_codex_mcp_args() -> Vec<String> {
         "-c".to_string(),
         "mcp_servers.horizon-browser.args=[\"--browser-mcp\"]".to_string(),
         "-c".to_string(),
-        "mcp_servers.horizon-browser.env_vars=[\"HORIZON_BROWSER_ACTOR\",\"HORIZON_BROWSER_HOST_INSTANCE\"]"
+        "mcp_servers.horizon-browser.env_vars=[\"HORIZON_BROWSER_ACTOR\",\"HORIZON_BROWSER_HOST_INSTANCE\",\"HORIZON_HOME\"]"
             .to_string(),
         "-c".to_string(),
         "mcp_servers.horizon-browser.default_tools_approval_mode=\"approve\"".to_string(),
@@ -799,7 +799,7 @@ mod tests {
         assert!(command.contains("mcp_servers.horizon-browser.command="));
         assert!(command.contains("mcp_servers.horizon-browser.args="));
         assert!(command.contains(
-            "mcp_servers.horizon-browser.env_vars=[\"HORIZON_BROWSER_ACTOR\",\"HORIZON_BROWSER_HOST_INSTANCE\"]"
+            "mcp_servers.horizon-browser.env_vars=[\"HORIZON_BROWSER_ACTOR\",\"HORIZON_BROWSER_HOST_INSTANCE\",\"HORIZON_HOME\"]"
         ));
         assert!(command.contains("mcp_servers.horizon-browser.default_tools_approval_mode=\"approve\""));
         assert!(command.contains("mcp_servers.horizon-browser.tool_timeout_sec=3660"));

@@ -373,7 +373,8 @@ impl Config {
         serde_yaml::to_string(self).map_err(|e| Error::Config(e.to_string()))
     }
 
-    /// Return the default config file path (`~/.horizon/config.yaml`).
+    /// Return the default config file path: `config.yaml` in the Horizon home, which is
+    /// `HORIZON_HOME` when set, else `~/.horizon`.
     #[must_use]
     pub fn default_path() -> Option<PathBuf> {
         Some(HorizonHome::resolve().config_path())
@@ -506,13 +507,25 @@ fn normalized_ssh_target(connection: &SshConnection) -> String {
 
 fn config_candidates() -> Vec<PathBuf> {
     config_candidates_with_env(
+        horizon_browser_control::paths::configured_home(),
         std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
         std::env::var_os("HOME").map(PathBuf::from),
     )
 }
 
-fn config_candidates_with_env(xdg_config_home: Option<PathBuf>, home: Option<PathBuf>) -> Vec<PathBuf> {
+/// A `HORIZON_HOME` override is the only place a config is looked for, so an isolated
+/// instance never loads or saves the user's own config.
+fn config_candidates_with_env(
+    horizon_home: Option<PathBuf>,
+    xdg_config_home: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> Vec<PathBuf> {
     let mut paths = Vec::new();
+
+    if let Some(horizon_home) = horizon_home {
+        push_config_dir_candidates(&mut paths, &horizon_home);
+        return paths;
+    }
 
     if let Some(home) = home {
         push_config_dir_candidates(&mut paths, &home.join(".horizon"));
@@ -616,7 +629,7 @@ mod tests {
     #[test]
     fn includes_horizon_config_candidates() {
         let temp_home = PathBuf::from("/tmp/horizon-home");
-        let candidates = config_candidates_with_env(Some(temp_home.join(".config")), Some(temp_home));
+        let candidates = config_candidates_with_env(None, Some(temp_home.join(".config")), Some(temp_home));
 
         assert_eq!(
             candidates.first(),
@@ -629,6 +642,20 @@ mod tests {
                 .any(|path| path.ends_with(".config/horizon/config.yaml"))
         );
         assert!(candidates.iter().any(|path| path == &PathBuf::from("horizon.yaml")));
+    }
+
+    #[test]
+    fn a_horizon_home_override_is_the_only_config_location() {
+        let user_home = PathBuf::from("/tmp/horizon-user");
+        let private = PathBuf::from("/tmp/horizon-private");
+
+        let candidates =
+            config_candidates_with_env(Some(private.clone()), Some(user_home.join(".config")), Some(user_home));
+
+        assert_eq!(
+            candidates,
+            vec![private.join("config.yaml"), private.join("config.yml")]
+        );
     }
 
     #[test]

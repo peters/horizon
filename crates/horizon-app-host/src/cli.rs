@@ -15,7 +15,11 @@ impl Drop for Cancel {
 }
 
 pub(crate) fn report_error(error: &Error) {
-    let event = serde_json::json!({"phase":"error","message":error.to_string()});
+    report_message(&error.to_string());
+}
+
+pub(crate) fn report_message(message: &str) {
+    let event = serde_json::json!({"phase":"error","message":message});
     let mut bytes = event.to_string().into_bytes();
     bytes.push(b'\n');
     if let Ok(output) = output::Output::new(std::io::stderr()) {

@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 pub const RUNTIME_ROOT_ENV: &str = "HORIZON_BROWSER_ROOT";
+/// Names the application home in place of `.horizon` in the user's home directory.
+pub const HOME_ENV: &str = "HORIZON_HOME";
 static RUNTIME_PATHS: OnceLock<Option<BrowserRuntimePaths>> = OnceLock::new();
 
 #[derive(Debug, thiserror::Error)]
@@ -14,17 +16,33 @@ pub enum RuntimePathError {
     Resolve(#[from] std::io::Error),
     #[error("browser runtime paths were already used with defaults or configured with a different root")]
     AlreadyInUse,
+    #[error("HORIZON_HOME must be an absolute path, not {}", .0.display())]
+    RelativeHome(PathBuf),
 }
 
-/// The application home is independent of an explicitly configured browser root: `.horizon`
-/// in the user's home directory, from `HOME` or, where that is unset as on Windows, from
-/// `USERPROFILE`. Only without either is it `.horizon` in the working directory.
+/// The application home is independent of an explicitly configured browser root: the path in
+/// `HORIZON_HOME` when it is set and not empty, else `.horizon` in the user's home directory,
+/// from `HOME` or, where that is unset as on Windows, from `USERPROFILE`. Only without any of
+/// them is it `.horizon` in the working directory. While `HORIZON_HOME` is set this never falls
+/// back to the user's home directory; entry points reject a relative value with
+/// [`home_override`] before they use it.
 #[must_use]
 pub fn default_horizon_root() -> PathBuf {
-    horizon_root_from(std::env::var_os("HOME"), std::env::var_os("USERPROFILE"))
+    horizon_root_from(
+        std::env::var_os(HOME_ENV),
+        std::env::var_os("HOME"),
+        std::env::var_os("USERPROFILE"),
+    )
 }
 
-fn horizon_root_from(home: Option<std::ffi::OsString>, profile: Option<std::ffi::OsString>) -> PathBuf {
+fn horizon_root_from(
+    horizon_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+    profile: Option<std::ffi::OsString>,
+) -> PathBuf {
+    if let Some(root) = non_empty_path(horizon_home) {
+        return root;
+    }
     home.into_iter()
         .chain(profile)
         .find(|value| !value.is_empty())
@@ -51,10 +69,35 @@ pub fn configure_runtime_root(root: impl AsRef<Path>) -> Result<(), RuntimePathE
     }
 }
 
+/// The path in `HORIZON_HOME` as given, or `None` when it is unset or empty.
+#[must_use]
+pub fn configured_home() -> Option<PathBuf> {
+    non_empty_path(std::env::var_os(HOME_ENV))
+}
+
+/// The application home that `HORIZON_HOME` names, or `None` when it is unset or empty.
+/// # Errors
+/// Rejects a value that is not an absolute path.
+pub fn home_override() -> Result<Option<PathBuf>, RuntimePathError> {
+    home_override_from(std::env::var_os(HOME_ENV))
+}
+
+fn home_override_from(value: Option<std::ffi::OsString>) -> Result<Option<PathBuf>, RuntimePathError> {
+    match non_empty_path(value) {
+        Some(root) if !root.is_absolute() => Err(RuntimePathError::RelativeHome(root)),
+        root => Ok(root),
+    }
+}
+
+fn non_empty_path(value: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    value.filter(|value| !value.is_empty()).map(PathBuf::from)
+}
+
 /// Initialize standalone clients before discovery, pruning or serving requests.
 /// # Errors
 /// Returns configuration errors without falling back to another root.
 pub fn initialize_from_environment() -> Result<(), RuntimePathError> {
+    home_override()?;
     if let Some(root) = std::env::var_os(RUNTIME_ROOT_ENV) {
         configure_runtime_root(PathBuf::from(root))
     } else {
@@ -185,7 +228,7 @@ mod home_tests {
     #[test]
     fn the_home_comes_from_home_then_the_windows_profile() {
         let root = |home: Option<&str>, profile: Option<&str>| {
-            super::horizon_root_from(home.map(OsString::from), profile.map(OsString::from))
+            super::horizon_root_from(None, home.map(OsString::from), profile.map(OsString::from))
         };
         let user = PathBuf::from("user");
         assert_eq!(root(Some("user"), Some("profile")), user.join(".horizon"));
@@ -200,6 +243,48 @@ mod home_tests {
         );
         assert_eq!(root(None, None), PathBuf::from(".horizon"));
         assert_eq!(root(Some(""), Some("")), PathBuf::from(".horizon"));
+    }
+
+    #[test]
+    fn a_horizon_home_override_replaces_the_user_home() {
+        let root = |horizon_home: Option<&str>, home: Option<&str>| {
+            super::horizon_root_from(
+                horizon_home.map(OsString::from),
+                home.map(OsString::from),
+                Some(OsString::from("profile")),
+            )
+        };
+        let private = std::env::temp_dir().join("private-horizon");
+        let private = private.to_str().expect("UTF-8 temporary path");
+        assert_eq!(root(Some(private), Some("user")), PathBuf::from(private));
+        assert_eq!(root(Some(private), None), PathBuf::from(private));
+        assert_eq!(
+            root(Some(""), Some("user")),
+            PathBuf::from("user").join(".horizon"),
+            "an empty override is unset, as an interpolated `${{HORIZON_HOME:-}}` is"
+        );
+        assert_eq!(
+            root(Some("relative"), Some("user")),
+            PathBuf::from("relative"),
+            "a set override never falls back to the user home"
+        );
+    }
+
+    #[test]
+    fn only_an_absolute_horizon_home_is_accepted() {
+        let absolute = std::env::temp_dir().join("private-horizon");
+        assert_eq!(super::home_override_from(None).expect("unset"), None);
+        assert_eq!(super::home_override_from(Some(OsString::new())).expect("empty"), None);
+        assert_eq!(
+            super::home_override_from(Some(absolute.clone().into_os_string())).expect("absolute"),
+            Some(absolute)
+        );
+        for relative in ["relative", "./relative", "../outside"] {
+            assert!(matches!(
+                super::home_override_from(Some(OsString::from(relative))),
+                Err(super::RuntimePathError::RelativeHome(path)) if path == std::path::Path::new(relative)
+            ));
+        }
     }
 }
 

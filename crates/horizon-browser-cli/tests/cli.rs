@@ -20,6 +20,14 @@ const JOB_PROGRESS_GUARD: Duration = Duration::from_mins(1);
 const STDIN_EXECUTION_TIMEOUT: Duration = Duration::from_secs(1);
 const DEADLINE_ROUNDING_SLACK_MILLIS: u128 = 1;
 
+/// The CLI under test, without an inherited `HORIZON_HOME`, which would point it at the
+/// state of the person running the tests instead of the fixture's.
+fn browser_cli() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_horizon-browser"));
+    command.env_remove("HORIZON_HOME");
+    command
+}
+
 #[test]
 fn drop_files_plan_dispatches_the_public_action_with_synthetic_bytes() {
     use horizon_browser::{AgentActionResult, BrowserControlAction, BrowserControlValue, BrowserTarget};
@@ -49,7 +57,7 @@ fn drop_files_plan_dispatches_the_public_action_with_synthetic_bytes() {
         },
     )
     .unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+    let mut child = browser_cli()
         .args(["run", plan.to_str().unwrap()])
         .env("HOME", root.path())
         .env("HORIZON_BROWSER_ROOT", root.path().join(".horizon"))
@@ -295,7 +303,7 @@ fn run_publishes_a_complete_relative_job_when_home_is_unset() {
     )
     .expect("write plan");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+    let output = browser_cli()
         .args(["run", plan.to_str().expect("UTF-8 path")])
         .current_dir(current_dir.path())
         .env_remove("HOME")
@@ -582,7 +590,7 @@ fn resume_skip_runs_later_steps_without_replaying_or_succeeding() {
 #[test]
 fn run_timeout_starts_after_stdin_plan_validation() {
     let root = tempfile::tempdir().expect("isolated root");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+    let mut child = browser_cli()
         .args(["run", "-", "--timeout", &STDIN_EXECUTION_TIMEOUT.as_secs().to_string()])
         .env("HOME", root.path())
         .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
@@ -715,7 +723,7 @@ fn interrupt_persists_cancelled_partial_report_and_exit_130() {
         attempts += 1;
         let root = tempfile::tempdir().expect("isolated root");
         let (plan, manifest_path) = write_blocking_plan(root.path());
-        let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+        let mut child = browser_cli()
             .args(["run", plan.to_str().expect("UTF-8 path"), "--timeout", "30"])
             .env("HOME", root.path())
             .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
@@ -774,7 +782,7 @@ fn interrupt_bounds_blocked_plan_input_before_durable_setup() {
             .expect("create plan FIFO")
             .success()
     );
-    let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+    let mut child = browser_cli()
         .args(["run", plan_pipe.to_str().expect("UTF-8 FIFO path"), "--timeout", "30"])
         .env("HOME", root.path())
         .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
@@ -849,7 +857,7 @@ fn interrupt_terminates_blocked_report_finalization() {
             .expect("create report FIFO")
             .success()
     );
-    let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+    let mut child = browser_cli()
         .args([
             "run",
             plan.to_str().expect("UTF-8 plan"),
@@ -977,7 +985,7 @@ fn run_waits_for_hand_back_before_finishing_a_handoff_step() {
     )
     .expect("write wait handoff plan");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+    let mut child = browser_cli()
         .args(["run", plan.to_str().expect("UTF-8 path"), "--timeout", "10"])
         .env("HOME", home.path())
         .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
@@ -1024,7 +1032,7 @@ fn run_waits_for_hand_back_before_finishing_a_handoff_step() {
 }
 
 fn run_command<const N: usize>(home: &std::path::Path, arguments: [&str; N]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+    browser_cli()
         .args(arguments)
         .env("HOME", home)
         .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
@@ -1034,7 +1042,7 @@ fn run_command<const N: usize>(home: &std::path::Path, arguments: [&str; N]) -> 
 }
 
 fn run_process_local_command<const N: usize>(home: &std::path::Path, arguments: [&str; N]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+    browser_cli()
         .args(arguments)
         .env("HOME", home)
         .env_remove("HORIZON_BROWSER_ACTOR")
@@ -1058,7 +1066,7 @@ fn run_deadline_after_action(
 ) -> DeadlineRun {
     let mut timeout_seconds = DEADLINE_TEST_TIMEOUT_SECONDS;
     loop {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_horizon-browser"));
+        let mut command = browser_cli();
         let timeout = timeout_seconds.to_string();
         command
             .args(["run", plan.to_str().expect("UTF-8 path"), "--timeout", &timeout])
@@ -1252,7 +1260,7 @@ struct McpProcess {
 
 impl McpProcess {
     fn start(home: &std::path::Path) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+        let mut child = browser_cli()
             .arg("mcp")
             .env("HOME", home)
             .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
@@ -1316,7 +1324,7 @@ fn cli_plan_calls_the_public_usage_tool_and_preserves_multiple_provider_results(
         .expect("plan"),
     )
     .expect("write plan");
-    let child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+    let child = browser_cli()
         .args(["run", plan.to_str().expect("path")])
         .env_remove("HORIZON")
         .env_remove("HORIZON_BROWSER_ROOT")
@@ -1372,7 +1380,7 @@ fn standalone_cli_reports_missing_provider_host_instead_of_zero_capacity() {
         br#"{"version":1,"steps":[{"id":"usage","tool":"browser_provider_usage"}]}"#,
     )
     .expect("plan");
-    let output = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+    let output = browser_cli()
         .args(["run", plan.to_str().expect("path")])
         .env_remove("HORIZON")
         .env_remove("HORIZON_BROWSER_ACTOR")
@@ -1392,7 +1400,7 @@ fn cli_plan_discovers_provider_devices_without_a_browser_or_configured_target() 
     let root = tempfile::tempdir().unwrap();
     let plan = root.path().join("plan.json");
     std::fs::write(&plan, br#"{"version":1,"steps":[{"id":"devices","tool":"browser_provider_devices","arguments":{"provider":"account","search":"phone","offset":50}}]}"#).unwrap();
-    let child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+    let child = browser_cli()
         .args(["run", plan.to_str().unwrap()])
         .env_remove("HORIZON")
         .env_remove("HORIZON_BROWSER_ROOT")
@@ -1453,7 +1461,7 @@ fn direct_orientation_executes_one_mcp_action_and_reports_measured_acknowledgeme
             },
         )
         .expect("mock panel");
-        let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+        let mut child = browser_cli()
             .args(["orientation", panel_id, "landscape", "--timeout-millis", "5000"])
             .env("HOME", root.path())
             .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")

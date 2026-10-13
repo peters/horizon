@@ -50,6 +50,8 @@ unused 1600×1000 Xvfb display, disables MIT-SHM and starts its own window manag
 It launches an ephemeral Horizon with a heartbeat terminal and a plain Bash input
 terminal. A filesystem namespace masks the developer's home with private state
 for this child; it does not change the real HOME value or existing sessions.
+The harness removes `HORIZON_HOME` from the child environment, so the fixture
+keeps its state in `.horizon` of the masked home.
 The same namespace gives namespaced processes a private writable `/tmp` and a
 session bus at the standard `/run/user/<uid>/bus` path, backed by fixture
 runtime, so native applications and `dbus-run-session` can bind sockets. Host

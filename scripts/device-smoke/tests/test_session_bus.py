@@ -84,6 +84,7 @@ class NamespaceTests(unittest.TestCase):
         env['DBUS_SESSION_BUS_ADDRESS'] = 'unix:path=/definitely/developer/bus'
         env['DBUS_STARTER_ADDRESS'] = env['DBUS_SESSION_BUS_ADDRESS']
         env['DISPLAY'] = ':0'
+        env['HORIZON_HOME'] = '/operator/horizon-home'
         with tempfile.TemporaryDirectory(prefix='horizon-dbus-strip-') as raw:
             box = sandbox.prepare(raw, environ=env)
             self.assertNotIn('DBUS_SESSION_BUS_ADDRESS', box.host_env)
@@ -91,6 +92,8 @@ class NamespaceTests(unittest.TestCase):
             self.assertNotEqual(box.sandbox_env['DBUS_SESSION_BUS_ADDRESS'], env['DBUS_SESSION_BUS_ADDRESS'])
             self.assertNotIn('DISPLAY', box.host_env)
             self.assertNotIn('DISPLAY', box.sandbox_env)
+            self.assertNotIn('HORIZON_HOME', box.host_env)
+            self.assertNotIn('HORIZON_HOME', box.sandbox_env)
 
     def test_apparmor_bind_is_the_query_file_only(self):
         if sandbox.APPARMOR_ACCESS.is_file():

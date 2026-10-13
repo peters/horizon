@@ -39,6 +39,7 @@ impl McpProcess {
         let mut command = Command::new(env!("CARGO_BIN_EXE_horizon-browser-mcp"));
         command
             .env("HOME", home)
+            .env_remove("HORIZON_HOME")
             .env("HORIZON_BROWSER_ACTOR", actor)
             .env_remove("HORIZON_BROWSER_HOST_INSTANCE")
             .env("RUST_LOG", "off");

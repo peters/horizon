@@ -380,7 +380,7 @@ Most app shortcuts use **Ctrl+Shift** so they do not steal shell chords (Ctrl+C,
 
 ## Configuration
 
-The settings editor writes back to the same file Horizon loaded. By default that is `~/.horizon/config.yaml` (`config.yml` is also accepted). You can seed workspaces, panel presets, feature flags, and shortcuts.
+The settings editor writes back to the same file Horizon loaded. By default that is `~/.horizon/config.yaml` (`config.yml` is also accepted), or the same file in [`HORIZON_HOME`](#state-folder) when you set it. You can seed workspaces, panel presets, feature flags, and shortcuts.
 
 Workspace templates use `terminals:` (each entry needs a `name`). Unknown keys are ignored, so a `panels:` block will not create anything.
 
@@ -546,6 +546,20 @@ docker run --rm \
   -e REMOTE_BROWSER_ACCESS_KEY \
   example/browser-test-runner
 ```
+
+### State folder
+
+Horizon keeps its config, sessions, browser profiles, cloud settings and runtime files in `~/.horizon`. Set `HORIZON_HOME` to an absolute path to keep them in another folder instead, for example to run a second Horizon that cannot touch your usual one:
+
+```bash
+HORIZON_HOME=/path/to/private-horizon horizon
+```
+
+- If the folder is missing, Horizon creates it, readable only by you (mode `700` on Linux and macOS). Horizon refuses to start when the path is relative, is not a folder or is a symbolic link. On Linux and macOS it also refuses a folder that belongs to another user or whose permission bits let other users in. Horizon does not examine ACLs, so on macOS an ACL can still give other users access.
+- With `HORIZON_HOME` set, Horizon looks for its config only in that folder (`config.yaml` or `config.yml`), never in `~/.horizon`, `$XDG_CONFIG_HOME/horizon` or the working directory. `--config` still wins.
+- `HOME` stays the same, so terminals in this Horizon keep your normal home directory. They inherit `HORIZON_HOME`, which is how agents in them find this Horizon's browser panels.
+- Horizon still adds its agent skills to the usual folders of Claude Code, Codex and the other agents in your home directory.
+- An empty value is the same as an unset one.
 
 ---
 
