@@ -170,7 +170,8 @@ pub fn rebuild(
 /// verifies its image again and that the worker's container disk holds it, and a
 /// requested one is sent again only while the provider still reports the previous image.
 /// # Errors
-/// Refuses without a pending replacement, and a built image that the worker's container
+/// Refuses without a pending replacement, an unsent one whose agents have an unusable
+/// configured credential, and a built image that the worker's container
 /// disk cannot hold; keeps the journal after a failure, so it can be cancelled.
 pub fn continue_replacement(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) -> Result<Deployment> {
     emit(Event::stage(Stage::Validate));
@@ -195,6 +196,8 @@ pub fn continue_replacement(request: &Request, cancel: &Cancellation, emit: &dyn
         drop(store);
         return finish(request, Driven::Committed, state, cancel, emit);
     }
+    // Checked again while the update is unsent: the credentials may have changed since.
+    accept(state.replacement_profile(), None, &request.settings)?;
     let building = journal.phase == ReplacementPhase::Prepared {};
     let steps = live::Live::new(request, &store, &state, building, cancel, emit)?;
     let driven = drive(&steps, &store, &mut state, emit)?;

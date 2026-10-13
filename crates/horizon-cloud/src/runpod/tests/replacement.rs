@@ -380,6 +380,28 @@ fn observe(
 }
 
 #[test]
+fn a_worker_on_the_new_image_with_the_previous_capabilities_is_not_settled() {
+    let current = spec();
+    let mut next = next(&current);
+    next.profile.capabilities.desktop = !next.profile.capabilities.desktop;
+    let carrying = |on: &WorkerSpec, capabilities: &crate::Capabilities| {
+        let mut value = pod(&current, on);
+        value["env"]["HORIZON_WORKER_CAPABILITIES"] = json!(json!(capabilities).to_string());
+        value
+    };
+    for (inspected, expected) in [
+        (carrying(&next, &current.profile.capabilities), Observed::Unsettled),
+        (carrying(&next, &next.profile.capabilities), Observed::Next),
+        (carrying(&current, &current.profile.capabilities), Observed::Previous),
+        (carrying(&current, &next.profile.capabilities), Observed::Unsettled),
+    ] {
+        let (provider, _requests, task) = server(vec![(200, inspected.to_string())]);
+        assert_eq!(observe(&provider, &current, &next, None).unwrap(), expected);
+        task.join().unwrap();
+    }
+}
+
+#[test]
 fn observation_reports_the_recorded_image_of_the_pair() {
     let current = spec();
     let next = next(&current);

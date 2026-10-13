@@ -257,3 +257,32 @@ fn a_plan_reads_the_latest_commit_and_lists_its_changes() {
     let error = plan(repository.path(), &bound, "dev", &cancel).unwrap_err();
     assert!(error.to_string().contains("in gpu."), "{error}");
 }
+
+#[test]
+fn continuing_an_unsent_settings_change_checks_the_added_agent_credential_again() {
+    let (fixture, bound, committed) = settings_change();
+    let script = script_for(&fixture, &committed);
+    script.fail_at.set(Some(Boundary::Begun));
+    assert_eq!(rebuild_with(&fixture, &script).unwrap_err().to_string(), CRASH);
+    // The key file became readable by others after the rebuild was journaled.
+    let key = fixture.root.join("openai-key");
+    std::fs::write(&key, "synthetic-openai-key").unwrap();
+    std::fs::set_permissions(&key, std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
+    let settings: Settings = serde_json::from_value(json!({
+        "runpod_key_file": "/absent", "ssh_identity_file": "/absent", "docker_config": "/absent",
+        "cpu_flavors": [], "gpu_types": [], "openai_api_key_file": key
+    }))
+    .unwrap();
+    let state = fixture.state();
+    let request = Request::new(
+        state.cloud_id.clone(),
+        state.repository.clone(),
+        state.revision.clone(),
+        bound,
+        fixture.root.clone(),
+        settings,
+    );
+    let error = continue_replacement(&request, &Cancellation::default(), &|_| {}).unwrap_err();
+    assert_eq!(error.to_string(), "API-key file must be private (0600)");
+    assert!(fixture.state().image_replacement.is_some(), "the journal stays");
+}

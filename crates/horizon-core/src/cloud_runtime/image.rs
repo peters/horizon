@@ -294,8 +294,13 @@ pub fn build_arguments(capabilities: &Capabilities, releases: &agents::Releases)
 /// provider tells apart from the worker's current one, while a cached build with the same
 /// settings keeps its digest. Nothing in it is secret: the worker's environment has it too.
 fn settings_label(profile: &Profile) -> [String; 2] {
+    // Hosted devices are fixed at creation, and their names stay out of public metadata.
+    let capabilities = Capabilities {
+        browserstack: None,
+        ..profile.capabilities.clone()
+    };
     let settings = serde_json::json!({
-        "capabilities": profile.capabilities,
+        "capabilities": capabilities,
         "readiness_seconds": profile.bootstrap.readiness_seconds,
         "idle_stop_minutes": profile.idle_stop_minutes,
         "build": profile.build,

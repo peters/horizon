@@ -70,7 +70,8 @@ impl RunPod {
     /// Reports which image of the replacement the provider records for the worker.
     /// A worker with a CPU workspace `volume` is also read through the current API,
     /// and the replacement settles only when both observations report the same image.
-    /// `timeout` bounds the whole observation.
+    /// A worker whose environment still selects the other side's capabilities is
+    /// unsettled too. `timeout` bounds the whole observation.
     /// # Errors
     /// `WorkerLost` when the provider no longer returns the worker; `IdentityMismatch`
     /// for a third image, a missing or different operation marker, or another mount.
@@ -92,6 +93,12 @@ impl RunPod {
             .inspect_with_timeout(worker_id, cancel, timeout)?
             .ok_or(CloudError::WorkerLost)?;
         let listed = identify(&worker, current, next)?;
+        // The image and the environment may not change at once; a worker that still
+        // carries the other side's capabilities is not settled on this one.
+        let spec = if listed == ImageSide::Next { next } else { current };
+        if !carries_capabilities(&worker, spec) {
+            return Ok(Observed::Unsettled);
+        }
         let Some(volume) = volume else {
             return Ok(listed.into());
         };
@@ -128,6 +135,15 @@ fn identify(worker: &Worker, current: &WorkerSpec, next: &WorkerSpec) -> Result<
         return Err(CloudError::IdentityMismatch);
     }
     Ok(side)
+}
+
+/// Whether the worker's environment selects `spec`'s capabilities. A worker created
+/// before Horizon recorded them in the environment carries none, which any spec accepts.
+fn carries_capabilities(worker: &Worker, spec: &WorkerSpec) -> bool {
+    worker.env.get("HORIZON_WORKER_CAPABILITIES").is_none_or(|selected| {
+        serde_json::from_str::<crate::Capabilities>(selected)
+            .is_ok_and(|selected| selected == spec.profile.capabilities)
+    })
 }
 
 /// Sends only the fields that change, relying on the update to keep omitted ones. A
