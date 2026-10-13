@@ -257,6 +257,9 @@ def main(argv=None):
         if running != digest:
             raise RuntimeError(f'The running executable {running} is not the frozen binary {digest}')
         if not wait_for_window(process, args.display, args.window_timeout):
+            if process.poll() is not None:
+                raise RuntimeError(f'Horizon exited with code {process.returncode} before its window showed; '
+                                   f'read {log_path}')
             raise RuntimeError(f'No window of Horizon {process.pid} showed on {args.display} within '
                                f'{args.window_timeout:g} s; read {log_path}')
         manifest = {

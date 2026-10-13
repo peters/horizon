@@ -187,6 +187,26 @@ class FreezeAndStopTests(unittest.TestCase):
             self.assertFalse((Path(raw) / 'state' / 'worker-desktop.json').exists(), 'no manifest')
         self.assertIsNotNone(started[0].poll(), 'the launcher stopped the candidate')
 
+    def test_a_candidate_that_exits_before_its_window_is_named(self):
+        real_popen = subprocess.Popen
+
+        def popen(command, *args, **kwargs):
+            if not str(command[0]).endswith('/bin/horizon'):
+                return real_popen(command, *args, **kwargs)
+            # As a missing runtime library makes the window library panic at start.
+            return real_popen(['sh', '-c', 'sleep 0.2; exit 101'], stdout=kwargs['stdout'], start_new_session=True)
+        with tempfile.TemporaryDirectory() as raw:
+            binary = Path(raw) / 'horizon'
+            binary.write_bytes(b'synthetic binary')
+            arguments = ['--horizon', str(binary), '--state', str(Path(raw) / 'state'),
+                         '--display', ':4242', '--window-timeout', '5']
+            with mock.patch.object(worker_desktop.subprocess, 'Popen', side_effect=popen), \
+                    mock.patch.object(worker_desktop, 'sha256', return_value='same'), \
+                    mock.patch.object(worker_desktop.x11_windows, 'windows_of', return_value=[]), \
+                    mock.patch.object(worker_desktop.x11_windows, 'request_close', return_value=0):
+                with self.assertRaisesRegex(RuntimeError, 'Horizon exited with code 101 before its window showed'):
+                    worker_desktop.main(arguments)
+
     def test_an_unreadable_display_is_named(self):
         process = subprocess.Popen(['sleep', '60'], start_new_session=True)
         self.addCleanup(worker_desktop.end_group, process)

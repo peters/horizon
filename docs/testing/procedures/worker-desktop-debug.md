@@ -84,23 +84,37 @@ These names apply in the steps:
 
 ### 6.2 W02: Prepare the worker
 
-1. Install the build packages and Rust as root.
+1. Install the build packages, the libraries that the window needs at run
+   time, and Rust as root.
 
    ```sh
-   ssh -i <identity> root@<worker> 'apt-get update -qq && apt-get install -y -qq build-essential pkg-config libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev libgl-dev cmake nasm && curl -fsSL https://sh.rustup.rs | RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo sh -s -- -y --profile minimal --no-modify-path && chmod -R a+rX /usr/local/rustup /usr/local/cargo'
+   ssh -i <identity> root@<worker> 'apt-get update -qq && apt-get install -y -qq build-essential pkg-config libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev libgl-dev cmake nasm libxkbcommon-x11-0 libx11-xcb1 mesa-vulkan-drivers libgl1-mesa-dri libegl1 && curl -fsSL https://sh.rustup.rs | RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo sh -s -- -y --profile minimal --no-modify-path'
    ```
 
-   Result: `/usr/local/cargo/bin/cargo` exists.
+   Result: `/usr/local/cargo/bin/cargo` exists. Without `libxkbcommon-x11-0`,
+   the debug Horizon stops at start and the command reports that Horizon exited
+   before its window showed.
 
-2. Give the sessions the toolchain.
+2. Install the toolchain and the components that `rust-toolchain.toml` asks
+   for. The agent account cannot write `/usr/local/rustup`.
+
+   ```sh
+   ssh -i <identity> root@<worker> 'export RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo; /usr/local/cargo/bin/rustup default stable && /usr/local/cargo/bin/rustup component add rustfmt clippy && chmod -R a+rX /usr/local/rustup /usr/local/cargo'
+   ```
+
+   Result: The command shows no error.
+
+3. Give the sessions the toolchain.
 
    ```sh
    ssh -i <identity> root@<worker> 'printf "PATH_PREPEND=/usr/local/cargo/bin\nRUSTUP_HOME=/usr/local/rustup\nCARGO_HOME=/workspace/home/.cargo\n" > /etc/horizon-worker/session-env.d/20-rust.env && horizon-worker-session-env apply > /dev/null && echo valid'
    ```
 
-   Result: The output is `valid`.
+   Result: The output is `valid`. If the image has no
+   `/etc/horizon-worker/session-env.d`, set `PATH`, `RUSTUP_HOME` and
+   `CARGO_HOME` with these values in the Shell panel of W04 before the command.
 
-3. Copy the candidate worktree without `target` and `.git` to `<tree>`, owned by
+4. Copy the candidate worktree without `target` and `.git` to `<tree>`, owned by
    the agent account.
 
    ```sh
@@ -138,10 +152,11 @@ These names apply in the steps:
 2. Examine the priority of the build.
 
    ```sh
-   ps -o pid,ni,cls,cmd -C rustc | head
+   ps -o pid,cls,cmd -C rustc | head; for p in $(pgrep -x rustc | head -3); do awk '{print $1, "nice=" $19}' /proc/$p/stat; ionice -p $p; done
    ```
 
-   Result: `NI` is `19` and `CLS` is `IDL`.
+   Result: `CLS` is `IDL`, each process shows `nice=19`, and `ionice` shows
+   `idle`. `ps` shows the nice value of the idle class as `-`.
 
 3. Wait for the manifest line.
 
@@ -153,6 +168,9 @@ These names apply in the steps:
    Result: The probe output covers the baseline and the full build.
 
 ### 6.5 W05: Examine the debug Horizon
+
+Do these steps in a Shell panel of the cloud. With agent isolation, root over
+SSH cannot read `/proc/<pid>` of the agent account's processes.
 
 1. Compare the hash of the running executable with the manifest.
 
@@ -169,7 +187,10 @@ These names apply in the steps:
    ```
 
    Result: The names are `DISPLAY`, `HOME`, `HORIZON_AGENT_INTEGRATIONS`,
-   `HORIZON_HOME` and `HORIZON_SESSION_DIR`. No worker identity name shows.
+   `HORIZON_HOME` and `HORIZON_SESSION_DIR`. With agent isolation,
+   `HORIZON_UNPRIVILEGED` and `HORIZON_WORKER_SELF_STOP_AVAILABLE` can also
+   show; the worker scripts read them, Horizon does not. No worker identity
+   name and no `ANTHROPIC` or `WAYLAND` name shows.
 
 3. Examine the value of the switch.
 
