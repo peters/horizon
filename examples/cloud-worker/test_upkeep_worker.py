@@ -341,6 +341,16 @@ class SchedulerTests(unittest.TestCase):
         Path(job.log).write_text('first\n\x1b]52;c;ZXZpbA==\x07Fixed the build\n')
         self.assertEqual(job.last_line(), ']52;c;ZXZpbA==Fixed the build')
 
+    def test_merges_are_the_pull_requests_merged_since_before_the_run(self):
+        status = self.dir / 'status.json'
+        status.write_text(json.dumps({'pull_requests': [{'repository': 'acme/web', 'number': [1], 'state': 'merged'}]}))
+        before = RUN['merged']()
+        status.write_text(json.dumps({'pull_requests': [
+            {'repository': 'acme/web', 'number': [1], 'state': 'merged'},
+            {'repository': 'acme/web', 'number': 2, 'state': 'merged'},
+            {'repository': 'acme/web', 'number': 3, 'state': 'ready'}]}))
+        self.assertEqual(len(RUN['merged']() - before), 1)
+
     def test_a_run_the_loop_did_not_finish_is_closed_as_failed(self):
         RUN['record']({'started_at': 100, 'outcome': 'running'})
         RUN['close_interrupted']()

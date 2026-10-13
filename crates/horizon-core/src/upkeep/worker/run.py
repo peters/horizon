@@ -397,7 +397,7 @@ def merged():
     """The pull requests that the status shows as merged."""
     status = load(DIR + '/status.json', {})
     pull_requests = status.get('pull_requests') if isinstance(status, dict) else None
-    return {(pr.get('repository'), pr.get('number')) for pr in pull_requests or []
+    return {json.dumps([pr.get('repository'), pr.get('number')]) for pr in pull_requests or []
             if isinstance(pr, dict) and pr.get('state') == 'merged'} if isinstance(pull_requests, list) else set()
 
 
