@@ -208,11 +208,9 @@ fn card(ui: &mut Ui, key: &str, tint: Color32, paired: bool, add: impl FnOnce(&m
                 };
                 let beside = ui.data(|data| data.get_temp::<f32>(card_id(other).with("content")));
                 let target = CARD_HEIGHT.max(beside.unwrap_or_default());
-                // Space after the content, which already ends one item spacing lower.
-                let short = target - content - ui.spacing().item_spacing.y;
-                if short > 0.0 {
-                    ui.add_space(short);
-                }
+                // Exactly that tall from the card's top, whatever spacing follows the content.
+                let top = ui.min_rect().min;
+                ui.expand_to_include_rect(Rect::from_min_size(top, Vec2::new(0.0, target)));
             }
         });
     let rect = shown.response.rect;
