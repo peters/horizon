@@ -234,6 +234,7 @@ fn pump(
             id: id.clone(),
             after,
             commands: commands.try_iter().take(128).collect(),
+            uploads: None,
         };
     }
     Ok(())

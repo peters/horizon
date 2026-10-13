@@ -2,6 +2,12 @@
 pub const MAX_CLOUD_VIEW_BYTES: usize = 96 * 1024 * 1024;
 use crate::BrowserCommand;
 use serde::{Deserialize, Serialize};
+mod uploads;
+pub use uploads::{
+    CLOUD_UPLOAD_VERSION, CloudBrowserNotice, CloudChooserAnswer, CloudChooserError, CloudChooserRequest,
+    CloudFileDrop, CloudStageChunk, CloudStageReceipt, CloudStagedFiles, CloudUploadLimits, CloudUploadPoll,
+    CloudUploadState, MAX_UPLOAD_NAME_BYTES, valid_upload_batch, valid_upload_name,
+};
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum CloudViewRequest {
@@ -17,7 +23,10 @@ pub enum CloudViewRequest {
         id: String,
         after: u64,
         commands: Vec<BrowserCommand>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        uploads: Option<CloudUploadPoll>,
     },
+    Stage(CloudStageChunk),
     List,
     RevokeRemote,
     Close {
@@ -49,6 +58,8 @@ pub struct CloudViewState {
     pub sequence: u64,
     pub png: Option<String>,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uploads: Option<CloudUploadState>,
 }
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct CloudViewResponse {
@@ -60,4 +71,6 @@ pub struct CloudViewResponse {
     pub desktop_last_input: Option<String>,
     pub browsers: Vec<CloudViewState>,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staged: Option<CloudStageReceipt>,
 }
