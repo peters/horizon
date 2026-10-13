@@ -164,7 +164,10 @@ fn row(ui: &mut Ui, pr: &PullRequest, now: OffsetDateTime) -> Option<String> {
     // Only a row with a page takes clicks and keyboard focus.
     let opens = pr.has_page();
     let sense = if opens { Sense::click() } else { Sense::hover() };
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), sense);
+    // The id follows the pull request, not its place in the list, so focus stays on it
+    // when a new status reorders the rows.
+    let (_, rect) = ui.allocate_space(Vec2::new(ui.available_width(), height));
+    let response = ui.interact(rect, egui::Id::new(("upkeep-pr", &pr.repository, pr.number)), sense);
     // A row out of view only takes its space: a long list costs nothing per frame.
     if !ui.is_rect_visible(rect) {
         return None;
@@ -183,7 +186,7 @@ fn row(ui: &mut Ui, pr: &PullRequest, now: OffsetDateTime) -> Option<String> {
     }
     let response = if url.is_some() {
         response.on_hover_cursor(CursorIcon::PointingHand).on_hover_ui(|ui| {
-            ui.label(format!("Open #{} in a browser panel", pr.number));
+            ui.label(format!("Open {}#{} in a browser panel", pr.repository, pr.number));
         })
     } else {
         response
