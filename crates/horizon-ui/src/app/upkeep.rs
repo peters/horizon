@@ -33,6 +33,10 @@ impl HorizonApp {
         let Some(workspace) = self.board.panel(board).map(|panel| panel.workspace_id) else {
             return;
         };
+        // A fullscreen board would hide the page it opens.
+        if self.fullscreen_panel == Some(board) {
+            self.fullscreen_panel = None;
+        }
         let existing = self
             .board
             .panels

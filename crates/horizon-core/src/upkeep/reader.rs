@@ -3,9 +3,8 @@
 //! before the board draws them.
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use super::Status;
@@ -88,25 +87,34 @@ impl Reader {
     }
 }
 
-/// Starts a thread that sends a reading whenever the document changes. It ends when
-/// `alive` turns false or the receiver is gone.
-pub(super) fn spawn(path: PathBuf, alive: Arc<AtomicBool>) -> Option<Receiver<Reading>> {
-    let (sender, receiver) = mpsc::channel();
+/// The newest reading the thread found and the board has not taken yet. A newer reading
+/// replaces an older one, so a board that is not drawn holds at most one.
+pub(super) type Latest = Arc<Mutex<Option<Reading>>>;
+
+/// Starts a thread that puts a reading into the returned slot whenever the document
+/// changes. It ends when `alive` turns false or the board dropped the slot.
+pub(super) fn spawn(path: PathBuf, alive: Arc<AtomicBool>) -> Option<Latest> {
+    let latest = Latest::default();
+    let slot = Arc::downgrade(&latest);
     let mut reader = Reader::new(path);
     std::thread::Builder::new()
         .name("upkeep-status".into())
         .spawn(move || {
             while alive.load(Ordering::Relaxed) {
-                if let Some(reading) = reader.check()
-                    && sender.send(reading).is_err()
-                {
+                let Some(slot) = slot.upgrade() else {
                     return;
+                };
+                if let Some(reading) = reader.check()
+                    && let Ok(mut latest) = slot.lock()
+                {
+                    *latest = Some(reading);
                 }
+                drop(slot);
                 std::thread::sleep(CHECK_EVERY);
             }
         })
         .ok()?;
-    Some(receiver)
+    Some(latest)
 }
 
 fn read_status(path: &Path) -> Reading {
@@ -283,13 +291,26 @@ mod tests {
         let path = dir.path().join("status.json");
         std::fs::write(&path, r#"{"agent":"codex"}"#).unwrap();
         let alive = Arc::new(AtomicBool::new(true));
-        let receiver = spawn(path, alive.clone()).unwrap();
-        let reading = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        let latest = spawn(path.clone(), alive.clone()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let reading = loop {
+            if let Some(reading) = latest.lock().unwrap().take() {
+                break reading;
+            }
+            assert!(std::time::Instant::now() < deadline, "no first reading");
+            std::thread::sleep(Duration::from_millis(20));
+        };
         assert_eq!(reading.unwrap().agent, "codex");
+        // Two changes while nobody takes them leave only the newer one.
+        std::fs::write(&path, r#"{"agent":"one"}"#).unwrap();
+        std::thread::sleep(Duration::from_millis(2500));
+        std::fs::write(&path, r#"{"agent":"three"}"#).unwrap();
+        std::thread::sleep(Duration::from_millis(2500));
+        assert_eq!(latest.lock().unwrap().take().unwrap().unwrap().agent, "three");
         alive.store(false, Ordering::Relaxed);
-        assert!(
-            receiver.recv_timeout(Duration::from_secs(5)).is_err(),
-            "the thread ends"
-        );
+        std::thread::sleep(Duration::from_millis(2500));
+        std::fs::write(&path, r#"{"agent":"after"}"#).unwrap();
+        std::thread::sleep(Duration::from_millis(2500));
+        assert!(latest.lock().unwrap().is_none(), "the thread ended");
     }
 }

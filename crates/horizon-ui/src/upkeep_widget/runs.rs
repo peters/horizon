@@ -14,6 +14,16 @@ pub(super) fn running(status: &Status) -> Option<&Run> {
     status.runs.last().filter(|run| run.outcome == RunOutcome::Running)
 }
 
+/// How long after its start a run that still shows as running counts as no longer
+/// reported: two schedule periods, and at least three hours.
+fn stale_after(status: &Status) -> time::Duration {
+    let every = i64::from(status.schedule.every_minutes.max(60));
+    time::Duration::minutes((2 * every).max(180))
+}
+
+/// A short grace after the planned start before a missed run shows as late.
+const LATE_AFTER: time::Duration = time::Duration::minutes(10);
+
 pub(super) fn show(ui: &mut Ui, status: &Status, now: OffsetDateTime) {
     Frame::new()
         .fill(theme::PANEL_BG_ALT())
@@ -32,20 +42,7 @@ pub(super) fn show(ui: &mut Ui, status: &Status, now: OffsetDateTime) {
 
 /// "in 22 min" big, with what it means under it.
 fn next_run(ui: &mut Ui, status: &Status, now: OffsetDateTime) {
-    let (headline, color, line) = if let Some(run) = running(status) {
-        let started = relative(run.started_at, now);
-        ("Running".to_string(), theme::ACCENT(), format!("Started {started}"))
-    } else if status.schedule.paused {
-        (
-            "Paused".to_string(),
-            theme::PALETTE_YELLOW(),
-            "No runs until resumed".to_string(),
-        )
-    } else if let Some(next) = status.schedule.next_run_at {
-        (relative(next, now), theme::FG(), format!("Next run at {}", clock(next)))
-    } else {
-        ("Not scheduled".to_string(), theme::FG_SOFT(), String::new())
-    };
+    let (headline, color, line) = next_run_text(status, now);
     ui.vertical(|ui| {
         ui.set_width(150.0);
         ui.spacing_mut().item_spacing.y = 2.0;
@@ -53,6 +50,40 @@ fn next_run(ui: &mut Ui, status: &Status, now: OffsetDateTime) {
         ui.label(RichText::new(headline).size(20.0).strong().color(color));
         ui.label(RichText::new(line).size(11.5).color(theme::FG_SOFT()));
     });
+}
+
+/// The headline, its color and the line under it.
+fn next_run_text(status: &Status, now: OffsetDateTime) -> (String, egui::Color32, String) {
+    if let Some(run) = running(status) {
+        let started = relative(run.started_at, now);
+        if now - run.started_at > stale_after(status) {
+            (
+                "No report".to_string(),
+                theme::PALETTE_YELLOW(),
+                format!("A run started {started}"),
+            )
+        } else {
+            ("Running".to_string(), theme::ACCENT(), format!("Started {started}"))
+        }
+    } else if status.schedule.paused {
+        (
+            "Paused".to_string(),
+            theme::PALETTE_YELLOW(),
+            "No runs until resumed".to_string(),
+        )
+    } else if let Some(next) = status.schedule.next_run_at {
+        if now - next > LATE_AFTER {
+            (
+                "Late".to_string(),
+                theme::PALETTE_YELLOW(),
+                format!("Was due at {}", clock(next)),
+            )
+        } else {
+            (relative(next, now), theme::FG(), format!("Next run at {}", clock(next)))
+        }
+    } else {
+        ("Not scheduled".to_string(), theme::FG_SOFT(), String::new())
+    }
 }
 
 fn bars(ui: &mut Ui, status: &Status, now: OffsetDateTime) {
@@ -92,9 +123,10 @@ fn bars(ui: &mut Ui, status: &Status, now: OffsetDateTime) {
                 .collect();
             let summary = Hour::of(&runs);
             paint_bar(ui, bar, summary);
-            let tip = tooltip(hour, &runs, summary);
             ui.interact(bar, ui.id().with(("upkeep-hour", slot)), Sense::hover())
-                .on_hover_text(tip);
+                .on_hover_ui(|ui| {
+                    ui.label(tooltip(hour, &runs, summary));
+                });
         }
         ui.horizontal(|ui| {
             ui.label(
@@ -252,6 +284,41 @@ mod tests {
         assert_eq!(tooltip(at, &[&failed], Hour::of(&[&failed])), "14:00 UTC: failed");
         assert_eq!(Hour::of(&[&first, &failed]).unwrap().outcome, RunOutcome::Failed);
         assert_eq!(Hour::of(&[]), None);
+    }
+
+    #[test]
+    fn a_status_that_stopped_reporting_does_not_look_live() {
+        let now = parse_time("2026-10-13T14:37:00Z").unwrap();
+        let status = |runs: &str, next: &str| -> Status {
+            serde_json::from_str(&format!(
+                r#"{{"schedule":{{"every_minutes":60,"next_run_at":"{next}"}},"runs":[{runs}]}}"#
+            ))
+            .unwrap()
+        };
+        let text = |status: &Status| {
+            let (headline, _, line) = next_run_text(status, now);
+            format!("{headline} / {line}")
+        };
+        let running = r#"{"started_at":"2026-10-13T14:00:00Z","outcome":"running"}"#;
+        assert_eq!(
+            text(&status(running, "2026-10-13T15:00:00Z")),
+            "Running / Started 37 min ago"
+        );
+        let stuck = r#"{"started_at":"2026-10-11T14:00:00Z","outcome":"running"}"#;
+        assert_eq!(
+            text(&status(stuck, "2026-10-11T15:00:00Z")),
+            "No report / A run started 2 d ago"
+        );
+        assert_eq!(
+            text(&status("", "2026-10-13T15:00:00Z")),
+            "in 23 min / Next run at 15:00 UTC"
+        );
+        assert_eq!(
+            text(&status("", "2026-10-13T14:30:00Z")),
+            "7 min ago / Next run at 14:30 UTC",
+            "within the grace"
+        );
+        assert_eq!(text(&status("", "2026-10-13T12:00:00Z")), "Late / Was due at 12:00 UTC");
     }
 
     #[test]

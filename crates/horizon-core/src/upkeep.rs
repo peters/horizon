@@ -7,7 +7,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Receiver;
 
 use serde::Deserialize;
 use time::OffsetDateTime;
@@ -61,12 +60,12 @@ pub struct Schedule {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunOutcome {
-    #[default]
     Done,
     Running,
     Skipped,
     Failed,
-    /// An outcome this Horizon does not know.
+    /// No outcome, or one this Horizon does not know.
+    #[default]
     #[serde(other)]
     Other,
 }
@@ -209,7 +208,7 @@ pub struct UpkeepBoard {
     /// Why the document could not be read, the last time it changed.
     pub error: Option<String>,
     pub request: Option<Request>,
-    readings: Option<Receiver<reader::Reading>>,
+    latest: Option<reader::Latest>,
     alive: Arc<AtomicBool>,
 }
 
@@ -221,7 +220,7 @@ impl UpkeepBoard {
             status: None,
             error: None,
             request: None,
-            readings: None,
+            latest: None,
             alive: Arc::new(AtomicBool::new(true)),
         }
     }
@@ -234,25 +233,29 @@ impl UpkeepBoard {
     /// Takes what the reader thread found since the last call, starting the thread on
     /// the first call. Never touches the file itself. Returns true when anything changed.
     pub fn poll(&mut self) -> bool {
-        if self.readings.is_none() {
-            self.readings = reader::spawn(self.path.clone(), self.alive.clone());
-            if self.readings.is_none() {
+        if self.latest.is_none() {
+            self.latest = reader::spawn(self.path.clone(), self.alive.clone());
+            if self.latest.is_none() {
                 self.error = Some("The Upkeep status reader could not start.".into());
                 return true;
             }
         }
-        let mut changed = false;
-        while let Some(reading) = self.readings.as_ref().and_then(|readings| readings.try_recv().ok()) {
-            changed = true;
-            match reading {
-                Ok(status) => {
-                    self.status = Some(Arc::new(status));
-                    self.error = None;
-                }
-                Err(error) => self.error = Some(error),
+        let reading = self
+            .latest
+            .as_ref()
+            .and_then(|latest| latest.lock().ok().and_then(|mut latest| latest.take()));
+        match reading {
+            None => false,
+            Some(Ok(status)) => {
+                self.status = Some(Arc::new(status));
+                self.error = None;
+                true
+            }
+            Some(Err(error)) => {
+                self.error = Some(error);
+                true
             }
         }
-        changed
     }
 }
 

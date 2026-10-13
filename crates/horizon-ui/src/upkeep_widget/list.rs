@@ -162,16 +162,25 @@ fn row(ui: &mut Ui, pr: &PullRequest, now: OffsetDateTime) -> Option<String> {
     let has_note = !pr.note.is_empty();
     let height = if has_note { ROW_HEIGHT + NOTE_HEIGHT } else { ROW_HEIGHT };
     let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::click());
-    let url = pr.github_url();
+    // A row out of view only takes its space: a long list costs nothing per frame.
+    if !ui.is_rect_visible(rect) {
+        return None;
+    }
+    // The page and the texts are made only when the row is pointed at or clicked.
+    let url = (response.hovered() || response.clicked())
+        .then(|| pr.github_url())
+        .flatten();
     let response = if url.is_some() {
-        response
-            .on_hover_cursor(CursorIcon::PointingHand)
-            .on_hover_text(format!("Open #{} in a browser panel", pr.number))
+        response.on_hover_cursor(CursorIcon::PointingHand).on_hover_ui(|ui| {
+            ui.label(format!("Open #{} in a browser panel", pr.number));
+        })
     } else {
         response
     };
-    let name = format!("{}#{} {}", pr.repository, pr.number, pr.title);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, url.is_some(), &name));
+    response.widget_info(|| {
+        let name = format!("{}#{} {}", pr.repository, pr.number, pr.title);
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, pr.github_url().is_some(), name)
+    });
     if response.hovered() {
         ui.painter().rect_filled(
             rect,

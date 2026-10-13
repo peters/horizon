@@ -1050,7 +1050,7 @@ mod tests {
         ] {
             assert!(kind.accepts_text_input(), "kind {kind:?} must accept text input");
         }
-        for kind in [PanelKind::GitChanges, PanelKind::Usage] {
+        for kind in [PanelKind::GitChanges, PanelKind::Usage, PanelKind::Upkeep] {
             assert!(!kind.accepts_text_input(), "kind {kind:?} must reject text input");
         }
     }
