@@ -124,7 +124,8 @@ change in the report as a deviation.
 | `smoke-lib` | Hetzner, CPU, companion repository `<lib>` | None | G01, G03–G10, G12 |
 | `smoke-lib0` | Hetzner, CPU, companion repository `<lib>`, no worker (`smoke-lib1` if a retry is necessary) | None | G08 |
 | `smoke-x` | Hetzner, CPU, image-only, idle stop of 10 minutes | None | L07, L08 |
-| `smoke-hb` | Hetzner, CPU, `runpod-build` with Hetzner chosen in New cloud | None | L11 |
+| `smoke-hb` | Hetzner, CPU, `runpod-build` with Hetzner and other storage chosen in New cloud | None | L11 |
+| `smoke-hd` | Hetzner, CPU, `runpod-build` with a 1 GB system disk requirement | None | L12 |
 
 ### 4.3 Rules for each step
 
@@ -280,7 +281,7 @@ area X.
 15. Do T12 and T13.
 16. Do the cleanup of area G.
 17. Do N01 to N05.
-18. Do L01 to L11.
+18. Do L01 to L12.
 
 The cleanup of this procedure does X01 to X05.
 
@@ -292,7 +293,7 @@ The cleanup of this procedure does X01 to X05.
 | C — New cloud dialog | [c-new-cloud-dialog.md](cloud-panels/c-new-cloud-dialog.md) | C01–C31 | C08 if the watch starts a cloud, and C31 |
 | D — Deployment | [d-deployment.md](cloud-panels/d-deployment.md) | D01–D07 | rents compute |
 | E — Panels in a cloud | [e-panels.md](cloud-panels/e-panels.md) | E01–E09 | rents compute |
-| L — Lifecycle | [l-lifecycle.md](cloud-panels/l-lifecycle.md) | L01–L11 | rents compute |
+| L — Lifecycle | [l-lifecycle.md](cloud-panels/l-lifecycle.md) | L01–L12 | rents compute |
 | T — Tailnets | [t-tailnets.md](cloud-panels/t-tailnets.md) | T01–T14 | T03–T12 and T14 rent compute |
 | G — Companion repositories | [g-companions.md](cloud-panels/g-companions.md) | G01–G12 | rents compute, also G08 if the provider request is faster than the cancel |
 | O — Offers and cost | [o-offers.md](cloud-panels/o-offers.md) | O01–O03 | O02 rents compute |

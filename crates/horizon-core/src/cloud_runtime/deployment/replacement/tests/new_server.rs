@@ -100,6 +100,10 @@ impl Steps for NewServer<'_> {
         self.script.verify(state, image)
     }
 
+    fn unpacked_bytes(&self, state: &Deployment, tag: &str, digest: &str) -> Result<Option<u64>> {
+        self.script.unpacked_bytes(state, tag, digest)
+    }
+
     fn release_devices(&self, _: &Deployment) -> Result<()> {
         panic!("a new-server cloud holds no hosted devices")
     }
@@ -185,6 +189,55 @@ fn a_hetzner_cloud_whose_committed_profile_names_runpod_rebuilds_on_hetzner_at_t
     assert_eq!(after.profile, before.profile, "the cloud stays on Hetzner");
     assert_eq!(after.spec.as_ref().unwrap().profile, before.profile);
     assert_eq!(after.cloud_id, before.cloud_id);
+}
+
+#[test]
+fn a_hetzner_cloud_with_storage_chosen_in_new_cloud_rebuilds_on_the_same_volume() {
+    let fixture = hetzner();
+    // New cloud's Hetzner storage: a system disk requirement and a workspace size of its
+    // own; the volume type is always standard there.
+    fixture.bind_storage(|storage| (storage.container_gb, storage.volume_gb) = (30, 10));
+    let before = fixture.state();
+    let mut head = before.profile.clone();
+    head.provider = "runpod".into();
+    head.storage = horizon_cloud::Storage {
+        container_gb: 20,
+        volume_gb: 40,
+        volume_tier: horizon_cloud::runpod::volumes::Tier::HighPerformance,
+    };
+    let mut script = Script::new(&fixture);
+    script.head.revision.clone_from(&before.revision);
+    script.head.config = Some(config(&head));
+    let steps = NewServer {
+        script: &script,
+        hosting: Hosting::default(),
+    };
+    assert_eq!(rebuild_new(&fixture, &steps).unwrap(), Driven::Committed);
+    assert_committed(&fixture, &steps);
+    assert_eq!(*steps.hosting.calls.borrow(), ["release", "reopen"]);
+    let after = fixture.state();
+    assert_eq!(after.profile, before.profile, "the cloud keeps its storage");
+    assert_eq!(after.spec.as_ref().unwrap().profile, before.profile);
+}
+
+#[test]
+fn an_image_larger_than_the_system_disk_requirement_is_refused_before_the_server_is_released() {
+    let fixture = hetzner();
+    let before = fixture.state();
+    let mut script = Script::new(&fixture);
+    let disk = u64::from(before.profile.storage.container_gb) * super::super::compatibility::BYTES_PER_GB;
+    script.unpacked = Some(disk + 1);
+    let steps = NewServer {
+        script: &script,
+        hosting: Hosting::default(),
+    };
+    let error = rebuild_new(&fixture, &steps).unwrap_err().to_string();
+    assert_eq!(error, super::super::compatibility::IMAGE_TOO_LARGE);
+    assert!(steps.hosting.calls.borrow().is_empty(), "the server is never released");
+    let after = fixture.state();
+    assert!(after.image_replacement.is_none());
+    assert_eq!(after.spec, before.spec);
+    assert_eq!(after.operation, before.operation);
 }
 
 #[test]

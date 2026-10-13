@@ -97,7 +97,7 @@ impl Images<'_> {
         }
         require_docker()?;
         let image = if profile.build.is_some() {
-            format!("{}:{tag}", repository_name(&profile.image))
+            built_reference(profile, tag)
         } else {
             profile.image.clone()
         };
@@ -152,20 +152,12 @@ impl Images<'_> {
             )?;
         }
         let digest = self.resolve(&image)?;
-        if let Some(image_id) = validated_id {
-            let manifest = self.runner.run(
-                "pushed image identity",
-                self.docker()
-                    .args(["buildx", "imagetools", "inspect", &digest, "--raw"]),
-                Duration::from_secs(60),
-            )?;
-            let manifest: serde_json::Value =
-                serde_json::from_str(&manifest).map_err(|_| Error::Invalid("Invalid pushed manifest"))?;
-            if !uploaded_image_matches(&image_id, &digest, &manifest) {
-                return Err(Error::Invalid(
-                    "Pushed image differs from the verified local worker image",
-                ));
-            }
+        if let Some(image_id) = validated_id
+            && !self.pushed_as(&image_id, &digest)?
+        {
+            return Err(Error::Invalid(
+                "Pushed image differs from the verified local worker image",
+            ));
         }
         if profile.build.is_none() {
             self.runner.transfer(
@@ -177,6 +169,54 @@ impl Images<'_> {
             self.validate(&digest, operation_id, profile)?;
         }
         Ok(digest)
+    }
+    /// Whether the registry image `digest` is the local image `local_id`.
+    fn pushed_as(&self, local_id: &str, digest: &str) -> Result<bool> {
+        let manifest = self.runner.run(
+            "pushed image identity",
+            self.docker().args(["buildx", "imagetools", "inspect", digest, "--raw"]),
+            Duration::from_secs(60),
+        )?;
+        let manifest: serde_json::Value =
+            serde_json::from_str(&manifest).map_err(|_| Error::Invalid("Invalid pushed manifest"))?;
+        Ok(uploaded_image_matches(local_id, digest, &manifest))
+    }
+    /// # Errors
+    /// The unpacked size in bytes of the registry image `digest` that a build of `profile`
+    /// under `tag` pushed, as `docker image inspect` reports it for the local image. The
+    /// tag can be moved after the push, so the size counts only while the tag still names
+    /// the image pushed as `digest`. A profile without a build section has no such image.
+    pub fn unpacked_bytes(&self, profile: &Profile, tag: &str, digest: &str) -> Result<u64> {
+        if profile.build.is_none() || !valid_tag(tag) {
+            return Err(Error::Invalid("Only an image built under a valid tag has a local size"));
+        }
+        let image = built_reference(profile, tag);
+        let output = self
+            .runner
+            .run_parsed(
+                "local image size",
+                self.docker()
+                    .args(["image", "inspect", "--format", "{{.Id}} {{.Size}}", &image]),
+                Duration::from_secs(30),
+            )
+            .map_err(|error| match error {
+                // Docker's own message is in the output; the hint names the way out.
+                Error::Command(_) => Error::Invalid(
+                    "Local Docker cannot report the size of the built image. If the image is gone, cancel the replacement and rebuild",
+                ),
+                other => other,
+            })?;
+        let (local_id, size) = output
+            .trim()
+            .split_once(' ')
+            .ok_or(Error::Invalid("Docker reported no size for the built image"))?;
+        if !self.pushed_as(local_id, digest)? {
+            return Err(Error::Invalid(
+                "The built image's local tag no longer names the image that was pushed; cancel the replacement and rebuild",
+            ));
+        }
+        size.parse()
+            .map_err(|_| Error::Invalid("Docker reported no size for the built image"))
     }
     fn resolve(&self, image: &str) -> Result<String> {
         let output = self.runner.run(
@@ -268,6 +308,11 @@ fn valid_tag(tag: &str) -> bool {
             .next()
             .is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_')
         && tag.bytes().all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+}
+
+/// The local tag that a build of `profile` under `tag` gets and pushes.
+fn built_reference(profile: &Profile, tag: &str) -> String {
+    format!("{}:{tag}", repository_name(&profile.image))
 }
 
 fn repository_name(image: &str) -> &str {

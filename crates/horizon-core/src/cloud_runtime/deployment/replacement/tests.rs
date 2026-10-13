@@ -11,6 +11,7 @@ use std::{
 mod committed_profile;
 mod new_server;
 mod quick_start;
+mod storage_choice;
 
 const CRASH: &str = "simulated crash";
 
@@ -99,6 +100,25 @@ impl Fixture {
         store.save(&state).unwrap();
     }
 
+    /// Binds the worker to `change`d storage, as New cloud chooses it or `storage::growth`
+    /// grows it, in the storage journal too when the cloud has one.
+    fn bind_storage(&self, change: impl FnOnce(&mut horizon_cloud::Storage)) {
+        self.edit(|state| {
+            change(&mut state.profile.storage);
+            state.spec.as_mut().unwrap().profile = state.profile.clone();
+        });
+        let path = self.root.join("workspace-volume.json");
+        if !path.exists() {
+            return;
+        }
+        let state = self.state();
+        let mut journal: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        journal["worker"] = serde_json::to_value(&state.spec).unwrap();
+        journal["spec"]["size"] = json!(state.profile.storage.volume_gb);
+        journal["spec"]["tier"] = serde_json::to_value(state.profile.storage.volume_tier).unwrap();
+        std::fs::write(&path, journal.to_string()).unwrap();
+    }
+
     /// The image the storage journal records its worker with.
     fn storage_image(&self) -> String {
         let journal: serde_json::Value =
@@ -120,6 +140,8 @@ struct Script {
     /// The sibling revisions each build layered.
     built_siblings: RefCell<Vec<Vec<String>>>,
     built: String,
+    /// The built image's unpacked size, as local Docker reports it.
+    unpacked: Option<u64>,
     /// The pull login and registry generation the built image gets, if any.
     built_login: Option<(String, String)>,
     fail_at: Cell<Option<Boundary>>,
@@ -140,6 +162,7 @@ impl Script {
             sibling_heads: Some(Vec::new()),
             built_siblings: RefCell::default(),
             built: digest('b'),
+            unpacked: Some(3 * compatibility::BYTES_PER_GB),
             built_login: Some(("pull-b".into(), "generation-b".into())),
             fail_at: Cell::new(None),
             calls: RefCell::default(),
@@ -228,6 +251,12 @@ impl Steps for Script {
         assert_eq!(image.digest, self.built);
         self.log("verify");
         Ok(())
+    }
+
+    fn unpacked_bytes(&self, _state: &Deployment, tag: &str, digest: &str) -> Result<Option<u64>> {
+        assert!(tag.starts_with("horizon-rebuilt-"));
+        assert_eq!(digest, self.built, "the size of the image that was pushed");
+        Ok(self.unpacked)
     }
 
     fn release_devices(&self, state: &Deployment) -> Result<()> {

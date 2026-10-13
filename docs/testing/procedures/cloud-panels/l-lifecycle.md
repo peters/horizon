@@ -19,7 +19,7 @@ check, the image rebuild, resize, idle stop, deletion and redeploy.
 ## 2. Applicability
 
 - Candidate: the frozen candidate from area S.
-- Platforms: Linux. Clouds: `smoke-a`, `smoke-r`, `smoke-sib`, `smoke-x` and `smoke-hb`.
+- Platforms: Linux. Clouds: `smoke-a`, `smoke-r`, `smoke-sib`, `smoke-x`, `smoke-hb` and `smoke-hd`.
 - This area does not test: a lost worker or an uncertain provider answer. The
   [cloud workspaces smoke guide](../../cloud-workspaces-mvp-smoke.md#disconnect-restart-and-failure-recovery)
   covers those cases with a provider simulator.
@@ -572,11 +572,13 @@ Use `smoke-r`.
 
    Result: The marker value and the commit are the same as before the stop.
 
-### 6.11 L11: Rebuild a Hetzner cloud from a profile that names RunPod
+### 6.11 L11: Rebuild a Hetzner cloud whose provider and storage differ from its profile
 
-Use the profile `runpod-build`. It sets `provider: runpod`. This task makes the
-cloud `smoke-hb` on Hetzner, then rebuilds it at the same commit
-([issue #1507](https://github.com/peters/horizon/issues/1507)).
+Use the profile `runpod-build`. It sets `provider: runpod` and 20 GB for the
+container disk and the workspace. This task makes the cloud `smoke-hb` on Hetzner
+with other storage values, then rebuilds it at the same commit
+([issue #1507](https://github.com/peters/horizon/issues/1507),
+[issue #1534](https://github.com/peters/horizon/issues/1534)).
 
 1. Record the commit of `<repo>`.
 
@@ -600,8 +602,11 @@ cloud `smoke-hb` on Hetzner, then rebuilds it at the same commit
    Result: The summary shows a RunPod worker.
 
 5. Click **Hetzner**. Select a Hetzner row with 4 vCPU and 8 GB that is in stock.
+   In **Storage**, set **Workspace size** to 10 GB and **System disk requirement**
+   to 30 GB.
 
-   Result: The summary shows a Hetzner worker.
+   Result: The summary shows a Hetzner worker with a 10 GB workspace and a 30 GB
+   system disk requirement.
 
    > **CAUTION:** THIS STEP RENTS COMPUTE AND PUSHES AN IMAGE TO THE REGISTRY.
    > Record the server and the volume in the resource ledger.
@@ -672,6 +677,88 @@ cloud `smoke-hb` on Hetzner, then rebuilds it at the same commit
 
     Result: The profile `runpod-build` has no `idle_stop_minutes`.
 
+### 6.12 L12: Refuse a rebuilt image that is larger than the container disk
+
+Use the profile `runpod-build`. This task makes the cloud `smoke-hd` on Hetzner
+with a system disk requirement of 1 GB. The rebuilt image is larger, so Horizon
+must refuse the rebuild before it changes the worker
+([issue #1534](https://github.com/peters/horizon/issues/1534)).
+
+1. Open **Cloud › New cloud…** in the workspace of `smoke-a`.
+
+   Result: The New cloud dialog opens.
+
+2. Type the path `<repo>` as the repository and `smoke-hd` as the title. Click
+   **Read .horizon/cloud.yml**.
+
+   Result: The dialog shows the worker catalog.
+
+3. Select `runpod-build` in **Profile**. Do not select the sibling `sib`.
+
+   Result: The summary shows a RunPod worker.
+
+4. Click **Hetzner**. Select a Hetzner row that is in stock. In **Storage**, set
+   **System disk requirement** to 1 GB.
+
+   Result: The summary shows a Hetzner worker with a 1 GB system disk requirement.
+
+   > **CAUTION:** THIS STEP RENTS COMPUTE AND PUSHES AN IMAGE TO THE REGISTRY.
+   > Record the server and the volume in the resource ledger.
+
+5. Click **Start cloud**. Wait until the card of `smoke-hd` shows **Ready**.
+
+   Result: The **Machine** tab shows a Hetzner server.
+
+6. Write the server, the volume and the SSH key in the resource ledger. Record the
+   server ID.
+
+   Result: The ledger contains the resources of `smoke-hd`.
+
+7. In `<repo>`, add the line `LABEL horizon.smoke=l12` at the end of the
+   Dockerfile that the `build` section of `runpod-build` names. Commit the change.
+
+   Result: `git -C <repo> log -1` shows the new commit. The rebuild builds an
+   image with another digest, so Horizon checks its size instead of reporting an
+   unchanged image.
+
+   > **CAUTION:** THIS STEP PUSHES AN IMAGE TO THE REGISTRY.
+
+8. On the card, click **Rebuild image & restart…**, then **Rebuild and restart**.
+
+   Result: The card shows the build and the push. Then it shows **Rebuild refused:**
+   with the text `storage.container_gb`.
+
+9. Wait until the card shows **Ready**.
+
+   Result: The **Machine** tab shows the server ID from step 6. The card does not
+   offer **Continue rebuild** or **Cancel rebuild**.
+
+10. Revert the commit of step 7.
+
+    Result: The Dockerfile of `runpod-build` does not contain `horizon.smoke=l12`.
+
+11. On the card of `smoke-hd`, click **Delete cloud resources…**.
+
+    Result: The card asks for confirmation and shows **Delete resources permanently**.
+
+    > **CAUTION:** THIS STEP DELETES THE VOLUME OF `smoke-hd`. Its files cannot
+    > come back.
+
+12. Click **Delete resources permanently**.
+
+    Result: The card shows **Deleted**.
+
+13. Mark the resources of `smoke-hd` as deleted in the resource ledger.
+
+    Result: The ledger shows no active resource for `smoke-hd`.
+
+    > **CAUTION:** REMOVE ONLY `smoke-hd`. Horizon removes the cloud and its panels
+    > from the board.
+
+14. Click **Remove cloud**.
+
+    Result: The cloud `smoke-hd` is not on the board.
+
 ## 7. Pass criteria
 
 - The marker files survive stop, resume, resize and the Hetzner resume.
@@ -680,7 +767,10 @@ cloud `smoke-hb` on Hetzner, then rebuilds it at the same commit
 - **Check provider** and `cloud_deploy reconcile` show the same worker ID.
 - After **Cancel rebuild**, no rebuild step waits. A full rebuild reaches **Ready**.
 - `smoke-hb` rebuilds on Hetzner at the same commit, although its profile names
-  RunPod. A changed `idle_stop_minutes` gives a refusal that names the field.
+  RunPod and other storage values. A changed `idle_stop_minutes` gives a refusal
+  that names the field.
+- The rebuild of `smoke-hd` is refused with `storage.container_gb`, and its
+  server stays.
 - Idle stop stops `smoke-x` after the profile limit.
 - Deletion removes the resources, and redeploy makes new resources.
 - A Hetzner resume makes a new server. The host key from `/workspace` stays, and
@@ -698,7 +788,7 @@ cloud `smoke-hb` on Hetzner, then rebuilds it at the same commit
 
    Result: Each active line in the ledger belongs to a cloud on the board.
 
-L11 is the last task that uses the `<build-repository>` entry of A08. Steps 3
+L12 is the last task that uses the `<build-repository>` entry of A08. Steps 3
 to 12 revoke it while the fixture runs.
 
 3. Open **Menu › Cloud settings**.

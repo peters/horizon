@@ -101,6 +101,10 @@ trait Steps: Provider {
     fn build(&self, state: &Deployment, revision: &str, siblings: &[String], tag: &str) -> Result<ReplacementImage>;
     /// Verifies again that a built image and its pull binding are unchanged.
     fn verify(&self, state: &Deployment, image: &ReplacementImage) -> Result<()>;
+    /// The unpacked size in bytes of the image that `build` made under `tag` and pushed as
+    /// `digest`, as local Docker reports it; `None` when nothing was built, as for the
+    /// pinned base image. Refuses when `tag` no longer names that image.
+    fn unpacked_bytes(&self, state: &Deployment, tag: &str, digest: &str) -> Result<Option<u64>>;
     /// Releases hosted devices before the container reset ends the worker's copies.
     fn release_devices(&self, state: &Deployment) -> Result<()>;
     /// For a provider that rebuilds on a new server (`provider::Rebuild::NewServer`),
@@ -144,8 +148,10 @@ enum Driven {
 /// # Errors
 /// Refuses unless the cloud is ready with nothing pending and the committed profile named
 /// `profile_name` matches the bound one apart from the choices bound at creation, such
-/// as the provider. After a failure the journal stays, so the replacement can be
-/// continued or cancelled.
+/// as the provider and the storage. Refuses a built image that the worker's container
+/// disk cannot hold before anything changes on the worker, and drops its unsent journal,
+/// so nothing stays pending. After any other failure once the replacement is journaled,
+/// the journal stays, so the replacement can be continued or cancelled.
 pub fn rebuild(
     request: &Request,
     profile_name: &str,
@@ -171,10 +177,11 @@ pub fn rebuild(
 }
 
 /// Resumes a pending replacement from its next step: a prepared one builds, a built one
-/// verifies its image again, and a requested one is sent again only while the provider
-/// still reports the previous image.
+/// verifies its image again and that the worker's container disk holds it, and a
+/// requested one is sent again only while the provider still reports the previous image.
 /// # Errors
-/// Refuses without a pending replacement; keeps the journal after a failure.
+/// Refuses without a pending replacement, and a built image that the worker's container
+/// disk cannot hold; keeps the journal after a failure, so it can be cancelled.
 pub fn continue_replacement(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) -> Result<Deployment> {
     emit(Event::stage(Stage::Validate));
     let (store, mut state) = open(request)?;
@@ -446,6 +453,8 @@ fn drive(steps: &impl Steps, store: &Store, state: &mut Deployment, emit: &dyn F
                 }
                 return Ok(Driven::Unchanged);
             }
+            // Checked before the image is journaled, so every built replacement fits its worker.
+            require_held(steps, store, state, &journal.tag, &image.digest, emit)?;
             state.replacement_built(image)?;
             store.save(state)?;
             steps.checkpoint(Boundary::Built)?;
@@ -453,6 +462,12 @@ fn drive(steps: &impl Steps, store: &Store, state: &mut Deployment, emit: &dyn F
         ReplacementPhase::Built(image) => {
             emit(activity("Verifying the built image and its pull binding"));
             steps.verify(state, &image)?;
+            // Checked again, as an earlier Horizon version journaled a built image unchecked.
+            // The journal stays: hosted devices may already be released, and cancelling the
+            // replacement arms them again.
+            if !held(steps, state, &journal.tag, &image.digest, emit)? {
+                return Err(Error::Invalid(compatibility::BUILT_IMAGE_TOO_LARGE));
+            }
         }
         ReplacementPhase::Requested(_) => {
             match steps.server() {
@@ -464,6 +479,41 @@ fn drive(steps: &impl Steps, store: &Store, state: &mut Deployment, emit: &dyn F
     }
     request(steps, store, state, emit)?;
     Ok(Driven::Committed)
+}
+
+/// Refuses an image built under `tag` and pushed as `digest` that the worker's container
+/// disk cannot hold, and drops the replacement, whose update was never sent.
+fn require_held(
+    steps: &impl Steps,
+    store: &Store,
+    state: &mut Deployment,
+    tag: &str,
+    digest: &str,
+    emit: &dyn Fn(Event),
+) -> Result<()> {
+    if held(steps, state, tag, digest, emit)? {
+        return Ok(());
+    }
+    state.discard_replacement()?;
+    store.save(state)?;
+    Err(Error::Invalid(compatibility::IMAGE_TOO_LARGE))
+}
+
+/// Whether the worker's container disk holds the image built under `tag` and pushed as
+/// `digest` ([`compatibility::holds_image`]), after reporting both sizes.
+fn held(steps: &impl Steps, state: &Deployment, tag: &str, digest: &str, emit: &dyn Fn(Event)) -> Result<bool> {
+    let Some(bytes) = steps.unpacked_bytes(state, tag, digest)? else {
+        return Ok(true);
+    };
+    // Rounded up to a tenth, so an image just over the disk never reads as equal to it.
+    let tenths = bytes.div_ceil(compatibility::BYTES_PER_GB / 10);
+    emit(Event::Output(format!(
+        "The rebuilt image is {}.{} GB unpacked; this cloud's container disk (storage.container_gb) is {} GB",
+        tenths / 10,
+        tenths % 10,
+        state.profile.storage.container_gb
+    )));
+    Ok(compatibility::holds_image(&state.profile, bytes))
 }
 
 /// Journals the update as possibly sent, sends it and commits once the provider reports it.
