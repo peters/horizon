@@ -77,6 +77,16 @@ impl From<CloudError> for BillingError {
     }
 }
 
+/// Whether Horizon reads what each worker of `profile`'s provider was billed. Only
+/// `RunPod` reports it; Hetzner invoices a whole project and reports no billing per
+/// server, so a Hetzner cloud has no known total since creation. A profile that names
+/// no known provider is a `RunPod` one, as everywhere else.
+#[must_use]
+pub fn history_supported(profile: &horizon_cloud::Profile) -> bool {
+    use horizon_cloud::provider::{Description, Kind};
+    Description::of(profile).kind == Kind::RunPod
+}
+
 /// Reads worker `pod_id`'s billing for the last [`HISTORY`]: day buckets until
 /// the start of the current UTC day and hour buckets since.
 /// # Errors
@@ -165,7 +175,7 @@ impl BillingMonitor {
     ) {
         // Only RunPod's billing is read; another provider's worker has no RunPod pod.
         let pod = deployment
-            .filter(|deployment| deployment.profile.provider == horizon_cloud::provider::RUNPOD.id)
+            .filter(|deployment| history_supported(&deployment.profile))
             .and_then(|deployment| match &deployment.operation {
                 CreateState::Bound { worker_id } => Some(worker_id.as_str()),
                 _ => None,
@@ -540,6 +550,13 @@ mod tests {
         hetzner.profile.provider = "hetzner".into();
         monitor.follow(Some(&hetzner), Some(root), fetch, &notify);
         assert!(!monitor.refreshing(), "a Hetzner server has no RunPod billing");
+        assert!(!history_supported(&hetzner.profile) && history_supported(&bound.profile));
+        let mut unnamed = bound.profile.clone();
+        unnamed.provider = String::new();
+        assert!(
+            history_supported(&unnamed),
+            "a profile without a provider is a RunPod one"
+        );
         monitor.follow(Some(&bound), None, fetch, &notify);
         assert!(!monitor.refreshing(), "no settings, no refresh");
         monitor.follow(Some(&bound), Some(root), fetch, &notify);

@@ -85,6 +85,25 @@ pub fn rate_coverage(provider: &Description) -> &'static str {
     }
 }
 
+/// Why a worker has no current-run estimate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunGap {
+    /// The provider reports the worker stopped.
+    Stopped,
+    /// The provider reports a worker status that is neither running, starting nor stopped.
+    UnknownStatus,
+    /// The provider reported no hourly rate.
+    NoRate,
+    /// The provider reported no start time that Horizon can read.
+    NoStart,
+}
+
+/// Why `worker` has no current run, or `None` when it has one.
+#[must_use]
+pub fn run_gap(worker: &Worker) -> Option<RunGap> {
+    live_run(worker).err()
+}
+
 /// The savings-plan rate when the provider reports one, otherwise the list rate.
 /// A zero adjusted rate is treated as absent so a missing plan never shows a free worker.
 #[must_use]
@@ -99,7 +118,7 @@ pub fn hourly_rate(worker: &Worker) -> Option<f64> {
 /// rate and start time. A start in the future (clock skew) counts as zero elapsed.
 #[must_use]
 pub fn current_run(worker: &Worker, now: SystemTime) -> Option<RunCost> {
-    let (started, rate) = live_run(worker)?;
+    let (started, rate) = live_run(worker).ok()?;
     let elapsed = now.duration_since(started).unwrap_or_default();
     Some(RunCost {
         elapsed,
@@ -238,7 +257,7 @@ impl Billing {
     /// whole current run is estimated.
     #[must_use]
     pub fn total(&self, worker: &Worker, now: SystemTime) -> TotalCost {
-        let run = live_run(worker);
+        let run = live_run(worker).ok();
         let Some(latest) = self.latest else {
             return TotalCost {
                 billed: 0.0,
@@ -310,12 +329,19 @@ fn symbol(currency: &str) -> Option<&'static str> {
 }
 
 /// Start and hourly rate of a running worker's current run.
-fn live_run(worker: &Worker) -> Option<(SystemTime, f64)> {
-    if !matches!(worker.status(), WorkerStatus::Running | WorkerStatus::Starting) {
-        return None;
+fn live_run(worker: &Worker) -> Result<(SystemTime, f64), RunGap> {
+    match worker.status() {
+        WorkerStatus::Running | WorkerStatus::Starting => {}
+        WorkerStatus::Stopped => return Err(RunGap::Stopped),
+        WorkerStatus::Lost => return Err(RunGap::UnknownStatus),
     }
-    let rate = hourly_rate(worker)?;
-    Some((started_at(worker.last_started_at.as_deref()?)?, rate))
+    let rate = hourly_rate(worker).ok_or(RunGap::NoRate)?;
+    let started = worker
+        .last_started_at
+        .as_deref()
+        .and_then(started_at)
+        .ok_or(RunGap::NoStart)?;
+    Ok((started, rate))
 }
 
 fn estimate(rate: f64, from: SystemTime, now: SystemTime) -> f64 {
@@ -729,9 +755,29 @@ mod tests {
         // A stop deletes the server and bills no compute; a resume creates a new one.
         let stopped = hetzner(&json!({"desiredStatus": "EXITED"}));
         assert_eq!(current_run(&stopped, later), None);
+        assert_eq!(run_gap(&stopped), Some(RunGap::Stopped));
+        let lost = hetzner(&json!({"desiredStatus": "UNKNOWN"}));
+        assert_eq!(run_gap(&lost), Some(RunGap::UnknownStatus));
         let resumed = hetzner(&json!({"id": "43", "lastStartedAt": "2026-10-12T10:00:00Z"}));
         let run = current_run(&resumed, at("2026-10-12T10:10:00Z")).unwrap();
         assert_eq!(run.elapsed, Duration::from_mins(10));
+    }
+
+    #[test]
+    fn a_missing_rate_or_start_is_named_instead_of_estimated() {
+        let now = at("2026-10-12T09:00:00Z");
+        assert_eq!(run_gap(&hetzner(&json!({}))), None);
+        assert_eq!(run_gap(&hetzner(&json!({"costPerHr": null}))), Some(RunGap::NoRate));
+        for start in [json!(null), json!("yesterday")] {
+            let worker = hetzner(&json!({"lastStartedAt": start}));
+            assert_eq!(run_gap(&worker), Some(RunGap::NoStart), "{start}");
+            assert_eq!(current_run(&worker, now), None);
+        }
+        assert_eq!(
+            run_gap(&hetzner(&json!({"costPerHr": null, "lastStartedAt": null}))),
+            Some(RunGap::NoRate),
+            "the rate is named first"
+        );
     }
 
     #[test]

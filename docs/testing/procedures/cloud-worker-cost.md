@@ -15,7 +15,9 @@ owner: peters
 This procedure makes sure that a cloud card shows the hourly rate and the cost
 of the current run of its worker in the currency of the provider. It also makes
 sure that the run starts at the correct time, and that a reconnect, a restart,
-a stop and a resume keep that start correct.
+a stop and a resume keep that start correct. It also makes sure that a figure
+that Horizon cannot know says why, and that a Ready worker never shows
+`estimate pending until ready`.
 
 ## 2. Applicability
 
@@ -24,10 +26,11 @@ a stop and a resume keep that start correct.
 - Task 6.1 uses a synthetic cloud of a debug build and rents no compute.
   Tasks 6.2 to 6.5 rent compute.
 - This procedure does not test these functions:
-  - The total since creation of a Hetzner cloud. Hetzner reports no billing
-    for each server.
   - Totals from RunPod billing. The unit tests of the billing monitor and of
     the cost module cover them.
+  - A Ready worker without a rate or a start time. The unit tests of the cost
+    module and of the cloud card cover them, because a provider seldom omits
+    these values.
 
 ## 3. Safety
 
@@ -99,6 +102,22 @@ a stop and a resume keep that start correct.
    It names the workspace volume, the primary IPv4 address, traffic and VAT as
    not included.
 
+7. Look at **Since creation** in the section **Cost**.
+
+   Result: It shows `Not available` and the note `no billing per worker`.
+   It does not show an amount, `billing not read yet` or `Awaiting billing`.
+
+8. Hold the pointer on the hourly rate in the header of the card.
+
+   Result: A tooltip says that Hetzner reports no billing per worker. It says
+   that the run estimate covers only the current run, and that earlier runs,
+   stopped periods and kept storage are not in it.
+
+9. Look at the lines under the three figures of the section **Cost**.
+
+   Result: The line `This run · <time> · €<amount> · €0.0240/h` shows, and
+   under it `Since creation · not reported by Hetzner`.
+
 ### 6.2 LIVE: A Ready Hetzner worker
 
 > **CAUTION:** THIS TASK RENTS A HETZNER SERVER. Do the cleanup at the end.
@@ -127,6 +146,12 @@ a stop and a resume keep that start correct.
 
    Result: The run amount increases. On a type of €0.0088 an hour, it changes
    from `€0.00` to `€0.01` after about 34 minutes.
+
+5. Look at **Since creation** in the section **Cost**, and at the line under
+   the figures.
+
+   Result: **Since creation** shows `Not available` and `no billing per worker`.
+   The line `Since creation · not reported by Hetzner` shows under the run line.
 
 ### 6.3 RECONNECT: A restart and a reconnect keep the run
 
@@ -184,6 +209,8 @@ a stop and a resume keep that start correct.
   A reconnect and a restart do not change that start.
 - A stopped cloud shows no hourly rate. A resumed cloud starts a new run.
 - `cloud_list` gives the currency of each hourly rate.
+- A Hetzner cloud shows its total since creation as not available. No Ready
+  worker shows `estimate pending until ready`.
 - RunPod amounts show US dollars. No sum adds two currencies.
 
 ## 8. Cleanup
