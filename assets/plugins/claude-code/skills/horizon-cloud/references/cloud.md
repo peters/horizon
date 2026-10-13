@@ -48,8 +48,8 @@ auto mode gives these agents access to the worker's credentials and repositories
 Set `capabilities.agent_approvals: ask` to select the interactive approval preset.
 This setting requires an image with `horizon-agent-approvals-contract=1`.
 The launcher reads the root-owned `/run/horizon-worker/agent-approvals` policy.
-New tmux sessions reset their executable search path and shell startup variables; image-layer
-session environment files still configure the agent after the policy check.
+New tmux sessions take their executable search path from the fresh SSH login and clear shell
+startup variables; image-layer session environment files still configure the agent after the policy check.
 Changes to `/workspace/capabilities.json` do not change that policy. Missing or
 invalid policy data, or a root agent process, keeps the prompts.
 

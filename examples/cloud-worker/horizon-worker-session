@@ -230,9 +230,10 @@ session_data() { mkdir -p "/workspace/session-data/$id"; chmod 700 "/workspace/s
 # would hold it for the server's lifetime.
 launch() {
     # A previous agent can change the shared server's environment and default shell.
-    # Execute the protected launcher directly, before applying the image's session env.
+    # Use this SSH invocation's PATH, not the server's mutable copy, then apply the image's session env.
+    # Execute the protected launcher directly so the server's default shell cannot run startup code.
     tmux -L horizon-cloud new-session -d -s "$id" -c "$worktree" \
-        -e PATH=/usr/local/bin:/usr/bin:/bin -e BASH_ENV= -e ENV= \
+        -e "PATH=$PATH" -e BASH_ENV= -e ENV= \
         -e LD_PRELOAD= -e LD_LIBRARY_PATH= -e LD_AUDIT= \
         /bin/bash --noprofile --norc -p /usr/local/bin/horizon-worker-run "$id" "$agent" 9>&-
 }

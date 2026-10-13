@@ -138,7 +138,7 @@ class SessionRelaunchTests(unittest.TestCase):
         launch[launch.index('/usr/local/bin/horizon-worker-run'):] = [str(case.script), 'test-panel', 'codex']
         real_tmux = shutil.which('tmux')
         socket = case.root / 'tmux.sock'
-        environment = dict(case.env, PATH=os.defpath, CODEX_DAEMON='1')
+        environment = dict(case.env, PATH=self.env['PATH'], CODEX_DAEMON='1')
         def tmux(*args, check=True):
             return subprocess.run([real_tmux, '-S', str(socket), *args], env=environment,
                                   capture_output=True, text=True, timeout=15, check=check)
@@ -177,6 +177,7 @@ class SessionRelaunchTests(unittest.TestCase):
                     '--config', 'approval_policy="on-request"', '--sandbox', 'workspace-write']
                 self.assertEqual(child['args'], ['--no-daemon', *options])
                 self.assertTrue(child['path'].startswith(str(case.tools) + ':'))
+                self.assertIn(str(self.tools), child['path'].split(':'), 'the fresh SSH PATH is preserved')
                 for key in ('LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT'):
                     self.assertEqual(child['env'][key], '')
                 self.assertFalse(marker.exists(), 'tmux executed agent-controlled startup code')

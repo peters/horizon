@@ -641,8 +641,8 @@ capabilities:
   but cannot change or replace it. A missing or invalid policy keeps the prompts.
   Readiness compares this protected value with the requested profile.
 
-New tmux sessions reset the executable search path and shell startup variables before
-running the protected launcher. The policy reader uses the system Python. Image-layer
+New tmux sessions use the fresh SSH login's executable search path and clear shell startup
+variables before running the protected launcher. The policy reader uses the system Python. Image-layer
 session environment files still configure the agent process after these checks.
 
 In `ask` mode, Claude Code starts with `--permission-mode default`, the manual interactive
