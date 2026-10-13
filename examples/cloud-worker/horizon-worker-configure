@@ -10,6 +10,9 @@ if os.geteuid() == 0 and Path('/run/horizon-tailnet/agent-isolation').exists():
     os.chdir('/workspace')
     os.execv('/usr/local/bin/horizon-worker-tailnet', ['horizon-worker-tailnet', 'agent', '/usr/local/bin/horizon-worker-configure', *sys.argv[1:]])
 home = Path('/workspace/home')
+# horizon-device keeps its lock, its controller record and its resize markers next to the
+# target, so the target lives in a folder that the agent account owns, not in /workspace.
+DEVICE_TARGET = '/workspace/device/target.json'
 subprocess.run(['git', 'lfs', 'install', '--skip-repo'], check=True)
 subprocess.run(['git', 'config', '--global', 'lfs.storage', '/workspace/source/lfs'], check=True)
 # The GitHub service routes Git through its proxy again once it holds a chain; until it does,
@@ -24,7 +27,7 @@ if capabilities.get('agents', []):
 if capabilities.get('browsers', []) or capabilities.get('browserstack') is not None:
     servers['horizon-browser'] = {'command': '/usr/local/bin/horizon-browser', 'args': ['mcp', '--connect']}
 if capabilities.get('desktop', False):
-    servers['horizon-device'] = {'command': '/usr/local/bin/horizon-device', 'args': ['--target', '/workspace/device.json', 'mcp']}
+    servers['horizon-device'] = {'command': '/usr/local/bin/horizon-device', 'args': ['--target', DEVICE_TARGET, 'mcp']}
 # Agents may stop the worker when done only where the profile opts in to stopping by itself
 # and the provider gave the worker a credential to stop with; a Hetzner worker has none
 # (Horizon stops it), so the tool could only ever refuse there.
@@ -40,7 +43,8 @@ if capabilities.get('agents', []) and shutil.which('horizon-worker-github'):
     servers['horizon-github'] = {'command': '/usr/local/bin/horizon-worker-github', 'args': ['mcp']}
 Path('/workspace/agent-mcp.json').write_text(json.dumps({'mcpServers': servers}))
 if capabilities.get('desktop', False):
-    Path('/workspace/device.json').write_text(json.dumps({'id': 'cloud-desktop', 'endpoint': {'kind': 'local_x11', 'display': ':99'}}))
+    Path('/workspace/device').mkdir(mode=0o700, exist_ok=True)
+    Path(DEVICE_TARGET).write_text(json.dumps({'id': 'cloud-desktop', 'endpoint': {'kind': 'local_x11', 'display': ':99'}}))
 for agent in ['codex', 'grok']:
     root = home / ('.' + agent)
     config = root / 'config.toml'

@@ -545,6 +545,19 @@ assert policy.read_text() == 'ask\n'
         self.assertEqual(json.loads(self.path('/workspace/agent-mcp.json').read_text())['mcpServers']['horizon-worker'],
                          {'command': '/usr/local/bin/horizon-worker-stop', 'args': ['mcp']})
 
+    def test_the_device_target_lives_in_a_folder_that_the_agent_owns(self):
+        # horizon-device creates its lock, controller record and resize markers next to the
+        # target. /workspace belongs to root, so an unprivileged agent cannot create them there.
+        self.write('/workspace/capabilities.json', {'desktop': True})
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.configure()
+        servers = json.loads(self.path('/workspace/agent-mcp.json').read_text())['mcpServers']
+        self.assertEqual(servers['horizon-device']['args'], ['--target', '/workspace/device/target.json', 'mcp'])
+        target = json.loads(self.path('/workspace/device/target.json').read_text())
+        self.assertEqual(target, {'id': 'cloud-desktop', 'endpoint': {'kind': 'local_x11', 'display': ':99'}})
+        tailnet = (ROOT / 'horizon-worker-tailnet').read_text()
+        self.assertRegex(tailnet, r"folders = \[[^]]*'device'", 'the isolation handoff gives the folder to the agent')
+
     def test_agents_get_the_github_access_tool_where_the_image_has_the_service(self):
         for agents, service, expected in [(['claude'], '/usr/local/bin/horizon-worker-github', True),
                                           (['claude'], None, False), ([], '/usr/local/bin/horizon-worker-github', False)]:

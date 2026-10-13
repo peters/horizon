@@ -309,8 +309,8 @@ def handoff_paths(first):
     # All workspace code and tool services run with the same unprivileged identity.
     # The mount root and networking directories stay owned by the control lane.
     folders = ['home', 'agents', 'sessions', 'session-data', 'locks', 'credentials',
-               'checkout', 'worktrees', 'companions', 'siblings', 'source', 'repository.git', '.horizon']
-    files = ['agent-mcp.json', 'capabilities.json', 'siblings.json', 'import.lock', 'source.lock', 'shared-checkout.lock', 'session-env.log', 'device.json',
+               'checkout', 'worktrees', 'companions', 'siblings', 'source', 'repository.git', '.horizon', 'device']
+    files = ['agent-mcp.json', 'capabilities.json', 'siblings.json', 'import.lock', 'source.lock', 'shared-checkout.lock', 'session-env.log',
              'shared-checkout.status', 'shared-checkout.log']
     roots = [Path('/workspace', name) for name in folders + files]
     for root in roots:
@@ -318,7 +318,7 @@ def handoff_paths(first):
             raise ValueError()
         if root.name in folders:
             root.mkdir(exist_ok=True)
-        if root.name in {'agent-mcp.json', 'device.json', 'import.lock', 'source.lock', 'shared-checkout.lock', 'session-env.log'}:
+        if root.name in {'agent-mcp.json', 'import.lock', 'source.lock', 'shared-checkout.lock', 'session-env.log'}:
             root.touch(exist_ok=True)
         own(root, recursive=first)
     credentials = Path('/run/horizon-credentials')
