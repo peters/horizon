@@ -12,4 +12,8 @@ mkdir -p /workspace/locks
 export HORIZON_GPU_LOCK=/workspace/locks/gpu.lock
 # run.py gives each agent the browser host instance that the worker publishes at that time.
 unset HORIZON HORIZON_BROWSER_HOST_INSTANCE
-exec python3 -I -u /workspace/home/upkeep/run.py "$session"
+# The loop runs a copy, so it knows exactly which files run and sees a newer install.
+active=/workspace/home/upkeep/.active
+mkdir -p "$active"
+cp /workspace/home/upkeep/run.sh /workspace/home/upkeep/run.py "$active/"
+exec python3 -I -u "$active/run.py" "$session"

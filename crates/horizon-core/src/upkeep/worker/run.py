@@ -76,6 +76,17 @@ def names(cfg, key, pattern, default=()):
     return found
 
 
+def codex_enabled(environment):
+    """Whether the cloud profile of this worker enables Codex, as horizon-worker-session asks
+    before it starts a panel."""
+    try:
+        result = subprocess.run(['horizon-worker-check', '--agent', 'codex'], stdin=subprocess.DEVNULL,
+                                capture_output=True, timeout=60, env=environment)
+        return result.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def approvals():
     """'auto' only where the worker lets agents run without asking, decided as
     horizon-worker-run decides it: never as root, and only when the worker's policy says so."""
@@ -116,12 +127,13 @@ def session_environment():
     return environment
 
 
-def sources():
-    """The loop's own files, so it can start again when an exchange installed new ones."""
+def sources(folder):
+    """The loop's files in `folder`, so it can start again when an exchange installed new ones.
+    run.sh copies them to .active before it runs the copy, so .active holds what runs."""
     digest = hashlib.sha256()
     for name in ('run.sh', 'run.py'):
         try:
-            with open(os.path.join(DIR, name), 'rb') as handle:
+            with open(os.path.join(folder, name), 'rb') as handle:
                 digest.update(handle.read())
         except OSError:
             pass
@@ -308,11 +320,11 @@ class Job:
         # A run can last hours: each agent starts under the policy and with the session
         # environment of its own moment, as a panel would.
         environment = session_environment() if approvals() == 'auto' else None
-        if environment is None:
+        if environment is None or not codex_enabled(environment):
             self.code = None
             with open(self.log, 'a') as log:
-                log.write('\nThe worker asks before an agent runs a command, or refused its session '
-                          'environment; this agent did not start.\n')
+                log.write('\nThe worker asks before an agent runs a command, refused its session '
+                          'environment, or does not enable Codex; this agent did not start.\n')
             return
         prompt = (template.replace('@@REPOSITORY@@', self.repository)
                   .replace('@@STATUS@@', DIR + '/status.d/' + self.slug + '.json'))
@@ -571,7 +583,7 @@ def main():
     upcoming = next_slot(cfg)
     write_next(upcoming)
     print(f'Upkeep waits for its next run at {time.strftime("%H:%M", time.gmtime(upcoming))} UTC.', flush=True)
-    installed = sources()
+    installed = sources(DIR + '/.active')
     while True:
         cfg = config()
         paused = os.path.exists(DIR + '/paused')
@@ -614,7 +626,7 @@ def main():
             print(f'\nUpkeep waits for its next run at {time.strftime("%H:%M", time.gmtime(upcoming))} UTC.', flush=True)
         # Between runs only, and never when one is due, so an update stops no agent and skips
         # no run.
-        elif sources() != installed:
+        elif sources(DIR) != installed:
             print('\nAn exchange installed a new loop; starting it.', flush=True)
             os.execv('/bin/bash', ['/bin/bash', '--noprofile', '--norc', DIR + '/run.sh', *sys.argv[1:]])
         time.sleep(10)

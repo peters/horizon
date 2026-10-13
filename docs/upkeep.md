@@ -126,7 +126,8 @@ started also starts agents for the repositories that did not change.
   continues.
 - When the schedule changes, the loop calculates the next run again.
 - When an exchange installed a new loop, the loop starts the new loop between two
-  runs.
+  runs. The loop runs a copy of its files in `.active`, so it compares the
+  installed files with the files that run.
 - When the loop starts, it records a run that did not end (for example, because
   the loop was stopped) as failed.
 - The loop keeps the last 1 MiB of an agent log that grew to more than 8 MiB.
@@ -156,9 +157,11 @@ The exchange and the loop guarantee these items:
 - The exchange runs as the account that owns `/workspace/home`. On a worker that
   isolates agents, Horizon starts the exchange through
   `horizon-worker-tailnet agent`, as the agent account. On other workers, the
-  agents and the exchange run as root. The exchange stops with an error when it
-  runs as a different account from the owner of `/workspace/home`. Thus root
-  never writes into a folder that the agent account controls.
+  exchange and the loop run as root, as the agent panels do there. The loop then
+  starts no agent, because the approval policy for root is always "ask". The
+  exchange stops with an error when it runs as a different account from the
+  owner of `/workspace/home`. Thus root never writes into a folder that the agent
+  account controls.
 - The exchange opens each folder without links and makes sure that the folder
   belongs to its account. It does not use a folder that is a link.
 - The exchange writes each file to a new temporary file with a random name. Then
@@ -203,7 +206,9 @@ The exchange and the loop guarantee these items:
   without approvals: the agents do not run as root, and the worker policy
   `/run/horizon-worker/agent-approvals` is `auto`. On other workers the loop
   starts no agent, and the run fails with the reason. This is the same rule that
-  `horizon-worker-run` uses for agent panels. The loop examines the policy again
+  `horizon-worker-run` uses for agent panels. Before each agent, the loop also
+  asks `horizon-worker-check --agent codex` whether the cloud profile enables
+  Codex, as `horizon-worker-session` does. The loop examines the policy again
   immediately before it starts each agent. Like `horizon-worker-run`, it starts
   Codex with `--no-daemon` when the installed Codex has that option.
 - The loop gives each agent the session environment of the worker image, as

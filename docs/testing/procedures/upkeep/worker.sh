@@ -29,5 +29,5 @@ check "no file outside the folders changed" 'cmp -s /etc/hostname /run/hostname-
 check "the links are replaced by files" '[ -f /workspace/home/upkeep/config.json ] && [ ! -L /workspace/home/upkeep/config.json ] && [ ! -L /workspace/sessions/upkeep-abc-123/revision ]'
 check "the agent account owns every written path" '[ -z "$(find /workspace/home /workspace/sessions /workspace/session-data ! -user horizon-agent)" ]'
 sleep 2
-check "the loop runs as the agent account" '[ -n "$(pgrep -u 10001 -f upkeep/run.py)" ] && [ -z "$(pgrep -u 0 -f upkeep/run.py)" ]'
+check "the loop runs as the agent account" '[ -n "$(pgrep -u 10001 -f upkeep/.active/run.py)" ] && [ -z "$(pgrep -u 0 -f upkeep/.active/run.py)" ]'
 exit "$fail"

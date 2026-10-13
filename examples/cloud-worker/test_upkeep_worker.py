@@ -249,7 +249,9 @@ class LoopTests(unittest.TestCase):
                              'printf "args:%s env:%s\\n" "$*" "$UPKEEP_TEST"\ncat\n')
             codex.chmod(0o700)
             (tools / 'horizon-worker-session-env').write_text('#!/bin/sh\nprintf "UPKEEP_TEST=1\\0"\n')
-            (tools / 'horizon-worker-session-env').chmod(0o700)
+            (tools / 'horizon-worker-check').write_text('#!/bin/sh\n[ "$*" = "--agent codex" ]\n')
+            for tool in ('horizon-worker-session-env', 'horizon-worker-check'):
+                (tools / tool).chmod(0o700)
             for folder in ('repos', 'logs', 'status.d'):
                 (directory / folder).mkdir()
             policy = directory / 'agent-approvals'
@@ -299,6 +301,7 @@ class SchedulerTests(unittest.TestCase):
             'gh': f'#!/bin/sh\ncat {self.pulls}\n',
             'codex': f'#!/bin/sh\ncat >> {self.agents}\necho >> {self.agents}\n',
             'horizon-worker-session-env': '#!/bin/sh\n',
+            'horizon-worker-check': f'#!/bin/sh\n[ ! -e {self.root}/codex-disabled ]\n',
         }
         for name, text in scripts.items():
             (tools / name).write_text(text)
@@ -336,6 +339,12 @@ class SchedulerTests(unittest.TestCase):
         self.pulls.write_text(pulls)
         self.assertTrue(self.run_once())
         self.assertEqual(self.agents_started(), 8)
+
+    def test_a_profile_without_codex_starts_no_agent(self):
+        (self.root / 'codex-disabled').touch()
+        self.assertFalse(self.run_once())
+        self.assertEqual(self.agents_started(), 0)
+        self.assertIn('does not enable Codex', (self.dir / 'logs' / 'acme__web.log').read_text())
 
     def test_reports_of_any_shape_merge_into_a_bounded_status(self):
         (self.dir / 'status.d' / 'acme__web.json').write_text('[]')
