@@ -1,8 +1,11 @@
-//! The localci that runs a proof's CI. The candidate image is the agent's work, so a
-//! localci inside it proves nothing: Horizon fetches its own pinned release, checks it
+//! The localci programs of a proof. The CI runs the localci a worker session of the image
+//! finds first, as the agents on the worker do, so every image the setup builds must have
+//! one, with mode 755. Horizon's own localci checks the plan before the CI: the plan must
+//! keep a step that runs in every job. Horizon fetches its pinned release, checks it
 //! against the checksum this Horizon was built with and mounts it read-only into the
-//! proof's container. The release is a static binary, so nothing the image preloads
-//! runs inside it. Before the CI, its plan must keep a step that runs in every job.
+//! proof's container; the release is a static binary, so nothing the image preloads runs
+//! inside it. Horizon's localci runs the CI only for a published image without a localci
+//! of its own.
 use sha2::{Digest as _, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::Command;
