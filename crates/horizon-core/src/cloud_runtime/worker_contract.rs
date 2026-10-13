@@ -11,6 +11,7 @@ const SELF_STOP_MARKER: &str = "horizon-self-stop-contract=1";
 const PINNED_SUBMODULES_MARKER: &str = "horizon-source-shallow-contract=1";
 const LFS_SELECTION_MARKER: &str = "horizon-source-lfs-selection-contract=1";
 const PREPARE_CHECKOUT_MARKER: &str = "horizon-prepare-checkout-contract=1";
+pub(super) const TAGGED_TAILNET_MARKER: &str = "horizon-tailnet-contract=4";
 /// The image starts agents in auto mode and keeps their prompts for `agent_approvals: ask`.
 pub(super) const AGENT_APPROVALS_MARKER: &str = "horizon-agent-approvals-contract=1";
 /// A reason longer than this was not written by `horizon-worker-stop`.
@@ -53,7 +54,7 @@ impl SelfStop {
 /// Optional worker features the checker reports beside the required markers.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WorkerContract {
-    /// Root-only enrollment with unprivileged agent sessions.
+    /// Tagged root-only enrollment checked before unprivileged agent sessions start.
     pub tailnet: bool,
     /// The image sets a stable device name from the cloud ID.
     pub tailnet_stable_name: bool,
@@ -80,8 +81,9 @@ pub struct WorkerContract {
 impl WorkerContract {
     pub(super) fn reported(output: &str) -> Self {
         Self {
-            tailnet: reports(output, "horizon-tailnet-contract=1") || reports(output, "horizon-tailnet-contract=2"),
-            tailnet_stable_name: reports(output, "horizon-tailnet-contract=2"),
+            tailnet: reports(output, TAGGED_TAILNET_MARKER),
+            tailnet_stable_name: reports(output, "horizon-tailnet-contract=2")
+                || reports(output, TAGGED_TAILNET_MARKER),
             session_restart: reports(output, SESSION_RESTART_MARKER),
             container_started: output
                 .lines()

@@ -247,13 +247,21 @@ impl Connection {
             .worktree
             .strip_prefix(super::siblings::SHARED_CHECKOUT_ROOT)
             .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with('/'));
-        let guard = if shared {
-            "contract=$(horizon-worker-check) || { status=$?; printf '%s\\n' \"$contract\"; exit \"$status\"; }; if ! printf '%s\\n' \"$contract\" | grep -qx 'horizon-shared-checkout-contract=1'; then \
-             printf '%s\\n' 'Rebuild the cloud worker image before adding panels: shared checkouts are not supported.'; \
-             exit 3; fi; "
-        } else {
-            ""
-        };
+        let mut guard = format!(
+            "if [ -f /workspace/.horizon-tailnet/selection ]; then \
+             contract=$(horizon-worker-check) || {{ status=$?; printf '%s\\n' \"$contract\"; exit \"$status\"; }}; \
+             if ! printf '%s\\n' \"$contract\" | grep -qx '{}'; then \
+             printf '%s\\n' 'Rebuild the cloud worker image before adding panels: tag:horizon-worker enrollment is not supported; authorize the tag in tagOwners.'; \
+             exit 3; fi; fi; ",
+            worker_contract::TAGGED_TAILNET_MARKER,
+        );
+        if shared {
+            guard.push_str(
+                "contract=$(horizon-worker-check) || { status=$?; printf '%s\\n' \"$contract\"; exit \"$status\"; }; if ! printf '%s\\n' \"$contract\" | grep -qx 'horizon-shared-checkout-contract=1'; then \
+                 printf '%s\\n' 'Rebuild the cloud worker image before adding panels: shared checkouts are not supported.'; \
+                 exit 3; fi; ",
+            );
+        }
         let option = if shared { "--shared " } else { "" };
         args.push(format!(
             "{guard}horizon-worker-session {option}{} {} {revision}",
@@ -350,8 +358,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn shared_attachment_refuses_old_images_and_legacy_attachment_keeps_its_protocol() {
+    fn attachment_fixture() -> (tempfile::TempDir, Connection, Session) {
         use std::{fs, os::unix::fs::PermissionsExt};
         let root = tempfile::tempdir().unwrap();
         for (name, body) in [
@@ -372,24 +379,47 @@ mod tests {
             known_hosts: root.path().join("known-hosts"),
             host_key_alias: "fixture".into(),
         };
-        let mut session = Session {
+        let session = Session {
             panel_id: "panel".into(),
             agent: "shell".into(),
             tmux: "panel".into(),
             branch: String::new(),
             worktree: super::super::siblings::shared_worktree(None),
         };
+        (root, connection, session)
+    }
+
+    fn run_attachment(
+        root: &Path,
+        connection: &Connection,
+        session: &Session,
+        marker: &str,
+        status: &str,
+    ) -> std::process::Output {
+        let log = root.join("session.log");
+        let selection = root.join("selection");
+        let args = connection.attach_args(session, &"a".repeat(40)).unwrap();
+        let remote = args
+            .last()
+            .unwrap()
+            .replace("/workspace/.horizon-tailnet/selection", selection.to_str().unwrap());
+        Command::new("/bin/sh")
+            .args(["-c", &remote])
+            .env("PATH", format!("{}:/usr/bin:/bin", root.display()))
+            .env("CHECK_MARKER", marker)
+            .env("CHECK_EXIT", status)
+            .env("SESSION_LOG", &log)
+            .output()
+            .unwrap()
+    }
+
+    #[test]
+    fn shared_attachment_refuses_old_images_and_legacy_attachment_keeps_its_protocol() {
+        use std::fs;
+        let (root, connection, mut session) = attachment_fixture();
         let log = root.path().join("session.log");
         let run = |session: &Session, marker: &str, status: &str| {
-            let args = connection.attach_args(session, &"a".repeat(40)).unwrap();
-            Command::new("/bin/sh")
-                .args(["-c", args.last().unwrap()])
-                .env("PATH", format!("{}:/usr/bin:/bin", root.path().display()))
-                .env("CHECK_MARKER", marker)
-                .env("CHECK_EXIT", status)
-                .env("SESSION_LOG", &log)
-                .output()
-                .unwrap()
+            run_attachment(root.path(), &connection, session, marker, status)
         };
         let refused = run(&session, "horizon-worker-contract=1", "0");
         assert_eq!(refused.status.code(), Some(3));
@@ -419,6 +449,48 @@ mod tests {
         session.worktree = "/workspace/agents/panel".into();
         assert!(run(&session, "", "0").status.success());
         assert!(fs::read_to_string(&log).unwrap().starts_with("panel\nshell\n"));
+    }
+
+    #[test]
+    fn attachment_refuses_legacy_selected_tailnet_images() {
+        use std::fs;
+        let (root, connection, mut session) = attachment_fixture();
+        session.worktree = "/workspace/agents/panel".into();
+        let log = root.path().join("session.log");
+        let selection = root.path().join("selection");
+        let run = |session: &Session, marker: &str, status: &str| {
+            run_attachment(root.path(), &connection, session, marker, status)
+        };
+        fs::write(&selection, "work").unwrap();
+        for markers in [
+            "",
+            "horizon-tailnet-contract=1",
+            "horizon-tailnet-contract=2",
+            "horizon-tailnet-contract=3",
+            " horizon-tailnet-contract=4",
+            "horizon-tailnet-contract=40",
+            "horizon-tailnet-contract=4-suffix",
+        ] {
+            let refused = run(&session, markers, "0");
+            assert_eq!(refused.status.code(), Some(3));
+            let output = String::from_utf8_lossy(&refused.stdout);
+            assert!(output.contains("tag:horizon-worker") && output.contains("tagOwners"));
+            assert!(!log.exists(), "a legacy tailnet worker cannot start another session");
+        }
+        let markers = "horizon-tailnet-contract=4";
+        assert_eq!(run(&session, markers, "7").status.code(), Some(7));
+        assert!(!log.exists());
+        assert!(run(&session, markers, "0").status.success());
+        assert!(fs::read_to_string(&log).unwrap().starts_with("panel\nshell\n"));
+        fs::remove_file(&log).unwrap();
+        session.worktree = super::super::siblings::shared_worktree(None);
+        assert_eq!(run(&session, markers, "0").status.code(), Some(3));
+        assert!(!log.exists());
+        assert!(
+            run(&session, &format!("{markers}\nhorizon-shared-checkout-contract=1"), "0")
+                .status
+                .success()
+        );
     }
 
     #[test]

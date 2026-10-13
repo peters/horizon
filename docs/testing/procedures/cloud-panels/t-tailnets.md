@@ -43,10 +43,10 @@ send TCP traffic to each other over the tailnet.
 
 - The equipment in the [main procedure](../cloud-panels.md#4-equipment-and-preconditions).
 - The fixture with a Secret Service from S05.
-- The test tailnet. Its auth key is reusable, pre-authorized and not ephemeral.
+- The test tailnet. Its auth key is reusable, pre-authorized and not ephemeral,
+  with only `tag:horizon-worker`. The policy defines the tag in `tagOwners`.
 - The PC is a device on the test tailnet. Tests T05, T06 and T07 need this.
-- A worker image that reports `horizon-tailnet-contract=1` and
-  `horizon-tailnet-contract=2`. Use
+- A worker image that reports `horizon-tailnet-contract=4`. Use
   [`check-markers.py`](../../../../examples/cloud-worker/README.md#helpers-from-the-published-artifact)
   in B05 to examine the image.
 - A worker shell in each cloud of this area. Until the fix for

@@ -22,8 +22,8 @@ service on the first cloud with the same name before and after the resume.
   [issue #1310](https://github.com/peters/horizon/issues/1310).
 - Platforms: Linux. Lanes: cloud A on Hetzner, cloud B on RunPod or Hetzner.
 - This procedure does not test:
-  - An image without `horizon-tailnet-contract=2`. Its device name changes at
-    each resume. Unit tests cover the rename of such a cloud after a rebuild.
+  - An image without `horizon-tailnet-contract=4`. Selected-tailnet operations
+    require marker 4. Older images need a rebuild before this procedure.
   - A device name that a tailnet administrator changed.
   - OAuth enrollment, Remote Hosts or inbound access to the PC.
 
@@ -46,7 +46,8 @@ service on the first cloud with the same name before and after the resume.
 - A frozen candidate and its SHA-256.
 - A worker image built from the candidate commit.
 - A test tailnet with a saved auth key in **Settings > Tailnets**. The key is
-  reusable, preauthorized and not ephemeral.
+  reusable, preauthorized and not ephemeral, with only `tag:horizon-worker`.
+- A tailnet policy that defines `tag:horizon-worker` in `tagOwners`.
 - Provider keys in **Cloud settings** for each lane.
 - A private evidence directory, `<evidence>`.
 - A tailnet policy that lets cloud B reach cloud A on TCP `<port>`. If the
@@ -103,10 +104,10 @@ address. Thus, cloud B reaches the server, but the public network does not.
 2. Type this command.
 
    ```sh
-   horizon-worker-tailnet --stable-name-contract
+   horizon-worker-tailnet --tagged-enrollment-contract
    ```
 
-   Result: The command shows `horizon-tailnet-contract=2`.
+   Result: The command shows `horizon-tailnet-contract=4`.
 
 3. Show the device entry of cloud A. The first entry in the file is always the
    worker itself.
@@ -244,7 +245,7 @@ address. Thus, cloud B reaches the server, but the public network does not.
 
 ## 7. Pass criteria
 
-- T01 shows `horizon-tailnet-contract=2` and a name `horizon-cloud-<ID>`.
+- T01 shows `horizon-tailnet-contract=4` and a name `horizon-cloud-<ID>`.
 - The container host name changes after each resume.
 - The device name and the addresses of cloud A do not change after each resume.
 - In T02, T04 and T05, cloud B gets the current nonce from `<name>` with `exit=0`.

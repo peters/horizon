@@ -19,9 +19,25 @@ platform qualification remains separately tracked in #741.
 credential store. Names and opaque IDs are the only saved catalog metadata; keys
 are never returned by CLI/MCP, loaded back into the form, or included in project
 configuration. Add multiple networks, replace a key, or remove a saved binding.
-Use a preauthorized, non-ephemeral key; reuse requires a reusable key.
+Use a preauthorized, non-ephemeral auth key with only `tag:horizon-worker`.
+Use a reusable key to enroll more than one cloud. The tailnet policy must define
+`tag:horizon-worker` in `tagOwners`. The auth key must permit this tag.
+The tailnet administrator sets which services this tag can reach.
+Horizon does not change the tailnet policy.
 
-Choose **None** or a saved network in **New cloud** before provisioning. A cloud
+The worker requests `--advertise-tags=tag:horizon-worker` at enrollment.
+After `tailscale up`, it reads `Self.Tags` from `tailscale status --json`.
+It checks the saved node once at each resume too. The node must have exactly
+`tag:horizon-worker`. An untagged node or a node with extra tags is refused and
+logged out. An unreadable status also fails the check. The error names the tag
+and the `tagOwners` prerequisite.
+
+These checks apply at enrollment and resume only. Horizon does not monitor tags
+continuously. The tailnet policy controls reachability, also after a policy or
+tag change. This contract does not provide a separate tag for each workspace.
+See [the enrollment trust boundary](architecture/tailnet-enrollment.md).
+
+**None** is the default in **New cloud**. Choose a saved network before provisioning. A cloud
 retains that choice after allocation, including stop/resume. Removing a binding
 does not move its existing clouds to another network. Remote Hosts are outside
 this MVP. OAuth enrollment, API-based administration and Remote Hosts are
@@ -41,9 +57,19 @@ saves the auth key. Node state and the administrative socket are root-only;
 workspace code, agents, browsers and desktop services run as UID 10001 without
 capabilities or privilege escalation. The cloud volume retains node identity
 across worker restarts. Provider volumes that cannot enforce ownership/modes are
-refused. Custom images must advertise `horizon-tailnet-contract=1` before a
-selected-network cloud can be allocated; **None** remains compatible with older
-images.
+refused. A selected tailnet requires `horizon-tailnet-contract=4` from the worker
+image before allocation. Reconnect and new sessions require this marker from the
+actual worker too. Markers 1, 2 and 3 do not qualify. **None** remains compatible
+with older images.
+
+### Release compatibility note: tagged enrollment
+
+Existing keys that cannot assign `tag:horizon-worker` fail enrollment. An already-joined,
+untagged cloud logs out when it resumes with the new helper. Before the upgrade,
+ask the tailnet administrator to define `tag:horizon-worker` in `tagOwners` and
+supply a key with only that tag. Rebuild custom images with contract marker 4.
+The current quick-start pin predates marker 4, so quick start refuses a selected
+tailnet. A later image publication and pin update enable this path.
 
 Each cloud has one device name in its tailnet for the life of the cloud. The
 worker makes the name from the cloud ID. The name stays the same after a stop
@@ -86,8 +112,10 @@ the digest form:
 Thus, each name is a valid DNS label and is unique to its cloud. Tailscale does
 not change a name that a tailnet administrator set. If a different device has
 the name, Tailscale adds a suffix such as `-1`. An image with this behavior
-reports `horizon-tailnet-contract=2`. An older image keeps the container host
-name, which changes at each resume.
+reports `horizon-tailnet-contract=4`. Marker 2 also declares stable names on
+older images, but those images do not qualify for selected-tailnet operations.
+An image without stable-name support keeps the container host name, which changes
+at each resume.
 
 All members of the tailnet can see the device name. A name in the direct form
 shows the full cloud ID. A name in the digest form shows a maximum of 28
