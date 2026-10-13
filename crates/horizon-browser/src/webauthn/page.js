@@ -47,8 +47,11 @@
         return encoded;
     };
     const text = (value) => (value === undefined || value === null ? undefined : String(value));
-    const timeoutOf = (value) =>
-        Number.isFinite(value) && value >= 0 ? Math.min(Math.floor(value), 0xffffffff) : undefined;
+    // `timeout` is a WebIDL number, so "5000" counts; the host clamps it.
+    const timeoutOf = (value) => {
+        const millis = value === undefined || value === null ? NaN : Number(value);
+        return Number.isFinite(millis) && millis >= 0 ? Math.min(Math.floor(millis), 0xffffffff) : undefined;
+    };
     // `alg` is a required WebIDL `long`: missing is a TypeError, and a value
     // converts like ToInt32 (`1.5` is 1, `"abc"` is 0).
     const algorithmOf = (parameter) => {

@@ -80,6 +80,8 @@ test('options are bounded before they are posted', async () => {
     const {credentials, posted} = install();
     credentials.get({publicKey: {challenge, timeout: 1e21}});
     assert.equal(posted[0].options.timeout, 0xffffffff);
+    credentials.get({publicKey: {challenge, timeout: '5000'}});
+    assert.equal(posted.pop().options.timeout, 5000);
     await assert.rejects(credentials.create({publicKey: {challenge, rp: {name: 'x'}, user,
         pubKeyCredParams: [{type: 'public-key'}]}}), {name: 'TypeError'});
     await assert.rejects(credentials.get({publicKey: {challenge: new Uint8Array(8192)}}), {name: 'TypeError'});
