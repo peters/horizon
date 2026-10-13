@@ -92,7 +92,10 @@ pub(super) fn probe_with_timeout(capabilities: &Capabilities, timeout: Duration)
             .current_dir(home.path()),
         timeout.min(Duration::from_secs(60)),
     )?;
-    let output = std::str::from_utf8(&output).map_err(|_| invalid())?;
+    validate_probe(capabilities, std::str::from_utf8(&output).map_err(|_| invalid())?)
+}
+
+pub(super) fn validate_probe(capabilities: &Capabilities, output: &str) -> io::Result<()> {
     for marker in [
         "horizon-worker-contract=1",
         "horizon-source-contract=1",
@@ -102,6 +105,11 @@ pub(super) fn probe_with_timeout(capabilities: &Capabilities, timeout: Duration)
         if !output.lines().any(|line| line == marker) {
             return Err(invalid());
         }
+    }
+    if !capabilities.agent_approvals.is_auto()
+        && !output.lines().any(|line| line == "horizon-agent-approvals-contract=1")
+    {
+        return Err(invalid());
     }
     if capabilities.browserstack.is_some() && !output.lines().any(|line| line == "horizon-browserstack-contract=1") {
         return Err(invalid());
@@ -170,6 +178,7 @@ fn execute_input(command: &mut Command, timeout: Duration, input: Stdio) -> io::
 mod tests {
     use super::*;
     use crate::bootstrap::{keys, recovery::MANIFEST, runtime::Source};
+    use horizon_cloud::AgentApprovals;
     use horizon_cloud_protocol::{
         AllocationId, ControllerId, OperationId, SharingMode,
         bootstrap::{BootstrapOutcome, BootstrapReceipt, RecoveryReceipt, Startup},
@@ -266,10 +275,10 @@ mod tests {
             }
         }
         fn request(&self, action: Action, revision: u64) -> RecoveryRequest {
-            let payload = serde_json::to_string(&Request {
-                capabilities: serde_json::from_str("{}").unwrap(),
-            })
-            .unwrap();
+            self.request_capabilities(action, revision, serde_json::from_str("{}").unwrap())
+        }
+        fn request_capabilities(&self, action: Action, revision: u64, capabilities: Capabilities) -> RecoveryRequest {
+            let payload = serde_json::to_string(&Request { capabilities }).unwrap();
             let binding = &self.runtime.startup.controller;
             let intent = Intent::new(
                 binding,
@@ -330,6 +339,38 @@ mod tests {
             .is_err()
         );
         assert!(inspect(&f.store, &f.runtime, &request, |_| panic!("nonempty allocation")).is_err());
+    }
+
+    #[test]
+    fn allocation_inspection_requires_the_exact_approval_marker_only_for_ask() {
+        let f = Fixture::new();
+        let generic = "horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\nhorizon-session-restart-contract=1\n";
+        let original = f.store.read(BOOTSTRAP).unwrap();
+        for mode in [AgentApprovals::Auto, AgentApprovals::Ask] {
+            let capabilities = Capabilities {
+                agent_approvals: mode,
+                ..Capabilities::default()
+            };
+            let request = f.request_capabilities(Action::InspectAllocation, 0, capabilities);
+            for marker in [
+                "",
+                "horizon-agent-approvals-contract=2",
+                " horizon-agent-approvals-contract=1",
+                "horizon-agent-approvals-contract=1-suffix",
+                "horizon-agent-approvals-contract=1",
+            ] {
+                let output = format!("{generic}{marker}\n");
+                let result = inspect(&f.store, &f.runtime, &request, |selected| {
+                    validate_probe(selected, &output)
+                });
+                assert_eq!(
+                    result.is_ok(),
+                    mode.is_auto() || marker == "horizon-agent-approvals-contract=1",
+                    "{mode:?}: {marker}"
+                );
+                assert_eq!(f.store.read(BOOTSTRAP).unwrap(), original);
+            }
+        }
     }
 
     #[test]

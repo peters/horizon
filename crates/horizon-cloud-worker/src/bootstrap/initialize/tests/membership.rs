@@ -1,10 +1,11 @@
 mod namespaces;
 use super::*;
 use crate::bootstrap::{
+    inspection::validate_probe,
     membership::{mutate, startup},
     store::Publication,
 };
-use horizon_cloud::Capabilities;
+use horizon_cloud::{AgentApprovals, Capabilities};
 use horizon_cloud_protocol::{
     ProjectId, ProjectIdentity,
     membership::{Manifest, Receipt, Request, State},
@@ -205,6 +206,50 @@ fn ports_grants_and_missing_capabilities_fail_before_publication() {
         .is_err()
     );
     assert_eq!(f.manifest().revision, 0);
+}
+
+#[test]
+fn membership_requires_the_approval_marker_before_publishing_an_ask_reservation() {
+    let f = Fixture::ready();
+    let payload = Request::Reserve {
+        capabilities: Capabilities {
+            agent_approvals: AgentApprovals::Ask,
+            ..Capabilities::default()
+        },
+        ports: [8000].into(),
+    };
+    let request = f.membership(&identity("one"), 0, OperationId::generate(), &payload);
+    let store = Store::open(&f.root()).unwrap();
+    let original = store.read(MANIFEST).unwrap();
+    let generic = "horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\nhorizon-session-restart-contract=1\n";
+    for marker in [
+        "",
+        "horizon-agent-approvals-contract=2",
+        " horizon-agent-approvals-contract=1",
+    ] {
+        assert!(
+            mutate(
+                &store,
+                &f.runtime,
+                &request,
+                payload.action(),
+                |selected| validate_probe(selected, &format!("{generic}{marker}\n")),
+                &mut |_| panic!("an unsupported approval preset must not be published")
+            )
+            .is_err()
+        );
+        assert_eq!(store.read(MANIFEST).unwrap(), original);
+    }
+    let receipt = mutate(
+        &store,
+        &f.runtime,
+        &request,
+        payload.action(),
+        |selected| validate_probe(selected, &format!("{generic}horizon-agent-approvals-contract=1\n")),
+        &mut |_| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(receipt.revision, 1);
 }
 
 #[test]

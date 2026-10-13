@@ -464,10 +464,13 @@ and sends no agent prompt.
 
    ```bash
    cargo test -p horizon-core --lib keeping_agent_prompts_requires_its_exact_marker_and_auto_mode_needs_none
+   cargo test -p horizon-cloud-worker approval_marker
    ```
 
    Result: A requested `ask` mode requires the exact approval contract marker.
-   An image without the marker is refused. Auto mode accepts older images.
+   An image without the marker is refused. Auto mode accepts older images. Worker-side
+   allocation inspection and membership reservation also require the exact marker for
+   `ask`. A refused reservation leaves the manifest unchanged.
 
 ### 6.9 Q09 — Interactive approval preset on a worker
 
