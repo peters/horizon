@@ -411,6 +411,9 @@ class TmuxTests(unittest.TestCase):
         self.wait_for(lambda: 'bg=#102030' in self.tmux('show-options', '-wg', 'window-style'))
 
     def test_a_panel_that_reports_no_colors_sets_no_style_and_keeps_typed_keys(self):
+        # The colors of an earlier panel do not stay.
+        self.attach().close()
+        self.assertIn('bg=#102030', self.tmux('show-options', '-wg', 'window-style'))
         terminal = self.attach(answer=b'echo early\r\x1b[?1;2c')
         terminal.read_until(lambda data: b'\r\nearly\r\n' in data)
         self.assertEqual(self.tmux('show-options', '-p', '-t', '=a:', 'window-style'), '')

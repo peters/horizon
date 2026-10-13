@@ -593,7 +593,11 @@ class Attachment:
                 break
             data += chunk
         self.outstanding = True
-        return self.answered(data)
+        commands, typed = self.answered(data)
+        if not commands:
+            # No colors of this panel, so none of an earlier panel either; a later answer sets them.
+            commands = ['set-option -p -u -t %s window-style' % self.target, 'set-option -w -g -u window-style']
+        return commands, typed
 
     def answered(self, data):
         """Removes the answer to the color query from `data` until the answer is complete: the tmux
