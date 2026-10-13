@@ -124,8 +124,13 @@ impl Deployment {
         {
             return Err(Error::Invalid(REPLACEMENT_MISMATCH));
         }
+        // A changed profile must be one that a rebuild may bind: valid, with a recipe, and
+        // different from the bound one only in its rebuild settings.
         if let Some(profile) = &replacement.profile
-            && (**profile == spec.profile || spec.profile.with_rebuild_settings(profile) != **profile)
+            && (**profile == spec.profile
+                || spec.profile.with_rebuild_settings(profile) != **profile
+                || profile.build.is_none()
+                || profile.validate(false).is_err())
         {
             return Err(Error::Invalid(PROFILE_MISMATCH));
         }
