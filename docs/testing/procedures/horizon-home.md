@@ -74,6 +74,23 @@ These names apply in the steps:
 
    Result: The output is `error: HORIZON_HOME must be an absolute path, not relative` and `exit 2`.
 
+2. Start a native mode and the browser MCP mode with the relative value.
+
+   ```sh
+   cd <run> && for mode in --native-catalog --browser-mcp; do HOME=<home> HORIZON_HOME=relative <bin>/horizon $mode </dev/null; echo "exit $?"; done
+   ```
+
+   Result: Each mode shows the same error and `exit 2`. `<run>/relative` does not exist.
+
+3. Start the agent work hook with the relative value.
+
+   ```sh
+   HOME=<home> HORIZON_HOME=relative HORIZON_WORK_ROOT= <bin>/horizon --agent-work-hook </dev/null; echo "exit $?"
+   ```
+
+   Result: The output is `exit 0`. The hook does not use the Horizon home, and
+   its exit codes control the turn of the agent.
+
 ### 6.2 H02: Horizon rejects a file and a shared folder
 
 1. Make a file and a folder that other users can read.
