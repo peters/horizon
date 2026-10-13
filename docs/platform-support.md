@@ -69,7 +69,7 @@ the same PR.
 | Credential store for tailnet auth keys | Secret Service | Keychain | Credential Manager |
 
 6. Horizon refuses all cloud operations on a host that is not Unix
-   (`crates/horizon-core/src/session_store.rs:546-555`). Tailnets and the Local
+   (`crates/horizon-core/src/session_store.rs:550-559`). Tailnets and the Local
    Network Bridge need a cloud. Issue #969 tracks Windows support.
 
 ## Media and speech

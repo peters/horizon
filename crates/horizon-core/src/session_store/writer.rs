@@ -386,11 +386,14 @@ impl Writer {
                     continue;
                 }
             };
-            let saved = store.save_runtime_state_durably(&session_id, &queued.board);
+            // Index changes queued before this save are written with it, so it never overtakes them.
+            let ahead = self.lock().index.unwritten();
+            let saved = store.save_runtime_state_durably(&session_id, &queued.board, &ahead);
             let mut state = self.lock();
             state.writing = None;
             match saved {
                 Ok(()) => {
+                    state.index.written_ahead(ahead.len());
                     state.failed.remove(&session_id);
                     let written = state.written.entry(session_id).or_default();
                     *written = (*written).max(queued.generation);
@@ -421,7 +424,7 @@ impl Writer {
     }
 
     fn write_index(&self, store: &SessionStore, change: &IndexChange) {
-        let written = store.write_index_change(change);
+        let written = store.write_index_changes([change]);
         if let Err(error) = &written {
             tracing::warn!(?change, %error, "failed to change the session index; Horizon tries again");
         }

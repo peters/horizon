@@ -60,6 +60,14 @@ impl IndexQueue {
         }
     }
 
+    /// Removes the first `count` changes, which a board save wrote ahead of its own touch.
+    pub(super) fn written_ahead(&mut self, count: usize) {
+        if count > 0 {
+            self.changes.drain(..count.min(self.changes.len()));
+            self.retry = None;
+        }
+    }
+
     /// Drops the change that is written now, after its write panicked.
     pub(super) fn abandon_writing(&mut self) {
         if std::mem::take(&mut self.writing) {

@@ -350,3 +350,26 @@ fn an_index_change_that_fails_is_tried_again() {
     }
     assert!(store.flush_runtime_states(std::time::Duration::from_secs(30)));
 }
+
+#[test]
+fn a_board_save_never_overtakes_an_index_change_queued_before_it() {
+    let root_dir = test_root("index-order");
+    let home = HorizonHome::from_root(root_dir.path().into());
+    let store = SessionStore::new(home.clone(), home.config_path());
+    let later = store.create_session_from_runtime(RuntimeState::default()).unwrap();
+    assert!(store.flush_runtime_states(std::time::Duration::from_secs(30)));
+    // The touch of `earlier` fails and waits for its retry.
+    let saved = std::fs::read(home.session_index_path()).unwrap();
+    std::fs::write(home.session_index_path(), "\0").unwrap();
+    let earlier = store.create_session_from_runtime(RuntimeState::default()).unwrap();
+    assert!(!store.flush_runtime_states(std::time::Duration::from_secs(30)));
+    std::fs::write(home.session_index_path(), saved).unwrap();
+    // `later` is used after `earlier`, so it stays the last session.
+    let _ = store.queue_runtime_state(&later.session_id, RuntimeState::default());
+    assert!(store.flush_runtime_states(std::time::Duration::from_secs(30)));
+    let index_path = home.session_index_path();
+    let index = super::IndexFile::at(&index_path).load().unwrap();
+    let profile = index.profile(store.profile_id()).unwrap();
+    assert_eq!(profile.last_session_id.as_deref(), Some(later.session_id.as_str()));
+    assert!(index.names(store.profile_id(), &earlier.session_id));
+}

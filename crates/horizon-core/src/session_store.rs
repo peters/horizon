@@ -298,20 +298,24 @@ impl SessionStore {
         self.writer.flush(timeout)
     }
 
-    /// As [`Self::save_runtime_state`], each file synced before and after its rename. Only
-    /// the session writer calls it, never the UI thread.
-    fn save_runtime_state_durably(&self, session_id: &str, runtime_state: &RuntimeState) -> Result<()> {
+    /// As [`Self::save_runtime_state`], each file synced before and after its rename, and the
+    /// index changes queued `ahead` of it written with its touch. Only the session writer calls it.
+    fn save_runtime_state_durably(
+        &self,
+        session_id: &str,
+        runtime_state: &RuntimeState,
+        ahead: &[IndexChange],
+    ) -> Result<()> {
         self.write_runtime_state(session_id, runtime_state, writer::durable_write)?;
         // A new session folder is named in the sessions folder, a new one of those in the root.
         writer::sync_folder_and_parent(&self.home.sessions_dir())?;
-        let index = self.write_index_change(&IndexChange::Touch(session_id.to_owned()))?;
+        let index = self.write_index_changes(ahead.iter().chain([&IndexChange::Touch(session_id.to_owned())]))?;
         if index.names(&self.profile_id, session_id) {
-            Ok(())
-        } else {
-            Err(Error::State(format!(
-                "the session index on disk does not name session {session_id}"
-            )))
+            return Ok(());
         }
+        Err(Error::State(format!(
+            "the index on disk does not name session {session_id}"
+        )))
     }
 
     /// Writes the board, the runtime index and the metadata of `session_id` with `write`.
@@ -343,11 +347,14 @@ impl SessionStore {
         write(&meta_path, meta_yaml.as_bytes())
     }
 
-    /// Writes `change` to the session index under the locks that other threads and Horizon
-    /// processes respect, and returns the index on disk after it. Only the session writer
-    /// calls it, never the UI thread.
-    fn write_index_change(&self, change: &IndexChange) -> Result<SessionIndex> {
-        IndexFile::at(&self.home.session_index_path()).change(|index| change.apply(index, &self.profile_id))
+    /// Writes `changes` in order to the session index under its locks, and returns the index
+    /// on disk after them. Only the session writer calls it, never the UI thread.
+    fn write_index_changes<'a>(&self, changes: impl IntoIterator<Item = &'a IndexChange>) -> Result<SessionIndex> {
+        IndexFile::at(&self.home.session_index_path()).change(|index| {
+            for change in changes {
+                change.apply(index, &self.profile_id);
+            }
+        })
     }
 
     /// Persist a new session from an already prepared runtime state snapshot, and queue its
