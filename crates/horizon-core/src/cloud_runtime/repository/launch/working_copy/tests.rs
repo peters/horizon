@@ -317,3 +317,21 @@ fn names_are_listed_as_a_sentence() {
         "Profiles a and b build images, so New cloud offers them after you commit them."
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn the_fingerprint_reads_a_checkout_whose_folder_name_holds_a_newline() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("two\nlines");
+    std::fs::create_dir(&path).unwrap();
+    repository(&path);
+    let cancel = Cancellation::default();
+    let directory = path.to_str().unwrap();
+    let first = fingerprint(directory, &cancel);
+    write(&path, &CONFIG.replace("cpu: 4", "cpu: 8"));
+    assert_ne!(
+        fingerprint(directory, &cancel),
+        first,
+        "the file of that folder is read"
+    );
+}

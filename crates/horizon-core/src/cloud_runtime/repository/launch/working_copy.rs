@@ -249,8 +249,8 @@ pub fn fingerprint(directory: &str, cancel: &Cancellation) -> Fingerprint {
     ) else {
         return Fingerprint::default();
     };
-    let mut lines = output.lines();
-    let Some(root) = lines.next() else {
+    // The commit is the last line; the folder before it may itself hold a newline.
+    let Some((root, head)) = output.strip_suffix('\n').unwrap_or(&output).rsplit_once('\n') else {
         return Fingerprint::default();
     };
     let file = contents(Path::new(root)).map(|text| {
@@ -259,7 +259,7 @@ pub fn fingerprint(directory: &str, cancel: &Cancellation) -> Fingerprint {
         hasher.finish()
     });
     Fingerprint {
-        head: lines.next().map(str::to_owned),
+        head: Some(head.trim_end().to_owned()),
         file,
     }
 }
