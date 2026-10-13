@@ -451,7 +451,7 @@ impl HorizonApp {
         (controls, self.minimap_overlay_rect(ctx))
     }
 
-    fn cloud_overview(&mut self, ctx: &egui::Context) {
+    pub(in crate::app) fn cloud_overview(&mut self, ctx: &egui::Context) {
         let mut min = [f32::MAX; 2];
         let mut max = [f32::MIN; 2];
         for group in &self.cloud_prototype.groups.0 {

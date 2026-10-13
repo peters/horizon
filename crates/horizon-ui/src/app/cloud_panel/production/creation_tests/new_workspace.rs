@@ -17,42 +17,36 @@ fn new_offers_the_cloud_first_above_the_sidebar_and_a_cancel_leaves_no_workspace
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
     click(&ctx, &mut app, label_position(&output, "New"));
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
-    let positions = |matches: &dyn Fn(&str) -> bool| {
+    let rects = |matches: &dyn Fn(&str) -> bool| {
         output
             .shapes
             .iter()
             .filter_map(|shape| match &shape.shape {
                 Shape::Text(text) if matches(&text.galley.job.text) => {
-                    Some(Rect::from_min_size(text.pos, text.galley.size()).center())
+                    Some(Rect::from_min_size(text.pos, text.galley.size()))
                 }
                 _ => None,
             })
             .collect::<Vec<_>>()
     };
-    // The sidebar has a This PC group too: the menu's row is the one right above Cloud GPU.
-    let cloud_gpu = label_position(&output, "Cloud GPU");
-    let this_pc = positions(&|text| text == "This PC")
-        .into_iter()
-        .filter(|position| position.y < cloud_gpu.y && (position.x - cloud_gpu.x).abs() < 80.0)
-        .max_by(|a, b| a.y.total_cmp(&b.y))
-        .expect("a This PC row above Cloud GPU");
-    // The toolbar has a Cloud menu too: the menu's own row is the one right above This PC.
-    let cloud = positions(&|text| text == "Cloud")
-        .into_iter()
-        .filter(|position| position.y < this_pc.y && (position.x - this_pc.x).abs() < 80.0)
-        .max_by(|a, b| a.y.total_cmp(&b.y))
-        .expect("a Cloud row above This PC");
-    let rows = [cloud, this_pc, cloud_gpu];
-    assert!(
-        rows[0].y < rows[1].y && rows[1].y < rows[2].y,
-        "the cloud comes first, and This PC second"
-    );
     // Under Cloud, the machine of a quick start and its price; the tests reach no provider.
-    assert!(
-        output.shapes.iter().any(|shape| matches!(&shape.shape,
-            Shape::Text(text) if text.galley.job.text == super::super::new_workspace::machine::CHECKING)),
-        "the machine line is under Cloud"
-    );
+    let machine = rects(&|text| text == super::super::new_workspace::machine::CHECKING);
+    let [machine] = machine[..] else {
+        panic!("one machine line under Cloud: {machine:?}");
+    };
+    // The toolbar and the sidebar show Cloud and This PC too: the menu's rows are the ones
+    // aligned with the machine line, Cloud right above it and This PC below.
+    let in_menu = |rect: &Rect| (rect.min.x - machine.min.x).abs() < 1.0;
+    let cloud = rects(&|text| text == "Cloud")
+        .into_iter()
+        .filter(|rect| in_menu(rect) && rect.min.y < machine.min.y)
+        .max_by(|a, b| a.min.y.total_cmp(&b.min.y))
+        .expect("a Cloud row above its machine line");
+    let this_pc = rects(&|text| text == "This PC")
+        .into_iter()
+        .find(|rect| in_menu(rect) && rect.min.y > machine.min.y)
+        .expect("a This PC row below Cloud");
+    let rows = [cloud.center(), this_pc.center()];
     for row in rows {
         // Drawn above the sidebar, not under it.
         assert_eq!(ctx.layer_id_at(row).unwrap().order, egui::Order::Tooltip);

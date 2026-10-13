@@ -2,6 +2,7 @@ mod list;
 mod menus;
 mod new_workspace;
 mod panel_rows;
+mod rich_menu;
 mod rows;
 mod text;
 mod toolbar;

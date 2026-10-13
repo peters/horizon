@@ -3,12 +3,13 @@ use egui::{
 };
 
 use crate::app::root_chrome::{
-    ROOT_TOOLBAR_BUTTON_GAP, ROOT_TOOLBAR_BUTTON_HEIGHT, ROOT_TOOLBAR_FPS_WIDTH, RootToolbarLayout, ToolbarAction,
-    ToolbarItem, root_toolbar_layout,
+    ROOT_TOOLBAR_BUTTON_GAP, ROOT_TOOLBAR_FPS_WIDTH, RootToolbarLayout, ToolbarAction, ToolbarItem, root_toolbar_layout,
 };
 use crate::app::util;
 use crate::app::{HorizonApp, TOOLBAR_HEIGHT};
 use crate::{branding, theme};
+
+mod buttons;
 
 impl HorizonApp {
     pub(in crate::app) fn render_toolbar(&mut self, ctx: &Context) {
@@ -85,8 +86,8 @@ impl HorizonApp {
                 for item in &layout.visible_items {
                     match *item {
                         ToolbarItem::FpsMeter => self.render_toolbar_fps_meter(ui),
-                        ToolbarItem::Action(action) => self.render_toolbar_action_button(ui, action),
-                        ToolbarItem::OverflowMenu => self.render_toolbar_overflow_menu(ui, &layout.overflow_actions),
+                        ToolbarItem::NewWorkspace { compact } => self.render_toolbar_new_workspace(ui, compact),
+                        ToolbarItem::Menu => self.render_toolbar_menu(ui),
                     }
                 }
             },
@@ -151,73 +152,7 @@ impl HorizonApp {
         let _ = response.on_hover_text(tooltip);
     }
 
-    fn render_toolbar_action_button(&mut self, ui: &mut egui::Ui, action: ToolbarAction) {
-        #[cfg(feature = "cloud-workspaces")]
-        if action == ToolbarAction::Cloud {
-            ui.menu_button("Cloud", |ui| self.render_cloud_menu(ui));
-            return;
-        }
-        let response = match action {
-            ToolbarAction::QuickNav => ui
-                .add(
-                    util::chrome_button(action.label())
-                        .min_size(Vec2::new(action_button_width(action), ROOT_TOOLBAR_BUTTON_HEIGHT)),
-                )
-                .on_hover_text(
-                    self.shortcuts
-                        .command_palette
-                        .display_label(util::primary_shortcut_label()),
-                ),
-            ToolbarAction::RemoteHosts => ui
-                .add(
-                    util::chrome_button(action.label())
-                        .min_size(Vec2::new(action_button_width(action), ROOT_TOOLBAR_BUTTON_HEIGHT)),
-                )
-                .on_hover_text(
-                    self.shortcuts
-                        .open_remote_hosts
-                        .display_label(util::primary_shortcut_label()),
-                ),
-            #[cfg(feature = "cloud-workspaces")]
-            ToolbarAction::Cloud => return,
-            ToolbarAction::Sessions | ToolbarAction::Settings => ui.add(
-                util::chrome_button(action.label())
-                    .min_size(Vec2::new(action_button_width(action), ROOT_TOOLBAR_BUTTON_HEIGHT)),
-            ),
-        };
-
-        if response.clicked() {
-            self.perform_toolbar_action(ui.ctx(), action);
-        }
-    }
-
-    fn render_toolbar_overflow_menu(&mut self, ui: &mut egui::Ui, overflow_actions: &[ToolbarAction]) {
-        ui.scope(|ui| {
-            ui.style_mut().spacing.button_padding = Vec2::new(12.0, 7.0);
-            ui.menu_button(egui::RichText::new("More").size(11.0).color(theme::FG_SOFT()), |ui| {
-                ui.set_min_width(160.0);
-
-                for action in overflow_actions {
-                    #[cfg(feature = "cloud-workspaces")]
-                    if *action == ToolbarAction::Cloud {
-                        ui.menu_button("Cloud", |ui| self.render_cloud_menu(ui));
-                        continue;
-                    }
-                    let button =
-                        egui::Button::new(egui::RichText::new(action.label()).size(12.0).color(theme::FG_SOFT()))
-                            .frame(false);
-                    let response = ui.add(button);
-
-                    if response.clicked() {
-                        self.perform_toolbar_action(ui.ctx(), *action);
-                        ui.close();
-                    }
-                }
-            });
-        });
-    }
-
-    fn perform_toolbar_action(&mut self, ctx: &Context, action: ToolbarAction) {
+    pub(super) fn perform_toolbar_action(&mut self, ctx: &Context, action: ToolbarAction) {
         match action {
             ToolbarAction::QuickNav => self.open_command_palette(),
             ToolbarAction::RemoteHosts => self.toggle_remote_hosts_overlay(ctx),
@@ -231,15 +166,4 @@ impl HorizonApp {
 
 fn fps_meter_width() -> f32 {
     ROOT_TOOLBAR_FPS_WIDTH
-}
-
-fn action_button_width(action: ToolbarAction) -> f32 {
-    match action {
-        ToolbarAction::QuickNav => 102.0,
-        ToolbarAction::RemoteHosts => 120.0,
-        #[cfg(feature = "cloud-workspaces")]
-        ToolbarAction::Cloud => 72.0,
-        ToolbarAction::Sessions => 94.0,
-        ToolbarAction::Settings => 92.0,
-    }
 }
