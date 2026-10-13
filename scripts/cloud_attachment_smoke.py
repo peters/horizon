@@ -16,6 +16,9 @@ import termios
 import time
 
 LIMIT = 65536
+# horizon-worker-attach asks the terminal for its colors at each attach; a panel answers.
+COLOR_QUERY = b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b[c"
+COLOR_ANSWER = b"\x1b]10;rgb:e0e0/e6e6/f1f1\x1b\\\x1b]11;rgb:0f0f/1313/1c1c\x1b\\\x1b[?62;22c"
 
 
 def frame(sock, kind, data=b""):
@@ -157,6 +160,14 @@ class Client:
         self.process = subprocess.Popen(["ssh"] + arguments, stdin=slave, stdout=slave, stderr=slave, preexec_fn=controlling_terminal)
         os.close(slave)
         self.output = b""
+        self.answered = 0
+
+    def read(self):
+        self.output += os.read(self.master, LIMIT)
+        assert len(self.output) < 4 * 1024 * 1024
+        while self.output.count(COLOR_QUERY) > self.answered:
+            self.answered += 1
+            self.write(COLOR_ANSWER)
 
     def write(self, value):
         os.write(self.master, value)
@@ -166,8 +177,7 @@ class Client:
         while value not in self.output:
             assert time.monotonic() < deadline, "Terminal marker deadline expired"
             if select.select([self.master], [], [], .1)[0]:
-                self.output += os.read(self.master, LIMIT)
-                assert len(self.output) < 4 * 1024 * 1024
+                self.read()
         return self.output
 
     def exited(self, timeout=15):
@@ -176,7 +186,7 @@ class Client:
             assert time.monotonic() < deadline, "SSH client did not exit"
             if select.select([self.master], [], [], .05)[0]:
                 try:
-                    self.output += os.read(self.master, LIMIT)
+                    self.read()
                 except OSError:
                     pass
         return self.process.returncode
