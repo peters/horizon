@@ -124,3 +124,92 @@ fn without_cloud_workspaces_new_cloud_is_dimmed_and_does_nothing() {
     click(&ctx, &mut app, label_position(&output, "+  Workspace"));
     assert_eq!(app.board.workspaces.len(), workspaces + 1, "a This PC workspace");
 }
+
+#[test]
+fn the_empty_canvas_offers_new_cloud_and_an_empty_workspace() {
+    for (button, opens_new_cloud) in [("New Cloud", true), ("New Workspace", false)] {
+        let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState::default()),
+        });
+        app.root_viewport_stabilizer = None;
+        app.cloud_prototype.root = Some(temp.path().join("clouds"));
+        app.cloud_prototype.ready = true;
+        for _ in 0..2 {
+            frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+        }
+        assert!(app.board.workspaces.is_empty(), "the empty canvas needs an empty board");
+        let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+        click(&ctx, &mut app, label_position(&output, button));
+        assert_eq!(app.board.workspaces.len(), 1, "{button} makes one workspace");
+        assert_eq!(
+            app.cloud_prototype.production.creating, opens_new_cloud,
+            "{button} opens New cloud only for a cloud"
+        );
+    }
+}
+
+/// The id of the node that a screen reader reads as `label`, and the focused node.
+fn node_and_focus(
+    output: &egui::FullOutput,
+    label: &str,
+) -> (Option<egui::accesskit::NodeId>, egui::accesskit::NodeId) {
+    let update = output
+        .platform_output
+        .accesskit_update
+        .as_ref()
+        .expect("an AccessKit update");
+    let node = update
+        .nodes
+        .iter()
+        .find(|(_, node)| node.label() == Some(label))
+        .map(|(id, _)| *id);
+    (node, update.focus)
+}
+
+#[test]
+fn a_dimmed_new_cloud_takes_no_focus_and_says_why_on_hover() {
+    let tab = |ctx: &egui::Context, app: &mut HorizonApp| {
+        let mut input = raw_input([1400.0, 900.0], None);
+        input.events = vec![Event::Key {
+            key: Key::Tab,
+            physical_key: Some(Key::Tab),
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }];
+        run_app_frame_with_input(ctx, app, input)
+    };
+    // Whether Tab ever puts the focus on New cloud, in at most 40 steps.
+    let focused_by_tab = |ready: bool| {
+        let (_temp, ctx, mut app, _) = ready_app();
+        app.cloud_prototype.ready = ready;
+        ctx.enable_accesskit();
+        (0..40).any(|_| {
+            let output = tab(&ctx, &mut app);
+            let (node, focus) = node_and_focus(&output, "New cloud");
+            node == Some(focus)
+        })
+    };
+    assert!(focused_by_tab(true), "Tab reaches a ready New cloud");
+    assert!(!focused_by_tab(false), "Tab passes over a dimmed New cloud");
+
+    let (_temp, ctx, mut app, _) = ready_app();
+    app.cloud_prototype.ready = false;
+    ctx.all_styles_mut(|style| style.interaction.tooltip_delay = 0.0);
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    let cloud = label_position(&output, "+  New cloud");
+    for _ in 0..3 {
+        frame(&ctx, &mut app, vec![Event::PointerMoved(cloud)], Modifiers::NONE);
+    }
+    let mut input = raw_input([1400.0, 900.0], None);
+    input.events = vec![Event::PointerMoved(cloud)];
+    let output = run_app_frame_with_input(&ctx, &mut app, input);
+    assert!(
+        text_center(
+            &output,
+            "Cloud workspaces are not ready on this computer. Open Menu › Cloud settings."
+        )
+        .is_some(),
+        "the hover explains the dimmed button"
+    );
+}

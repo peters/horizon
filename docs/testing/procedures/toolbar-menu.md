@@ -29,7 +29,11 @@ in the toolbar in a narrow window.
     a cloud account.
   - A build or computer where cloud workspaces are not ready. Then
     **+ New cloud** is dimmed, or not in a build without cloud workspaces. The
-    unit tests of the toolbar cover it.
+    dimmed button takes no click and no keyboard focus, and its tooltip says why.
+    The unit tests of the toolbar cover it.
+  - **New Cloud** and **New Workspace** on the empty canvas. The canvas shows
+    them only on a board without workspaces, and the fixture always has a
+    workspace. The unit tests of the empty canvas cover them.
   - The words that a screen reader speaks. The unit tests of the menu rows
     check that a row gives its title, description and shortcut.
 
