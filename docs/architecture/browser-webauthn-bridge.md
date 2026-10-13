@@ -80,7 +80,8 @@ The `browser_panel` and `browser_list` MCP results report
 - The driver refuses a request from a frame that does not have the same
   origin as each of its ancestors. The page gets `NotAllowedError`.
 - The driver refuses an origin that is not `https://<domain>` or
-  `http://localhost`. An IP address host is refused. The page gets
+  `http://localhost`, each with an optional port. An IP address host is
+  refused. The page gets
   `SecurityError`.
 - The driver refuses an `rp_id` that is not the host or a parent domain of the
   host. A parent domain must have two labels or more. The page gets
@@ -209,7 +210,7 @@ On Windows, the command starts without a console window.
 | Time for one request | The page `timeout`, from 10 to 120 seconds. 120 seconds when the page gives none. |
 | Command stdout | 256 KiB |
 | Page message | 192 KiB |
-| Challenge | 1 to 1024 bytes |
+| Challenge | 1 to 1024 bytes. An empty challenge gets `TypeError` before the command starts. |
 | Credential ID | 1 to 1023 bytes |
 | User ID | 1 to 64 bytes |
 | Credential lists | 64 entries |

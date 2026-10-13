@@ -41,6 +41,11 @@
         return bytes.buffer;
     };
     const residentKeys = ["discouraged", "preferred", "required"];
+    const challengeOf = (source) => {
+        const encoded = encode(source);
+        if (!encoded) throw new TypeError("publicKey.challenge must not be empty");
+        return encoded;
+    };
     const text = (value) => (value === undefined || value === null ? undefined : String(value));
     const timeoutOf = (value) =>
         Number.isFinite(value) && value >= 0 ? Math.min(Math.floor(value), 0xffffffff) : undefined;
@@ -57,7 +62,7 @@
         name === "TypeError" ? new TypeError(message) : new DOMException(message || NOT_ALLOWED, name || "NotAllowedError");
 
     const getOptions = (publicKey) => ({
-        challenge: encode(publicKey.challenge),
+        challenge: challengeOf(publicKey.challenge),
         rp_id: text(publicKey.rpId),
         allow_credentials: credentialIds(publicKey.allowCredentials),
         user_verification: text(publicKey.userVerification),
@@ -80,7 +85,7 @@
             throw new DOMException("No supported public key algorithm", "NotSupportedError");
         }
         return {
-            challenge: encode(publicKey.challenge),
+            challenge: challengeOf(publicKey.challenge),
             rp_id: text(rp.id),
             rp_name: text(rp.name),
             user: { id: encode(user.id), name: text(user.name), display_name: text(user.displayName) },

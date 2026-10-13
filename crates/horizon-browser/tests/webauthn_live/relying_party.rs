@@ -261,6 +261,7 @@ fn refusals_script(frame_port: u16) -> String {
     format!(
         r#"(async () => {{
     await outcome("foreign_rp_id", navigator.credentials.get({{ publicKey: {{ challenge: anyChallenge(), rpId: "example.com", timeout: 1e21 }} }}));
+    await outcome("empty_challenge", navigator.credentials.get({{ publicKey: {{ challenge: new Uint8Array(0) }} }}));
     await outcome("malformed_options", navigator.credentials.create({{ publicKey: {{
         challenge: anyChallenge(), rp: {{ name: "x" }}, user: {{ id: anyChallenge(), name: "u", displayName: "u" }},
         pubKeyCredParams: [{{ type: "public-key" }}],

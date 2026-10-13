@@ -20,7 +20,9 @@ gives the design, the command contract and the full boundary.
 ## Rules that must hold
 
 - A frame that does not have the same origin as each ancestor is refused.
-- Only `https://<domain>` and `http://localhost` origins are served.
+- Only `https://<domain>[:port]` and `http://localhost[:port]` origins are
+  served.
+- An empty challenge is a `TypeError` and never starts the command.
 - The `rp_id` is the host or a parent domain with two labels or more.
 - Conditional mediation never starts the command.
 - An abort from the page, the start of a cross-document navigation of the

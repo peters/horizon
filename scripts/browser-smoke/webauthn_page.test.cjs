@@ -83,6 +83,7 @@ test('options are bounded before they are posted', async () => {
     await assert.rejects(credentials.create({publicKey: {challenge, rp: {name: 'x'}, user,
         pubKeyCredParams: [{type: 'public-key'}]}}), {name: 'TypeError'});
     await assert.rejects(credentials.get({publicKey: {challenge: new Uint8Array(8192)}}), {name: 'TypeError'});
+    await assert.rejects(credentials.get({publicKey: {challenge: new Uint8Array(0)}}), {name: 'TypeError'});
     assert.equal(posted.length, 1);
 });
 

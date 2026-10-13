@@ -115,6 +115,7 @@ mod tests {
             "http://localhost",
             "http://localhost:3000",
             "https://localhost:8443",
+            "https://example.com:443",
         ] {
             assert!(CallerOrigin::parse(accepted).is_ok(), "{accepted}");
         }
