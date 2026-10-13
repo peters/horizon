@@ -4,6 +4,11 @@
 #
 # Usage: detect-ci-build-inputs.sh <event-name> <base-sha> <head-sha>
 #
+# REF_NAME, when set, is the pushed ref. A merge-queue batch branch
+# (`refs/heads/mq/*`) is new on its first push, so its all-zero base is
+# replaced by its merge base with origin/main: the batch is classified by
+# what it adds to main instead of building everything.
+#
 # Prints `run_snap_build=<bool>` and `release_inputs=<bool>`, in the
 # `key=value` form a workflow step appends to $GITHUB_OUTPUT. Runs in the
 # current working directory, which must be the repository checkout.
@@ -21,6 +26,15 @@ head_sha=$3
 emit() {
   printf 'run_snap_build=%s\nrelease_inputs=%s\n' "$1" "$2"
 }
+
+zero_sha=0000000000000000000000000000000000000000
+case "${REF_NAME:-}" in
+  refs/heads/mq/*)
+    if [ "$event_name" = "push" ] && [ "$base_sha" = "$zero_sha" ]; then
+      base_sha=$(git merge-base origin/main "$head_sha" 2>/dev/null || true)
+    fi
+    ;;
+esac
 
 # A manual dispatch, a branch's first push (an all-zero base) and a base this
 # checkout cannot resolve all leave the diff unknown, so they build everything

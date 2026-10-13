@@ -48,11 +48,15 @@ class DetectionTests(unittest.TestCase):
         self.git("commit", "-m", f"touch {' '.join(paths)}")
         return self.git("rev-parse", "HEAD")
 
-    def detect(self, event="push", base=None, head="HEAD"):
+    def detect(self, event="push", base=None, head="HEAD", ref=None):
         arguments = [str(SCRIPT), event]
         arguments.append(self.base if base is None else base)
         arguments.append(head)
-        result = subprocess.run(arguments, cwd=self.repo, capture_output=True, text=True)
+        env = {key: value for key, value in os.environ.items() if key != "REF_NAME"}
+        if ref is not None:
+            env["REF_NAME"] = ref
+        result = subprocess.run(arguments, cwd=self.repo, env=env, capture_output=True,
+                                text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         return dict(line.split("=", 1) for line in result.stdout.split())
 
@@ -96,6 +100,22 @@ class DetectionTests(unittest.TestCase):
         for base in ["", ZERO_SHA, "0" * 38, "deadbeef" * 5, "refs/heads/missing"]:
             with self.subTest(base=base):
                 self.assert_gates(self.detect(base=base), snap="true", release="true")
+
+    def test_a_new_merge_queue_branch_diffs_from_its_merge_base_with_main(self):
+        self.git("update-ref", "refs/remotes/origin/main", self.base)
+        self.commit("docs/plan.md")
+        self.assert_gates(self.detect(base=ZERO_SHA, ref="refs/heads/mq/20261013T0800Z"),
+                          snap="false", release="false")
+        self.commit("crates/horizon-ui/src/lib.rs")
+        self.assert_gates(self.detect(base=ZERO_SHA, ref="refs/heads/mq/20261013T0800Z"),
+                          snap="false", release="true")
+
+    def test_other_new_branches_and_unresolvable_queue_bases_build_everything(self):
+        self.commit("docs/plan.md")
+        for ref in ["refs/heads/feature", "refs/heads/main", "refs/heads/mq/no-origin-main"]:
+            with self.subTest(ref=ref):
+                self.assert_gates(self.detect(base=ZERO_SHA, ref=ref), snap="true",
+                                  release="true")
 
     def test_workflow_dispatch_builds_everything_from_a_resolvable_base(self):
         self.commit("docs/plan.md")
