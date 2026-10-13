@@ -157,6 +157,11 @@ impl Account {
             return;
         }
         let now = std::time::Instant::now();
+        // An out-of-date list keeps a retry planned, also after a request of the person's
+        // took the place of one.
+        if self.stale.is_some() && self.repositories.is_some() && self.retry_at.is_none() {
+            self.retry_at = Some(now + RETRY);
+        }
         if let Some(at) = self.retry_at {
             if now >= at {
                 self.retry_at = None;
