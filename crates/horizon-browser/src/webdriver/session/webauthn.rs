@@ -132,10 +132,13 @@ impl Driver {
                 let Some(passkeys) = self.passkeys.as_mut() else {
                     return;
                 };
-                if let Some(reply) = passkeys.bridge.admit(source.clone(), id) {
-                    self.deliver_passkey_reply(source, &reply, events);
-                    return;
-                }
+                let ticket = match passkeys.bridge.admit(source.clone(), id) {
+                    Ok(ticket) => ticket,
+                    Err(reply) => {
+                        self.deliver_passkey_reply(source, &reply, events);
+                        return;
+                    }
+                };
                 // The realm reads drain events. An abort or a navigation of
                 // the caller in that time withdraws the admitted request.
                 let origin = self.passkey_caller_origin(source, events);
@@ -143,7 +146,7 @@ impl Driver {
                 let Some(passkeys) = self.passkeys.as_mut() else {
                     return;
                 };
-                if let Some((source, reply)) = passkeys.bridge.start(op, &options, origin, agent.as_deref()) {
+                if let Some((source, reply)) = passkeys.bridge.start(ticket, op, &options, origin, agent.as_deref()) {
                     self.deliver_passkey_reply(&source, &reply, events);
                 }
                 self.note_passkey_change(events);

@@ -171,14 +171,20 @@ impl DriverState {
                 self.deliver_passkey_reply(link, context, &crate::webauthn::malformed_reply(id));
             }
             PageMessage::Request { id, op, options } => {
-                if let Some(reply) = self
+                let Some(admission) = self
                     .passkeys
                     .as_mut()
-                    .and_then(|passkeys| passkeys.bridge.admit(context, id))
-                {
-                    self.deliver_passkey_reply(link, context, &reply);
+                    .map(|passkeys| passkeys.bridge.admit(context, id))
+                else {
                     return;
-                }
+                };
+                let ticket = match admission {
+                    Ok(ticket) => ticket,
+                    Err(reply) => {
+                        self.deliver_passkey_reply(link, context, &reply);
+                        return;
+                    }
+                };
                 // The frame-tree read drains events. An abort or the end of
                 // the context in that time withdraws the admitted request.
                 let origin = self.passkey_caller_origin(link, event_tx, frame_slot, context);
@@ -186,7 +192,7 @@ impl DriverState {
                 let Some(passkeys) = self.passkeys.as_mut() else {
                     return;
                 };
-                if let Some((context, reply)) = passkeys.bridge.start(op, &options, origin, agent.as_deref()) {
+                if let Some((context, reply)) = passkeys.bridge.start(ticket, op, &options, origin, agent.as_deref()) {
                     self.deliver_passkey_reply(link, context, &reply);
                 }
                 self.note_passkey_change(event_tx);

@@ -153,6 +153,7 @@ pub(crate) fn malformed_reply(page_id: u64) -> String {
 
 #[derive(Debug)]
 struct Admitted<T> {
+    ticket: u64,
     target: T,
     page_id: u64,
     withdrawn: Option<Withdrawal>,
@@ -183,10 +184,13 @@ pub(crate) struct Bridge<T> {
     binding: String,
     frame_slot: Arc<FrameSlot>,
     active: Option<Active<T>>,
-    /// The request whose caller origin is being read. The read drains
-    /// browser events, so a nested request sees the panel busy, and an abort
-    /// or a navigation of the caller in that time withdraws the request.
-    admitted: Option<Admitted<T>>,
+    /// Requests whose caller origin is being read. The read drains browser
+    /// events, so a nested request sees the panel busy while one of them is
+    /// live, and an abort or a navigation of the caller in that time
+    /// withdraws it. A withdrawn entry no longer blocks a new request; it
+    /// waits here until its own [`Self::start`] call consumes it.
+    admitted: Vec<Admitted<T>>,
+    next_ticket: u64,
     recent_starts: VecDeque<Instant>,
 }
 
@@ -204,7 +208,8 @@ impl<T: Clone + PartialEq> Bridge<T> {
             binding: format!("__horizon_passkey_post_{}", &token[16..]),
             frame_slot: Arc::clone(&config.frame_slot),
             active: None,
-            admitted: None,
+            admitted: Vec::new(),
+            next_ticket: 0,
             recent_starts: VecDeque::new(),
         })
     }
@@ -240,12 +245,14 @@ impl<T: Clone + PartialEq> Bridge<T> {
         )
     }
 
-    /// Admit a request before the engine reads its caller origin. Returns a
-    /// reply for the page when another request runs or the panel reached
-    /// its start limit; otherwise the engine must call [`Self::start`].
-    pub(crate) fn admit(&mut self, target: T, page_id: u64) -> Option<String> {
-        if self.active.is_some() || self.admitted.is_some() {
-            return Some(error_reply(page_id, PageError::busy()));
+    /// Admit a request before the engine reads its caller origin. Returns
+    /// the ticket that the engine passes to [`Self::start`], or a reply for
+    /// the page when another request is live or the panel reached its start
+    /// limit.
+    pub(crate) fn admit(&mut self, target: T, page_id: u64) -> Result<u64, String> {
+        let live = self.admitted.iter().any(|admitted| admitted.withdrawn.is_none());
+        if self.active.is_some() || live {
+            return Err(error_reply(page_id, PageError::busy()));
         }
         let now = Instant::now();
         while self
@@ -256,14 +263,16 @@ impl<T: Clone + PartialEq> Bridge<T> {
             self.recent_starts.pop_front();
         }
         if self.recent_starts.len() >= MAX_STARTS_PER_WINDOW {
-            return Some(error_reply(page_id, PageError::too_many()));
+            return Err(error_reply(page_id, PageError::too_many()));
         }
-        self.admitted = Some(Admitted {
+        self.next_ticket += 1;
+        self.admitted.push(Admitted {
+            ticket: self.next_ticket,
             target,
             page_id,
             withdrawn: None,
         });
-        None
+        Ok(self.next_ticket)
     }
 
     /// Start the admitted request once the engine resolved its caller
@@ -272,16 +281,19 @@ impl<T: Clone + PartialEq> Bridge<T> {
     /// by its realm gets `NotAllowedError`. Neither starts a command.
     pub(crate) fn start(
         &mut self,
+        ticket: u64,
         operation: Operation,
         options: &PageOptions,
         origin: Result<CallerOrigin, PageError>,
         agent: Option<&str>,
     ) -> Option<(T, String)> {
+        let position = self.admitted.iter().position(|admitted| admitted.ticket == ticket)?;
         let Admitted {
             target,
             page_id,
             withdrawn,
-        } = self.admitted.take()?;
+            ..
+        } = self.admitted.remove(position);
         match withdrawn {
             Some(Withdrawal::Aborted) => return None,
             Some(Withdrawal::Ended) => return Some((target, error_reply(page_id, PageError::not_allowed()))),
@@ -291,6 +303,9 @@ impl<T: Clone + PartialEq> Bridge<T> {
             Ok(prepared) => prepared,
             Err(error) => return Some((target, error_reply(page_id, error))),
         };
+        if self.active.is_some() {
+            return Some((target, error_reply(page_id, PageError::busy())));
+        }
         self.recent_starts.push_back(Instant::now());
         let run = command::CommandRun::start(&self.argv, prepared.input.clone(), prepared.timeout);
         self.active = Some(Active {
@@ -323,7 +338,7 @@ impl<T: Clone + PartialEq> Bridge<T> {
     }
 
     fn withdraw_where(&mut self, reason: Withdrawal, matches: impl Fn(&Admitted<T>) -> bool) {
-        if let Some(admitted) = self.admitted.as_mut().filter(|admitted| matches(admitted)) {
+        for admitted in self.admitted.iter_mut().filter(|admitted| matches(admitted)) {
             admitted.withdrawn.get_or_insert(reason);
         }
     }
@@ -443,26 +458,26 @@ mod tests {
         let PageMessage::Request { id, op, options } = get_request() else {
             unreachable!("request");
         };
-        assert!(bridge.admit(1, id).is_none());
+        let ticket = bridge.admit(1, id).expect("admitted");
         let (target, refused) = bridge
-            .start(op, &options, Err(PageError::insecure_origin()), None)
+            .start(ticket, op, &options, Err(PageError::insecure_origin()), None)
             .expect("refused at once");
         assert_eq!(target, 1);
         assert!(refused.contains("SecurityError"));
         assert!(!bridge.frame_slot.passkey_pending());
         let origin = CallerOrigin::parse("https://example.com");
         assert!(
-            bridge.start(op, &options, origin.clone(), None).is_none(),
-            "nothing was admitted"
+            bridge.start(ticket, op, &options, origin.clone(), None).is_none(),
+            "a used ticket starts nothing"
         );
         assert!(!bridge.frame_slot.passkey_pending());
 
-        assert!(bridge.admit(1, id).is_none());
-        let nested = bridge.admit(2, 8).expect("busy while the origin is read");
+        let ticket = bridge.admit(1, id).expect("admitted");
+        let nested = bridge.admit(2, 8).expect_err("busy while the origin is read");
         assert!(nested.contains("Another passkey request is waiting"));
-        assert!(bridge.start(op, &options, origin.clone(), None).is_none());
+        assert!(bridge.start(ticket, op, &options, origin.clone(), None).is_none());
         assert!(bridge.frame_slot.passkey_pending());
-        let busy = bridge.admit(2, 8).expect("busy");
+        let busy = bridge.admit(2, 8).expect_err("busy");
         assert!(busy.contains("Another passkey request is waiting"));
 
         assert!(!bridge.abort(&2, id), "another realm cannot abort the request");
@@ -471,11 +486,11 @@ mod tests {
         assert!(bridge.poll().is_none());
 
         for _ in 1..MAX_STARTS_PER_WINDOW {
-            assert!(bridge.admit(1, id).is_none());
-            assert!(bridge.start(op, &options, origin.clone(), None).is_none());
+            let ticket = bridge.admit(1, id).expect("admitted");
+            assert!(bridge.start(ticket, op, &options, origin.clone(), None).is_none());
             assert!(bridge.abort(&1, id));
         }
-        let limited = bridge.admit(1, id).expect("rate limited");
+        let limited = bridge.admit(1, id).expect_err("rate limited");
         assert!(limited.contains("Too many passkey requests"));
     }
 
@@ -487,31 +502,53 @@ mod tests {
             unreachable!("request");
         };
         let origin = CallerOrigin::parse("https://example.com");
-        assert!(bridge.admit(1, id).is_none());
+        let ticket = bridge.admit(1, id).expect("admitted");
         assert!(!bridge.abort(&2, id), "another realm cannot withdraw it");
         bridge.abort(&1, id);
-        assert!(bridge.start(op, &options, origin.clone(), None).is_none());
+        assert!(bridge.start(ticket, op, &options, origin.clone(), None).is_none());
         assert!(
             !bridge.frame_slot.passkey_pending(),
             "a withdrawn request starts no command"
         );
 
-        assert!(bridge.admit(1, id).is_none());
+        let ticket = bridge.admit(1, id).expect("admitted");
         assert!(bridge.cancel_for(|target| *target == 1).is_none());
         let (target, ended) = bridge
-            .start(op, &options, origin.clone(), None)
+            .start(ticket, op, &options, origin.clone(), None)
             .expect("a navigation still settles the promise");
         assert_eq!(target, 1);
         assert!(ended.contains("NotAllowedError"));
         assert!(!bridge.frame_slot.passkey_pending());
 
-        assert!(bridge.admit(1, id).is_none(), "the panel is free again");
-        assert!(bridge.start(op, &options, origin, None).is_none());
+        let ticket = bridge.admit(1, id).expect("the panel is free again");
+        assert!(bridge.start(ticket, op, &options, origin, None).is_none());
         assert!(bridge.frame_slot.passkey_pending());
         let (target, ended) = bridge.cancel_for(|target| *target == 1).expect("reply");
         assert_eq!(target, 1);
         assert!(ended.contains("NotAllowedError"));
         assert!(!bridge.frame_slot.passkey_pending());
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "uses /bin/sh as the authenticator command")]
+    fn a_retry_after_an_abort_during_the_origin_read_is_admitted() {
+        let mut bridge = bridge(vec!["/bin/sh".into(), "-c".into(), "sleep 30".into()]).expect("bridge");
+        let PageMessage::Request { id, op, options } = get_request() else {
+            unreachable!("request");
+        };
+        let origin = CallerOrigin::parse("https://example.com");
+        let first = bridge.admit(1, id).expect("admitted");
+        bridge.abort(&1, id);
+        let retry = bridge
+            .admit(1, id + 1)
+            .expect("an aborted request no longer blocks a retry");
+        assert!(bridge.start(retry, op, &options, origin.clone(), None).is_none());
+        assert!(bridge.frame_slot.passkey_pending(), "the retry runs");
+        assert!(
+            bridge.start(first, op, &options, origin, None).is_none(),
+            "the aborted request ends without a reply"
+        );
+        assert!(bridge.frame_slot.passkey_pending(), "and leaves the retry running");
     }
 
     #[test]
@@ -522,10 +559,10 @@ mod tests {
         let PageMessage::Request { id, op, options } = get_request() else {
             unreachable!("request");
         };
-        assert!(bridge.admit(5, id).is_none());
+        let ticket = bridge.admit(5, id).expect("admitted");
         assert!(
             bridge
-                .start(op, &options, CallerOrigin::parse("https://example.com"), None)
+                .start(ticket, op, &options, CallerOrigin::parse("https://example.com"), None)
                 .is_none()
         );
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
