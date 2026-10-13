@@ -462,7 +462,9 @@ fn a_repository_around_horizon_s_folder_lends_no_rewrite() {
     );
     let folder = around.path().join("setup-fetch").join("crates-x");
     std::fs::create_dir_all(&folder).unwrap();
-    let effective = effective_address("https://github.com/peters/tools", &folder).unwrap();
+    let effective = effective_address("https://github.com/peters/tools", &folder, Duration::from_secs(60))
+        .unwrap()
+        .unwrap();
     assert!(!effective.contains("elsewhere.invalid"), "{effective}");
 }
 
@@ -660,4 +662,37 @@ fn cargo_s_fetch_reads_a_clone_another_user_owns() {
     let fetched = fetch(Some(trusted));
     assert!(fetched.status.success(), "{}", String::from_utf8_lossy(&fetched.stderr));
     assert_eq!(String::from_utf8_lossy(&fetched.stdout).trim(), "commit");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_git_question_its_configuration_holds_fails_closed_in_time() {
+    // A folder whose configuration includes a FIFO: every git command that reads it waits
+    // for a writer that never comes.
+    let folder = tempfile::tempdir().unwrap();
+    run(folder.path(), &["init", "-q"]);
+    let fifo = folder.path().join("waits");
+    assert!(Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+    let config = folder.path().join(".git/config");
+    let plain = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(&config, format!("{plain}[include]\n\tpath = {}\n", fifo.display())).unwrap();
+    let limit = Duration::from_millis(300);
+    let started = std::time::Instant::now();
+    let address = effective_address("https://github.com/peters/tools", folder.path(), limit);
+    assert!(
+        address.is_err(),
+        "no address is trusted from Git that did not answer: {address:?}"
+    );
+    let settings = sign_in_settings(folder.path(), limit);
+    assert!(
+        settings.is_err(),
+        "no sign-in settings from Git that did not answer: {settings:?}"
+    );
+    let held = holds_commit(folder.path(), &"a".repeat(40), limit);
+    assert!(held.is_err(), "no commit is held by Git that did not answer: {held:?}");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "each question ended at its limit: {:?}",
+        started.elapsed()
+    );
 }

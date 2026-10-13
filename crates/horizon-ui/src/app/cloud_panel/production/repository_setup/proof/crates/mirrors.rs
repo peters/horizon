@@ -30,6 +30,9 @@ const CLONE_BYTES: u64 = 4 << 30;
 /// The longest cloning one repository on this computer may take.
 const CLONE_TIMEOUT: Duration = Duration::from_mins(10);
 
+/// The longest one of this computer's git questions about a clone may take.
+const GIT_LIMIT: Duration = super::super::super::bounded::GIT;
+
 /// The clones of one proof, in a private folder that goes with them.
 pub(in crate::app::cloud_panel::production::repository_setup::proof) struct Mirrors {
     pub(super) _folder: Option<tempfile::TempDir>,
@@ -141,7 +144,10 @@ impl Mirrors {
         }
         let empty_config = folder.path().join("empty.gitconfig");
         std::fs::write(&empty_config, "").map_err(|error| error.to_string())?;
-        let sign_in = sign_in_settings(folder.path());
+        // Settings that cannot be read in time clone nothing: a clone without them could
+        // not sign in anyway, and Git that does not answer is no Git to trust.
+        let sign_in = sign_in_settings(folder.path(), GIT_LIMIT)
+            .map_err(|error| format!("cannot read this computer's Git sign-in settings: {error}"))?;
         // The clones share one bound on this computer's disk: past it, the proof stops.
         // Nothing between here and its stop returns early.
         let watch = SizeWatch::start(folder.path(), CLONE_BYTES, cancel.clone());
@@ -279,26 +285,46 @@ fn git_outside(folder: &Path) -> Command {
     command
 }
 
+/// Runs one git command of the clones within `limit`: its exit status and output, or why
+/// it gave none. A configuration Git reads can name an `include` that leads to a FIFO,
+/// which holds any git command that reads it; past `limit` the command is ended with
+/// everything it started, and the caller refuses what it asked for.
+fn bounded_git(command: Command, limit: Duration) -> Result<std::process::Output, String> {
+    super::super::super::bounded::output(command, None, limit)
+}
+
 /// The address Git would fetch for `address` after this computer's URL rewrites, asked
-/// in `folder` without the network.
-pub(super) fn effective_address(address: &str, folder: &Path) -> Option<String> {
-    let output = git_outside(folder)
-        .args(["ls-remote", "--get-url", "--", address])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())?;
-    Some(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+/// in `folder` without the network within `limit`: none when Git names none, and an
+/// error when it gave no answer in time, so a held configuration clones nothing.
+pub(super) fn effective_address(address: &str, folder: &Path, limit: Duration) -> Result<Option<String>, String> {
+    let mut command = git_outside(folder);
+    command.args(["ls-remote", "--get-url", "--", address]);
+    let output = bounded_git(command, limit)?;
+    Ok(output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned()))
 }
 
 /// This computer's Git settings that signing in to GitHub needs: credential helpers,
 /// HTTP and SSH settings, read once from the user's and the system's configuration (run
-/// in `folder`, which is no repository, so no repository's settings join them).
-fn sign_in_settings(folder: &Path) -> Vec<(String, String)> {
-    git_outside(folder)
+/// in `folder`, which is no repository, so no repository's settings join them), within
+/// `limit`. `--get-regexp` exits 1 when nothing matches, so only a command that gave no
+/// answer is an error.
+pub(super) fn sign_in_settings(folder: &Path, limit: Duration) -> Result<Vec<(String, String)>, String> {
+    let mut command = git_outside(folder);
+    command
         .args(["config", "--includes", "--null", "--get-regexp"])
-        .arg(r"^(credential|http)\.|^core\.(sshcommand|askpass)$")
-        .output()
-        .map_or_else(|_| Vec::new(), |output| config_records(&output.stdout))
+        .arg(r"^(credential|http)\.|^core\.(sshcommand|askpass)$");
+    bounded_git(command, limit).map(|output| config_records(&output.stdout))
+}
+
+/// Whether the clone at `target` holds `commit`, asked within `limit`; an error when Git
+/// gave no answer in time.
+pub(super) fn holds_commit(target: &Path, commit: &str, limit: Duration) -> Result<bool, String> {
+    let mut command = git(target);
+    command.args(["cat-file", "-e", &format!("{commit}^{{commit}}")]);
+    bounded_git(command, limit).map(|output| output.status.success())
 }
 
 /// The `name` and `value` of each record of `git config --null --get-regexp`.
@@ -406,14 +432,10 @@ fn clone_one(
     if !failures.is_empty() {
         return Err(format!("{key} not cloned: {}", failures.join("; ")));
     }
-    let missing = group.iter().find(|source| {
-        !git(&target)
-            .args(["cat-file", "-e", &format!("{}^{{commit}}", source.commit)])
-            .status()
-            .is_ok_and(|status| status.success())
-    });
-    if let Some(source) = missing {
-        return Err(format!("{key} lacks the locked commit {}", source.commit));
+    for source in &group {
+        if !holds_commit(&target, &source.commit, GIT_LIMIT).map_err(|error| format!("{key} not checked: {error}"))? {
+            return Err(format!("{key} lacks the locked commit {}", source.commit));
+        }
     }
     readable_to_all(&target).map_err(|error| format!("{key} not cloned: {error}"))?;
     Ok((folder_name, target, addresses))
@@ -464,9 +486,9 @@ fn clone_from(
     // Git rewrites an address by `url.*.insteadOf` in this computer's own configuration,
     // often to SSH: the clone must still come from the approved GitHub repository. The
     // rewritten address is not shown: it can carry a credential.
-    let Some(effective) =
-        effective_address(address, folder).filter(|address| github_key(address).as_deref() == Some(key))
-    else {
+    let effective = effective_address(address, folder, GIT_LIMIT)
+        .map_err(|error| format!("Git did not name the address it fetches: {error}"))?;
+    let Some(effective) = effective.filter(|address| github_key(address).as_deref() == Some(key)) else {
         return Err(
             "a url.insteadOf rule in this computer's Git configuration sends it outside the approved repository"
                 .to_owned(),
