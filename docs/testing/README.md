@@ -26,6 +26,7 @@ documents that are not yet STE.
 | Procedure | Feature | Cost |
 |---|---|---|
 | [browser-firefox-disclosure](procedures/browser-firefox-disclosure.md) | Firefox native webdriver getter and sign-in field | none |
+| [browser-passkey-bridge](procedures/browser-passkey-bridge.md) | Browser WebAuthn bridge to an external authenticator command | none |
 | [browser-recording](procedures/browser-recording.md) | Browser panel video and toolbar icons | none |
 | [chromecast-live-mirror](procedures/chromecast-live-mirror.md) | Chromecast live cast, mirror transport | none |
 | [chromecast-live-progressive](procedures/chromecast-live-progressive.md) | Chromecast live cast, progressive transport | none |
