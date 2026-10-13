@@ -1,14 +1,14 @@
 //! What a cloud costs: the header's one-line spend and the drawer's Cost tab. A
 //! figure that is not known yet says why instead of reading "Unavailable".
 //! Amounts are in the provider's own currency.
-use super::super::Runtime;
+use super::super::{Runtime, Stage};
 use super::strip::Spend;
 use crate::theme;
 use egui::{RichText, Sense, vec2};
 use horizon_core::cloud_runtime::{
     self,
     billing::BillingBucket,
-    cost::{format_amount, format_rate},
+    cost::{RunGap, format_amount, format_rate},
     provider::{self, Description},
 };
 use std::time::{Instant, SystemTime};
@@ -45,6 +45,33 @@ pub(super) fn provider(runtime: &Runtime) -> &'static Description {
         .state
         .as_ref()
         .map_or(&provider::RUNPOD, |state| Description::of(&state.profile))
+}
+
+/// Whether the provider reports what the cloud's workers were billed, so a total
+/// since creation can be known.
+pub(super) fn history_supported(runtime: &Runtime) -> bool {
+    runtime
+        .state
+        .as_ref()
+        .is_none_or(|state| cloud_runtime::billing::history_supported(&state.profile))
+}
+
+/// Why a Ready worker has no run estimate. Before Ready, the estimate is pending, and
+/// a Ready cloud whose worker was not read yet has no gap to name.
+fn ready_gap(runtime: &Runtime) -> Option<RunGap> {
+    if runtime.stage != Some(Stage::Ready) || compute_idle(runtime) {
+        return None;
+    }
+    cloud_runtime::cost::run_gap(runtime.state.as_ref()?.worker.as_ref()?)
+}
+
+/// What a cloud whose provider reports no billing per worker shows instead of a total.
+pub(super) fn history_unavailable(runtime: &Runtime) -> String {
+    format!(
+        "{} reports no billing per worker, so Horizon cannot show a total since creation. The run estimate \
+         covers only the current run: earlier runs, stopped periods and kept storage are not in it.",
+        provider(runtime).label
+    )
 }
 
 /// What is left of a deleted worker: nothing, or its workspace storage while cleanup is
@@ -117,6 +144,7 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
     let total = runtime.total_cost(now);
     let idle = compute_idle(runtime);
     let deleted = worker_deleted(runtime);
+    let gap = ready_gap(runtime);
     let mut parts = Vec::new();
     // A deleted worker bills no compute; its history can still follow.
     if let Some(deleted) = deleted {
@@ -147,6 +175,9 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
     } else if idle {
         // Known stopped: missing rate data does not make the worker billable again.
         "compute stopped".to_owned()
+    } else if gap == Some(RunGap::NoRate) {
+        // A Ready worker without a rate is billing; nothing more will arrive without a new read.
+        "Worker billing · rate not reported".to_owned()
     } else if worker.is_some() || worker_requested(runtime) {
         // Billing starts with the request, before the provider describes the worker.
         "Worker billing · rate pending".to_owned()
@@ -157,12 +188,25 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
         Some(total) => runtime.billing.explanation(total, Instant::now()),
         None => match runtime.billing.error() {
             Some(error) => format!("Provider billing unavailable: {error}. Horizon tries again every few minutes."),
+            None if !history_supported(runtime) && (idle || deleted.is_some()) => {
+                format!("Compute is stopped. {}", history_unavailable(runtime))
+            }
+            None if !history_supported(runtime) && rate.is_some() => format!(
+                "{}\n{}",
+                cloud_runtime::cost::rate_coverage(provider(runtime)),
+                history_unavailable(runtime)
+            ),
             None if idle && (worker.is_some() || worker_requested(runtime)) => {
                 "Compute is stopped; the provider has not reported billed periods yet.".into()
             }
             // The rate shown is the worker's own; only billed periods are still missing.
             None if rate.is_some() => {
                 "The rate is the worker's last reported hourly price; the provider has not reported billed periods yet."
+                    .into()
+            }
+            None if gap == Some(RunGap::NoRate) => {
+                "The worker is ready, but the provider reported no hourly rate for it, so Horizon cannot estimate \
+                 its cost. Reconnect to read the worker again."
                     .into()
             }
             None if worker.is_some() || worker_requested(runtime) => {
@@ -175,14 +219,21 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
 }
 
 /// The Cost tab's run note. The run is estimated once the worker is Ready; before that a
-/// requested worker may already bill, so it is pending rather than "not running".
+/// requested worker may already bill, so it is pending rather than "not running". A
+/// Ready worker without an estimate names the input it lacks.
 fn run_note(runtime: &Runtime, estimated: bool) -> &'static str {
     if estimated {
-        "estimate since the last start"
-    } else if !compute_idle(runtime) && worker_requested(runtime) {
-        "estimate pending until ready"
-    } else {
-        "not running"
+        return "estimate since the last start";
+    }
+    match ready_gap(runtime) {
+        Some(RunGap::NoRate) => "no rate reported",
+        Some(RunGap::NoStart) => "no start time reported",
+        Some(RunGap::Stopped) => "not running",
+        Some(RunGap::UnknownStatus) => "worker status unknown",
+        None if compute_idle(runtime) || !worker_requested(runtime) => "not running",
+        None if runtime.stage != Some(Stage::Ready) => "estimate pending until ready",
+        // Ready, but the record holds no worker yet: a reconnect reads it.
+        None => "worker not read yet",
     }
 }
 
@@ -201,6 +252,7 @@ fn rate_metric(runtime: &Runtime, rate: Option<f64>) -> (String, &'static str) {
     match rate {
         Some(rate) if provider.net_of_vat => (format_rate(rate, provider.currency), "compute, net of VAT"),
         Some(rate) => (format_rate(rate, provider.currency), "last reported worker rate"),
+        None if ready_gap(runtime) == Some(RunGap::NoRate) => ("—".into(), "no rate reported"),
         None if worker_requested(runtime) || runtime.state.as_ref().is_some_and(|state| state.worker.is_some()) => {
             ("—".into(), "rate pending")
         }
@@ -242,6 +294,12 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) {
                 format_amount(total.total(), provider.currency),
                 "billed + estimated",
                 runtime.billing.explanation(total, Instant::now()),
+            ),
+            None if !history_supported(runtime) => (
+                "Since creation",
+                "Not available".into(),
+                "no billing per worker",
+                history_unavailable(runtime),
             ),
             None if runtime.billing.error().is_some() => (
                 "Since creation",
@@ -756,5 +814,117 @@ mod tests {
             &server(&serde_json::json!({"id": "43", "lastStartedAt": "2026-10-12T10:00:00Z"})),
         );
         assert_eq!(elapsed(&resumed), Some(std::time::Duration::from_mins(5)));
+    }
+
+    #[test]
+    fn a_ready_worker_names_a_missing_rate_or_start_instead_of_waiting_for_ready() {
+        let now = created() + std::time::Duration::from_mins(45);
+        let has = |shown: &[String], wanted: &str| shown.iter().any(|text| text == wanted);
+        let unpriced = hetzner(Stage::Ready, &server(&serde_json::json!({"costPerHr": null})));
+        let line = spend(&unpriced, now);
+        assert_eq!(line.line, "Worker billing · rate not reported");
+        assert!(
+            line.explanation.contains("reported no hourly rate"),
+            "{}",
+            line.explanation
+        );
+        let shown = texts(&unpriced);
+        assert_eq!(
+            shown.iter().filter(|text| *text == "no rate reported").count(),
+            2,
+            "{shown:?}"
+        );
+        for stale in ["estimate pending until ready", "rate pending"] {
+            assert!(!has(&shown, stale), "{stale}: {shown:?}");
+        }
+        let mut runpod = runtime();
+        runpod.state.as_mut().unwrap().worker.as_mut().unwrap().cost_per_hr = None;
+        assert!(has(&texts(&runpod), "no rate reported"), "on every provider");
+
+        let unstarted = hetzner(Stage::Ready, &server(&serde_json::json!({"lastStartedAt": null})));
+        assert_eq!(spend(&unstarted, now).line, "€0.0240/h");
+        assert!(has(&texts(&unstarted), "no start time reported"));
+        let unknown = hetzner(Stage::Ready, &server(&serde_json::json!({"desiredStatus": "UNKNOWN"})));
+        assert!(has(&texts(&unknown), "worker status unknown"));
+        let exited = hetzner(Stage::Ready, &server(&serde_json::json!({"desiredStatus": "EXITED"})));
+        assert!(
+            has(&texts(&exited), "not running"),
+            "a stopped worker's status is known"
+        );
+        // A Ready record without a worker was not read yet; nothing says no rate was reported.
+        let unread = hetzner(Stage::Ready, &serde_json::Value::Null);
+        assert_eq!(spend(&unread, now).line, "Worker billing · rate pending");
+        let shown = texts(&unread);
+        assert!(
+            has(&shown, "worker not read yet") && has(&shown, "rate pending"),
+            "{shown:?}"
+        );
+        assert!(!has(&shown, "no rate reported"), "{shown:?}");
+
+        // Before Ready, a requested worker's estimate is still pending.
+        let provisioning = hetzner(Stage::Provision, &serde_json::Value::Null);
+        assert_eq!(spend(&provisioning, now).line, "Worker billing · rate pending");
+        let shown = texts(&provisioning);
+        assert!(
+            has(&shown, "estimate pending until ready") && has(&shown, "rate pending"),
+            "{shown:?}"
+        );
+    }
+
+    #[test]
+    fn hetzner_billing_history_reads_as_unavailable_never_as_pending_or_zero() {
+        let now = created() + std::time::Duration::from_mins(45);
+        let has = |shown: &[String], wanted: &str| shown.iter().any(|text| text == wanted);
+        let ready = hetzner(Stage::Ready, &server(&serde_json::json!({})));
+        assert!(ready.total_cost(now).is_none());
+        let shown = texts(&ready);
+        assert!(
+            has(&shown, "Not available") && has(&shown, "no billing per worker"),
+            "{shown:?}"
+        );
+        for pending in ["billing not read yet", "Awaiting billing", "Reading…", "Unavailable"] {
+            assert!(!has(&shown, pending), "{pending}: {shown:?}");
+        }
+        assert_eq!(
+            card(&ready, now),
+            [
+                "This run · 45m 00s · €0.02 · €0.0240/h",
+                "Since creation · not reported by Hetzner"
+            ]
+        );
+        let line = spend(&ready, now);
+        assert!(
+            !line.line.contains("total"),
+            "a run is not a lifetime total: {}",
+            line.line
+        );
+        for named in [
+            "euros net of VAT",
+            "workspace volume",
+            "Hetzner reports no billing per worker",
+        ] {
+            assert!(line.explanation.contains(named), "{named}: {}", line.explanation);
+        }
+        let stopped = hetzner(Stage::Stopped, &server(&serde_json::json!({"desiredStatus": "EXITED"})));
+        assert!(has(&texts(&stopped), "Not available"));
+        let explanation = spend(&stopped, now).explanation;
+        assert!(
+            explanation.starts_with("Compute is stopped. Hetzner reports no billing per worker"),
+            "{explanation}"
+        );
+
+        // A failed read of history the provider does report is a different state.
+        let mut failed = runtime();
+        failed.billing.record(
+            "worker1",
+            Err(cloud_runtime::billing::BillingError::Unreachable),
+            Instant::now(),
+        );
+        let shown = texts(&failed);
+        assert!(
+            has(&shown, "Unavailable") && has(&shown, "billing could not be read"),
+            "{shown:?}"
+        );
+        assert!(!has(&shown, "Not available"), "{shown:?}");
     }
 }

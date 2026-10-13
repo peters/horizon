@@ -330,6 +330,12 @@ fn total_cost(ui: &mut egui::Ui, runtime: &super::Runtime, now: std::time::Syste
             .on_hover_ui(|ui| {
                 ui.label(runtime.billing.explanation(&total, std::time::Instant::now()));
             });
+    } else if !cost::history_supported(runtime) {
+        ui.small(format!(
+            "Since creation · not reported by {}",
+            cost::provider(runtime).label
+        ))
+        .on_hover_text(cost::history_unavailable(runtime));
     } else if let Some(error) = runtime.billing.error() {
         ui.label(format!("Total unavailable: {error}"))
             .on_hover_text("RunPod billing could not be read. Horizon tries again every few minutes.");
