@@ -128,6 +128,7 @@ impl HorizonApp {
             form.launch.accounts_checked = false;
             form.launch.ready_profiles.clear();
             form.profiles = None;
+            form.launch.reread.hidden = None;
             self.cloud_prototype.error = None;
         }
         let form = &mut self.cloud_prototype.production;
@@ -215,6 +216,13 @@ impl HorizonApp {
                 Some(Err(error)) => {
                     form.launch.reread.finished();
                     form.launch.notes.clear();
+                    if quiet {
+                        // This error replaces the shown one; the shown storage waits for the next save.
+                        self.cloud_prototype.error = None;
+                        if let Some(shown) = form.profiles.take() {
+                            form.launch.reread.hidden = Some(shown);
+                        }
+                    }
                     form.profiles = None;
                     form.launch.revision = None;
                     form.launch.submitted = false;
@@ -282,7 +290,8 @@ fn apply(form: &mut super::Production, loaded: Loaded, quiet: bool) {
         form.launch.accounts_checked = false;
     }
     form.launch.notes = prepared.notes;
-    reread::keep_edits(&mut form.launch.reread, form.profiles.as_ref(), &mut prepared.config);
+    let shown = form.profiles.take().or_else(|| form.launch.reread.hidden.take());
+    reread::keep_edits(&mut form.launch.reread, shown.as_ref(), &mut prepared.config);
     form.launch.ready_profiles = loaded.ready_profiles;
     form.repository = prepared.repository.to_string_lossy().into_owned();
     // Cloud GPU from New workspace takes each repository's first GPU profile;

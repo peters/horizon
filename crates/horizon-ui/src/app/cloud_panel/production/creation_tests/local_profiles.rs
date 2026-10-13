@@ -501,6 +501,19 @@ fn a_half_saved_working_copy_keeps_the_choices_for_the_next_save() {
     app.read_cloud_profiles(&ctx);
     finish_read(&ctx, &mut app);
     app.cloud_prototype.production.selected_profile = "other".into();
+    let container_gb = |app: &HorizonApp| {
+        app.cloud_prototype.production.profiles.as_ref().unwrap().profiles["other"]
+            .storage
+            .container_gb
+    };
+    app.cloud_prototype
+        .production
+        .profiles
+        .as_mut()
+        .and_then(|config| config.profiles.get_mut("other"))
+        .unwrap()
+        .storage
+        .container_gb = 50;
     std::fs::write(&path, "version: 1\ndefault: test-image\nprofiles: [").unwrap();
     wait_until(&ctx, &mut app, |app| app.cloud_prototype.production.profiles.is_none());
     assert_eq!(app.cloud_prototype.production.selected_profile, "other");
@@ -511,5 +524,12 @@ fn a_half_saved_working_copy_keeps_the_choices_for_the_next_save() {
     .unwrap();
     wait_until(&ctx, &mut app, |app| app.cloud_prototype.production.profiles.is_some());
     assert_eq!(app.cloud_prototype.production.selected_profile, "other");
+    assert_eq!(container_gb(&app), 50, "the storage edit comes back too");
     assert!(app.cloud_prototype.error.is_none(), "the earlier read error goes");
+    // A half-saved file, then no file: the error of the first read goes with it.
+    std::fs::write(&path, "profiles: [").unwrap();
+    wait_until(&ctx, &mut app, |app| app.cloud_prototype.error.is_some());
+    std::fs::remove_file(&path).unwrap();
+    wait_until(&ctx, &mut app, |app| app.cloud_prototype.production.launch.unconfigured);
+    assert!(app.cloud_prototype.error.is_none());
 }

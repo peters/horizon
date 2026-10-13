@@ -30,6 +30,8 @@ pub(super) struct State {
     pub quiet: bool,
     /// The settings as last read, before the person edited them in the dialog.
     as_read: Option<CloudConfig>,
+    /// The shown settings, with the person's edits, while a failed quiet read hides them.
+    pub hidden: Option<CloudConfig>,
 }
 
 impl State {
