@@ -128,6 +128,20 @@ def sources():
     return digest.hexdigest()
 
 
+def codex_command(environment):
+    """`codex` with the options that horizon-worker-run gives it. Codex 0.156 and later start a
+    shared background server that refuses a folder that others can write, which a network
+    volume can report; the loop keeps the agent running, so it starts without that server."""
+    try:
+        usage = subprocess.run(['codex', '--help'], stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                               timeout=60, env=environment)
+        daemon = '--no-daemon' in usage.stdout
+    except (OSError, subprocess.TimeoutExpired):
+        daemon = False
+    return ['codex', *(['--no-daemon'] if daemon else []), 'exec', '--skip-git-repo-check',
+            '--dangerously-bypass-approvals-and-sandbox', '-']
+
+
 def every(cfg):
     try:
         return max(15, int(cfg.get('every_minutes', 60)))
@@ -190,12 +204,20 @@ def open_pull_requests(repository, authors):
     return found
 
 
+def slug(repository):
+    """The file name of a repository. An owner has no `_`, so the first `__` is always the
+    slash and two repositories never share a name."""
+    return repository.replace('/', '__', 1)
+
+
 def fingerprint(pull_requests, template):
     """What a repository's agent would see: when it is the same as last time, nothing moved."""
     state = []
     for pr in sorted(pull_requests, key=lambda pr: pr.get('number', 0)):
-        checks = sorted(str(check.get('conclusion') or check.get('state') or check.get('status'))
-                        for check in pr.get('statusCheckRollup') or [])
+        # Each check by its name, so two checks that swap their results still count as a change.
+        checks = sorted(json.dumps([str(check.get('workflowName')), str(check.get('name') or check.get('context')),
+                                    str(check.get('conclusion') or check.get('state') or check.get('status'))])
+                        for check in pr.get('statusCheckRollup') or [] if isinstance(check, dict))
         state.append([pr.get('number'), pr.get('headRefOid'), checks, pr.get('reviewDecision'), pr.get('mergeable')])
     return hashlib.sha256(json.dumps([state, template]).encode()).hexdigest()
 
@@ -235,7 +257,7 @@ def tree_rss_mb(pid):
 class Job:
     def __init__(self, repository):
         self.repository = repository
-        self.slug = repository.replace('/', '__')
+        self.slug = slug(repository)
         self.started = None
         self.finished = None
         self.peak_mb = 0
@@ -280,6 +302,13 @@ class Job:
             return ''
 
     def attempt(self, template, environment):
+        # The policy can change during a run that lasts hours; each agent starts under the
+        # policy of that moment.
+        if approvals() != 'auto':
+            self.code = None
+            with open(self.log, 'a') as log:
+                log.write('\nThe worker now asks before an agent runs a command; this agent did not start.\n')
+            return
         prompt = (template.replace('@@REPOSITORY@@', self.repository)
                   .replace('@@STATUS@@', DIR + '/status.d/' + self.slug + '.json'))
         # The prompt goes on standard input: as an argument, text that starts with a dash
@@ -291,8 +320,7 @@ class Job:
             log.write(f'\n=== {time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())} {self.repository} ===\n')
             log.flush()
             process = subprocess.Popen(
-                ['codex', 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', '-'],
-                cwd=DIR + '/repos', stdin=instructions, stdout=log, stderr=subprocess.STDOUT,
+                codex_command(environment), cwd=DIR + '/repos', stdin=instructions, stdout=log, stderr=subprocess.STDOUT,
                 env=environment)
             stopped = False
             while process.poll() is None:
@@ -344,7 +372,7 @@ def merge_status(repositories):
     """One status document from the jobs' own reports, which the agents write as they like."""
     reports, activity = [], []
     for repository in repositories:
-        report = load(DIR + '/status.d/' + repository.replace('/', '__') + '.json', {})
+        report = load(DIR + '/status.d/' + slug(repository) + '.json', {})
         reports.append(entries(report, 'pull_requests'))
         activity += entries(report, 'activity')
     activity.sort(key=lambda entry: str(entry.get('at', '')))
@@ -363,7 +391,7 @@ def merge_status(repositories):
 def forget_open(repository):
     """Keeps only the merged pull requests in a repository's report once it has no open ones,
     so the board does not show pull requests that closed without an agent."""
-    path = DIR + '/status.d/' + repository.replace('/', '__') + '.json'
+    path = DIR + '/status.d/' + slug(repository) + '.json'
     report = load(path, None)
     if isinstance(report, dict) and isinstance(report.get('pull_requests'), list):
         report['pull_requests'] = [pr for pr in report['pull_requests']

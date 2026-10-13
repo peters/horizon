@@ -112,11 +112,14 @@ def write(parent, name, text, mode=0o600):
 
 
 def create(parent, name):
-    """Creates the empty file `name` when nothing has that name yet."""
+    """Makes sure that the marker `name` is a regular file. One that exists keeps its content;
+    a link or another kind of file is replaced, and a folder stops the exchange."""
     try:
-        os.close(os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent))
-    except FileExistsError:
+        if stat.S_ISREG(os.stat(name, dir_fd=parent, follow_symlinks=False).st_mode):
+            return
+    except FileNotFoundError:
         pass
+    write(parent, name, '')
 
 
 def install(payload, upkeep):

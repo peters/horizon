@@ -202,7 +202,9 @@ The exchange and the loop guarantee these items:
   without approvals: the agents do not run as root, and the worker policy
   `/run/horizon-worker/agent-approvals` is `auto`. On other workers the loop
   starts no agent, and the run fails with the reason. This is the same rule that
-  `horizon-worker-run` uses for agent panels.
+  `horizon-worker-run` uses for agent panels. The loop examines the policy again
+  immediately before it starts each agent. Like `horizon-worker-run`, it starts
+  Codex with `--no-daemon` when the installed Codex has that option.
 - The loop gives each agent the session environment of the worker image, as
   `horizon-worker-run` does. When the worker refuses that environment, the run
   starts no agent.

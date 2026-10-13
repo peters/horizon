@@ -105,7 +105,7 @@ class ExchangeTests(unittest.TestCase):
         self.assertFalse((self.worker.root / 'created-through-link').exists())
         self.assertFalse(os.path.lexists(self.worker.upkeep / 'run-now'))
         for path in (self.worker.upkeep / 'config.json', self.worker.upkeep / 'run.sh',
-                     self.worker.upkeep / 'paused', binding / 'revision'):
+                     self.worker.upkeep / 'paused', binding / 'revision', binding / 'launch-requested'):
             self.assertFalse(path.is_symlink(), path)
             self.assertTrue(path.is_file(), path)
 
@@ -218,6 +218,15 @@ class LoopTests(unittest.TestCase):
                 self.assertIsNone(RUN['session_environment']())
             self.assertIn('refused: HOME is set by the worker', output.getvalue())
 
+    def test_checks_that_swap_results_are_a_change_and_names_never_collide(self):
+        before = [{'number': 1, 'statusCheckRollup': [{'name': 'a', 'conclusion': 'SUCCESS'},
+                                                       {'name': 'b', 'conclusion': 'FAILURE'}]}]
+        after = [{'number': 1, 'statusCheckRollup': [{'name': 'a', 'conclusion': 'FAILURE'},
+                                                      {'name': 'b', 'conclusion': 'SUCCESS'}]}]
+        self.assertNotEqual(RUN['fingerprint'](before, ''), RUN['fingerprint'](after, ''))
+        self.assertEqual(RUN['slug']('acme/b__c'), 'acme__b__c')
+        self.assertFalse(RUN['REPOSITORY'].fullmatch('acme__b/c'))
+
     def test_invalid_names_never_reach_a_command(self):
         config = {'repositories': ['acme/web', '--repo=x/y', 'acme/..', 'acme/web', 'a/b/c', 7],
                   'authors': ['app/dependabot', 'renovate[bot]', '--state=closed', 'a b'],
@@ -236,19 +245,32 @@ class LoopTests(unittest.TestCase):
             tools = directory / 'tools'
             tools.mkdir()
             codex = tools / 'codex'
-            codex.write_text('#!/bin/sh\nprintf "args:%s env:%s\\n" "$*" "$UPKEEP_TEST"\ncat\n')
+            codex.write_text('#!/bin/sh\n[ "$1" = --help ] && { echo "  --no-daemon"; exit 0; }\n'
+                             'printf "args:%s env:%s\\n" "$*" "$UPKEEP_TEST"\ncat\n')
             codex.chmod(0o700)
             for folder in ('repos', 'logs', 'status.d'):
                 (directory / folder).mkdir()
+            policy = directory / 'agent-approvals'
+            policy.write_text('auto\n')
             names = RUN['Job'].__init__.__globals__
-            with mock.patch.dict(names, DIR=str(directory), REFRESH=0.05), \
+            with mock.patch.dict(names, DIR=str(directory), REFRESH=0.05, APPROVALS=str(policy)), \
+                    mock.patch('os.geteuid', return_value=10001), \
                     mock.patch.dict(os.environ, PATH=f'{tools}:{os.environ["PATH"]}'):
                 job = RUN['Job']('acme/web')
                 job.run('--help\nWork on @@REPOSITORY@@ and write @@STATUS@@.', dict(os.environ, UPKEEP_TEST='1'))
             log = Path(job.log).read_text()
             self.assertEqual(job.code, 0)
-            self.assertIn('args:exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - env:1\n', log)
+            self.assertIn('args:--no-daemon exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - '
+                          'env:1\n', log)
             self.assertIn(f'--help\nWork on acme/web and write {directory}/status.d/acme__web.json.', log)
+            # A policy that changed to ask during the run starts no further agent.
+            policy.write_text('ask\n')
+            with mock.patch.dict(names, DIR=str(directory), REFRESH=0.05, APPROVALS=str(policy)), \
+                    mock.patch('os.geteuid', return_value=10001):
+                job = RUN['Job']('acme/web')
+                job.run('Work on @@REPOSITORY@@.', dict(os.environ))
+            self.assertIsNone(job.code)
+            self.assertIn('this agent did not start', Path(job.log).read_text())
 
 
 class SchedulerTests(unittest.TestCase):
