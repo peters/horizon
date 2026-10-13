@@ -212,6 +212,17 @@ pub fn keep_repositories(
     Ok(true)
 }
 
+/// Whether `login` is still this computer's sign-in for the app of `settings`, read under
+/// the sign-in's lock: a list that failed for an account that another window has replaced
+/// since is not shown as that account's either. A lock that cannot be taken says yes.
+#[must_use]
+pub fn still_signed_in_as(root: &Path, settings: &Settings, login: &str) -> bool {
+    let Ok(_lock) = lock(root, settings) else {
+        return true;
+    };
+    configured(root, settings) && stored::load(&path(root, settings)).is_some_and(|chain| chain.login == login)
+}
+
 /// Forgets the kept list when this computer turns out not to be signed in. Checked again
 /// under the lock: a request that was `cancel`led and replaced, or a sign-in that another
 /// window finished since, keeps the list.

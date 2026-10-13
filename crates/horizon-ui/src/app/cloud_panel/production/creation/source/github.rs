@@ -434,6 +434,9 @@ fn exchange(
                 }
                 Some(found)
             }
+            // A list that failed for an account that another window replaced meanwhile is not
+            // kept on screen as that account's.
+            Err(_) if !host::still_signed_in_as(root, settings, &login) => return Answer::Replaced,
             Err(reason) => return Answer::Failed(reason),
         },
     };
