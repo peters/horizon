@@ -163,7 +163,10 @@ impl State {
                 self.token.push_str(&pasted);
                 pasted.zeroize();
             }
-            self.folder = (!self.input.trim().is_empty() && holds_repository(&path)).then_some(path);
+            // A path that ends in a separator is opened, not used: Tab into a repository
+            // browses its folders.
+            let opened = self.input.trim_end().ends_with(std::path::is_separator);
+            self.folder = (!self.input.trim().is_empty() && !opened && holds_repository(&path)).then_some(path);
             self.failure = None;
             self.public = false;
             self.token_instead = false;

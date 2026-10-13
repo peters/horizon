@@ -145,6 +145,33 @@ takes a pasted link. It also proves the keyboard: the arrow keys, **Enter** and
    Result: The focus moves from the field to the next control of the dialog. No
    result row takes the focus.
 
+### 6.7 S07 — Edge cases
+
+1. Type `~/code/` and push **Shift+Tab**.
+
+   Result: The focus moves back to the control before the field. No folder opens.
+
+2. Select all the text in the field and type `..`.
+
+   Result: The rows show the folders of the parent of `<home>`, not a search.
+
+3. Select all the text in the field and type `.git`.
+
+   Result: The field is a search, not a path: the caption says **MATCHES** or the
+   dialog says **Nothing matches**.
+
+4. Select all the text in the field and type `~/github/acme/`. Highlight `web` and
+   push **Tab**.
+
+   Result: The field shows `~/github/acme/web/` and the rows show its folders. The
+   dialog does not use the repository until you push **Enter** on a row or delete
+   the last `/`.
+
+5. Clear the field. While the rows show, push **Down** two times, then wait for
+   the spinner beside the counts to stop.
+
+   Result: The highlight stays on the same row, also if rows move.
+
 ## 7. Pass criteria
 
 - The dialog has no **Browse…** button for the repository.

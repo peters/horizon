@@ -175,3 +175,23 @@ fn a_branch_or_an_age_finds_no_checkout() {
     assert!(search_rows("main", std::slice::from_ref(&checkout), &[]).is_empty());
     assert!(search_rows("ago", std::slice::from_ref(&checkout), &[]).is_empty());
 }
+
+#[test]
+fn new_rows_for_the_same_query_keep_the_highlighted_row() {
+    let mut finder = super::Finder {
+        checkouts: Some(Vec::new()),
+        ..super::Finder::default()
+    };
+    let names = vec!["acme/api".to_owned(), "acme/web".to_owned()];
+    let _ = finder.rows("", &names);
+    finder.move_highlight(true);
+    assert_eq!(finder.current_rows()[finder.highlighted].title, "acme/web");
+    // The scan finishes and a recent checkout now leads the list.
+    finder.checkouts = Some(vec![checkout("/home/x/code/tool", None)]);
+    let _ = finder.rows("", &names);
+    assert_eq!(
+        finder.current_rows()[finder.highlighted].title,
+        "acme/web",
+        "still the row chosen"
+    );
+}

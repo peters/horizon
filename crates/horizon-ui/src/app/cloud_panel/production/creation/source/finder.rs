@@ -138,7 +138,13 @@ impl Finder {
         let typed = typed.trim();
         if is_path(typed) {
             if self.lookup.as_ref().is_none_or(|(asked, _)| asked != typed) && self.folders_for != typed {
-                self.lookup = Some((typed.to_owned(), spawn_folders(typed.to_owned())));
+                // `.` and `..` name the home folder and its parent, as `./` and `../` do.
+                let query = if matches!(typed, "." | "..") {
+                    format!("{typed}/")
+                } else {
+                    typed.to_owned()
+                };
+                self.lookup = Some((typed.to_owned(), spawn_folders(query)));
             }
             if let Some((asked, receiver)) = &self.lookup {
                 match receiver.try_recv() {
@@ -179,6 +185,7 @@ impl Finder {
             self.folders.len(),
         );
         if self.made_for.as_ref() != Some(&key) {
+            let previous = self.rows.get(self.highlighted).map(|row| row.kind.clone());
             // An earlier path's folders stay in view until this one's are read.
             self.stale = is_path(&key.0) && self.folders_for != key.0;
             self.rows = if is_path(&key.0) {
@@ -190,8 +197,12 @@ impl Finder {
             } else {
                 search_rows(&key.0, self.checkouts.as_deref().unwrap_or_default(), repositories)
             };
+            // A new query starts at the top; new rows for the same query keep the highlight on
+            // the row it was on, wherever that row moved.
             if self.made_for.as_ref().is_none_or(|made| made.0 != key.0) {
                 self.highlighted = 0;
+            } else if let Some(kind) = previous {
+                self.highlighted = self.rows.iter().position(|row| row.kind == kind).unwrap_or(0);
             }
             self.highlighted = self.highlighted.min(self.rows.len().saturating_sub(1));
             self.made_for = Some(key);
@@ -445,8 +456,14 @@ impl super::State {
         if !focused || !plain || !self.searching() || !self.finder.settled() || self.finder.current_rows().is_empty() {
             return None;
         }
-        // A typed `owner/name` is a repository to clone: Enter is Continue's, not a result's.
-        let takes_enter = self.remote.is_none();
+        // A typed `owner/name` that the account does not list, or with no account list, is a
+        // repository to clone: Enter is Continue's. A part of a listed name is a search.
+        let listed = self
+            .account
+            .as_ref()
+            .and_then(|account| account.repositories.as_ref())
+            .map(|names| names.iter().any(|name| name.eq_ignore_ascii_case(self.input.trim())));
+        let takes_enter = self.remote.is_none() || listed == Some(false);
         let (down, up, enter, tab) = ui.input_mut(|input| {
             (
                 input.consume_key(Modifiers::NONE, Key::ArrowDown),

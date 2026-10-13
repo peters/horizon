@@ -111,7 +111,7 @@ impl State {
         let Some(remote) = self.remote().cloned() else {
             // A name that narrows the connected account's list is no unknown link.
             // While the finder shows, it says itself when nothing matches.
-            if self.unrecognised() && !self.filters_the_list() && !self.searching() {
+            if !self.searching() && self.unrecognised() && !self.filters_the_list() {
                 ui.label(
                     RichText::new("That is neither a repository link nor a folder that exists.")
                         .size(13.0)
