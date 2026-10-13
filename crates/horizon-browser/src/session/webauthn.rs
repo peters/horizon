@@ -19,6 +19,7 @@ use super::{BrowserEventSender, DriverState};
 
 /// Queued page messages handled in one pass of the driver loop.
 const MESSAGES_PER_TICK: usize = 4;
+const FRAME_TREE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[derive(Debug)]
 pub(super) struct CdpPasskeys {
@@ -242,15 +243,16 @@ impl DriverState {
             .as_ref()
             .and_then(|passkeys| passkeys.contexts.get(&context).cloned())
             .ok_or_else(PageError::not_allowed)?;
-        let session = self.session_id.clone().ok_or_else(PageError::not_allowed)?;
+        // A short bound: the read blocks frames and input, and Chromium can
+        // hold Page commands while a navigation is in flight.
         let tree = self
-            .call_and_ack(
+            .send_page_command_within(
                 link,
                 event_tx,
                 frame_slot,
                 "Page.getFrameTree",
                 &json!({}),
-                Some(&session),
+                FRAME_TREE_TIMEOUT,
             )
             .map_err(|error| {
                 tracing::warn!(target: "browser", "passkey request could not read the frame tree: {error}");

@@ -34,14 +34,22 @@ pub(super) struct BidiPasskeys {
 const MESSAGES_PER_TICK: usize = 4;
 const MAX_QUEUED_REPLIES: usize = 32;
 const MAX_REPLIES_PER_TICK: usize = 8;
+const MAX_ENDING_REPLIES: usize = 256;
 
 impl BidiPasskeys {
-    /// A busy reply to a flood is dropped once the outbox is full. A reply
-    /// that ends a request is always kept: there is at most one for each
-    /// queued or running request, so these stay bounded too.
+    /// A busy reply to a flood is dropped once the outbox holds 32 replies.
+    /// A reply that ends a request is kept up to a much higher bound, which
+    /// only a page that loops requests and stopped navigations can reach.
     fn queue_reply(&mut self, reply: (Source, String), ends_request: bool) {
-        if ends_request || self.outbox.len() < MAX_QUEUED_REPLIES {
+        let limit = if ends_request {
+            MAX_ENDING_REPLIES
+        } else {
+            MAX_QUEUED_REPLIES
+        };
+        if self.outbox.len() < limit {
             self.outbox.push_back(reply);
+        } else {
+            tracing::warn!(target: "browser", "passkey reply dropped: the page outpaces delivery");
         }
     }
 
