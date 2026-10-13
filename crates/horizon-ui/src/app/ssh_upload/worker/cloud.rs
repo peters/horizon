@@ -170,7 +170,8 @@ fn explain(error: &str) -> String {
     let advice = if lower.contains("host key verification failed") || lower.contains("host identification has changed")
     {
         "The worker did not show the host key that Horizon recorded for this cloud, so Horizon sent nothing. Reconnect the cloud, then drop the files again."
-    } else if lower.contains("permission denied") {
+    } else if lower.contains("permission denied (") {
+        // SSH names the refused methods; a file error on the worker does not.
         "The worker refused the cloud SSH key of this computer. Reconnect the cloud, then drop the files again."
     } else if [
         "connection refused",
@@ -218,6 +219,14 @@ mod tests {
         );
         assert!(host_key.ends_with("\n\nHost key verification failed."), "{host_key}");
         assert!(explain("ssh: connect to host 192.0.2.1 port 22: Connection refused").contains("could not reach"));
+        assert!(
+            explain("root@192.0.2.1: Permission denied (publickey).")
+                .starts_with("The worker refused the cloud SSH key")
+        );
+        assert!(
+            explain("mkdir: cannot create directory '/workspace/.horizon-drops': Permission denied")
+                .starts_with("The cloud worker did not take the files: mkdir:")
+        );
         assert_eq!(
             explain("The worker has no session for this panel.\n"),
             "The cloud worker did not take the files: The worker has no session for this panel."
