@@ -31,12 +31,13 @@ function install() {
 
 const challenge = new Uint8Array([1, 2, 3, 4]);
 const user = {id: new Uint8Array([9]), name: 'u', displayName: 'U'};
+const pubKeyCredParams = [{type: 'public-key', alg: -7}];
 
 test('an unknown residentKey counts as absent so requireResidentKey applies', () => {
     const {credentials, posted} = install();
-    credentials.create({publicKey: {challenge, rp: {name: 'x'}, user,
+    credentials.create({publicKey: {challenge, rp: {name: 'x'}, user, pubKeyCredParams,
         authenticatorSelection: {residentKey: 'unknown-value', requireResidentKey: true}}});
-    credentials.create({publicKey: {challenge, rp: {name: 'x'}, user,
+    credentials.create({publicKey: {challenge, rp: {name: 'x'}, user, pubKeyCredParams,
         authenticatorSelection: {residentKey: 'preferred', requireResidentKey: true}}});
     assert.equal(posted[0].options.resident_key, 'required');
     assert.equal(posted[1].options.resident_key, 'preferred');
@@ -48,7 +49,7 @@ test('conditional mediation never posts and settles on abort', async () => {
     for (const op of ['get', 'create']) {
         const controller = new AbortController();
         const pending = credentials[op]({mediation: 'conditional', signal: controller.signal,
-            publicKey: {challenge, rp: {name: 'x'}, user}});
+            publicKey: {challenge, rp: {name: 'x'}, user, pubKeyCredParams}});
         controller.abort();
         await assert.rejects(pending, {name: 'AbortError'});
     }
@@ -85,6 +86,22 @@ test('options are bounded before they are posted', async () => {
     assert.equal(posted.length, 1);
 });
 
+test('a create without a required member is a TypeError and never posts', async () => {
+    const {credentials, posted} = install();
+    const complete = {challenge, rp: {name: 'x'}, user, pubKeyCredParams};
+    for (const publicKey of [
+        {...complete, rp: {}},
+        {...complete, user: {id: user.id, displayName: 'U'}},
+        {...complete, user: {id: user.id, name: 'u'}},
+        {challenge, rp: {name: 'x'}, user},
+    ]) {
+        await assert.rejects(credentials.create({publicKey}), {name: 'TypeError'});
+    }
+    assert.equal(posted.length, 0);
+    credentials.create({publicKey: {...complete, pubKeyCredParams: []}});
+    assert.deepEqual(posted[0].options.algorithms, []);
+});
+
 test('other credential types keep the native API', async () => {
     const {credentials, posted} = install();
     assert.equal(await credentials.get({password: true}), 'native get');
@@ -109,7 +126,7 @@ test('a reply resolves a credential with the page JSON shape', async () => {
 
 test('an error reply rejects with the named DOMException', async () => {
     const {credentials, posted, context} = install();
-    const pending = credentials.create({publicKey: {challenge, rp: {name: 'x'}, user}});
+    const pending = credentials.create({publicKey: {challenge, rp: {name: 'x'}, user, pubKeyCredParams}});
     context.__deliver(JSON.stringify({id: posted[0].id, error: {name: 'InvalidStateError', message: 'excluded'}}));
     await assert.rejects(pending, {name: 'InvalidStateError'});
 });

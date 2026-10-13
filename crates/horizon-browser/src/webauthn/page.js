@@ -66,14 +66,18 @@
     const createOptions = (publicKey) => {
         const rp = publicKey.rp;
         const user = publicKey.user;
-        if (!rp || !user) throw new TypeError("publicKey.rp and publicKey.user are required");
+        // The required dictionary members of PublicKeyCredentialCreationOptions,
+        // as WebIDL checks them in a browser before any authenticator runs.
+        const missing = !rp || rp.name === undefined || !user || user.name === undefined
+            || user.displayName === undefined || publicKey.pubKeyCredParams === undefined;
+        if (missing) throw new TypeError("publicKey is missing a required member");
         const selection = publicKey.authenticatorSelection || {};
         return {
             challenge: encode(publicKey.challenge),
             rp_id: text(rp.id),
             rp_name: text(rp.name),
-            user: { id: encode(user.id), name: text(user.name) || "", display_name: text(user.displayName) || "" },
-            algorithms: Array.from(publicKey.pubKeyCredParams || [])
+            user: { id: encode(user.id), name: text(user.name), display_name: text(user.displayName) },
+            algorithms: Array.from(publicKey.pubKeyCredParams)
                 .filter((parameter) => parameter && parameter.type === "public-key")
                 .map(algorithmOf),
             exclude_credentials: credentialIds(publicKey.excludeCredentials),
