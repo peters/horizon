@@ -168,7 +168,11 @@ impl Account {
             }
             ctx.request_repaint_after(at - now);
         }
-        // A shown list is checked against the signed-in account every little while.
+        // A shown list is checked against the signed-in account every little while; the
+        // timer starts again whenever a list shows and nothing runs.
+        if self.repositories.is_some() && self.check_at.is_none() {
+            self.check_at = Some(now + RETRY);
+        }
         if let Some(at) = self.check_at.filter(|_| self.repositories.is_some()) {
             if now >= at {
                 self.check_at = None;
@@ -319,7 +323,12 @@ impl Account {
                     self.stale = None;
                     self.kept = false;
                     self.listed_for = None;
-                    self.failed = Some(ANOTHER_ACCOUNT.into());
+                    self.retry_at = None;
+                    self.check_at = None;
+                    // Only a request the person made says why it shows nothing.
+                    if !purpose.quiet() {
+                        self.failed = Some(ANOTHER_ACCOUNT.into());
+                    }
                     return None;
                 }
                 // Signed out after all: a kept list is not shown, and the sign-in button is.

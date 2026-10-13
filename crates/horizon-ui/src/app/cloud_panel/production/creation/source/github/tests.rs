@@ -382,7 +382,12 @@ fn a_list_of_an_account_that_another_window_replaced_is_never_shown() {
         assert!(account.poll().is_none());
         assert!(account.repositories.is_none(), "{:?}", account.repositories);
         assert!(account.stale.is_none());
-        assert_eq!(account.failed.as_deref(), Some(ANOTHER_ACCOUNT));
+        let expected = (purpose == Purpose::List).then_some(ANOTHER_ACCOUNT);
+        assert_eq!(
+            account.failed.as_deref(),
+            expected,
+            "only a request of the person's says so"
+        );
     }
 }
 
