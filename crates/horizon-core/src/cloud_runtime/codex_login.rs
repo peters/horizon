@@ -59,7 +59,7 @@ pub fn account(home: &Path) -> Result<Option<Account>> {
 }
 
 /// Signs in with the system browser through `codex login` and returns the account. A
-/// sign-in replaces the earlier login of `home`, which Codex revokes, so clouds holding
+/// sign-in replaces the earlier login of `home`, which is revoked first, so clouds holding
 /// it get the new one when they next connect. Blocks until the browser flow ends; run it
 /// off the UI thread.
 /// # Errors
@@ -70,11 +70,98 @@ pub fn sign_in(home: &Path, cancel: &super::Cancellation) -> std::result::Result
 
 fn sign_in_with(program: &str, home: &Path, cancel: &super::Cancellation) -> std::result::Result<Account, SignInError> {
     private_directory(home)?;
-    let mut command = codex(program, home);
+    remove_abandoned_sign_ins(home);
+    // Codex signs in into a private staging home, removed with it, so a cloud that
+    // connects during the browser flow still gets the login here, and the new login
+    // replaces it in one rename under the lock that clouds and sign-out take.
+    let staging = tempfile::Builder::new()
+        .prefix(".sign-in-")
+        .tempdir_in(home)
+        .map_err(Error::from)?;
+    let mut command = codex(program, staging.path());
     // Codex keeps the login in the file, never the system keyring, so it can be copied.
     command.args(["login", "-c", "cli_auth_credentials_store=\"file\""]);
     run(&mut command, cancel, "ChatGPT sign-in", SIGN_IN)?;
-    account(home)?.ok_or_else(|| SignInError::Codex("Codex finished without a ChatGPT login".into()))
+    let login =
+        read(staging.path())?.ok_or_else(|| SignInError::Codex("Codex finished without a ChatGPT login".into()))?;
+    let _lock = lock(home)?;
+    if cancel.is_cancelled() {
+        return Err(SignInError::Codex("The ChatGPT sign-in was cancelled".into()));
+    }
+    // An earlier login, such as one another Horizon window made, is revoked once the new
+    // one is in place, so a worker that still holds it cannot renew it into a later login
+    // that replaces this one. A file that cannot be read is replaced without revocation.
+    let earlier = read(home).ok().flatten();
+    write_private(home, &login.bytes)?;
+    if let Some(earlier) = earlier {
+        revoke_copy(program, home, &earlier.bytes);
+    }
+    Ok(login.account)
+}
+
+/// Revokes a login that is no longer in `home`, from a private copy that Codex removes.
+fn revoke_copy(program: &str, home: &Path, bytes: &[u8]) {
+    let revoked = tempfile::Builder::new()
+        .prefix(".sign-in-")
+        .tempdir_in(home)
+        .map_err(Error::from)
+        .and_then(|copy| write_private(copy.path(), bytes).map(|()| copy));
+    match revoked {
+        Ok(copy) => revoke(program, copy.path()),
+        Err(error) => tracing::warn!(%error, "could not revoke the earlier ChatGPT login"),
+    }
+}
+
+/// Removes what Horizon left behind when it stopped during a sign-in or a write: staging
+/// homes and unfinished login files, which may hold a login. One younger than a sign-in
+/// may belong to another window. Best effort: what cannot be removed now is tried again
+/// at the next sign-in or sign-out.
+fn remove_abandoned_sign_ins(home: &Path) {
+    let Ok(entries) = std::fs::read_dir(home) else {
+        return;
+    };
+    for entry in entries.filter_map(std::result::Result::ok) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !(name.starts_with(".sign-in-") || name.starts_with(".auth-")) {
+            continue;
+        }
+        let abandoned = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .is_ok_and(|modified| {
+                modified
+                    .elapsed()
+                    .is_ok_and(|age| age > SIGN_IN + Duration::from_mins(5))
+            });
+        if !abandoned {
+            continue;
+        }
+        let removed = if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            std::fs::remove_dir_all(entry.path())
+        } else {
+            std::fs::remove_file(entry.path())
+        };
+        if let Err(error) = removed
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(%error, "could not remove an abandoned ChatGPT sign-in");
+        }
+    }
+}
+
+/// Revokes the login of `home` at `OpenAI` with `codex logout`, which also removes it.
+/// Revocation is a courtesy to the account; without Codex or `OpenAI` it is skipped.
+fn revoke(program: &str, home: &Path) {
+    let mut command = codex(program, home);
+    command.arg("logout");
+    if let Err(error) = run(
+        &mut command,
+        &super::Cancellation::default(),
+        "ChatGPT sign-out",
+        Duration::from_secs(30),
+    ) {
+        tracing::warn!(%error, "codex logout did not revoke the ChatGPT login");
+    }
 }
 
 /// Signs out: `codex logout` revokes the login at `OpenAI` when it can, and the login
@@ -91,24 +178,19 @@ fn sign_out_with(program: &str, home: &Path) -> Result<()> {
     }
     // A cloud connecting now cannot bring the login back after it is gone.
     let _lock = lock(home)?;
-    if read(home)?.is_none() {
-        return Ok(());
-    }
-    let mut command = codex(program, home);
-    command.arg("logout");
-    // Revocation is a courtesy to the account; without Codex or OpenAI the login still goes.
-    if let Err(error) = run(
-        &mut command,
-        &super::Cancellation::default(),
-        "ChatGPT sign-out",
-        Duration::from_secs(30),
-    ) {
-        tracing::warn!(%error, "codex logout did not revoke the ChatGPT login");
+    remove_abandoned_sign_ins(home);
+    // A login file that cannot be read, such as one with open permissions, goes too.
+    match read(home) {
+        Ok(None) if !home.join(FILE).exists() => return Ok(()),
+        Ok(Some(_)) => revoke(program, home),
+        _ => {}
     }
     match std::fs::remove_file(home.join(FILE)) {
-        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
-        _ => Ok(()),
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+        _ => {}
     }
+    // Durable, so a power loss now cannot bring the login back for a later cloud.
+    sync_directory(home)
 }
 
 /// Gives the login in `home` to the worker behind `connection`, as its Codex login, and
@@ -266,8 +348,15 @@ fn write_private(home: &Path, bytes: &[u8]) -> Result<()> {
     file.write_all(bytes)?;
     file.as_file().sync_all()?;
     file.persist(home.join(FILE)).map_err(|error| error.error)?;
+    sync_directory(home)
+}
+
+/// Makes a rename or removal in `home` durable.
+fn sync_directory(home: &Path) -> Result<()> {
     #[cfg(unix)]
     File::open(home)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = home;
     Ok(())
 }
 

@@ -210,14 +210,20 @@ mod codex_cli {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
-    /// A stand-in `codex` that records its arguments and the Codex home it was given.
+    /// A stand-in `codex` that appends each call's arguments to `directory/calls` and keeps
+    /// the `OPENAI_API_KEY` it saw in `directory/env`; `body` runs only for `login`.
     fn fake(directory: &Path, body: &str) -> String {
         let path = directory.join("bin/codex");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let calls = directory.join("calls");
+        let env = directory.join("env");
         std::fs::write(
             &path,
             format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$CODEX_HOME/../args\"\nprintf '%s' \"${{OPENAI_API_KEY-unset}}\" > \"$CODEX_HOME/../env\"\n{body}\n"
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nprintf '%s' \"${{OPENAI_API_KEY-unset}}\" > '{}'\n[ \"$1\" = login ] || {{ {logout} }}\n{body}\n",
+                calls.display(),
+                env.display(),
+                logout = if body.contains("exit 1") { "echo 'Error revoking: synthetic' >&2; exit 1;" } else { "exit 0;" },
             ),
         )
         .unwrap();
@@ -225,27 +231,58 @@ mod codex_cli {
         path.to_str().unwrap().to_owned()
     }
 
+    fn calls(directory: &Path) -> Vec<String> {
+        std::fs::read_to_string(directory.join("calls"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
     #[test]
     fn sign_in_runs_codex_login_into_the_private_home_with_file_storage() {
         let root = tempfile::tempdir().unwrap();
         let home = root.path().join("codex");
+        private_directory(&home).unwrap();
+        // An earlier login, as another Horizon window may have left it.
+        let earlier = login("a", Some("2026-09-01T08:00:00Z"), "synthetic-earlier");
+        stored(&home, &earlier);
+        let held = root.path().join("earlier.json");
+        std::fs::write(&held, &earlier).unwrap();
         let source = root.path().join("login.json");
-        std::fs::write(&source, login("a", Some("2026-10-01T08:00:00Z"), "synthetic")).unwrap();
+        let new = login("a", Some("2026-10-01T08:00:00Z"), "synthetic");
+        std::fs::write(&source, &new).unwrap();
+        // Codex signs in into a staging home: the login of `home` stays as it is meanwhile.
         let program = fake(
             root.path(),
             &format!(
-                "echo 'Starting local login server' >&2\numask 077\ncp '{}' \"$CODEX_HOME/auth.json\"",
+                "echo 'Starting local login server' >&2\numask 077\ncmp -s \"$CODEX_HOME/../auth.json\" '{}' && touch \"$CODEX_HOME/../earlier-kept\"\ncp '{}' \"$CODEX_HOME/auth.json\"",
+                held.display(),
                 source.display()
             ),
         );
         let account = sign_in_with(&program, &home, &crate::cloud_runtime::Cancellation::default()).unwrap();
         assert_eq!(account.email.as_deref(), Some("person@example.test"));
+        // The earlier login is revoked last, with `codex logout`.
         assert_eq!(
-            std::fs::read_to_string(root.path().join("args")).unwrap().trim(),
-            "login -c cli_auth_credentials_store=\"file\""
+            calls(root.path()),
+            ["login -c cli_auth_credentials_store=\"file\"", "logout"]
         );
         assert_eq!(std::fs::read_to_string(root.path().join("env")).unwrap(), "unset");
+        assert!(home.join("earlier-kept").exists());
+        assert_eq!(std::fs::read(home.join(FILE)).unwrap(), new);
+        assert_eq!(
+            std::fs::metadata(home.join(FILE)).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         assert_eq!(std::fs::metadata(&home).unwrap().permissions().mode() & 0o777, 0o700);
+        // The staging home goes with the sign-in.
+        let left: Vec<_> = std::fs::read_dir(&home)
+            .unwrap()
+            .filter_map(|entry| entry.unwrap().file_name().into_string().ok())
+            .filter(|name| name.starts_with(".sign-in-"))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
     }
 
     #[test]
@@ -305,20 +342,53 @@ mod codex_cli {
         private_directory(&home).unwrap();
         stored(&home, &login("a", None, "synthetic"));
         // A failed revocation leaves the file to Horizon; the sign-out still ends here.
-        let program = fake(root.path(), "echo 'Error revoking: synthetic' >&2\nexit 1");
+        let program = fake(root.path(), "exit 1");
         sign_out_with(&program, &home).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(root.path().join("args")).unwrap().trim(),
-            "logout"
-        );
+        assert_eq!(calls(root.path()), ["logout"]);
         assert_eq!(account(&home).unwrap(), None);
         // Without Codex the login goes too.
         stored(&home, &login("a", None, "synthetic"));
         sign_out_with(root.path().join("no-codex").to_str().unwrap(), &home).unwrap();
         assert_eq!(account(&home).unwrap(), None);
         // Without a login there is nothing to run.
-        std::fs::remove_file(root.path().join("args")).unwrap();
         sign_out_with(&program, &home).unwrap();
-        assert!(!root.path().join("args").exists());
+        assert_eq!(calls(root.path()), ["logout"]);
+    }
+
+    #[test]
+    fn abandoned_sign_ins_go_and_one_under_way_stays() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("codex");
+        private_directory(&home).unwrap();
+        let abandoned = home.join(".sign-in-abandoned");
+        let current = home.join(".sign-in-current");
+        for staging in [&abandoned, &current] {
+            std::fs::create_dir(staging).unwrap();
+            std::fs::write(staging.join(FILE), b"synthetic").unwrap();
+        }
+        let unfinished = home.join(".auth-unfinished");
+        std::fs::write(&unfinished, b"synthetic").unwrap();
+        let old = std::time::SystemTime::now() - SIGN_IN - Duration::from_mins(6);
+        std::fs::File::open(&abandoned).unwrap().set_modified(old).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&unfinished)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        sign_out_with(root.path().join("no-codex").to_str().unwrap(), &home).unwrap();
+        assert!(!abandoned.exists() && !unfinished.exists());
+        assert!(current.join(FILE).exists());
+    }
+
+    #[test]
+    fn a_login_file_others_can_read_still_signs_out() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("codex");
+        private_directory(&home).unwrap();
+        stored(&home, &login("a", None, "synthetic"));
+        std::fs::set_permissions(home.join(FILE), std::fs::Permissions::from_mode(0o644)).unwrap();
+        sign_out_with(root.path().join("no-codex").to_str().unwrap(), &home).unwrap();
+        assert!(!home.join(FILE).exists());
     }
 }
