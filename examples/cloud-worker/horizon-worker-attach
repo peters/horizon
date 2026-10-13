@@ -51,7 +51,8 @@ STATE = ('pane_id', 'pane_width', 'pane_height', 'history_size', 'cursor_x', 'cu
          'mouse_button_flag', 'mouse_any_flag', 'mouse_sgr_flag', 'mouse_utf8_flag', 'host', 'host_short',
          # Last, because a title can contain spaces.
          'pane_title')
-PANE = re.compile(r'%[0-9]{1,9}')
+# As long as horizon-cloud-worker accepts a pane ID.
+PANE = re.compile(r'%[0-9]{1,19}')
 NUMBERS = ('_width', '_height', '_size', '_x', '_y', '_flag', '_on', '_upper', '_lower')
 # Private modes that this terminal keeps in its own state: tmux adds paste brackets itself and
 # does not pass focus, color scheme or in-band resize reports on.
