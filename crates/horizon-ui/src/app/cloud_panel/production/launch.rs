@@ -131,8 +131,8 @@ impl HorizonApp {
             self.cloud_prototype.error = None;
         }
         let form = &mut self.cloud_prototype.production;
-        let seen = std::sync::Arc::default();
-        form.launch.reread.read = std::sync::Arc::clone(&seen);
+        let slot = std::sync::Arc::default();
+        form.launch.reread.read = std::sync::Arc::clone(&slot);
         let root = self
             .cloud_prototype
             .root
@@ -148,7 +148,7 @@ impl HorizonApp {
         std::thread::spawn(move || {
             // Taken first, so an edit made during the read calls for another one.
             let fingerprint = cloud_runtime::repository::launch::fingerprint(&repository, &cancel);
-            *seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(fingerprint);
+            *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(fingerprint);
             let runner = cloud_runtime::command::Runner {
                 cancel: &cancel,
                 emit: &|_| {},

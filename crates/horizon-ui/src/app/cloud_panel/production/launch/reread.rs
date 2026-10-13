@@ -123,10 +123,10 @@ pub(super) fn busy(form: &super::super::Production) -> bool {
         || super::super::repository_setup::running_here(form)
 }
 
-/// Keeps a storage size the person changed in the dialog while the file's own value for it
-/// stays what it was, and remembers `config` as read.
+/// Keeps the storage the person changed in the dialog for a profile while the file's storage
+/// for it stays what it was, and remembers `config` as read.
 pub(super) fn keep_edits(state: &mut State, shown: Option<&CloudConfig>, config: &mut CloudConfig) {
-    let read = std::mem::replace(&mut state.as_read, Some(config.clone()));
+    let read = state.as_read.replace(config.clone());
     let (Some(shown), Some(read)) = (shown, read) else {
         return;
     };

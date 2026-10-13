@@ -44,7 +44,7 @@ pub(super) fn apply(
     };
     runner.cancel.check()?;
     match (file, committed) {
-        (WorkingFile::Valid(working), committed) => merge(committed, working),
+        (WorkingFile::Valid(working), committed) => merge(committed.as_ref(), working),
         (WorkingFile::Missing, Some(committed)) => Ok((committed, vec![MISSING.into()])),
         (WorkingFile::Invalid, Some(committed)) => Ok((committed, vec![INVALID.into()])),
         (WorkingFile::Missing, None) => Err(Error::Invalid(super::MISSING_CONFIG)),
@@ -55,9 +55,9 @@ pub(super) fn apply(
 /// `working` with the commit's build, image and capabilities for each profile that builds
 /// in either file, and the commit's source and companions. A profile only in the working
 /// copy is offered when it runs an existing image.
-fn merge(committed: Option<CloudConfig>, working: CloudConfig) -> super::super::Result<(CloudConfig, Vec<String>)> {
+fn merge(committed: Option<&CloudConfig>, working: CloudConfig) -> super::super::Result<(CloudConfig, Vec<String>)> {
     let empty = BTreeMap::new();
-    let committed_profiles = committed.as_ref().map_or(&empty, |config| &config.profiles);
+    let committed_profiles = committed.map_or(&empty, |config| &config.profiles);
     let mut ignored = Vec::new();
     let mut unoffered = Vec::new();
     let mut profiles = BTreeMap::new();
@@ -88,7 +88,6 @@ fn merge(committed: Option<CloudConfig>, working: CloudConfig) -> super::super::
         }
     }
     let (source, companions) = committed
-        .as_ref()
         .map(|config| (config.source.clone(), config.companions.clone()))
         .unwrap_or_default();
     note_field(&mut ignored, "source", source != working.source);
@@ -103,7 +102,7 @@ fn merge(committed: Option<CloudConfig>, working: CloudConfig) -> super::super::
     if !unoffered.is_empty() {
         notes.push(unoffered_note(&unoffered));
     }
-    let fallback = |mut notes: Vec<String>, note: &str| match committed.clone() {
+    let fallback = |mut notes: Vec<String>, note: &str| match committed.cloned() {
         Some(committed) => {
             notes.push(note.into());
             Ok((committed, notes))
@@ -118,7 +117,7 @@ fn merge(committed: Option<CloudConfig>, working: CloudConfig) -> super::super::
     if profiles.values().any(|profile| profile.validate(false).is_err()) {
         return fallback(Vec::new(), MISMATCH);
     }
-    let default = [Some(&working.default), committed.as_ref().map(|config| &config.default)]
+    let default = [Some(&working.default), committed.map(|config| &config.default)]
         .into_iter()
         .flatten()
         .find(|name| profiles.contains_key(*name))
