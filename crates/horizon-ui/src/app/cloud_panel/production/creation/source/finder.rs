@@ -53,6 +53,8 @@ pub(super) enum Pick {
 #[derive(Default)]
 pub(super) struct Finder {
     checkouts: Option<Vec<Checkout>>,
+    /// Each checkout's title and detail, made once when the checkouts arrive.
+    labels: Vec<(String, String)>,
     scan: Option<Receiver<Vec<Checkout>>>,
     /// The typed path folders were last listed for, and their answer: each folder and
     /// whether it holds a repository.
@@ -125,6 +127,10 @@ impl Finder {
         if let Some(scan) = &self.scan {
             match scan.try_recv() {
                 Ok(found) => {
+                    self.labels = found
+                        .iter()
+                        .map(|checkout| (checkout_title(checkout), checkout_detail(checkout)))
+                        .collect();
                     self.checkouts = Some(found);
                     self.scan = None;
                 }
@@ -197,7 +203,15 @@ impl Finder {
                     folder_rows(&key.0, &self.folders)
                 }
             } else {
-                search_rows(&key.0, self.checkouts.as_deref().unwrap_or_default(), repositories)
+                let checkouts = self.checkouts.as_deref().unwrap_or_default();
+                // Tests set checkouts without labels; they are made here then.
+                if self.labels.len() != checkouts.len() {
+                    self.labels = checkouts
+                        .iter()
+                        .map(|checkout| (checkout_title(checkout), checkout_detail(checkout)))
+                        .collect();
+                }
+                search_rows(&key.0, checkouts, &self.labels, repositories)
             };
             // A new query starts at the top; new rows for the same query keep the highlight on
             // the row it was on, wherever that row moved.
@@ -205,7 +219,7 @@ impl Finder {
                 self.highlighted = 0;
                 self.moved = false;
             } else if let Some(kind) = previous {
-                self.highlighted = self.rows.iter().position(|row| row.kind == kind).unwrap_or(0);
+                self.highlighted = self.rows.iter().position(|row| row.kind.same_place(&kind)).unwrap_or(0);
             }
             self.highlighted = self.highlighted.min(self.rows.len().saturating_sub(1));
             self.made_for = Some(key);
@@ -251,6 +265,20 @@ fn names_a_host(text: &str) -> bool {
         .split('/')
         .next()
         .is_some_and(|first| first.contains('.') && !first.starts_with('.'))
+}
+
+impl Kind {
+    /// Whether two results are the same place, whatever their badges say now.
+    fn same_place(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Local { path: a, .. } | Self::Folder { path: a, .. },
+                Self::Local { path: b, .. } | Self::Folder { path: b, .. },
+            ) => a == b,
+            (Self::GitHub { name: a }, Self::GitHub { name: b }) => a == b,
+            _ => false,
+        }
+    }
 }
 
 /// What choosing `row` does; `open` (Tab) goes into a folder instead of using it.
@@ -314,24 +342,22 @@ fn ago(when: SystemTime) -> Option<String> {
 
 /// Checkouts and repositories that match `query`, best first. Before anything is typed the
 /// most recently changed checkouts lead, then every repository not cloned yet.
-fn search_rows(query: &str, checkouts: &[Checkout], repositories: &[String]) -> Vec<Row> {
+fn search_rows(query: &str, checkouts: &[Checkout], labels: &[(String, String)], repositories: &[String]) -> Vec<Row> {
     let listed: HashSet<&str> = repositories.iter().map(String::as_str).collect();
     let mut cloned = HashSet::new();
     let mut scored: Vec<(i32, Row)> = Vec::new();
-    for (recency, checkout) in checkouts.iter().enumerate() {
+    for (recency, (checkout, (title, detail))) in checkouts.iter().zip(labels).enumerate() {
         let name = checkout.origin.as_deref().and_then(github_name);
         let github = name.as_deref().is_some_and(|name| listed.contains(name));
         if github && let Some(name) = name {
             cloned.insert(name);
         }
-        let title = checkout_title(checkout);
-        let detail = checkout_detail(checkout);
         let (score, marks) = if query.is_empty() {
             if recency >= RECENT {
                 continue;
             }
             (-i32::try_from(recency).unwrap_or(i32::MAX), Vec::new())
-        } else if let Some(found) = fuzzy::score(query, &title) {
+        } else if let Some(found) = fuzzy::score(query, title) {
             // Being on this computer already is worth a little.
             (found.score + 8, found.positions)
         } else if dir_search::abbreviate_home(&checkout.path)
@@ -351,8 +377,8 @@ fn search_rows(query: &str, checkouts: &[Checkout], repositories: &[String]) -> 
         scored.push((
             score,
             Row {
-                title,
-                detail,
+                title: title.clone(),
+                detail: detail.clone(),
                 marks,
                 kind,
             },

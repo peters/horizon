@@ -3,6 +3,15 @@ use crate::test_egui::DiscardTextures as _;
 use horizon_core::dir_search::Checkout;
 use std::path::PathBuf;
 
+/// The search rows for `query`, with the labels the finder makes when checkouts arrive.
+fn rows_for(query: &str, checkouts: &[Checkout], repositories: &[String]) -> Vec<super::Row> {
+    let labels: Vec<(String, String)> = checkouts
+        .iter()
+        .map(|checkout| (super::checkout_title(checkout), super::checkout_detail(checkout)))
+        .collect();
+    search_rows(query, checkouts, &labels, repositories)
+}
+
 fn checkout(path: &str, origin: Option<&str>) -> Checkout {
     Checkout {
         path: PathBuf::from(path),
@@ -35,7 +44,7 @@ fn paths_links_and_words_are_told_apart() {
 #[test]
 fn a_cloned_repository_shows_once_as_the_checkout_with_both_badges() {
     let checkouts = [checkout("/home/x/github/acme/web", Some("git@github.com:Acme/web.git"))];
-    let rows = search_rows("web", &checkouts, &names(&["acme/web", "acme/website"]));
+    let rows = rows_for("web", &checkouts, &names(&["acme/web", "acme/website"]));
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].title, "Acme/web", "as the checkout's own remote spells it");
     assert!(
@@ -51,7 +60,7 @@ fn before_typing_recent_checkouts_lead_then_the_account_list() {
     let checkouts: Vec<Checkout> = (0..10)
         .map(|n| checkout(&format!("/home/x/code/tool-{n}"), None))
         .collect();
-    let rows = search_rows("", &checkouts, &names(&["acme/api"]));
+    let rows = rows_for("", &checkouts, &names(&["acme/api"]));
     assert_eq!(rows.len(), 7, "six recent checkouts and the repository");
     assert_eq!(rows[0].title, "tool-0");
     assert!(matches!(rows[6].kind, Kind::GitHub { .. }));
@@ -59,7 +68,7 @@ fn before_typing_recent_checkouts_lead_then_the_account_list() {
 
 #[test]
 fn choosing_a_result_uses_a_checkout_clones_a_repository_or_opens_a_folder() {
-    let rows = search_rows("api", &[], &names(&["acme/api"]));
+    let rows = rows_for("api", &[], &names(&["acme/api"]));
     assert_eq!(pick(&rows[0], false), Pick::Text("https://github.com/acme/api".into()));
     let repo = PathBuf::from("/x/repo");
     let plain = PathBuf::from("/x/plain");
@@ -85,9 +94,9 @@ fn a_link_with_a_host_is_no_search() {
 #[test]
 fn letters_scattered_over_a_path_find_nothing() {
     let checkouts = [checkout("/home/x/projects/tool", None)];
-    assert!(search_rows("wxyz", &checkouts, &[]).is_empty());
+    assert!(rows_for("wxyz", &checkouts, &[]).is_empty());
     assert_eq!(
-        search_rows("projects/to", &checkouts, &[]).len(),
+        rows_for("projects/to", &checkouts, &[]).len(),
         1,
         "a run in the path still finds it"
     );
@@ -172,8 +181,8 @@ fn shift_tab_keeps_its_way_back() {
 fn a_branch_or_an_age_finds_no_checkout() {
     let mut checkout = checkout("/home/x/code/tool", None);
     checkout.touched = Some(std::time::SystemTime::now() - std::time::Duration::from_secs(600));
-    assert!(search_rows("main", std::slice::from_ref(&checkout), &[]).is_empty());
-    assert!(search_rows("ago", std::slice::from_ref(&checkout), &[]).is_empty());
+    assert!(rows_for("main", std::slice::from_ref(&checkout), &[]).is_empty());
+    assert!(rows_for("ago", std::slice::from_ref(&checkout), &[]).is_empty());
 }
 
 #[test]

@@ -155,7 +155,9 @@ fn list(ui: &mut Ui, state: &mut State, rows: &[Row]) -> Option<Pick> {
     if let Some(index) = hovered
         && ui.input(|input| input.pointer.delta() != Vec2::ZERO)
     {
+        // A row under the moving pointer is chosen as one picked with the arrows.
         state.finder.highlighted = index;
+        state.finder.moved = true;
     }
     clicked
 }

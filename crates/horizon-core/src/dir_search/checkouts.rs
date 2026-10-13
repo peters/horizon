@@ -15,6 +15,18 @@ const LIMIT: usize = 2000;
 /// The most folders read while looking, so a huge home never keeps the search busy.
 const VISITS: usize = 50_000;
 
+/// Home folders that macOS guards with a privacy prompt; opening New cloud never asks.
+const GUARDED: [&str; 8] = [
+    "Desktop",
+    "Documents",
+    "Downloads",
+    "Pictures",
+    "Movies",
+    "Music",
+    "Library",
+    "Public",
+];
+
 /// Folders that usually hold checkouts, read first so a full home reaches them.
 const FIRST: [&str; 5] = ["github", "code", "src", "projects", "dev"];
 
@@ -61,6 +73,14 @@ pub fn checkouts(root: &Path) -> Vec<Checkout> {
         // place is remembered, so two links to one folder, or a loop, are read one time.
         let mut children: Vec<PathBuf> = entries
             .flatten()
+            // Hidden folders, and on macOS the folders it guards with a privacy prompt, are
+            // passed by before a link among them is remembered.
+            .filter(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                let guarded = depth == 0 && cfg!(target_os = "macos") && GUARDED.contains(&name.as_ref());
+                !name.starts_with('.') && !guarded
+            })
             .filter(|entry| match entry.file_type() {
                 Ok(kind) if kind.is_dir() => true,
                 Ok(kind) if kind.is_symlink() => {
@@ -70,11 +90,6 @@ pub fn checkouts(root: &Path) -> Vec<Checkout> {
                 _ => false,
             })
             .map(|entry| entry.path())
-            .filter(|path| {
-                path.file_name()
-                    .map(|name| name.to_string_lossy())
-                    .is_some_and(|name| !name.starts_with('.'))
-            })
             .collect();
         children.sort_by_key(|path| {
             let name = path
