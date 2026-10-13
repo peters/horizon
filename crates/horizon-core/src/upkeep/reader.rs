@@ -28,10 +28,13 @@ pub(super) type Reading = Result<Status, String>;
 /// Looks at the document when asked; [`spawn`] asks every two seconds on its own thread.
 pub(super) struct Reader {
     path: PathBuf,
-    /// Whether the document was looked at before.
-    looked: bool,
-    /// The modification time at the last look, `None` for a missing file.
-    modified: Option<SystemTime>,
+    /// Whether `seen` holds a look. It is false before the first look and after a read
+    /// that failed, so that read is tried again.
+    settled: bool,
+    /// The file's modification time and length at the last settled look, `None` when missing.
+    seen: Option<(SystemTime, u64)>,
+    /// The last error sent, so a read that keeps failing the same way is sent once.
+    last_error: Option<String>,
     /// Whether a valid status was read before.
     read_once: bool,
 }
@@ -40,30 +43,48 @@ impl Reader {
     pub(super) fn new(path: PathBuf) -> Self {
         Self {
             path,
-            looked: false,
-            modified: None,
+            settled: false,
+            seen: None,
+            last_error: None,
             read_once: false,
         }
     }
 
     /// A new reading when the document changed, appeared or went since the last look.
+    /// A file is the same while its modification time and length are; a read that
+    /// failed is tried again at the next look.
     pub(super) fn check(&mut self) -> Option<Reading> {
-        let modified = std::fs::metadata(&self.path).and_then(|meta| meta.modified()).ok();
-        if self.looked && self.modified == modified {
+        let found = std::fs::metadata(&self.path)
+            .ok()
+            .map(|meta| (meta.modified().unwrap_or(SystemTime::UNIX_EPOCH), meta.len()));
+        if self.settled && self.seen == found {
             return None;
         }
-        self.looked = true;
-        self.modified = modified;
-        if modified.is_none() {
-            return Some(Err(if self.read_once {
-                "The Upkeep status file is gone.".into()
+        let reading = if found.is_none() {
+            self.settled = true;
+            Err(if self.read_once {
+                "The Upkeep status file is gone.".to_string()
             } else {
-                "Upkeep has not reported yet.".into()
-            }));
+                "Upkeep has not reported yet.".to_string()
+            })
+        } else {
+            let reading = read_status(&self.path);
+            self.settled = reading.is_ok();
+            reading
+        };
+        self.seen = found;
+        match reading {
+            Ok(status) => {
+                self.read_once = true;
+                self.last_error = None;
+                Some(Ok(status))
+            }
+            Err(error) if self.last_error.as_ref() == Some(&error) => None,
+            Err(error) => {
+                self.last_error = Some(error.clone());
+                Some(Err(error))
+            }
         }
-        let reading = read_status(&self.path);
-        self.read_once |= reading.is_ok();
-        Some(reading)
     }
 }
 
@@ -91,24 +112,27 @@ pub(super) fn spawn(path: PathBuf, alive: Arc<AtomicBool>) -> Option<Receiver<Re
 fn read_status(path: &Path) -> Reading {
     let file = std::fs::File::open(path).map_err(|error| format!("The Upkeep status cannot be read: {error}"))?;
     // The limit holds even when the file grows while it is read.
-    let mut text = String::new();
+    let mut bytes = Vec::new();
     file.take(STATUS_LIMIT + 1)
-        .read_to_string(&mut text)
+        .read_to_end(&mut bytes)
         .map_err(|error| format!("The Upkeep status cannot be read: {error}"))?;
-    if text.len() as u64 > STATUS_LIMIT {
+    if bytes.len() as u64 > STATUS_LIMIT {
         return Err("The Upkeep status is too large to read.".into());
     }
     let mut status: Status =
-        serde_json::from_str(&text).map_err(|error| format!("The Upkeep status is not valid: {error}"))?;
+        serde_json::from_slice(&bytes).map_err(|error| format!("The Upkeep status is not valid: {error}"))?;
     bound(&mut status);
     Ok(status)
 }
 
-/// Keeps the newest entries of each list and clips each text, so a large document
-/// cannot make every frame slow.
+/// Puts runs and activity in time order, keeps the newest entries of each list and
+/// clips each text, so a large document cannot make every frame slow.
 fn bound(status: &mut Status) {
+    status.runs.sort_by_key(|run| run.started_at);
     keep_last(&mut status.runs, MAX_RUNS);
+    status.activity.sort_by_key(|entry| entry.at);
     keep_last(&mut status.activity, MAX_ACTIVITY);
+    status.pull_requests.sort_by_key(|pr| std::cmp::Reverse(pr.updated_at));
     status.pull_requests.truncate(MAX_PULL_REQUESTS);
     status.repositories.truncate(MAX_REPOSITORIES);
     for text in [
@@ -165,8 +189,6 @@ mod tests {
         assert_eq!(reader.check().unwrap().unwrap().agent, "codex");
         assert!(reader.check().is_none());
         std::fs::write(&path, "{").unwrap();
-        let file = std::fs::File::options().write(true).open(&path).unwrap();
-        file.set_modified(SystemTime::now() + Duration::from_secs(5)).unwrap();
         assert!(
             reader
                 .check()
@@ -174,8 +196,53 @@ mod tests {
                 .unwrap_err()
                 .starts_with("The Upkeep status is not valid")
         );
+        assert!(reader.check().is_none(), "the same failure is sent once");
         std::fs::remove_file(&path).unwrap();
         assert_eq!(reader.check().unwrap().unwrap_err(), "The Upkeep status file is gone.");
+    }
+
+    #[test]
+    fn a_failed_read_is_tried_again_even_when_the_file_looks_the_same() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("status.json");
+        let mut reader = Reader::new(path.clone());
+        // The worker wrote part of the document; the rest lands with the same time and length.
+        std::fs::write(&path, r#"{"agent":"cod"#).unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert!(reader.check().unwrap().is_err());
+        std::fs::write(&path, r#"{"agent":"c"}"#).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        assert_eq!(reader.check().unwrap().unwrap().agent, "c");
+    }
+
+    #[test]
+    fn runs_and_activity_are_put_in_time_order_before_the_newest_are_kept() {
+        let mut status: Status = serde_json::from_str(
+            r#"{"runs":[{"started_at":"2026-10-13T12:00:00Z","merged":2},{"started_at":"2026-10-13T10:00:00Z","merged":1}],
+                "activity":[{"at":"2026-10-13T12:00:00Z","text":"b"},{"at":"2026-10-13T10:00:00Z","text":"a"}]}"#,
+        )
+        .unwrap();
+        bound(&mut status);
+        assert_eq!(status.runs.last().map(|run| run.merged), Some(2));
+        assert_eq!(status.activity.last().map(|entry| entry.text.as_str()), Some("b"));
+    }
+
+    #[test]
+    fn a_document_cut_inside_a_character_at_the_limit_is_too_large() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("status.json");
+        let mut text = " ".repeat(usize::try_from(STATUS_LIMIT).unwrap() - 1);
+        text.push('é');
+        std::fs::write(&path, text).unwrap();
+        assert_eq!(
+            read_status(&path).unwrap_err(),
+            "The Upkeep status is too large to read."
+        );
     }
 
     #[test]

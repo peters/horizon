@@ -47,13 +47,19 @@ The board guarantees:
   requests, the newest 100 runs, the newest 100 activity lines and 1,000 repository
   names, and it cuts each text to 300 characters.
 - It parses the document into a fixed schema and never runs anything from it.
-  Unknown fields are ignored. A state that this Horizon does not know shows as
-  **Other**, and an unknown check state as **No checks**.
+  Unknown fields are ignored. A field of the wrong type falls back to its default,
+  and a list entry that does not parse (for example a pull request without a
+  repository or number) is left out. A state that this Horizon does not know shows
+  as **Other**, and an unknown check state as **No checks**.
+- It puts runs and activity lines in time order before it keeps the newest, so the
+  document can list them in any order. Each hour's bar combines all runs that started
+  in that hour, and the merged total counts the same runs.
 - A row opens a page only when its URL is exactly
   `https://github.com/<owner>/<name>/pull/<number>` for the row's own repository and
   number, and the repository is a plain `owner/name`. Any other URL opens nothing.
 - When a newer document is not valid or the file is gone, the board keeps the last
-  valid status and says why in yellow.
+  valid status and says why in yellow. A read that failed is tried again every two
+  seconds, also when the file's time and length did not change.
 
 The board does not guarantee that the status is true. The agent writes it, and an
 agent can be wrong. Check a merge on GitHub before you act on it.

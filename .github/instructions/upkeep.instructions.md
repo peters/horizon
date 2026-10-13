@@ -16,7 +16,9 @@ times far in the past or the future, and URLs to other sites. Check that:
 - No file read, parse or other blocking work on the status runs on the UI thread.
 - The size limit and the list and text bounds apply before the board draws anything.
 - Arithmetic over counts from the document cannot overflow or panic.
-- An unknown enum value never makes the whole document invalid.
+- An unknown enum value, a field of the wrong type or one broken list entry never makes
+  the whole document invalid.
+- Nothing assumes the order of lists in the document.
 - Only `PullRequest::github_url` decides which page opens, and it accepts only the
   exact GitHub pull request page of a plain `owner/name` repository.
 

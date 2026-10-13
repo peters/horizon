@@ -18,42 +18,43 @@ mod reader;
 /// The time crate, so panels that show these times need no dependency of their own.
 pub use ::time;
 
-/// What the agent reports. Unknown fields are ignored so the worker can add some.
+/// What the agent reports. Unknown fields are ignored so the worker can add some; a field of
+/// the wrong type falls back to its default, and a list entry that does not parse is left out.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Status {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub agent: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub worker: Worker,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub schedule: Schedule,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub repositories: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_list")]
     pub runs: Vec<Run>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_list")]
     pub pull_requests: Vec<PullRequest>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_list")]
     pub activity: Vec<Activity>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Worker {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub location: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub state: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Schedule {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub every_minutes: u32,
-    #[serde(default, deserialize_with = "rfc3339_option")]
+    #[serde(default, deserialize_with = "lenient_time")]
     pub next_run_at: Option<OffsetDateTime>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub paused: bool,
 }
 
@@ -74,16 +75,16 @@ pub enum RunOutcome {
 pub struct Run {
     #[serde(deserialize_with = "rfc3339")]
     pub started_at: OffsetDateTime,
-    #[serde(default, deserialize_with = "rfc3339_option")]
+    #[serde(default, deserialize_with = "lenient_time")]
     pub finished_at: Option<OffsetDateTime>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub outcome: RunOutcome,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub merged: u32,
 }
 
 /// Where a pull request stands, as the agent sees it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PrState {
     /// The agent cannot move it and a person must look.
@@ -98,6 +99,7 @@ pub enum PrState {
     Ready,
     Merged,
     /// A state this Horizon does not know.
+    #[default]
     #[serde(other)]
     Other,
 }
@@ -149,16 +151,19 @@ pub enum Checks {
 pub struct PullRequest {
     pub repository: String,
     pub number: u64,
+    #[serde(default, deserialize_with = "lenient")]
     pub title: String,
+    #[serde(default, deserialize_with = "lenient")]
     pub url: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub author: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub checks: Checks,
+    #[serde(default, deserialize_with = "lenient")]
     pub state: PrState,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub note: String,
-    #[serde(default, deserialize_with = "rfc3339_option")]
+    #[serde(default, deserialize_with = "lenient_time")]
     pub updated_at: Option<OffsetDateTime>,
 }
 
@@ -306,10 +311,37 @@ fn rfc3339<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<OffsetDa
     OffsetDateTime::parse(&text, &Rfc3339).map_err(serde::de::Error::custom)
 }
 
-fn rfc3339_option<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<OffsetDateTime>, D::Error> {
-    let text = Option::<String>::deserialize(deserializer)?;
-    text.map(|text| OffsetDateTime::parse(&text, &Rfc3339).map_err(serde::de::Error::custom))
-        .transpose()
+/// A value of the wrong type is the field's default, so one odd field does not hide the
+/// whole status.
+fn lenient<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(T::deserialize(value).unwrap_or_default())
+}
+
+/// An RFC 3339 time, or `None` for anything else.
+fn lenient_time<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<OffsetDateTime>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value.as_str().and_then(parse_time))
+}
+
+/// The entries that parse; the others are left out.
+fn lenient_list<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let serde_json::Value::Array(entries) = value else {
+        return Ok(Vec::new());
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| T::deserialize(entry).ok())
+        .collect())
 }
 
 /// Parses an RFC 3339 time, for tests and fixtures.
@@ -363,6 +395,26 @@ mod tests {
         assert_eq!(status.runs[0].outcome, RunOutcome::Other);
         assert_eq!(status.pull_requests[0].state, PrState::Other);
         assert_eq!(status.pull_requests[0].checks, Checks::None);
+    }
+
+    #[test]
+    fn odd_fields_fall_back_and_broken_entries_are_left_out() {
+        let status: Status = serde_json::from_str(
+            r#"{"agent":7,"schedule":{"every_minutes":-1,"next_run_at":"","paused":"yes"},
+                "runs":[{"started_at":"2026-10-13T10:00:00Z","merged":5000000000},{"merged":1}],
+                "pull_requests":[{"repository":"o/r","number":1,"checks":null},{"title":"no repository"}],
+                "activity":"none"}"#,
+        )
+        .unwrap();
+        assert_eq!(status.agent, "");
+        assert_eq!(status.schedule.every_minutes, 0);
+        assert!(status.schedule.next_run_at.is_none() && !status.schedule.paused);
+        assert_eq!(status.runs.len(), 1);
+        assert_eq!(status.runs[0].merged, 0);
+        assert_eq!(status.pull_requests.len(), 1);
+        assert_eq!(status.pull_requests[0].state, PrState::Other);
+        assert_eq!(status.pull_requests[0].checks, Checks::None);
+        assert!(status.activity.is_empty());
     }
 
     #[test]

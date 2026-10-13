@@ -60,11 +60,12 @@ fn bars(ui: &mut Ui, status: &Status, now: OffsetDateTime) {
         ui.spacing_mut().item_spacing.y = 4.0;
         let this_hour = start_of_hour(now);
         let first = this_hour - time::Duration::hours(HOURS - 1);
+        let end = this_hour + time::Duration::hours(1);
         // The same runs as the bars, summed without overflow: the counts are untrusted.
         let merged = status
             .runs
             .iter()
-            .filter(|run| run.started_at >= first)
+            .filter(|run| run.started_at >= first && run.started_at < end)
             .fold(0_u32, |total, run| total.saturating_add(run.merged));
         ui.horizontal(|ui| {
             super::caption(ui, "Last 24 hours");
@@ -84,12 +85,14 @@ fn bars(ui: &mut Ui, status: &Status, now: OffsetDateTime) {
             let index = f32::from(u8::try_from(slot).unwrap_or(0));
             let x = rect.min.x + index * (bar_width + BAR_GAP);
             let bar = Rect::from_min_size(Pos2::new(x, rect.min.y), Vec2::new(bar_width, BAR_HEIGHT));
-            let run = status
+            let runs: Vec<&Run> = status
                 .runs
                 .iter()
-                .find(|run| run.started_at >= hour && run.started_at < hour + time::Duration::hours(1));
-            paint_bar(ui, bar, run);
-            let tip = tooltip(hour, run);
+                .filter(|run| run.started_at >= hour && run.started_at < hour + time::Duration::hours(1))
+                .collect();
+            let summary = Hour::of(&runs);
+            paint_bar(ui, bar, summary);
+            let tip = tooltip(hour, &runs, summary);
             ui.interact(bar, ui.id().with(("upkeep-hour", slot)), Sense::hover())
                 .on_hover_text(tip);
         }
@@ -112,14 +115,41 @@ fn start_of_hour(now: OffsetDateTime) -> OffsetDateTime {
     now.replace_time(time::Time::from_hms(now.hour(), 0, 0).unwrap_or(time::Time::MIDNIGHT))
 }
 
-fn paint_bar(ui: &Ui, bar: Rect, run: Option<&Run>) {
+/// What the bar of one hour shows: the most telling outcome of its runs and their merges.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Hour {
+    outcome: RunOutcome,
+    merged: u32,
+}
+
+impl Hour {
+    /// `None` for an hour without runs. A run in progress outranks a failure, a failure
+    /// outranks a finished run, and a finished run outranks a skipped or unknown one.
+    fn of(runs: &[&Run]) -> Option<Self> {
+        let rank = |outcome: RunOutcome| match outcome {
+            RunOutcome::Running => 3,
+            RunOutcome::Failed => 2,
+            RunOutcome::Done => 1,
+            RunOutcome::Skipped | RunOutcome::Other => 0,
+        };
+        let outcome = runs
+            .iter()
+            .map(|run| run.outcome)
+            .max_by_key(|outcome| rank(*outcome))?;
+        let merged = runs.iter().fold(0_u32, |total, run| total.saturating_add(run.merged));
+        Some(Self { outcome, merged })
+    }
+}
+
+fn paint_bar(ui: &Ui, bar: Rect, hour: Option<Hour>) {
     let painter = ui.painter();
     let radius = CornerRadius::same(3);
-    match run.map(|run| (run.outcome, run.merged)) {
-        None => {
-            painter.rect_filled(bar, radius, theme::alpha(theme::BORDER_SUBTLE(), 120));
-        }
-        Some((RunOutcome::Skipped | RunOutcome::Other, _)) => {
+    let Some(hour) = hour else {
+        painter.rect_filled(bar, radius, theme::alpha(theme::BORDER_SUBTLE(), 120));
+        return;
+    };
+    match hour.outcome {
+        RunOutcome::Skipped | RunOutcome::Other => {
             painter.rect_stroke(
                 bar.shrink(0.5),
                 radius,
@@ -127,41 +157,46 @@ fn paint_bar(ui: &Ui, bar: Rect, run: Option<&Run>) {
                 StrokeKind::Inside,
             );
         }
-        Some((RunOutcome::Failed, _)) => {
+        RunOutcome::Failed => {
             painter.rect_filled(bar, radius, theme::alpha(theme::PALETTE_RED(), 150));
         }
-        Some((RunOutcome::Running, _)) => {
+        RunOutcome::Running => {
             painter.rect_filled(bar, radius, theme::ACCENT());
         }
-        Some((RunOutcome::Done, merged)) => {
+        RunOutcome::Done => {
             painter.rect_filled(bar, radius, theme::alpha(theme::PALETTE_GREEN(), 46));
-            if merged > 0 {
-                // The merged part rises with the count, up to four in a run.
-                let share = (f32::from(u8::try_from(merged.min(4)).unwrap_or(4)) / 4.0).max(0.3);
-                let top = bar.max.y - bar.height() * share;
-                let filled = Rect::from_min_max(Pos2::new(bar.min.x, top), bar.max);
-                painter.rect_filled(filled, radius, theme::alpha(theme::PALETTE_GREEN(), 200));
-            }
         }
+    }
+    if hour.merged > 0 && hour.outcome != RunOutcome::Running {
+        // The merged part rises with the count, up to four in an hour.
+        let share = (f32::from(u8::try_from(hour.merged.min(4)).unwrap_or(4)) / 4.0).max(0.3);
+        let top = bar.max.y - bar.height() * share;
+        let filled = Rect::from_min_max(Pos2::new(bar.min.x, top), bar.max);
+        painter.rect_filled(filled, radius, theme::alpha(theme::PALETTE_GREEN(), 200));
     }
 }
 
-fn tooltip(hour: OffsetDateTime, run: Option<&Run>) -> String {
+fn tooltip(hour: OffsetDateTime, runs: &[&Run], summary: Option<Hour>) -> String {
     let at = clock(hour);
-    let Some(run) = run else {
-        return format!("{at}: no run");
-    };
+    match (runs, summary) {
+        ([], _) | (_, None) => format!("{at}: no run"),
+        ([run], _) => format!("{at}: {}", describe(run)),
+        (runs, Some(summary)) => format!("{at}: {} runs, {} merged", runs.len(), summary.merged),
+    }
+}
+
+fn describe(run: &Run) -> String {
     let length = run
         .finished_at
-        .map(|end| format!("{} min", (end - run.started_at).whole_minutes().max(1)))
+        .map(|end| format!(" after {} min", (end - run.started_at).whole_minutes().max(1)))
         .unwrap_or_default();
     match run.outcome {
-        RunOutcome::Done if run.merged == 0 => format!("{at}: {length}, nothing to merge"),
-        RunOutcome::Done => format!("{at}: {length}, {} merged", run.merged),
-        RunOutcome::Running => format!("{at}: running"),
-        RunOutcome::Failed => format!("{at}: failed after {length}"),
-        RunOutcome::Skipped => format!("{at}: skipped, the previous run was still busy"),
-        RunOutcome::Other => format!("{at}: an outcome this Horizon does not know"),
+        RunOutcome::Done if run.merged == 0 => format!("done{length}, nothing to merge"),
+        RunOutcome::Done => format!("done{length}, {} merged", run.merged),
+        RunOutcome::Running => "running".to_string(),
+        RunOutcome::Failed => format!("failed{length}"),
+        RunOutcome::Skipped => "skipped, the previous run was still busy".to_string(),
+        RunOutcome::Other => "an outcome this Horizon does not know".to_string(),
     }
 }
 
@@ -169,6 +204,55 @@ fn tooltip(hour: OffsetDateTime, run: Option<&Run>) -> String {
 mod tests {
     use super::*;
     use horizon_core::upkeep::parse_time;
+
+    fn run(started_at: &str, outcome: RunOutcome, merged: u32, finished_at: Option<&str>) -> Run {
+        serde_json::from_value(serde_json::json!({
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "outcome": match outcome {
+                RunOutcome::Done => "done",
+                RunOutcome::Running => "running",
+                RunOutcome::Failed => "failed",
+                RunOutcome::Skipped => "skipped",
+                RunOutcome::Other => "other",
+            },
+            "merged": merged,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn an_hour_with_several_runs_shows_all_their_merges() {
+        let first = run(
+            "2026-10-13T14:05:00Z",
+            RunOutcome::Done,
+            0,
+            Some("2026-10-13T14:09:00Z"),
+        );
+        let second = run("2026-10-13T14:40:00Z", RunOutcome::Done, u32::MAX, None);
+        let hour = Hour::of(&[&first, &second]).unwrap();
+        assert_eq!(
+            hour,
+            Hour {
+                outcome: RunOutcome::Done,
+                merged: u32::MAX
+            },
+            "saturates"
+        );
+        let at = parse_time("2026-10-13T14:00:00Z").unwrap();
+        assert_eq!(
+            tooltip(at, &[&first, &second], Some(hour)),
+            format!("14:00 UTC: 2 runs, {} merged", u32::MAX)
+        );
+        assert_eq!(
+            tooltip(at, &[&first], Hour::of(&[&first])),
+            "14:00 UTC: done after 4 min, nothing to merge"
+        );
+        let failed = run("2026-10-13T14:40:00Z", RunOutcome::Failed, 0, None);
+        assert_eq!(tooltip(at, &[&failed], Hour::of(&[&failed])), "14:00 UTC: failed");
+        assert_eq!(Hour::of(&[&first, &failed]).unwrap().outcome, RunOutcome::Failed);
+        assert_eq!(Hour::of(&[]), None);
+    }
 
     #[test]
     fn a_run_on_the_hour_belongs_to_that_hour() {
