@@ -157,9 +157,9 @@ impl HorizonApp {
         form.launch.receiver = Some(receiver);
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            // Taken first, so an edit made during the read calls for another one.
-            let fingerprint = cloud_runtime::repository::launch::fingerprint(&repository, &cancel);
-            *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(fingerprint);
+            // Taken before and after the read: the result stands for the checkout only when
+            // nothing changed in between; otherwise the dialog reads again.
+            let before = cloud_runtime::repository::launch::fingerprint(&repository, &cancel);
             let runner = cloud_runtime::command::Runner {
                 cancel: &cancel,
                 emit: &|_| {},
@@ -179,6 +179,13 @@ impl HorizonApp {
                     ready_profiles,
                 }
             });
+            let after = cloud_runtime::repository::launch::fingerprint(&repository, &cancel);
+            let read = if before == after {
+                reread::ReadOf::Checkout(after)
+            } else {
+                reread::ReadOf::Changed
+            };
+            *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(read);
             let _ = sender.send(result);
             ctx.request_repaint();
         });

@@ -19,12 +19,15 @@ const INTERVAL: Duration = Duration::from_secs(1);
 #[derive(Default)]
 pub(super) struct State {
     watcher: Option<Watcher>,
-    /// What the newest read saw, set by its thread before it read anything.
-    pub read: Arc<Mutex<Option<Fingerprint>>>,
+    /// What the newest read saw, set by its thread once it ends.
+    pub read: Arc<Mutex<Option<ReadOf>>>,
     /// What the shown settings were read from.
     applied: Option<Fingerprint>,
     /// What the watcher saw last.
     seen: Option<Fingerprint>,
+    /// The checkout changed while the shown settings were read, so they may be of neither
+    /// version.
+    stale: bool,
     /// The read in flight was started by a change, not by the person: it shows no spinner
     /// and keeps the shown settings until it ends.
     pub quiet: bool,
@@ -34,14 +37,29 @@ pub(super) struct State {
     pub hidden: Option<CloudConfig>,
 }
 
+/// The checkout a read saw.
+pub(super) enum ReadOf {
+    /// The same before and after the read.
+    Checkout(Fingerprint),
+    /// It changed during the read.
+    Changed,
+}
+
 impl State {
     /// Records the fingerprint of the read that just ended.
     pub fn finished(&mut self) {
-        self.applied = self
+        let read = self
             .read
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
+        self.stale = matches!(read, Some(ReadOf::Changed));
+        if !self.stale {
+            self.applied = read.and_then(|read| match read {
+                ReadOf::Checkout(fingerprint) => Some(fingerprint),
+                ReadOf::Changed => None,
+            });
+        }
     }
 }
 
@@ -109,7 +127,8 @@ impl HorizonApp {
         {
             reread.seen = Some(seen);
         }
-        let changed = reread.applied.is_some() && reread.seen.is_some() && reread.seen != reread.applied;
+        let changed =
+            reread.stale || (reread.applied.is_some() && reread.seen.is_some() && reread.seen != reread.applied);
         if changed && !form.launch.loading_any() && !busy(form) {
             self.start_cloud_profiles_read(ctx, true);
         }
@@ -146,6 +165,26 @@ pub(super) fn keep_edits(state: &mut State, shown: Option<&CloudConfig>, config:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_read_during_which_the_checkout_changed_is_read_again() {
+        let mut state = State::default();
+        *state.read.lock().unwrap() = Some(ReadOf::Checkout(Fingerprint::default()));
+        state.finished();
+        assert!(!state.stale);
+        assert_eq!(state.applied, Some(Fingerprint::default()));
+        *state.read.lock().unwrap() = Some(ReadOf::Changed);
+        state.finished();
+        assert!(state.stale, "the shown settings may be of neither version");
+        assert_eq!(
+            state.applied,
+            Some(Fingerprint::default()),
+            "kept for the next comparison"
+        );
+        *state.read.lock().unwrap() = Some(ReadOf::Checkout(Fingerprint::default()));
+        state.finished();
+        assert!(!state.stale);
+    }
 
     #[test]
     fn a_storage_edit_survives_a_reread_until_the_file_changes_that_value() {
