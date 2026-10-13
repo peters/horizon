@@ -418,8 +418,8 @@ this task and G11 use.
 6. Close the dialog and open **New cloud** again.
 
    Result: The list shows immediately, without a click or a sign-in.
-   `stat -c '%a' ~/.horizon/cloud/github-repositories.json` shows `600`, and the
-   file holds the listed names.
+   `stat -c '%a' ~/.horizon/cloud/credentials/github-host-*-repositories.json`
+   shows `600`, and the file holds the listed names.
 
 ### 6.11 G11: Install the app on an organization
 

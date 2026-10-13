@@ -24,6 +24,16 @@ fn path(root: &Path, settings: &Settings) -> PathBuf {
         .join(format!("github-host-{}.json", settings.app_id))
 }
 
+/// The name of the file that keeps the repositories last listed with this computer's
+/// sign-in for the app `app_id`, beside the sign-in itself.
+fn listed_name(app_id: u64) -> String {
+    format!("github-host-{app_id}-repositories.json")
+}
+
+fn listed(root: &Path, settings: &Settings) -> PathBuf {
+    root.join("credentials").join(listed_name(settings.app_id))
+}
+
 /// Holds the lock of this computer's chain, so two Horizon windows never renew it at once:
 /// a renewal ends the old chain, and the second would lose it.
 fn lock(root: &Path, settings: &Settings) -> Result<std::fs::File> {
@@ -57,6 +67,7 @@ pub fn current(root: &Path, settings: &Settings) -> Result<Option<(String, Secre
 fn renewed(root: &Path, settings: &Settings, client: &Client) -> Result<Option<(String, Secret)>> {
     let _lock = lock(root, settings)?;
     if !configured(root, settings) {
+        stored::forget(&listed(root, settings))?;
         return stored::forget(&path(root, settings));
     }
     // A chain from a web sign-in renews with the secret whatever the setting says now; a
@@ -142,6 +153,31 @@ pub fn repositories(token: &Secret) -> std::result::Result<Vec<String>, String> 
     Ok(found)
 }
 
+/// The repositories last listed with this computer's sign-in for the app of `settings`,
+/// so **New cloud** shows them before GitHub answers again. `None` while this computer is
+/// not signed in to that app, or when no list was kept or it cannot be read.
+#[must_use]
+pub fn kept_repositories(root: &Path, settings: &Settings) -> Option<Vec<String>> {
+    if !configured(root, settings) || !path(root, settings).exists() {
+        return None;
+    }
+    let bytes = stored::read_private(&listed(root, settings)).ok()??;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Keeps `repositories` for the next **New cloud**, private beside the sign-in and under its
+/// lock: a Disconnect forgets them with it, and a list that arrives after one is not kept.
+/// # Errors
+/// A file that cannot be written.
+pub fn keep_repositories(root: &Path, settings: &Settings, repositories: &[String]) -> Result<()> {
+    let _lock = lock(root, settings)?;
+    if !configured(root, settings) || !path(root, settings).exists() {
+        return Ok(());
+    }
+    let bytes = serde_json::to_vec(repositories).map_err(|_| Error::Json)?;
+    stored::write_private(&root.join("credentials"), &listed_name(settings.app_id), &bytes)
+}
+
 /// Disconnects the app of `settings`: forgets this computer's sign-in for it and runs
 /// `save`, which stores the settings without it, both under the sign-in's lock. No renewal
 /// or sign-in in another Horizon window can store a chain between the two, and one that
@@ -150,6 +186,7 @@ pub fn repositories(token: &Secret) -> std::result::Result<Vec<String>, String> 
 /// A file that cannot be removed, which leaves the settings unsaved, or `save`'s error.
 pub fn disconnect<T>(root: &Path, settings: &Settings, save: impl FnOnce() -> Result<T>) -> Result<T> {
     let _lock = lock(root, settings)?;
+    stored::forget(&listed(root, settings))?;
     stored::forget(&path(root, settings))?;
     save()
 }

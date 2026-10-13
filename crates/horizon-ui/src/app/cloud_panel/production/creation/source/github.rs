@@ -17,8 +17,6 @@ use std::{
 };
 use zeroize::Zeroize as _;
 
-mod cache;
-
 /// At most this many repositories show at once; typing narrows them.
 const SHOWN: usize = 8;
 
@@ -72,6 +70,8 @@ pub(super) struct Account {
     prompt: Option<Prompt>,
     pub(super) repositories: Option<Vec<String>>,
     pub(super) failed: Option<String>,
+    /// Why the shown list could not be refreshed; it may be out of date.
+    pub(super) stale: Option<String>,
     refreshed: bool,
 }
 
@@ -86,6 +86,7 @@ impl Account {
             prompt: None,
             repositories: None,
             failed: None,
+            stale: None,
             refreshed: false,
         })
     }
@@ -135,7 +136,7 @@ impl Account {
         std::thread::spawn(move || {
             // The names kept from last time show while GitHub is asked.
             if purpose == Purpose::Refresh
-                && let Some(listed) = cache::load(&root, settings.app_id)
+                && let Some(listed) = host::kept_repositories(&root, &settings)
             {
                 let _ = sender.send(Answer::Cached(listed));
                 ctx.request_repaint();
@@ -152,7 +153,10 @@ impl Account {
                 ..
             } = &answer
             {
-                cache::save(&root, settings.app_id, listed);
+                // Losing the kept list only costs the next dialog its head start.
+                if let Err(error) = host::keep_repositories(&root, &settings, listed) {
+                    tracing::debug!(%error, "could not keep the GitHub repository list");
+                }
             }
             let _ = sender.send(answer);
             ctx.request_repaint();
@@ -177,14 +181,16 @@ impl Account {
                     self.finish();
                     if repositories.is_some() {
                         self.repositories = repositories;
+                        self.stale = None;
                     }
                     return (purpose == Purpose::Clone).then_some(token);
                 }
                 Ok(Answer::Failed(reason)) => {
                     self.finish();
-                    // The list kept from last time still stands when a refresh fails.
+                    // The list kept from last time still stands when a refresh fails, marked
+                    // as possibly out of date.
                     if purpose == Purpose::Refresh {
-                        tracing::debug!(%reason, "could not refresh the GitHub repository list");
+                        self.stale = Some(reason);
                     } else {
                         self.failed = Some(reason);
                     }
@@ -503,6 +509,17 @@ impl super::State {
             super::super::selector::widgets::caption(ui, "YOUR GITHUB REPOSITORIES");
             let filter = self.input.trim().to_owned();
             chosen = account.picker(ui, &filter);
+            // A list that could not be refreshed says so, with a way to sign in again.
+            if let Some(stale) = account.stale.clone() {
+                ui.label(
+                    RichText::new(format!("This list may be out of date: {stale}"))
+                        .size(12.5)
+                        .color(theme::PALETTE_YELLOW()),
+                );
+                if ui.add(chrome_button("Refresh from GitHub")).clicked() {
+                    account.request(Purpose::List, ui.ctx());
+                }
+            }
             if ui
                 .add(chrome_button("Add repositories on GitHub"))
                 .on_hover_text("Choose which repositories your GitHub App can reach.")

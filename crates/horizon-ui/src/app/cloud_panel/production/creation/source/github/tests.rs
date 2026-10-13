@@ -15,6 +15,7 @@ fn account() -> Account {
         prompt: None,
         repositories: None,
         failed: None,
+        stale: None,
         refreshed: true,
     }
 }
@@ -274,14 +275,35 @@ fn the_kept_list_shows_until_a_refresh_replaces_it() {
 }
 
 #[test]
-fn a_refresh_without_a_sign_in_or_with_an_error_keeps_the_list_and_says_nothing() {
-    for answer in [Answer::Quiet, Answer::Failed("GitHub could not be reached.".into())] {
-        let (mut account, sender) = waiting(Purpose::Refresh);
-        account.repositories = Some(vec!["acme/kept".into()]);
-        sender.send(answer).unwrap();
-        assert!(account.poll().is_none());
-        assert_eq!(account.repositories.as_deref(), Some(&["acme/kept".to_owned()][..]));
-        assert!(account.failed.is_none(), "a background refresh shows no error");
-        assert!(account.job.is_none());
-    }
+fn a_failed_refresh_keeps_the_list_and_marks_it_out_of_date() {
+    let (mut account, sender) = waiting(Purpose::Refresh);
+    account.repositories = Some(vec!["acme/kept".into()]);
+    sender
+        .send(Answer::Failed("GitHub could not be reached.".into()))
+        .unwrap();
+    assert!(account.poll().is_none());
+    assert_eq!(account.repositories.as_deref(), Some(&["acme/kept".to_owned()][..]));
+    assert!(account.failed.is_none(), "no red error for a background refresh");
+    assert_eq!(account.stale.as_deref(), Some("GitHub could not be reached."));
+    assert!(account.job.is_none());
+    let (mut account, sender) = waiting(Purpose::List);
+    account.stale = Some("old".into());
+    sender
+        .send(Answer::Done {
+            token: Secret::new("ghu_synthetic".into()),
+            repositories: Some(vec!["acme/new".into()]),
+        })
+        .unwrap();
+    assert!(account.poll().is_none());
+    assert!(account.stale.is_none(), "a fresh list is current again");
+}
+
+#[test]
+fn a_refresh_without_a_sign_in_shows_no_kept_list() {
+    let (mut account, sender) = waiting(Purpose::Refresh);
+    sender.send(Answer::Quiet).unwrap();
+    assert!(account.poll().is_none());
+    assert!(account.repositories.is_none(), "the sign-in button stays in view");
+    assert!(account.failed.is_none() && account.stale.is_none());
+    assert!(account.job.is_none());
 }

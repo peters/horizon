@@ -39,6 +39,11 @@ fn a_disconnect_forgets_the_sign_in_and_a_later_use_finds_the_app_gone() {
         refresh_expires_at: std::time::SystemTime::now() + std::time::Duration::from_hours(400),
     };
     stored::save(&path(root.path(), &settings(42)), "octo-cat", &chain, false).unwrap();
+    keep_repositories(root.path(), &settings(42), &["acme/private".into()]).unwrap();
+    assert_eq!(
+        kept_repositories(root.path(), &settings(42)),
+        Some(vec!["acme/private".to_owned()])
+    );
     let saved = disconnect(root.path(), &settings(42), || {
         std::fs::write(root.path().join("settings.json"), "{}")?;
         Ok("saved")
@@ -46,6 +51,10 @@ fn a_disconnect_forgets_the_sign_in_and_a_later_use_finds_the_app_gone() {
     .unwrap();
     assert_eq!(saved, "saved");
     assert!(!path(root.path(), &settings(42)).exists(), "forgotten under the lock");
+    assert!(
+        !listed(root.path(), &settings(42)).exists(),
+        "the listed names go with the sign-in"
+    );
     // A chain that a renewal in another window would store is dropped, not served.
     stored::save(&path(root.path(), &settings(42)), "octo-cat", &chain, false).unwrap();
     assert!(current(root.path(), &settings(42)).unwrap().is_none());
@@ -145,4 +154,42 @@ fn a_disconnected_app_asks_github_for_no_sign_in() {
     })
     .unwrap();
     assert_eq!(ended.err().as_deref(), Some(DISCONNECTED));
+}
+
+#[test]
+fn a_list_is_kept_only_while_this_computer_is_signed_in() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("settings.json"), r#"{"github":{"app_id":42}}"#).unwrap();
+    keep_repositories(root.path(), &settings(42), &["acme/web".into()]).unwrap();
+    assert!(
+        !listed(root.path(), &settings(42)).exists(),
+        "no sign-in, so nothing is kept"
+    );
+    stored::private_directory(&root.path().join("credentials")).unwrap();
+    std::fs::write(path(root.path(), &settings(42)), "{}").unwrap();
+    keep_repositories(root.path(), &settings(42), &["acme/web".into()]).unwrap();
+    assert_eq!(
+        kept_repositories(root.path(), &settings(42)),
+        Some(vec!["acme/web".to_owned()])
+    );
+    assert_eq!(
+        kept_repositories(root.path(), &settings(43)),
+        None,
+        "another app keeps its own"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(listed(root.path(), &settings(42)))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    std::fs::remove_file(path(root.path(), &settings(42))).unwrap();
+    assert_eq!(
+        kept_repositories(root.path(), &settings(42)),
+        None,
+        "signed out, so none is shown"
+    );
 }
