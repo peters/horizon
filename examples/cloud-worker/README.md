@@ -187,6 +187,88 @@ endpoint and the remote browser credentials in `/run/horizon-credentials` are al
 open to them. With a selected tailnet, the cloud browsers use the proxy settings
 of the agents.
 
+### Browser uploads
+
+A person can give local files to a page in a cloud browser. The page's upload
+button and a file drop on the panel both use this function. The presentation
+protocol in `crates/horizon-browser-protocol/src/cloud_view/uploads.rs` has
+version 1 of it.
+
+The function is off until Horizon hosts relay uploads. The control service
+turns it on only when the variable `HORIZON_CLOUD_BROWSER_UPLOADS` has the
+value `1`. Without it, the control service does not catch file choosers,
+refuses each upload and sends no upload state, as a service that predates the
+function. It still removes the staged files of an earlier control service
+when it starts. When the function is on, the control service does these steps:
+
+1. Each worker Chromium or Firefox browser sends its page file chooser to the
+   control service. A remote device of a provider does not, because it cannot
+   read worker files.
+2. A host that sends uploads states this in each poll. The control service then
+   gives the pending chooser, the limits and each failure to that host.
+3. The host sends each file in parts on a separate connection. The control
+   service writes the parts in order to
+   `/workspace/home/.horizon/cloud-browser-history/.uploads/BROWSER/BATCH/NAME`.
+   It accepts a file only after its size and its SHA-256 agree with the host.
+4. The answer or the drop names the batch and the file names, not paths. The
+   control service gives the browser only complete files of the same browser.
+
+A chooser waits only while a host that sends uploads polls. If no such host
+polled in the last 10 seconds, the control service cancels the chooser. It also
+cancels a chooser after 20 minutes. Thus a page or an agent never waits for a
+person who cannot answer. An older host never states upload support, so the
+control service cancels each chooser immediately.
+
+Limits: 32 files and 256 MB in one choice or drop, parts of 4 MB, 64 batches and
+1 GB for all browsers. A page reads a file after the attachment, so a used batch
+stays until its browser closes. At a limit, the control service removes the
+oldest used batch. It removes a batch that no answer or drop used after 10
+minutes. It removes all files of a browser that closed or stopped, and all
+files of an earlier control service when it starts.
+
+The files belong to the account of the control service, mode `0600` in folders
+with mode `0700`. That account is also the account of the agents, so an agent
+can read or change the files, as it can change all browser state. The upload
+function gives no isolation from the agents of the worker.
+
+#### Trust boundary of browser uploads
+
+The page, the agents and the worker are not trusted by the host:
+
+- A page or an agent can open a file chooser at any time. The page writes the
+  `accept` and `origin` text of a request.
+- The control service writes the limits, the errors and the notices. A changed
+  worker can send any text or number in them.
+
+The control service guarantees these conditions to the host and the page:
+
+- A batch ID is 1 to 64 ASCII letters, digits, `-` or `_`. A file name is one
+  path component of at most 255 bytes, without `/`, `\` or control
+  characters. Thus a staged file is a new file in its batch folder.
+- A browser gets only complete files that the control service staged for that
+  browser. The size and the SHA-256 of each file agree with the host.
+- An answer applies only to the request that it names. A drop names the page
+  generation that the person saw, and the control service refuses it after a
+  navigation of the page. Each change of the page URL is a navigation, also a
+  change of the fragment or of the history state. A scroll during the transfer
+  is not a navigation.
+
+A host that relays uploads must obey these rules:
+
+- Show `accept`, `origin`, errors and notices only as plain text, and shorten
+  long text.
+- Send only the files that the person picked or dropped. Never read a path from
+  the worker, and never send a host path to the worker.
+- Use a worker limit only to lower the host limits, never to raise them.
+- Bind each answer to the browser and the request that the person saw.
+
+The function does not give these conditions:
+
+- Isolation of staged files from the agents of the worker. They use the account
+  of the control service.
+- Protection of the file content from the page. The page gets the content of
+  each file that the person gives to it.
+
 ## Cloud tailnet contract
 
 The stock image includes pinned Tailscale v1.102.5 binaries. Startup isolates

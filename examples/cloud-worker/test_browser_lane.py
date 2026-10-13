@@ -9,6 +9,8 @@ queue tests also need unshare. The real-browser test needs Google Chrome or Chro
 on the system PATH;
 the CI Ubuntu runner and the worker image have Google Chrome.
 """
+import base64
+import hashlib
 import importlib.machinery
 import importlib.util
 import http.server
@@ -27,6 +29,7 @@ import time
 import threading
 from types import SimpleNamespace
 import unittest
+import urllib.parse
 from unittest import mock
 
 
@@ -56,6 +59,49 @@ _loader.exec_module(TAILNET)
 DENIED = 'the operating system denied access to a host coordination file'
 # Upper bound for the cold first Chromium start; the largest measured start took 15 s.
 WARM_LIMIT = 120
+# A page reports what it received in a numbered URL fragment: the control service relays
+# fragment navigations, not title changes made by a script.
+UPLOAD_PAGE = b"""<!doctype html><meta charset=utf-8><title>Upload page</title>
+<style>body{margin:0}#pick{position:fixed;left:0;top:0;width:400px;height:150px}
+#zone{position:fixed;left:0;top:200px;width:400px;height:200px}</style>
+<input id=pick type=file multiple><div id=zone>Drop files</div><script>
+let reports = 0;
+const report = text => { location.hash = ++reports + ':' + encodeURIComponent(text); };
+const hex = buffer => [...new Uint8Array(buffer)].map(b => b.toString(16).padStart(2, '0')).join('');
+async function describe(files) {
+  const parts = [];
+  for (const file of files) parts.push(`${file.name}|${file.size}|${hex(await crypto.subtle.digest('SHA-256', await file.arrayBuffer()))}`);
+  return parts.sort().join(';');
+}
+pick.addEventListener('change', async () => report('picked:' + await describe(pick.files)));
+pick.addEventListener('cancel', () => report('cancelled'));
+zone.addEventListener('dragover', event => event.preventDefault());
+zone.addEventListener('drop', async event => { event.preventDefault(); report('dropped:' + await describe(event.dataTransfer.files)); });
+</script>"""
+
+
+class CloudView:
+    """One connection to the control service, as `horizon-cloud-worker connect` gives a host."""
+
+    def __init__(self, test):
+        self.socket = socket.create_connection(SUPERVISE['CONTROL_ENDPOINT'], timeout=40)
+        self.stream = self.socket.makefile('rb')
+        test.addCleanup(self.socket.close)
+        test.addCleanup(self.stream.close)
+
+    def call(self, message):
+        self.socket.sendall((json.dumps(message) + '\n').encode())
+        return json.loads(self.stream.readline(1 << 27))
+
+
+def click(x, y):
+    press = {'type': 'mouse_press', 'x': x, 'y': y, 'button': 'left', 'click_count': 1, 'buttons': 1, 'modifiers': {}}
+    return [{'Input': press}, {'Input': dict(press, type='mouse_release', buttons=0)}]
+
+
+def page_report(state):
+    count, _, text = state['url'].partition('#')[2].partition(':')
+    return (int(count), urllib.parse.unquote(text)) if count.isdigit() else (0, '')
 
 
 def root_available():
@@ -301,8 +347,7 @@ class BrowserLaneTests(unittest.TestCase):
         self.assertFalse(result.get('isError'), self.text(result))
         return json.loads(self.text(result))
 
-    def page(self):
-        body = b'<!doctype html><title>Lane page</title><h1>Agent lane</h1>'
+    def page(self, body=b'<!doctype html><title>Lane page</title><h1>Agent lane</h1>'):
 
         class Page(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
@@ -467,6 +512,92 @@ class BrowserLaneTests(unittest.TestCase):
             time.sleep(.2)
         for path in [self.browser_root, *self.browser_root.rglob('*')]:
             self.assertEqual(path.lstat().st_uid, AGENT, path)
+
+    @unittest.skipUnless(CHROMIUM, 'needs Google Chrome or Chromium on the system PATH, as on the worker image')
+    @unittest.skipUnless(shutil.which('unshare'), 'needs unshare to show the service its workspace')
+    def test_a_page_receives_the_files_that_a_host_uploads_through_the_cloud_view(self):
+        if os.geteuid() != 0:
+            return self.nested()
+        warm_chromium(self.root)
+        url = self.page(UPLOAD_PAGE)
+        # Uploads stay off until hosts relay them.
+        self.environment['HORIZON_CLOUD_BROWSER_UPLOADS'] = '1'
+        service = self.serve(agent=True, host='agent-host', workspace=self.workspace())
+        self.addCleanup(subprocess.run, ['pkill', '-KILL', '-f', '--', f'--user-data-dir={self.home}'], check=False)
+        self.await_answer(service)
+        view, transfer, browser = CloudView(self), CloudView(self), 'upload-lane'
+
+        def poll(uploads=None, commands=(), until=lambda state: True, label=''):
+            deadline = time.monotonic() + 60
+            while True:
+                message = {'operation': 'poll', 'id': browser, 'after': 0, 'commands': list(commands)}
+                if uploads is not None:
+                    message['uploads'] = uploads
+                reply = view.call(message)
+                self.assertIsNone(reply.get('error'), reply)
+                state = reply['browsers'][0]
+                if until(state):
+                    return state
+                self.assertLess(time.monotonic(), deadline, f'{label}: {dict(state, png=None)}')
+                commands, uploads = (), uploads and {'version': 1}
+                time.sleep(.15)
+
+        def stage(batch, name, data, digest=None):
+            parts = [data[offset:offset + (4 << 20)] for offset in range(0, len(data), 4 << 20)] or [b'']
+            for index, part in enumerate(parts):
+                last = index == len(parts) - 1
+                reply = transfer.call({'operation': 'stage', 'id': browser, 'batch': batch, 'name': name,
+                                       'size': len(data), 'offset': index * (4 << 20),
+                                       'data': base64.b64encode(part).decode(),
+                                       **({'sha256': digest or hashlib.sha256(data).hexdigest()} if last else {})})
+            return reply
+
+        def described(files):
+            return ';'.join(sorted(f'{name}|{len(data)}|{hashlib.sha256(data).hexdigest()}' for name, data in files.items()))
+
+        opened = view.call({'operation': 'open', 'id': browser, 'url': url, 'backend': 'chromium'})
+        self.assertIsNone(opened.get('error'), opened)
+        state = poll(until=lambda state: state['ready'] and state.get('uploads', {}).get('file_chooser'), label='ready')
+        self.assertTrue(state['uploads']['drops'])
+
+        # A host that predates uploads never answers, so the service cancels its chooser at once.
+        poll(None, click(100, 75), lambda state: page_report(state)[1] == 'cancelled', 'older host')
+
+        poll({'version': 1}, click(100, 75), lambda state: state['uploads'].get('request'), 'chooser')
+        request = poll({'version': 1})['uploads']['request']
+        self.assertTrue(request['multiple'])
+        files = {"it's ñ 1.txt": b'synthetic text\n' * 100, 'photo.png': os.urandom((4 << 20) + 17)}
+        self.assertIn('different bytes', stage('b1', 'photo.png', files['photo.png'], '0' * 64)['error'])
+        for name, data in files.items():
+            self.assertTrue(stage('b1', name, data)['staged']['complete'])
+        answer = {'request': request['id'], 'files': {'batch': 'b1', 'names': list(files)}}
+        state = poll({'version': 1, 'answer': answer}, until=lambda state: page_report(state)[1].startswith('picked:'),
+                     label='answer')
+        self.assertEqual(page_report(state)[1], 'picked:' + described(files))
+        self.assertNotIn('request', state['uploads'])
+
+        dropped = {'drop me.txt': b'dropped bytes'}
+        page = state['uploads']['page']
+        self.assertTrue(stage('b2', 'drop me.txt', dropped['drop me.txt'])['staged']['complete'])
+        stale = {'page': page - 1, 'x': 100, 'y': 300, 'files': {'batch': 'b2', 'names': ['drop me.txt']}}
+        state = poll({'version': 1, 'drop': stale}, label='stale',
+                     until=lambda state: 'page changed' in state['uploads'].get('notice', {}).get('message', ''))
+        self.assertIn('page changed', state['uploads']['notice']['message'])
+        drop = dict(stale, page=page)
+        state = poll({'version': 1, 'drop': drop}, until=lambda state: page_report(state)[1].startswith('dropped:'),
+                     label='drop')
+        self.assertEqual(page_report(state)[1], 'dropped:' + described(dropped))
+
+        staged = self.browser_root / 'cloud-browser-history' / '.uploads' / browser
+        for path in [staged, *staged.rglob('*')]:
+            info = path.lstat()
+            self.assertEqual((info.st_uid, info.st_mode & 0o777), (AGENT, 0o700 if path.is_dir() else 0o600), path)
+        self.assertEqual(view.call({'operation': 'close', 'id': browser})['closed'], [browser])
+        deadline = time.monotonic() + 10
+        while staged.exists():
+            self.assertLess(time.monotonic(), deadline, 'the staged files stayed after the browser closed')
+            view.call({'operation': 'list'})
+            time.sleep(.2)
 
     def test_root_never_follows_a_symlink_that_the_agent_planted(self):
         if os.geteuid() != 0:
