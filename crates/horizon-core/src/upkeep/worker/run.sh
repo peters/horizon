@@ -11,4 +11,4 @@ unset HORIZON HORIZON_BROWSER_HOST_INSTANCE
 if host_value="$(cat /run/horizon-worker/browser-host-instance 2>/dev/null)" && [ -n "$host_value" ]; then
     export HORIZON_BROWSER_HOST_INSTANCE="$host_value"
 fi
-exec python3 -I -u /workspace/home/upkeep/run.py "$session"
+exec python3 -I -u /workspace/home/upkeep/run.py

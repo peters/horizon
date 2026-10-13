@@ -90,3 +90,92 @@ The board guarantees these items:
 
 The board does not guarantee that the status is true. The agent writes it, and an
 agent can make errors. Check a merge on GitHub before you act on it.
+
+## The worker loop
+
+Horizon keeps the Upkeep loop on the cloud worker with an exchange. An exchange is
+one SSH command. The code is in `crates/horizon-core/src/upkeep/worker.rs` and
+`crates/horizon-core/src/upkeep/worker/`. No part of the Horizon window starts an
+exchange yet. The exchange does these steps:
+
+1. It writes the loop (`run.sh` and `run.py`), the settings (`config.json`) and
+   the agent instructions (`prompt.md`) to `/workspace/home/upkeep`.
+2. It writes the session binding in `/workspace/sessions/upkeep-<cloud>`. Thus
+   the agents of the loop can ask for GitHub access and open browser panels.
+3. It writes the Run now and Pause signals.
+4. It starts the loop in the tmux session `upkeep-<cloud>` when the session does
+   not run the loop.
+5. It reads back the runs, the next run time and the status that the agents wrote.
+
+The loop starts one run on the schedule, or sooner after **Run now**. It starts no
+run while the loop has the pause signal. A run lists the open pull requests of the
+bots in each repository. It starts one Codex agent for each repository that has
+pull requests that changed since the last clean run. The repositories in the
+order list run one at a time first. Then the other repositories run side by side.
+The number of agents that run side by side depends on the processor cores, the
+memory and the peak memory of earlier runs. The loop stops an agent and all of its
+processes after 90 minutes.
+
+## Trust boundary of the worker loop
+
+The worker loop runs as the agent account. The agent can change all files in
+`/workspace/home/upkeep`, the loop included. Thus the exchange treats each file in
+that folder as untrusted input.
+
+Untrusted input:
+
+- The files in `/workspace/home/upkeep`, `/workspace/sessions/upkeep-<cloud>` and
+  `/workspace/session-data/upkeep-<cloud>`. The agent can replace a file with a
+  link, a pipe or a folder.
+- The status, the runs and the next run time that the exchange reads back.
+- The content of the pull requests on GitHub: titles, bodies, comments, code,
+  check logs and pages that the agent opens.
+
+Trusted input:
+
+- The settings of the person: the repositories, the bots, the schedule, the
+  worker name and the instructions. Horizon examines them before it sends them.
+
+The exchange and the loop guarantee these items:
+
+- The exchange runs as the account that owns `/workspace/home`. On a worker that
+  isolates agents, Horizon starts the exchange through
+  `horizon-worker-tailnet agent`, as the agent account. On other workers, the
+  agents and the exchange run as root. The exchange stops with an error when it
+  runs as a different account from the owner of `/workspace/home`. Thus root
+  never writes into a folder that the agent account controls.
+- The exchange opens each folder without links and makes sure that the folder
+  belongs to its account. It does not use a folder that is a link.
+- The exchange writes each file to a new temporary file with a random name. Then
+  it moves the temporary file into place. When the agent replaced a file with a
+  link, the exchange replaces the link. It never writes through the link.
+- The exchange reads only regular files. It does not read a link, a pipe or a
+  device. It reads at most 1 MiB of status and the last 256 KiB of runs. It
+  sends back no status when the answer is more than 3 MiB.
+- Horizon accepts these settings only:
+  - 1 to 100 repositories. Each repository is a GitHub `owner/name` that is
+    listed one time.
+  - An order list that has only repositories of the list.
+  - 1 to 20 bots. Each bot is a GitHub login, `name[bot]` or `app/name`.
+  - The Codex agent.
+  - A schedule from every 15 minutes to every 24 hours.
+  - Instructions of at most 16 KiB and a worker name of at most 200 bytes.
+  - A cloud ID of letters, digits, `-` and `_`, and a revision of 40 or 64
+    lowercase hexadecimal characters.
+- The loop examines the repositories and the bots in `config.json` again. It
+  leaves out the names that Horizon does not accept. Thus no name can start an
+  option of `gh`, or change a file name or the agent instructions.
+- The loop gives the instructions to Codex on the standard input. Thus
+  instructions that start with `-` are not options.
+
+The exchange and the loop do not guarantee these items:
+
+- They do not prevent that the agent changes its own loop, its settings or its
+  status. The agent account can write all of these files.
+- They do not prevent prompt injection. The agent reads pull requests that other
+  people and bots write, and it runs with push access to the repositories of this
+  Upkeep. Give an Upkeep only the repositories and the bots that you trust it to
+  merge.
+- They do not make the status true. The board treats it as untrusted input, as
+  the section [Trust boundary of the status document](#trust-boundary-of-the-status-document)
+  describes.

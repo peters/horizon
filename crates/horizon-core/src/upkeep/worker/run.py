@@ -11,17 +11,23 @@ import glob
 import hashlib
 import json
 import os
+import re
 import shutil
+import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
 DIR = '/workspace/home/upkeep'
-SESSION = sys.argv[1]
 # A job that runs longer than this is stopped, so one stuck repository cannot hold the hour.
 JOB_LIMIT = 90 * 60
 REFRESH = 5
+# The names Horizon accepts. They reach command lines, file names and prompts, so the loop
+# checks them again: config.json is a file in the agent's own folder.
+REPOSITORY = re.compile(r'(?!-)[A-Za-z0-9-]{1,39}(?<!-)/(?!\.\.?$)[A-Za-z0-9._-]{1,100}')
+AUTHOR = re.compile(r'(app/)?(?!-)[A-Za-z0-9-]{1,39}(?<!-)(\[bot\])?')
 
 
 def load(path, default):
@@ -40,7 +46,20 @@ def save(path, value):
 
 
 def config():
-    return load(DIR + '/config.json', {})
+    cfg = load(DIR + '/config.json', {})
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def names(cfg, key, pattern, default=()):
+    """The valid names in the list `key`, once each; the others are reported and left out."""
+    values = cfg.get(key, list(default))
+    found = []
+    for value in values if isinstance(values, list) else []:
+        if not isinstance(value, str) or not pattern.fullmatch(value):
+            print(f'Left out an invalid name in the {key} of config.json: {value!r:.80}', flush=True)
+        elif value not in found:
+            found.append(value)
+    return found
 
 
 def every(cfg):
@@ -179,17 +198,25 @@ class Job:
     def attempt(self, template):
         prompt = (template.replace('@@REPOSITORY@@', self.repository)
                   .replace('@@STATUS@@', DIR + '/status.d/' + self.slug + '.json'))
-        with open(self.log, 'a') as log:
+        # The prompt goes on standard input: as an argument, text that starts with a dash
+        # would be read as an option, and a long one would pass the argument size limit.
+        with open(self.log, 'a') as log, tempfile.TemporaryFile() as instructions:
+            instructions.write(prompt.encode())
+            instructions.seek(0)
             log.write(f'\n=== {time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())} {self.repository} ===\n')
             log.flush()
             process = subprocess.Popen(
-                ['codex', 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', prompt],
-                cwd=DIR + '/repos', stdout=log, stderr=subprocess.STDOUT)
+                ['codex', 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', '-'],
+                cwd=DIR + '/repos', stdin=instructions, stdout=log, stderr=subprocess.STDOUT,
+                start_new_session=True)
+            stopped = False
             while process.poll() is None:
                 self.peak_mb = max(self.peak_mb, tree_rss_mb(process.pid))
-                if time.time() - self.started > JOB_LIMIT:
-                    process.kill()
+                if not stopped and time.time() - self.started > JOB_LIMIT:
+                    # The whole process group, so no tool the agent started keeps running.
+                    os.killpg(process.pid, signal.SIGKILL)
                     log.write('\nStopped: the run passed its time limit.\n')
+                    stopped = True
                 time.sleep(REFRESH)
             self.code = process.returncode
 
@@ -230,9 +257,9 @@ def draw(started, jobs, queued, capacity):
 
 def run_once(cfg):
     template = open(DIR + '/prompt.md').read()
-    repositories = list(cfg.get('repositories', []))
-    authors = list(cfg.get('authors', ['app/dependabot']))
-    order = [repository for repository in cfg.get('order', []) if repository in repositories]
+    repositories = names(cfg, 'repositories', REPOSITORY)
+    authors = names(cfg, 'authors', AUTHOR, ['app/dependabot'])
+    order = [repository for repository in names(cfg, 'order', REPOSITORY) if repository in repositories]
     print(f'Listing open pull requests in {len(repositories)} repositories...', flush=True)
     seen = load(DIR + '/fingerprints.json', {})
     forced = os.path.exists(DIR + '/full-run')
@@ -352,4 +379,5 @@ def main():
         time.sleep(10)
 
 
-main()
+if __name__ == '__main__':
+    main()

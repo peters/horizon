@@ -1,127 +1,235 @@
-"""One Upkeep exchange on a worker, as root: install the loop, keep its session running,
-apply Run now and Pause, and print what the board shows. Idempotent."""
+"""One Upkeep exchange on a worker: install the loop, keep its session running, apply Run now
+and Pause, and print what the board shows. Idempotent.
+
+It runs as the account that owns /workspace/home: the agent account where the worker isolates
+agents (Horizon starts it through horizon-worker-tailnet agent), root where agents run as
+root. It refuses any other account, so it never writes into a folder that a less privileged
+account controls. Every path below the workspace folders is opened relative to a checked
+folder and without following links, and files are replaced through new temporary files.
+"""
 import base64
 import json
 import os
+import re
+import secrets
+import stat
 import subprocess
 import sys
 
 HOME = '/workspace/home'
-DIR = HOME + '/upkeep'
-STATUS_LIMIT = 2 * 1024 * 1024
-
-payload = json.loads(base64.b64decode(sys.argv[1]))
-session = payload['session']
-owner = os.stat(HOME)
-uid, gid = owner.st_uid, owner.st_gid
-# Sessions run as the agent account where the worker isolates agents: their bindings and
-# their tmux server belong to it, so the loop's must too, or no panel can attach to it.
-ISOLATED = os.path.exists('/run/horizon-tailnet/agent-isolation')
-
-
-def as_agent(command):
-    return ['horizon-worker-tailnet', 'agent', *command] if ISOLATED else command
+SESSIONS = '/workspace/sessions'
+SESSION_DATA = '/workspace/session-data'
+FOLDER = 'upkeep'
+STATUS_LIMIT = 1024 * 1024
+RUNS_LIMIT = 256 * 1024
+# Horizon reads at most 4 MiB of output; escaping can make the status six times longer.
+OUTPUT_LIMIT = 3 * 1024 * 1024
+SESSION = re.compile(r'upkeep-[A-Za-z0-9_-]{1,90}')
+REVISION = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
 
 
-def own(path):
-    os.chown(path, uid, gid)
+class Refused(Exception):
+    pass
 
 
-def write(path, text, mode=0o600):
+def owned_folder(path):
+    """An existing folder of this account, opened without following a link."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as error:
+        raise Refused(f'{path} is not a folder') from error
+    if os.fstat(fd).st_uid != os.geteuid():
+        os.close(fd)
+        raise Refused(f'{path} belongs to another account')
+    return fd
+
+
+def folder(parent, name, mode=0o700):
+    """The folder `name` in `parent`, created when missing. A link, another kind of file or a
+    folder of another account is refused."""
+    try:
+        os.mkdir(name, mode, dir_fd=parent)
+    except FileExistsError:
+        pass
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+    except OSError as error:
+        raise Refused(f'{name} is not a folder') from error
+    info = os.fstat(fd)
+    if info.st_uid != os.geteuid():
+        os.close(fd)
+        raise Refused(f'{name} belongs to another account')
+    if stat.S_IMODE(info.st_mode) != mode:
+        os.fchmod(fd, mode)
+    return fd
+
+
+def read(parent, name, limit, tail=False):
+    """At most `limit` bytes of the regular file `name`, or None. A link, a pipe or a device
+    is never read, so none can redirect or block the exchange."""
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+    except OSError:
+        return None
+    with os.fdopen(fd, 'rb') as handle:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        if tail and info.st_size > limit:
+            handle.seek(info.st_size - limit)
+        return handle.read(limit)
+
+
+def write(parent, name, text, mode=0o600):
+    """Replaces `name` with `text` through a new temporary file. Whatever had that name, a
+    link included, is replaced, never written through."""
     data = text.encode()
     try:
-        with open(path, 'rb') as current:
-            if current.read() == data:
-                return
-    except OSError:
+        current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        unchanged = (stat.S_ISREG(current.st_mode) and stat.S_IMODE(current.st_mode) == mode
+                     and read(parent, name, len(data) + 1) == data)
+    except FileNotFoundError:
+        unchanged = False
+    if unchanged:
+        return
+    temporary = f'.{name}.{secrets.token_hex(8)}'
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=parent)
+    try:
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(data)
+            os.fchmod(handle.fileno(), mode)
+        os.replace(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
+    except BaseException:
+        try:
+            os.unlink(temporary, dir_fd=parent)
+        except OSError:
+            pass
+        raise
+
+
+def create(parent, name):
+    """Creates the empty file `name` when nothing has that name yet."""
+    try:
+        os.close(os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent))
+    except FileExistsError:
         pass
-    temporary = path + '.new'
-    with open(temporary, 'wb') as handle:
-        handle.write(data)
-    os.chmod(temporary, mode)
-    own(temporary)
-    os.replace(temporary, path)
 
 
-os.makedirs(DIR, exist_ok=True)
-own(DIR)
-write(DIR + '/config.json', payload['config'])
-write(DIR + '/prompt.md', payload['prompt'])
-write(DIR + '/run.sh', payload['run'], 0o700)
-write(DIR + '/run.py', payload['scheduler'], 0o600)
+def install(payload, upkeep):
+    """Writes the loop, its settings and the session binding."""
+    session = payload['session']
+    write(upkeep, 'config.json', payload['config'])
+    write(upkeep, 'prompt.md', payload['prompt'])
+    write(upkeep, 'run.sh', payload['run'], 0o700)
+    write(upkeep, 'run.py', payload['scheduler'])
+    # The binding that makes the session a Codex session to the worker's services: its
+    # processes may ask for GitHub access and open browser panels for this cloud.
+    sessions = owned_folder(SESSIONS)
+    try:
+        binding = folder(sessions, session)
+        try:
+            write(binding, 'agent', 'codex\n')
+            write(binding, 'revision', payload['revision'] + '\n')
+            create(binding, 'shared-checkout')
+            create(binding, 'launch-requested')
+        finally:
+            os.close(binding)
+    finally:
+        os.close(sessions)
+    data = owned_folder(SESSION_DATA)
+    try:
+        os.close(folder(data, session))
+    finally:
+        os.close(data)
 
-# The binding that makes the session a Codex session to the worker's services: its
-# processes may ask for GitHub access and open browser panels for this cloud.
-binding = '/workspace/sessions/' + session
-os.makedirs(binding, exist_ok=True)
-os.chmod(binding, 0o700)
-own(binding)
-for name, text in (('agent', 'codex\n'), ('revision', payload['revision'] + '\n'),
-                   ('shared-checkout', ''), ('launch-requested', '')):
-    path = os.path.join(binding, name)
-    if not os.path.exists(path) or name in ('agent', 'revision'):
-        with open(path, 'w') as handle:
-            handle.write(text)
-    os.chmod(path, 0o600)
-    own(path)
-data = '/workspace/session-data/' + session
-os.makedirs(data, exist_ok=True)
-os.chmod(data, 0o700)
-own(data)
 
-if payload.get('run_now'):
-    open(DIR + '/run-now', 'a').close()
-    own(DIR + '/run-now')
-paused = payload.get('paused')
-if paused is True:
-    open(DIR + '/paused', 'a').close()
-elif paused is False and os.path.exists(DIR + '/paused'):
-    os.remove(DIR + '/paused')
+def signal(payload, upkeep):
+    if payload.get('run_now'):
+        write(upkeep, 'run-now', '')
+    paused = payload.get('paused')
+    if paused is True:
+        write(upkeep, 'paused', '')
+    elif paused is False:
+        try:
+            os.unlink('paused', dir_fd=upkeep)
+        except FileNotFoundError:
+            pass
 
 
 def tmux(*args):
-    return subprocess.run(as_agent(['tmux', '-L', 'horizon-cloud', *args]), capture_output=True, text=True)
+    return subprocess.run(['tmux', '-L', 'horizon-cloud', *args], capture_output=True, text=True, timeout=20)
 
 
-if ISOLATED:
-    # An earlier exchange may have started the loop on root's server, where no panel finds it.
-    subprocess.run(['tmux', '-L', 'horizon-cloud', 'kill-session', '-t', '=' + session], capture_output=True)
-# A reconnect relaunches recorded sessions as interactive agents; only the loop belongs here.
-start = tmux('display-message', '-p', '-t', '=' + session + ':', '#{pane_start_command}')
-loop = start.returncode == 0 and 'upkeep/run.sh' in start.stdout
-# A loop that already ran before this exchange has survived its start; only then is its
-# session ready for a panel to attach.
-settled = loop
-if start.returncode == 0 and not loop:
-    tmux('kill-session', '-t', '=' + session)
-if not loop:
-    command = ['/bin/bash', '--noprofile', '--norc', DIR + '/run.sh', session]
-    started = tmux('new-session', '-d', '-s', session, '-c', DIR,
-                   '-e', 'PATH=' + os.environ.get('PATH', '/usr/local/bin:/usr/bin:/bin'),
-                   '-e', 'BASH_ENV=', '-e', 'ENV=', *command)
-    loop = started.returncode == 0
+def keep_loop(session, directory):
+    """Whether the loop's session runs, and whether it already ran before this exchange."""
+    # A reconnect relaunches recorded sessions as interactive agents; only the loop belongs here.
+    start = tmux('display-message', '-p', '-t', '=' + session + ':', '#{pane_start_command}')
+    loop = start.returncode == 0 and 'upkeep/run.sh' in start.stdout
+    # A loop that already ran before this exchange has survived its start; only then is its
+    # session ready for a panel to attach.
+    settled = loop
+    if start.returncode == 0 and not loop:
+        tmux('kill-session', '-t', '=' + session)
+    if not loop:
+        command = ['/bin/bash', '--noprofile', '--norc', directory + '/run.sh', session]
+        started = tmux('new-session', '-d', '-s', session, '-c', directory,
+                       '-e', 'PATH=' + os.environ.get('PATH', '/usr/local/bin:/usr/bin:/bin'),
+                       '-e', 'BASH_ENV=', '-e', 'ENV=', *command)
+        loop = started.returncode == 0
+    return loop, settled
 
-status = None
-try:
-    with open(DIR + '/status.json', 'rb') as handle:
-        status = handle.read(STATUS_LIMIT).decode('utf-8', 'replace')
-except OSError:
-    pass
-runs = []
-try:
-    with open(DIR + '/runs.jsonl') as handle:
-        for line in handle.readlines()[-200:]:
-            try:
-                runs.append(json.loads(line))
-            except ValueError:
-                pass
-except OSError:
-    pass
-next_run = None
-try:
-    with open(DIR + '/next-run') as handle:
-        next_run = int(handle.read().strip())
-except (OSError, ValueError):
-    pass
-print(json.dumps({'loop': loop, 'settled': settled, 'status': status, 'runs': runs, 'next_run': next_run,
-                  'paused': os.path.exists(DIR + '/paused')}))
+
+def report(upkeep, loop, settled):
+    """What the board shows. Everything here comes from files that the agent can write."""
+    status = read(upkeep, 'status.json', STATUS_LIMIT)
+    runs = []
+    for line in (read(upkeep, 'runs.jsonl', RUNS_LIMIT, tail=True) or b'').splitlines()[-200:]:
+        try:
+            run = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(run, dict):
+            runs.append(run)
+    try:
+        next_run = int((read(upkeep, 'next-run', 32) or b'').strip())
+    except ValueError:
+        next_run = None
+    answer = {'loop': loop, 'settled': settled, 'runs': runs, 'next_run': next_run,
+              'paused': read(upkeep, 'paused', 0) is not None,
+              'status': status.decode('utf-8', 'replace') if status is not None else None}
+    text = json.dumps(answer)
+    if len(text) > OUTPUT_LIMIT:
+        answer['status'] = None
+        text = json.dumps(answer)
+    return text
+
+
+def exchange(payload):
+    session = payload['session']
+    if not SESSION.fullmatch(session) or not REVISION.fullmatch(payload['revision']):
+        raise Refused('the session or revision is not valid')
+    home = owned_folder(HOME)
+    try:
+        upkeep = folder(home, FOLDER)
+        try:
+            install(payload, upkeep)
+            signal(payload, upkeep)
+            loop, settled = keep_loop(session, HOME + '/' + FOLDER)
+            return report(upkeep, loop, settled)
+        finally:
+            os.close(upkeep)
+    finally:
+        os.close(home)
+
+
+def main():
+    payload = json.loads(base64.b64decode(sys.argv[1]))
+    try:
+        print(exchange(payload))
+    except Refused as error:
+        print(f'Upkeep refused this worker: {error}.', file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()

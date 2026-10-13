@@ -13,6 +13,14 @@ const EXCHANGE: &str = include_str!("worker/exchange.py");
 const RUN: &str = include_str!("worker/run.sh");
 const SCHEDULER: &str = include_str!("worker/run.py");
 const TIMEOUT: Duration = Duration::from_secs(45);
+/// The remote command is one argument of the worker's shell, which Linux limits to 128 KiB.
+const COMMAND_LIMIT: usize = 120 * 1024;
+const REPOSITORY_LIMIT: usize = 100;
+const AUTHOR_LIMIT: usize = 20;
+const INSTRUCTIONS_LIMIT: usize = 16 * 1024;
+const WORKER_LIMIT: usize = 200;
+/// The only agent the worker loop runs.
+pub const AGENT: &str = "codex";
 
 /// How the worker finds pull requests and checks out code.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,9 +57,15 @@ impl Checkouts {
     /// What the agent is told about finding pull requests and cloning.
     fn instructions(self) -> &'static str {
         match self {
-            Self::OnDemand => "- Read the open pull requests without cloning: `gh pr list --repo @@REPOSITORY@@ --author <author> --state open --json number,title,url,headRefName,statusCheckRollup,mergeable`, then `gh pr view` or `gh pr checks`. Clone only when a pull request needs a fix, a rebase or a local check, and then partially: `git clone --filter=blob:none https://github.com/@@REPOSITORY@@` into /workspace/home/upkeep/repos/@@REPOSITORY@@.\n",
-            Self::Partial => "- Keep a partial clone in /workspace/home/upkeep/repos/@@REPOSITORY@@: `git clone --filter=blob:none https://github.com/@@REPOSITORY@@` the first time, `git fetch --prune` in later runs.\n",
-            Self::Full => "- Keep a full clone in /workspace/home/upkeep/repos/@@REPOSITORY@@: `git clone https://github.com/@@REPOSITORY@@` and `git lfs pull` the first time, `git fetch --prune` and `git lfs pull` in later runs.\n",
+            Self::OnDemand => {
+                "- Read the open pull requests without cloning: `gh pr list --repo @@REPOSITORY@@ --author <author> --state open --json number,title,url,headRefName,statusCheckRollup,mergeable`, then `gh pr view` or `gh pr checks`. Clone only when a pull request needs a fix, a rebase or a local check, and then partially: `git clone --filter=blob:none https://github.com/@@REPOSITORY@@` into /workspace/home/upkeep/repos/@@REPOSITORY@@.\n"
+            }
+            Self::Partial => {
+                "- Keep a partial clone in /workspace/home/upkeep/repos/@@REPOSITORY@@: `git clone --filter=blob:none https://github.com/@@REPOSITORY@@` the first time, `git fetch --prune` in later runs.\n"
+            }
+            Self::Full => {
+                "- Keep a full clone in /workspace/home/upkeep/repos/@@REPOSITORY@@: `git clone https://github.com/@@REPOSITORY@@` and `git lfs pull` the first time, `git fetch --prune` and `git lfs pull` in later runs.\n"
+            }
         }
     }
 }
@@ -63,7 +77,7 @@ pub struct Config {
     pub repositories: Vec<String>,
     /// GitHub logins of the bots whose pull requests it moves, such as `app/dependabot`.
     pub authors: Vec<String>,
-    /// `codex`, `claude` or `grok`.
+    /// The agent that runs; the worker loop runs only [`AGENT`].
     pub agent: String,
     pub every_minutes: u32,
     pub instructions: String,
@@ -104,6 +118,71 @@ impl Config {
             .retain(|held| !names.iter().any(|name| name.trim().eq_ignore_ascii_case(held)));
         before - self.repositories.len()
     }
+
+    /// Checks every value that reaches a command line, a file name or the agent's prompt on
+    /// the worker. The instructions are the person's own text and only have a size limit.
+    /// # Errors
+    /// The first value the worker must not get.
+    pub fn validate(&self) -> Result<()> {
+        if self.repositories.is_empty() || self.repositories.len() > REPOSITORY_LIMIT {
+            return Err(Error::Invalid("Upkeep needs 1 to 100 repositories"));
+        }
+        if !self
+            .repositories
+            .iter()
+            .all(|name| horizon_cloud::github::valid_repository(name))
+        {
+            return Err(Error::Invalid("An Upkeep repository is not a GitHub owner/name"));
+        }
+        // Two agents on one repository would work against each other.
+        for (index, name) in self.repositories.iter().enumerate() {
+            if self.repositories[..index]
+                .iter()
+                .any(|held| held.eq_ignore_ascii_case(name))
+            {
+                return Err(Error::Invalid("An Upkeep repository is listed twice"));
+            }
+        }
+        if !self.order.iter().all(|name| self.repositories.contains(name)) {
+            return Err(Error::Invalid(
+                "The Upkeep order names a repository that is not in the list",
+            ));
+        }
+        if self.authors.is_empty()
+            || self.authors.len() > AUTHOR_LIMIT
+            || !self.authors.iter().all(|name| valid_author(name))
+        {
+            return Err(Error::Invalid("An Upkeep bot is not a GitHub login"));
+        }
+        if self.agent != AGENT {
+            return Err(Error::Invalid("Upkeep runs Codex only"));
+        }
+        if !(15..=24 * 60).contains(&self.every_minutes) {
+            return Err(Error::Invalid("Upkeep runs every 15 minutes to every 24 hours"));
+        }
+        if self.instructions.len() > INSTRUCTIONS_LIMIT || self.worker.len() > WORKER_LIMIT {
+            return Err(Error::Invalid("The Upkeep instructions or worker name are too long"));
+        }
+        Ok(())
+    }
+}
+
+/// A login that `gh pr list --author` accepts: `name`, `name[bot]` or `app/name`.
+fn valid_author(name: &str) -> bool {
+    let name = name.strip_prefix("app/").unwrap_or(name);
+    let name = name.strip_suffix("[bot]").unwrap_or(name);
+    (1..=39).contains(&name.len())
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+fn valid_cloud_id(cloud_id: &str) -> bool {
+    !cloud_id.is_empty()
+        && cloud_id.len() <= 90
+        && cloud_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 /// The tmux session of an Upkeep cloud's loop, which its live panel attaches to.
@@ -120,8 +199,14 @@ pub fn directory(cloud_id: &str) -> PathBuf {
 
 /// Saves `config` for `cloud_id`.
 /// # Errors
-/// The folder or file cannot be written.
+/// A cloud id that is not one folder name, or a folder or file that cannot be written.
 pub fn save(cloud_id: &str, config: &Config) -> std::io::Result<PathBuf> {
+    if !valid_cloud_id(cloud_id) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid cloud for Upkeep",
+        ));
+    }
     let folder = directory(cloud_id);
     std::fs::create_dir_all(&folder)?;
     let path = folder.join("upkeep.json");
@@ -180,17 +265,21 @@ Pull requests opened by: {authors}.\n\n\
     )
 }
 
-/// The remote command for one exchange.
+/// The remote command for one exchange. It runs as the account that owns the agent's home:
+/// through `horizon-worker-tailnet agent` where the worker isolates agents, so root never
+/// writes into a folder the agent controls.
 /// # Errors
-/// Refuses a cloud id or revision that could not name a worker session.
+/// Refuses a cloud id or revision that could not name a worker session, settings that
+/// [`Config::validate`] refuses, and a command too long for the worker's shell.
 pub fn command(cloud_id: &str, revision: &str, config: &Config, signals: Signals) -> Result<String> {
-    let valid_id = !cloud_id.is_empty()
-        && cloud_id.len() <= 90
-        && cloud_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
-    let valid_revision = matches!(revision.len(), 40 | 64) && revision.bytes().all(|b| b.is_ascii_hexdigit());
-    if !valid_id || !valid_revision {
+    let valid_revision = matches!(revision.len(), 40 | 64)
+        && revision
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    if !valid_cloud_id(cloud_id) || !valid_revision {
         return Err(Error::Invalid("Invalid cloud for Upkeep"));
     }
+    config.validate()?;
     let config_text = serde_json::to_string(config).map_err(|_| Error::Invalid("Invalid Upkeep settings"))?;
     let payload = serde_json::json!({
         "session": session(cloud_id),
@@ -205,7 +294,14 @@ pub fn command(cloud_id: &str, revision: &str, config: &Config, signals: Signals
     let engine = base64::engine::general_purpose::STANDARD;
     let script = engine.encode(EXCHANGE);
     let payload = engine.encode(payload.to_string());
-    Ok(format!("printf %s '{script}' | base64 -d | python3 -I - '{payload}'"))
+    let command = format!(
+        "launcher=python3; if [ -f /run/horizon-tailnet/agent-isolation ]; then launcher='horizon-worker-tailnet agent python3'; fi; \
+printf %s '{script}' | base64 -d | $launcher -I - '{payload}'"
+    );
+    if command.len() > COMMAND_LIMIT {
+        return Err(Error::Invalid("The Upkeep settings are too long for the worker"));
+    }
+    Ok(command)
 }
 
 /// What one exchange read back.
@@ -255,7 +351,8 @@ pub fn exchange(
 /// # Errors
 /// Output that is not one exchange object.
 pub fn parse(output: &str) -> Result<Exchange> {
-    let raw: Raw = serde_json::from_str(output.trim()).map_err(|_| Error::Invalid("The worker's Upkeep answer is malformed"))?;
+    let raw: Raw =
+        serde_json::from_str(output.trim()).map_err(|_| Error::Invalid("The worker's Upkeep answer is malformed"))?;
     Ok(Exchange {
         loop_running: raw.loop_running,
         settled: raw.settled,
@@ -355,7 +452,10 @@ mod tests {
     #[test]
     fn repositories_are_added_once_and_removed_ignoring_case() {
         let mut config = config();
-        assert_eq!(config.add(&["Acme/Web".into(), "acme/docs".into(), "acme/docs".into()]), 1);
+        assert_eq!(
+            config.add(&["Acme/Web".into(), "acme/docs".into(), "acme/docs".into()]),
+            1
+        );
         assert_eq!(config.repositories, ["acme/web", "acme/api", "acme/docs"]);
         assert_eq!(config.remove(&["ACME/API".into(), "acme/missing".into()]), 1);
         assert_eq!(config.repositories, ["acme/web", "acme/docs"]);
@@ -377,6 +477,72 @@ mod tests {
         assert!(command("abc-123", &revision, &config(), Signals::default()).is_ok());
         assert!(command("abc;rm", &revision, &config(), Signals::default()).is_err());
         assert!(command("abc", "HEAD", &config(), Signals::default()).is_err());
+    }
+
+    #[test]
+    fn settings_that_could_reach_a_command_line_or_path_are_refused() {
+        assert!(config().validate().is_ok());
+        let refused = |change: fn(&mut Config)| {
+            let mut config = config();
+            change(&mut config);
+            config.validate().is_err()
+        };
+        assert!(refused(|config| config.repositories.clear()));
+        assert!(refused(|config| config.repositories.push("--repo=evil/x".into())));
+        assert!(refused(|config| config.repositories.push("acme/..".into())));
+        assert!(refused(|config| config.repositories.push("acme/web/../x".into())));
+        assert!(refused(|config| config.repositories.push("acme/a b".into())));
+        assert!(refused(|config| config.repositories.push("ACME/Web".into())));
+        assert!(refused(
+            |config| config.repositories = (0..101).map(|n| format!("acme/r{n}")).collect()
+        ));
+        assert!(refused(|config| config.order.push("acme/other".into())));
+        assert!(refused(|config| config.authors.clear()));
+        assert!(refused(|config| config.authors.push("--state=closed".into())));
+        assert!(refused(|config| config.authors.push("app/".into())));
+        assert!(refused(|config| config.authors.push("bot;id".into())));
+        assert!(refused(|config| config.agent = "claude".into()));
+        assert!(refused(|config| config.every_minutes = 5));
+        assert!(refused(
+            |config| config.instructions = "x".repeat(INSTRUCTIONS_LIMIT + 1)
+        ));
+        assert!(refused(|config| config.worker = "x".repeat(WORKER_LIMIT + 1)));
+        let mut config = config();
+        config.authors = vec!["app/dependabot".into(), "renovate[bot]".into(), "dependabot".into()];
+        config.order = vec!["acme/api".into()];
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn the_command_runs_as_the_agent_where_the_worker_isolates_it() {
+        let remote = command("abc-123", &"a".repeat(40), &config(), Signals::default()).unwrap();
+        assert!(remote.starts_with(
+            "launcher=python3; if [ -f /run/horizon-tailnet/agent-isolation ]; then launcher='horizon-worker-tailnet agent python3'; fi;"
+        ));
+        assert!(remote.contains("| $launcher -I - '"));
+        let mut long = config();
+        long.instructions = "x".repeat(INSTRUCTIONS_LIMIT);
+        long.repositories = (0..REPOSITORY_LIMIT)
+            .map(|n| format!("{}/{}", "o".repeat(39), n.to_string().repeat(20)))
+            .collect();
+        assert!(command("abc-123", &"a".repeat(40), &long, Signals::default()).is_ok());
+        assert!(command("abc-123", &"A".repeat(40), &config(), Signals::default()).is_err());
+    }
+
+    #[test]
+    fn a_cloud_id_that_is_not_one_folder_name_is_never_saved() {
+        assert!(save("../escape", &config()).is_err());
+        assert!(save("", &config()).is_err());
+    }
+
+    #[test]
+    fn the_default_instructions_lead_the_prompt() {
+        let mut config = config();
+        config.instructions = crate::upkeep::DEFAULT_INSTRUCTIONS.into();
+        let prompt = prompt(&config);
+        assert!(prompt.starts_with("Keep dependency pull requests moving"));
+        assert!(prompt.contains("Pull requests opened by: app/dependabot."));
+        assert!(prompt.contains("--match-head-commit"));
     }
 
     #[test]
