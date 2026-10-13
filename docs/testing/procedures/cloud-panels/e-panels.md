@@ -151,6 +151,25 @@ real request.
 
    Result: The agent replies `ready`.
 
+6. Start Claude Code in the first Shell panel from E01. If step 2 saved the key
+   again, open a new Shell panel as in E01 steps 1 and 2. Use that panel.
+
+   ```sh
+   claude
+   ```
+
+   Result: Claude Code starts. It shows no login prompt and no question about the API key.
+
+7. Type the request of step 5 of H01. Then type `/exit`.
+
+   Result: The agent replies `ready`. The panel does not show `Not logged in`.
+
+8. Open a new Shell panel as in E01 steps 1 and 2. Start Claude Code in it as in
+   step 6. Then do step 7.
+
+   Result: The agent replies `ready`. A Shell panel that opens after a Claude Code
+   panel also uses the saved key.
+
 ### 6.3 E03 — Start a Codex panel
 
 1. In `smoke-a`, open the panel picker as in E01.
@@ -340,6 +359,7 @@ real request.
 
 - The Shell panel opens at the expected commit as UID 10001.
 - Claude Code replies to a request without a `401` error.
+- Claude Code that you start in a Shell panel replies without a login prompt.
 - Codex replies, or it gives a clear reason.
 - The Browser panel loads the page and names its controller.
 - The desktop viewer shows the worker desktop and sends no input.
