@@ -317,6 +317,8 @@ The debug Horizon gets a changed environment:
 - `CODEX_HOME`, `GROK_HOME`, `XDG_DATA_HOME`, `XDG_CONFIG_HOME` and
   `XDG_CACHE_HOME` go to the state directory. The agents and tools that the
   debug app starts keep their files there.
+- `HISTFILE` is `<state>/shell-history`, so the shells in the debug app's
+  terminals write no history to `HOME`.
 - `HOME` does not change. Terminals in the debug app keep `/workspace/home`.
 
 The manifest has these fields:
@@ -331,7 +333,7 @@ The manifest has these fields:
 | `log`, `config` | The Horizon log and the config that it loaded. |
 | `display` | The worker desktop, `:99`. |
 | `started_at` | The UTC launch time, for `find -newermt`. |
-| `window` | `true` when a window of `pid` showed on the display. |
+| `window` | Always `true`. When no window of `pid` shows within `--window-timeout` seconds (60 by default), the command stops Horizon and fails without a manifest. |
 | `build` | The target directory, the build log, the seconds and the priority. `null` with `--horizon`. |
 | `removed_environment` | The names that the command removed. |
 
@@ -364,6 +366,7 @@ Options:
 - `--config PATH` uses this config instead of the disposable fixture.
 - `--target-dir DIR` builds into this directory. See the next section.
 - `--display NAME` uses another X display, for example for a local test.
+- `--window-timeout SECONDS` sets how long the command waits for the window.
 - Set `CARGO_BUILD_JOBS` to use fewer build jobs when the worker has little memory.
 
 ### Build stalls on the workspace volume

@@ -33,7 +33,7 @@ WORKER_IDENTITY_KEYS = (
 )
 CREDENTIAL_KEYS = ('ANTHROPIC_API_KEY', 'ANTHROPIC_WORKSPACE_ID', 'ANTHROPIC_CUSTOM_HEADERS')
 STRIPPED_KEYS = WORKER_IDENTITY_KEYS + CREDENTIAL_KEYS + ('WAYLAND_DISPLAY',)
-REPLACED_KEYS = ('DISPLAY', 'HORIZON_HOME', 'HORIZON_AGENT_INTEGRATIONS', 'CODEX_HOME', 'GROK_HOME',
+REPLACED_KEYS = ('DISPLAY', 'HORIZON_HOME', 'HORIZON_AGENT_INTEGRATIONS', 'HISTFILE', 'CODEX_HOME', 'GROK_HOME',
                  'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME')
 STOP_SECONDS = 15
 
@@ -44,14 +44,16 @@ def child_environment(environ, state, display):
     HOME stays, so terminals in the debug app keep the worker home. Horizon's state goes to
     HORIZON_HOME, and HORIZON_AGENT_INTEGRATIONS=off stops it from installing agent skills,
     plugins, MCP registrations and a desktop entry in that home, which the worker's own agents
-    use. The Codex and Grok homes and the XDG directories go to the state directory too, so
-    the agents and tools that the debug app starts keep their files there.
+    use. The Codex and Grok homes, the XDG directories and the shell history of its terminals
+    go to the state directory too, so the agents and tools that the debug app starts keep
+    their files there.
     """
     removed = sorted(key for key in STRIPPED_KEYS if key in environ)
     env = {key: value for key, value in environ.items() if key not in STRIPPED_KEYS + REPLACED_KEYS}
     env.update(DISPLAY=display,
                HORIZON_HOME=str(state / 'horizon-home'),
                HORIZON_AGENT_INTEGRATIONS='off',
+               HISTFILE=str(state / 'shell-history'),
                CODEX_HOME=str(state / 'agents' / 'codex'),
                GROK_HOME=str(state / 'agents' / 'grok'),
                XDG_DATA_HOME=str(state / 'xdg' / 'data'),
@@ -234,12 +236,15 @@ def main(argv=None):
             raise RuntimeError(f'Horizon stopped at launch ({error}); read {log_path}') from error
         if running != digest:
             raise RuntimeError(f'The running executable {running} is not the frozen binary {digest}')
+        if not wait_for_window(process, args.display, args.window_timeout):
+            raise RuntimeError(f'No window of Horizon {process.pid} showed on {args.display} within '
+                               f'{args.window_timeout:g} s; read {log_path}')
         manifest = {
             'display': args.display, 'pid': process.pid, 'launcher_pid': os.getpid(),
             'binary': str(frozen), 'frozen_by': frozen_by, 'sha256': digest, 'state': str(state),
             'horizon_home': env['HORIZON_HOME'], 'log': str(log_path), 'config': str(config),
             'started_at': started_at, 'build': built, 'removed_environment': removed,
-            'window': wait_for_window(process, args.display, args.window_timeout),
+            'window': True,
         }
         (state / 'worker-desktop.json').write_text(json.dumps(manifest, indent=2))
         print(json.dumps(manifest), flush=True)

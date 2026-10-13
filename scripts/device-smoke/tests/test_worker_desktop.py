@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -58,6 +59,7 @@ class ChildEnvironmentTests(unittest.TestCase):
         self.assertEqual(self.env['HORIZON_SESSION_DIR'], '/workspace/session-data/s1')
         self.assertEqual(self.env['HORIZON_HOME'], str(self.state / 'horizon-home'))
         self.assertEqual(self.env['HORIZON_AGENT_INTEGRATIONS'], 'off', 'nothing is installed in HOME')
+        self.assertEqual(self.env['HISTFILE'], str(self.state / 'shell-history'), 'its terminals keep no history in HOME')
         for key in ('CODEX_HOME', 'GROK_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME'):
             self.assertTrue(Path(self.env[key]).is_relative_to(self.state), key)
 
@@ -160,6 +162,28 @@ class FreezeAndStopTests(unittest.TestCase):
             self.assertFalse(os.path.samefile(frozen, source))
             self.assertEqual(frozen.stat().st_mode & 0o777, 0o700)
             self.assertEqual(digest, hashlib.sha256(b'synthetic binary').hexdigest())
+
+    def test_a_launch_without_a_window_fails_and_stops_the_process(self):
+        started = []
+        real_popen = subprocess.Popen
+
+        def popen(command, *args, **kwargs):
+            if not str(command[0]).endswith('/bin/horizon'):
+                return real_popen(command, *args, **kwargs)
+            # A candidate that stays alive but never maps a window.
+            started.append(real_popen(['sleep', '60'], stdout=kwargs['stdout'], start_new_session=True))
+            return started[0]
+        with tempfile.TemporaryDirectory() as raw:
+            binary = Path(raw) / 'horizon'
+            binary.write_bytes(b'synthetic binary')
+            arguments = ['--horizon', str(binary), '--state', str(Path(raw) / 'state'),
+                         '--display', ':4242', '--window-timeout', '1']
+            with mock.patch.object(worker_desktop.subprocess, 'Popen', side_effect=popen), \
+                    mock.patch.object(worker_desktop, 'sha256', return_value='same'):
+                with self.assertRaisesRegex(RuntimeError, 'No window of Horizon'):
+                    worker_desktop.main(arguments)
+            self.assertFalse((Path(raw) / 'state' / 'worker-desktop.json').exists(), 'no manifest')
+        self.assertIsNotNone(started[0].poll(), 'the launcher stopped the candidate')
 
     def test_stop_ends_a_process_that_has_no_window(self):
         process = subprocess.Popen(['sleep', '60'], start_new_session=True)

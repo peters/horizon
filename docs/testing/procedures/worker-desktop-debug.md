@@ -65,7 +65,7 @@ These names apply in the steps:
 | `<identity>` | The SSH identity file of the cloud settings. |
 | `<tree>` | The copy of the candidate on the worker, `/workspace/worktrees/horizon-candidate`. |
 | `<state>` | The `state` value in the manifest of W04. |
-| `<started>` | The `started_at` value in the manifest of W04. |
+| `<second>` | The `started_at` value in the manifest of W08. |
 
 ## 5. Setup
 
@@ -108,14 +108,6 @@ These names apply in the steps:
    ```
 
    Result: `<tree>/scripts/device-smoke/serve.py` exists on the worker.
-
-4. Record the state of the browser service's root.
-
-   ```sh
-   ssh -i <identity> root@<worker> 'find /workspace/home/.horizon -type f | sort | xargs sha256sum' > <evidence>/horizon-root-before.txt
-   ```
-
-   Result: The file lists the files of `/workspace/home/.horizon`.
 
 ### 6.3 W03: Measure the browser panels before and during the build
 
@@ -199,29 +191,58 @@ These names apply in the steps:
    Result: The viewer in the client shows the debug Horizon window. Clicks in
    the viewer do nothing, because the cloud desktop is read-only.
 
-### 6.7 W07: Make sure that the debug Horizon wrote nothing in the home
-
-1. Look for changed files in the worker home.
-
-   ```sh
-   ssh -i <identity> root@<worker> 'find /workspace/home -newermt "<started>"'
-   ```
-
-   Result: No path in the output comes from the debug Horizon: no Horizon
-   skill, plugin, lease, MCP registration or desktop entry, and no file in
-   `/workspace/home/.horizon`. Files of the Shell panels, such as the shell
-   history, can show.
-
-2. Compare the files of `/workspace/home/.horizon` with W02 step 4.
-
-   Result: The list and the hashes are the same.
-
-### 6.8 W08: Stop the debug Horizon
+### 6.7 W07: Stop the debug Horizon
 
 1. Press Ctrl-C in the second Shell panel.
 
    Result: The debug Horizon window closes in less than 15 seconds. The command
    ends. No process from `<state>/bin/horizon` runs.
+
+### 6.8 W08: Make sure that a launch writes nothing in the home
+
+The browser probe of W03 changes `/workspace/home/.horizon` itself. For this
+reason, this task starts the frozen binary again after the probe stopped.
+
+1. Record the worker home.
+
+   ```sh
+   ssh -i <identity> root@<worker> 'find /workspace/home -printf "%P %y %s %T@\n" | sort; find /workspace/home/.horizon -type f -print0 | sort -z | xargs -0 sha256sum' > <evidence>/home-before.txt
+   ```
+
+   Result: The file lists the worker home and the hashes of
+   `/workspace/home/.horizon`.
+
+2. In the second Shell panel, start the frozen binary of W04 without a build.
+
+   ```sh
+   cd <tree> && python3 scripts/device-smoke/serve.py --worker-desktop --horizon <state>/bin/horizon
+   ```
+
+   Result: The Shell panel shows one JSON line. `build` is `null`. Write its
+   `started_at` value as `<second>`.
+
+3. Wait 30 seconds, then press Ctrl-C.
+
+   Result: The window closes and the command ends.
+
+4. Look for changed files in the worker home.
+
+   ```sh
+   ssh -i <identity> root@<worker> 'find /workspace/home -newermt "<second>"'
+   ```
+
+   Result: The output is empty. The debug Horizon wrote no Horizon skill,
+   plugin, lease, MCP registration, desktop entry or shell history, and no file
+   in `/workspace/home/.horizon`.
+
+5. Record the worker home again into `<evidence>/home-after.txt` with the
+   command of step 1, and compare the two files.
+
+   ```sh
+   diff <evidence>/home-before.txt <evidence>/home-after.txt
+   ```
+
+   Result: The output is empty.
 
 ### 6.9 W09: Delete the cloud
 
@@ -242,7 +263,8 @@ These names apply in the steps:
   some seconds while the build writes to the volume are known.
 - The running executable has the frozen hash. No worker identity variable shows.
 - `device_screenshot` and **Add desktop viewer** show the debug Horizon.
-- The debug Horizon wrote nothing in `/workspace/home`.
+- With the probe stopped, a launch of the debug Horizon changed nothing in
+  `/workspace/home`.
 - Ctrl-C closes the window and ends the command.
 - No resource of the run stays in the Hetzner project.
 
