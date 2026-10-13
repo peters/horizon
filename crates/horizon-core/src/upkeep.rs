@@ -311,7 +311,7 @@ pub fn relative(at: OffsetDateTime, now: OffsetDateTime) -> String {
 
 fn rfc3339<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<OffsetDateTime, D::Error> {
     let text = String::deserialize(deserializer)?;
-    OffsetDateTime::parse(&text, &Rfc3339).map_err(serde::de::Error::custom)
+    parse_time(&text).ok_or_else(|| serde::de::Error::custom("not an RFC 3339 time in UTC range"))
 }
 
 /// A value of the wrong type is the field's default, so one odd field does not hide the
@@ -347,10 +347,13 @@ where
         .collect())
 }
 
-/// Parses an RFC 3339 time, for tests and fixtures.
+/// Parses an RFC 3339 time and turns it into UTC. A time whose UTC date is out of range
+/// is `None`, so no later conversion can panic on it.
 #[must_use]
 pub fn parse_time(text: &str) -> Option<OffsetDateTime> {
-    OffsetDateTime::parse(text, &Rfc3339).ok()
+    OffsetDateTime::parse(text, &Rfc3339)
+        .ok()?
+        .checked_to_offset(time::UtcOffset::UTC)
 }
 
 #[cfg(test)]
@@ -398,6 +401,19 @@ mod tests {
         assert_eq!(status.runs[0].outcome, RunOutcome::Other);
         assert_eq!(status.pull_requests[0].state, PrState::Other);
         assert_eq!(status.pull_requests[0].checks, Checks::None);
+    }
+
+    #[test]
+    fn a_time_out_of_range_in_utc_is_refused_not_a_panic() {
+        assert!(parse_time("9999-12-31T23:59:59-23:59").is_none());
+        let status: Status = serde_json::from_str(
+            r#"{"schedule":{"next_run_at":"9999-12-31T23:59:59-23:59"},
+                "activity":[{"at":"9999-12-31T23:59:59-23:59","text":"x"},{"at":"2026-10-13T12:00:00+02:00","text":"y"}]}"#,
+        )
+        .unwrap();
+        assert!(status.schedule.next_run_at.is_none());
+        assert_eq!(status.activity.len(), 1);
+        assert_eq!(clock(status.activity[0].at), "10:00 UTC");
     }
 
     #[test]
