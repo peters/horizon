@@ -533,3 +533,25 @@ fn a_half_saved_working_copy_keeps_the_choices_for_the_next_save() {
     wait_until(&ctx, &mut app, |app| app.cloud_prototype.production.launch.unconfigured);
     assert!(app.cloud_prototype.error.is_none());
 }
+
+/// A read of the previous repository that ends after the person picked another one does
+/// not bring the previous one back.
+#[test]
+fn a_read_in_flight_does_not_bring_back_the_previous_repository() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    fixture(temp.path());
+    let form = &mut app.cloud_prototype.production;
+    form.creating = true;
+    form.repository = temp.path().to_string_lossy().into();
+    app.read_cloud_profiles(&ctx);
+    let other = tempfile::tempdir().unwrap();
+    app.set_cloud_repository(other.path());
+    assert!(!app.cloud_prototype.production.launch.loading());
+    std::thread::sleep(Duration::from_millis(300));
+    app.poll_cloud_launch(&ctx);
+    let form = &app.cloud_prototype.production;
+    assert_eq!(std::path::Path::new(&form.repository), other.path());
+    assert!(form.profiles.is_none());
+}

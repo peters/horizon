@@ -58,6 +58,14 @@ impl State {
         self.receiver.is_some()
     }
 
+    /// Forgets the read in flight and the settings read for the previous repository.
+    pub fn switch_repository(&mut self) {
+        self.cancel.cancel();
+        self.receiver = None;
+        self.reread = reread::State::default();
+        self.notes.clear();
+    }
+
     #[cfg(all(test, unix))]
     pub(super) fn hold_loading_for_test(&mut self) -> impl Send + use<> {
         let (sender, receiver) = channel();
@@ -127,8 +135,10 @@ impl HorizonApp {
             form.launch.notes.clear();
             form.launch.accounts_checked = false;
             form.launch.ready_profiles.clear();
-            form.profiles = None;
-            form.launch.reread.hidden = None;
+            // The shown settings keep the person's storage edits for the read that follows.
+            if let Some(shown) = form.profiles.take() {
+                form.launch.reread.hidden = Some(shown);
+            }
             self.cloud_prototype.error = None;
         }
         let form = &mut self.cloud_prototype.production;

@@ -451,6 +451,8 @@ impl HorizonApp {
         if form.repository != repository {
             form.repository = repository.into_owned();
             form.profiles = None;
+            // A read of the previous repository, quiet or not, must not bring it back.
+            form.launch.switch_repository();
             // Quick start is chosen for one repository; another one reads its own settings.
             if form.launch.configuration == Configuration::QuickStart {
                 form.launch.configuration = Configuration::WorkingCopy;

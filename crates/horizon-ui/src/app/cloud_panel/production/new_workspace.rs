@@ -138,17 +138,18 @@ impl HorizonApp {
 pub(super) fn gpu_profile(form: &mut Production, config: &CloudConfig) -> Option<String> {
     let repository = form.repository.clone();
     let intent = form.new_workspace.as_mut().filter(|intent| intent.gpu)?;
-    let again = intent.chosen_for.as_deref() == Some(repository.as_str());
-    if again && !intent.no_gpu {
-        return None;
-    }
     let found = config
         .profiles
         .iter()
         .find(|(_, profile)| profile.gpu)
         .map(|(name, _)| name.clone());
-    if again && found.is_none() {
-        return None;
+    if intent.chosen_for.as_deref() == Some(repository.as_str()) {
+        // A reread keeps the pick, and says so when the GPU profiles are gone.
+        let keep = !intent.no_gpu || found.is_none();
+        intent.no_gpu |= found.is_none();
+        if keep {
+            return None;
+        }
     }
     intent.chosen_for = Some(repository);
     intent.no_gpu = found.is_none();
