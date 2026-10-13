@@ -45,6 +45,8 @@ pub(super) struct IndexFile<'a> {
     path: &'a Path,
     /// [`INDEX_UPDATE`]; a test gives each updater its own, as each process has its own.
     threads: &'a Mutex<()>,
+    /// How long a change waits for the file lock; [`LOCK_WAIT`] outside tests.
+    wait: Duration,
 }
 
 impl<'a> IndexFile<'a> {
@@ -52,6 +54,7 @@ impl<'a> IndexFile<'a> {
         Self {
             path,
             threads: &INDEX_UPDATE,
+            wait: LOCK_WAIT,
         }
     }
 
@@ -112,7 +115,7 @@ impl<'a> IndexFile<'a> {
             .create(true)
             .truncate(false)
             .open(&lock_path)?;
-        let deadline = Instant::now() + LOCK_WAIT;
+        let deadline = Instant::now() + self.wait;
         loop {
             match file.try_lock() {
                 Ok(()) => return Ok(Some(file)),

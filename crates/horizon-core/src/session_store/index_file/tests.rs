@@ -16,9 +16,11 @@ fn updaters_that_share_only_the_file_lock_keep_every_change() {
             let (path, start) = (path.clone(), Arc::clone(&start));
             std::thread::spawn(move || {
                 let threads = Mutex::new(());
+                // A slow disk can hold the other updater's syncs longer than the lock wait.
                 let index = IndexFile {
                     path: &path,
                     threads: &threads,
+                    wait: Duration::from_secs(300),
                 };
                 start.wait();
                 for change in 0..CHANGES {

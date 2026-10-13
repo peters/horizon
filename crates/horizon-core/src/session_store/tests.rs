@@ -299,27 +299,47 @@ fn a_queued_save_is_durable_on_disk_even_after_its_file_was_removed() {
 }
 
 #[test]
-fn a_session_create_never_waits_for_the_index_lock_and_reads_see_its_change() {
+fn session_create_copy_and_delete_never_wait_for_the_index_lock() {
+    use std::time::{Duration, Instant};
     let root_dir = test_root("index-lock");
     let home = HorizonHome::from_root(root_dir.path().into());
     let store = SessionStore::new(home.clone(), home.config_path());
     let first = store.create_session_from_runtime(RuntimeState::default()).unwrap();
-    assert!(store.flush_runtime_states(std::time::Duration::from_secs(30)));
+    let doomed = store.create_session_from_runtime(RuntimeState::default()).unwrap();
+    assert!(store.flush_runtime_states(Duration::from_secs(30)));
     // Another Horizon process holds the index lock, so the writer cannot change the index.
     let held = std::fs::File::create(home.sessions_dir().join("index.lock")).unwrap();
     held.lock().unwrap();
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let second = store.create_session_from_runtime(RuntimeState::default()).unwrap();
+    let copy = store.duplicate_session(&first.session_id).unwrap();
+    store.delete_session(&doomed.session_id).unwrap();
     let waited = started.elapsed();
     let listed = store.list_profile_sessions().unwrap();
+    // The exit wait for the writer keeps its bound while the change cannot be written.
+    let started = Instant::now();
+    let flushed = store.flush_runtime_states(Duration::from_millis(200));
+    let exit_wait = started.elapsed();
     drop(held);
-    assert!(waited < std::time::Duration::from_secs(2), "the create took {waited:?}");
-    assert_eq!(listed[0].session_id, second.session_id, "a read sees the queued change");
-    assert!(store.flush_runtime_states(std::time::Duration::from_secs(30)));
+    assert!(
+        waited < Duration::from_secs(2),
+        "create, copy and delete took {waited:?}"
+    );
+    assert_eq!(listed[0].session_id, copy.session_id, "a read sees the queued changes");
+    assert!(
+        !flushed && exit_wait < Duration::from_secs(2),
+        "the exit wait took {exit_wait:?}"
+    );
+    assert!(
+        store.flush_runtime_states(Duration::from_secs(30)),
+        "the exit wait writes them"
+    );
     let index = super::IndexFile::at(&home.session_index_path()).load().unwrap();
     let profile = index.profile(store.profile_id()).unwrap();
-    assert_eq!(profile.last_session_id.as_deref(), Some(second.session_id.as_str()));
+    assert_eq!(profile.last_session_id.as_deref(), Some(copy.session_id.as_str()));
+    assert!(index.names(store.profile_id(), &second.session_id));
     assert!(index.names(store.profile_id(), &first.session_id));
+    assert!(!index.names(store.profile_id(), &doomed.session_id));
 }
 
 #[test]
