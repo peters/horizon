@@ -344,24 +344,37 @@ pub(super) fn chosen_preset<'a>(
         .or_else(|| presets.first())
 }
 
-/// Under the profiles: which image a quick start runs and how to leave it, or why
-/// quick start does not apply to a commit with its own settings. Committed settings
-/// can be updated from the CI; true when the person asked for that.
-pub(super) fn quick_start_note(ui: &mut egui::Ui, form: &mut Production) -> bool {
+/// What the person asked for under the profiles.
+pub(super) enum Note {
+    None,
+    /// An agent checks the repository's settings against its CI.
+    UpdateFromCi,
+    /// The repository's own `.horizon/cloud.yml` instead of quick start.
+    LeaveQuickStart,
+}
+
+/// Under the profiles: which image a quick start runs and how to leave it. The
+/// repository's own settings can be updated from the CI instead.
+pub(super) fn quick_start_note(ui: &mut egui::Ui, form: &mut Production) -> Note {
     if let Some(note) = quick_start_text(form) {
         ui.label(RichText::new(note).size(12.0).color(theme::FG_SOFT()));
+        let leave = ui
+            .add(action_button("Use .horizon/cloud.yml"))
+            .on_hover_text("Read the repository's own settings, from the working copy on the checked-out commit.")
+            .clicked();
+        return if leave { Note::LeaveQuickStart } else { Note::None };
     }
-    if form.profiles.is_none() || form.launch.configuration != Configuration::Committed {
-        return false;
+    if form.profiles.is_none() || form.launch.configuration != Configuration::WorkingCopy {
+        return Note::None;
     }
     ui.add_space(4.0);
     // The setup agent runs on Linux only, so elsewhere its note stands where the action would.
     if !cfg!(target_os = "linux") {
         ui.label(RichText::new(PLATFORM_NOTE).size(12.5).color(theme::FG_SOFT()));
-        return false;
+        return Note::None;
     }
     if busy_elsewhere(ui, form) {
-        return false;
+        return Note::None;
     }
     let update = ui
         .add(action_button("Update setup from CI"))
@@ -369,8 +382,9 @@ pub(super) fn quick_start_note(ui: &mut egui::Ui, form: &mut Production) -> bool
         .clicked();
     if update {
         form.setup_mode = Mode::Update;
+        return Note::UpdateFromCi;
     }
-    update
+    Note::None
 }
 
 fn quick_start_text(form: &Production) -> Option<String> {
@@ -381,12 +395,12 @@ fn quick_start_text(form: &Production) -> Option<String> {
                 .split_once("@sha256:")
                 .unwrap_or((quick_start::IMAGE, ""));
             Some(format!(
-                "Quick start on the public base image {image}, digest {}. No registry login, no image build and no Docker on this computer. To use the repository's own settings, choose Read .horizon/cloud.yml in More options.",
+                "Quick start on the public base image {image}, digest {}. No registry login, no image build and no Docker on this computer.",
                 digest.get(..12).unwrap_or(digest)
             ))
         }
-        // Profiles read from the commit or the working copy need no note.
-        Configuration::Committed | Configuration::LocalImageOnly => None,
+        // The repository's own profiles need no note.
+        Configuration::Committed | Configuration::WorkingCopy => None,
     }
 }
 
@@ -452,12 +466,14 @@ mod tests {
         let mut form = Production::default();
         assert_eq!(quick_start_text(&form), None, "nothing is read yet");
         form.profiles = Some(quick_start::builtin().unwrap());
-        assert_eq!(quick_start_text(&form), None, "committed profiles need no note");
+        assert_eq!(
+            quick_start_text(&form),
+            None,
+            "the repository's own profiles need no note"
+        );
         form.launch.configuration = Configuration::QuickStart;
         let note = quick_start_text(&form).unwrap();
         assert!(note.starts_with("Quick start on the public base image"), "{note}");
-        form.launch.configuration = Configuration::LocalImageOnly;
-        assert_eq!(quick_start_text(&form), None, "the working copy is not the commit");
     }
 
     #[test]

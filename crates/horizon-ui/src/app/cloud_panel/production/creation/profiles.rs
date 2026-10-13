@@ -34,6 +34,13 @@ pub(super) fn field(ui: &mut Ui, form: &mut Production) {
     }
 }
 
+/// Why some working-copy settings do not apply, such as an uncommitted build change.
+pub(super) fn notes(ui: &mut Ui, form: &Production) {
+    for note in &form.launch.notes {
+        ui.label(RichText::new(note).size(12.5).color(theme::PALETTE_YELLOW()));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

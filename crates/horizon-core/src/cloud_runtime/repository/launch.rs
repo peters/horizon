@@ -3,14 +3,19 @@ use super::{Error, PathBuf, Runner, resolve_with_runner};
 use horizon_cloud::CloudConfig;
 use std::{path::Path, process::Command, time::Duration};
 
-mod local;
 pub mod quick_start;
+mod working_copy;
+
+pub use working_copy::{Fingerprint, fingerprint};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Configuration {
-    #[default]
+    /// The `.horizon/cloud.yml` of the selected commit alone.
     Committed,
-    LocalImageOnly,
+    /// What New cloud reads: the selected commit's file, with where and how big each
+    /// worker runs taken from the working copy while that commit is checked out.
+    #[default]
+    WorkingCopy,
     /// The built-in profile on the public base image, for a commit without
     /// `.horizon/cloud.yml`.
     QuickStart,
@@ -20,6 +25,8 @@ pub struct Prepared {
     pub repository: PathBuf,
     pub revision: String,
     pub config: CloudConfig,
+    /// Why some working-copy settings do not apply, for New cloud to show.
+    pub notes: Vec<String>,
 }
 
 /// # Errors
@@ -29,7 +36,7 @@ pub fn prepare(directory: &str, revision: &str, runner: &Runner<'_>) -> super::R
 }
 
 /// # Errors
-/// Local settings offer existing worker images only; source stays pinned to `revision`.
+/// As [`prepare`]; the source stays pinned to `revision` whatever the working copy says.
 pub fn prepare_with_configuration(
     directory: &str,
     revision: &str,
@@ -50,18 +57,27 @@ pub fn prepare_with_configuration(
     )?;
     let repository = Path::new(root.trim_end_matches(['\r', '\n'])).canonicalize()?;
     let revision = resolve_with_runner(&repository, if revision.is_empty() { "HEAD" } else { revision }, runner)?;
-    let config = match configuration {
-        Configuration::Committed => {
-            committed_config(&repository, &revision, runner)?.ok_or(Error::Invalid(MISSING_CONFIG))?
+    let (config, notes) = match configuration {
+        Configuration::Committed => (
+            committed_config(&repository, &revision, runner)?.ok_or(Error::Invalid(MISSING_CONFIG))?,
+            Vec::new(),
+        ),
+        Configuration::WorkingCopy => {
+            let committed = committed_config(&repository, &revision, runner)?;
+            if resolve_with_runner(&repository, "HEAD", runner)? == revision {
+                working_copy::apply(&repository, committed, runner)?
+            } else {
+                (committed.ok_or(Error::Invalid(MISSING_CONFIG))?, Vec::new())
+            }
         }
-        Configuration::LocalImageOnly => local::read(&repository, runner)?,
-        Configuration::QuickStart => quick_start::config(&repository, &revision, runner)?,
+        Configuration::QuickStart => (quick_start::config(&repository, &revision, runner)?, Vec::new()),
     };
     let config = creatable(config)?;
     Ok(Prepared {
         repository,
         revision,
         config,
+        notes,
     })
 }
 
@@ -85,7 +101,7 @@ fn creatable(mut config: CloudConfig) -> super::Result<CloudConfig> {
 
 /// The answer for a commit without `.horizon/cloud.yml`. It is not a fault: New cloud
 /// shows it as guidance next to quick start and the setup agent.
-pub const MISSING_CONFIG: &str = "The selected commit has no readable .horizon/cloud.yml. Quick start on the public base image, let a setup agent prepare the repository, choose another revision, or use local image-only settings in More options.";
+pub const MISSING_CONFIG: &str = "The selected commit has no readable .horizon/cloud.yml. Quick start on the public base image, let a setup agent prepare the repository, or choose another revision. A profile with a build section is offered after you commit it.";
 
 /// The refusal of a configuration none of whose profiles Horizon can create a cloud for.
 pub(crate) const NO_CREATABLE_PROFILE: &str =

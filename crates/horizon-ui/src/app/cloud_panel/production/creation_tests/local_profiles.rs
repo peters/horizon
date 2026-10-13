@@ -71,8 +71,29 @@ fn tall_click(ctx: &egui::Context, app: &mut HorizonApp, label: &str) {
     }
 }
 
+fn wait_until(ctx: &egui::Context, app: &mut HorizonApp, done: impl Fn(&HorizonApp) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !done(app) {
+        assert!(Instant::now() < deadline, "the dialog did not read the change");
+        app.poll_cloud_launch(ctx);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn painted(output: &egui::FullOutput) -> String {
+    output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::epaint::Shape::Text(text) => Some(text.galley.job.text.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[test]
-fn local_choice_loads_untracked_settings_and_captures_the_profile_for_creation() {
+fn untracked_settings_load_without_a_button_and_the_profile_is_captured_for_creation() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
@@ -82,18 +103,10 @@ fn local_choice_loads_untracked_settings_and_captures_the_profile_for_creation()
     app.cloud_prototype.production.title = "Test image".into();
     app.read_cloud_profiles(&ctx);
     finish_read(&ctx, &mut app);
-    assert!(app.cloud_prototype.production.profiles.is_none());
-    // A commit without settings is guidance, not an error.
-    assert!(app.cloud_prototype.production.launch.unconfigured);
-    assert!(app.cloud_prototype.error.is_none());
-    for _ in 0..4 {
-        frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
-    }
-    let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
-    click(&ctx, &mut app, label_position(&output, "Use local image-only settings"));
-    finish_read(&ctx, &mut app);
     let form = &mut app.cloud_prototype.production;
-    assert_eq!(form.launch.configuration, Configuration::LocalImageOnly);
+    assert_eq!(form.launch.configuration, Configuration::WorkingCopy);
+    assert!(!form.launch.unconfigured);
+    assert!(form.launch.notes.is_empty());
     assert_eq!(form.selected_profile, "test-image");
     assert_eq!(
         form.profiles.as_ref().unwrap().profiles["test-image"].image,
@@ -208,13 +221,13 @@ fn quick_start_on_a_commit_with_settings_reads_those_settings_instead() {
     app.read_cloud_profiles(&ctx);
     finish_read(&ctx, &mut app);
     let form = &app.cloud_prototype.production;
-    assert_eq!(form.launch.configuration, Configuration::Committed);
+    assert_eq!(form.launch.configuration, Configuration::WorkingCopy);
     assert_eq!(form.selected_profile, "test-image");
     assert!(app.cloud_prototype.error.is_none());
 }
 
 #[test]
-fn quick_start_ends_with_another_repository_or_a_read_of_the_settings() {
+fn quick_start_ends_with_another_repository_or_the_repository_settings() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
@@ -227,30 +240,28 @@ fn quick_start_ends_with_another_repository_or_a_read_of_the_settings() {
     app.read_cloud_profiles(&ctx);
     finish_read(&ctx, &mut app);
     assert_eq!(app.cloud_prototype.production.selected_profile, quick_start::PROFILE);
-    tall_click(&ctx, &mut app, "More options");
-    tall_click(&ctx, &mut app, "Read .horizon/cloud.yml");
+    tall_click(&ctx, &mut app, "Use .horizon/cloud.yml");
     finish_read(&ctx, &mut app);
     let form = &app.cloud_prototype.production;
-    assert_eq!(form.launch.configuration, Configuration::Committed);
+    assert_eq!(form.launch.configuration, Configuration::WorkingCopy);
     assert!(form.profiles.is_none() && form.launch.unconfigured);
     app.cloud_prototype.production.launch.configuration = Configuration::QuickStart;
     let other = tempfile::tempdir().unwrap();
     app.set_cloud_repository(other.path());
     assert_eq!(
         app.cloud_prototype.production.launch.configuration,
-        Configuration::Committed
+        Configuration::WorkingCopy
     );
 }
 
 #[test]
-fn invalid_local_reload_clears_the_previous_profile_and_placement() {
+fn an_invalid_working_copy_without_committed_settings_clears_the_profile_and_placement() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
     fixture(temp.path());
     let form = &mut app.cloud_prototype.production;
     form.repository = temp.path().to_string_lossy().into();
-    form.launch.configuration = Configuration::LocalImageOnly;
     app.read_cloud_profiles(&ctx);
     finish_read(&ctx, &mut app);
     assert_eq!(app.cloud_prototype.production.selected_profile, "test-image");
@@ -265,7 +276,7 @@ fn invalid_local_reload_clears_the_previous_profile_and_placement() {
     app.close_cloud_creation();
     assert_eq!(
         app.cloud_prototype.production.launch.configuration,
-        Configuration::Committed
+        Configuration::WorkingCopy
     );
 }
 
@@ -313,4 +324,136 @@ fn rereading_committed_settings_retains_an_explicit_profile_and_valid_size() {
     finish_read(&ctx, &mut app);
     assert_eq!(app.cloud_prototype.production.selected_profile, "other");
     assert_eq!(app.cloud_prototype.production.size, Some((8, 16)));
+}
+
+/// The person edits `.horizon/cloud.yml` while New cloud is open: the size shows without a
+/// button, the chosen profile stays, and an uncommitted build change is named.
+#[test]
+fn an_edit_of_the_working_copy_shows_while_the_dialog_is_open() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    fixture(temp.path());
+    let yaml = format!(
+        "{CONFIG}  other:\n    provider: runpod\n    image: example.invalid/other\n    cpu: 4\n    memory_gb: 8\n    build:\n      context: .\n      dockerfile: Dockerfile\n"
+    );
+    std::fs::write(temp.path().join(".horizon/cloud.yml"), &yaml).unwrap();
+    commit(temp.path());
+    let form = &mut app.cloud_prototype.production;
+    form.creating = true;
+    form.repository = temp.path().to_string_lossy().into();
+    form.title = "Edited".into();
+    app.read_cloud_profiles(&ctx);
+    finish_read(&ctx, &mut app);
+    app.cloud_prototype.production.selected_profile = "other".into();
+    let cpu = |app: &HorizonApp| {
+        app.cloud_prototype
+            .production
+            .profiles
+            .as_ref()
+            .map(|config| config.profiles["other"].cpu)
+    };
+    assert_eq!(cpu(&app), Some(4));
+    std::fs::write(
+        temp.path().join(".horizon/cloud.yml"),
+        yaml.replace(
+            "cpu: 4\n    memory_gb: 8\n    build",
+            "min_cpu: 16\n    memory_gb: 8\n    build",
+        )
+        .replace("dockerfile: Dockerfile", "dockerfile: Other.Dockerfile"),
+    )
+    .unwrap();
+    wait_until(&ctx, &mut app, |app| cpu(app) == Some(16));
+    let form = &app.cloud_prototype.production;
+    assert_eq!(form.selected_profile, "other", "the choice stays");
+    assert!(
+        form.profiles.is_some() && !form.launch.loading(),
+        "no spinner while it reads"
+    );
+    assert_eq!(
+        form.launch.notes,
+        ["Uncommitted changes to build are not used until you commit them."]
+    );
+    for _ in 0..4 {
+        run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 2400.0], None));
+    }
+    let shown = painted(&run_app_frame_with_input(
+        &ctx,
+        &mut app,
+        raw_input([1400.0, 2400.0], None),
+    ));
+    assert!(shown.contains("Uncommitted changes to build"), "{shown}");
+    assert!(!shown.contains("Read .horizon/cloud.yml"), "{shown}");
+    assert!(!shown.contains("image-only"), "{shown}");
+    // A commit of the same file leaves nothing to say.
+    commit(temp.path());
+    wait_until(&ctx, &mut app, |app| {
+        app.cloud_prototype.production.launch.notes.is_empty()
+    });
+    assert_eq!(cpu(&app), Some(16));
+}
+
+/// A change read while the cloud is being started does not swap what the person started.
+#[test]
+fn an_edit_during_a_start_waits_until_the_start_ends() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    fixture(temp.path());
+    let form = &mut app.cloud_prototype.production;
+    form.creating = true;
+    form.repository = temp.path().to_string_lossy().into();
+    app.read_cloud_profiles(&ctx);
+    finish_read(&ctx, &mut app);
+    let cpu = |app: &HorizonApp| app.cloud_prototype.production.profiles.as_ref().unwrap().profiles["test-image"].cpu;
+    // Held by a stock watch, as by a start: both freeze what is shown.
+    let profile = app.cloud_prototype.production.profiles.as_ref().unwrap().profiles["test-image"].clone();
+    let selection = horizon_core::cloud_runtime::prices::watch::Selection::new(
+        profile,
+        horizon_core::cloud_panel::Placement {
+            data_centers: vec!["EU-RO-1".into()],
+            ..horizon_core::cloud_panel::Placement::default()
+        },
+    );
+    app.cloud_prototype.production.launch.watch = Some(selection.unwrap());
+    std::fs::write(
+        temp.path().join(".horizon/cloud.yml"),
+        CONFIG.replace("min_cpu: 4", "min_cpu: 8"),
+    )
+    .unwrap();
+    let until = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < until {
+        app.poll_cloud_launch(&ctx);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(cpu(&app), 4);
+    app.cloud_prototype.production.launch.watch = None;
+    wait_until(&ctx, &mut app, |app| cpu(app) == 8);
+}
+
+fn commit(path: &std::path::Path) {
+    for args in [
+        vec!["add", ".horizon/cloud.yml"],
+        vec![
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "Commit cloud settings",
+        ],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(path)
+                .args(args)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+    }
 }

@@ -2,7 +2,7 @@
 use super::{HorizonApp, Production};
 use crate::dir_picker::{DirPicker, DirPickerPurpose};
 use crate::theme;
-use egui::{Align, Button, Context, Frame, Id, Key, LayerId, Layout, Order, RichText, Stroke, TextEdit, Ui, Vec2};
+use egui::{Align, Context, Frame, Id, Key, LayerId, Layout, Order, RichText, Stroke, TextEdit, Ui, Vec2};
 use horizon_core::{
     ShortcutBinding, ShortcutKey, ShortcutModifiers, cloud_panel::Placement,
     cloud_runtime::repository::launch::Configuration,
@@ -451,9 +451,9 @@ impl HorizonApp {
         if form.repository != repository {
             form.repository = repository.into_owned();
             form.profiles = None;
-            // Quick start is chosen for one repository; another one is read as committed.
+            // Quick start is chosen for one repository; another one reads its own settings.
             if form.launch.configuration == Configuration::QuickStart {
-                form.launch.configuration = Configuration::Committed;
+                form.launch.configuration = Configuration::WorkingCopy;
             }
             form.launch.unconfigured = false;
             form.selected_profile.clear();
@@ -589,8 +589,14 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
         false
     } else if form.profiles.is_some() {
         profiles::field(ui, form);
-        if super::repository_setup::quick_start_note(ui, form) {
-            action = RepositoryAction::Setup;
+        profiles::notes(ui, form);
+        match super::repository_setup::quick_start_note(ui, form) {
+            super::repository_setup::Note::None => {}
+            super::repository_setup::Note::UpdateFromCi => action = RepositoryAction::Setup,
+            super::repository_setup::Note::LeaveQuickStart => {
+                super::repository_setup::set_configuration(form, Configuration::WorkingCopy);
+                action = RepositoryAction::Load;
+            }
         }
         ui.add_space(12.0);
         machine(ui, form)
@@ -654,10 +660,8 @@ fn machine(ui: &mut Ui, form: &mut Production) -> bool {
 }
 
 fn advanced_fields(ui: &mut Ui, form: &mut Production) -> RepositoryAction {
-    let mut changed = false;
-    ui.add_space(8.0);
-    ui.add_space(8.0);
-    changed |= field(
+    ui.add_space(16.0);
+    let changed = field(
         ui,
         "Committed base revision",
         "cloud-revision",
@@ -665,52 +669,16 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production) -> RepositoryAction {
         "HEAD",
     )
     .changed();
-    ui.label(
-        RichText::new("Only committed files are transferred. Local changes stay on this computer.")
-            .size(12.0)
-            .color(theme::FG_SOFT()),
-    );
-    let mut local = form.launch.configuration == Configuration::LocalImageOnly;
-    if ui.checkbox(&mut local, "Use local image-only settings").changed() {
-        let configuration = if local {
-            Configuration::LocalImageOnly
-        } else {
-            Configuration::Committed
-        };
-        super::repository_setup::set_configuration(form, configuration);
-        changed = true;
-    }
-    if local {
-        ui.label(
-            RichText::new("Reads the working copy of .horizon/cloud.yml. Only profiles without build are offered; settings are saved locally for this cloud.")
-                .size(12.0)
-                .color(theme::FG_SOFT()),
-        );
-    }
-    let load = ui
-        .add(
-            Button::new(RichText::new("Read .horizon/cloud.yml").size(13.0))
-                .min_size(Vec2::new(0.0, 32.0))
-                .corner_radius(8),
-        )
-        .clicked();
-    // Reading the file leaves quick start for the repository's own settings.
-    if load && form.launch.configuration == Configuration::QuickStart {
-        super::repository_setup::set_configuration(form, Configuration::Committed);
-    }
-    if form.profiles.is_none() {
-        ui.label(
-            RichText::new("Read the repository settings to choose a profile.")
-                .size(13.0)
-                .color(theme::FG_SOFT()),
-        );
-    }
-    if load || changed {
+    ui.label(RichText::new(REVISION_NOTE).size(12.0).color(theme::FG_SOFT()));
+    if changed {
         RepositoryAction::Load
     } else {
         RepositoryAction::None
     }
 }
+
+/// What the revision decides, and what the working copy still decides on the checked-out commit.
+const REVISION_NOTE: &str = "Only committed files are transferred. On the checked-out commit, profiles and sizes come from the working copy of .horizon/cloud.yml and update as you save it.";
 
 /// Why Start is unavailable, for the selector tests; the dialog works it out once per
 /// frame with [`submit_reason_given`].
@@ -732,7 +700,7 @@ fn submit_reason_given(form: &Production, blocked: Option<&'static str>) -> Opti
         (false, false) => blocked,
         // A missing title is asked for under its field.
         (true, false) => None,
-        (_, true) => Some("Read the repository profile before starting."),
+        (_, true) => Some("The repository has no usable cloud settings yet."),
     }
 }
 

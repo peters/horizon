@@ -11,6 +11,8 @@ use std::{
     sync::mpsc::{Receiver, TryRecvError, channel},
 };
 
+mod reread;
+
 struct Loaded {
     prepared: Prepared,
     ready_profiles: Vec<String>,
@@ -29,6 +31,10 @@ pub(super) struct State {
     pub unconfigured: bool,
     /// Why the committed settings did not load; the Fix card starts the agent from it.
     pub read_error: Option<String>,
+    /// Why some working-copy settings do not apply, from the last read.
+    pub notes: Vec<String>,
+    /// Reads the settings again when the checkout changes.
+    reread: reread::State,
     pub submitted: bool,
     pub watch: Option<cloud_runtime::prices::watch::Selection>,
     /// The hourly compute price shown when the watch started.
@@ -43,7 +49,12 @@ pub(super) struct State {
     pub siblings: super::creation::siblings::State,
 }
 impl State {
+    /// Whether the person waits for settings: a read they started, not a quiet reread.
     pub fn loading(&self) -> bool {
+        self.receiver.is_some() && !self.reread.quiet
+    }
+
+    fn loading_any(&self) -> bool {
         self.receiver.is_some()
     }
 
@@ -99,15 +110,29 @@ impl HorizonApp {
     }
 
     pub(super) fn read_cloud_profiles(&mut self, ctx: &Context) {
+        self.start_cloud_profiles_read(ctx, false);
+    }
+
+    /// A `quiet` read follows a change in the checkout and leaves the shown settings in
+    /// place until it ends.
+    fn start_cloud_profiles_read(&mut self, ctx: &Context, quiet: bool) {
         let form = &mut self.cloud_prototype.production;
         form.launch.cancel.cancel();
         form.launch.cancel = cloud_runtime::Cancellation::default();
-        form.launch.revision = None;
-        form.launch.unconfigured = false;
-        form.launch.read_error = None;
-        form.launch.accounts_checked = false;
-        form.launch.ready_profiles.clear();
-        form.profiles = None;
+        form.launch.reread.quiet = quiet;
+        if !quiet {
+            form.launch.revision = None;
+            form.launch.unconfigured = false;
+            form.launch.read_error = None;
+            form.launch.notes.clear();
+            form.launch.accounts_checked = false;
+            form.launch.ready_profiles.clear();
+            form.profiles = None;
+            self.cloud_prototype.error = None;
+        }
+        let form = &mut self.cloud_prototype.production;
+        let seen = std::sync::Arc::default();
+        form.launch.reread.read = std::sync::Arc::clone(&seen);
         let root = self
             .cloud_prototype
             .root
@@ -119,9 +144,11 @@ impl HorizonApp {
         let cancel = form.launch.cancel.clone();
         let (sender, receiver) = channel();
         form.launch.receiver = Some(receiver);
-        self.cloud_prototype.error = None;
         let ctx = ctx.clone();
         std::thread::spawn(move || {
+            // Taken first, so an edit made during the read calls for another one.
+            let fingerprint = cloud_runtime::repository::launch::fingerprint(&repository, &cancel);
+            *seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(fingerprint);
             let runner = cloud_runtime::command::Runner {
                 cancel: &cancel,
                 emit: &|_| {},
@@ -168,40 +195,28 @@ impl HorizonApp {
                 )),
             };
             form.launch.receiver = None;
+            let quiet = std::mem::take(&mut form.launch.reread.quiet);
+            // A quiet result that would change what the person started from is dropped; the
+            // change is read again once they are done.
+            let result = if quiet && reread::busy(form) {
+                None
+            } else {
+                Some(result)
+            };
             match result {
-                Ok(loaded) => {
-                    let prepared = loaded.prepared;
-                    form.launch.ready_profiles = loaded.ready_profiles;
-                    form.repository = prepared.repository.to_string_lossy().into_owned();
-                    // Cloud GPU from New workspace takes each repository's first GPU profile;
-                    // a reread of the same repository keeps the person's pick.
-                    if let Some(name) = super::new_workspace::gpu_profile(form, &prepared.config) {
-                        form.selected_profile = name;
-                        form.launch.selector.profile_changed();
-                        form.size = None;
-                        form.placement = Placement::default();
-                        form.provider = None;
+                None => {}
+                Some(Ok(loaded)) => {
+                    if quiet && form.profiles.is_none() {
+                        // The shown error came from the read this one replaces.
+                        self.cloud_prototype.error = None;
                     }
-                    if !prepared.config.profiles.contains_key(&form.selected_profile) {
-                        form.selected_profile.clone_from(&prepared.config.default);
-                        form.launch.selector.profile_changed();
-                        form.size = None;
-                        form.placement = Placement::default();
-                        form.provider = None;
-                    }
-                    // A reread profile keeps a chosen size only while the chosen provider
-                    // still offers it.
-                    let profile = prepared.config.profiles.get(&form.selected_profile);
-                    form.size = form.size.filter(|&size| {
-                        profile.is_some_and(|profile| {
-                            let provider = super::creation::provider::current(form.provider, profile);
-                            super::creation::provider::sized(provider, profile, Some(size)).is_ok()
-                        })
-                    });
-                    form.profiles = Some(prepared.config);
-                    form.launch.revision = Some(prepared.revision);
+                    apply(form, loaded, quiet);
                 }
-                Err(error) => {
+                Some(Err(error)) => {
+                    form.launch.reread.finished();
+                    form.launch.notes.clear();
+                    form.profiles = None;
+                    form.launch.revision = None;
                     form.launch.submitted = false;
                     form.selected_profile.clear();
                     form.size = None;
@@ -213,7 +228,7 @@ impl HorizonApp {
                         && cloud_runtime::repository::launch::quick_start::is_refused(&error)
                     {
                         // This commit has its own settings, so they apply instead of quick start.
-                        super::repository_setup::set_configuration(form, Configuration::Committed);
+                        super::repository_setup::set_configuration(form, Configuration::WorkingCopy);
                         self.read_cloud_profiles(ctx);
                         return;
                     }
@@ -227,6 +242,8 @@ impl HorizonApp {
                 }
             }
         }
+        self.reread_cloud_profiles_on_change(ctx);
+        let form = &mut self.cloud_prototype.production;
         if form.launch.submitted && form.pending_creation.is_none() && form.profiles.is_some() {
             if !form.launch.accounts_checked && !form.launch.ready_profiles.contains(&form.selected_profile) {
                 form.launch.submitted = false;
@@ -250,6 +267,50 @@ impl HorizonApp {
     }
 }
 
+/// Shows the settings `loaded` read, keeping the profile, size, provider, place and storage
+/// the person chose while they still apply.
+fn apply(form: &mut super::Production, loaded: Loaded, quiet: bool) {
+    let mut prepared = loaded.prepared;
+    form.launch.reread.finished();
+    form.launch.unconfigured = false;
+    form.launch.read_error = None;
+    if quiet {
+        // The profiles may need other keys now.
+        form.launch.accounts_checked = false;
+    }
+    form.launch.notes = prepared.notes;
+    reread::keep_edits(&mut form.launch.reread, form.profiles.as_ref(), &mut prepared.config);
+    form.launch.ready_profiles = loaded.ready_profiles;
+    form.repository = prepared.repository.to_string_lossy().into_owned();
+    // Cloud GPU from New workspace takes each repository's first GPU profile;
+    // a reread of the same repository keeps the person's pick.
+    if let Some(name) = super::new_workspace::gpu_profile(form, &prepared.config) {
+        form.selected_profile = name;
+        form.launch.selector.profile_changed();
+        form.size = None;
+        form.placement = Placement::default();
+        form.provider = None;
+    }
+    if !prepared.config.profiles.contains_key(&form.selected_profile) {
+        form.selected_profile.clone_from(&prepared.config.default);
+        form.launch.selector.profile_changed();
+        form.size = None;
+        form.placement = Placement::default();
+        form.provider = None;
+    }
+    // A reread profile keeps a chosen size only while the chosen provider
+    // still offers it.
+    let profile = prepared.config.profiles.get(&form.selected_profile);
+    form.size = form.size.filter(|&size| {
+        profile.is_some_and(|profile| {
+            let provider = super::creation::provider::current(form.provider, profile);
+            super::creation::provider::sized(provider, profile, Some(size)).is_ok()
+        })
+    });
+    form.profiles = Some(prepared.config);
+    form.launch.revision = Some(prepared.revision);
+}
+
 /// The repository a workspace's folder stands for. A folder that is not inside a checkout (a
 /// workspace's folder is also just where its terminals start) stands for nothing: the dialog then
 /// asks where the code is.
@@ -268,7 +329,7 @@ mod tests {
     fn loaded(path: &std::path::Path) -> Loaded {
         Loaded {
             prepared: Prepared {
-                repository: path.into(), revision: "a".repeat(40),
+                repository: path.into(), revision: "a".repeat(40), notes: Vec::new(),
                 config: CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n").unwrap(),
             }, ready_profiles: vec!["dev".into()],
         }
