@@ -1,4 +1,6 @@
-//! Presentation gates for adding panels to an existing cloud.
+//! Presentation gates for adding panels and dropped files to an existing cloud.
+mod file_drop;
+
 use super::{HorizonApp, Production, Stage};
 use horizon_core::{WorkspaceId, cloud_panel::CloudGroup};
 

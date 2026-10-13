@@ -344,7 +344,7 @@ impl HorizonApp {
         self.paste_native_text_into_terminal(panel_id, &payload, focus)
     }
 
-    fn paste_native_text_into_terminal(&mut self, panel_id: PanelId, payload: &str, focus: bool) -> bool {
+    pub(super) fn paste_native_text_into_terminal(&mut self, panel_id: PanelId, payload: &str, focus: bool) -> bool {
         let did_paste = {
             let Some(panel) = self.board.panel_mut(panel_id) else {
                 return false;
@@ -545,7 +545,7 @@ fn format_path_for_terminal(path: &Path) -> String {
     }
 }
 
-fn format_posix_path(path: &str) -> String {
+pub(super) fn format_posix_path(path: &str) -> String {
     if !path_needs_posix_quotes(path) {
         return path.to_string();
     }

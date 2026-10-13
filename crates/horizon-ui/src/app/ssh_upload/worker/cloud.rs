@@ -1,0 +1,265 @@
+//! Sends dropped files to a cloud worker session over the worker's pinned SSH connection.
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use horizon_core::cloud_runtime::file_drop::{Batch, Destination, remote_names};
+use horizon_core::cloud_runtime::ssh::{Connection, USER};
+
+use super::{
+    LocalUploadFile, SSH_POLL_INTERVAL, UploadControl, UploadMessage, UploadOutcome, UploadProgressContext,
+    UploadSnapshot, UploadWorkerHandle, WorkerExit, build_local_upload_files, send_upload_snapshot, ssh::stream_file,
+    wait_for_command,
+};
+
+/// How long the worker gets to remove a drop's folders after the result is shown.
+const CLEANUP_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// What happens to a drop's folders on the worker after Horizon shows the result.
+enum After {
+    /// Every file arrived: remove the empty private folder.
+    Finish(Connection, Batch),
+    /// The drop stopped: remove the batch folder and its private folder.
+    Remove(Connection, Batch),
+}
+
+pub(in crate::app::ssh_upload) fn start_cloud_upload(
+    destination: Destination,
+    paths: Vec<PathBuf>,
+) -> UploadWorkerHandle {
+    let (progress_tx, progress_rx) = mpsc::channel();
+    let (control_tx, control_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut after = None;
+        let result = upload(&destination, paths, &control_rx, &progress_tx, &mut after);
+        let _ = progress_tx.send(UploadMessage::Finished(result));
+        // After the result is shown, so an unreachable worker does not delay it. A cancel can
+        // no longer arrive, so the private folder stays until the result is certain.
+        match after {
+            Some(After::Remove(connection, batch)) if !on_worker(&connection, &batch.remove_command()) => {
+                tracing::warn!(folder = %batch.directory(), "cloud file drop left its batch folder on the worker");
+            }
+            Some(After::Finish(connection, batch)) if !on_worker(&connection, &batch.finish_command()) => {
+                tracing::debug!(folder = %batch.directory(), "cloud file drop left its empty private folder");
+            }
+            _ => {}
+        }
+    });
+    UploadWorkerHandle {
+        progress_rx,
+        control_tx,
+    }
+}
+
+/// `after` gets what to do with the drop's folders once the result is shown, also the
+/// folder that a failed preparation may have made before its failure reached Horizon.
+fn upload(
+    destination: &Destination,
+    paths: Vec<PathBuf>,
+    control_rx: &Receiver<UploadControl>,
+    progress_tx: &Sender<UploadMessage>,
+    after: &mut Option<After>,
+) -> Result<UploadOutcome, String> {
+    let files = local_files(paths)?;
+    let names = remote_names(&files.iter().map(|file| file.path.clone()).collect::<Vec<_>>());
+    let total_files = files.len();
+    let total_bytes = files.iter().map(|file| file.size_bytes).sum();
+    let connection = destination
+        .connect()
+        .map_err(|error| format!("Horizon could not connect to the cloud worker: {error}"))?;
+    let batch = destination.batch();
+    send_upload_snapshot(
+        progress_tx,
+        UploadSnapshot {
+            completed_files: 0,
+            total_files,
+            completed_bytes: 0,
+            total_bytes,
+            current_file_name: None,
+            current_file_size: None,
+            detail: "Preparing a folder on the cloud worker".to_string(),
+        },
+    );
+    let mut progress = UploadProgressContext {
+        completed_files: 0,
+        total_files,
+        completed_bytes: 0,
+        total_bytes,
+    };
+    let prepare = connection.pinned_command(&batch.prepare_command());
+    if let Err(exit) = wait_for_command(spawn(prepare), control_rx) {
+        *after = Some(After::Remove(connection, batch));
+        return stopped(exit, progress);
+    }
+    let mut remote_paths = Vec::with_capacity(total_files);
+    for (file, name) in files.iter().zip(&names) {
+        let mut command = connection.pinned_command(&batch.write_command(name, file.size_bytes));
+        let detail = format!("Uploading {} to the cloud worker", file.name);
+        if let Err(exit) = stream_file(&mut command, file, &detail, progress, control_rx, progress_tx) {
+            *after = Some(After::Remove(connection, batch));
+            return stopped(exit, progress);
+        }
+        progress.completed_files += 1;
+        progress.completed_bytes += file.size_bytes;
+        remote_paths.push(batch.path(name));
+    }
+    tracing::debug!(files = total_files, folder = %batch.directory(), "cloud file drop uploaded");
+    *after = Some(After::Finish(connection, batch));
+    Ok(UploadOutcome {
+        cancelled: false,
+        completed_files: progress.completed_files,
+        total_files,
+        completed_bytes: progress.completed_bytes,
+        total_bytes,
+        detail: format!("Uploaded {total_files} file(s) to the cloud worker"),
+        remote_paths,
+    })
+}
+
+/// Folders are refused before anything is sent: a drop uploads files only.
+fn local_files(paths: Vec<PathBuf>) -> Result<Vec<LocalUploadFile>, String> {
+    if let Some(folder) = paths.iter().find(|path| path.is_dir()) {
+        return Err(format!(
+            "{} is a folder. Horizon uploads only files to a cloud worker: drop the files in the folder, or an archive of it.",
+            folder.display()
+        ));
+    }
+    build_local_upload_files(paths)
+}
+
+fn spawn(mut command: Command) -> Result<std::process::Child, String> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("failed to start SSH: {error}"))
+}
+
+/// Why the drop stopped. Its batch folder is removed after this is shown.
+fn stopped(exit: WorkerExit, progress: UploadProgressContext) -> Result<UploadOutcome, String> {
+    match exit {
+        WorkerExit::Cancelled => Ok(UploadOutcome {
+            cancelled: true,
+            completed_files: progress.completed_files,
+            total_files: progress.total_files,
+            completed_bytes: progress.completed_bytes,
+            total_bytes: progress.total_bytes,
+            detail: format!(
+                "Cancelled after {} of {} files. No path was inserted, and Horizon removes the files from the worker.",
+                progress.completed_files, progress.total_files
+            ),
+            remote_paths: Vec::new(),
+        }),
+        WorkerExit::Failed(error) => Err(explain(&error)),
+    }
+}
+
+/// Runs `remote` on the worker with a time limit; true when it succeeded.
+fn on_worker(connection: &Connection, remote: &str) -> bool {
+    let mut command = connection.pinned_command(remote);
+    command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    let Ok(mut child) = command.spawn() else {
+        return false;
+    };
+    let deadline = Instant::now() + CLEANUP_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if Instant::now() < deadline => thread::sleep(SSH_POLL_INTERVAL),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
+}
+
+/// Puts what the person can do first, then what SSH or the worker said: only its last
+/// line after known advice, since SSH prints long banners for these failures. Advice
+/// follows only whole OpenSSH diagnostic lines, which a file name cannot make.
+fn explain(error: &str) -> String {
+    if error.starts_with("failed to read ") {
+        return format!(
+            "Horizon could not read a dropped file on this computer: {}",
+            error.trim()
+        );
+    }
+    let refused_key = format!("{USER}@");
+    let lines: Vec<String> = error.lines().map(|line| line.trim().to_ascii_lowercase()).collect();
+    let any = |test: &dyn Fn(&str) -> bool| lines.iter().any(|line| test(line));
+    let advice = if any(&|line| line == "host key verification failed.") {
+        "The worker did not show the host key that Horizon recorded for this cloud, so Horizon sent nothing. Reconnect the cloud, then drop the files again."
+    } else if any(&|line| line.starts_with(&refused_key) && line.contains(": permission denied (")) {
+        "The worker refused the cloud SSH key of this computer. Reconnect the cloud, then drop the files again."
+    } else if any(&|line| line.starts_with("ssh: connect to host") || line.starts_with("ssh: could not resolve")) {
+        "Horizon could not reach the cloud worker. Make sure that the cloud runs, then drop the files again."
+    } else {
+        return format!("The cloud worker did not take the files: {}", error.trim());
+    };
+    let last = error
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    format!("{advice}\n\n{last}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{explain, local_files};
+
+    #[test]
+    fn a_folder_is_refused_before_anything_is_sent() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("notes.txt");
+        std::fs::write(&file, "notes").unwrap();
+        let error = local_files(vec![file.clone(), temp.path().to_path_buf()]).unwrap_err();
+        assert!(error.contains("is a folder"), "{error}");
+        assert_eq!(local_files(vec![file]).unwrap()[0].size_bytes, 5);
+    }
+
+    #[test]
+    fn failures_start_with_what_to_do() {
+        let banner = "@@@@\n@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @\nHost key verification failed.\n";
+        let host_key = explain(banner);
+        assert!(
+            host_key.starts_with("The worker did not show the host key"),
+            "{host_key}"
+        );
+        assert!(host_key.ends_with("\n\nHost key verification failed."), "{host_key}");
+        assert!(explain("ssh: connect to host 192.0.2.1 port 22: Connection refused").contains("could not reach"));
+        assert!(
+            explain("root@192.0.2.1: Permission denied (publickey).")
+                .starts_with("The worker refused the cloud SSH key")
+        );
+        assert!(
+            explain("mkdir: cannot create directory '/workspace/.horizon-drops': Permission denied")
+                .starts_with("The cloud worker did not take the files: mkdir:")
+        );
+        assert!(
+            explain("failed to read /synthetic/secret.txt: Permission denied (os error 13)")
+                .starts_with("Horizon could not read a dropped file on this computer:")
+        );
+        assert!(
+            explain("failed to read /synthetic/Host key verification failed.: Permission denied (os error 13)")
+                .starts_with("Horizon could not read a dropped file on this computer:")
+        );
+        assert!(
+            explain("Horizon did not replace Host key verification failed., which exists on the worker.")
+                .starts_with("The cloud worker did not take the files:")
+        );
+        assert!(
+            explain("The worker received 3 of 10 bytes of timed out.txt, so it kept nothing.")
+                .starts_with("The cloud worker did not take the files:")
+        );
+        assert_eq!(
+            explain("The worker has no session for this panel.\n"),
+            "The cloud worker did not take the files: The worker has no session for this panel."
+        );
+    }
+}

@@ -1,0 +1,104 @@
+version: 3
+window:
+  width: 1600.0
+  height: 1000.0
+  x: null
+  y: null
+canvas_view:
+  pan_offset:
+  - 0.0
+  - 0.0
+  zoom: 1.0
+active_workspace_local_id: 0b6f3a52-7c1d-4e8a-9f20-3d5b6c7e8f91
+focused_panel_local_id: 6a1e4c2b-3d5f-4a7b-8c9d-0e1f2a3b4c5d
+workspaces:
+- local_id: 0b6f3a52-7c1d-4e8a-9f20-3d5b6c7e8f91
+  name: drop-demo
+  cwd: null
+  position:
+  - 0.0
+  - 40.0
+  template: null
+  layout: null
+  panels: []
+- local_id: 7c2d9e41-5a3b-4c6d-8e7f-1a2b3c4d5e6f
+  name: local
+  cwd: null
+  position:
+  - 760.0
+  - 40.0
+  template: null
+  layout: null
+  panels:
+  - local_id: 6a1e4c2b-3d5f-4a7b-8c9d-0e1f2a3b4c5d
+    name: local shell
+    name_is_custom: true
+    kind: shell
+    command: /bin/bash
+    args:
+    - --norc
+    - --noprofile
+    cwd: null
+    rows: 24
+    cols: 80
+    resume: fresh
+    work_resume:
+      enabled: false
+      max_downtime_seconds: 10800
+    position:
+    - 774.0
+    - 80.0
+    size:
+    - 560.0
+    - 400.0
+    session_binding: null
+    template: null
+cloud_groups:
+- remote:
+    deployment_started: true
+    id: drop-demo
+    revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    profile_name: dev
+    profile:
+      provider: runpod
+      image: registry.example/worker
+      cpu: 4
+      memory_gb: 8
+      gpu: false
+      build: null
+      storage:
+        container_gb: 20
+        volume_gb: 20
+      bootstrap:
+        readiness_seconds: 600
+        contract_version: 1
+      capabilities:
+        agents:
+        - codex
+        - claude
+        - grok
+        browsers: []
+        desktop: false
+  issue: 101
+  title: drop-demo
+  workspace: 0b6f3a52-7c1d-4e8a-9f20-3d5b6c7e8f91
+  environment:
+    id: issue-101
+    image: development-image (mock)
+    connection: LocalPrototype
+    profile: null
+    provider: null
+  cwd: /
+  position:
+  - 620.0
+  - 40.0
+  workspace_position:
+  - 620.0
+  - 0.0
+  size:
+  - 600.0
+  - 560.0
+  collapsed: false
+  layout: null
+  panels: []
+  hidden: []
