@@ -8,6 +8,7 @@ use std::{
     path::PathBuf,
 };
 
+mod committed_profile;
 mod new_server;
 mod quick_start;
 
@@ -474,46 +475,6 @@ fn a_third_image_or_lost_worker_fails_closed_and_keeps_the_update_requested() {
         recover(&fixture, &script, Recovery::Settle).unwrap();
         assert_eq!(fixture.state().spec.unwrap().image_digest, digest('b'));
         assert_eq!(script.count("replace Next"), 1);
-    }
-}
-
-#[test]
-fn a_changed_or_missing_committed_profile_refuses_before_anything_is_journaled() {
-    let fixture = Fixture::new();
-    let bound = fixture.state().profile;
-    let mut renamed = config(&bound);
-    renamed.profiles = [("other".into(), bound.clone())].into();
-    let changed = |change: fn(&mut Profile)| {
-        let mut head = bound.clone();
-        change(&mut head);
-        Some(config(&head))
-    };
-    let heads = [
-        (None, NO_CONFIG),
-        (Some(renamed), NO_PROFILE),
-        (changed(|profile| profile.gpu = true), "size"),
-        (changed(|profile| profile.storage.volume_gb = 40), "size"),
-        (changed(|profile| profile.capabilities.desktop = true), "capabilities"),
-        (
-            changed(|profile| profile.image = "registry.example/other".into()),
-            "image repository",
-        ),
-        (
-            changed(|profile| profile.build.as_mut().unwrap().dockerfile = "Other".into()),
-            "build section",
-        ),
-        (
-            changed(|profile| profile.bootstrap.readiness_seconds = 900),
-            "bootstrap",
-        ),
-    ];
-    for (head, reason) in heads {
-        let mut script = Script::new(&fixture);
-        script.head.config = head;
-        let error = rebuild_with(&fixture, &script).unwrap_err().to_string();
-        assert!(error.contains(reason), "{error}");
-        assert!(fixture.state().image_replacement.is_none());
-        assert_eq!(*script.calls.borrow(), ["head"]);
     }
 }
 

@@ -5,6 +5,7 @@
 //! the steps outside the record sit behind `Steps` so every persistence boundary is
 //! tested offline. Only dedicated clouds have a `deployment.json` record; a migrated
 //! allocation does not load here.
+mod compatibility;
 mod live;
 mod new_server;
 #[cfg(all(test, unix))]
@@ -35,9 +36,6 @@ use std::{
 const NOTHING_PENDING: &str = "No image replacement is pending";
 const NOT_READY: &str = "Only a ready, running cloud without a pending replacement can rebuild its image";
 const NO_RECIPE: &str = "This cloud's profile has no build section and does not run the public base image, so there is no recipe to rebuild its image from";
-const NO_CONFIG: &str =
-    "The latest commit has no readable .horizon/cloud.yml; commit the cloud configuration to rebuild";
-const NO_PROFILE: &str = "The latest commit's .horizon/cloud.yml no longer defines this cloud's profile";
 const COMMITTED_BASE: &str = "This cloud runs the public base image without a build section, and the latest commit has its own .horizon/cloud.yml. Only a cloud of a repository without one moves to the pinned base image; create a new cloud to use the committed settings.";
 const UNSETTLED: &str =
     "The provider has not reported the switched image yet; the replacement stays pending. Continue or cancel it.";
@@ -145,8 +143,9 @@ enum Driven {
 /// builds nothing.
 /// # Errors
 /// Refuses unless the cloud is ready with nothing pending and the committed profile named
-/// `profile_name` equals the bound one. After a failure the journal stays, so the
-/// replacement can be continued or cancelled.
+/// `profile_name` matches the bound one apart from the choices bound at creation, such
+/// as the provider. After a failure the journal stays, so the replacement can be
+/// continued or cancelled.
 pub fn rebuild(
     request: &Request,
     profile_name: &str,
@@ -378,11 +377,11 @@ fn ready(state: &Deployment) -> Result<()> {
     Ok(())
 }
 
-/// The committed recipes to rebuild, once the profile named `profile_name` equals the
-/// bound one: the primary's latest commit and each sibling's. A cloud on the public base
-/// image has no recipe; while the latest commit has no `.horizon/cloud.yml`, as for quick
-/// start, its image is the pin of this Horizon version. Committed settings are never
-/// passed over: with them such a cloud is refused.
+/// The committed recipes to rebuild, once the profile named `profile_name` matches the
+/// bound one ([`compatibility::unchanged`]): the primary's latest commit and each
+/// sibling's. A cloud on the public base image has no recipe; while the latest commit has
+/// no `.horizon/cloud.yml`, as for quick start, its image is the pin of this Horizon
+/// version. Committed settings are never passed over: with them such a cloud is refused.
 fn committed_recipes(
     recipe: &impl Recipe,
     state: &Deployment,
@@ -401,7 +400,7 @@ fn committed_recipes(
             siblings: Vec::new(),
         });
     }
-    unchanged_profile(&state.profile, head.config.as_ref(), profile_name)?;
+    compatibility::unchanged(&state.profile, head.config.as_ref(), profile_name)?;
     let (Some(set), Some(config)) = (&state.siblings, &head.config) else {
         return Ok(Recipes {
             revision: head.revision,
@@ -423,39 +422,6 @@ fn begin(steps: &impl Steps, store: &Store, state: &mut Deployment, recipes: Rec
     state.begin_layered_replacement(OperationId::generate(), recipes.revision, recipes.siblings)?;
     store.save(state)?;
     steps.checkpoint(Boundary::Begun)
-}
-
-/// A running worker's size, capabilities and image repository are fixed, so the
-/// committed profile must equal the bound one exactly.
-fn unchanged_profile(bound: &Profile, config: Option<&CloudConfig>, name: &str) -> Result<()> {
-    let mut head = config
-        .ok_or(Error::Invalid(NO_CONFIG))?
-        .profiles
-        .get(name)
-        .ok_or(Error::Invalid(NO_PROFILE))?
-        .clone();
-    // A CPU cloud's vCPU and memory are chosen when it is created; the committed ones are defaults.
-    if !bound.gpu && !head.gpu {
-        (head.cpu, head.memory_gb) = (bound.cpu, bound.memory_gb);
-    }
-    if head == *bound {
-        return Ok(());
-    }
-    Err(Error::Invalid(
-        if (head.cpu, head.memory_gb, head.gpu, &head.storage)
-            != (bound.cpu, bound.memory_gb, bound.gpu, &bound.storage)
-        {
-            "The latest commit changes this cloud's size (CPU, memory, GPU or storage), and a running worker cannot be resized. Create a new cloud to use it."
-        } else if head.capabilities != bound.capabilities {
-            "The latest commit changes this cloud's capabilities, which are fixed when its worker is created. Create a new cloud to use them."
-        } else if head.image != bound.image {
-            "The latest commit changes this cloud's image repository. Create a new cloud to use it."
-        } else if head.build != bound.build {
-            "The latest commit changes this cloud's build section. Create a new cloud to use it."
-        } else {
-            "The latest commit changes this cloud's provider or bootstrap settings. Create a new cloud to use them."
-        },
-    ))
 }
 
 /// Advances the journal from whichever phase it records to a committed replacement.

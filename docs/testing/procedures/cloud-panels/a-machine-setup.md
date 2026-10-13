@@ -485,7 +485,7 @@ Do this task after B02. It needs the synthetic repository.
     Result: The ledger shows the token of A08 as revoked.
 
 The `runpod-build` profile needs a second entry with a push credential.
-G02 and L05 use this entry. Keep it until the end of area L.
+G02, L05 and L11 use this entry. Keep it until the end of area L.
 
 22. In the **Container registry** card, click **Add image repository**.
 
