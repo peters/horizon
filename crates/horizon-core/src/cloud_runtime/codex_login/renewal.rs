@@ -84,10 +84,18 @@ pub(super) fn renew_with(home: &Path, url: &str, now: OffsetDateTime, cancel: &C
     if !due(&login, now) {
         return Ok(Renewal::NotDue);
     }
+    // Always later than the login it replaces, also after the clock went back, so a worker's
+    // spent copy never counts as the later renewal. Decided before the refresh token is spent.
+    let stamp = match login.refreshed {
+        Some(before) if before >= now => before
+            .checked_add(time::Duration::nanoseconds(1))
+            .ok_or(Error::Invalid("The ChatGPT login has an impossible renewal time"))?,
+        _ => now,
+    };
     cancel.check()?;
     match request(url, &login)? {
         Answer::Tokens(answer) => {
-            write_private(home, &renewed(&login.bytes, &answer, now)?)?;
+            write_private(home, &renewed(&login.bytes, &answer, stamp)?)?;
             Ok(Renewal::Renewed)
         }
         Answer::Refused => {

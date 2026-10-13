@@ -342,3 +342,25 @@ fn a_refused_login_is_not_given_but_a_worker_renewal_still_comes_back() {
     assert_eq!(std::fs::read(home.path().join(FILE)).unwrap(), renewal);
     assert!(super::super::account(home.path()).unwrap().is_some());
 }
+
+#[test]
+fn a_renewal_after_the_clock_went_back_is_still_the_later_login() {
+    let mut value: serde_json::Value = serde_json::from_slice(&login(NOW, NOW + 3600)).unwrap();
+    // Renewed "in the future" before the clock was set back.
+    value["last_refresh"] = "2030-01-01T00:00:00Z".into();
+    let earlier = serde_json::to_vec(&value).unwrap();
+    let home = home_with(&earlier);
+    let fresh = token(&serde_json::json!({"iat": NOW + 3500, "exp": NOW + 3500 + 10 * DAY}));
+    let body: &'static str = Box::leak(
+        serde_json::json!({"access_token": fresh, "refresh_token": "synthetic-refresh-2"})
+            .to_string()
+            .into_boxed_str(),
+    );
+    let (url, _request) = server(200, body);
+    assert_eq!(
+        renew_with(home.path(), &url, at(NOW + 3500), &Cancellation::default()).unwrap(),
+        Renewal::Renewed
+    );
+    let renewed = read(home.path()).unwrap().unwrap();
+    assert!(renewed.renews(&Login::parse(&earlier).unwrap()));
+}
