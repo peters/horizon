@@ -189,6 +189,18 @@ def drifted(entry, current_head):
     return entry["head"] != current_head
 
 
+def landed_base(plan):
+    """The commit main must be at now: the last merge `land` made, or the batch base. A
+    `land` that stopped partway resumes from there."""
+    merged = [e["merged"] for e in plan["prs"] if e.get("merged")]
+    return merged[-1] if merged else plan["base"]
+
+
+def transient_merge_refusal(stderr):
+    """GitHub refuses a merge for a moment after the base branch changes."""
+    return re.search(r"base branch was modified|not mergeable", stderr, re.I) is not None
+
+
 # Git work on a private detached worktree, so no checkout of the user's changes.
 
 def apply_batch(repo, base, entries, fetch_head):
@@ -414,9 +426,11 @@ def blockers(repo, plan):
     found += [f"CI on the batch tip: {p}" for p in problems]
     git("fetch", "-q", "origin", BASE_BRANCH, timeout=300)
     main = git("rev-parse", f"origin/{BASE_BRANCH}").stdout.strip()
-    if main != plan["base"]:
-        found.append(f"main moved from {plan['base'][:9]} to {main[:9]}: build again")
+    if main != landed_base(plan):
+        found.append(f"main moved from {landed_base(plan)[:9]} to {main[:9]}: build again")
     for entry in plan["prs"]:
+        if entry.get("merged"):
+            continue
         pr = pull(repo, entry["number"])
         if pr["state"] != "OPEN" or pr["isDraft"]:
             found.append(f"#{entry['number']} is not open and ready")
@@ -452,20 +466,28 @@ def cmd_land(args):
     if found:
         raise QueueError("the batch cannot land:\n" + "\n".join(f"- {i}" for i in found))
     if args.dry_run:
-        print("dry run: would land " + ", ".join(f"#{e['number']}" for e in plan["prs"]))
+        print("dry run: would land " + ", ".join(f"#{e['number']}" for e in plan["prs"]
+                                                 if not e.get("merged")))
         return
-    expected = plan["base"]
+    expected = landed_base(plan)
     for entry in plan["prs"]:
-        # Each merge must land on the commit the previous one made. Another push to main
-        # in between would put this PR on an untested base.
-        git("fetch", "-q", "origin", BASE_BRANCH, timeout=300)
-        main_now = git("rev-parse", f"origin/{BASE_BRANCH}").stdout.strip()
-        if main_now != expected:
-            raise QueueError(f"main moved to {main_now[:9]} outside the batch before "
-                             f"#{entry['number']}; it and later PRs were not merged")
-        run(["gh", "pr", "merge", str(entry["number"]), "--repo", repo, "--squash",
-             "--match-head-commit", entry["head"], "--subject", entry["subject"],
-             "--body", entry["body"]], timeout=300)
+        if entry.get("merged"):
+            continue
+        for attempt in range(5):
+            # Each merge must land on the commit the previous one made. Another push to
+            # main in between would put this PR on an untested base.
+            git("fetch", "-q", "origin", BASE_BRANCH, timeout=300)
+            main_now = git("rev-parse", f"origin/{BASE_BRANCH}").stdout.strip()
+            if main_now != expected:
+                raise QueueError(f"main moved to {main_now[:9]} outside the batch before "
+                                 f"#{entry['number']}; it and later PRs were not merged")
+            result = run(["gh", "pr", "merge", str(entry["number"]), "--repo", repo,
+                          "--squash", "--match-head-commit", entry["head"],
+                          "--subject", entry["subject"], "--body", entry["body"]],
+                         timeout=300, check=False)
+            if result.returncode == 0 or not transient_merge_refusal(result.stderr):
+                break
+            time.sleep(5 * (attempt + 1))
         for _attempt in range(10):
             # GitHub can report the merge commit a moment after the merge returns.
             merged = gh_json("pr", "view", str(entry["number"]), "--repo", repo, "--json",
@@ -475,13 +497,17 @@ def cmd_land(args):
                 break
             time.sleep(2)
         if merged["state"] != "MERGED" or not commit:
-            raise QueueError(f"#{entry['number']} did not merge; later PRs were not merged")
+            reason = result.stderr.strip() or "GitHub did not merge it"
+            raise QueueError(f"#{entry['number']} did not merge ({reason}); later PRs were not "
+                             "merged. Run land again to resume.")
         git("fetch", "-q", "origin", BASE_BRANCH, timeout=300)
         if not trees_match(ROOT, commit, entry["commit"]):
             raise QueueError(f"MISMATCH: #{entry['number']} merged as {commit}, but its tree "
                              "is not the tested batch tree. Another merge may have landed "
                              "first. Later PRs were not merged. Check main CI now.")
         print(f"#{entry['number']} merged as {commit}")
+        entry["merged"] = commit
+        plan_path().write_text(json.dumps(plan, indent=2) + "\n")
         expected = commit
     git("push", "-q", "origin", "--delete", plan["branch"], timeout=300, check=False)
     plan_path().rename(state_dir() / f"landed-{plan['branch'][3:]}.json")

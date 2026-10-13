@@ -113,6 +113,19 @@ class EntryTests(unittest.TestCase):
         self.assertTrue(mq.drifted({"head": HEAD_A}, "b" * 40))
 
 
+class LandTests(unittest.TestCase):
+    def test_a_stopped_land_resumes_from_its_last_merge(self):
+        plan = {"base": "b" * 40, "prs": [{"number": 1}, {"number": 2}]}
+        self.assertEqual(mq.landed_base(plan), "b" * 40)
+        plan["prs"][0]["merged"] = "m" * 40
+        self.assertEqual(mq.landed_base(plan), "m" * 40)
+
+    def test_only_base_changes_count_as_transient_refusals(self):
+        self.assertTrue(mq.transient_merge_refusal("GraphQL: Base branch was modified."))
+        self.assertTrue(mq.transient_merge_refusal("Pull request is not mergeable: the base"))
+        self.assertFalse(mq.transient_merge_refusal("Head branch was modified. Review and try"))
+
+
 class CiVerdictTests(unittest.TestCase):
     def run_(self, status="completed", conclusion="success", name="CI"):
         return {"name": name, "status": status, "conclusion": conclusion}
