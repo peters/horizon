@@ -35,9 +35,11 @@ a local Device panel to its desktop, and that no input reaches the desktop while
 ## 4. Equipment and preconditions
 
 - The equipment of the [local device smoke](../../../scripts/device-smoke/README.md),
-  and `xterm`.
+  `xterm` and `xdotool`.
 - A native Device panel in your Horizon window that shows the viewer fixture of
-  step 3 in section 5. This is the live view.
+  step 3 in section 5. This is the live view. It is only for observation: the
+  fixture serves its display through a view-only VNC server, so the live view
+  sends no input to the fixture.
 
 ## 5. Setup
 
@@ -61,8 +63,26 @@ a local Device panel to its desktop, and that no input reaches the desktop while
    ```
 
    Result: The fixture Horizon shows a Device panel for `127.0.0.1:<port>`.
+   The fixture's `lab.json` names its display, for example `:<f>`.
 
-4. In the fixture Device panel, click **Reconnect**.
+4. Find the fixture Horizon's process ID `<horizon-pid>` in the fixture's owned
+   process tree, as the [local device smoke](../../../scripts/device-smoke/README.md)
+   describes, and its window on the fixture display:
+
+   ```sh
+   DISPLAY=:<f> xdotool search --pid <horizon-pid> | tail -n 1
+   ```
+
+   Result: The command prints one window ID, `<window>`. Each click in this
+   procedure goes to the fixture display only, at the coordinates in that window
+   of the control that the live view shows. Each key goes to the fixture display
+   too, where the fixture Horizon window has the focus after the click:
+
+   ```sh
+   DISPLAY=:<f> xdotool mousemove --window <window> <x> <y> click 1
+   ```
+
+5. Click **Reconnect** in the fixture Device panel.
 
    Result: The panel shows **Connected** and the `xterm` image.
 
@@ -82,7 +102,12 @@ a local Device panel to its desktop, and that no input reaches the desktop while
 
    Result: The panel shows `Keyboard captured, Escape included; click outside the image to release it`.
 
-4. Type `echo interact-check` and press Enter.
+4. Type `echo interact-check` and press Enter in the fixture Horizon window:
+
+   ```sh
+   DISPLAY=:<f> xdotool type 'echo interact-check'
+   DISPLAY=:<f> xdotool key Return
+   ```
 
    Result: The `xterm` in the image shows `interact-check` on a new line.
 
@@ -96,7 +121,8 @@ a local Device panel to its desktop, and that no input reaches the desktop while
 
    Result: The panel does not capture the keyboard.
 
-3. Type `echo stopped`.
+3. Type `echo stopped` in the fixture Horizon window, with `xdotool type` as in
+   I01.
 
    Result: The `xterm` does not change.
 
