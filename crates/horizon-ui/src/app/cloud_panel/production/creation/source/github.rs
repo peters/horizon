@@ -64,6 +64,8 @@ enum Answer {
     },
     /// The account this computer is signed in as, once that is known.
     SignedIn(String),
+    /// This computer turned out not to be signed in; a sign-in for the request follows.
+    SignedOut,
     /// A check found this computer still signed in.
     Checked,
     /// Another window signed this computer in as another account while the list was on its
@@ -230,13 +232,14 @@ impl Account {
                 repaint.request_repaint();
             };
             let told = sender.clone();
-            let signed = move |login: &str| {
-                let _ = told.send(Answer::SignedIn(login.to_owned()));
+            let signed = move |login: Option<&str>| {
+                let said = login.map_or(Answer::SignedOut, |login| Answer::SignedIn(login.to_owned()));
+                let _ = told.send(said);
             };
             let answer = if purpose == Purpose::Check {
                 match host::stored_login(&root, &settings) {
                     Some(login) => {
-                        signed(&login);
+                        signed(Some(&login));
                         Answer::Checked
                     }
                     None => Answer::Quiet,
@@ -311,6 +314,13 @@ impl Account {
                     self.finish();
                     self.check_at = Some(std::time::Instant::now() + RETRY);
                     return None;
+                }
+                Ok(Answer::SignedOut) => {
+                    self.repositories = None;
+                    self.stale = None;
+                    self.listed_for = None;
+                    self.retry_at = None;
+                    self.check_at = None;
                 }
                 // Another account's list is not this one's, even when its own list fails.
                 Ok(Answer::SignedIn(login)) => {
@@ -487,7 +497,7 @@ fn exchange(
     settings: &github::Settings,
     cancel: &Cancellation,
     show: &dyn Fn(Prompt),
-    signed: &dyn Fn(&str),
+    signed: &dyn Fn(Option<&str>),
     purpose: Purpose,
 ) -> Answer {
     // A request replaced before it starts asks GitHub nothing.
@@ -497,14 +507,18 @@ fn exchange(
     let (login, token) = match host::current(root, settings) {
         Ok(Some(signed_in)) => signed_in,
         Ok(None) if purpose == Purpose::Refresh => return Answer::Quiet,
-        Ok(None) => match host::sign_in(root, settings, cancel, show) {
-            Ok(Ok(signed_in)) => signed_in,
-            Ok(Err(reason)) => return Answer::Failed(reason),
-            Err(error) => return Answer::Failed(error.to_string()),
-        },
+        // Signed out: no list of the account that was signed in stays while a new sign-in runs.
+        Ok(None) => {
+            signed(None);
+            match host::sign_in(root, settings, cancel, show) {
+                Ok(Ok(signed_in)) => signed_in,
+                Ok(Err(reason)) => return Answer::Failed(reason),
+                Err(error) => return Answer::Failed(error.to_string()),
+            }
+        }
         Err(error) => return Answer::Failed(error.to_string()),
     };
-    signed(&login);
+    signed(Some(&login));
     // Replaced while the sign-in was checked: the request that took over lists instead.
     if cancel.is_cancelled() {
         return Answer::Quiet;

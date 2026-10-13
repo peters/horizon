@@ -467,3 +467,15 @@ fn a_shown_list_is_checked_against_the_signed_in_account_again() {
     assert!(account.poll().is_none());
     assert!(account.repositories.is_none(), "another window's sign-in clears it");
 }
+
+#[test]
+fn a_sign_in_that_turned_out_gone_drops_the_list_while_a_new_one_runs() {
+    let (mut account, sender) = waiting(Purpose::List);
+    account.repositories = Some(vec!["acme/private".into()]);
+    account.listed_for = Some("octo-cat".into());
+    account.stale = Some("old".into());
+    sender.send(Answer::SignedOut).unwrap();
+    assert!(account.poll().is_none());
+    assert!(account.repositories.is_none(), "no names while the new sign-in runs");
+    assert!(account.busy(), "the request goes on to sign in");
+}
