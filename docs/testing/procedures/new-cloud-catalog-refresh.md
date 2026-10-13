@@ -195,14 +195,14 @@ fixture opens the candidate window at 1480 × 900 pixels.
      windowsize %1 800 900
    ```
 
-   Result: The window is 800 pixels wide. The toolbar shows **More** instead of
-   **Cloud**.
+   Result: The window is 800 pixels wide. The toolbar shows **+ New workspace**
+   and **Menu**, without the tagline.
 
 7. Start a recording of the isolated desktop.
 
    Result: The recorder writes frames.
 
-8. Open **More › Cloud › New cloud…**.
+8. Open **Menu › New cloud**.
 
    Result: The dialog shows the summary below the worker fields in one column.
 

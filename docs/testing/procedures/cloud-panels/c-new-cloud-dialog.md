@@ -95,7 +95,7 @@ runs in the place that the dialog showed.
 The tasks from C04 use an open New cloud dialog for `<home>/smoke/app`. If the
 dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 
-### 6.1 C01 — Open New cloud from the panel picker, the toolbar and the overflow menu
+### 6.1 C01 — Open New cloud from the panel picker and the toolbar Menu
 
 1. In a workspace, open the panel picker.
 
@@ -109,11 +109,12 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 
    Result: The dialog closes. No cloud starts.
 
-4. Click **Cloud** in the menu bar.
+4. Click **Menu** in the toolbar.
 
-   Result: The Cloud menu opens.
+   Result: The Menu opens. Under the caption **CLOUD**, it shows **New cloud**,
+   **Cloud settings** and **Fit all clouds**.
 
-5. Click **New cloud…**.
+5. Click **New cloud**.
 
    Result: The New cloud dialog opens.
 
@@ -127,9 +128,10 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
    DISPLAY=<display> xdotool search --pid <child-pid> --name '^Horizon$' windowsize %1 800 900
    ```
 
-   Result: The toolbar shows **More** instead of **Cloud**.
+   Result: The toolbar shows **+ New workspace** and **Menu**. The tagline
+   after **Horizon** is not shown.
 
-8. Open **More › Cloud › New cloud…**.
+8. Open **Menu › New cloud**.
 
    Result: The New cloud dialog opens in one column.
 
@@ -139,7 +141,7 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 
 10. Set the window back to its first size.
 
-    Result: The toolbar shows **Cloud** again.
+    Result: The toolbar shows the tagline again.
 
 ### 6.2 C02 — Refuse a cloud in a detached workspace
 
@@ -995,8 +997,9 @@ This task starts no cloud. `<local>` is a new repository whose committed
 
 2. Click **New** in the sidebar.
 
-   Result: A menu shows **Cloud**, **This PC** and **Cloud GPU**, in that order.
-   Under **Cloud**, the text `Checking machine prices…` changes in some seconds to
+   Result: A menu shows **Cloud** and **This PC**, in that order. Each row has a
+   one-line description. **Cloud GPU** is not in this menu. Under the description
+   of **Cloud**, the text `Checking machine prices…` changes in some seconds to
    the machine of a quick start and its hourly price, for example
    `from €0.0088/h · 2 vCPU · 4 GB · Hetzner`. The price is the cheapest offer that
    **New cloud** shows for a quick start.
@@ -1010,18 +1013,18 @@ This task starts no cloud. `<local>` is a new repository whose committed
    Result: **New cloud** opens for a new workspace. After **Cancel**, that
    workspace is gone and the sidebar shows the same workspaces as before.
 
-5. Click **New**, then **Cloud GPU**. Type `<repo>` in the repository field.
-
-   Result: The dialog reads the profiles and selects `runpod-gpu`, the first
-   profile with `gpu: true`. Click **Cancel**.
-
-6. Double-click an empty part of the canvas.
+5. Double-click an empty part of the canvas.
 
    Result: This menu is the preset picker, not the menu of step 2. It shows the
    cloud choices **Cloud** and **Cloud GPU** first, then the heading **This PC**
    above the presets that make a workspace on this computer.
 
-7. Click **Cloud** in that menu. Type `<home>/smoke/local` in the repository field.
+6. Click **Cloud GPU**. Type `<repo>` in the repository field.
+
+   Result: The dialog reads the profiles and selects `runpod-gpu`, the first
+   profile with `gpu: true`. Click **Cancel**.
+
+7. Double-click an empty part of the canvas again. Click **Cloud** in that menu. Type `<home>/smoke/local` in the repository field.
    This is `<data-home>/smoke/local` from step 1, as the fixture shows it.
 
    Result: The dialog shows **This repository runs on This PC** and
@@ -1061,7 +1064,8 @@ This task starts no cloud. `<local>` is a new repository whose committed
 
 ## 7. Pass criteria
 
-- C01 opens the dialog from the panel picker, the toolbar and **More**.
+- C01 opens the dialog from the panel picker and the toolbar **Menu**, also in a
+  narrow window.
 - C02 refuses a cloud in a detached workspace. C03 refuses a cloud in an unsaved session.
 - C04 to C11 show the picks, the prices, the filters, the refresh, the watch,
   the tailnet chooser, the siblings and the fields as written.
@@ -1070,9 +1074,9 @@ This task starts no cloud. `<local>` is a new repository whose committed
 - C31 shows that each worker runs in the place that the summary named.
 - C32 clones a pasted link into `<folder>/<owner>/<repository>` and uses an
   earlier checkout at `<folder>/<repository>` without a second clone.
-- C33 offers Cloud with its machine and hourly price, This PC and Cloud GPU for a
-  new workspace, takes away the empty workspace of a cancelled Cloud, selects a GPU
-  profile for Cloud GPU, opens a `placement: local` repository on This PC, and keeps
+- C33 offers Cloud with its machine and hourly price and This PC for a new
+  workspace, takes away the empty workspace of a cancelled Cloud, selects a GPU
+  profile for Cloud GPU in the canvas preset picker, opens a `placement: local` repository on This PC, and keeps
   and forgets the choice for that repository.
 - No cloud starts in this area except through D01 and D02, or a watch that the
   operator permitted.

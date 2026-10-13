@@ -174,20 +174,25 @@ including for launching the declaring repository's own cloud.
 
 ## One-time machine setup
 
-A new workspace runs in the cloud by default. **New** in the sidebar and the
-**New Workspace** menu of the empty canvas show **Cloud** first, then **This PC**
-and **Cloud GPU**:
+A new workspace runs in the cloud by default. **+ New workspace** in the toolbar
+makes one where the default says: in the cloud when cloud workspaces are ready,
+else on this computer. The part after it (**Cloud ▾**) opens the menu of places,
+as **New** in the sidebar and the **New Workspace** menu of the empty canvas do.
+The menu shows **Cloud** first, then **This PC**, each with a one-line
+description:
 
 - **Cloud** makes the workspace and opens **New cloud** for it. Under **Cloud**,
   the menu shows the machine of a quick start and its hourly price, for example
   `from €0.0088/h · 2 vCPU · 4 GB · Hetzner`: the cheapest offer of the providers
   that this computer can deploy to. A repository with its own profile can ask for a
   larger machine. **New cloud** then shows that machine and its price.
-- **Cloud GPU** does the same and selects the first profile with `gpu: true`. When
-  the repository has no GPU profile, the dialog says so and keeps the default
-  profile on a CPU worker.
-- **This PC** makes a workspace on this computer, as before clouds. In the canvas
-  menu, the presets under **This PC** do this with a panel.
+- **This PC** makes a workspace on this computer, as before clouds.
+
+The preset picker that opens when you double-click an empty part of the canvas
+also offers **Cloud GPU**. It does what **Cloud** does and selects the first
+profile with `gpu: true`. When the repository has no GPU profile, the dialog says
+so and keeps the default profile on a CPU worker. The presets under **This PC** in
+that picker make a workspace on this computer with a panel.
 
 When you cancel **New cloud** for a workspace that **Cloud** made, the empty
 workspace goes too, unless it is the only workspace on the board. When cloud workspaces are not ready on this computer, only
@@ -209,7 +214,7 @@ does not. Click **Forget** to remove the choice. Horizon keeps the choices on th
 computer only, in `~/.horizon/cloud/repository-choices.json`.
 
 In an existing workspace, choose **Cloud** from the panel-creation menu (or
-**Cloud > New cloud**), enter a title, and press Enter. Horizon discovers the Git
+**Menu > New cloud** in the toolbar), enter a title, and press Enter. Horizon discovers the Git
 root from the workspace directory, loads `.horizon/cloud.yml`, and uses its named
 default profile. Preparation runs while you type. A configured launch starts
 provisioning immediately after submission, without a separate Deploy action.
@@ -242,8 +247,8 @@ SSH identity is created when needed and keys stay in private machine-local files
 Blank replacement fields preserve saved keys. Subscription login for Claude happens
 through the actual agent on the worker; worker readiness does not prove authentication.
 See [Sign in with ChatGPT for Codex](#sign-in-with-chatgpt-for-codex).
-Open **Cloud > Cloud settings** to change machine defaults without launching.
-On narrow windows, Cloud appears in the toolbar overflow.
+Open **Menu > Cloud settings** in the toolbar to change machine defaults without
+launching. **Menu > Fit all clouds** shows every cloud on the canvas.
 
 Cloud allocation requires a saved session so worker identity survives reconnect.
 An isolated test instance can use its own disposable saved session and private home.

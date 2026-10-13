@@ -71,7 +71,7 @@ send TCP traffic to each other over the tailnet.
 
 ### 6.1 T01 — Add a tailnet and examine the key check
 
-1. Click **Settings** in the toolbar.
+1. Click **Menu** in the toolbar, then **Settings**.
 
    Result: The Settings window opens.
 

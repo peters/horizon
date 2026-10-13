@@ -328,7 +328,7 @@ A first cloud needs these items today:
 
 | Item | Need | Where |
 |---|---|---|
-| RunPod API key or Hetzner API token | Required | **Cloud > Cloud settings** |
+| RunPod API key or Hetzner API token | Required | **Menu > Cloud settings** |
 | Worker image in a registry | Required, except for quick start. Quick start uses the public base image on RunPod. | Build it from [`examples/cloud-worker`](../examples/cloud-worker/README.md) |
 | Git and OpenSSH | Required | This computer |
 | Docker with buildx | Required, except for quick start. Quick start does not use Docker. | This computer |
