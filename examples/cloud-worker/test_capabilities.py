@@ -6,10 +6,13 @@ import os
 from pathlib import Path
 import runpy
 import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
 from unittest import mock
+
+from test_agent_runtime import root_available
 
 ROOT = Path(__file__).parent
 RUN = subprocess.run
@@ -29,9 +32,12 @@ class CapabilitiesTests(unittest.TestCase):
         self.available = {'agents': ['codex', 'claude'], 'browsers': [], 'desktop': True}
         self.write('/etc/horizon-worker/capabilities.json', self.available)
         self.write('/workspace/capabilities.json', self.available)
+        policy = self.path('/run/horizon-worker/agent-approvals')
+        policy.parent.mkdir(parents=True)
+        policy.write_text('auto\n')
 
     def path(self, value):
-        if isinstance(value, str) and value.startswith(('/workspace/', '/etc/horizon-worker/')):
+        if isinstance(value, str) and value.startswith(('/workspace/', '/etc/horizon-worker/', '/run/horizon-worker/')):
             return self.root / value.lstrip('/')
         return self.real_path(value)
 
@@ -43,6 +49,7 @@ class CapabilitiesTests(unittest.TestCase):
     def run_check(self, *args, missing=(), environment=None, reported=None, run=None, identities=(10001, 10001),
                   bin_dir='/bin'):
         output = io.StringIO()
+        change_owner = os.chown if os.geteuid() == 0 else mock.Mock()
         def reply(command, **kwargs):
             if command[:1] == ['/usr/bin/id']:
                 value = identities[0 if command[1] == '-u' else 1]
@@ -51,6 +58,8 @@ class CapabilitiesTests(unittest.TestCase):
                 return run(command, **kwargs)
             return subprocess.CompletedProcess(command, 0, stdout=(reported or {}).get(command[0], b''))
         with mock.patch('pathlib.Path', side_effect=self.path), \
+                mock.patch('os.geteuid', return_value=0), \
+                mock.patch('os.chown', side_effect=change_owner), \
                 mock.patch('sys.argv', ['horizon-worker-check', *args]), \
                 mock.patch.dict(os.environ, environment or {}, clear=True), \
                 mock.patch('subprocess.run', side_effect=reply) as commands, \
@@ -361,6 +370,110 @@ class CapabilitiesTests(unittest.TestCase):
             self.assertNotIn("'claude'", str(commands), record)
         self.path('/etc/horizon-worker/agent-versions.json').write_text('{')
         self.assertEqual(self.run_check(reported=reported)[0], 1)
+
+    def test_agent_approvals_are_kept_only_for_ask_and_reported_by_their_marker(self):
+        for value, stored in [('ask', 'ask'), ('auto', None)]:
+            requested = dict(self.available, agent_approvals=value)
+            status, output, _ = self.run_check('--write-runtime', '--capabilities-json', json.dumps(requested))
+            self.assertEqual(status, 0, output)
+            self.assertIn('horizon-agent-approvals-contract=1', output.splitlines())
+            runtime = json.loads(self.path('/workspace/capabilities.json').read_text())
+            self.assertEqual(runtime.get('agent_approvals'), stored)
+            policy = self.path('/run/horizon-worker/agent-approvals')
+            self.assertEqual(policy.read_text(), value + '\n')
+            self.assertEqual(policy.stat().st_mode & 0o777, 0o644)
+        status, _, _ = self.run_check('--capabilities-json', json.dumps(dict(self.available, agent_approvals='never')))
+        self.assertEqual(status, 1)
+
+    @unittest.skipUnless(root_available(), 'needs root or passwordless sudo for the two-user policy test')
+    def test_root_publishes_policy_readable_but_not_replaceable_by_the_agent(self):
+        if os.geteuid() != 0:
+            name = f'{Path(__file__).stem}.{type(self).__name__}.{self._testMethodName}'
+            nested = RUN(['sudo', '-n', sys.executable, '-B', '-m', 'unittest', name],
+                         cwd=ROOT, capture_output=True, text=True, timeout=120)
+            self.assertEqual(nested.returncode, 0, nested.stderr)
+            self.assertNotIn('skipped', nested.stderr)
+            return
+        for existing_agent_directory in (False, True):
+            with self.subTest(existing_agent_directory=existing_agent_directory):
+                self.assert_protected_policy(existing_agent_directory)
+
+    def assert_protected_policy(self, existing_agent_directory):
+        self.root.chmod(0o755)
+        requested = dict(self.available, agent_approvals='ask')
+        # Worker startup uses umask 077; the root-owned parent must still be searchable.
+        mask = os.umask(0o077)
+        try:
+            self.path('/run/horizon-worker/agent-approvals').unlink()
+            directory = self.path('/run/horizon-worker/agent-approvals').parent
+            directory.rmdir()
+            if existing_agent_directory:
+                directory.mkdir()
+                os.chown(directory, 10001, 10001)
+                directory.chmod(0o777)
+            status, output, _ = self.run_check('--write-runtime', '--capabilities-json', json.dumps(requested))
+        finally:
+            os.umask(mask)
+        self.assertEqual(status, 0, output)
+        policy = self.path('/run/horizon-worker/agent-approvals')
+        self.assertEqual(policy.stat().st_uid, 0)
+        self.assertEqual(policy.parent.stat().st_uid, 0)
+        self.assertEqual(policy.parent.stat().st_gid, 0)
+        self.assertEqual(policy.parent.stat().st_mode & 0o777, 0o755)
+        probe = r"""
+import os, pathlib, sys
+policy, workspace = map(pathlib.Path, sys.argv[1:])
+assert policy.read_text() == 'ask\n'
+workspace.write_text('{}')
+for operation in (lambda: policy.parent.chmod(0o777),
+                  lambda: policy.write_text('auto\n'), policy.unlink,
+                  lambda: os.replace(workspace, policy),
+                  lambda: policy.parent.rename(policy.parent.with_name('replaced'))):
+    try:
+        operation()
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError('agent changed root policy')
+assert policy.read_text() == 'ask\n'
+"""
+        workspace = self.path('/workspace/capabilities.json')
+        # The isolation handoff gives the workspace copy to the agent.
+        os.chown(workspace, 10001, 10001)
+        result = RUN(['setpriv', '--reuid=10001', '--regid=10001', '--clear-groups', '--',
+                      sys.executable, '-I', '-c', probe, str(policy), str(workspace)],
+                     capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_policy_publication_refuses_a_symlinked_runtime_directory(self):
+        policy = self.path('/run/horizon-worker/agent-approvals')
+        target = policy.parent.with_name('agent-state')
+        policy.parent.rename(target)
+        policy.parent.symlink_to(target, target_is_directory=True)
+        requested = dict(self.available, agent_approvals='ask')
+        status, output, _ = self.run_check('--write-runtime', '--capabilities-json', json.dumps(requested))
+        self.assertEqual(status, 1)
+        self.assertIn('Worker validation failed', output)
+        self.assertEqual((target / 'agent-approvals').read_text(), 'auto\n')
+
+    def test_readiness_refuses_a_changed_agent_approvals_setting(self):
+        self.write('/workspace/capabilities.json', dict(self.available, agent_approvals='ask'))
+        with mock.patch('socket.create_connection') as connect:
+            status, _, _ = self.run_check('--ready', '--capabilities-json', json.dumps(self.available))
+        self.assertEqual(status, 1)
+        connect.assert_not_called()
+
+    def test_readiness_refuses_approval_policy_drift_even_if_the_workspace_matches(self):
+        policy = self.path('/run/horizon-worker/agent-approvals')
+        for value in ['ask\n', '', 'auto', None]:
+            with self.subTest(value=value):
+                policy.unlink(missing_ok=True)
+                if value is not None:
+                    policy.write_text(value)
+                with mock.patch('socket.create_connection') as connect:
+                    status, _, _ = self.run_check('--ready', '--capabilities-json', json.dumps(self.available))
+                self.assertEqual(status, 1)
+                connect.assert_not_called()
 
     def test_readiness_refuses_profile_drift_before_contacting_services(self):
         for active, requested in [(self.available, {}), ({}, self.available)]:

@@ -24,6 +24,8 @@ items:
 - Each segment of the stage track shows its hover text.
 - **Rebuild image & restart** moves a quick start cloud to the pinned image and
   keeps its workspace.
+- Claude Code and Codex run in auto mode: they run a command and write a file
+  without a prompt.
 
 ## 2. Applicability
 
@@ -38,7 +40,7 @@ items:
 
 ## 3. Safety
 
-> **CAUTION:** TASKS Q04 TO Q06 RENT A RUNPOD WORKER AND A NETWORK VOLUME. The
+> **CAUTION:** TASKS Q04 TO Q07 AND Q09 USE A PAID WORKER AND A NETWORK VOLUME. The
 > provider bills the worker while it runs and the volume until you delete it.
 
 > **CAUTION:** DELETE ONLY THE CLOUD THAT THIS RUN MADE. If you delete other
@@ -384,6 +386,121 @@ This task allocates nothing.
     Result: The pod image is the pin of the candidate. The pod ID, the network
     volume and the marker did not change.
 
+### 6.7 Q07 — Agents in auto mode
+
+> **CAUTION:** THIS TASK SENDS PROMPTS TO ANTHROPIC AND OPENAI WITH THE API KEY
+> FILES OF THE CLOUD SETTINGS. Each prompt uses a small amount of API credit.
+
+Do this task only if `<settings>` has an Anthropic API key file and an OpenAI API
+key file.
+
+1. Open the panel picker of the cloud and click **Claude Code**.
+
+   Result: A Claude Code panel opens and shows its prompt. It shows no first-run
+   dialog and no warning about the bypass of permissions.
+
+2. Type this task in the Claude Code panel and press Enter:
+
+   ```text
+   Run the shell command uname -sr. Then create a file q07-claude.txt that contains hello.
+   ```
+
+   Result: Claude Code shows the output of `uname -sr` and writes the file. It
+   does not ask for approval.
+
+3. Open the panel picker of the cloud and click **Codex**.
+
+   Result: A Codex panel opens and shows `Ask Codex to do anything`. It does not
+   ask if you trust the folder.
+
+4. Type this task in the Codex panel and press Enter:
+
+   ```text
+   Run the shell command uname -sr. Then create a file q07-codex.txt that contains hello.
+   ```
+
+   Result: Codex shows the output of `uname -sr` and writes the file. It does
+   not ask for approval, and it shows no sandbox error.
+
+5. Type this command in a worker shell:
+
+   ```bash
+   stat -c '%U %n' /workspace/checkout/q07-claude.txt /workspace/checkout/q07-codex.txt
+   ```
+
+   Result: The owner of each file is `horizon-agent`.
+
+### 6.8 Q08 — Approval policy regressions without a cloud
+
+This task uses synthetic worker files and child executables. It allocates no cloud
+and sends no agent prompt.
+
+1. Run these tests from `examples/cloud-worker` as an unprivileged user with tmux installed:
+
+   ```bash
+   python3 -B -m unittest test_agent_runtime test_capabilities test_session_relaunch
+   ```
+
+   Result: The tests pass. The launcher keeps `ask` after the workspace selection
+   changes. Missing or invalid protected policy data keeps the prompts. Readiness
+   refuses a different protected policy. A repository with bypass settings gets
+   explicit CLI approval and sandbox options, including after an auto-mode session.
+   New and resumed Claude Code sessions override a saved bypass mode. A private tmux server
+   with a poisoned PATH, shell startup file and default shell still launches both modes
+   with the correct options. Image-layer PATH additions still reach the agent.
+
+2. On a disposable Linux test runner with root access, run these modules as root:
+
+   ```bash
+   python3 -B -m unittest test_agent_runtime test_capabilities
+   ```
+
+   Result: The two-user test runs. UID 10001 reads the policy that root publishes
+   with a restrictive startup umask, including when the directory was agent-owned.
+   It cannot write, delete or replace the policy, change its directory permissions
+   or rename its parent. A symlinked directory is refused. The root-only tests report no skip.
+
+3. Run the worker-contract regression from the repository root:
+
+   ```bash
+   cargo test -p horizon-core --lib keeping_agent_prompts_requires_its_exact_marker_and_auto_mode_needs_none
+   cargo test -p horizon-cloud-worker approval_marker
+   ```
+
+   Result: A requested `ask` mode requires the exact approval contract marker.
+   An image without the marker is refused. Auto mode accepts older images. Worker-side
+   allocation inspection and membership reservation also require the exact marker for
+   `ask`. A refused reservation leaves the manifest unchanged.
+
+### 6.9 Q09 — Interactive approval preset on a worker
+
+This task requires a separate authorized repository cloud with
+`capabilities.agent_approvals: ask` and the candidate worker image. Use the
+repository-profile deployment procedure in [cloud deployment](cloud-panels/d-deployment.md).
+Record that cloud and its volume in the resource ledger. Do not change Q04's cloud.
+
+1. Open a Codex panel in the repository cloud.
+
+   Result: A new folder is not automatically trusted. After you accept folder
+   trust, the session reports the `on-request` approval policy and the
+   `workspace-write` sandbox. A stricter user default is also overridden by this
+   explicit profile preset.
+
+2. Request a harmless command that requires access outside the sandbox. On a
+   provider without user namespaces, request `uname -sr`.
+
+   Result: The agent requests approval before it runs outside the sandbox.
+   Decline the request. The command does not run outside the sandbox.
+
+3. Open a Claude Code panel and request a shell command that its default policy
+   requires you to approve. Decline that request.
+
+   Result: The panel shows an approval prompt. The declined command does not run.
+
+4. Delete the repository cloud and its volume. Check both through the provider.
+
+   Result: Neither resource remains. Record the cleanup result in the ledger.
+
 ## 7. Pass criteria
 
 - Q01 shows the guidance section and no red error.
@@ -404,6 +521,12 @@ This task allocates nothing.
 - Q06 reports an unchanged image for the same pin. It switches the pod to the
   other pin and back, and keeps the pod, the volume and `/workspace`. No candidate
   in Q06 can start Docker.
+- In Q07, Claude Code and Codex each run a command and write a file as
+  `horizon-agent`, with no prompt and no sandbox error.
+- Q08 passes the approval regressions and the exact contract-marker test. The
+  root-only permission tests run on a disposable test runner.
+- Q09 shows interactive approval in both agents. A declined request does not run
+  outside the sandbox. Its separate cloud and volume are deleted.
 - Cleanup removes the pod and the network volume of this run.
 
 ## 8. Cleanup

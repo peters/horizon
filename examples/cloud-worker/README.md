@@ -29,7 +29,8 @@ its native executable and geckodriver. A new browser panel without an engine
 preference uses the first enabled engine in the centralized profile order; an
 explicitly disabled engine fails, and an existing session never switches engine
 on reconnect. Inside an explicit capability section, omitted lists are empty and
-omitted desktop support is disabled.
+omitted desktop support is disabled. `agent_approvals` is `auto` (the default) or
+`ask`; see [agent approvals](#agent-approvals).
 
 The base always includes SSH, Git/LFS, tmux, the source/worktree helpers and worker
 control service. When the worker is created with `HORIZON_IDLE_STOP_MINUTES`, the
@@ -604,9 +605,67 @@ Codex stops before it shows its interface.
 
 Thus `horizon-worker-run` starts Codex with `--no-daemon` when `codex --help` shows that
 option. tmux keeps the session when the SSH connection stops, so the session does not need
-the background server. An older Codex has no background server and no `--no-daemon` option,
-so it starts with no option. If you start `codex` yourself in a Shell panel on such a
-volume, add `--no-daemon`.
+the background server. An older Codex has no background server, so the launcher omits
+`--no-daemon` but still applies the selected approval mode. If you start `codex` yourself
+in a Shell panel on such a volume, add `--no-daemon`.
+
+## Agent approvals
+
+By default, Claude Code and Codex on a worker run in auto mode: they run commands and edit
+files without asking first. The worker is a disposable container, and the agent runs as the
+unprivileged agent account (UID 10001), so the container is the boundary. Codex cannot start
+its own sandbox on a provider that denies user namespaces, such as RunPod, so in auto mode
+Codex also runs without that sandbox.
+
+> **CAUTION:** IN AUTO MODE, AN AGENT DOES NOT ASK BEFORE IT RUNS A COMMAND. Text that the
+> agent reads, for example in the repository, in an issue or on a web page, can make it run
+> commands. Those commands can push to the repositories that the worker has access to, use
+> API credit, or read the credentials on the worker.
+
+To select the interactive approval preset, set `agent_approvals: ask` in the
+profile capabilities:
+
+```yaml
+capabilities:
+  agents: [codex, claude]
+  agent_approvals: ask
+```
+
+`horizon-worker-run` uses auto mode only when all of these conditions are true:
+
+- The agent runs as an account that is not root. An image without agent isolation runs its
+  agents as root, and Claude Code refuses to skip its prompts as root.
+- `/run/horizon-worker/agent-approvals` contains `auto`. Root publishes this policy at
+  startup with mode `0644` in a directory with mode `0755`. Startup resets the directory
+  owner and group to root and refuses a symlinked directory. The agent can read the policy
+  but cannot change or replace it. A missing or invalid policy keeps the prompts.
+  Readiness compares this protected value with the requested profile.
+
+New tmux sessions use the fresh SSH login's executable search path and clear shell startup
+variables before running the protected launcher. The policy reader uses the system Python. Image-layer
+session environment files still configure the agent process after these checks.
+
+In `ask` mode, Claude Code starts with `--permission-mode default`, the manual interactive
+mode. This overrides a saved bypass mode for a new or resumed session without rewriting
+user settings.
+
+In auto mode, Claude Code starts with `--dangerously-skip-permissions`, and the launcher
+records in `~/.claude.json` that the one-time warning for this mode is accepted. Codex starts
+with `--dangerously-bypass-approvals-and-sandbox`. Only in auto mode does the launcher
+record in the Codex `config.toml` that the session folder is trusted. An existing decision
+for that folder is kept. In `ask` mode, it leaves folder trust unchanged and sets
+`approval_policy="on-request"` and `--sandbox workspace-write` on the command line.
+These overrides prevent project configuration, including a folder trusted in an earlier
+auto-mode session, from disabling approvals or selecting an unrestricted sandbox.
+This preset controls how Horizon starts agents; it does not restrict programs that the
+agent account starts itself. It overrides user approval and sandbox settings too, including
+stricter user defaults. It permits sandboxed workspace edits; it does not ask before every action.
+On a provider that blocks user namespaces, this sandbox can still require approval to
+run a command outside the sandbox.
+
+`horizon-worker-check` reports `horizon-agent-approvals-contract=1` for images that support
+this setting. Horizon refuses to deploy a profile with `agent_approvals: ask` to other
+images. An image without this marker runs its agents with their prompts.
 
 ## Session environment from image layers
 

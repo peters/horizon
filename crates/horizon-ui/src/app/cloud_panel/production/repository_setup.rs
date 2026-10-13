@@ -574,6 +574,15 @@ mod tests {
         app.cloud_prototype.production.repository = temp.path().display().to_string();
         // A non-process panel exercises placement without invoking a real login in unit tests.
         app.cloud_prototype.production.setup_agent = Some(PanelKind::Usage);
+        app.cloud_prototype.production.setup_presets = vec![horizon_core::PresetConfig {
+            name: "Test panel".into(),
+            kind: PanelKind::Usage,
+            alias: None,
+            command: None,
+            args: Vec::new(),
+            resume: horizon_core::PanelResume::default(),
+            ssh_connection: None,
+        }];
         app.start_cloud_repository_setup(&ctx);
         // Only Linux offers the setup agent: elsewhere it says why and starts nothing.
         if !cfg!(target_os = "linux") {
@@ -619,6 +628,15 @@ mod tests {
             });
         app.cloud_prototype.production.repository = temp.path().display().to_string();
         app.cloud_prototype.production.setup_agent = Some(PanelKind::Usage);
+        app.cloud_prototype.production.setup_presets = vec![horizon_core::PresetConfig {
+            name: "Test panel".into(),
+            kind: PanelKind::Usage,
+            alias: None,
+            command: None,
+            args: Vec::new(),
+            resume: horizon_core::PanelResume::default(),
+            ssh_connection: None,
+        }];
         app.start_cloud_repository_setup(&ctx);
         // The agent starts once its run's baseline was read on a thread.
         let started = std::time::Instant::now();

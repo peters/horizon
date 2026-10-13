@@ -11,6 +11,8 @@ const SELF_STOP_MARKER: &str = "horizon-self-stop-contract=1";
 const PINNED_SUBMODULES_MARKER: &str = "horizon-source-shallow-contract=1";
 const LFS_SELECTION_MARKER: &str = "horizon-source-lfs-selection-contract=1";
 const PREPARE_CHECKOUT_MARKER: &str = "horizon-prepare-checkout-contract=1";
+/// The image starts agents in auto mode and keeps their prompts for `agent_approvals: ask`.
+pub(super) const AGENT_APPROVALS_MARKER: &str = "horizon-agent-approvals-contract=1";
 /// A reason longer than this was not written by `horizon-worker-stop`.
 const SELF_STOP_REASON_LIMIT: usize = 200;
 
@@ -125,6 +127,12 @@ pub(super) fn validate(output: &str, capabilities: &Capabilities, git_auth: bool
     if capabilities.browserstack.is_some() && !contains("horizon-browserstack-contract=1") {
         return Err(Error::Invalid(
             "Worker image lacks requested remote-browser support; rebuild before deployment",
+        ));
+    }
+    // An older image ignores the setting, so its agents would keep or drop prompts unasked.
+    if !capabilities.agent_approvals.is_auto() && !contains(AGENT_APPROVALS_MARKER) {
+        return Err(Error::Invalid(
+            "Worker image does not support agent_approvals: ask; rebuild with the current worker bootstrap",
         ));
     }
     if git_auth && !contains("horizon-git-auth-contract=1") {

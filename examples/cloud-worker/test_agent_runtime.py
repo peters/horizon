@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 
 
@@ -70,12 +71,12 @@ if sys.argv[1:] == ['--help']:
         self.env = {'PATH': str(tools) + os.pathsep + os.defpath,
                     'CHILD_RECEIPT': str(self.root / 'child.json'), 'HORIZON': 'parent-host'}
 
-    def launch(self, agent='claude', panel='test-panel', commands=None, **environment):
+    def launch(self, agent='claude', panel='test-panel', commands=None, cwd=None, **environment):
         (self.workspace / 'sessions' / panel).mkdir(exist_ok=True)
         (self.root / 'child.json').unlink(missing_ok=True)
         result = subprocess.run(['bash', str(self.script), panel, agent], input=commands,
                                 env=dict(self.env, **environment), capture_output=True,
-                                text=True, timeout=10, check=True)
+                                text=True, timeout=10, check=True, cwd=cwd)
         self.assertEqual((self.workspace / 'sessions' / panel / 'exit-status').read_text(), '23\n')
         self.assertIn('Session process exited with status 23', result.stdout)
         self.stdout, self.stderr = result.stdout, result.stderr
@@ -85,14 +86,16 @@ if sys.argv[1:] == ['--help']:
         child = self.launch()
         self.assertEqual(child['args'][0], '--session-id')
         self.assertEqual(len(child['args'][1]), 36)
-        self.assertEqual(child['args'][2:], ['--mcp-config', str(self.workspace / 'agent-mcp.json')])
+        self.assertEqual(child['args'][2:], ['--permission-mode', 'default',
+                                            '--mcp-config', str(self.workspace / 'agent-mcp.json')])
         again = self.launch()
         self.assertEqual(again['args'], child['args'])
         project = self.workspace / 'home/.claude/projects/repo'
         project.mkdir(parents=True)
         (project / f"{child['args'][1]}.jsonl").write_text('{}\n')
         resumed = self.launch()
-        self.assertEqual(resumed['args'], ['--resume', child['args'][1], '--mcp-config', str(self.workspace / 'agent-mcp.json')])
+        self.assertEqual(resumed['args'], ['--resume', child['args'][1], '--permission-mode', 'default',
+                                           '--mcp-config', str(self.workspace / 'agent-mcp.json')])
         self.assertEqual(child['env'], {
             'DISABLE_AUTOUPDATER': '1', 'HOME': str(self.workspace / 'home'),
             'HORIZON': None, 'HORIZON_BROWSER_ACTOR': 'horizon:cloud-test-panel',
@@ -293,12 +296,14 @@ if sys.argv[1:] == ['--help']:
 
     def test_codex_starts_without_the_background_server(self):
         child = self.launch('codex', CODEX_DAEMON='1')
-        self.assertEqual(child['args'], ['--no-daemon'])
+        self.assertEqual(child['args'], ['--no-daemon', '--config', 'approval_policy="on-request"',
+                                         '--sandbox', 'workspace-write'])
         self.assertEqual(child['env']['HOME'], str(self.workspace / 'home'))
         self.assertIsNone(child['env']['ANTHROPIC_API_KEY'])
 
-    def test_codex_without_the_server_option_starts_with_no_arguments(self):
-        self.assertEqual(self.launch('codex')['args'], [])
+    def test_codex_without_the_server_option_starts_with_only_approval_arguments(self):
+        self.assertEqual(self.launch('codex')['args'],
+                         ['--config', 'approval_policy="on-request"', '--sandbox', 'workspace-write'])
 
     def test_codex_option_probe_uses_the_session_path(self):
         layer = self.root / 'layer-bin'
@@ -309,8 +314,160 @@ if sys.argv[1:] == ['--help']:
         self.fragments.mkdir()
         (self.fragments / '20-codex.env').write_text(f'PATH_PREPEND={layer}\n')
         child = self.launch('codex')
-        self.assertEqual(child['args'], ['--no-daemon'])
+        self.assertEqual(child['args'], ['--no-daemon', '--config', 'approval_policy="on-request"',
+                                         '--sandbox', 'workspace-write'])
         self.assertTrue(child['path'].startswith(f'{layer}:'), child['path'])
+
+    def select(self, **settings):
+        """The worker's selection for this cloud, as horizon-worker-check --write-runtime keeps it."""
+        (self.run_dir / 'agent-approvals').write_text(settings.get('agent_approvals', 'auto') + '\n')
+
+    def as_uid(self, uid):
+        # The launcher decides on root by `id -u`; this stands in for it so the test does not
+        # depend on the account that runs it.
+        tool = self.tools / 'id'
+        tool.write_text(f'#!/bin/sh\n[ "$1" = -u ] && echo {uid} && exit 0\nexec /usr/bin/id "$@"\n')
+        tool.chmod(0o700)
+
+    def checkout(self):
+        folder = self.workspace / 'checkout'
+        folder.mkdir(exist_ok=True)
+        return folder
+
+    def codex_config(self):
+        return self.workspace / 'home/.codex/config.toml'
+
+    def test_auto_mode_skips_claude_prompts_and_accepts_its_warning(self):
+        self.as_uid(10001)
+        self.select()
+        child = self.launch()
+        self.assertEqual(child['args'][2:], ['--dangerously-skip-permissions',
+                                             '--mcp-config', str(self.workspace / 'agent-mcp.json')])
+        self.assertIs(self.claude_config()['bypassPermissionsModeAccepted'], True)
+
+    def test_ask_an_unreadable_selection_or_root_keeps_claude_prompts(self):
+        selection = self.run_dir / 'agent-approvals'
+        for uid, text in [(10001, 'ask\n'), (10001, None), (10001, ''),
+                          (10001, 'never\n'), (10001, 'auto'), (10001, '{}'), (0, 'auto\n')]:
+            with self.subTest(uid=uid, selection=text):
+                self.as_uid(uid)
+                selection.unlink(missing_ok=True)
+                if text is not None:
+                    selection.write_text(text)
+                child = self.launch()
+                self.assertNotIn('--dangerously-skip-permissions', child['args'])
+                self.assertNotIn('bypassPermissionsModeAccepted', self.claude_config())
+
+    def test_claude_ask_overrides_a_persisted_bypass_mode_after_an_auto_session(self):
+        self.as_uid(10001)
+        self.select()
+        auto = self.launch()
+        self.assertIn('--dangerously-skip-permissions', auto['args'])
+        settings = self.workspace / 'home/.claude/settings.json'
+        settings.parent.mkdir(exist_ok=True)
+        saved = json.dumps({'permissions': {'defaultMode': 'bypassPermissions'}})
+        settings.write_text(saved)
+        self.select(agent_approvals='ask')
+        for resume in [False, True]:
+            with self.subTest(resume=resume):
+                if resume:
+                    project = settings.parent / 'projects/repo'
+                    project.mkdir(parents=True)
+                    (project / f"{auto['args'][1]}.jsonl").write_text('{}\n')
+                child = self.launch()
+                self.assertEqual(child['args'][0], '--resume' if resume else '--session-id')
+                mode = child['args'].index('--permission-mode')
+                self.assertEqual(child['args'][mode + 1], 'default')
+                self.assertNotIn('--dangerously-skip-permissions', child['args'])
+                self.assertEqual(settings.read_text(), saved)
+
+    def test_policy_reader_does_not_use_a_python_from_the_session_path(self):
+        self.as_uid(10001)
+        self.select(agent_approvals='ask')
+        python = self.tools / 'python3'
+        python.write_text('#!/bin/sh\necho auto\n')
+        python.chmod(0o700)
+        child = self.launch('codex', CODEX_DAEMON='1')
+        self.assertEqual(child['args'], ['--no-daemon', '--config', 'approval_policy="on-request"',
+                                         '--sandbox', 'workspace-write'])
+
+    def test_auto_mode_codex_skips_prompts_and_the_sandbox_and_trusts_its_folder(self):
+        self.as_uid(10001)
+        self.select()
+        folder = self.checkout()
+        child = self.launch('codex', cwd=folder, CODEX_DAEMON='1')
+        self.assertEqual(child['args'], ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox'])
+        config = tomllib.loads(self.codex_config().read_text())
+        self.assertEqual(config['projects'][str(folder.resolve())], {'trust_level': 'trusted'})
+
+    def test_codex_with_ask_keeps_prompts_and_an_existing_folder_decision(self):
+        self.as_uid(10001)
+        self.select(agent_approvals='ask')
+        folder = self.checkout()
+        self.codex_config().parent.mkdir(parents=True)
+        saved = f'model = "saved"\n\n[projects.{json.dumps(str(folder.resolve()))}]\ntrust_level = "untrusted"\n'
+        self.codex_config().write_text(saved)
+        self.assertEqual(self.launch('codex', cwd=folder)['args'],
+                         ['--config', 'approval_policy="on-request"', '--sandbox', 'workspace-write'])
+        self.assertEqual(self.codex_config().read_text(), saved)
+
+    def test_ask_does_not_trust_a_checkout_with_bypass_configuration(self):
+        self.as_uid(10001)
+        self.select(agent_approvals='ask')
+        folder = self.checkout()
+        (folder / '.codex').mkdir()
+        (folder / '.codex/config.toml').write_text(
+            'approval_policy = "never"\nsandbox_mode = "danger-full-access"\n')
+        child = self.launch('codex', cwd=folder)
+        self.assertFalse(self.codex_config().exists())
+        self.assertEqual(child['args'],
+                         ['--config', 'approval_policy="on-request"', '--sandbox', 'workspace-write'])
+        # A previous auto-mode session may already have trusted this same checkout.
+        self.select()
+        self.launch('codex', cwd=folder)
+        saved = self.codex_config().read_text()
+        self.select(agent_approvals='ask')
+        self.assertEqual(self.launch('codex', cwd=folder)['args'], child['args'])
+        self.assertEqual(self.codex_config().read_text(), saved)
+
+    def test_workspace_selection_cannot_override_the_protected_approval_policy(self):
+        self.as_uid(10001)
+        self.select(agent_approvals='ask')
+        (self.workspace / 'capabilities.json').write_text('{}')
+        self.assertNotIn('--dangerously-skip-permissions', self.launch()['args'])
+        self.assertNotIn('--dangerously-bypass-approvals-and-sandbox', self.launch('codex')['args'])
+        (self.run_dir / 'agent-approvals').unlink()
+        self.assertNotIn('--dangerously-skip-permissions', self.launch()['args'])
+        self.assertNotIn('--dangerously-bypass-approvals-and-sandbox', self.launch('codex')['args'])
+
+    def test_the_launch_never_imports_modules_from_the_repository(self):
+        self.as_uid(10001)
+        self.select()
+        folder = self.checkout()
+        marker = self.root / 'imported'
+        for name in ['json', 'tomllib', 'fcntl', 'os']:
+            (folder / f'{name}.py').write_text(f'open({str(marker)!r}, "a").write("{name}\\n")\n')
+        self.launch('codex', cwd=folder)
+        self.launch('claude', cwd=folder)
+        self.assertFalse(marker.exists(), marker.read_text() if marker.exists() else '')
+        config = tomllib.loads(self.codex_config().read_text())
+        self.assertEqual(config['projects'][str(folder.resolve())], {'trust_level': 'trusted'})
+
+    def test_codex_folder_trust_is_added_once_and_a_broken_config_is_left_alone(self):
+        self.as_uid(10001)
+        self.select()
+        folder = self.checkout()
+        self.codex_config().parent.mkdir(parents=True)
+        self.codex_config().write_text('model = "saved"')
+        self.launch('codex', cwd=folder)
+        self.launch('codex', cwd=folder)
+        text = self.codex_config().read_text()
+        self.assertTrue(text.startswith('model = "saved"\n'), text)
+        self.assertEqual(text.count('[projects.'), 1, text)
+        self.assertEqual(tomllib.loads(text)['projects'][str(folder.resolve())], {'trust_level': 'trusted'})
+        self.codex_config().write_text('model = [')
+        self.launch('codex', cwd=folder)
+        self.assertEqual(self.codex_config().read_text(), 'model = [')
 
     def test_inherited_session_directory_is_replaced(self):
         child = self.launch(HORIZON_SESSION_DIR='/elsewhere')

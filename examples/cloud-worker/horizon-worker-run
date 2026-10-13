@@ -47,6 +47,24 @@ if host_value="$(cat "$host_instance" 2>/dev/null)" && [ -n "$host_value" ]; the
 else
     printf 'The worker has not published its browser host instance (%s); browser tools in this session cannot identify their workspace.\n' "$host_instance" >&2
 fi
+# Auto mode: Claude and Codex run commands and edit files without asking. The worker is a
+# disposable container and this process runs as the unprivileged agent account, so the
+# container is the boundary. A profile with `agent_approvals: ask` keeps the prompts, and so
+# does an agent that runs as root (an image without agent isolation) or a worker whose
+# selection cannot be read.
+approvals=ask
+if [ "$(id -u)" != 0 ]; then
+    approvals="$(/usr/bin/python3 -I - <<'PY' 2>/dev/null
+with open('/run/horizon-worker/agent-approvals') as policy:
+    approvals = policy.read()
+if approvals not in ('auto\n', 'ask\n'):
+    raise SystemExit(1)
+approvals = approvals.strip()
+print(approvals)
+PY
+)" || approvals=ask
+    [ "$approvals" = auto ] || approvals=ask
+fi
 # A person can start claude by hand in a Shell panel, so the shell gets the same key,
 # workspace and first-run settings as a Claude panel, whichever of the two opened first.
 if [ "$agent" = claude ] || [ "$agent" = shell ]; then
@@ -63,10 +81,14 @@ if [ "$agent" = claude ] || [ "$agent" = shell ]; then
     fi
     # A worker is a disposable container, so its person has already chosen to run Claude Code
     # here: skip the first-run dialogs (theme, the API key, trusting the folder) rather than
-    # leave every new panel asking them. Failing to seed only brings the dialogs back.
-    python3 - <<'PY' || true
+    # leave every new panel asking them. Failing to seed only brings the dialogs back. In
+    # auto mode, it also accepts the one-time warning that Claude shows for skipped prompts.
+    # Isolated mode: the current folder is the repository, and none of its files may be
+    # imported here.
+    SEED_BYPASS="$([ "$approvals" = auto ] && echo 1)" python3 -I - <<'PY' || true
 import fcntl, json, os
 home = os.environ['HOME']
+bypass = os.environ.get('SEED_BYPASS') == '1'
 path = home + '/.claude.json'
 key = os.environ.get('ANTHROPIC_API_KEY', '').strip()
 # Claude keeps approvals by the last 20 characters. A key no longer than that would be copied
@@ -106,6 +128,8 @@ def seeded(raw):
             answers = config['customApiKeyResponses'] = {}
         answers['approved'] = list(dict.fromkeys([*answers.get('approved', []), tail]))
         answers['rejected'] = [other for other in answers.get('rejected', []) if other != tail]
+    if bypass:
+        config['bypassPermissionsModeAccepted'] = True
     return config
 
 
@@ -150,6 +174,12 @@ if [ "$agent" = claude ]; then
             fi
         done
     fi
+    if [ "$approvals" = auto ]; then
+        claude_args+=(--dangerously-skip-permissions)
+    else
+        # A saved user setting or resumed session must not keep a previous bypass mode.
+        claude_args+=(--permission-mode default)
+    fi
     env -- "${session_env_assignments[@]}" claude "${claude_args[@]}" --mcp-config /workspace/agent-mcp.json
 elif [ "$agent" = grok ]; then
     env -- "${session_env_assignments[@]}" grok --no-leader
@@ -162,6 +192,58 @@ elif [ "$agent" = codex ]; then
     codex_args=()
     if env -- "${session_env_assignments[@]}" codex --help 2>/dev/null | grep -q -e '--no-daemon'; then
         codex_args=(--no-daemon)
+    fi
+    if [ "$approvals" = auto ]; then
+        # Codex asks once per repository folder whether to trust it, and only an entry for that
+        # exact folder answers it; one for /workspace does not. This session's folder is trusted
+        # like Claude's. An existing decision for it is kept, and failing to write only brings the
+        # question back. The session environment can name another CODEX_HOME. Isolated mode: the
+        # current folder is the repository, and none of its files may be imported here.
+        env -- "${session_env_assignments[@]}" python3 -I - <<'PY' || true
+import fcntl, json, os, tomllib
+home = os.environ.get('CODEX_HOME') or os.path.join(os.environ['HOME'], '.codex')
+path = os.path.join(home, 'config.toml')
+folder = os.path.realpath(os.getcwd())
+
+
+def addition(raw):
+    # None: nothing to add, or a file Codex itself would refuse, which stays as it is.
+    try:
+        text = raw.decode()
+        projects = tomllib.loads(text).get('projects', {})
+        if not isinstance(projects, dict) or folder in projects:
+            return None
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return None
+    entry = f'\n[projects.{json.dumps(folder)}]\ntrust_level = "trusted"\n'
+    try:
+        tomllib.loads(text + entry)
+    except tomllib.TOMLDecodeError:
+        return None
+    return entry
+
+
+os.makedirs(home, mode=0o700, exist_ok=True)
+with open(path + '.horizon-lock', 'a') as lock:
+    # Launchers serialize on this lock, so two sessions never add the same entry. Codex saves
+    # the file without it, so the entry is appended and the file is never replaced: a save
+    # by a running Codex is never lost. The check and the append use one open file, so a
+    # replacement by Codex at the same moment can only detach the entry from config.toml,
+    # and the question then comes back once.
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(descriptor, 'r+b') as saved:
+        entry = addition(saved.read())
+        if entry is not None:
+            saved.write(entry.encode())
+PY
+        # Bypasses the sandbox too: where the container denies user namespaces, as RunPod's
+        # does, the sandbox cannot start and every command would ask to run without it.
+        codex_args+=(--dangerously-bypass-approvals-and-sandbox)
+    else
+        # CLI overrides also cover folders trusted by a previous auto-mode session: a
+        # repository's project configuration must not disable the requested protections.
+        codex_args+=(--config 'approval_policy="on-request"' --sandbox workspace-write)
     fi
     env -- "${session_env_assignments[@]}" codex "${codex_args[@]}"
 else

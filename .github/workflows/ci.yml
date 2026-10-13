@@ -313,6 +313,8 @@ jobs:
       # Speech links ALSA. The other shards do not build that feature.
       - if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'speech' }}
         run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
+      - if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'libs' }}
+        run: bash scripts/install-ci-ubuntu-dependencies.sh tmux
       - name: Test shard
         shell: bash
         env:
