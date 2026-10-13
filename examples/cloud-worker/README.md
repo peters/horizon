@@ -127,8 +127,10 @@ fence prevents replaying a process whose launch or survival is uncertain.
 
 SSH accepts only the caller-supplied public key. The client uses a dedicated
 known-host file per provider worker: first connection uses OpenSSH trust on first
-use; later host-key changes fail. VNC listens on worker loopback and is read-only;
-SSH tunnels are required for presentation. Disconnecting the client detaches
+use; later host-key changes fail. VNC listens on worker loopback and is view-only by
+design: it ignores mouse and keyboard input, so the Horizon desktop viewer does not
+offer **Interact**. Agents send input with the worker's device tools instead. SSH
+tunnels are required for presentation. Disconnecting the client detaches
 tmux. Deleting a worker loses its processes and Pod-local volume.
 
 The stock image runs agents and workspace services as UID 10001 with no

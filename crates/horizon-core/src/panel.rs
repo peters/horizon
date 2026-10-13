@@ -138,6 +138,7 @@ impl Default for PanelLayout {
 
 pub struct PanelOptions {
     pub device_identity: Option<crate::browser::manifest::device::DeviceIdentity>,
+    pub device_input: crate::DeviceInput,
     pub name: Option<String>,
     /// Whether `name` was explicitly chosen by the user. `None` preserves
     /// the legacy behavior of treating every supplied name as custom.
@@ -186,6 +187,7 @@ impl Default for PanelOptions {
     fn default() -> Self {
         Self {
             device_identity: None,
+            device_input: crate::DeviceInput::default(),
             name: None,
             name_is_custom: None,
             command: None,

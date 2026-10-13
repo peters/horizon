@@ -177,6 +177,7 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: Pane
                 command.as_deref(),
                 is_restore,
                 opts.device_identity.take(),
+                opts.device_input,
                 opts.ssh_connection.take(),
             )
         }

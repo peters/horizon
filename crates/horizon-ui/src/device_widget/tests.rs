@@ -8,6 +8,7 @@ mod presentation;
 fn fixture_device() -> DevicePanelState {
     DevicePanelState {
         target: horizon_core::DeviceViewTarget::parse("127.0.0.1:5900").unwrap(),
+        input: horizon_core::DeviceInput::Accepted,
         identity: None,
         connect_on_start: false,
         ssh_tunnel: None,
@@ -482,6 +483,7 @@ fn connected_texture_is_not_display_proof_when_image_is_clipped() {
     let ctx = egui::Context::default();
     let device = DevicePanelState {
         target: horizon_core::DeviceViewTarget::parse("127.0.0.1:5900").unwrap(),
+        input: horizon_core::DeviceInput::Accepted,
         identity: None,
         connect_on_start: false,
         ssh_tunnel: None,

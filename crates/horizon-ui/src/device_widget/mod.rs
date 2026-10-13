@@ -13,7 +13,7 @@ mod session;
 use std::time::Duration;
 
 use egui::{ColorImage, Context, TextureHandle, TextureOptions, Ui};
-use horizon_core::{DevicePanelState, DeviceViewOptions, browser::manifest::device::DeviceServerDetails};
+use horizon_core::{DeviceInput, DevicePanelState, DeviceViewOptions, browser::manifest::device::DeviceServerDetails};
 
 use frame::present_image;
 use input::InputState;
@@ -207,6 +207,10 @@ impl DeviceUiState {
 
     pub(crate) fn show(&mut self, ui: &mut Ui, device: &DevicePanelState, interactive: bool) {
         self.rendered = true;
+        if device.input == DeviceInput::ViewOnly && self.interact {
+            self.interact = false;
+            self.release_input();
+        }
         if !self.initialized {
             self.initialized = true;
             if device.connect_on_start {
@@ -251,7 +255,7 @@ impl DeviceUiState {
         if changed && self.apply_view_options(previous) {
             ui.ctx().request_repaint();
         }
-        ui.add_enabled_ui(interactive, |ui| self.interact_toggle(ui));
+        ui.add_enabled_ui(interactive, |ui| self.interact_toggle(ui, device.input));
         self.refresh_presentation(ui.ctx());
         ui.separator();
         if let Some(texture) = &self.texture {

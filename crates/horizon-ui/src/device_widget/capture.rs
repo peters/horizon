@@ -1,15 +1,25 @@
 //! Interact: forwarding a person's pointer and keyboard to the desktop while
 //! the image has focus, and letting go of everything when it does not.
 use egui::Ui;
-use horizon_core::DeviceImageLayout;
+use horizon_core::{DeviceImageLayout, DeviceInput};
 
 use super::DeviceUiState;
 use super::input::{InputState, SCROLL_NOTCH_POINTS, button_bit, desktop_point};
 use vnc::X11Event;
 
+pub(super) const VIEW_ONLY_REASON: &str = "View only: the VNC server of this desktop ignores mouse and keyboard input";
+
 impl DeviceUiState {
-    pub(super) fn interact_toggle(&mut self, ui: &mut Ui) {
+    pub(super) fn interact_toggle(&mut self, ui: &mut Ui, input: DeviceInput) {
         ui.horizontal(|ui| {
+            if input == DeviceInput::ViewOnly {
+                ui.add_enabled_ui(false, |ui| ui.toggle_value(&mut false, "Interact"))
+                    .inner
+                    .on_disabled_hover_text(VIEW_ONLY_REASON);
+                // Wrapped, so a narrow viewer does not grow to fit the reason.
+                ui.add(egui::Label::new(egui::RichText::new(VIEW_ONLY_REASON).weak()).wrap());
+                return;
+            }
             let was = self.interact;
             ui.toggle_value(&mut self.interact, "Interact").on_hover_text(
                 "Send your mouse and keyboard to the desktop while the image has focus. \

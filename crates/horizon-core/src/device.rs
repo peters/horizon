@@ -36,11 +36,23 @@ impl DeviceViewTarget {
     }
 }
 
+/// What the VNC server of a desktop does with a viewer's pointer and keyboard events.
+/// RFB cannot tell a client that the server drops them, so the creator of the viewer states it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DeviceInput {
+    /// The server acts on input, so a person can turn Interact on.
+    #[default]
+    Accepted,
+    /// The server drops all input, so Interact could not reach the desktop.
+    ViewOnly,
+}
+
 /// A read-only viewer target, separate from application/device input control.
 #[derive(Clone, Debug)]
 pub struct DevicePanelState {
     /// The VNC endpoint: on this machine, or as seen from the `ssh_tunnel` host.
     pub target: DeviceViewTarget,
+    pub input: DeviceInput,
     pub identity: Option<DeviceIdentity>,
     /// Restored panels require explicit reconnection because local ports can be reused.
     pub connect_on_start: bool,
@@ -130,7 +142,7 @@ impl DevicePanelState {
 mod tests {
     use std::time::Duration;
 
-    use super::{DevicePanelState, DeviceViewTarget};
+    use super::{DeviceInput, DevicePanelState, DeviceViewTarget};
     use crate::{
         Board, CanvasViewState, Panel, PanelId, PanelKind, PanelOptions, PanelResume, PresetConfig, RuntimeState,
         WindowConfig, WorkspaceId,
@@ -286,6 +298,25 @@ mod tests {
     }
 
     #[test]
+    fn device_input_comes_from_the_creator_and_is_accepted_by_default() -> crate::Result<()> {
+        assert_eq!(PanelOptions::default().device_input, DeviceInput::Accepted);
+        for input in [DeviceInput::Accepted, DeviceInput::ViewOnly] {
+            let panel = Panel::spawn(
+                PanelId(1),
+                WorkspaceId(1),
+                PanelOptions {
+                    kind: PanelKind::Device,
+                    command: Some("127.0.0.1:5900".into()),
+                    device_input: input,
+                    ..PanelOptions::default()
+                },
+            )?;
+            assert_eq!(panel.device().map(|device| device.input), Some(input));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn tunnel_without_a_host_is_rejected_before_panel_creation() {
         use crate::SshConnection;
         assert!(
@@ -306,6 +337,7 @@ mod tests {
         );
         let local = DevicePanelState {
             target: DeviceViewTarget::parse("127.0.0.1:5900").unwrap(),
+            input: DeviceInput::Accepted,
             identity: None,
             connect_on_start: true,
             ssh_tunnel: None,
@@ -325,6 +357,7 @@ mod tests {
         super::DevicePanelState::normalize_identity(&mut identity)?;
         let mut device = super::DevicePanelState {
             target: DeviceViewTarget::parse("127.0.0.1:5900")?,
+            input: DeviceInput::Accepted,
             identity: Some(identity),
             connect_on_start: false,
             ssh_tunnel: None,

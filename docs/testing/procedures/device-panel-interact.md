@@ -1,0 +1,152 @@
+---
+procedure: device-panel-interact
+feature: Interact in native VNC Device panels
+platforms: [linux]
+cost: none
+destructive: no
+secrets: none
+owner: peters
+---
+
+# Device panel Interact test procedure
+
+## 1. Purpose
+
+This procedure makes sure that **Interact** sends mouse and keyboard input from
+a local Device panel to its desktop, and that no input reaches the desktop while
+**Interact** is off.
+
+## 2. Applicability
+
+- Candidate: a frozen debug build of one exact commit, `<candidate-commit>`.
+- Platforms: Linux with Xvfb.
+- This procedure does not test:
+  - The view-only cloud desktop viewer on a real worker, which offers no
+    **Interact** and shows the reason. That test needs a paid cloud worker, so
+    test E05 of the [cloud panels procedure](cloud-panels/e-panels.md) does it.
+  - Agent input through the device CLI and MCP tools.
+
+## 3. Safety
+
+> **CAUTION:** START THE VNC SERVER WITHOUT `-viewonly` ONLY ON A PRIVATE TEST
+> DISPLAY. A VNC server that accepts input lets each local process that connects
+> to it control that display.
+
+## 4. Equipment and preconditions
+
+- The equipment of the [local device smoke](../../../scripts/device-smoke/README.md),
+  `xterm` and `xdotool`.
+- A native Device panel in your Horizon window that shows the viewer fixture of
+  step 3 in section 5. This is the live view. It is only for observation: the
+  fixture serves its display through a view-only VNC server, so the live view
+  sends no input to the fixture.
+
+## 5. Setup
+
+1. Start a private Xvfb display, for example `:<n>`, and an `xterm` on it.
+
+   Result: The `xterm` shows a shell prompt.
+
+2. Start an x11vnc server for `:<n>` on loopback, without `-viewonly`:
+
+   ```sh
+   x11vnc -display :<n> -localhost -rfbport <port> -forever -shared -nopw
+   ```
+
+   Result: The x11vnc log shows `PORT=<port>`.
+
+3. Start the viewer fixture with a Device panel for that server:
+
+   ```sh
+   python3 scripts/device-smoke/serve.py --horizon "$smoke_bin/horizon" \
+     --native-view --device-address 127.0.0.1:<port> --state <new-state-dir>
+   ```
+
+   Result: The fixture Horizon shows a Device panel for `127.0.0.1:<port>`.
+   The fixture's `lab.json` names its display, for example `:<f>`.
+
+4. Find the fixture Horizon's process ID `<horizon-pid>` in the fixture's owned
+   process tree, as the [local device smoke](../../../scripts/device-smoke/README.md)
+   describes, and its window on the fixture display:
+
+   ```sh
+   DISPLAY=:<f> xdotool search --pid <horizon-pid> | tail -n 1
+   ```
+
+   Result: The command prints one window ID, `<window>`. Each click in this
+   procedure goes to the fixture display only, at the coordinates in that window
+   of the control that the live view shows. Each key goes to the fixture display
+   too, where the fixture Horizon window has the focus after the click:
+
+   ```sh
+   DISPLAY=:<f> xdotool mousemove --window <window> <x> <y> click 1
+   ```
+
+5. Click **Reconnect** in the fixture Device panel.
+
+   Result: The panel shows **Connected** and the `xterm` image.
+
+## 6. Tasks
+
+### 6.1 I01 — Interact sends input to a local desktop
+
+1. Examine **Interact** in the fixture Device panel.
+
+   Result: **Interact** is enabled and off. The header shows `Read-only`.
+
+2. Click **Interact**.
+
+   Result: The panel shows `Click the image to type into it`.
+
+3. Click the `xterm` in the image.
+
+   Result: The panel shows `Keyboard captured, Escape included; click outside the image to release it`.
+
+4. Type `echo interact-check` and press Enter in the fixture Horizon window:
+
+   ```sh
+   DISPLAY=:<f> xdotool type 'echo interact-check'
+   DISPLAY=:<f> xdotool key Return
+   ```
+
+   Result: The `xterm` in the image shows `interact-check` on a new line.
+
+### 6.2 I02 — Interact off stops the input
+
+1. Click **Interact** again.
+
+   Result: **Interact** is off. The header shows `Read-only`.
+
+2. Click the `xterm` in the image.
+
+   Result: The panel does not capture the keyboard.
+
+3. Type `echo stopped` in the fixture Horizon window, with `xdotool type` as in
+   I01.
+
+   Result: The `xterm` does not change.
+
+## 7. Pass criteria
+
+- I01: The text typed through **Interact** shows in the `xterm`.
+- I02: No input reaches the `xterm` while **Interact** is off.
+
+## 8. Cleanup
+
+1. Close the fixture Horizon normally.
+
+   Result: The fixture stops its own processes.
+
+2. Stop the x11vnc, `xterm` and Xvfb processes of section 5 by their process IDs.
+
+   Result: The private display is gone.
+
+3. Close the live-view Device panel with `device_panel` operation `close`.
+
+   Result: The panel is gone from your Horizon window.
+
+## 9. Record of results
+
+If the run must be kept, write a report in `docs/testing/reports/` with
+[the report template](../reports/TEMPLATE.md). If not, put the results in the
+pull request. Keep private evidence out of the repository.
