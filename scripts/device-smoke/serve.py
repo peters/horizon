@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import signal
 import re
+import sys
 import time
 
 import sandbox
@@ -73,6 +74,9 @@ def application_document(cwd, device_address=None, firefox_system_access=False):
 
 
 def main():
+    if '--worker-desktop' in sys.argv[1:]:
+        import worker_desktop
+        return worker_desktop.main()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--horizon', type=Path, required=True, help='Horizon debug binary for an isolated smoke')
     parser.add_argument('--tools', type=Path, help='Optional unpacked Debian tools root')
@@ -200,4 +204,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

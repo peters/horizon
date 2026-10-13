@@ -266,6 +266,98 @@ Both fixtures use `--native-view`. x11vnc remains loopback-only and read-only.
 The viewer fixture must itself be watched live in the current user's native
 Device panel; inspecting a screenshot of that fixture is not enough.
 
+## Horizon on a cloud worker desktop
+
+Use this mode only in an agent session on a Horizon cloud worker. There, the
+fixture display above has no viewer: `device_panel` refuses with
+`viewer_requires_horizon`. The only viewer is **Add desktop viewer** on the
+cloud card. It shows the worker desktop `:99`.
+
+Run the command in the checkout or worktree that you want to build:
+
+```sh
+python3 scripts/device-smoke/serve.py --worker-desktop
+```
+
+The command does these steps:
+
+1. It builds `cargo build --locked -p horizon-ui --bin horizon` into
+   `$HORIZON_SESSION_DIR/target/device-smoke`. The shared checkout's `target/`
+   belongs to all sessions on the worker, so the build does not use it.
+2. It runs the build at nice 19, with the idle CPU scheduler and the idle I/O
+   class. The worker container has no `CAP_SYS_NICE`, so a lower priority cannot
+   go up again. For this reason, only the build child gets the low priority, and
+   your shell keeps its priority. Browser panels stay usable during the build.
+3. It copies the binary to `<state>/bin/horizon` and writes its SHA-256 to
+   `<state>/bin/SHA256SUMS`. The state directory is
+   `$HORIZON_SESSION_DIR/worker-desktop/<time>-<pid>`, mode 700.
+4. It starts the frozen binary on `:99` with the disposable fixture config and
+   `--ephemeral`. It makes sure that `/proc/<pid>/exe` has the frozen hash.
+5. It prints one JSON manifest line and writes the same data to
+   `<state>/worker-desktop.json`.
+
+The debug Horizon gets a changed environment:
+
+- `HORIZON_HOME` is `<state>/horizon-home`. Horizon keeps all of its state
+  there, never in `/workspace/home/.horizon`, which is the root of the worker's
+  browser service.
+- The command removes the worker identity variables `HORIZON`,
+  `HORIZON_BROWSER_ACTOR`, `HORIZON_BROWSER_HOST_INSTANCE`,
+  `HORIZON_BROWSER_ROOT`, `HORIZON_DEVICE_ACTOR`, `HORIZON_CLOUD_ACTOR` and
+  `HORIZON_GPU_LOCK`. Without them, the debug app does not act as a worker
+  client. It also removes `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID`,
+  `ANTHROPIC_CUSTOM_HEADERS` and `WAYLAND_DISPLAY`. The manifest lists the
+  removed names, never their values.
+- `CODEX_HOME`, `GROK_HOME`, `XDG_DATA_HOME`, `XDG_CONFIG_HOME` and
+  `XDG_CACHE_HOME` go to the state directory. Horizon installs its agent skills
+  and its desktop entry there.
+- `HOME` does not change. Terminals in the debug app keep `/workspace/home`.
+  Horizon still makes empty `.horizon-leases` directories in the other skill
+  folders under `HOME`, for example `~/.claude/skills`.
+
+The manifest has these fields:
+
+| Field | Value |
+|---|---|
+| `pid` | The process ID of the debug Horizon. |
+| `launcher_pid` | The process ID of this command. Send it `SIGTERM` to stop. |
+| `sha256` | The hash of the frozen binary and of `/proc/<pid>/exe`. |
+| `state`, `horizon_home` | The state directory and the Horizon home in it. |
+| `log`, `config` | The Horizon log and the config that it loaded. |
+| `display` | The worker desktop, `:99`. |
+| `started_at` | The UTC launch time, for `find -newermt`. |
+| `window` | `true` when a window of `pid` showed on the display. |
+| `build` | The target directory, the build log, the seconds and the priority. `null` with `--horizon`. |
+| `removed_environment` | The names that the command removed. |
+
+Ask the person to open **Add desktop viewer** on the cloud card. Agents cannot
+create this viewer. The worker desktop is shared by all sessions on the worker.
+It is not task-owned, so other windows can show on it. The cloud desktop is
+read-only by decision (#1508): the person can watch the debug app but cannot
+click in it. For evidence, use `device_screenshot` with the target
+`cloud-desktop`. To make sure that the launch did not change the browser
+service's root, examine it:
+
+```sh
+find /workspace/home/.horizon -newermt "<started_at>"
+```
+
+Result: The output is empty.
+
+To stop, press Ctrl-C, or send `SIGTERM` to `launcher_pid`. A command that runs
+in the background ignores `SIGINT`. The command sends `WM_DELETE_WINDOW` to the
+windows of `pid`, as a window manager does, so Horizon exits normally. After
+15 seconds it stops the process group. The state directory and the logs stay.
+
+Options:
+
+- `--horizon PATH` uses this binary and does not build.
+- `--state DIR` uses a new state directory.
+- `--config PATH` uses this config instead of the disposable fixture.
+- `--target-dir DIR` builds into this directory.
+- `--display NAME` uses another X display, for example for a local test.
+- Set `CARGO_BUILD_JOBS` to use fewer build jobs when the worker has little memory.
+
 ## Video evidence and cleanup
 
 For visible feature additions or behavior changes, record a short clip directly
