@@ -415,7 +415,14 @@ mod tests {
         let mut resized = profile.clone();
         resized.cpu += 1;
         resized.storage.volume_gb += 1;
+        // Hosted devices are fixed at creation, and their names stay out of the label.
+        resized.capabilities.browserstack = Some(horizon_cloud::BrowserStack {
+            provider: "synthetic-devices".into(),
+            targets: ["synthetic-phone".into()].into(),
+            local_ports: std::collections::BTreeSet::new(),
+        });
         assert_eq!(settings_label(&resized), label);
+        assert!(!label[1].contains("synthetic"));
         let edits: [fn(&mut Profile); 4] = [
             |profile| profile.capabilities.desktop = !profile.capabilities.desktop,
             |profile| profile.idle_stop_minutes = Some(30),
