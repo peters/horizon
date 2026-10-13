@@ -33,6 +33,8 @@ a host path to the worker.
 - A host that predates uploads sends no `uploads`, and a worker that predates
   them sends no `uploads` state and no `staged` receipt. New versions only add
   fields.
+- A host sends a `stage` request only for a browser whose state has `uploads`.
+  A worker that predates uploads cannot read it and closes the connection.
 
 ## Report
 
