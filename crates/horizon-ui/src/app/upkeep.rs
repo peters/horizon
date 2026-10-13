@@ -74,12 +74,17 @@ impl HorizonApp {
             },
             workspace,
         );
-        if let Ok(panel) = created {
-            if let Some(upkeep) = self.board.panel_mut(board).and_then(|board| board.content.upkeep_mut()) {
-                upkeep.browser = Some(panel);
+        let panel = match created {
+            Ok(panel) => panel,
+            Err(error) => {
+                tracing::warn!(%error, "could not open a browser panel for an Upkeep pull request");
+                return;
             }
-            self.board.focus(panel);
+        };
+        if let Some(upkeep) = self.board.panel_mut(board).and_then(|board| board.content.upkeep_mut()) {
+            upkeep.browser = Some(panel);
         }
+        self.board.focus(panel);
         // The board and the page it opened are seen side by side.
         self.fit_workspace_visible(ctx, workspace);
         self.mark_runtime_dirty();

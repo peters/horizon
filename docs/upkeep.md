@@ -29,7 +29,8 @@ The `upkeep` panel kind is the board of one Upkeep. The board shows these items:
 
 A click on a row opens its pull request page in the browser panel **Pull request**
 next to the board. The board uses the same panel for the next row. A browser panel
-that the board did not open is never used, also when it has the same name.
+that the board did not open is never used, also when it has the same name. After a
+click, the view fits the workspace, so the board and the page are both in view.
 
 The board is read-only. It reads the status document that the panel `command` names.
 When the command is empty, it reads `~/.horizon/upkeep/status.json`. A config file
@@ -58,8 +59,8 @@ The board guarantees these items:
   - 500 pull requests. Open pull requests come before merged pull requests.
   - The newest 1,500 runs.
   - The newest 100 activity lines.
-- It ignores runs and activity lines that are more than one day in the future.
   - 1,000 repository names.
+- It ignores runs and activity lines that are more than one day in the future.
 - It cuts each text to 300 characters.
 - It parses the document into a fixed schema. It never runs a part of the document.
   - It ignores unknown fields.
