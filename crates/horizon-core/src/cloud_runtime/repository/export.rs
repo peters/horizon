@@ -20,6 +20,7 @@
 //! it runs no program.
 use super::{Error, Result, Runner};
 use std::{
+    ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     process::Command,
     time::Duration,
@@ -158,19 +159,7 @@ fn list_refs(repository: &Path, listing: &Path, runner: &Runner<'_>, limit: u64)
 /// not; a detached source HEAD becomes a detached private HEAD at the same commit, so `%D`
 /// does not read the default `refs/heads/master` as the named branch.
 fn mirror_head(repository: &Path, neutral: &Path, borrowed: &Path, runner: &Runner<'_>) -> Result<()> {
-    let branch = runner
-        .run(
-            "Read the exported branch",
-            Command::new("git")
-                .arg("-C")
-                .arg(repository)
-                .args(["symbolic-ref", "-q", "HEAD"]),
-            Duration::from_secs(30),
-        )
-        .ok()
-        .map(|head| head.trim().to_owned())
-        .filter(|head| !head.is_empty());
-    let borrowed_head = |args: &[&str]| {
+    let borrowed_head = |args: &[&OsStr]| {
         runner.run(
             "Name the exported HEAD",
             isolated(neutral, &mut Command::new("git"))
@@ -180,8 +169,8 @@ fn mirror_head(repository: &Path, neutral: &Path, borrowed: &Path, runner: &Runn
             Duration::from_secs(30),
         )
     };
-    if let Some(branch) = branch {
-        borrowed_head(&["symbolic-ref", "HEAD", &branch]).map(|_| ())
+    if let Some(branch) = source_branch(repository) {
+        borrowed_head(&[OsStr::new("symbolic-ref"), OsStr::new("HEAD"), &branch]).map(|_| ())
     } else {
         let detached = runner.run(
             "Read the exported HEAD",
@@ -192,8 +181,24 @@ fn mirror_head(repository: &Path, neutral: &Path, borrowed: &Path, runner: &Runn
                 .args(["rev-parse", "--verify", "--end-of-options", "HEAD"]),
             Duration::from_secs(30),
         )?;
-        borrowed_head(&["update-ref", "--no-deref", "HEAD", detached.trim()]).map(|_| ())
+        borrowed_head(&["update-ref", "--no-deref", "HEAD", detached.trim()].map(OsStr::new)).map(|_| ())
     }
+}
+
+/// The branch `repository`'s HEAD names, byte for byte, or `None` for a detached HEAD.
+/// Opened with git2, as [`objects_dir`] is, so a name that is not UTF-8 is kept rather than
+/// decoded lossily into another branch. Windows passes a command line argument as UTF-16,
+/// so there such a name is treated as detached, which names no branch rather than a wrong
+/// one.
+fn source_branch(repository: &Path) -> Option<OsString> {
+    let repository = git2::Repository::open(repository).ok()?;
+    let head = repository.find_reference("HEAD").ok()?;
+    let branch = head.symbolic_target_bytes()?;
+    #[cfg(unix)]
+    let branch = Some(<OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(branch));
+    #[cfg(not(unix))]
+    let branch = std::str::from_utf8(branch).ok().map(OsStr::new);
+    branch.map(OsStr::to_os_string)
 }
 
 /// `git archive` converts line endings the way a checkout on this host would. The Linux
@@ -256,7 +261,7 @@ fn isolated<'c>(neutral: &Path, command: &'c mut Command) -> &'c mut Command {
 
 #[cfg(test)]
 mod tests {
-    use super::{alternate_line, isolated, list_refs};
+    use super::{alternate_line, isolated, list_refs, source_branch};
     use std::process::Command;
 
     #[test]
@@ -341,5 +346,40 @@ mod tests {
         list_refs(&repository, &whole, &runner, 1024 * 1024).unwrap();
         let listed = std::fs::read_to_string(&whole).unwrap();
         assert_eq!(listed.lines().count(), 4, "{listed}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_branch_name_that_is_not_utf8_is_read_byte_for_byte() {
+        use std::os::unix::ffi::OsStrExt;
+        let scratch = tempfile::tempdir().unwrap();
+        let repository = scratch.path();
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(repository)
+                .args(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "git {args:?}");
+            String::from_utf8(output.stdout).unwrap()
+        };
+        git(&["init", "-q"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "one"]);
+        let commit = git(&["rev-parse", "HEAD"]);
+        // A packed ref, as a folder named with such a byte cannot exist on every file system.
+        let branch = b"refs/heads/bad-\xff";
+        let mut packed = format!("{} ", commit.trim()).into_bytes();
+        packed.extend_from_slice(branch);
+        packed.push(b'\n');
+        std::fs::write(repository.join(".git/packed-refs"), packed).unwrap();
+        let mut head = b"ref: ".to_vec();
+        head.extend_from_slice(branch);
+        head.push(b'\n');
+        std::fs::write(repository.join(".git/HEAD"), head).unwrap();
+        assert_eq!(source_branch(repository).unwrap().as_bytes(), branch);
+        git(&["checkout", "-q", "--detach", commit.trim()]);
+        assert_eq!(source_branch(repository), None, "a detached HEAD names no branch");
     }
 }
