@@ -131,7 +131,7 @@ impl UploadWorkerHandle {
     }
 
     /// A handle whose messages a test sends.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn for_test() -> (Self, Sender<UploadMessage>) {
         let (progress_tx, progress_rx) = mpsc::channel();
         let (control_tx, _) = mpsc::channel();

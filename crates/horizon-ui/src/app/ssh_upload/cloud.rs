@@ -188,11 +188,13 @@ impl SshUploadFlow {
     }
 
     /// As a click on **Cancel Upload** that comes after the worker thread reported.
+    #[cfg(unix)] // only the Unix-only readiness file drop tests call this
     pub(in crate::app) fn test_cancel(&mut self) {
         self.note_cloud_cancel();
     }
 
     /// Replaces the upload worker with one that reports `result` at the next poll.
+    #[cfg(unix)] // only the Unix-only readiness file drop tests call this
     pub(in crate::app) fn test_finish(&mut self, result: Result<Vec<String>, String>) {
         let (handle, sender) = super::worker::UploadWorkerHandle::for_test();
         let result = result.map(|remote_paths| UploadOutcome {
