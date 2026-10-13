@@ -130,11 +130,11 @@ test('requests that no platform credential can satisfy never post', async () => 
     assert.equal(typeof pending.then, 'function', 'a throwing options getter rejects instead of throwing');
     await assert.rejects(pending, {name: 'RangeError'});
     assert.equal(reads, 1);
-    for (const allowCredentials of [null, {}, [null], [{id: new Uint8Array([1])}]]) {
+    for (const allowCredentials of [null, {}, '', [null], [{id: new Uint8Array([1])}]]) {
         await assert.rejects(credentials.get({publicKey: {challenge, allowCredentials}}), {name: 'TypeError'});
     }
     for (const extra of [{excludeCredentials: [{id: new Uint8Array([1])}]}, {pubKeyCredParams: null},
-        {pubKeyCredParams: [{alg: -7}]}]) {
+        {pubKeyCredParams: [{alg: -7}]}, {pubKeyCredParams: ''}]) {
         await assert.rejects(credentials.create({publicKey: {challenge, rp: {name: 'x'}, user, pubKeyCredParams,
             ...extra}}), {name: 'TypeError'});
     }

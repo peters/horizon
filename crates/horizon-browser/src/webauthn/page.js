@@ -58,11 +58,11 @@
     };
     // Converts every descriptor, as WebIDL does, so a bad id is a TypeError
     // even in an entry of another type; then keeps the public-key ones.
-    // A WebIDL sequence: `undefined` is an omitted member, anything that is
-    // not iterable (`null` included) is a TypeError.
+    // A WebIDL sequence: `undefined` is an omitted member; anything that is
+    // not an iterable object (`null` and strings included) is a TypeError.
     const sequenceOf = (value, name) => {
         if (value === undefined) return [];
-        if (value === null || typeof value[Symbol.iterator] !== "function") {
+        if (value === null || typeof value !== "object" || typeof value[Symbol.iterator] !== "function") {
             throw new TypeError(`${name} must be a sequence`);
         }
         return Array.from(value);
