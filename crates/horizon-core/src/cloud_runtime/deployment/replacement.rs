@@ -150,8 +150,8 @@ enum Driven {
 /// `profile_name` matches the bound one apart from the choices bound at creation, such
 /// as the provider and the storage. Refuses a built image that the worker's container
 /// disk cannot hold before anything changes on the worker, and drops its unsent journal,
-/// so nothing stays pending. After a failure the journal stays, so the replacement can
-/// be continued or cancelled.
+/// so nothing stays pending. After any other failure once the replacement is journaled,
+/// the journal stays, so the replacement can be continued or cancelled.
 pub fn rebuild(
     request: &Request,
     profile_name: &str,
