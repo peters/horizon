@@ -25,6 +25,9 @@ setup** commits `.horizon` and reads it as the repository profile.
   recommended.
 - This procedure does not test: a deploy, a provider, or a paid agent API key.
   No step rents compute.
+- For a pull request that changes the setup agent, the proof or the desktop preview,
+  also run [the setup gate](cloud-setup-gate.md). It runs the proof on real
+  repositories.
 
 ## 3. Safety
 

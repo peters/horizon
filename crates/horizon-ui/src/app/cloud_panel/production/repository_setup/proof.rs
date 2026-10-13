@@ -13,6 +13,9 @@ mod bundle;
 // Its only user, a UI test, runs where the setup agent is offered: on Linux.
 #[cfg(all(test, target_os = "linux"))]
 mod failed;
+// The setup gate, an ignored test that scripts/setup-gate.py runs, on Linux likewise.
+#[cfg(all(test, target_os = "linux"))]
+mod gate;
 mod localci;
 mod needs;
 mod preflight;
