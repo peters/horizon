@@ -43,14 +43,8 @@ use horizon_core::{
 use tracing_subscriber::fmt::format::FmtSpan;
 
 fn main() -> eframe::Result {
-    // Every mode below reads or writes the Horizon home, so an unusable override stops them all.
-    let horizon_home = match HorizonHome::prepare() {
-        Ok(home) => home,
-        Err(problem) => {
-            eprintln!("error: {problem}");
-            std::process::exit(2);
-        }
-    };
+    // The native modes prepare the Horizon home themselves. The agent work hook writes only to
+    // HORIZON_WORK_ROOT and must keep its own exit codes, which steer the agent's turn.
     if horizon_app_host::entry::run_if_requested() {
         return Ok(());
     }
@@ -59,6 +53,13 @@ fn main() -> eframe::Result {
     }
     init_tracing();
 
+    let horizon_home = match HorizonHome::prepare() {
+        Ok(home) => home,
+        Err(problem) => {
+            eprintln!("error: {problem}");
+            std::process::exit(2);
+        }
+    };
     if browser_mcp_mode_requested() {
         run_browser_mcp_server();
         return Ok(());
