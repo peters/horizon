@@ -72,7 +72,7 @@ that a person gives to it. It also makes sure of these conditions:
 
 Give each task an ID. A report uses the ID to give a result.
 
-### 6.1 U01 — Relay as the agent user
+### 6.1 U01: Relay as the agent user
 
 1. In `examples/cloud-worker`, run the upload test of the browser lane.
 
@@ -86,7 +86,7 @@ Give each task an ID. A report uses the ID to give a result.
    and the browser run as UID 10001, as on a worker. The CI step **Cloud worker
    scripts** runs the same test.
 
-### 6.2 U02 — Relay without a locale
+### 6.2 U02: Relay without a locale
 
 1. Start the control service in a private root that has a `/workspace`
    directory and no locale variables.
