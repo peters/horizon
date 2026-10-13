@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/upkeep.rs,crates/horizon-core/src/upkeep/**,examples/cloud-worker/test_upkeep_worker.py,docs/upkeep.md,crates/horizon-ui/src/upkeep_widget.rs,crates/horizon-ui/src/upkeep_widget/**,crates/horizon-ui/src/app/upkeep.rs"
+applyTo: "crates/horizon-core/src/upkeep.rs,crates/horizon-core/src/upkeep/**,examples/cloud-worker/test_upkeep_worker.py,docs/upkeep.md,docs/testing/procedures/upkeep/worker.sh,crates/horizon-ui/src/upkeep_widget.rs,crates/horizon-ui/src/upkeep_widget/**,crates/horizon-ui/src/app/upkeep.rs"
 ---
 
 # Trust boundaries of Upkeep
@@ -45,7 +45,11 @@ everything the exchange reads back, as written by the agent. Check that:
   `O_EXCL | O_NOFOLLOW` temporary file and `os.replace`, and read only when it is a
   regular file opened with `O_NOFOLLOW | O_NONBLOCK`.
 - Every read from the worker has a size limit, and the answer stays under the 4 MiB
-  that `Runner::run_parsed` accepts.
+  that `Runner::run_parsed` accepts. Only typed, range-checked fields of `runs.jsonl`
+  and `next-run` go back, so no file of the agent can make the answer invalid.
+- `run.py` starts `codex exec` without approvals only under the rule of
+  `horizon-worker-run`: not as root, and `/run/horizon-worker/agent-approvals` is
+  exactly `auto`. Otherwise it starts no agent.
 
 ## Untrusted: names on their way to a command line, a path or the prompt
 

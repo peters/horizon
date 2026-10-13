@@ -19,7 +19,7 @@ SESSION = 'upkeep-45ee423d-7fb2'
 
 
 def payload(**changes):
-    value = {'session': SESSION, 'revision': 'a' * 40, 'config': '{"repositories": ["acme/web"]}',
+    value = {'session': SESSION, 'revision': 'a' * 40, 'config': {'repositories': ['acme/web']},
              'prompt': 'Keep moving.', 'run': '#!/bin/bash\n', 'scheduler': 'print()\n',
              'run_now': False, 'paused': None}
     value.update(changes)
@@ -66,7 +66,7 @@ class ExchangeTests(unittest.TestCase):
     def test_installs_the_loop_and_binding_and_starts_the_session(self):
         answer = self.worker.exchange(payload(run_now=True, paused=True))
         upkeep = self.worker.upkeep
-        self.assertEqual((upkeep / 'config.json').read_text(), '{"repositories": ["acme/web"]}')
+        self.assertEqual(json.loads((upkeep / 'config.json').read_text()), {'repositories': ['acme/web']})
         self.assertEqual(stat.S_IMODE(upkeep.stat().st_mode), 0o700)
         self.assertEqual(stat.S_IMODE((upkeep / 'run.sh').stat().st_mode), 0o700)
         self.assertEqual(stat.S_IMODE((upkeep / 'prompt.md').stat().st_mode), 0o600)
@@ -140,6 +140,27 @@ class ExchangeTests(unittest.TestCase):
         self.assertEqual(len(answer['runs']), 200)
         self.assertEqual(answer['runs'][-1], {'started_at': 299})
 
+    def test_a_run_file_of_the_agent_cannot_make_the_answer_invalid(self):
+        self.worker.upkeep.mkdir(mode=0o700)
+        lines = ['{"started_at": 1, "x": NaN, "outcome": "done"}', '[' * 100000,
+                 '{"started_at": 99999999999999999999}', '{"started_at": true}',
+                 '{"started_at": 2, "finished_at": 1e400, "outcome": {"deep": [[[]]]}}']
+        (self.worker.upkeep / 'runs.jsonl').write_text('\n'.join(lines) + '\n')
+        (self.worker.upkeep / 'next-run').write_text('99999999999999999999')
+        os.mkdir(self.worker.upkeep / 'status.json')
+        answer = self.worker.exchange()
+        self.assertEqual(answer['runs'], [{'started_at': 1, 'outcome': 'done'}, {'started_at': 2}])
+        self.assertIsNone(answer['next_run'])
+        self.assertIsNone(answer['status'])
+
+    def test_a_folder_in_place_of_a_file_stops_the_exchange(self):
+        for name, value in (('config.json', payload()), ('paused', payload(paused=False))):
+            self.worker.upkeep.mkdir(mode=0o700, exist_ok=True)
+            (self.worker.upkeep / name).mkdir()
+            with self.assertRaisesRegex(EXCHANGE['Refused'], name + ' is a folder'):
+                self.worker.exchange(value)
+            (self.worker.upkeep / name).rmdir()
+
     def test_a_status_too_large_to_send_back_is_left_out(self):
         self.worker.upkeep.mkdir(mode=0o700)
         (self.worker.upkeep / 'status.json').write_bytes(b'\x01' * EXCHANGE['STATUS_LIMIT'])
@@ -156,6 +177,38 @@ class ExchangeTests(unittest.TestCase):
 
 
 class LoopTests(unittest.TestCase):
+    def test_agents_run_without_approvals_only_where_the_worker_allows_it(self):
+        with tempfile.TemporaryDirectory() as root:
+            policy = Path(root) / 'agent-approvals'
+            names = RUN['approvals'].__globals__
+            with mock.patch.dict(names, APPROVALS=str(policy)):
+                self.assertEqual(RUN['approvals'](), 'ask')
+                policy.write_text('auto\n')
+                self.assertEqual(RUN['approvals'](), 'auto')
+                with mock.patch('os.geteuid', return_value=0):
+                    self.assertEqual(RUN['approvals'](), 'ask')
+                for text in ('ask\n', 'auto', 'auto\nauto\n'):
+                    policy.write_text(text)
+                    self.assertEqual(RUN['approvals'](), 'ask')
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    self.assertFalse(RUN['run_once']({'repositories': ['acme/web']}, True))
+                self.assertIn('Upkeep starts no agent', output.getvalue())
+
+    def test_the_session_environment_of_the_image_reaches_the_agent(self):
+        with tempfile.TemporaryDirectory() as root:
+            tool = Path(root) / 'horizon-worker-session-env'
+            tool.write_text('#!/bin/sh\nprintf "DOTNET_ROOT=/opt/dotnet\\0PATH=/opt/dotnet:/usr/bin\\0"\n')
+            tool.chmod(0o700)
+            with mock.patch.dict(os.environ, PATH=f'{root}:{os.environ["PATH"]}'):
+                environment = RUN['session_environment']()
+            self.assertEqual(environment['DOTNET_ROOT'], '/opt/dotnet')
+            self.assertEqual(environment['PATH'], '/opt/dotnet:/usr/bin')
+            tool.write_text('#!/bin/sh\necho "refused: HOME is set by the worker" >&2\nexit 1\n')
+            with mock.patch.dict(os.environ, PATH=f'{root}:{os.environ["PATH"]}'), \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertIsNone(RUN['session_environment']())
+            self.assertIn('refused: HOME is set by the worker', output.getvalue())
+
     def test_invalid_names_never_reach_a_command(self):
         config = {'repositories': ['acme/web', '--repo=x/y', 'acme/..', 'acme/web', 'a/b/c', 7],
                   'authors': ['app/dependabot', 'renovate[bot]', '--state=closed', 'a b'],
@@ -174,7 +227,7 @@ class LoopTests(unittest.TestCase):
             tools = directory / 'tools'
             tools.mkdir()
             codex = tools / 'codex'
-            codex.write_text('#!/bin/sh\nprintf "args:%s\\n" "$*"\ncat\n')
+            codex.write_text('#!/bin/sh\nprintf "args:%s env:%s\\n" "$*" "$UPKEEP_TEST"\ncat\n')
             codex.chmod(0o700)
             for folder in ('repos', 'logs', 'status.d'):
                 (directory / folder).mkdir()
@@ -182,10 +235,10 @@ class LoopTests(unittest.TestCase):
             with mock.patch.dict(names, DIR=str(directory), REFRESH=0.05), \
                     mock.patch.dict(os.environ, PATH=f'{tools}:{os.environ["PATH"]}'):
                 job = RUN['Job']('acme/web')
-                job.run('--help\nWork on @@REPOSITORY@@ and write @@STATUS@@.')
+                job.run('--help\nWork on @@REPOSITORY@@ and write @@STATUS@@.', dict(os.environ, UPKEEP_TEST='1'))
             log = Path(job.log).read_text()
             self.assertEqual(job.code, 0)
-            self.assertIn('args:exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -\n', log)
+            self.assertIn('args:exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - env:1\n', log)
             self.assertIn(f'--help\nWork on acme/web and write {directory}/status.d/acme__web.json.', log)
 
 

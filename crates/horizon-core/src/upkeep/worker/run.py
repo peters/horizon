@@ -5,7 +5,9 @@ paused exists. A run lists the open bot pull requests of every repository withou
 then starts one agent per repository that has some: the repositories in `order` one at a
 time first, then the others side by side. What each repository cost before (minutes and peak
 memory) decides how many run together: a heavy one runs alone, and the number side by side
-never passes what the worker's cores and memory allow.
+never passes what the worker's cores and memory allow. A repository whose pull requests did
+not move since its last clean run is skipped, except in a run that Run now started. No agent
+starts where the worker keeps agent approvals (ask): an Upkeep agent has nobody to ask.
 """
 import glob
 import hashlib
@@ -21,6 +23,7 @@ import threading
 import time
 
 DIR = '/workspace/home/upkeep'
+APPROVALS = '/run/horizon-worker/agent-approvals'
 # A job that runs longer than this is stopped, so one stuck repository cannot hold the hour.
 JOB_LIMIT = 90 * 60
 REFRESH = 5
@@ -60,6 +63,49 @@ def names(cfg, key, pattern, default=()):
         elif value not in found:
             found.append(value)
     return found
+
+
+def approvals():
+    """'auto' only where the worker lets agents run without asking, decided as
+    horizon-worker-run decides it: never as root, and only when the worker's policy says so."""
+    if os.geteuid() == 0:
+        return 'ask'
+    try:
+        with open(APPROVALS) as policy:
+            return 'auto' if policy.read() == 'auto\n' else 'ask'
+    except OSError:
+        return 'ask'
+
+
+def session_environment():
+    """The environment that the image layers give every session, as horizon-worker-run applies
+    it, or None when the worker refuses it."""
+    try:
+        result = subprocess.run(['horizon-worker-session-env', 'apply'], capture_output=True, timeout=60)
+    except FileNotFoundError:
+        return dict(os.environ)
+    if result.returncode != 0:
+        print(f'The worker refused its session environment: {result.stderr.decode(errors="replace").strip()[:300]}',
+              flush=True)
+        return None
+    environment = dict(os.environ)
+    for assignment in result.stdout.split(b'\0'):
+        key, separator, value = assignment.decode(errors='replace').partition('=')
+        if separator:
+            environment[key] = value
+    return environment
+
+
+def sources():
+    """The loop's own files, so it can start again when an exchange installed new ones."""
+    digest = hashlib.sha256()
+    for name in ('run.sh', 'run.py'):
+        try:
+            with open(os.path.join(DIR, name), 'rb') as handle:
+                digest.update(handle.read())
+        except OSError:
+            pass
+    return digest.hexdigest()
 
 
 def every(cfg):
@@ -177,14 +223,20 @@ class Job:
         except OSError:
             return ''
 
-    def run(self, template):
+    def run(self, template, environment):
         self.started = time.time()
-        self.attempt(template)
-        # The model service sometimes has no capacity for a moment; one later try often works.
-        if self.code != 0 and 'at capacity' in self.tail(4096):
-            time.sleep(60)
-            self.attempt(template)
-        self.finished = time.time()
+        try:
+            self.attempt(template, environment)
+            # The model service sometimes has no capacity for a moment; one later try often works.
+            if self.code != 0 and 'at capacity' in self.tail(4096):
+                time.sleep(60)
+                self.attempt(template, environment)
+        except Exception as error:  # noqa: BLE001 - the run records the job as failed
+            self.code = None
+            with open(self.log, 'a') as log:
+                log.write(f'\nThe agent could not run: {error}\n')
+        finally:
+            self.finished = time.time()
 
     def tail(self, size):
         try:
@@ -195,7 +247,7 @@ class Job:
         except OSError:
             return ''
 
-    def attempt(self, template):
+    def attempt(self, template, environment):
         prompt = (template.replace('@@REPOSITORY@@', self.repository)
                   .replace('@@STATUS@@', DIR + '/status.d/' + self.slug + '.json'))
         # The prompt goes on standard input: as an argument, text that starts with a dash
@@ -208,13 +260,16 @@ class Job:
             process = subprocess.Popen(
                 ['codex', 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', '-'],
                 cwd=DIR + '/repos', stdin=instructions, stdout=log, stderr=subprocess.STDOUT,
-                start_new_session=True)
+                env=environment, start_new_session=True)
             stopped = False
             while process.poll() is None:
                 self.peak_mb = max(self.peak_mb, tree_rss_mb(process.pid))
                 if not stopped and time.time() - self.started > JOB_LIMIT:
                     # The whole process group, so no tool the agent started keeps running.
-                    os.killpg(process.pid, signal.SIGKILL)
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
                     log.write('\nStopped: the run passed its time limit.\n')
                     stopped = True
                 time.sleep(REFRESH)
@@ -255,14 +310,22 @@ def draw(started, jobs, queued, capacity):
     sys.stdout.flush()
 
 
-def run_once(cfg):
-    template = open(DIR + '/prompt.md').read()
+def run_once(cfg, forced):
+    """One run. `forced` (Run now) also starts agents for repositories that did not move."""
+    if approvals() != 'auto':
+        print('This worker asks before an agent runs a command (agent approvals: ask), and an Upkeep '
+              'agent has nobody to ask. Upkeep starts no agent. Use a worker with auto approvals.', flush=True)
+        return False
+    environment = session_environment()
+    if environment is None:
+        return False
+    with open(DIR + '/prompt.md') as handle:
+        template = handle.read()
     repositories = names(cfg, 'repositories', REPOSITORY)
     authors = names(cfg, 'authors', AUTHOR, ['app/dependabot'])
     order = [repository for repository in names(cfg, 'order', REPOSITORY) if repository in repositories]
     print(f'Listing open pull requests in {len(repositories)} repositories...', flush=True)
     seen = load(DIR + '/fingerprints.json', {})
-    forced = os.path.exists(DIR + '/full-run')
     todo, prints, unchanged = [], {}, []
     for repository in repositories:
         found = open_pull_requests(repository, authors)
@@ -293,7 +356,7 @@ def run_once(cfg):
     started = time.time()
 
     def start(job):
-        thread = threading.Thread(target=job.run, args=(template,), daemon=True)
+        thread = threading.Thread(target=job.run, args=(template, environment), daemon=True)
         thread.start()
         running.append((job, thread))
 
@@ -331,10 +394,6 @@ def run_once(cfg):
             if found is not None:
                 seen[job.repository] = fingerprint(found, template)
     save(DIR + '/fingerprints.json', seen)
-    try:
-        os.remove(DIR + '/full-run')
-    except OSError:
-        pass
     draw(started, jobs, [], capacity)
     return all(job.code == 0 for job in jobs)
 
@@ -347,11 +406,17 @@ def main():
     with open(DIR + '/next-run', 'w') as handle:
         handle.write(str(upcoming))
     print(f'Upkeep waits for its next run at {time.strftime("%H:%M", time.gmtime(upcoming))} UTC.', flush=True)
+    installed = sources()
     while True:
+        # Between runs only, so an update never stops an agent in the middle of its work.
+        if sources() != installed:
+            print('\nAn exchange installed a new loop; starting it.', flush=True)
+            os.execv('/bin/bash', ['/bin/bash', '--noprofile', '--norc', DIR + '/run.sh', *sys.argv[1:]])
         if os.path.exists(DIR + '/paused'):
             time.sleep(10)
             continue
-        if os.path.exists(DIR + '/run-now') or time.time() >= upcoming:
+        forced = os.path.exists(DIR + '/run-now')
+        if forced or time.time() >= upcoming:
             try:
                 os.remove(DIR + '/run-now')
             except OSError:
@@ -360,7 +425,7 @@ def main():
             begun = int(time.time())
             record({'started_at': begun, 'outcome': 'running'})
             try:
-                ok = run_once(cfg)
+                ok = run_once(cfg, forced)
             except Exception as error:  # noqa: BLE001 - one failed run must not end the loop
                 print(f'The run failed: {error}', flush=True)
                 ok = False

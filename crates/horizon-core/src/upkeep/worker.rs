@@ -15,9 +15,9 @@ const SCHEDULER: &str = include_str!("worker/run.py");
 const TIMEOUT: Duration = Duration::from_secs(45);
 /// The remote command is one argument of the worker's shell, which Linux limits to 128 KiB.
 const COMMAND_LIMIT: usize = 120 * 1024;
-const REPOSITORY_LIMIT: usize = 100;
+const REPOSITORY_LIMIT: usize = 50;
 const AUTHOR_LIMIT: usize = 20;
-const INSTRUCTIONS_LIMIT: usize = 16 * 1024;
+const INSTRUCTIONS_LIMIT: usize = 8 * 1024;
 const WORKER_LIMIT: usize = 200;
 /// The only agent the worker loop runs.
 pub const AGENT: &str = "codex";
@@ -125,7 +125,7 @@ impl Config {
     /// The first value the worker must not get.
     pub fn validate(&self) -> Result<()> {
         if self.repositories.is_empty() || self.repositories.len() > REPOSITORY_LIMIT {
-            return Err(Error::Invalid("Upkeep needs 1 to 100 repositories"));
+            return Err(Error::Invalid("Upkeep needs 1 to 50 repositories"));
         }
         if !self
             .repositories
@@ -162,6 +162,17 @@ impl Config {
         }
         if self.instructions.len() > INSTRUCTIONS_LIMIT || self.worker.len() > WORKER_LIMIT {
             return Err(Error::Invalid("The Upkeep instructions or worker name are too long"));
+        }
+        // Control characters cost six bytes each on the way and show as nothing.
+        if self
+            .instructions
+            .chars()
+            .any(|c| c.is_control() && c != '\n' && c != '\t')
+            || self.worker.chars().any(char::is_control)
+        {
+            return Err(Error::Invalid(
+                "The Upkeep instructions or worker name hold a control character",
+            ));
         }
         Ok(())
     }
@@ -280,11 +291,10 @@ pub fn command(cloud_id: &str, revision: &str, config: &Config, signals: Signals
         return Err(Error::Invalid("Invalid cloud for Upkeep"));
     }
     config.validate()?;
-    let config_text = serde_json::to_string(config).map_err(|_| Error::Invalid("Invalid Upkeep settings"))?;
     let payload = serde_json::json!({
         "session": session(cloud_id),
         "revision": revision,
-        "config": config_text,
+        "config": config,
         "prompt": prompt(config),
         "run": RUN,
         "scheduler": SCHEDULER,
@@ -494,7 +504,7 @@ mod tests {
         assert!(refused(|config| config.repositories.push("acme/a b".into())));
         assert!(refused(|config| config.repositories.push("ACME/Web".into())));
         assert!(refused(
-            |config| config.repositories = (0..101).map(|n| format!("acme/r{n}")).collect()
+            |config| config.repositories = (0..=REPOSITORY_LIMIT).map(|n| format!("acme/r{n}")).collect()
         ));
         assert!(refused(|config| config.order.push("acme/other".into())));
         assert!(refused(|config| config.authors.clear()));
@@ -507,6 +517,8 @@ mod tests {
             |config| config.instructions = "x".repeat(INSTRUCTIONS_LIMIT + 1)
         ));
         assert!(refused(|config| config.worker = "x".repeat(WORKER_LIMIT + 1)));
+        assert!(refused(|config| config.instructions = "Merge.\u{1b}[2J".into()));
+        assert!(refused(|config| config.worker = "Hetzner\n".into()));
         let mut config = config();
         config.authors = vec!["app/dependabot".into(), "renovate[bot]".into(), "dependabot".into()];
         config.order = vec!["acme/api".into()];
@@ -524,11 +536,17 @@ mod tests {
             "launcher=python3; if [ -f /run/horizon-tailnet/agent-isolation ]; then launcher='horizon-worker-tailnet agent python3'; fi;"
         ));
         assert!(remote.contains("| $launcher -I - '"));
+        // The longest settings Config::validate accepts, in the characters that escaping makes
+        // longest, still fit the worker's shell.
         let mut long = config();
-        long.instructions = "x".repeat(INSTRUCTIONS_LIMIT);
+        long.instructions = "\"".repeat(INSTRUCTIONS_LIMIT);
+        long.worker = "\\".repeat(WORKER_LIMIT);
         long.repositories = (0..REPOSITORY_LIMIT)
-            .map(|n| format!("{}/{}", "o".repeat(39), n.to_string().repeat(20)))
+            .map(|n| format!("{}/{n:0>100}", "o".repeat(39)))
             .collect();
+        long.order.clone_from(&long.repositories);
+        long.authors = (0..AUTHOR_LIMIT).map(|n| format!("app/{n:0>39}[bot]")).collect();
+        assert!(long.validate().is_ok());
         assert!(command("abc-123", &"a".repeat(40), &long, Signals::default()).is_ok());
         assert!(command("abc-123", &"A".repeat(40), &config(), Signals::default()).is_err());
     }

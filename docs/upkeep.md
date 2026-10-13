@@ -114,7 +114,9 @@ pull requests that changed since the last clean run. The repositories in the
 order list run one at a time first. Then the other repositories run side by side.
 The number of agents that run side by side depends on the processor cores, the
 memory and the peak memory of earlier runs. The loop stops an agent and all of its
-processes after 90 minutes.
+processes after 90 minutes. A run that **Run now** started also starts agents for
+the repositories that did not change. When an exchange installed a new loop, the
+loop starts the new loop between two runs.
 
 ## Trust boundary of the worker loop
 
@@ -149,17 +151,24 @@ The exchange and the loop guarantee these items:
 - The exchange writes each file to a new temporary file with a random name. Then
   it moves the temporary file into place. When the agent replaced a file with a
   link, the exchange replaces the link. It never writes through the link.
-- The exchange reads only regular files. It does not read a link, a pipe or a
-  device. It reads at most 1 MiB of status and the last 256 KiB of runs. It
-  sends back no status when the answer is more than 3 MiB.
+- The exchange stops with an error when a folder has the name of a file that it
+  writes.
+- The exchange reads only regular files. It does not read a link, a pipe, a
+  device or a folder. It reads at most 1 MiB of status and the last 256 KiB of
+  runs. It sends back no status when the answer is more than 3 MiB.
+- From each run, the exchange sends back only an integer start time, an integer
+  end time and a short outcome text. It sends back the next run time only when it
+  is an integer in the range of Horizon. Thus a run file of the agent cannot make
+  the answer invalid.
 - Horizon accepts these settings only:
-  - 1 to 100 repositories. Each repository is a GitHub `owner/name` that is
+  - 1 to 50 repositories. Each repository is a GitHub `owner/name` that is
     listed one time.
   - An order list that has only repositories of the list.
   - 1 to 20 bots. Each bot is a GitHub login, `name[bot]` or `app/name`.
   - The Codex agent.
   - A schedule from every 15 minutes to every 24 hours.
-  - Instructions of at most 16 KiB and a worker name of at most 200 bytes.
+  - Instructions of at most 8 KiB and a worker name of at most 200 bytes,
+    without control characters. The instructions can have line breaks and tabs.
   - A cloud ID of letters, digits, `-` and `_`, and a revision of 40 or 64
     lowercase hexadecimal characters.
 - The loop examines the repositories and the bots in `config.json` again. It
@@ -167,6 +176,14 @@ The exchange and the loop guarantee these items:
   option of `gh`, or change a file name or the agent instructions.
 - The loop gives the instructions to Codex on the standard input. Thus
   instructions that start with `-` are not options.
+- The loop starts Codex without approvals only when the worker lets agents run
+  without approvals: the agents do not run as root, and the worker policy
+  `/run/horizon-worker/agent-approvals` is `auto`. On other workers the loop
+  starts no agent, and the run fails with the reason. This is the same rule that
+  `horizon-worker-run` uses for agent panels.
+- The loop gives each agent the session environment of the worker image, as
+  `horizon-worker-run` does. When the worker refuses that environment, the run
+  starts no agent.
 
 The exchange and the loop do not guarantee these items:
 

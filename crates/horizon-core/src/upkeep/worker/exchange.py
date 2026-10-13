@@ -24,6 +24,8 @@ STATUS_LIMIT = 1024 * 1024
 RUNS_LIMIT = 256 * 1024
 # Horizon reads at most 4 MiB of output; escaping can make the status six times longer.
 OUTPUT_LIMIT = 3 * 1024 * 1024
+# Horizon reads times as 64-bit integers.
+TIME_LIMIT = 2 ** 62
 SESSION = re.compile(r'upkeep-[A-Za-z0-9_-]{1,90}')
 REVISION = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
 
@@ -71,26 +73,28 @@ def read(parent, name, limit, tail=False):
         fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
     except OSError:
         return None
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode):
+        os.close(fd)
+        return None
     with os.fdopen(fd, 'rb') as handle:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode):
-            return None
         if tail and info.st_size > limit:
             handle.seek(info.st_size - limit)
         return handle.read(limit)
 
 
 def write(parent, name, text, mode=0o600):
-    """Replaces `name` with `text` through a new temporary file. Whatever had that name, a
-    link included, is replaced, never written through."""
+    """Replaces `name` with `text` through a new temporary file. A file that had that name, a
+    link included, is replaced, never written through; a folder stops the exchange."""
     data = text.encode()
     try:
         current = os.stat(name, dir_fd=parent, follow_symlinks=False)
-        unchanged = (stat.S_ISREG(current.st_mode) and stat.S_IMODE(current.st_mode) == mode
-                     and read(parent, name, len(data) + 1) == data)
     except FileNotFoundError:
-        unchanged = False
-    if unchanged:
+        current = None
+    if current is not None and stat.S_ISDIR(current.st_mode):
+        raise Refused(f'{name} is a folder')
+    if (current is not None and stat.S_ISREG(current.st_mode) and stat.S_IMODE(current.st_mode) == mode
+            and read(parent, name, len(data) + 1) == data):
         return
     temporary = f'.{name}.{secrets.token_hex(8)}'
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=parent)
@@ -118,7 +122,7 @@ def create(parent, name):
 def install(payload, upkeep):
     """Writes the loop, its settings and the session binding."""
     session = payload['session']
-    write(upkeep, 'config.json', payload['config'])
+    write(upkeep, 'config.json', json.dumps(payload['config'], indent=1))
     write(upkeep, 'prompt.md', payload['prompt'])
     write(upkeep, 'run.sh', payload['run'], 0o700)
     write(upkeep, 'run.py', payload['scheduler'])
@@ -154,6 +158,8 @@ def signal(payload, upkeep):
             os.unlink('paused', dir_fd=upkeep)
         except FileNotFoundError:
             pass
+        except IsADirectoryError as error:
+            raise Refused('paused is a folder') from error
 
 
 def tmux(*args):
@@ -179,28 +185,44 @@ def keep_loop(session, directory):
     return loop, settled
 
 
-def report(upkeep, loop, settled):
-    """What the board shows. Everything here comes from files that the agent can write."""
-    status = read(upkeep, 'status.json', STATUS_LIMIT)
-    runs = []
-    for line in (read(upkeep, 'runs.jsonl', RUNS_LIMIT, tail=True) or b'').splitlines()[-200:]:
-        try:
-            run = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(run, dict):
-            runs.append(run)
+def moment(value):
+    """A time Horizon can read: an integer, not a flag, in range."""
+    return value if type(value) is int and -TIME_LIMIT < value < TIME_LIMIT else None
+
+
+def run_record(line):
+    """The fields the board uses from one line of runs.jsonl, or None."""
     try:
-        next_run = int((read(upkeep, 'next-run', 32) or b'').strip())
+        run = json.loads(line)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(run, dict) or moment(run.get('started_at')) is None:
+        return None
+    record = {'started_at': run['started_at']}
+    if moment(run.get('finished_at')) is not None:
+        record['finished_at'] = run['finished_at']
+    if isinstance(run.get('outcome'), str):
+        record['outcome'] = run['outcome'][:40]
+    return record
+
+
+def report(upkeep, loop, settled):
+    """What the board shows. Everything here comes from files that the agent can write, so
+    only the fields and types that Horizon reads are sent back."""
+    status = read(upkeep, 'status.json', STATUS_LIMIT)
+    lines = (read(upkeep, 'runs.jsonl', RUNS_LIMIT, tail=True) or b'').splitlines()[-200:]
+    runs = [record for record in map(run_record, lines) if record is not None]
+    try:
+        next_run = moment(int((read(upkeep, 'next-run', 32) or b'').strip()))
     except ValueError:
         next_run = None
     answer = {'loop': loop, 'settled': settled, 'runs': runs, 'next_run': next_run,
               'paused': read(upkeep, 'paused', 0) is not None,
               'status': status.decode('utf-8', 'replace') if status is not None else None}
-    text = json.dumps(answer)
+    text = json.dumps(answer, allow_nan=False)
     if len(text) > OUTPUT_LIMIT:
         answer['status'] = None
-        text = json.dumps(answer)
+        text = json.dumps(answer, allow_nan=False)
     return text
 
 
