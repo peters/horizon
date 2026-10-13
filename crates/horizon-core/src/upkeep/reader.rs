@@ -169,6 +169,7 @@ fn bound(status: &mut Status) {
     status.runs.retain(|run| run.started_at <= horizon);
     status.runs.sort_by_key(|run| run.started_at);
     keep_last(&mut status.runs, MAX_RUNS);
+    status.activity.retain(|entry| entry.at <= horizon);
     status.activity.sort_by_key(|entry| entry.at);
     keep_last(&mut status.activity, MAX_ACTIVITY);
     // Open pull requests first, so a person never misses one for a merged one.
@@ -332,6 +333,22 @@ mod tests {
     }
 
     #[test]
+    fn the_newest_reading_wins_but_an_untaken_status_stays_with_a_later_error() {
+        let status = |agent: &str| Status {
+            agent: agent.into(),
+            ..Status::default()
+        };
+        let mut pending = Pending::default();
+        pending.put(Ok(status("one")));
+        pending.put(Ok(status("two")));
+        pending.put(Err("broken".into()));
+        assert_eq!(pending.status.take().map(|status| status.agent), Some("two".into()));
+        assert!(matches!(pending.error.take(), Some(ErrorChange::Set(error)) if error == "broken"));
+        pending.put(Ok(status("three")));
+        assert!(matches!(pending.error.take(), Some(ErrorChange::Cleared)));
+    }
+
+    #[test]
     fn the_thread_sends_the_first_reading_and_stops_when_asked() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("status.json");
@@ -347,27 +364,6 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         };
         assert_eq!(status.agent, "codex");
-        // Two changes while nobody takes them leave only the newer one.
-        std::fs::write(&path, r#"{"agent":"one"}"#).unwrap();
-        std::thread::sleep(Duration::from_millis(2500));
-        std::fs::write(&path, r#"{"agent":"three"}"#).unwrap();
-        std::thread::sleep(Duration::from_millis(2500));
-        assert_eq!(latest.lock().unwrap().status.take().unwrap().agent, "three");
-        // A broken document after a valid one that nobody took keeps both.
-        std::fs::write(&path, "{").unwrap();
-        std::thread::sleep(Duration::from_millis(2500));
-        std::fs::write(&path, r#"{"agent":"four"}"#).unwrap();
-        std::thread::sleep(Duration::from_millis(2500));
-        std::fs::write(&path, "{{").unwrap();
-        std::thread::sleep(Duration::from_millis(2500));
-        {
-            let mut pending = latest.lock().unwrap();
-            assert_eq!(pending.status.take().unwrap().agent, "four");
-            let Some(ErrorChange::Set(error)) = pending.error.take() else {
-                panic!("the error is kept");
-            };
-            assert!(error.starts_with("The Upkeep status is not valid"));
-        }
         alive.store(false, Ordering::Relaxed);
         std::thread::sleep(Duration::from_millis(2500));
         std::fs::write(&path, r#"{"agent":"after"}"#).unwrap();

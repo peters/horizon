@@ -132,7 +132,8 @@ pub(super) fn show(ui: &mut Ui, shown: &[&PullRequest], filter: Filter, now: Off
                     .color(theme::FG_DIM()),
             );
         });
-        let limit = if state == PrState::Merged {
+        // The Merged chip shows every merged row; the open list shows the newest few.
+        let limit = if state == PrState::Merged && filter != Filter::State(PrState::Merged) {
             MERGED_ROWS
         } else {
             usize::MAX

@@ -22,12 +22,14 @@ fn summary(status: &Status) -> String {
         "claude" => "Claude Code".to_string(),
         other => other.to_string(),
     };
-    let every = match status.schedule.every_minutes {
-        0 | 60 => "every hour".to_string(),
-        minutes if minutes % 60 == 0 => format!("every {} hours", minutes / 60),
-        minutes => format!("every {minutes} min"),
-    };
-    let mut parts = vec![agent, every];
+    let mut parts = vec![agent];
+    // No cadence when the status names none; "Next run" then says "Not scheduled".
+    match status.schedule.every_minutes {
+        0 => {}
+        60 => parts.push("every hour".to_string()),
+        minutes if minutes % 60 == 0 => parts.push(format!("every {} hours", minutes / 60)),
+        minutes => parts.push(format!("every {minutes} min")),
+    }
     if !status.worker.name.is_empty() {
         let mut worker = status.worker.name.clone();
         if !status.worker.location.is_empty() {

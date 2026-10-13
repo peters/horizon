@@ -121,11 +121,13 @@ fn bars(ui: &mut Ui, status: &Status, now: OffsetDateTime) {
         let width = ui.available_width();
         let (rect, _) = ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT), Sense::hover());
         let count = f32::from(u8::try_from(HOURS).unwrap_or(24));
-        let bar_width = ((width - BAR_GAP * (count - 1.0)) / count).max(2.0);
+        // A narrow panel closes the gaps first, so the bars always fit.
+        let gap = if width >= count * (BAR_GAP + 4.0) { BAR_GAP } else { 0.0 };
+        let bar_width = ((width - gap * (count - 1.0)) / count).max(0.5);
         for slot in 0..HOURS {
             let hour = this_hour - time::Duration::hours(HOURS - 1 - slot);
             let index = f32::from(u8::try_from(slot).unwrap_or(0));
-            let x = rect.min.x + index * (bar_width + BAR_GAP);
+            let x = rect.min.x + index * (bar_width + gap);
             let bar = Rect::from_min_size(Pos2::new(x, rect.min.y), Vec2::new(bar_width, BAR_HEIGHT));
             let runs: Vec<&Run> = status
                 .runs

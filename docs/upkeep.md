@@ -18,10 +18,13 @@ The `upkeep` panel kind is the board of one Upkeep. The board shows these items:
 - **Last 24 hours**: one bar for each hour, and the total of merged pull requests.
   A red bar shows a failed run. An outline shows a skipped run. A green part shows
   merges.
-- The pull requests by state, with chips that filter them: **Blocked**, **Fixing**,
-  **Needs review**, **Checks running**, **Ready to merge** and **Merged**. The
-  **Other** chip shows a state that this Horizon does not know. Merged pull requests
-  stay for seven days.
+- The pull requests in groups by state: **Blocked**, **Fixing**, **Needs review**,
+  **Checks running**, **Ready to merge**, **Other** (a state that this Horizon does
+  not know) and **Merged**. Merged pull requests stay for seven days. The open list
+  shows the newest six merged rows; the **Merged** chip shows all of them.
+- Chips that filter the list: **Open**, **Needs you** (Blocked and Needs review),
+  **Fixing**, **Checks running**, **Ready to merge**, **Merged, 7 days**, and
+  **Other** only when a row has an unknown state.
 - **Latest run**: the last lines that the agent wrote about its work.
 
 A click on a row opens its pull request page in the browser panel **Pull request**
@@ -54,6 +57,7 @@ The board guarantees these items:
   - 500 pull requests. Open pull requests come before merged pull requests.
   - The newest 1,500 runs.
   - The newest 100 activity lines.
+- It ignores runs and activity lines that are more than one day in the future.
   - 1,000 repository names.
 - It cuts each text to 300 characters.
 - It parses the document into a fixed schema. It never runs a part of the document.
