@@ -34,7 +34,10 @@ impl Client {
             return Err(Error::InvalidResponse);
         }
         let mut counts = BTreeMap::new();
-        for owner in owners {
+        // Each owner is searched once, however often it is named.
+        let owners: std::collections::BTreeSet<String> =
+            owners.iter().map(|owner| owner.to_ascii_lowercase()).collect();
+        for owner in &owners {
             let mut read = 0_u64;
             for page in 1..=MAX_PAGES {
                 let path = format!(
@@ -99,7 +102,7 @@ mod tests {
             .open_pull_requests_by(
                 &Secret::new("ghu_synthetic".into()),
                 "app/dependabot",
-                &["acme".into(), "other".into()],
+                &["acme".into(), "other".into(), "Acme".into(), "acme".into()],
                 &["acme/web".into(), "acme/api".into(), "other/tool".into()],
             )
             .unwrap();
@@ -111,7 +114,7 @@ mod tests {
                 ("acme/web".into(), 100),
                 ("other/tool".into(), 1)
             ]),
-            "lowercased, and the repository the app cannot reach is left out"
+            "lowercased, each owner searched once, and the repository the app cannot reach is left out"
         );
         let lines: Vec<String> = requests.lock().unwrap().iter().map(|(line, _)| line.clone()).collect();
         assert_eq!(
