@@ -12,7 +12,9 @@ mod command;
 mod origin;
 mod request;
 
+use std::collections::VecDeque;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde_json::json;
@@ -25,6 +27,10 @@ use crate::frames::FrameSlot;
 /// Page messages larger than this are dropped before parsing.
 pub(crate) const MAX_PAGE_MESSAGE_BYTES: usize = 192 * 1024;
 const PAGE_FUNCTION: &str = include_str!("webauthn/page.js");
+/// A page that starts and aborts requests in a loop must not flood the
+/// person's authenticator with prompts.
+const MAX_STARTS_PER_WINDOW: usize = 6;
+const START_WINDOW: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -92,6 +98,13 @@ impl PageError {
             message: "Another passkey request is waiting.",
         }
     }
+
+    fn too_many() -> Self {
+        Self {
+            name: "NotAllowedError",
+            message: "Too many passkey requests. Wait a minute and try again.",
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -133,6 +146,7 @@ pub(crate) struct Bridge<T> {
     binding: String,
     frame_slot: Arc<FrameSlot>,
     active: Option<Active<T>>,
+    recent_starts: VecDeque<Instant>,
 }
 
 impl<T: Clone + PartialEq> Bridge<T> {
@@ -149,6 +163,7 @@ impl<T: Clone + PartialEq> Bridge<T> {
             binding: format!("__horizon_passkey_post_{}", &token[16..]),
             frame_slot: Arc::clone(&config.frame_slot),
             active: None,
+            recent_starts: VecDeque::new(),
         })
     }
 
@@ -197,6 +212,18 @@ impl<T: Clone + PartialEq> Bridge<T> {
             Ok(prepared) => prepared,
             Err(error) => return Some(error_reply(page_id, error)),
         };
+        let now = Instant::now();
+        while self
+            .recent_starts
+            .front()
+            .is_some_and(|started| now.duration_since(*started) >= START_WINDOW)
+        {
+            self.recent_starts.pop_front();
+        }
+        if self.recent_starts.len() >= MAX_STARTS_PER_WINDOW {
+            return Some(error_reply(page_id, PageError::too_many()));
+        }
+        self.recent_starts.push_back(now);
         let run = command::CommandRun::start(&self.argv, prepared.input.clone(), prepared.timeout);
         self.active = Some(Active {
             target,
@@ -325,13 +352,20 @@ mod tests {
         let origin = CallerOrigin::parse("https://example.com");
         assert!(bridge.start(1, id, op, &options, origin.clone(), None).is_none());
         assert!(bridge.frame_slot.passkey_pending());
-        let busy = bridge.start(2, 8, op, &options, origin, None).expect("busy");
+        let busy = bridge.start(2, 8, op, &options, origin.clone(), None).expect("busy");
         assert!(busy.contains("Another passkey request is waiting"));
 
         assert!(!bridge.abort(&2, id), "another realm cannot abort the request");
         assert!(bridge.abort(&1, id));
         assert!(!bridge.frame_slot.passkey_pending());
         assert!(bridge.poll().is_none());
+
+        for _ in 1..MAX_STARTS_PER_WINDOW {
+            assert!(bridge.start(1, id, op, &options, origin.clone(), None).is_none());
+            assert!(bridge.abort(&1, id));
+        }
+        let limited = bridge.start(1, id, op, &options, origin, None).expect("rate limited");
+        assert!(limited.contains("Too many passkey requests"));
     }
 
     #[cfg(unix)]

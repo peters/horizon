@@ -155,7 +155,7 @@ pub(crate) fn credential_from_output(prepared: &Prepared, stdout: &[u8]) -> Resu
         Some("excluded") if prepared.operation == Operation::Create => return Err(PageError::excluded()),
         Some(status) => {
             let message = output.get("message").and_then(Value::as_str).unwrap_or_default();
-            tracing::info!(target: "browser", status, message = %bounded_text(message), "passkey request was not completed");
+            tracing::debug!(target: "browser", status, message = %bounded_text(message), "passkey request was not completed");
             return Err(PageError::not_allowed());
         }
         None => return Err(refused("the command answered without a status")),
