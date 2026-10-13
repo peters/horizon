@@ -517,7 +517,9 @@ tmux stays the terminal of the session:
   last to its tmux server, before its own first attach. A program that asks
   before the first attach to a new tmux server gets no answer or black. tmux
   does not answer palette queries (OSC 4). If the panel colors change while a
-  panel is attached, the session gets the new colors at the next attach.
+  panel is attached, the session gets the new colors at the next attach. A
+  plain tmux client that attaches by hand also draws the pane in these colors,
+  and the style replaces a `window-style` from a tmux configuration.
 - The session cannot read or change the clipboard of the computer, because the
   helper removes its clipboard requests (OSC 52), as tmux did.
 - The panel always brackets a paste. The helper gives the paste to tmux, and
