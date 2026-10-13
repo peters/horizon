@@ -34,7 +34,14 @@ const MAX_REPLY: u64 = 64 * 1024;
 /// worker made on its own comes back here soon.
 const RESEND: Duration = Duration::from_mins(30);
 
-/// Per cloud, the login fingerprint its worker last got and when.
+/// How long a background sync waits for one worker; a deployment waits longer.
+const EXCHANGE: Duration = Duration::from_secs(15);
+/// How long each delivery pass of a sync may take, so that unreachable clouds never hold
+/// back the renewal here or the clouds after them for long. The rest wait for the next sync.
+const PASS: Duration = Duration::from_mins(2);
+
+/// Per cloud, the login fingerprint its worker last got and when. A failed attempt is
+/// recorded with an empty fingerprint, so that cloud is asked last next time.
 pub type Delivered = HashMap<String, (String, Instant)>;
 
 /// What a renewal did.
@@ -144,10 +151,11 @@ pub fn keep_cloud_current(root: &Path, cloud: &str, cancel: &Cancellation) -> Re
         secrets: Vec::new(),
     };
     // Never trust a new host key from a background job.
-    super::exchange(
+    super::exchange_within(
         &home,
         &mut connection.pinned_command(&super::install_command()),
         &runner,
+        EXCHANGE,
     )?;
     Ok(Kept::Current)
 }
@@ -162,15 +170,24 @@ pub fn keep_cloud_current(root: &Path, cloud: &str, cancel: &Cancellation) -> Re
 /// The cloud folders could not be listed. A renewal or a cloud that fails is logged and
 /// tried again at the next sync.
 pub fn sync(root: &Path, delivered: &mut Delivered, cancel: &Cancellation) -> Result<Renewal> {
-    let clouds = clouds(root)?;
+    let mut clouds = clouds(root)?;
     delivered.retain(|cloud, _| clouds.contains(cloud));
+    // Clouds never asked first, then the one asked longest ago, so a pass cut short by its
+    // deadline reaches the others next time. Clouds that failed last time come last.
+    clouds.sort_by_key(|cloud| delivered.get(cloud).map(|(given, at)| (given.is_empty(), *at)));
     // Before a renewal every cloud is asked, also one asked recently: a worker that renewed
     // on its own since holds the only refresh token that still works.
     let renewing = read(&home(root))
         .ok()
         .flatten()
         .is_some_and(|login| due(&login, OffsetDateTime::now_utc()));
-    let unreachable = deliver(root, &clouds, delivered, renewing, &[], cancel);
+    let (unreachable, complete) = deliver(root, &clouds, delivered, renewing, &[], Instant::now() + PASS, cancel);
+    // A cloud not asked yet may hold the only refresh token that still works; the renewal
+    // waits for a sync that reaches every cloud, well within its two-day margin.
+    if renewing && !complete {
+        tracing::warn!("ChatGPT login renewal waits until every cloud has been asked");
+        return Ok(Renewal::NotDue);
+    }
     let renewal = match renew(root, cancel) {
         Ok(renewal) => renewal,
         Err(error) => {
@@ -180,32 +197,49 @@ pub fn sync(root: &Path, delivered: &mut Delivered, cancel: &Cancellation) -> Re
     };
     // Also without a renewal here: a renewal taken over from one worker in the first pass
     // reaches the clouds asked before it. Clouds that have it already are skipped.
-    deliver(root, &clouds, delivered, false, &unreachable, cancel);
+    deliver(
+        root,
+        &clouds,
+        delivered,
+        false,
+        &unreachable,
+        Instant::now() + PASS,
+        cancel,
+    );
     Ok(renewal)
 }
 
 /// Asks the clouds that do not have the login now here, or were asked longer ago than
-/// [`RESEND`]; every cloud when `all`. Clouds in `skip` failed already in this sync.
-/// Returns the clouds that failed, so a second pass does not wait for them again.
+/// [`RESEND`]; every cloud when `all`. Clouds in `skip` failed already in this sync, and
+/// none is asked after `deadline`. Returns the clouds that failed, so a second pass does
+/// not wait for them again, and whether every cloud was reached, a cloud that failed last
+/// time and was left out counting as reached.
 fn deliver(
     root: &Path,
     clouds: &[String],
     delivered: &mut Delivered,
     all: bool,
     skip: &[String],
+    deadline: Instant,
     cancel: &Cancellation,
-) -> Vec<String> {
+) -> (Vec<String>, bool) {
     let mut failed = Vec::new();
-    for cloud in clouds.iter().filter(|cloud| !skip.contains(cloud)) {
-        if cancel.is_cancelled() {
-            break;
+    let asked: Vec<&String> = clouds.iter().filter(|cloud| !skip.contains(cloud)).collect();
+    for (index, cloud) in asked.iter().enumerate() {
+        if cancel.is_cancelled() || Instant::now() >= deadline {
+            // Clouds that failed last time and were left out cannot hold a newer login now.
+            let reached = asked[index..]
+                .iter()
+                .all(|left| delivered.get(*left).is_some_and(|(given, _)| given.is_empty()));
+            return (failed, reached);
         }
         let Ok(Some(current)) = fingerprint(root) else {
-            break;
+            return (failed, true);
         };
         if !all && current_on(delivered, cloud, &current) {
             continue;
         }
+        let cloud = *cloud;
         match keep_cloud_current(root, cloud, cancel) {
             // The exchange may have taken over the worker's renewal; record what it holds.
             Ok(Kept::Current) => {
@@ -216,11 +250,12 @@ fn deliver(
             Ok(Kept::Skipped) => {}
             Err(error) => {
                 tracing::warn!(%error, cloud, "could not give the ChatGPT login to a cloud");
+                delivered.insert(cloud.clone(), (String::new(), Instant::now()));
                 failed.push(cloud.clone());
             }
         }
     }
-    failed
+    (failed, true)
 }
 
 /// Whether `cloud` got the login `current` less than [`RESEND`] ago.

@@ -327,7 +327,9 @@ same request that Codex uses, and gives the renewal to every cloud with a record
 only five minutes before the access token ends, and it first reads its login file again
 and takes a newer login that it finds there, so the workers use the login that this
 computer renewed. Each ready cloud is also asked every half hour, and when the login here
-changes.
+changes. A sync waits at most 15 seconds for one worker and asks no more clouds after two
+minutes per pass; the rest, with the clouds that failed last time asked last, wait for the
+next sync.
 
 A worker that renewed its login while Horizon was closed keeps that renewal, and the
 renewal comes back to this computer and replaces the spent copy, so the next cloud gets

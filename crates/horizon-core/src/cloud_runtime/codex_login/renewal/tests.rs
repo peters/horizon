@@ -364,3 +364,39 @@ fn a_renewal_after_the_clock_went_back_is_still_the_later_login() {
     let renewed = read(home.path()).unwrap().unwrap();
     assert!(renewed.renews(&Login::parse(&earlier).unwrap()));
 }
+
+#[test]
+fn a_pass_asks_no_cloud_after_its_deadline() {
+    let root = tempfile::tempdir().unwrap();
+    let home = home(root.path());
+    super::super::private_directory(&home).unwrap();
+    write_private(&home, &login(NOW, NOW + 10 * DAY)).unwrap();
+    let mut delivered = Delivered::new();
+    let clouds = ["cloud-a".to_owned(), "cloud-b".to_owned()];
+    let (failed, complete) = deliver(
+        root.path(),
+        &clouds,
+        &mut delivered,
+        true,
+        &[],
+        Instant::now(),
+        &Cancellation::default(),
+    );
+    assert!(failed.is_empty());
+    assert!(!complete, "a renewal must not follow this pass");
+    assert!(delivered.is_empty(), "no cloud was asked");
+    // Clouds left out that failed last time do not hold a renewal back.
+    for cloud in &clouds {
+        delivered.insert(cloud.clone(), (String::new(), Instant::now()));
+    }
+    let (_, complete) = deliver(
+        root.path(),
+        &clouds,
+        &mut delivered,
+        true,
+        &[],
+        Instant::now(),
+        &Cancellation::default(),
+    );
+    assert!(complete);
+}

@@ -224,6 +224,11 @@ pub(super) fn give(home: &Path, connection: &Connection, runner: &Runner<'_>) ->
 
 /// Sends the login to `install`, the worker's install script, and keeps what it returns.
 fn exchange(home: &Path, install: &mut Command, runner: &Runner<'_>) -> Result<()> {
+    exchange_within(home, install, runner, Duration::from_secs(30))
+}
+
+/// [`exchange`] with a worker that must answer within `timeout`.
+fn exchange_within(home: &Path, install: &mut Command, runner: &Runner<'_>, timeout: Duration) -> Result<()> {
     let _lock = lock(home)?;
     let Some(local) = read(home)? else {
         return Ok(());
@@ -235,7 +240,7 @@ fn exchange(home: &Path, install: &mut Command, runner: &Runner<'_>) -> Result<(
     } else {
         &local.bytes
     };
-    let reply = runner.private_exchange(install, given, Duration::from_secs(30))?;
+    let reply = runner.private_exchange(install, given, timeout)?;
     adopt(home, &Zeroizing::new(reply))
 }
 

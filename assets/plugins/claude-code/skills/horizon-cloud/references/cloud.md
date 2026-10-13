@@ -75,7 +75,8 @@ ChatGPT".
 
 ChatGPT refresh tokens are single use, so this computer renews the login. While Horizon
 runs, it renews the login before the access token ends and gives the renewal to every
-cloud within five minutes; Codex on a worker takes the newer file instead of renewing.
+cloud, usually within five minutes; Codex on a worker takes the newer file instead of
+renewing.
 A worker that renewed the login on its own while Horizon was closed keeps that renewal,
 and the renewal comes back to this computer at the next sync or connect. Never run
 `codex login` or `codex logout` on a worker: both revoke the login that every cloud
