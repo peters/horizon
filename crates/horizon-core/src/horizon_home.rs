@@ -20,6 +20,8 @@ pub enum HorizonHomeError {
     NotOwned(PathBuf),
     #[error("HORIZON_HOME {} is open to other users; make it private with chmod 700", .0.display())]
     NotPrivate(PathBuf),
+    #[error("HORIZON_HOME {} must be readable, writable and searchable by its owner; use chmod 700", .0.display())]
+    NotUsable(PathBuf),
 }
 
 impl HorizonHome {
@@ -182,11 +184,7 @@ impl HorizonHome {
 }
 
 fn prepare_private_root(root: &Path) -> Result<(), HorizonHomeError> {
-    let mut builder = std::fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
-    if let Err(source) = builder.create(root) {
+    if let Err(source) = create_private_dirs(root) {
         if std::fs::metadata(root).is_ok_and(|metadata| !metadata.is_dir()) {
             return Err(HorizonHomeError::NotDirectory(root.to_path_buf()));
         }
@@ -210,6 +208,44 @@ fn prepare_private_root(root: &Path) -> Result<(), HorizonHomeError> {
         }
         if metadata.mode() & 0o077 != 0 {
             return Err(HorizonHomeError::NotPrivate(root.to_path_buf()));
+        }
+        if metadata.mode() & 0o700 != 0o700 {
+            return Err(HorizonHomeError::NotUsable(root.to_path_buf()));
+        }
+    }
+    Ok(())
+}
+
+/// Creates the missing directories of `root` with mode 700, whatever the umask, and leaves
+/// existing ancestors as they are.
+fn create_private_dirs(root: &Path) -> std::io::Result<()> {
+    let mut missing = Vec::new();
+    let mut next = Some(root);
+    while let Some(path) = next {
+        if std::fs::symlink_metadata(path).is_ok() {
+            break;
+        }
+        missing.push(path);
+        next = path.parent();
+    }
+    // Never more open than 700, also while a concurrent start inspects the new directory.
+    #[cfg(unix)]
+    let builder = {
+        let mut builder = std::fs::DirBuilder::new();
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder
+    };
+    #[cfg(not(unix))]
+    let builder = std::fs::DirBuilder::new();
+    for path in missing.into_iter().rev() {
+        match builder.create(path) {
+            Ok(()) => {
+                // A umask such as 0700 removes owner bits that the mode asked for.
+                #[cfg(unix)]
+                std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
         }
     }
     Ok(())
@@ -396,8 +432,50 @@ mod tests {
                 "mode {mode:o} must be rejected"
             );
         }
+        for mode in [0o600, 0o500, 0o300, 0o000] {
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(mode)).expect("permissions");
+            assert!(
+                matches!(
+                    HorizonHome::prepare_with(Some(root.clone())),
+                    Err(HorizonHomeError::NotUsable(path)) if path == root
+                ),
+                "mode {mode:o} cannot hold state"
+            );
+        }
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("permissions");
         HorizonHome::prepare_with(Some(root)).expect("an owner-only directory is accepted");
+    }
+
+    /// The umask is process-wide, so the restrictive one is set in a child process.
+    #[cfg(unix)]
+    #[test]
+    fn a_restrictive_umask_still_creates_a_usable_override() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let existing = temp.path().join("existing");
+        std::fs::create_dir(&existing).expect("directory");
+        std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o755)).expect("permissions");
+        let root = existing.join("new").join("horizon-home");
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args(["--exact", "horizon_home::tests::umask_child", "--nocapture"])
+            .env("HORIZON_HOME_UMASK_CHILD", &root)
+            .output()
+            .expect("child test");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let mode = |path: &std::path::Path| std::fs::metadata(path).expect("metadata").permissions().mode() & 0o777;
+        assert_eq!(mode(&root), 0o700);
+        assert_eq!(mode(&existing.join("new")), 0o700);
+        assert_eq!(mode(&existing), 0o755, "an existing ancestor keeps its mode");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn umask_child() {
+        let Some(root) = std::env::var_os("HORIZON_HOME_UMASK_CHILD") else {
+            return;
+        };
+        rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o777));
+        HorizonHome::prepare_with(Some(PathBuf::from(root))).expect("created despite the umask");
     }
 
     #[cfg(target_os = "linux")]
