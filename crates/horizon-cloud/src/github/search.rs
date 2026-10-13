@@ -53,7 +53,7 @@ impl Client {
                         .strip_prefix("https://api.github.com/repos/")
                         .ok_or(Error::InvalidResponse)?
                         .to_ascii_lowercase();
-                    if reachable.contains(&name) {
+                    if reachable.iter().any(|known| known.eq_ignore_ascii_case(&name)) {
                         *counts.entry(name).or_insert(0) += 1;
                     }
                 }
@@ -103,7 +103,7 @@ mod tests {
                 &Secret::new("ghu_synthetic".into()),
                 "app/dependabot",
                 &["acme".into(), "other".into(), "Acme".into(), "acme".into()],
-                &["acme/web".into(), "acme/api".into(), "other/tool".into()],
+                &["acme/web".into(), "Acme/API".into(), "other/tool".into()],
             )
             .unwrap();
         task.join().unwrap();
