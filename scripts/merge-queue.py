@@ -6,7 +6,7 @@ same guarantee by hand: main plus the queued PRs is tested once on an `mq/*` bra
 and only that tested result lands.
 
 - enqueue: the PR's agent queues one exact head after every merge gate in AGENTS.md
-  passed for it. The entry is a PR comment by a repository collaborator, plus the
+  passed for it. The entry is a PR comment by the repository owner, plus the
   `merge-queue` label.
 - build: applies each queued head to a fresh origin/main as one squash commit, in
   queue order, and pushes the result as `mq/<UTC time>`. CI runs on that branch.
@@ -32,6 +32,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -249,7 +250,7 @@ def load_plan():
 
 def pull(repo, number):
     return gh_json("pr", "view", str(number), "--repo", repo, "--json",
-                   "number,state,isDraft,headRefOid,baseRefName,title,labels")
+                   "number,state,isDraft,headRefOid,baseRefName,title,labels,reviewDecision")
 
 
 def queued(repo):
@@ -387,6 +388,10 @@ def cmd_build(args):
     plan = {"branch": branch, "base": base, "tip": tip,
             "prs": [{k: e[k] for k in ("number", "head", "subject", "body", "commit")}
                     for e in applied]}
+    if plan_path().exists():
+        # The earlier batch is replaced; its branch would otherwise stay on origin.
+        old = json.loads(plan_path().read_text())["branch"]
+        git("push", "-q", "origin", "--delete", old, timeout=300, check=False)
     plan_path().write_text(json.dumps(plan, indent=2) + "\n")
     print(f"pushed {branch}; CI runs on {tip}")
 
@@ -408,8 +413,12 @@ def blockers(repo, plan):
             found.append(f"#{entry['number']} targets {pr['baseRefName']}, not {BASE_BRANCH}")
         if drifted(entry, pr["headRefOid"]):
             found.append(f"#{entry['number']} head drifted to {pr['headRefOid'][:9]}")
-        if LABEL not in {label["name"] for label in pr["labels"]}:
-            found.append(f"#{entry['number']} left the queue")
+        current = latest_entry(gh_pages(f"repos/{repo}/issues/{entry['number']}/comments"))
+        if LABEL not in {label["name"] for label in pr["labels"]} or current is None \
+                or current["head"] != entry["head"]:
+            found.append(f"#{entry['number']} left the queue or was queued again")
+        if pr.get("reviewDecision") == "CHANGES_REQUESTED":
+            found.append(f"#{entry['number']} has a review that requests changes")
         threads = unresolved_threads(repo, entry["number"])
         if threads:
             found.append(f"#{entry['number']} has {threads} unresolved review threads")
@@ -446,9 +455,14 @@ def cmd_land(args):
         run(["gh", "pr", "merge", str(entry["number"]), "--repo", repo, "--squash",
              "--match-head-commit", entry["head"], "--subject", entry["subject"],
              "--body", entry["body"]], timeout=300)
-        merged = gh_json("pr", "view", str(entry["number"]), "--repo", repo, "--json",
-                         "state,mergeCommit")
-        commit = (merged.get("mergeCommit") or {}).get("oid")
+        for _attempt in range(10):
+            # GitHub can report the merge commit a moment after the merge returns.
+            merged = gh_json("pr", "view", str(entry["number"]), "--repo", repo, "--json",
+                             "state,mergeCommit")
+            commit = (merged.get("mergeCommit") or {}).get("oid")
+            if merged["state"] == "MERGED" and commit:
+                break
+            time.sleep(2)
         if merged["state"] != "MERGED" or not commit:
             raise QueueError(f"#{entry['number']} did not merge; later PRs were not merged")
         git("fetch", "-q", "origin", BASE_BRANCH, timeout=300)
