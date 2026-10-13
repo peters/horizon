@@ -4,9 +4,10 @@
 //! a board that is not written yet. The worker writes each board, its metadata and the
 //! session index so that a crash cannot leave a session without its content: each file is
 //! written to a temporary file, synced, renamed into place, and its folder is synced. It
-//! alone writes the session index, also the queued changes of it, in order. A read of a
-//! session or of the index returns what is queued and not written yet, so a reader never
-//! sees an older one. A save or an index change that fails is kept and tried again later.
+//! alone writes the index, with the queued changes of it in queue order with the boards. A
+//! read of a session or of the index returns what is queued and not written yet, so a reader
+//! never sees an older one. A save or an index change that fails is kept and tried again
+//! later, while the saves of other sessions go on.
 mod index_queue;
 
 use super::{SessionStore, index_file::IndexChange};
@@ -209,10 +210,12 @@ impl Writer {
         self.shared.changed.notify_all();
     }
 
-    /// Queues `change` of the session index; a worker of `store` writes it after the others.
+    /// Queues `change` of the session index; a worker of `store` writes it in queue order.
     pub(super) fn queue_index(&self, store: &SessionStore, change: IndexChange) {
         let mut state = self.lock();
-        state.index.push(change);
+        state.next += 1;
+        let generation = state.next;
+        state.index.push(generation, change);
         self.start(&mut state, store);
         drop(state);
         self.shared.changed.notify_all();
@@ -377,7 +380,12 @@ impl Writer {
             let (session_id, queued) = match self.next_job() {
                 None => return,
                 Some(Job::Index(change)) => {
-                    self.write_index(store, &change);
+                    let written = store.write_index_changes([&change]);
+                    if let Err(error) = &written {
+                        tracing::warn!(?change, %error, "failed to change the session index; Horizon tries again");
+                    }
+                    self.lock().index.written(written.is_ok());
+                    self.shared.changed.notify_all();
                     continue;
                 }
                 Some(Job::Board(session_id, queued)) => (session_id, *queued),
@@ -386,8 +394,8 @@ impl Writer {
                     continue;
                 }
             };
-            // Index changes queued before this save are written with it, so it never overtakes them.
-            let ahead = self.lock().index.unwritten();
+            // Index changes queued before this board are written with it, so it never overtakes them.
+            let ahead = self.lock().index.ahead_of(queued.generation);
             let saved = store.save_runtime_state_durably(&session_id, &queued.board, &ahead);
             let mut state = self.lock();
             state.writing = None;
@@ -423,15 +431,6 @@ impl Writer {
         }
     }
 
-    fn write_index(&self, store: &SessionStore, change: &IndexChange) {
-        let written = store.write_index_changes([change]);
-        if let Err(error) = &written {
-            tracing::warn!(?change, %error, "failed to change the session index; Horizon tries again");
-        }
-        self.lock().index.written(written.is_ok());
-        self.shared.changed.notify_all();
-    }
-
     fn write_parks(&self, store: &SessionStore, session_id: &str, parks: &[Park]) {
         #[cfg(feature = "cloud-workspaces")]
         {
@@ -452,22 +451,25 @@ impl Writer {
         self.shared.changed.notify_all();
     }
 
-    /// Takes the next index change, else the oldest board that is due, so every session is
+    /// Takes the index change or board that is due and was queued first, so every session is
     /// written in turn, else the park records of a session that has no board waiting; `None`
     /// ends an idle worker.
     fn next_job(&self) -> Option<Job> {
         let mut state = self.lock();
         loop {
             let now = Instant::now();
-            if let Some(change) = state.index.take_due(now) {
-                return Some(Job::Index(change));
-            }
             let due = (state.queued.iter())
                 .filter(|(session_id, _)| !state.direct.contains(*session_id))
                 .filter(|(_, queued)| queued.retry.is_none_or(|at| at <= now))
                 .min_by_key(|(_, queued)| queued.generation)
-                .map(|(session_id, _)| session_id.clone());
-            if let Some(session_id) = due
+                .map(|(session_id, queued)| (session_id.clone(), queued.generation));
+            if let Some(change) = state
+                .index
+                .take_due(now, due.as_ref().map(|(_, generation)| *generation))
+            {
+                return Some(Job::Index(change));
+            }
+            if let Some((session_id, _)) = due
                 && let Some(queued) = state.queued.remove(&session_id)
             {
                 state.writing = Some((session_id.clone(), queued.clone()));

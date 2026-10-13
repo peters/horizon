@@ -6,9 +6,9 @@
 //! thread or process writes over the change of another. The new index is written to a
 //! uniquely named temporary file, synced, renamed into place, and its folder is synced.
 use std::fs;
-use std::io::{ErrorKind, Read as _, Write as _};
+use std::io::{ErrorKind, Write as _};
 use std::path::Path;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, Once, PoisonError};
 use std::time::{Duration, Instant};
 
 use super::model::SessionIndex;
@@ -82,12 +82,11 @@ impl<'a> IndexFile<'a> {
         fs::rename(&renamed, self.path)?;
         renamed.disable_cleanup(true);
         writer::sync_folder(self.folder())?;
-        // A Horizon from before this lock can still rename its index over this one, so the
-        // file read must be the one written, and the path must still name it after the read.
-        let mut named = fs::File::open(self.path)?;
-        let mut contents = String::new();
-        named.read_to_string(&mut contents)?;
-        if !writer::same_file(&written, &named.metadata()?) || !writer::same_file(&written, &fs::metadata(self.path)?) {
+        // A Horizon from before this lock can still rename its index over this one. The path
+        // must give the content written and, after that read, still name the synced file; only
+        // a Unix host compares the file, and only there a save is durable.
+        let contents = fs::read_to_string(self.path)?;
+        if contents != yaml || !writer::same_file(&written, &fs::metadata(self.path)?) {
             return Err(Error::State(format!(
                 "another program replaced {} while Horizon wrote it",
                 self.path.display()
@@ -101,8 +100,9 @@ impl<'a> IndexFile<'a> {
     }
 
     /// Makes the folder of the index and takes its file lock, which is held until the
-    /// returned file is dropped.
-    fn lock(&self) -> Result<fs::File> {
+    /// returned file is dropped. A file system that cannot lock a file gives no lock; then
+    /// only [`INDEX_UPDATE`] keeps out other changes, as before this lock.
+    fn lock(&self) -> Result<Option<fs::File>> {
         fs::create_dir_all(self.folder())?;
         let lock_path = self.path.with_extension("lock");
         let file = fs::OpenOptions::new()
@@ -114,7 +114,7 @@ impl<'a> IndexFile<'a> {
         let deadline = Instant::now() + LOCK_WAIT;
         loop {
             match file.try_lock() {
-                Ok(()) => return Ok(file),
+                Ok(()) => return Ok(Some(file)),
                 Err(fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(1));
                 }
@@ -123,6 +123,13 @@ impl<'a> IndexFile<'a> {
                         "another Horizon process holds {}",
                         lock_path.display()
                     )));
+                }
+                Err(fs::TryLockError::Error(error)) if error.kind() == ErrorKind::Unsupported => {
+                    static WARNED: Once = Once::new();
+                    WARNED.call_once(|| {
+                        tracing::warn!(%error, "cannot lock the session index; another Horizon can overwrite it");
+                    });
+                    return Ok(None);
                 }
                 Err(fs::TryLockError::Error(error)) => return Err(error.into()),
             }

@@ -373,3 +373,28 @@ fn a_board_save_never_overtakes_an_index_change_queued_before_it() {
     assert_eq!(profile.last_session_id.as_deref(), Some(later.session_id.as_str()));
     assert!(index.names(store.profile_id(), &earlier.session_id));
 }
+
+#[test]
+fn boards_and_index_changes_are_written_in_queue_order() {
+    let root_dir = test_root("index-queue-order");
+    let home = HorizonHome::from_root(root_dir.path().into());
+    let store = SessionStore::new(home.clone(), home.config_path());
+    let board = store.create_session_from_runtime(RuntimeState::default()).unwrap();
+    let touched = store.create_session_from_runtime(RuntimeState::default()).unwrap();
+    assert!(store.flush_runtime_states(std::time::Duration::from_secs(30)));
+    // Another Horizon process holds the index lock, so the writer waits in the next change
+    // while a board and then an index change are queued behind it.
+    let held = std::fs::File::create(home.sessions_dir().join("index.lock")).unwrap();
+    held.lock().unwrap();
+    store.create_session_from_runtime(RuntimeState::default()).unwrap();
+    let _ = store.queue_runtime_state(&board.session_id, RuntimeState::default());
+    store
+        .save_runtime_state(&touched.session_id, &RuntimeState::default())
+        .unwrap();
+    drop(held);
+    assert!(store.flush_runtime_states(std::time::Duration::from_secs(30)));
+    let index_path = home.session_index_path();
+    let index = super::IndexFile::at(&index_path).load().unwrap();
+    let profile = index.profile(store.profile_id()).unwrap();
+    assert_eq!(profile.last_session_id.as_deref(), Some(touched.session_id.as_str()));
+}

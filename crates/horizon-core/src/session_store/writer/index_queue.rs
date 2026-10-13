@@ -6,16 +6,17 @@ use super::{FIRST_RETRY, IndexChange, LAST_RETRY};
 
 #[derive(Default)]
 pub(super) struct IndexQueue {
-    /// In order. The first one stays here while it is written and after it failed.
-    changes: VecDeque<IndexChange>,
+    /// In queue order, each with the generation of its queue, from the same count as the
+    /// boards. The first one stays here while it is written and after it failed.
+    changes: VecDeque<(u64, IndexChange)>,
     writing: bool,
     /// When the first change, which failed, is tried again, and the wait before that try.
     retry: Option<(Instant, Duration)>,
 }
 
 impl IndexQueue {
-    pub(super) fn push(&mut self, change: IndexChange) {
-        self.changes.push_back(change);
+    pub(super) fn push(&mut self, generation: u64, change: IndexChange) {
+        self.changes.push_back((generation, change));
     }
 
     pub(super) fn is_empty(&self) -> bool {
@@ -23,7 +24,15 @@ impl IndexQueue {
     }
 
     pub(super) fn unwritten(&self) -> Vec<IndexChange> {
-        self.changes.iter().cloned().collect()
+        self.changes.iter().map(|(_, change)| change.clone()).collect()
+    }
+
+    /// The changes queued before the board of `generation`, which its save writes first.
+    pub(super) fn ahead_of(&self, generation: u64) -> Vec<IndexChange> {
+        (self.changes.iter())
+            .take_while(|(queued, _)| *queued < generation)
+            .map(|(_, change)| change.clone())
+            .collect()
     }
 
     /// Whether a change is written now or was not tried yet; a failed one does not hold an
@@ -37,12 +46,17 @@ impl IndexQueue {
         self.retry.map(|(at, _)| at.saturating_duration_since(now))
     }
 
-    /// The first change if it is due; the worker writes it and then calls [`Self::written`].
-    pub(super) fn take_due(&mut self, now: Instant) -> Option<IndexChange> {
+    /// The first change if it is due and was queued before the board of `board`, if any;
+    /// the worker writes it and then calls [`Self::written`].
+    pub(super) fn take_due(&mut self, now: Instant, board: Option<u64>) -> Option<IndexChange> {
         if self.writing || self.retry.is_some_and(|(at, _)| at > now) {
             return None;
         }
-        let change = self.changes.front().cloned()?;
+        let (generation, change) = self.changes.front()?;
+        if board.is_some_and(|board| board < *generation) {
+            return None;
+        }
+        let change = change.clone();
         self.writing = true;
         Some(change)
     }

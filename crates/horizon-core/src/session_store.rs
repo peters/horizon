@@ -424,7 +424,7 @@ impl SessionStore {
     }
 
     fn load_profile_snapshot(&self) -> Result<ProfileSnapshot> {
-        // Read before the file, so a change written meanwhile applies twice and is never missed.
+        // Read before the file: no change is missed, but one written meanwhile can show an older order once.
         let unwritten = self.writer.unwritten_index_changes();
         let mut index = IndexFile::at(&self.home.session_index_path()).load()?;
         for change in &unwritten {
