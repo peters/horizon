@@ -200,11 +200,11 @@ Give each result the task ID. A report uses the ID to give a result.
 
    Result: `key-01.txt` contains 106 characters and no line feed.
 
-2. Click **Cloud** in the menu bar of the candidate.
+2. Click **Menu** in the toolbar of the candidate.
 
-   Result: The Cloud menu opens.
+   Result: The Menu opens.
 
-3. Click **Cloud settings…**.
+3. Click **Cloud settings**.
 
    Result: The dialog opens. The RunPod card shows an empty key field, or a
    saved key with **Replace**.

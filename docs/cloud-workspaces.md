@@ -464,8 +464,8 @@ Click **Add credentials**: the entry for the repository opens with its name fill
 in and **Expiry and publishing** open. Add a publishing credential and a read-only
 pull credential, save the settings, then click the retry in the header of the
 cloud card.
-To add a different repository, click **Add another**. **Cloud settings…** in the
-Cloud menu does not fill in a repository.
+To add a different repository, click **Add another**. **Cloud settings** in the
+toolbar Menu does not fill in a repository.
 
 ## Provider API and storage requirements
 
@@ -1051,7 +1051,7 @@ you create a cloud, the view fits its workspace below the overview controls and 
 the minimap. The view shows as little of the clouds of other workspaces as possible,
 so their parked terminals stay parked. A new workspace is at the right of the others,
 so the view puts it at the left edge of the canvas. A window that is wider than the
-space between two workspaces can show a part of the next workspace. **Cloud ›
+space between two workspaces can show a part of the next workspace. **Menu ›
 Fit all clouds** shows the clouds of all workspaces.
 
 ## Sessions and lifecycle

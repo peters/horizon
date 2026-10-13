@@ -161,7 +161,7 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 
    Result: The detached workspace is the active workspace.
 
-5. Open **Cloud › New cloud…**.
+5. Open **Menu › New cloud**.
 
    Result: The dialog shows `Move this workspace to the main window before creating
    a cloud`. No worker, cloud or session starts.
@@ -195,7 +195,7 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 
    Result: The Device panel shows a live view.
 
-3. In the second fixture, open **Cloud › New cloud…**.
+3. In the second fixture, open **Menu › New cloud**.
 
    Result: The New cloud dialog opens.
 
@@ -222,7 +222,7 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 
 ### 6.4 C04 — Combine RunPod and Hetzner and show the three picks
 
-1. Open **Cloud › New cloud…**.
+1. Open **Menu › New cloud**.
 
    Result: The New cloud dialog opens.
 
@@ -309,7 +309,7 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 
    Result: The dialog closes. No cloud starts.
 
-10. Open **Cloud › New cloud…** again.
+10. Open **Menu › New cloud** again.
 
     Result: **In stock only** is selected again. The search field is empty.
 
@@ -362,7 +362,7 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 
     Result: Only the key file of the fixture contains the RunPod key.
 
-12. Open **Cloud › New cloud…**.
+12. Open **Menu › New cloud**.
 
     Result: The New cloud dialog opens.
 
@@ -421,7 +421,7 @@ For a detailed check of the refresh, use the
 
 ### 6.9 C09 — List None and the saved networks in the tailnet chooser
 
-1. Open **Cloud › New cloud…**.
+1. Open **Menu › New cloud**.
 
    Result: The New cloud dialog opens.
 

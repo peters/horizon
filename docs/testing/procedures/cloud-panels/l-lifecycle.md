@@ -340,7 +340,7 @@ Use `smoke-r`. It is a RunPod CPU cloud.
 
 ### 6.7 L07 — Make sure that idle stop works
 
-1. Open **Cloud › New cloud…**.
+1. Open **Menu › New cloud**.
 
    Result: The New cloud dialog opens.
 
@@ -586,7 +586,7 @@ cloud `smoke-hb` on Hetzner, then rebuilds it at the same commit
 
    Result: The evidence has the commit.
 
-2. Open **Cloud › New cloud…** in the workspace of `smoke-a`.
+2. Open **Menu › New cloud** in the workspace of `smoke-a`.
 
    Result: The New cloud dialog opens.
 
@@ -701,7 +701,7 @@ cloud `smoke-hb` on Hetzner, then rebuilds it at the same commit
 L11 is the last task that uses the `<build-repository>` entry of A08. Steps 3
 to 12 revoke it while the fixture runs.
 
-3. Open **Cloud › Cloud settings…**.
+3. Open **Menu › Cloud settings**.
 
    Result: The Cloud settings dialog opens.
 

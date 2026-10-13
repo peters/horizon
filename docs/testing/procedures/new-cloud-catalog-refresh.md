@@ -62,7 +62,7 @@ narrow window. The dialog must not move or change size after it opens.
 
    Result: The Device panel shows a live view of the candidate.
 
-3. In the candidate, open **Cloud settings…**.
+3. In the candidate, open **Menu › Cloud settings**.
 
    Result: The Cloud settings dialog opens.
 
@@ -79,7 +79,7 @@ Give each task an ID. A report uses the ID to give a result.
 
 ### 6.1 C1 — Current prices
 
-1. Open **Cloud › New cloud…**.
+1. Open **Menu › New cloud**.
 
    Result: The New cloud dialog opens.
 
@@ -167,7 +167,7 @@ fixture opens the candidate window at 1480 × 900 pixels.
 
    Result: The dialog closes.
 
-2. Open **Cloud › New cloud…**.
+2. Open **Menu › New cloud**.
 
    Result: The dialog shows the summary to the right of the worker fields.
 

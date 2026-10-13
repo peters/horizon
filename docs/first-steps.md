@@ -346,8 +346,8 @@ Deploy sends committed source only. Horizon does not fetch your local clone
 from `origin` before deploy. Commit and update the branch before you start.
 
 1. Open a workspace in a Git repository.
-2. Click **Cloud**.
-3. Click **New cloud…**.
+2. Click **Menu** in the toolbar.
+3. Click **New cloud**.
 
    Result: The **Where is your code?** step opens.
 

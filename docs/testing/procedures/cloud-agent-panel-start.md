@@ -69,7 +69,7 @@ permission error. It also makes sure of these conditions:
 
    Result: The Device panel shows a live view of the candidate.
 
-3. In the candidate, open **Cloud settings…**.
+3. In the candidate, open **Menu › Cloud settings**.
 
    Result: The Cloud settings dialog opens.
 
@@ -92,7 +92,7 @@ permission error. It also makes sure of these conditions:
 
    Result: The dialog closes.
 
-7. Open **Cloud › New cloud…**.
+7. Open **Menu › New cloud**.
 
    Result: The New cloud dialog opens.
 
