@@ -436,8 +436,8 @@ mod tests {
         assert!(PageMessage::parse(&" ".repeat(MAX_PAGE_MESSAGE_BYTES + 1)).is_none());
     }
 
-    #[cfg(unix)]
     #[test]
+    #[cfg_attr(windows, ignore = "uses /bin/sh as the authenticator command")]
     fn refusals_answer_at_once_and_one_request_runs_at_a_time() {
         let mut bridge = bridge(vec!["/bin/sh".into(), "-c".into(), "sleep 30".into()]).expect("bridge");
         let PageMessage::Request { id, op, options } = get_request() else {
@@ -479,8 +479,8 @@ mod tests {
         assert!(limited.contains("Too many passkey requests"));
     }
 
-    #[cfg(unix)]
     #[test]
+    #[cfg_attr(windows, ignore = "uses /bin/sh as the authenticator command")]
     fn an_abort_or_navigation_during_the_origin_read_withdraws_the_request() {
         let mut bridge = bridge(vec!["/bin/sh".into(), "-c".into(), "sleep 30".into()]).expect("bridge");
         let PageMessage::Request { id, op, options } = get_request() else {
@@ -514,8 +514,8 @@ mod tests {
         assert!(!bridge.frame_slot.passkey_pending());
     }
 
-    #[cfg(unix)]
     #[test]
+    #[cfg_attr(windows, ignore = "uses /bin/sh as the authenticator command")]
     fn a_failing_command_becomes_a_not_allowed_reply_for_the_same_realm() {
         let mut bridge =
             bridge(vec!["/bin/sh".into(), "-c".into(), "cat >/dev/null; echo nope".into()]).expect("bridge");
