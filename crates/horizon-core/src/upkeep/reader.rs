@@ -277,7 +277,7 @@ mod tests {
         let pull_requests: Vec<serde_json::Value> = (0..2000)
             .map(|n| serde_json::json!({"repository": "o/r", "number": n, "title": long, "url": "", "state": "ready"}))
             .collect();
-        let runs: Vec<serde_json::Value> = (0..500)
+        let runs: Vec<serde_json::Value> = (0..2000)
             .map(|n| serde_json::json!({"started_at": "2026-10-13T10:00:00Z", "merged": n}))
             .collect();
         let document = serde_json::json!({"agent": long, "pull_requests": pull_requests, "runs": runs});
@@ -287,7 +287,7 @@ mod tests {
         assert_eq!(status.pull_requests[0].title.chars().count(), MAX_TEXT + 1);
         assert_eq!(status.agent.chars().count(), MAX_TEXT + 1);
         assert_eq!(status.runs.len(), MAX_RUNS);
-        assert_eq!(status.runs[0].merged, 400, "the newest runs stay");
+        assert_eq!(status.runs[0].merged, 500, "the newest runs stay");
     }
 
     #[test]
