@@ -373,6 +373,61 @@ that fails after the fence is persisted is not replayed. A later operation with 
 identifier can relaunch the session again. Images without the marker keep reporting
 such sessions lost.
 
+## Terminal history
+
+A panel attaches to its session through `horizon-worker-attach SESSION`.
+`horizon-worker-session` starts this helper after it finds or starts the session.
+The helper attaches tmux in control mode. tmux then reports each byte that the
+session writes, and the helper writes those bytes to the SSH terminal. Thus the
+panel keeps the history of the session in its own scrollback. The history
+indicator, the scroll bar, the mouse wheel and the selection operate as in a
+local panel. The mouse wheel sends no keys to the session, unless a program in
+the session turned on mouse reports: then, as in a local panel, the wheel goes
+to the program and Shift+wheel scrolls the scrollback. A plain tmux client is
+not used: it draws a screen, which a panel shows in its alternate screen, and
+it drops lines when output is fast.
+
+At each attach, the helper does these steps:
+
+1. It sets the size of the session to the size of the terminal.
+2. In one tmux command line, it reads the history, the screen, the cursor, the
+   terminal modes and the title of the session. tmux reads no output of the session
+   between these commands.
+3. It clears the screen and the scrollback of the panel. Then it writes the
+   history and the screen. Output that the session wrote while no panel was
+   attached is thus in the scrollback, and no line of an earlier attach stays.
+4. It writes the output that the session writes after step 2.
+
+tmux keeps the last 10000 lines of each session that starts on an image with
+this helper. A session that started before keeps the tmux default of 2000 lines
+until it starts again. A line older than this limit is not shown at the next
+attach. While a panel stays attached, it keeps the lines of its own scrollback
+limit.
+
+tmux stays the terminal of the session:
+
+- tmux answers the terminal queries of the session. The helper removes these
+  queries from the output, so the panel does not send a second answer. tmux 3.4
+  cannot get the colors of the panel from a control mode client, so it answers
+  a color query with its default colors.
+- The session cannot read or change the clipboard of the computer, because the
+  helper removes its clipboard requests (OSC 52), as tmux did.
+- The panel always brackets a paste. The helper gives the paste to tmux, and
+  tmux adds the brackets only if the session asked for them.
+- The helper removes the requests for focus reports, color scheme reports,
+  in-band resize reports and extended key codes. tmux does not send these to
+  the session.
+
+The helper sends keys to the session byte for byte with `tmux send-keys -H`.
+It attaches to one session only, and it shows the output of that session only.
+
+A plain tmux client drew each cell with its own attributes. The helper writes
+the output of the session instead, so it cannot restore a text style that a
+program set before the attach and did not use yet: tmux 3.4 does not report the
+current style of a pane. After the attach, such text shows in the default style
+until the program sets a style again. Programs that set the style for each
+piece of text, as agents and shells do, show no difference.
+
 ## Pinned submodule history
 
 Horizon can send only each submodule's pinned commit and its tree, without

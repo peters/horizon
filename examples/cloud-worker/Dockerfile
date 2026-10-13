@@ -85,6 +85,7 @@ COPY horizon-worker-tailnet \
     horizon-worker-stop \
     horizon-worker-run \
     horizon-worker-session \
+    horizon-worker-attach \
     horizon-worker-source \
     horizon-worker-import \
     horizon-worker-siblings \
