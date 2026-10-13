@@ -119,13 +119,13 @@ pub(super) struct Production {
     new_workspace: Option<new_workspace::Intent>,
 }
 #[derive(Default, PartialEq, Eq)]
-pub(super) enum Confirmation {
+enum Confirmation {
     #[default]
     None,
     Stop,
     Delete,
     Redeploy,
-    Rebuild,
+    Rebuild(Box<rebuild::Preview>),
     CancelRebuild,
 }
 /// One line of a cloud operation's output, with the step that printed it and when.
@@ -645,7 +645,7 @@ impl HorizonApp {
         self.finish_closing_clouds(ctx);
         self.reconnect_resumed(resumed, ctx);
         self.remove_closed_cloud_browsers(removed);
-        self.sync_resized_profiles();
+        self.sync_bound_profiles();
         self.sync_cloud_members();
         self.start_first_cloud_panels(ctx);
         self.cloud_prototype.groups.reconcile(&mut self.board);
@@ -795,7 +795,7 @@ impl HorizonApp {
                     Runtime::reconnects_on_restore(&state).then_some(group.issue)
                 })
                 .collect();
-            self.sync_resized_profiles();
+            self.sync_bound_profiles();
             for id in reconnect {
                 self.start_production_deployment(id, ctx);
             }

@@ -42,7 +42,7 @@ impl RunPod {
     /// `next` is updated, and therefore reset, again.
     /// # Errors
     /// Refuses a worker that is not running or not verifiably this operation's,
-    /// and any change beyond the image and its registry credential. Only errors
+    /// and any change `WorkerSpec::verify_replacement` refuses. Only errors
     /// for which `may_have_applied` holds leave the outcome uncertain; observe the
     /// worker with `observe_image` before retrying or reverting.
     pub fn replace_image(
@@ -130,10 +130,16 @@ fn identify(worker: &Worker, current: &WorkerSpec, next: &WorkerSpec) -> Result<
     Ok(side)
 }
 
-/// Sends only the fields that change, relying on the update to keep omitted ones.
+/// Sends only the fields that change, relying on the update to keep omitted ones. A
+/// rebuild that changes the worker's capabilities or idle stop sends the whole new
+/// environment, which the update replaces as a whole.
 fn update_body(current: &WorkerSpec, next: &WorkerSpec) -> Result<Value, CloudError> {
     current.verify_replacement(next)?;
     let mut body = json!({"image": next.image_digest});
+    let environment = super::create::environment(next);
+    if environment != super::create::environment(current) {
+        body["env"] = environment;
+    }
     match (&current.registry_auth_id, &next.registry_auth_id) {
         // How the update clears a credential is unverified; refuse rather than guess.
         (Some(_), None) => {

@@ -221,12 +221,15 @@ fn refuses_to_update_a_stopped_lost_or_unverified_worker() {
 }
 
 fn identity_changes(current: &WorkerSpec) -> Vec<WorkerSpec> {
-    let edits: [fn(&mut WorkerSpec); 9] = [
+    let edits: [fn(&mut WorkerSpec); 12] = [
         |spec| spec.operation_id = "other-operation".into(),
         |spec| spec.profile.cpu += 1,
         |spec| spec.profile.memory_gb += 1,
         |spec| spec.profile.storage.volume_gb += 1,
-        |spec| spec.profile.capabilities.desktop = !spec.profile.capabilities.desktop,
+        |spec| spec.profile.provider = crate::hetzner::PROVIDER.into(),
+        |spec| spec.profile.image = "example/other".into(),
+        |spec| spec.profile.capabilities.browserstack = Some(crate::BrowserStack::default()),
+        |spec| spec.profile.bootstrap.contract_version += 1,
         |spec| spec.public_key = OTHER_KEY.into(),
         |spec| spec.gpu_types = vec!["NVIDIA RTX A5000".into()],
         |spec| spec.cpu_flavors = vec!["cpu5c".into()],
@@ -243,7 +246,39 @@ fn identity_changes(current: &WorkerSpec) -> Vec<WorkerSpec> {
 }
 
 #[test]
-fn only_the_image_and_its_credential_may_change() {
+fn a_rebuild_that_changes_the_settings_sends_the_whole_new_environment() {
+    let current = spec();
+    let mut changed = next(&current);
+    changed.profile.capabilities.desktop = !changed.profile.capabilities.desktop;
+    changed.profile.idle_stop_minutes = Some(30);
+    changed.profile.bootstrap.readiness_seconds += 60;
+    current.verify_replacement(&changed).unwrap();
+    changed.verify_replacement(&current).unwrap();
+    let (provider, requests, task) = server(vec![(200, pod(&current, &current).to_string()), (200, "{}".into())]);
+    provider
+        .replace_image(&current, &changed, "worker1", &Cancellation::default())
+        .unwrap();
+    task.join().unwrap();
+    let sent = body(&requests.lock().unwrap()[1]);
+    assert_eq!(sent["image"], json!(changed.image_digest));
+    assert_eq!(sent["env"], super::super::create::create_body(&changed)["env"]);
+    assert_eq!(sent["env"]["HORIZON_IDLE_STOP_MINUTES"], json!("30"));
+    // A readiness timeout never reaches the worker, so only the image is sent.
+    let mut host_only = next(&current);
+    host_only.profile.bootstrap.readiness_seconds += 60;
+    let (provider, requests, task) = server(vec![(200, pod(&current, &current).to_string()), (200, "{}".into())]);
+    provider
+        .replace_image(&current, &host_only, "worker1", &Cancellation::default())
+        .unwrap();
+    task.join().unwrap();
+    assert_eq!(
+        body(&requests.lock().unwrap()[1]),
+        json!({"image": host_only.image_digest})
+    );
+}
+
+#[test]
+fn only_the_image_its_credential_and_the_rebuild_settings_may_change() {
     let current = spec();
     for changed in identity_changes(&current) {
         assert!(matches!(

@@ -276,6 +276,28 @@ impl CloudConfig {
     }
 }
 impl Profile {
+    /// `self` with the settings an image rebuild may change taken from `next`: the
+    /// agents, browsers, desktop and agent approvals of `capabilities`, the readiness
+    /// timeout, the idle stop and the build section. The provider, size, storage, GPU
+    /// fields, image repository, hosted devices and bootstrap contract stay `self`'s:
+    /// a running worker keeps them.
+    #[must_use]
+    pub fn with_rebuild_settings(&self, next: &Self) -> Self {
+        Self {
+            capabilities: crate::Capabilities {
+                browserstack: self.capabilities.browserstack.clone(),
+                ..next.capabilities.clone()
+            },
+            bootstrap: Bootstrap {
+                readiness_seconds: next.bootstrap.readiness_seconds,
+                contract_version: self.bootstrap.contract_version,
+            },
+            idle_stop_minutes: next.idle_stop_minutes,
+            build: next.build.clone(),
+            ..self.clone()
+        }
+    }
+
     /// # Errors
     /// Rejects invalid resources, unsafe build paths and unsupported runtime contracts.
     pub fn validate(&self, design_fixture: bool) -> Result<(), ProfileError> {

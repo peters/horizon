@@ -1,13 +1,14 @@
 use super::super::super::{
     Runtime,
     rebuild::{
-        Attempt,
+        Attempt, Preview,
         tests::{Phase, deployment},
     },
 };
 use super::super::runtime_actions;
 use super::*;
 use crate::test_egui::DiscardTextures;
+use horizon_core::cloud_runtime::deployment::replacement::Plan;
 use horizon_core::cloud_runtime::{Cancellation, Event, progress::Progress, state::Deployment};
 use std::{
     path::Path,
@@ -24,6 +25,15 @@ fn runtime(state: Deployment) -> Runtime {
 
 fn ready(build: bool, phase: Phase) -> Runtime {
     runtime(deployment(Path::new("/synthetic"), build, phase))
+}
+
+/// The confirmation once the latest commit was read: a plan with `changes`, or `refused`.
+fn read(runtime: &Runtime, changes: &[&str], refused: Option<&str>) -> Confirmation {
+    let plan = Plan {
+        profile: runtime.state.as_ref().unwrap().profile.clone(),
+        changes: changes.iter().map(|change| (*change).to_owned()).collect(),
+    };
+    Confirmation::Rebuild(Preview::of(refused.map_or(Ok(plan), |reason| Err(reason.to_owned()))))
 }
 
 /// One drawer surface: Manage's actions, or the Access section of Connections.
@@ -164,8 +174,15 @@ fn rebuild_is_offered_only_on_a_ready_bound_cloud_with_a_recipe_and_nothing_pend
 fn rebuild_confirmation_names_its_consequences_before_starting() {
     let ctx = egui::Context::default();
     let mut runtime = ready(true, Phase::None);
-    assert!(click(&ctx, &mut runtime, OFFER).is_none());
-    assert!(runtime.confirmation == Confirmation::Rebuild);
+    assert!(matches!(click(&ctx, &mut runtime, OFFER), Some(Action::PreviewRebuild)));
+    assert!(matches!(runtime.confirmation, Confirmation::Rebuild(_)));
+    // Nothing can start until the latest commit is read.
+    let reading = texts(&ctx, &mut runtime);
+    assert!(has(&reading, READING), "{reading:?}");
+    assert!(!has(&reading, "Rebuild and restart"));
+    assert!(has(&reading, "Keep current image"));
+
+    runtime.confirmation = read(&runtime, &["Adds agent codex", "Idle stop off → 30 min"], None);
     let confirming = texts(&ctx, &mut runtime);
     let text = confirming
         .iter()
@@ -178,17 +195,36 @@ fn rebuild_confirmation_names_its_consequences_before_starting() {
         "Running agent processes restart",
         "Files under /workspace, including worktrees and agent logins, are kept",
         "Uncommitted changes are not used",
-        "cannot change the cloud's size or capabilities",
+        "takes the committed agents, browsers, desktop, readiness timeout, idle stop and build settings",
+        "its size, storage, GPU and image repository stay",
     ] {
         assert!(text.contains(consequence), "{consequence}");
     }
+    for line in [CHANGES, "• Adds agent codex", "• Idle stop off → 30 min"] {
+        assert!(has(&confirming, line), "{line}: {confirming:?}");
+    }
     assert!(!has(&confirming, OFFER));
+    assert!(!has(&confirming, SAME_SETTINGS));
+
+    runtime.confirmation = read(&runtime, &[], None);
+    let unchanged = texts(&ctx, &mut runtime);
+    assert!(has(&unchanged, SAME_SETTINGS));
+    assert!(!has(&unchanged, CHANGES));
+
+    // A refused commit shows why, and the rebuild cannot start.
+    runtime.confirmation = read(&runtime, &[], Some("differs from its worker in gpu."));
+    let refused = texts(&ctx, &mut runtime);
+    assert!(
+        has(&refused, "Rebuild refused: differs from its worker in gpu."),
+        "{refused:?}"
+    );
+    assert!(!has(&refused, "Rebuild and restart"));
 
     assert!(click(&ctx, &mut runtime, "Keep current image").is_none());
     assert!(runtime.confirmation == Confirmation::None);
     assert!(has(&texts(&ctx, &mut runtime), OFFER));
 
-    runtime.confirmation = Confirmation::Rebuild;
+    runtime.confirmation = read(&runtime, &["Adds agent codex"], None);
     assert!(matches!(
         click(&ctx, &mut runtime, "Rebuild and restart"),
         Some(Action::Rebuild)
@@ -208,7 +244,8 @@ fn on_base() -> Runtime {
 fn a_quick_start_cloud_is_offered_a_restart_on_the_pinned_base_image() {
     let ctx = egui::Context::default();
     let mut runtime = on_base();
-    assert!(click(&ctx, &mut runtime, OFFER).is_none());
+    assert!(matches!(click(&ctx, &mut runtime, OFFER), Some(Action::PreviewRebuild)));
+    runtime.confirmation = read(&runtime, &[], None);
     let confirming = texts(&ctx, &mut runtime);
     let text = confirming
         .iter()
@@ -451,7 +488,7 @@ fn hetzner(build: bool, phase: Phase) -> Runtime {
 fn a_new_server_rebuild_says_that_the_server_is_replaced() {
     let ctx = egui::Context::default();
     let mut runtime = hetzner(true, Phase::None);
-    runtime.confirmation = Confirmation::Rebuild;
+    runtime.confirmation = read(&runtime, &[], None);
     assert!(has(&texts(&ctx, &mut runtime), &format!("{CONFIRMATION}{NEW_SERVER}")));
 
     let mut runtime = hetzner(true, Phase::Requested);

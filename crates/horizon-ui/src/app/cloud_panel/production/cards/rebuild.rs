@@ -25,7 +25,10 @@ const STAGES: [Stage; 7] = [
     Stage::Ready,
 ];
 
-const CONFIRMATION: &str = "Rebuild the image from the latest committed .horizon recipe with the newest agent CLIs, then restart the worker on it? Running agent processes restart. Files under /workspace, including worktrees and agent logins, are kept. Uncommitted changes are not used, and this cannot change the cloud's size or capabilities.";
+const CONFIRMATION: &str = "Rebuild the image from the latest committed .horizon recipe with the newest agent CLIs, then restart the worker on it? Running agent processes restart. Files under /workspace, including worktrees and agent logins, are kept. Uncommitted changes are not used. The cloud takes the committed agents, browsers, desktop, readiness timeout, idle stop and build settings; its size, storage, GPU and image repository stay.";
+const READING: &str = "Reading the latest committed .horizon/cloud.yml…";
+const CHANGES: &str = "The latest commit changes this cloud's settings:";
+const SAME_SETTINGS: &str = "The cloud's settings stay as they are.";
 /// For a cloud on the public base image, such as a quick-start cloud: no recipe, no build.
 const CONFIRMATION_BASE: &str = "Restart the worker on the base image that this Horizon version pins? Nothing is built, and an image that is already the pin restarts nothing. Running agent processes restart. Files under /workspace, including worktrees and agent logins, are kept, and this cannot change the cloud's size or capabilities.";
 const OFFER: &str = "Rebuild this cloud's image from its committed recipe and restart the worker on it.";
@@ -226,7 +229,8 @@ pub(super) fn offer(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> 
     } else {
         (OFFER, CONFIRMATION)
     };
-    if runtime.confirmation != Confirmation::Rebuild {
+    let new_server = new_server(runtime);
+    let Confirmation::Rebuild(preview) = &mut runtime.confirmation else {
         let detail = if on_public_base(runtime) {
             "Move to the current base image and restart; the workspace stays."
         } else {
@@ -240,22 +244,50 @@ pub(super) fn offer(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> 
             .on_hover_text(offer)
             .clicked()
         }) {
-            runtime.confirmation = Confirmation::Rebuild;
+            // The confirmation shows what the latest commit changes once it is read.
+            runtime.confirmation = Confirmation::Rebuild(Box::default());
+            return Some(Action::PreviewRebuild);
         }
         return None;
-    }
-    if new_server(runtime) {
-        ui.label(format!("{confirmation}{NEW_SERVER}"));
-    } else {
-        ui.label(confirmation);
-    }
-    if ui.add(danger_button("Rebuild and restart")).clicked() {
-        return Some(Action::Rebuild);
+    };
+    match preview.read() {
+        None => {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(READING);
+            });
+        }
+        Some(Err(reason)) => {
+            ui.colored_label(egui::Color32::LIGHT_RED, format!("Rebuild refused: {reason}"));
+        }
+        Some(Ok(plan)) => {
+            if new_server {
+                ui.label(format!("{confirmation}{NEW_SERVER}"));
+            } else {
+                ui.label(confirmation);
+            }
+            changes(ui, &plan.changes);
+            if ui.add(danger_button("Rebuild and restart")).clicked() {
+                return Some(Action::Rebuild);
+            }
+        }
     }
     if ui.add(action_button("Keep current image")).clicked() {
         runtime.confirmation = Confirmation::None;
     }
     None
+}
+
+/// The changes a rebuild makes to the cloud's settings, one per line.
+fn changes(ui: &mut egui::Ui, changes: &[String]) {
+    if changes.is_empty() {
+        ui.label(RichText::new(SAME_SETTINGS).color(theme::FG_DIM()));
+        return;
+    }
+    ui.label(RichText::new(CHANGES).strong());
+    for change in changes {
+        ui.label(format!("• {change}"));
+    }
 }
 
 /// Stop acts on the worker as recorded, so it waits for a pending replacement.

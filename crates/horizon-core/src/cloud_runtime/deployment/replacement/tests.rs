@@ -1,16 +1,17 @@
-use super::*;
+use super::{sessions::RELAUNCH_STATUS, *};
 use crate::cloud_runtime::{siblings::SiblingError, state::REPLACEMENT_PENDING};
-use horizon_cloud::Reason;
+use horizon_cloud::{CloudConfig, Reason};
 use serde_json::json;
 use std::{
     cell::{Cell, RefCell},
     collections::VecDeque,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 mod committed_profile;
 mod new_server;
 mod quick_start;
+mod settings_change;
 mod storage_choice;
 
 const CRASH: &str = "simulated crash";
@@ -223,7 +224,7 @@ impl Recipe for Script {
         Ok(self.head.clone())
     }
 
-    fn siblings(&self, state: &Deployment, config: &CloudConfig) -> Result<Vec<String>> {
+    fn siblings(&self, state: &Deployment, config: &CloudConfig, _profile: &Profile) -> Result<Vec<String>> {
         assert!(state.siblings.is_some());
         assert_eq!(
             Some(&config.profiles),

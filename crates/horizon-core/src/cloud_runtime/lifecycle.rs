@@ -334,7 +334,8 @@ mod tests {
             settings.clone(),
         );
         // A Hetzner rebuild runs on a new server; this profile has no recipe to rebuild.
-        let error = super::super::deployment::replacement::rebuild(&request, "cpu", &cancel, &|_| {}).unwrap_err();
+        let error =
+            super::super::deployment::replacement::rebuild(&request, "cpu", None, &cancel, &|_| {}).unwrap_err();
         assert_eq!(
             error.to_string(),
             "This cloud's profile has no build section and does not run the public base image, so there is no recipe to rebuild its image from"

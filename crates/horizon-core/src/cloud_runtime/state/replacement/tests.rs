@@ -270,3 +270,42 @@ fn pending_replacements_refuse_actions_that_assume_the_recorded_image() {
         matches!(requested.refuse_unsettled_replacement(), Err(Error::Invalid(message)) if message == REPLACEMENT_PENDING)
     );
 }
+
+#[test]
+fn a_journaled_profile_changes_only_the_rebuild_settings_and_binds_on_commit() {
+    let (mut state, _) = begun();
+    let bound = state.profile.clone();
+    let encoded = serde_json::to_value(&state).unwrap();
+    assert!(
+        encoded["image_replacement"].get("profile").is_none(),
+        "unchanged settings are omitted"
+    );
+    // The bound profile itself is no change.
+    state.replacement_changes_profile(bound.clone()).unwrap();
+    assert_eq!(state.image_replacement.as_ref().unwrap().profile, None);
+    let mut next = bound.clone();
+    next.idle_stop_minutes = Some(30);
+    next.capabilities.desktop = !next.capabilities.desktop;
+    let mut moved = next.clone();
+    moved.storage.volume_gb += 1;
+    let before = state.clone();
+    assert!(state.replacement_changes_profile(moved).is_err());
+    assert_eq!(state.image_replacement, before.image_replacement);
+    state.replacement_changes_profile(next.clone()).unwrap();
+    assert_eq!(state.replacement_profile(), &next);
+    assert_eq!(state.profile, bound, "bound only once the replacement commits");
+    // A loaded journal is checked the same way.
+    let mut tampered = state.clone();
+    tampered.image_replacement.as_mut().unwrap().profile = Some(Box::new(bound.clone()));
+    assert!(tampered.replacement_worker().is_err());
+    state.replacement_built(image('b')).unwrap();
+    assert!(
+        state.replacement_changes_profile(bound).is_err(),
+        "only before the build"
+    );
+    state.request_replacement().unwrap();
+    assert_eq!(state.replacement_worker().unwrap().unwrap().profile, next);
+    state.commit_replacement().unwrap();
+    assert_eq!(state.profile, next);
+    assert_eq!(state.spec.unwrap().profile, next);
+}

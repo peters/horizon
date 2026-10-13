@@ -14,8 +14,15 @@ fn legacy_markers_accept_only_the_original_effective_capabilities() {
 #[test]
 fn session_restart_is_reported_only_by_its_exact_marker_and_never_required() {
     let current = "horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n";
-    assert_eq!(WorkerContract::reported(current), WorkerContract::default());
+    assert_eq!(
+        WorkerContract::reported(current),
+        WorkerContract {
+            capabilities: true,
+            ..WorkerContract::default()
+        }
+    );
     assert!(!WorkerContract::reported(current).session_restart);
+    assert!(!WorkerContract::reported("horizon-worker-contract=1\nhorizon-source-contract=1\n").capabilities);
     assert!(validate(current, &Capabilities::default(), false, false).is_ok());
     let restartable = format!("{current}{SESSION_RESTART_MARKER}\n");
     assert!(WorkerContract::reported(&restartable).session_restart);

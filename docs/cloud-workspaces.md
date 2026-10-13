@@ -1547,11 +1547,36 @@ example to pick up newer agent CLIs or a committed change to its `.horizon`
 recipe. Horizon resolves the repository's latest committed `HEAD` (uncommitted
 changes are not used) and reads `.horizon/cloud.yml` there.
 
-Horizon refuses the rebuild when the cloud's profile is missing in that file. It
-also refuses when the profile is different from the profile of the cloud's worker.
-The refusal names the different field, for example `gpu`, `capabilities`, `image`,
-the `build` section or `bootstrap`. A rebuild cannot change these fields on a
-running worker.
+Horizon refuses the rebuild when the cloud's profile is missing in that file.
+
+A rebuild can change these settings of the cloud. The cloud gets the committed
+values:
+
+- `capabilities`: the agents, the browsers, the desktop and `agent_approvals`. For
+  example, you can add the agent `codex` to a cloud that has only `claude`.
+- `bootstrap.readiness_seconds`, the readiness timeout.
+- `idle_stop_minutes`.
+- The `build` section: `context`, `dockerfile` and `platform`.
+
+Horizon refuses the rebuild when the profile is different from the profile of the
+cloud's worker in another field. The refusal names the field. A running worker cannot
+change these fields:
+
+- `gpu`, the `cpu` and `memory_gb` of a GPU cloud, `min_cuda_version` and
+  `min_gpu_memory_gb`. The worker keeps its GPU host.
+- `image`. The rebuild pushes to the image repository of the worker, and the worker
+  pulls with its own pull binding.
+- `capabilities.browserstack`. The hosted devices are set when the worker is created.
+- `bootstrap.contract_version`. The worker keeps its bootstrap contract. Version 1 is
+  the only version that a profile can name now.
+- A missing `build` section. Then there is no recipe to rebuild.
+
+Horizon also refuses a profile with values that no profile can have, for example
+`idle_stop_minutes` together with hosted devices. For each change, the rebuild output
+shows a line that starts with `Profile change:`, for example `Profile change: Adds
+agent codex`. Before Horizon builds, it checks the API key file of each agent in the
+new profile, as each deployment does. Thus an added agent with an unusable key file
+stops the rebuild before the worker changes.
 
 Some differences are not a change. When you create the cloud, you choose these
 values in **New cloud**:
@@ -1567,8 +1592,11 @@ cloud on its provider, its size and its storage. A workspace that grew after
 creation is not a change either.
 
 For a profile with a build section, Horizon builds the recipe with the newest agent CLIs
-under a new tag. It then validates the worker contract, pushes the image and verifies
-the worker's pull binding. An unchanged image digest is reported, and nothing restarts.
+under a new tag. The build uses the new capabilities, and the worker contract check
+uses them too, so the image must contain each added agent. The image gets the label
+`io.horizon.worker.settings` with the rebuild settings. Thus a change of the settings
+always gives a new image. Horizon then pushes the image and verifies the worker's pull
+binding. An unchanged image digest is reported, and nothing restarts.
 A profile without a build section has no recipe to rebuild. The next paragraph tells
 the only exception.
 
@@ -1601,9 +1629,18 @@ cloud instead releases its server and starts a new one, with a new server ID and
 address, on the same workspace volume; see
 [Hetzner](cloud-hetzner.md#rebuilding-the-image). On either provider `/workspace`
 (worktrees, agent logins, SSH host keys) survives; the container disk is reset and
-running processes end. After readiness, Horizon relaunches each session's process
-in its existing worktree without resetting it. Images without the relaunch
-contract report those sessions lost, as Stop and Resume do.
+running processes end. The worker gets the new capabilities and idle stop in its
+environment: the pod update sends them on RunPod, and the new server gets them on
+Hetzner. The cloud's profile changes only when the worker runs the new image. Until
+then, and after a cancelled rebuild, the cloud keeps its previous profile. After
+readiness, Horizon gives the credentials of each added agent to the worker, as for a
+new cloud, and relaunches each session's process in its existing worktree without
+resetting it. Images without the relaunch contract report those sessions lost, as
+Stop and Resume do. A session of an agent that the rebuild removed does not relaunch.
+The output reports it, for example `Session panel-1 (codex): this cloud's profile no
+longer has agent codex, so its process was not relaunched`. The cloud keeps the record
+of the session. If a later rebuild adds the agent again, the session relaunches in its
+worktree.
 
 The replacement is journaled in the deployment record before each provider
 mutation, and older Horizon versions cannot read the record while the update may
@@ -1616,7 +1653,14 @@ stays available throughout.
 
 On the runtime card of a Ready cloud, **Rebuild image & restart…** asks for
 confirmation and names these consequences first. The card shows it if the profile
-has a build section or runs the base image. For a cloud on the base image, **Build
+has a build section or runs the base image. The confirmation reads the latest commit
+first. Then it lists each change of the cloud's settings, for example `Adds agent
+codex`, `Removes browser firefox` or `Readiness timeout 1800 s → 3600 s`, or it tells
+that the settings stay. If Horizon refuses the commit, the confirmation shows the
+reason and does not start the rebuild. If the latest commit changes the settings again
+after you confirm, Horizon refuses the rebuild, and you must confirm again. The
+`cloud_deploy plan-rebuild SETTINGS STATE_ROOT PROFILE` harness command prints the
+same list. For a cloud on the base image, **Build
 locally** and **Push image** show as skipped. While it runs, the card lists the rebuild's steps with their durations and
 offers **Cancel rebuild** only until the image switch is requested. A rebuild
 cancelled while its committed recipe is read leaves nothing pending, and the card

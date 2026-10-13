@@ -37,7 +37,7 @@ fn run() -> cloud_runtime::Result<()> {
     }
     if args.len() < 3 {
         return Err(cloud_runtime::Error::Invalid(
-            "Usage: cloud_deploy offers SETTINGS [REQUIREMENTS_JSON] | deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--quick-start] [--worker-choice OFFER_JSON_FILE] [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|resume|reconnect|endpoint|delete|idle-check|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | rebuild SETTINGS STATE_ROOT PROFILE | reconcile SETTINGS STATE_ROOT [WORKER_ID]. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume. --quick-start uses the built-in quick-start profile on the public base image for a commit without .horizon/cloud.yml.",
+            "Usage: cloud_deploy offers SETTINGS [REQUIREMENTS_JSON] | deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--quick-start] [--worker-choice OFFER_JSON_FILE] [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|resume|reconnect|endpoint|delete|idle-check|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | plan-rebuild|rebuild SETTINGS STATE_ROOT PROFILE | reconcile SETTINGS STATE_ROOT [WORKER_ID]. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume. --quick-start uses the built-in quick-start profile on the public base image for a commit without .horizon/cloud.yml.",
         ));
     }
     let settings = Settings::load(&PathBuf::from(&args[1]))?;
@@ -75,7 +75,10 @@ fn run() -> cloud_runtime::Result<()> {
     if args[0] == "endpoint" && args.len() == 3 {
         return endpoint(&PathBuf::from(&args[2]), &settings, &cancel);
     }
-    if matches!(args[0].as_str(), "rebuild" | "continue-rebuild" | "cancel-rebuild") {
+    if matches!(
+        args[0].as_str(),
+        "plan-rebuild" | "rebuild" | "continue-rebuild" | "cancel-rebuild"
+    ) {
         return rebuild(&args, settings, &cancel);
     }
     let (args, worker_choice) = choice::arguments(&args)?;
@@ -282,12 +285,23 @@ fn print_event(event: Event) {
     }
 }
 
-/// Rebuilds, continues or cancels an image replacement of the cloud saved under `STATE_ROOT`.
+/// Lists what a rebuild would change, or rebuilds, continues or cancels an image
+/// replacement of the cloud saved under `STATE_ROOT`.
 fn rebuild(args: &[String], settings: Settings, cancel: &Cancellation) -> cloud_runtime::Result<()> {
     let root = PathBuf::from(&args[2]);
     let state = Store::lock(&root)?
         .load()?
         .ok_or(cloud_runtime::Error::Invalid("No cloud deployment"))?;
+    if let ("plan-rebuild", Some(profile), 4) = (args[0].as_str(), args.get(3), args.len()) {
+        let plan = replacement::plan(&state.repository, &state.profile, profile, cancel)?;
+        if plan.changes.is_empty() {
+            println!("The rebuild keeps this cloud's settings");
+        }
+        for change in plan.changes {
+            println!("{}{change}", replacement::PROFILE_CHANGE);
+        }
+        return Ok(());
+    }
     let request = deployment::Request::new(
         state.cloud_id,
         state.repository,
@@ -297,7 +311,9 @@ fn rebuild(args: &[String], settings: Settings, cancel: &Cancellation) -> cloud_
         settings,
     );
     match (args[0].as_str(), args.get(3)) {
-        ("rebuild", Some(profile)) if args.len() == 4 => replacement::rebuild(&request, profile, cancel, &print_event),
+        ("rebuild", Some(profile)) if args.len() == 4 => {
+            replacement::rebuild(&request, profile, None, cancel, &print_event)
+        }
         ("continue-rebuild", None) => replacement::continue_replacement(&request, cancel, &print_event),
         ("cancel-rebuild", None) => replacement::cancel_replacement(&request, cancel, &print_event),
         _ => Err(cloud_runtime::Error::Invalid("Invalid rebuild arguments")),

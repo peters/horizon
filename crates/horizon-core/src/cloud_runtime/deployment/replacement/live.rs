@@ -296,6 +296,8 @@ impl Steps for Live<'_> {
         }
         let root = tempfile::tempdir_in(self.store.root())?;
         let source = repository::snapshot(&state.repository, revision, root.path(), &self.runner)?;
+        // Built and checked for the profile the cloud binds once the worker switches.
+        let profile = state.replacement_profile();
         let digest = {
             let registry = self.registry.borrow();
             if state.siblings.is_some() {
@@ -303,9 +305,13 @@ impl Steps for Live<'_> {
                 let layers = root.path().join("siblings");
                 std::fs::create_dir(&layers)?;
                 let images = self.images(registry.as_ref(), true);
-                image::build_layered(self.request, &images, state, siblings, &source, &layers, tag)?
+                let bound = Deployment {
+                    profile: profile.clone(),
+                    ..state.clone()
+                };
+                image::build_layered(self.request, &images, &bound, siblings, &source, &layers, tag)?
             } else {
-                self.single(registry.as_ref(), state, &state.profile, &source, tag)?
+                self.single(registry.as_ref(), state, profile, &source, tag)?
             }
         };
         self.register(state, digest)
@@ -326,7 +332,7 @@ impl Steps for Live<'_> {
         }
         let registry = self.registry.borrow();
         self.images(registry.as_ref(), false)
-            .unpacked_bytes(&state.profile, tag, digest)
+            .unpacked_bytes(state.replacement_profile(), tag, digest)
             .map(Some)
     }
 
@@ -358,11 +364,11 @@ impl Recipe for Runner<'_> {
         Ok(Head { revision, config })
     }
 
-    fn siblings(&self, state: &Deployment, config: &CloudConfig) -> Result<Vec<String>> {
+    fn siblings(&self, state: &Deployment, config: &CloudConfig, profile: &Profile) -> Result<Vec<String>> {
         let set = state
             .siblings
             .as_ref()
             .ok_or(Error::Invalid("This cloud has no same-worker siblings"))?;
-        siblings::latest(set, &state.repository, config, &state.profile, self)
+        siblings::latest(set, &state.repository, config, profile, self)
     }
 }

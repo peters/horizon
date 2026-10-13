@@ -56,6 +56,9 @@ impl SelfStop {
 pub struct WorkerContract {
     /// Tagged root-only enrollment checked before unprivileged agent sessions start.
     pub tailnet: bool,
+    /// The image checks the capabilities the profile selects, so it refuses to start an
+    /// agent that the profile does not have.
+    pub capabilities: bool,
     /// The image sets a stable device name from the cloud ID.
     pub tailnet_stable_name: bool,
     /// `horizon-worker-session --relaunch` can replace a session process lost in a
@@ -84,6 +87,7 @@ impl WorkerContract {
             tailnet: reports(output, TAGGED_TAILNET_MARKER),
             tailnet_stable_name: reports(output, "horizon-tailnet-contract=2")
                 || reports(output, TAGGED_TAILNET_MARKER),
+            capabilities: reports(output, CAPABILITIES_MARKER),
             session_restart: reports(output, SESSION_RESTART_MARKER),
             container_started: output
                 .lines()

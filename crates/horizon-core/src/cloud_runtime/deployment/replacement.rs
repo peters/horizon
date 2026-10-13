@@ -1,6 +1,8 @@
 //! Rebuilds a dedicated cloud's image from its latest committed recipe and switches the
-//! bound worker to it. A cloud on the public base image without a recipe, such as a
-//! quick-start cloud, switches to the base image this Horizon version pins instead.
+//! bound worker to it, binding the committed profile's rebuild settings with it
+//! (`Profile::with_rebuild_settings`). A cloud on the public base image without a
+//! recipe, such as a quick-start cloud, switches to the base image this Horizon version
+//! pins instead.
 //! Each provider mutation is journaled first (`ImageReplacement`), and
 //! the steps outside the record sit behind `Steps` so every persistence boundary is
 //! tested offline. Only dedicated clouds have a `deployment.json` record; a migrated
@@ -8,6 +10,8 @@
 mod compatibility;
 mod live;
 mod new_server;
+mod recipes;
+mod sessions;
 #[cfg(all(test, unix))]
 mod tests;
 
@@ -17,30 +21,31 @@ use super::{
         progress::Progress,
         state::{Deployment, ImageReplacement, OperationId, ReplacementImage, ReplacementPhase, Session},
     },
-    Error, Event, Request, Result, Stage, Store,
+    Error, Event, Request, Result, Settings, Stage, Store,
 };
 use crate::cloud_runtime::{command::Runner, repository::launch::quick_start};
 use horizon_cloud::{
-    Cancellation, CloudConfig, CloudError, CreateState, Profile, WorkerSpec,
+    Cancellation, CloudError, CreateState, Profile, WorkerSpec,
     provider::{Description, Rebuild},
     runpod::{
         RunPod,
         replacement::{Observed, may_have_applied},
     },
 };
-use std::{
-    path::Path,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
+
+use recipes::{Head, Recipe, Recipes, committed_recipes, report_changes};
+pub use recipes::{PROFILE_CHANGE, Plan, plan};
+pub(super) use sessions::relaunch_sessions;
 
 const NOTHING_PENDING: &str = "No image replacement is pending";
 const NOT_READY: &str = "Only a ready, running cloud without a pending replacement can rebuild its image";
 const NO_RECIPE: &str = "This cloud's profile has no build section and does not run the public base image, so there is no recipe to rebuild its image from";
-const COMMITTED_BASE: &str = "This cloud runs the public base image without a build section, and the latest commit has its own .horizon/cloud.yml. Only a cloud of a repository without one moves to the pinned base image; create a new cloud to use the committed settings.";
 const UNSETTLED: &str =
     "The provider has not reported the switched image yet; the replacement stays pending. Continue or cancel it.";
-const RELAUNCH_STATUS: &str = "horizon-relaunch-status=";
 const ADDS_CREDENTIAL: &str = "The rebuilt image needs a registry credential that this worker was created without, and a switch that adds one cannot be undone. Create a new cloud to use it.";
+const CONFIRMED_OTHER: &str = "The latest commit changes this cloud's settings differently from what was confirmed; review the changes and rebuild again";
+const SAME_IMAGE: &str = "The rebuilt image is the worker's current image, so the changed settings cannot reach the worker; cancel the rebuild";
 
 /// Durable writes of a replacement, where tests inject crashes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,13 +61,6 @@ enum Boundary {
     Released,
 }
 
-/// The repository's committed HEAD and its `.horizon/cloud.yml`, if readable.
-#[derive(Clone)]
-struct Head {
-    revision: String,
-    config: Option<CloudConfig>,
-}
-
 /// Provider calls of a replacement.
 trait Provider {
     /// Sends the pod update that switches `worker_id` from `from`'s image to `to`'s.
@@ -76,22 +74,6 @@ trait Provider {
     fn checkpoint(&self, _boundary: Boundary) -> Result<()> {
         Ok(())
     }
-}
-
-/// The rest of a rebuild outside its record.
-/// Reads the repository's committed recipe; needs no credentials.
-trait Recipe {
-    fn head(&self, repository: &Path) -> Result<Head>;
-    /// The latest committed revision of each of the deployment's siblings, whose
-    /// declarations `config`, the primary's latest committed configuration, holds.
-    fn siblings(&self, state: &Deployment, config: &CloudConfig) -> Result<Vec<String>>;
-}
-
-/// The latest committed recipes a rebuild layers: the primary's and each sibling's.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Recipes {
-    revision: String,
-    siblings: Vec<String>,
 }
 
 trait Steps: Provider {
@@ -138,7 +120,11 @@ enum Driven {
 }
 
 /// Rebuilds the image from the repository's latest committed `.horizon` recipe with the
-/// newest agent CLIs, moves the worker onto it and relaunches its sessions. A provider
+/// newest agent CLIs, moves the worker onto it and relaunches its sessions. The cloud
+/// binds the committed profile's rebuild settings, which [`plan`] lists, once the worker
+/// runs the new image; sessions of an agent the profile no longer has are reported and
+/// not relaunched. With `confirmed`, the profile a person confirmed from [`plan`], a commit that
+/// binds another one is refused. A provider
 /// that rebuilds in place keeps the worker ID; one that rebuilds on a new server
 /// (`provider::Rebuild::NewServer`) releases its server and starts a new one with a new
 /// ID on the same workspace volume. `/workspace` is kept either way; the container is reset.
@@ -147,14 +133,16 @@ enum Driven {
 /// builds nothing.
 /// # Errors
 /// Refuses unless the cloud is ready with nothing pending and the committed profile named
-/// `profile_name` matches the bound one apart from the choices bound at creation, such
-/// as the provider and the storage. Refuses a built image that the worker's container
+/// `profile_name` matches the bound one apart from its rebuild settings and the choices
+/// bound at creation, such as the provider and the storage, and an added agent whose
+/// configured credential is unusable. Refuses a built image that the worker's container
 /// disk cannot hold before anything changes on the worker, and drops its unsent journal,
 /// so nothing stays pending. After any other failure once the replacement is journaled,
 /// the journal stays, so the replacement can be continued or cancelled.
 pub fn rebuild(
     request: &Request,
     profile_name: &str,
+    confirmed: Option<&Profile>,
     cancel: &Cancellation,
     emit: &dyn Fn(Event),
 ) -> Result<Deployment> {
@@ -168,6 +156,8 @@ pub fn rebuild(
         secrets: Vec::new(),
     };
     let recipes = committed_recipes(&checkout, &state, profile_name, emit)?;
+    accept(&recipes.profile, confirmed, &request.settings)?;
+    report_changes(&state.profile, &recipes.profile, emit);
     let steps = live::Live::new(request, &store, &state, true, cancel, emit)?;
     begin(&steps, &store, &mut state, recipes)?;
     let driven = drive(&steps, &store, &mut state, emit)?;
@@ -189,6 +179,7 @@ pub fn continue_replacement(request: &Request, cancel: &Cancellation, emit: &dyn
         .image_replacement
         .as_ref()
         .ok_or(Error::Invalid(NOTHING_PENDING))?;
+    report_changes(&state.profile, state.replacement_profile(), emit);
     if journal.requested() {
         // Finishing a switch needs only the provider, not the checkout or registry.
         match Description::of(&state.profile).rebuild {
@@ -230,7 +221,7 @@ pub fn cancel_replacement(request: &Request, cancel: &Cancellation, emit: &dyn F
         }
         // Reconnecting arms hosted devices again, as every reconnect does.
         drop(store);
-        return tail(request, cancel, emit);
+        return tail(request, &state.profile, cancel, emit);
     }
     match Description::of(&state.profile).rebuild {
         Rebuild::InPlace => {
@@ -245,7 +236,7 @@ pub fn cancel_replacement(request: &Request, cancel: &Cancellation, emit: &dyn F
         }
     }
     drop(store);
-    tail(request, cancel, emit)
+    tail(request, &state.profile, cancel, emit)
 }
 
 /// Settles a replacement whose provider update may have been sent, reading the provider
@@ -274,64 +265,6 @@ fn settle_with(steps: &impl Provider, store: &Store, state: &mut Deployment) -> 
         }
     }
     state.refuse_unsettled_replacement()
-}
-
-/// After a replacement reset the worker's container, relaunches each recorded session's
-/// process in its existing worktree and clears the request. A relaunch is idempotent per
-/// replacement, so a reconnect retries safely. Images without the relaunch contract
-/// report their sessions lost, as Stop and Resume do.
-/// # Errors
-/// Keeps the request when a relaunch cannot be confirmed.
-pub(super) fn relaunch_sessions(
-    store: &Store,
-    state: &mut Deployment,
-    contract: &WorkerContract,
-    emit: &dyn Fn(Event),
-    mut run: impl FnMut(&str) -> Result<String>,
-) -> Result<()> {
-    let Some(operation) = state.session_restart else {
-        return Ok(());
-    };
-    if contract.session_restart && !state.sessions.is_empty() {
-        emit(activity("Relaunching sessions in their existing worktrees"));
-    }
-    for session in &state.sessions {
-        let relaunched = contract.session_restart
-            && match relaunch_status(&run(&relaunch_command(operation, session, &state.revision)?)?) {
-                Some(0 | 5) => true,
-                Some(3 | 4) => false,
-                _ => return Err(Error::Invalid("A session could not be relaunched; reconnect to retry")),
-            };
-        if !relaunched {
-            emit(Event::Output(format!(
-                "Session {} ({}) lost its process in the container reset and was not relaunched",
-                session.panel_id, session.agent
-            )));
-        }
-    }
-    state.session_restart = None;
-    store.save(state)
-}
-
-fn relaunch_command(operation: OperationId, session: &Session, revision: &str) -> Result<String> {
-    if !horizon_cloud::valid_id(&session.panel_id)
-        || !matches!(session.agent.as_str(), "codex" | "claude" | "grok" | "shell")
-        || !super::repository::is_commit_id(revision)
-    {
-        return Err(Error::Invalid("Invalid remote session identity"));
-    }
-    Ok(format!(
-        "horizon-worker-session --relaunch {operation} {} {} {revision}; printf '\\n{RELAUNCH_STATUS}%s\\n' \"$?\"",
-        session.panel_id, session.agent
-    ))
-}
-
-fn relaunch_status(output: &str) -> Option<i32> {
-    output
-        .lines()
-        .rev()
-        .find_map(|line| line.strip_prefix(RELAUNCH_STATUS))
-        .and_then(|status| status.parse().ok())
 }
 
 fn open(request: &Request) -> Result<(Store, Deployment)> {
@@ -384,49 +317,18 @@ fn ready(state: &Deployment) -> Result<()> {
     Ok(())
 }
 
-/// The committed recipes to rebuild, once the profile named `profile_name` matches the
-/// bound one ([`compatibility::unchanged`]): the primary's latest commit and each
-/// sibling's. A cloud on the public base image has no recipe; while the latest commit has
-/// no `.horizon/cloud.yml`, as for quick start, its image is the pin of this Horizon
-/// version. Committed settings are never passed over: with them such a cloud is refused.
-fn committed_recipes(
-    recipe: &impl Recipe,
-    state: &Deployment,
-    profile_name: &str,
-    emit: &dyn Fn(Event),
-) -> Result<Recipes> {
-    emit(activity("Reading the latest committed recipe"));
-    let head = recipe.head(&state.repository)?;
-    if quick_start::on_public_base(&state.profile) {
-        if head.config.is_some() {
-            return Err(Error::Invalid(COMMITTED_BASE));
-        }
-        emit(activity("Using the base image that this Horizon version pins"));
-        return Ok(Recipes {
-            revision: head.revision,
-            siblings: Vec::new(),
-        });
+/// Refuses to bind `next` when a person `confirmed` another profile, or when an agent it
+/// adds has a configured credential that is unusable, as a new cloud's would be.
+fn accept(next: &Profile, confirmed: Option<&Profile>, settings: &Settings) -> Result<()> {
+    if confirmed.is_some_and(|confirmed| confirmed != next) {
+        return Err(Error::Invalid(CONFIRMED_OTHER));
     }
-    compatibility::unchanged(&state.profile, head.config.as_ref(), profile_name)?;
-    let (Some(set), Some(config)) = (&state.siblings, &head.config) else {
-        return Ok(Recipes {
-            revision: head.revision,
-            siblings: Vec::new(),
-        });
-    };
-    emit(activity("Reading each same-worker sibling's latest committed recipe"));
-    let siblings = recipe.siblings(state, config)?;
-    for note in set.moved(&siblings) {
-        emit(Event::Output(note));
-    }
-    Ok(Recipes {
-        revision: head.revision,
-        siblings,
-    })
+    super::validate_agent_auth(settings, &next.capabilities)
 }
 
 fn begin(steps: &impl Steps, store: &Store, state: &mut Deployment, recipes: Recipes) -> Result<()> {
     state.begin_layered_replacement(OperationId::generate(), recipes.revision, recipes.siblings)?;
+    state.replacement_changes_profile(recipes.profile)?;
     store.save(state)?;
     steps.checkpoint(Boundary::Begun)
 }
@@ -450,6 +352,11 @@ fn drive(steps: &impl Steps, store: &Store, state: &mut Deployment, emit: &dyn F
                 store.save(state)?;
                 if adds_credential {
                     return Err(Error::Invalid(ADDS_CREDENTIAL));
+                }
+                // A build labels its image with these settings (`image::settings_label`),
+                // so only a recipe without a build gives back the same image.
+                if journal.profile.is_some() {
+                    return Err(Error::Invalid(SAME_IMAGE));
                 }
                 return Ok(Driven::Unchanged);
             }
@@ -658,13 +565,16 @@ fn finish(
             return Ok(state);
         }
     }
-    tail(request, cancel, emit)
+    tail(request, &state.profile, cancel, emit)
 }
 
 /// Reconnects through the ordinary deployment path, which verifies the recorded image
-/// strictly, waits for readiness and relaunches the sessions.
-fn tail(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) -> Result<Deployment> {
-    super::deploy(request, cancel, &|event| {
+/// strictly, waits for readiness and relaunches the sessions. The request binds
+/// `profile`, the recorded one, which a committed replacement may have changed.
+fn tail(request: &Request, profile: &Profile, cancel: &Cancellation, emit: &dyn Fn(Event)) -> Result<Deployment> {
+    let mut request = request.clone();
+    request.profile.clone_from(profile);
+    super::deploy(&request, cancel, &|event| {
         if !matches!(event, Event::Stage(Stage::Validate, _)) {
             emit(event);
         }

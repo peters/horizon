@@ -1,5 +1,6 @@
 use super::*;
 use crate::app::test_support::test_app;
+use horizon_core::cloud_runtime::deployment::replacement::Plan;
 use horizon_core::{
     cloud_panel::{CloudConfig, CloudGroup, CloudLaunch},
     cloud_runtime::state::{Deployment, OperationId, ReplacementImage, ReplacementPhase, Store},
@@ -168,11 +169,16 @@ fn seed_built_cloud(app: &mut HorizonApp, root: &Path) -> std::path::PathBuf {
 fn run_action<'a>(app: &'a mut HorizonApp, ctx: &egui::Context, action: Action) -> &'a Runtime {
     let watch = cloud_runtime::Cancellation::default();
     let (_watch_sender, watch_receiver) = channel();
+    // The rebuild starts with the settings its person confirmed: the cloud's own here.
+    let profile = app.cloud_prototype.groups.0[0].remote.as_ref().unwrap().profile.clone();
     let runtime = app.cloud_prototype.production.runtimes.entry(1).or_default();
     runtime.stage = Some(Stage::Ready);
     runtime.receiver = Some(watch_receiver);
     runtime.cancel = Some(watch.clone());
-    runtime.confirmation = Confirmation::Rebuild;
+    runtime.confirmation = Confirmation::Rebuild(Preview::of(Ok(Plan {
+        profile,
+        changes: Vec::new(),
+    })));
     runtime.error = Some("Earlier failure".into());
     app.change_production_worker(1, action, ctx);
     assert!(watch.is_cancelled(), "the presentation watch stops first");
@@ -342,4 +348,100 @@ fn a_busy_cloud_does_not_start_a_rebuild() {
     assert!(runtime.rebuild.is_none());
     assert_eq!(runtime.stage, Some(Stage::Provision));
     assert!(runtime.error.is_none(), "settings are not read for a refused start");
+}
+
+fn git(path: &Path, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["-c", "user.name=Test", "-c", "user.email=test@example.invalid"])
+        .args(args)
+        .status()
+        .unwrap();
+    assert!(status.success(), "git {args:?}");
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "cloud control requires durable directory updates, which are Unix-only"
+)]
+fn the_confirmation_reads_what_the_latest_commit_changes_and_only_a_confirmed_rebuild_starts() {
+    let (temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    app.prepare_production_clouds(&ctx);
+    let repository = temp.path().join("repository");
+    std::fs::create_dir_all(repository.join(".horizon")).unwrap();
+    git(&repository, &["init", "--quiet"]);
+    let committed = format!("{CONFIG}    capabilities:\n      agents: [codex]\n    idle_stop_minutes: 30\n");
+    std::fs::write(repository.join(".horizon/cloud.yml"), committed).unwrap();
+    git(&repository, &["add", "."]);
+    git(&repository, &["commit", "--quiet", "-m", "Codex only"]);
+    seed_built_cloud(&mut app, temp.path());
+    let runtime = app.cloud_prototype.production.runtimes.entry(1).or_default();
+    runtime.stage = Some(Stage::Ready);
+    runtime.state = Some(deployment(&repository, true, Phase::None));
+    // Without a confirmed plan a rebuild does not start.
+    app.change_production_worker(1, Action::Rebuild, &ctx);
+    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    assert!(runtime.rebuild.is_none() && runtime.receiver.is_none());
+
+    let runtime = app.cloud_prototype.production.runtimes.get_mut(&1).unwrap();
+    runtime.confirmation = Confirmation::Rebuild(Box::default());
+    app.change_production_worker(1, Action::PreviewRebuild, &ctx);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let plan = loop {
+        let runtime = app.cloud_prototype.production.runtimes.get_mut(&1).unwrap();
+        let Confirmation::Rebuild(preview) = &mut runtime.confirmation else {
+            panic!("the confirmation stays open");
+        };
+        if let Some(read) = preview.read() {
+            break read.clone().unwrap();
+        }
+        assert!(Instant::now() < deadline, "the latest commit must be read");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(
+        plan.changes,
+        [
+            "Removes agent claude",
+            "Removes agent grok",
+            "Removes browser chromium",
+            "Removes the desktop",
+            "Idle stop off → 30 min",
+        ]
+    );
+    assert_eq!(plan.profile.idle_stop_minutes, Some(30));
+    assert!(
+        app.cloud_prototype.production.runtimes[&1].rebuild.is_none(),
+        "reading starts nothing"
+    );
+}
+
+#[test]
+fn the_saved_profile_follows_the_settings_a_rebuild_bound() {
+    let (temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    app.prepare_production_clouds(&ctx);
+    seed_built_cloud(&mut app, temp.path());
+    let saved = app.cloud_prototype.groups.0[0].remote.as_ref().unwrap().profile.clone();
+    let mut bound = saved.clone();
+    bound.capabilities.agents.pop_first();
+    bound.idle_stop_minutes = Some(30);
+    bound.bootstrap.readiness_seconds = 1800;
+    let mut state = deployment(temp.path(), true, Phase::None);
+    state.profile = bound.clone();
+    app.cloud_prototype.production.runtimes.entry(1).or_default().state = Some(state);
+    app.sync_bound_profiles();
+    assert_eq!(app.cloud_prototype.groups.0[0].remote.as_ref().unwrap().profile, bound);
+    // A Hetzner rebuild leaves no server bound until the reconnect starts the new one;
+    // the settings bind already, the saved size does not follow an unbound record.
+    bound.capabilities.agents.pop_first();
+    let runtime = app.cloud_prototype.production.runtimes.get_mut(&1).unwrap();
+    let state = runtime.state.as_mut().unwrap();
+    state.operation = horizon_core::cloud_runtime::CreateState::Prepared;
+    state.profile = bound.clone();
+    state.profile.cpu += 1;
+    app.sync_bound_profiles();
+    assert_eq!(app.cloud_prototype.groups.0[0].remote.as_ref().unwrap().profile, bound);
 }

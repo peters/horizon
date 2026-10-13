@@ -1,5 +1,6 @@
 //! The committed profile a rebuild accepts: the choices a cloud binds when it is created
-//! stay its worker's, and every other difference is refused with the field it is in.
+//! stay its worker's, the rebuild settings come from the commit, and every other
+//! difference is refused with the field it is in.
 use super::super::compatibility::{NO_CONFIG, NO_PROFILE};
 use super::*;
 
@@ -15,9 +16,9 @@ fn assert_refused(fixture: &Fixture, head: Option<CloudConfig>, reason: &str) {
 }
 
 /// An edit of the bound profile, as a commit makes it.
-type Change = fn(&mut Profile);
+pub(super) type Change = fn(&mut Profile);
 
-fn changed(bound: &Profile, change: impl FnOnce(&mut Profile)) -> CloudConfig {
+pub(super) fn changed(bound: &Profile, change: impl FnOnce(&mut Profile)) -> CloudConfig {
     let mut head = bound.clone();
     change(&mut head);
     config(&head)
@@ -37,25 +38,32 @@ fn a_changed_or_missing_committed_profile_refuses_with_its_field_before_anything
             |profile| profile.min_gpu_memory_gb = Some(24),
             "in min_cuda_version or min_gpu_memory_gb.",
         ),
-        (|profile| profile.capabilities.desktop = true, "in capabilities."),
         (|profile| profile.image = "registry.example/other".into(), "in image."),
         (
-            |profile| profile.build.as_mut().unwrap().dockerfile = "Other".into(),
-            "in its build section",
+            |profile| profile.capabilities.browserstack = Some(horizon_cloud::BrowserStack::default()),
+            "in capabilities.browserstack.",
+        ),
+        (
+            |profile| profile.bootstrap.contract_version = 2,
+            "in bootstrap.contract_version.",
+        ),
+        (|profile| profile.build = None, "has no build section"),
+        // A rebuild setting is still checked as every profile is.
+        (
+            |profile| profile.idle_stop_minutes = Some(5),
+            "idle_stop_minutes must be between 10 and 1440",
         ),
         (
             |profile| profile.build.as_mut().unwrap().platform = "linux/arm64".into(),
-            "in its build section",
+            "platform must be linux/amd64",
         ),
-        (|profile| profile.bootstrap.readiness_seconds = 900, "in bootstrap"),
-        (|profile| profile.idle_stop_minutes = Some(30), "in idle_stop_minutes."),
         // Another default provider never hides a change the worker cannot take.
         (
             |profile| {
                 profile.provider = horizon_cloud::hetzner::PROVIDER.into();
-                profile.build.as_mut().unwrap().dockerfile = "Other".into();
+                profile.image = "registry.example/other".into();
             },
-            "in its build section",
+            "in image.",
         ),
     ];
     for (change, reason) in changes {
