@@ -425,6 +425,9 @@ def cmd_build(args):
 def blockers(repo, plan):
     """Every reason the batch may not land now."""
     found = []
+    if plan.get("stopped"):
+        found.append(f"an earlier land stopped on a mismatch ({plan['stopped']}): check "
+                     "main, then build again")
     _passed, problems = ci_on(repo, plan["tip"])
     found += [f"CI on the batch tip: {p}" for p in problems]
     git("fetch", "-q", "origin", BASE_BRANCH, timeout=300)
@@ -449,7 +452,7 @@ def pr_blockers(repo, entry):
         found.append(f"#{entry['number']} head drifted to {pr['headRefOid'][:9]}")
     current = latest_entry(gh_pages(f"repos/{repo}/issues/{entry['number']}/comments"))
     if LABEL not in {label["name"] for label in pr["labels"]} or current is None \
-            or current["head"] != entry["head"]:
+            or any(current[k] != entry[k] for k in ("head", "subject", "body")):
         found.append(f"#{entry['number']} left the queue or was queued again")
     if pr.get("reviewDecision") == "CHANGES_REQUESTED":
         found.append(f"#{entry['number']} has a review that requests changes")
@@ -521,15 +524,18 @@ def cmd_land(args):
             raise QueueError(f"#{entry['number']} did not merge ({reason}); later PRs were not "
                              "merged. Run land again to resume.")
         print(f"#{entry['number']} merged as {commit}")
-        entry["merged"] = commit
-        plan_path().write_text(json.dumps(plan, indent=2) + "\n")
         git("fetch", "-q", "origin", BASE_BRANCH, timeout=300)
         main_now = git("rev-parse", f"origin/{BASE_BRANCH}").stdout.strip()
         if not trees_match(ROOT, commit, entry["commit"]) or main_now != commit:
+            # The batch is spoiled: no later land may continue from it.
+            plan["stopped"] = f"#{entry['number']} merged as {commit} without the tested tree"
+            plan_path().write_text(json.dumps(plan, indent=2) + "\n")
             raise QueueError(f"MISMATCH: #{entry['number']} merged as {commit}, but main is "
                              f"{main_now[:9]} or the tree is not the tested batch tree. "
                              "Another push reached main. Later PRs were not merged. Check "
                              "main CI now.")
+        entry["merged"] = commit
+        plan_path().write_text(json.dumps(plan, indent=2) + "\n")
         expected = commit
     git("push", "-q", "origin", "--delete", plan["branch"], timeout=300, check=False)
     git("update-ref", "-d", f"refs/merge-queue/{plan['branch']}", check=False)

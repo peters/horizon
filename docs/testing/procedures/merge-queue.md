@@ -89,7 +89,10 @@ main and a stopped land.
 
    Result: The script prints the pull requests that it would merge.
 
-2. Run `python3 scripts/merge-queue.py land`.
+2. > **CAUTION: THIS STEP MERGES EACH PULL REQUEST INTO MAIN AND DELETES THE
+   > BATCH BRANCH.** Do this step only for heads that have merge permission.
+
+   Run `python3 scripts/merge-queue.py land`.
 
    Result: The script prints one merge commit for each pull request, in queue
    order, then "each merge has its tested tree; batch landed". The `mq/*` branch
