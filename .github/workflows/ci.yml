@@ -8,6 +8,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Pushes to mq/* run queued PR code in a push context, so the token stays read-only.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}

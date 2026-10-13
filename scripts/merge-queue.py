@@ -432,24 +432,30 @@ def blockers(repo, plan):
     if main != landed_base(plan):
         found.append(f"main moved from {landed_base(plan)[:9]} to {main[:9]}: build again")
     for entry in plan["prs"]:
-        if entry.get("merged"):
-            continue
-        pr = pull(repo, entry["number"])
-        if pr["state"] != "OPEN" or pr["isDraft"]:
-            found.append(f"#{entry['number']} is not open and ready")
-        if pr["baseRefName"] != BASE_BRANCH:
-            found.append(f"#{entry['number']} targets {pr['baseRefName']}, not {BASE_BRANCH}")
-        if drifted(entry, pr["headRefOid"]):
-            found.append(f"#{entry['number']} head drifted to {pr['headRefOid'][:9]}")
-        current = latest_entry(gh_pages(f"repos/{repo}/issues/{entry['number']}/comments"))
-        if LABEL not in {label["name"] for label in pr["labels"]} or current is None \
-                or current["head"] != entry["head"]:
-            found.append(f"#{entry['number']} left the queue or was queued again")
-        if pr.get("reviewDecision") == "CHANGES_REQUESTED":
-            found.append(f"#{entry['number']} has a review that requests changes")
-        threads = unresolved_threads(repo, entry["number"])
-        if threads:
-            found.append(f"#{entry['number']} has {threads} unresolved review threads")
+        if not entry.get("merged"):
+            found += pr_blockers(repo, entry)
+    return found
+
+
+def pr_blockers(repo, entry):
+    """Every reason one queued PR may not merge now."""
+    found = []
+    pr = pull(repo, entry["number"])
+    if pr["state"] != "OPEN" or pr["isDraft"]:
+        found.append(f"#{entry['number']} is not open and ready")
+    if pr["baseRefName"] != BASE_BRANCH:
+        found.append(f"#{entry['number']} targets {pr['baseRefName']}, not {BASE_BRANCH}")
+    if drifted(entry, pr["headRefOid"]):
+        found.append(f"#{entry['number']} head drifted to {pr['headRefOid'][:9]}")
+    current = latest_entry(gh_pages(f"repos/{repo}/issues/{entry['number']}/comments"))
+    if LABEL not in {label["name"] for label in pr["labels"]} or current is None \
+            or current["head"] != entry["head"]:
+        found.append(f"#{entry['number']} left the queue or was queued again")
+    if pr.get("reviewDecision") == "CHANGES_REQUESTED":
+        found.append(f"#{entry['number']} has a review that requests changes")
+    threads = unresolved_threads(repo, entry["number"])
+    if threads:
+        found.append(f"#{entry['number']} has {threads} unresolved review threads")
     return found
 
 
@@ -476,6 +482,11 @@ def cmd_land(args):
     for entry in plan["prs"]:
         if entry.get("merged"):
             continue
+        # A dequeue, a review or a new thread during the batch still stops this PR.
+        found = pr_blockers(repo, entry)
+        if found:
+            raise QueueError(f"#{entry['number']} and later PRs were not merged:\n"
+                             + "\n".join(f"- {i}" for i in found))
         for attempt in range(5):
             # Each merge must land on the commit the previous one made. Another push to
             # main in between would put this PR on an untested base.
@@ -509,14 +520,16 @@ def cmd_land(args):
             reason = error.strip() or "GitHub did not merge it"
             raise QueueError(f"#{entry['number']} did not merge ({reason}); later PRs were not "
                              "merged. Run land again to resume.")
-        git("fetch", "-q", "origin", BASE_BRANCH, timeout=300)
-        if not trees_match(ROOT, commit, entry["commit"]):
-            raise QueueError(f"MISMATCH: #{entry['number']} merged as {commit}, but its tree "
-                             "is not the tested batch tree. Another merge may have landed "
-                             "first. Later PRs were not merged. Check main CI now.")
         print(f"#{entry['number']} merged as {commit}")
         entry["merged"] = commit
         plan_path().write_text(json.dumps(plan, indent=2) + "\n")
+        git("fetch", "-q", "origin", BASE_BRANCH, timeout=300)
+        main_now = git("rev-parse", f"origin/{BASE_BRANCH}").stdout.strip()
+        if not trees_match(ROOT, commit, entry["commit"]) or main_now != commit:
+            raise QueueError(f"MISMATCH: #{entry['number']} merged as {commit}, but main is "
+                             f"{main_now[:9]} or the tree is not the tested batch tree. "
+                             "Another push reached main. Later PRs were not merged. Check "
+                             "main CI now.")
         expected = commit
     git("push", "-q", "origin", "--delete", plan["branch"], timeout=300, check=False)
     git("update-ref", "-d", f"refs/merge-queue/{plan['branch']}", check=False)
