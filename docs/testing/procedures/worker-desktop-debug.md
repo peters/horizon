@@ -16,8 +16,9 @@ This procedure makes sure that `serve.py --worker-desktop` builds and starts a
 debug Horizon on the desktop of a real cloud worker. It also makes sure of
 these items:
 
-- The build does not stop the browser panels of the cloud.
-- The debug Horizon does not change `/workspace/home/.horizon`.
+- The low build priority keeps the browser panels of the cloud usable.
+- The debug Horizon writes nothing in `/workspace/home`, also not in
+  `/workspace/home/.horizon`.
 - The debug Horizon has no worker identity variables.
 - **Add desktop viewer** shows the debug Horizon, and the stop is clean.
 
@@ -25,7 +26,7 @@ these items:
 
 - Candidate: each change to `scripts/device-smoke/worker_desktop.py`,
   `scripts/device-smoke/x11_windows.py`, the `--worker-desktop` branch of
-  `serve.py` or the `HORIZON_HOME` override.
+  `serve.py`, the `HORIZON_HOME` override or `HORIZON_AGENT_INTEGRATIONS`.
 - Platforms: a Hetzner quick start cloud, watched from a client Horizon in the
   local fixture.
 - This procedure does not test: a RunPod worker, a GPU worker or a worker image
@@ -137,8 +138,10 @@ These names apply in the steps:
    cd <tree> && python3 scripts/device-smoke/serve.py --worker-desktop
    ```
 
-   Result: The build starts. The probe continues and its times stay near the
-   baseline.
+   Result: The build starts. The probe continues. Most times stay near the
+   baseline. While the build writes to the workspace volume, some actions can
+   stop for some seconds, and one or two can fail with `host coordination timed
+   out`.
 
 2. Examine the priority of the build.
 
@@ -173,13 +176,21 @@ These names apply in the steps:
    tr '\0' '\n' < /proc/<pid>/environ | cut -d= -f1 | grep -E '^(HORIZON|ANTHROPIC|WAYLAND|HOME|DISPLAY)' | sort
    ```
 
-   Result: The names are `DISPLAY`, `HOME`, `HORIZON_HOME` and
-   `HORIZON_SESSION_DIR`. No worker identity name shows.
+   Result: The names are `DISPLAY`, `HOME`, `HORIZON_AGENT_INTEGRATIONS`,
+   `HORIZON_HOME` and `HORIZON_SESSION_DIR`. No worker identity name shows.
+
+3. Examine the value of the switch.
+
+   ```sh
+   tr '\0' '\n' < /proc/<pid>/environ | grep '^HORIZON_AGENT_INTEGRATIONS='
+   ```
+
+   Result: The output is `HORIZON_AGENT_INTEGRATIONS=off`.
 
 ### 6.6 W06: Take the screenshots
 
-1. Call the MCP tool `device_screenshot` of the `horizon-device` server with the
-   target `cloud-desktop` (`/workspace/device.json`).
+1. Call the MCP tool `device_screenshot` of the `horizon-device` server in
+   `/workspace/agent-mcp.json`. Its target is `cloud-desktop`.
 
    Result: The image shows the debug Horizon window.
 
@@ -188,17 +199,20 @@ These names apply in the steps:
    Result: The viewer in the client shows the debug Horizon window. Clicks in
    the viewer do nothing, because the cloud desktop is read-only.
 
-### 6.7 W07: Make sure that the browser service's root did not change
+### 6.7 W07: Make sure that the debug Horizon wrote nothing in the home
 
-1. Look for changed files.
+1. Look for changed files in the worker home.
 
    ```sh
-   ssh -i <identity> root@<worker> 'find /workspace/home/.horizon -newermt "<started>"'
+   ssh -i <identity> root@<worker> 'find /workspace/home -newermt "<started>"'
    ```
 
-   Result: The output is empty.
+   Result: No path in the output comes from the debug Horizon: no Horizon
+   skill, plugin, lease, MCP registration or desktop entry, and no file in
+   `/workspace/home/.horizon`. Files of the Shell panels, such as the shell
+   history, can show.
 
-2. Compare the files with W02 step 4.
+2. Compare the files of `/workspace/home/.horizon` with W02 step 4.
 
    Result: The list and the hashes are the same.
 
@@ -224,10 +238,11 @@ These names apply in the steps:
 ## 7. Pass criteria
 
 - The build runs at nice 19 in the idle classes, in `$HORIZON_SESSION_DIR`.
-- During the build, the browser probe times stay near the baseline.
+- During the build, most browser probe times stay near the baseline. Stops of
+  some seconds while the build writes to the volume are known.
 - The running executable has the frozen hash. No worker identity variable shows.
 - `device_screenshot` and **Add desktop viewer** show the debug Horizon.
-- `/workspace/home/.horizon` did not change.
+- The debug Horizon wrote nothing in `/workspace/home`.
 - Ctrl-C closes the window and ends the command.
 - No resource of the run stays in the Hetzner project.
 
