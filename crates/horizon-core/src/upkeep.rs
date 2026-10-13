@@ -354,20 +354,18 @@ fn lenient_time<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Opt
     Ok(value.as_str().and_then(parse_time))
 }
 
-/// The most entries of one list that the board reads from a document; later entries are
-/// skipped without being kept, so a document of many tiny entries stays cheap.
-const LIST_READ_LIMIT: usize = 10_000;
-
-/// The entries that parse, up to [`LIST_READ_LIMIT`]; the others are left out. A value that
-/// is not a list is an empty list.
+/// The entries that parse; the others are left out. A value that is not a list is an empty
+/// list. Every entry is read, but the kept ones are pruned to the most important whenever
+/// they reach twice their limit, so the order of the document decides nothing and a
+/// document of many tiny entries stays bounded in memory.
 fn lenient_list<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
-    T: serde::de::DeserializeOwned,
+    T: serde::de::DeserializeOwned + reader::Bounded,
 {
     struct Entries<T>(std::marker::PhantomData<T>);
 
-    impl<'de, T: serde::de::DeserializeOwned> serde::de::Visitor<'de> for Entries<T> {
+    impl<'de, T: serde::de::DeserializeOwned + reader::Bounded> serde::de::Visitor<'de> for Entries<T> {
         type Value = Vec<T>;
 
         fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -376,20 +374,12 @@ where
 
         fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<T>, A::Error> {
             let mut entries = Vec::new();
-            let mut read = 0;
-            loop {
-                if read >= LIST_READ_LIMIT {
-                    if seq.next_element::<serde::de::IgnoredAny>()?.is_none() {
-                        break;
-                    }
-                    continue;
-                }
-                let Some(entry) = seq.next_element::<serde_json::Value>()? else {
-                    break;
-                };
-                read += 1;
+            while let Some(entry) = seq.next_element::<serde_json::Value>()? {
                 if let Ok(entry) = T::deserialize(entry) {
                     entries.push(entry);
+                    if entries.len() >= 2 * T::KEEP {
+                        T::prune(&mut entries);
+                    }
                 }
             }
             Ok(entries)
@@ -511,16 +501,26 @@ mod tests {
     }
 
     #[test]
-    fn a_list_reads_at_most_its_limit_and_skips_the_rest() {
-        let many = vec!["0"; LIST_READ_LIMIT + 50].join(",");
-        let status: Status = serde_json::from_str(&format!(
-            r#"{{"repositories":[{many}],"activity":{{"a":1}},"runs":null,"agent":"codex"}}"#
-        ))
-        .unwrap();
-        assert!(status.repositories.is_empty(), "numbers are not names");
-        let names = vec![r#""o/r""#; LIST_READ_LIMIT + 50].join(",");
-        let status: Status = serde_json::from_str(&format!(r#"{{"repositories":[{names}]}}"#)).unwrap();
-        assert_eq!(status.repositories.len(), LIST_READ_LIMIT);
+    fn a_long_list_keeps_what_matters_whatever_its_order() {
+        let mut entries: Vec<String> = (0..10_050)
+            .map(|n| {
+                format!(r#"{{"repository":"o/r","number":{n},"state":"merged","updated_at":"2026-10-13T10:00:00Z"}}"#)
+            })
+            .collect();
+        entries.push(
+            r#"{"repository":"o/r","number":99999,"state":"blocked","updated_at":"2026-01-01T00:00:00Z"}"#.into(),
+        );
+        let status: Status = serde_json::from_str(&format!(r#"{{"pull_requests":[{}]}}"#, entries.join(","))).unwrap();
+        assert!(status.pull_requests.len() <= 2 * 500);
+        assert!(
+            status.pull_requests.iter().any(|pr| pr.number == 99999),
+            "the blocked one at the end stays"
+        );
+        let names = vec![r#""o/r""#; 3000].join(",");
+        let status: Status =
+            serde_json::from_str(&format!(r#"{{"repositories":[{names}],"activity":{{"a":1}}}}"#)).unwrap();
+        assert!(status.repositories.len() < 2000);
+        assert!(status.activity.is_empty());
     }
 
     #[test]

@@ -56,8 +56,8 @@ The board guarantees these items:
 - It reads the document on a separate thread, not on the UI thread. It looks for a
   change every two seconds.
 - It reads at most 4 MiB and refuses a larger document.
-- It reads at most 10,000 entries of each list. It skips later entries without
-  keeping them.
+- It reads every entry of a list but keeps at most twice the limit while it reads.
+  Then it keeps the most important entries, whatever their order in the document.
 - It keeps at most these entries:
   - 500 pull requests. Open pull requests come before merged pull requests.
   - The newest 1,500 runs.

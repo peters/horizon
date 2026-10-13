@@ -66,7 +66,8 @@ fn next_run(ui: &mut Ui, status: &Status, now: OffsetDateTime) {
 /// The headline, its color and the line under it.
 fn next_run_text(status: &Status, now: OffsetDateTime) -> (String, egui::Color32, String) {
     if let Some(run) = running(status, now) {
-        let started = relative(run.started_at, now);
+        // A start within the clock skew is shown as now, never as "in 3 min".
+        let started = relative(run.started_at.min(now), now);
         if now - run.started_at > stale_after(status) {
             (
                 "No report".to_string(),

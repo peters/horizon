@@ -190,23 +190,62 @@ fn read_status(path: &Path) -> Reading {
     parse_status(&read_bytes(path)?)
 }
 
-/// Puts runs and activity in time order, keeps the newest entries of each list and
-/// clips each text, so a large document cannot make every frame slow.
+/// A list of the status that keeps a bounded selection: the entries a person needs most.
+pub(super) trait Bounded: Sized {
+    /// The most entries kept.
+    const KEEP: usize;
+    /// Orders the entries by importance and keeps the first [`Self::KEEP`].
+    fn prune(list: &mut Vec<Self>);
+}
+
+impl Bounded for super::Run {
+    const KEEP: usize = MAX_RUNS;
+
+    /// The newest runs; a run dated far ahead cannot push the real ones out.
+    fn prune(list: &mut Vec<Self>) {
+        let horizon = time::OffsetDateTime::now_utc() + time::Duration::days(1);
+        list.retain(|run| run.started_at <= horizon);
+        list.sort_by_key(|run| run.started_at);
+        keep_last(list, Self::KEEP);
+    }
+}
+
+impl Bounded for super::Activity {
+    const KEEP: usize = MAX_ACTIVITY;
+
+    fn prune(list: &mut Vec<Self>) {
+        let horizon = time::OffsetDateTime::now_utc() + time::Duration::days(1);
+        list.retain(|entry| entry.at <= horizon);
+        list.sort_by_key(|entry| entry.at);
+        keep_last(list, Self::KEEP);
+    }
+}
+
+impl Bounded for super::PullRequest {
+    const KEEP: usize = MAX_PULL_REQUESTS;
+
+    /// Open pull requests first, newest first, so a person never misses one for a merged one.
+    fn prune(list: &mut Vec<Self>) {
+        list.sort_by_key(|pr| (pr.state == PrState::Merged, std::cmp::Reverse(pr.updated_at)));
+        list.truncate(Self::KEEP);
+    }
+}
+
+impl Bounded for String {
+    const KEEP: usize = MAX_REPOSITORIES;
+
+    fn prune(list: &mut Vec<Self>) {
+        list.truncate(Self::KEEP);
+    }
+}
+
+/// Puts runs and activity in time order, keeps the most important entries of each list
+/// and clips each text, so a large document cannot make every frame slow.
 fn bound(status: &mut Status) {
-    // A run dated far ahead cannot push the real ones out.
-    let horizon = time::OffsetDateTime::now_utc() + time::Duration::days(1);
-    status.runs.retain(|run| run.started_at <= horizon);
-    status.runs.sort_by_key(|run| run.started_at);
-    keep_last(&mut status.runs, MAX_RUNS);
-    status.activity.retain(|entry| entry.at <= horizon);
-    status.activity.sort_by_key(|entry| entry.at);
-    keep_last(&mut status.activity, MAX_ACTIVITY);
-    // Open pull requests first, so a person never misses one for a merged one.
-    status
-        .pull_requests
-        .sort_by_key(|pr| (pr.state == PrState::Merged, std::cmp::Reverse(pr.updated_at)));
-    status.pull_requests.truncate(MAX_PULL_REQUESTS);
-    status.repositories.truncate(MAX_REPOSITORIES);
+    super::Run::prune(&mut status.runs);
+    super::Activity::prune(&mut status.activity);
+    super::PullRequest::prune(&mut status.pull_requests);
+    String::prune(&mut status.repositories);
     for text in [
         &mut status.agent,
         &mut status.worker.name,
