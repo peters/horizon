@@ -137,6 +137,7 @@ impl HorizonApp {
 /// CPU worker until a reread finds one, such as one saved in the working copy.
 pub(super) fn gpu_profile(form: &mut Production, config: &CloudConfig) -> Option<String> {
     let repository = form.repository.clone();
+    let picked = config.profiles.contains_key(&form.selected_profile);
     let intent = form.new_workspace.as_mut().filter(|intent| intent.gpu)?;
     let found = config
         .profiles
@@ -144,10 +145,13 @@ pub(super) fn gpu_profile(form: &mut Production, config: &CloudConfig) -> Option
         .find(|(_, profile)| profile.gpu)
         .map(|(name, _)| name.clone());
     if intent.chosen_for.as_deref() == Some(repository.as_str()) {
-        // A reread keeps the pick, and says so when the GPU profiles are gone.
-        let keep = !intent.no_gpu || found.is_none();
-        intent.no_gpu |= found.is_none();
-        if keep {
+        // A reread keeps a pick that is still there, and says so when the GPU profiles
+        // are gone; a GPU profile replaces a pick that went or a CPU fallback.
+        if found.is_none() {
+            intent.no_gpu = true;
+            return None;
+        }
+        if picked && !intent.no_gpu {
             return None;
         }
     }

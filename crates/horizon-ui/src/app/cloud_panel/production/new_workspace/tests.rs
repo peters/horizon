@@ -90,7 +90,12 @@ fn cloud_gpu_takes_the_first_gpu_profile_of_each_repository_or_its_default() {
     let (_, shown) = texts(form);
     assert!(!shown.iter().any(|text| text.contains("no GPU profile")), "{shown:?}");
     // A reread of the same repository keeps the person's pick.
+    form.selected_profile = "dev".into();
     assert_eq!(gpu_profile(form, &config(GPU_TOO)), None);
+    // A renamed GPU profile replaces the pick that went.
+    form.selected_profile = "gpu".into();
+    let renamed = GPU_TOO.replace("\n  gpu:\n", "\n  gpu-b:\n");
+    assert_eq!(gpu_profile(form, &config(&renamed)).as_deref(), Some("gpu-b"));
     // A reread without the GPU profile says the cloud now runs on a CPU worker.
     assert_eq!(gpu_profile(form, &config(CPU_ONLY)), None);
     assert!(form.new_workspace.as_ref().unwrap().no_gpu);
