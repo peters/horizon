@@ -30,8 +30,11 @@ boundary exists on the worker.
   batch folder. The worker commands refuse a folder that is a symbolic link or
   that another user owns, so an agent cannot select where the SSH user writes.
 - The worker writes only new files and never follows a name out of the batch
-  folder. A file arrives in the private folder `.BATCH.part` and moves into the
-  batch folder only after its size is the local size.
+  folder. A file arrives in the private folder `.BATCH.TOKEN.part` and moves into
+  the batch folder only after its size is the local size.
+- The cleanup removes a batch folder only when the private folder of the same
+  drop exists, which the worker makes after the batch folder. It follows no
+  symbolic link and leaves folders that another user owns.
 - The files and folders belong to the group of `horizon-agent` with modes
   `0640` and `0750`. The agent can read them, not change them.
 
@@ -61,6 +64,7 @@ a cloud panel, also when the cloud is not connected or the upload fails.
 - A worker command that writes outside the batch folder and its private
   folder, follows a symbolic link, replaces a file or puts a partial file in the
   batch folder.
+- A cleanup that can remove a folder or file that another drop or an agent made.
 - A connection to the worker that can accept an unknown or a changed host key.
 - File I/O, a process start or a wait for a process on the UI thread.
 - Paths that go to a panel of another session, another cloud or another worker.

@@ -663,11 +663,14 @@ user of the worker, `root`. The boundary is as follows:
   `horizon-agent`. The folders have mode `0750` and the files have mode `0640`. The
   agent can read the files, but it cannot change or remove them.
 - A file is complete or absent. The worker writes it into the private folder
-  `SESSION/.BATCH.part` (mode `0700`) and moves it into the batch folder only after
-  its size is the size of the local file. A transfer that stops early leaves nothing
-  in the batch folder. The worker writes only new files, never over an existing file.
-- After a failure or a cancel, Horizon removes the batch folder and its private
-  folder, and pastes nothing.
+  `SESSION/.BATCH.TOKEN.part` (mode `0700`) and moves it into the batch folder only
+  after its size is the size of the local file. A transfer that stops early leaves
+  nothing in the batch folder. The worker writes only new files, never over an
+  existing file.
+- After a failure or a cancel, Horizon pastes nothing and removes the batch folder
+  and its private folder. `TOKEN` is new for each drop, and the worker makes the
+  private folder after the batch folder. Thus the cleanup removes a batch folder
+  only when this drop made it, and it follows no symbolic link.
 
 The files stay on the workspace volume until the cloud is deleted. They are not
 private between the sessions of one worker, because all agents run as the same user.

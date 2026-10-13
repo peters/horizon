@@ -111,9 +111,7 @@ mod worker_scripts {
     }
 
     fn part(batch: &Batch) -> PathBuf {
-        let directory = PathBuf::from(batch.directory());
-        let name = directory.file_name().unwrap().to_str().unwrap().to_owned();
-        directory.with_file_name(format!(".{name}.part"))
+        PathBuf::from(batch.directory()).with_file_name(format!(".{}.{}.part", batch.id, batch.token))
     }
 
     fn entries(path: &Path) -> usize {
@@ -247,7 +245,31 @@ mod worker_scripts {
         assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
         let written = run(&fixture.batch.write_command("file.txt", 1), b"x");
         assert_eq!(written.status.code(), Some(3), "no write follows the link");
+        // Folders that look like this drop's, behind the link: the cleanup leaves them.
+        let behind = elsewhere.join("session-1");
+        std::fs::create_dir_all(behind.join(&fixture.batch.id)).unwrap();
+        std::fs::write(behind.join(&fixture.batch.id).join("keep.txt"), "keep").unwrap();
+        std::fs::create_dir(behind.join(part(&fixture.batch).file_name().unwrap())).unwrap();
         assert!(run(&fixture.batch.remove_command(), b"").status.success());
-        assert!(elsewhere.exists());
+        assert!(behind.join(&fixture.batch.id).join("keep.txt").exists());
+    }
+
+    #[test]
+    fn a_drop_that_meets_another_drops_batch_folder_removes_nothing_of_it() {
+        let fixture = fixture();
+        assert!(run(&fixture.batch.prepare_command(), b"").status.success());
+        assert!(
+            run(&fixture.batch.write_command("first.txt", 5), b"first")
+                .status
+                .success()
+        );
+        let mut second = Batch::new(fixture.workspace.to_str().unwrap(), "session-1");
+        second.id.clone_from(&fixture.batch.id);
+        let refused = run(&second.prepare_command(), b"");
+        assert!(!refused.status.success(), "a batch folder is new");
+        assert!(!part(&second).exists());
+        assert!(run(&second.remove_command(), b"").status.success());
+        assert_eq!(std::fs::read(fixture.batch.path("first.txt")).unwrap(), b"first");
+        assert!(part(&fixture.batch).exists());
     }
 }

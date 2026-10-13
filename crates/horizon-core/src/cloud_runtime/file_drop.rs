@@ -4,8 +4,10 @@
 //! `/workspace/.horizon-drops/SESSION/BATCH`. That identity owns `.horizon-drops`, the
 //! session folder and the batch folder, so an agent that runs as `horizon-agent` can read
 //! the files but cannot choose or redirect where the controller writes. A file is complete
-//! or absent: it arrives in the private folder `.BATCH.part` next to the batch folder and
-//! moves into the batch folder only after the worker checked its size.
+//! or absent: it arrives in the private folder `.BATCH.TOKEN.part` next to the batch folder
+//! and moves into the batch folder only after the worker checked its size. `TOKEN` is new
+//! for each drop, so that folder also proves which drop made the batch folder: the cleanup
+//! removes nothing that another drop made.
 use super::{Error, Result, settings::Settings, ssh::Connection, state::cloud_directory};
 use horizon_cloud::{Worker, valid_id};
 use std::collections::HashSet;
@@ -16,6 +18,8 @@ const WORKSPACE: &str = "/workspace";
 const NAME_MAX: usize = 255;
 /// Hex digits of a batch folder name: enough that two drops never pick the same one.
 const BATCH_DIGITS: usize = 12;
+/// Hex digits of the token that names one drop's private folder.
+const TOKEN_DIGITS: usize = 16;
 
 /// Prepares the batch folder. Refuses a session the worker does not have, and a drops
 /// or session folder that is a symbolic link or that another user owns, such as one an
@@ -49,7 +53,8 @@ done
 mkdir -- "$drops/$session/$batch"
 chgrp -- "$group" "$drops/$session/$batch"
 chmod 0750 -- "$drops/$session/$batch"
-mkdir -- "$drops/$session/.$batch.part"
+# Made only after the batch folder: it proves to REMOVE that this drop made that folder.
+mkdir -- "$drops/$session/.$batch.$4.part"
 "#;
 
 /// Writes one file from standard input into the private folder, then moves it into the
@@ -59,9 +64,9 @@ const WRITE: &str = r#"
 set -eu
 umask 077
 dir="$1/.horizon-drops/$2/$3"
-part="$1/.horizon-drops/$2/.$3.part"
-name=$4
-size=$5
+part="$1/.horizon-drops/$2/.$3.$4.part"
+name=$5
+size=$6
 group=$(id -g)
 if [ -f /run/horizon-tailnet/agent-isolation ]; then group=$(id -g horizon-agent); fi
 for folder in "$dir" "$part"; do
@@ -92,11 +97,21 @@ mv -- "$partial" "$file"
 trap - EXIT HUP INT TERM
 "#;
 
+/// Removes the folders of one drop, only when its private folder shows that this drop
+/// made them, and never through a symbolic link or a folder that another user owns.
 const REMOVE: &str = r#"
 set -eu
-for folder in "$1/.horizon-drops/$2/$3" "$1/.horizon-drops/$2/.$3.part"; do
-    if [ -d "$folder" ] && [ ! -L "$folder" ]; then rm -rf -- "$folder"; fi
+owner=$(id -u)
+for folder in "$1/.horizon-drops" "$1/.horizon-drops/$2"; do
+    if [ -L "$folder" ] || [ ! -d "$folder" ] || [ "$(stat -c %u -- "$folder")" != "$owner" ]; then
+        exit 0
+    fi
 done
+dir="$1/.horizon-drops/$2/$3"
+part="$1/.horizon-drops/$2/.$3.$4.part"
+if [ -L "$part" ] || [ ! -d "$part" ]; then exit 0; fi
+if [ -d "$dir" ] && [ ! -L "$dir" ]; then rm -rf -- "$dir"; fi
+rm -rf -- "$part"
 "#;
 
 /// The worker and session that a drop goes to, captured when the person drops the files.
@@ -163,17 +178,26 @@ pub struct Batch {
     workspace: String,
     session: String,
     id: String,
+    token: String,
 }
 
 impl Batch {
     fn new(workspace: &str, session: &str) -> Self {
-        let mut id = uuid::Uuid::new_v4().simple().to_string();
-        id.truncate(BATCH_DIGITS);
+        let digits = |count| {
+            let mut value = uuid::Uuid::new_v4().simple().to_string();
+            value.truncate(count);
+            value
+        };
         Self {
             workspace: workspace.to_owned(),
             session: session.to_owned(),
-            id,
+            id: digits(BATCH_DIGITS),
+            token: digits(TOKEN_DIGITS),
         }
+    }
+
+    fn args(&self) -> [&str; 4] {
+        [&self.workspace, &self.session, &self.id, &self.token]
     }
 
     #[must_use]
@@ -187,25 +211,25 @@ impl Batch {
         format!("{}/{name}", self.directory())
     }
 
-    /// Makes the empty batch folder; fails when it exists.
+    /// Makes the empty batch folder and its private folder; fails when the batch folder exists.
     #[must_use]
     pub fn prepare_command(&self) -> String {
-        command(PREPARE, &[&self.workspace, &self.session, &self.id])
+        command(PREPARE, &self.args())
     }
 
     /// Writes standard input to `name` in the batch folder and checks that it has `size` bytes.
     #[must_use]
     pub fn write_command(&self, name: &str, size: u64) -> String {
-        command(
-            WRITE,
-            &[&self.workspace, &self.session, &self.id, name, &size.to_string()],
-        )
+        let size = size.to_string();
+        let [workspace, session, id, token] = self.args();
+        command(WRITE, &[workspace, session, id, token, name, &size])
     }
 
-    /// Removes the batch folder, its private folder and everything in them.
+    /// Removes the batch folder, its private folder and everything in them, when this
+    /// drop made them.
     #[must_use]
     pub fn remove_command(&self) -> String {
-        command(REMOVE, &[&self.workspace, &self.session, &self.id])
+        command(REMOVE, &self.args())
     }
 }
 

@@ -2,9 +2,9 @@
 procedure: cloud-file-drop
 feature: Local files dropped on a cloud agent or shell panel
 platforms: [linux]
-cost: none
+cost: rents compute  # F05 only; F01 to F04 and F06 use only the local fixture
 destructive: no
-secrets: none
+secrets: [provider API key, Claude API key]  # F05 only
 owner: peters
 ---
 
@@ -30,7 +30,12 @@ local paths.
 ## 3. Safety
 
 > **CAUTION:** USE ONLY THE SYNTHETIC FIXTURE AND SYNTHETIC FILES IN TASKS F01 TO
-> F04. The fixture has no provider key, so no step sends a request to a provider.
+> F04 AND F06. The fixture has no provider key, so these tasks send no request to a
+> provider.
+
+> **CAUTION:** DO TASK F05 ONLY WITH APPROVAL FOR ONE PAID WORKER. F05 rents a worker
+> and uses the provider API key and the Claude API key. Follow the cautions of the
+> [cloud agent panel procedure](cloud-agent-panel-start.md).
 
 ## 4. Equipment and preconditions
 
@@ -49,6 +54,9 @@ local paths.
   - `drag.py` shows a small window that drags files, as a file manager does.
 - A new directory for the candidate files, `<seed>`, outside the home directory.
 - A private evidence directory, `<evidence>`, outside the fixture state.
+- For F05 only: approval for one paid worker, and the equipment of the
+  [cloud agent panel procedure](cloud-agent-panel-start.md), with its provider API
+  key and Claude API key.
 
 ## 5. Setup
 
@@ -190,6 +198,7 @@ the display of the fixture. Start `drag.py` with `DISPLAY` set to that display.
 4. Examine the session folder in `.horizon-drops` of the stand-in worker.
 
    Result: The batch folder and the `.part` folder of the cancelled drop are gone.
+   Earlier batch folders stay.
 
 5. Click **Done**.
 
