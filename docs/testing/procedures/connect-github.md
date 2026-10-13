@@ -415,10 +415,11 @@ this task and G11 use.
    remote.origin.url` shows the plain `https://github.com/<owner>/<repo-b>.git` link,
    and `.git/config` holds no token.
 
-6. Close the dialog, open **New cloud** again and click **Pick from your GitHub
-   repositories**.
+6. Close the dialog and open **New cloud** again.
 
-   Result: The list shows without a sign-in.
+   Result: The list shows immediately, without a click or a sign-in.
+   `stat -c '%a' ~/.horizon/cloud/github-repositories.json` shows `600`, and the
+   file holds the listed names.
 
 ### 6.11 G11: Install the app on an organization
 

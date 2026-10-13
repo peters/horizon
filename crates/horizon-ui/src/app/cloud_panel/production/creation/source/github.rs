@@ -17,6 +17,8 @@ use std::{
 };
 use zeroize::Zeroize as _;
 
+mod cache;
+
 /// At most this many repositories show at once; typing narrows them.
 const SHOWN: usize = 8;
 
@@ -27,6 +29,9 @@ pub(super) enum Purpose {
     List,
     /// A token to clone the repository in the field.
     Clone,
+    /// A fresh list behind the one kept from last time, only when this computer is
+    /// already signed in: nothing is asked of the person for it.
+    Refresh,
 }
 
 enum Answer {
@@ -36,6 +41,10 @@ enum Answer {
         repositories: Option<Vec<String>>,
     },
     Failed(String),
+    /// The names kept from the last list, read before a refresh asks GitHub.
+    Cached(Vec<String>),
+    /// A refresh found no sign-in to use.
+    Quiet,
 }
 
 /// Ends its own request's sign-in when dropped, as on Cancel or when the dialog closes,
@@ -63,6 +72,7 @@ pub(super) struct Account {
     prompt: Option<Prompt>,
     pub(super) repositories: Option<Vec<String>>,
     pub(super) failed: Option<String>,
+    refreshed: bool,
 }
 
 impl Account {
@@ -76,6 +86,7 @@ impl Account {
             prompt: None,
             repositories: None,
             failed: None,
+            refreshed: false,
         })
     }
 
@@ -84,13 +95,31 @@ impl Account {
         self.settings.installation_url()
     }
 
+    /// Whether a request the person made is under way; a quiet refresh is not one.
     pub(super) fn busy(&self) -> bool {
-        self.job.is_some()
+        self.job.as_ref().is_some_and(|job| job.purpose != Purpose::Refresh)
+    }
+
+    /// Whether a fresh list is on its way behind the one shown.
+    pub(super) fn refreshing(&self) -> bool {
+        self.job.as_ref().is_some_and(|job| job.purpose == Purpose::Refresh)
+    }
+
+    /// Asks once per dialog for a fresh list, when this computer is already signed in.
+    pub(super) fn refresh_once(&mut self, ctx: &Context) {
+        // Tests never reach GitHub, or the machine's own list, by themselves.
+        if !std::mem::replace(&mut self.refreshed, true) && !cfg!(test) {
+            self.request(Purpose::Refresh, ctx);
+        }
     }
 
     /// Asks GitHub for a token, signing this computer in first when it has none, and for
     /// the repositories too when they are to be listed.
     pub(super) fn request(&mut self, purpose: Purpose, ctx: &Context) {
+        // A quiet refresh gives way to what the person asked for.
+        if self.refreshing() && purpose != Purpose::Refresh {
+            self.finish();
+        }
         if self.job.is_some() {
             return;
         }
@@ -104,6 +133,13 @@ impl Account {
         self.failed = None;
         let (root, settings, ctx) = (self.root.clone(), self.settings.clone(), ctx.clone());
         std::thread::spawn(move || {
+            // The names kept from last time show while GitHub is asked.
+            if purpose == Purpose::Refresh
+                && let Some(listed) = cache::load(&root, settings.app_id)
+            {
+                let _ = sender.send(Answer::Cached(listed));
+                ctx.request_repaint();
+            }
             let shown = sender.clone();
             let repaint = ctx.clone();
             let show = move |prompt: Prompt| {
@@ -111,6 +147,13 @@ impl Account {
                 repaint.request_repaint();
             };
             let answer = exchange(&root, &settings, &cancel, &show, purpose);
+            if let Answer::Done {
+                repositories: Some(listed),
+                ..
+            } = &answer
+            {
+                cache::save(&root, settings.app_id, listed);
+            }
             let _ = sender.send(answer);
             ctx.request_repaint();
         });
@@ -139,7 +182,19 @@ impl Account {
                 }
                 Ok(Answer::Failed(reason)) => {
                     self.finish();
-                    self.failed = Some(reason);
+                    // The list kept from last time still stands when a refresh fails.
+                    if purpose == Purpose::Refresh {
+                        tracing::debug!(%reason, "could not refresh the GitHub repository list");
+                    } else {
+                        self.failed = Some(reason);
+                    }
+                    return None;
+                }
+                Ok(Answer::Cached(listed)) => {
+                    self.repositories.get_or_insert(listed);
+                }
+                Ok(Answer::Quiet) => {
+                    self.finish();
                     return None;
                 }
                 Err(TryRecvError::Empty) => return None,
@@ -287,6 +342,7 @@ fn exchange(
 ) -> Answer {
     let token = match host::current(root, settings) {
         Ok(Some((_, token))) => token,
+        Ok(None) if purpose == Purpose::Refresh => return Answer::Quiet,
         Ok(None) => match host::sign_in(root, settings, cancel, show) {
             Ok(Ok((_, token))) => token,
             Ok(Err(reason)) => return Answer::Failed(reason),
@@ -296,7 +352,7 @@ fn exchange(
     };
     let repositories = match purpose {
         Purpose::Clone => None,
-        Purpose::List => match host::repositories(&token) {
+        Purpose::List | Purpose::Refresh => match host::repositories(&token) {
             Ok(found) => Some(found),
             Err(reason) => return Answer::Failed(reason),
         },
@@ -433,8 +489,10 @@ impl super::State {
         }
         let mut chosen = None;
         ui.add_space(4.0);
+        // The list kept from last time shows at once, and a fresh one replaces it.
+        account.refresh_once(ui.ctx());
         if account.repositories.is_none() {
-            if account.busy() {
+            if account.busy() || account.refreshing() {
                 if !picked {
                     account.sign_in_box(ui);
                 }

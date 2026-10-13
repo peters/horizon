@@ -15,6 +15,7 @@ fn account() -> Account {
         prompt: None,
         repositories: None,
         failed: None,
+        refreshed: true,
     }
 }
 
@@ -238,4 +239,49 @@ fn a_token_for_the_repository_in_the_field_is_used_once_and_never_kept() {
     );
     assert_eq!(state.ready.as_deref(), Some(checkout.as_path()), "the start ran");
     assert!(state.account_for.is_none());
+}
+
+/// An account waiting on a request of `purpose`, and the sender its thread would use.
+fn waiting(purpose: Purpose) -> (Account, std::sync::mpsc::Sender<Answer>) {
+    let (sender, receiver) = channel();
+    let mut account = account();
+    account.job = Some(Job {
+        receiver,
+        purpose,
+        _abort: Abort(Cancellation::default()),
+    });
+    (account, sender)
+}
+
+#[test]
+fn the_kept_list_shows_until_a_refresh_replaces_it() {
+    let (mut account, sender) = waiting(Purpose::Refresh);
+    assert!(!account.busy(), "a quiet refresh is no request of the person's");
+    assert!(account.refreshing());
+    sender.send(Answer::Cached(vec!["acme/old".into()])).unwrap();
+    assert!(account.poll().is_none());
+    assert_eq!(account.repositories.as_deref(), Some(&["acme/old".to_owned()][..]));
+    assert!(account.refreshing(), "the refresh goes on behind the kept list");
+    sender
+        .send(Answer::Done {
+            token: Secret::new("ghu_synthetic".into()),
+            repositories: Some(vec!["acme/new".into()]),
+        })
+        .unwrap();
+    assert!(account.poll().is_none(), "a refresh hands no token over");
+    assert_eq!(account.repositories.as_deref(), Some(&["acme/new".to_owned()][..]));
+    assert!(!account.refreshing());
+}
+
+#[test]
+fn a_refresh_without_a_sign_in_or_with_an_error_keeps_the_list_and_says_nothing() {
+    for answer in [Answer::Quiet, Answer::Failed("GitHub could not be reached.".into())] {
+        let (mut account, sender) = waiting(Purpose::Refresh);
+        account.repositories = Some(vec!["acme/kept".into()]);
+        sender.send(answer).unwrap();
+        assert!(account.poll().is_none());
+        assert_eq!(account.repositories.as_deref(), Some(&["acme/kept".to_owned()][..]));
+        assert!(account.failed.is_none(), "a background refresh shows no error");
+        assert!(account.job.is_none());
+    }
 }

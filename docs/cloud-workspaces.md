@@ -455,6 +455,11 @@ before. For a private repository on github.com, the token card becomes **Clone
 with GitHub**, which clones with your connected account; **Use a token instead**
 keeps the old way.
 
+Horizon keeps the last list in `github-repositories.json` in its cloud folder, so
+the next **New cloud** shows it immediately, without a click. If this computer is
+already signed in, Horizon gets a new list in the background and replaces the
+shown one. A failed refresh keeps the shown list and shows no error.
+
 For this, this computer signs in once to your GitHub App, the way the app's
 setting says: one Authorize click, or none in Automatic. Horizon keeps that
 sign-in private in its credentials folder, renews it before each use for about
