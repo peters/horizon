@@ -648,7 +648,7 @@ all files arrived. Each drop gets a new folder:
 - `BATCH` is 12 random hexadecimal digits. Horizon makes the folder before the first
   file and refuses a folder that exists, so two drops never share a folder.
 - `NAME` is the local file name. Horizon replaces control characters with `_` and
-  shortens a name to 255 bytes. A name that occurs again in the same drop gets
+  bytes that are not UTF-8 with `U+FFFD`, and it shortens a name to 255 bytes. A name that occurs again in the same drop gets
   ` (2)`, ` (3)` and so on before its extension.
 - Horizon refuses a drop that contains a folder before it sends a file.
 

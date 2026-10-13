@@ -195,8 +195,9 @@ impl Batch {
 }
 
 /// Worker file names for `paths`, in the same order and all different. Each is the local
-/// name with control characters replaced by `_`, shortened to the worker's limit. A repeated
-/// name gets ` (2)`, ` (3)` and so on before its extension.
+/// name with control characters replaced by `_` and bytes that are not UTF-8 by `U+FFFD`,
+/// shortened to the worker's limit. A repeated name gets ` (2)`, ` (3)` and so on before
+/// its extension.
 #[must_use]
 pub fn remote_names(paths: &[PathBuf]) -> Vec<String> {
     let mut taken = HashSet::new();
