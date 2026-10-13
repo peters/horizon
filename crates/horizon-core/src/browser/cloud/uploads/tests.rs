@@ -73,6 +73,7 @@ fn the_worker_request_shows_in_the_panel_picker_until_the_worker_ends_it() {
         (shown.multiple, shown.accept.as_str(), shown.origin.as_str()),
         (true, ".txt", "https://upload.test")
     );
+    assert!(shown.relayed, "the picker leaves file checks to the transfer");
     relay.apply(Some(state(Some(5))), &chooser);
     let replaced = chooser.request().unwrap();
     assert_ne!(replaced.id, shown.id);

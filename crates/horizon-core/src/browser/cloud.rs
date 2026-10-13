@@ -484,8 +484,21 @@ fn send_files(
         .spawn()
         .map_err(|error| format!("Cannot connect to the cloud worker: {error}"))?;
     let pipes = (child.stdin.take(), child.stdout.take());
-    // From here a dropped transfer kills the process, so a blocked read ends.
-    *process.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(child);
+    // From here a dropped transfer kills the process, so a blocked read ends. The
+    // stop check shares the lock with the drop, so a stop that came first wins.
+    let mut unpublished = Some(child);
+    {
+        let mut slot = process.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !stop.load(Ordering::Acquire) {
+            *slot = unpublished.take();
+        }
+    }
+    // Reaped outside the lock: the UI thread can wait for it in a drop.
+    if let Some(mut child) = unpublished {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("The upload stopped".into());
+    }
     let (Some(input), Some(output)) = pipes else {
         return Err("Cannot connect to the cloud worker".into());
     };

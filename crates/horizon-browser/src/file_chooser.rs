@@ -36,6 +36,8 @@ pub struct FileChooserRequest {
     pub multiple: bool,
     pub accept: String,
     pub origin: String,
+    /// A remote browser asked, and a transfer thread checks the files later.
+    pub relayed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -144,6 +146,10 @@ impl FileChooserHandle {
     }
 
     pub(crate) fn open(&self, multiple: bool, accept: String, origin: String) -> u64 {
+        self.open_request(multiple, accept, origin, false)
+    }
+
+    fn open_request(&self, multiple: bool, accept: String, origin: String, relayed: bool) -> u64 {
         let mut state = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.sequence = state.sequence.wrapping_add(1);
         let id = state.sequence;
@@ -152,6 +158,7 @@ impl FileChooserHandle {
             multiple,
             accept,
             origin,
+            relayed,
         }));
         state.answer = None;
         state.answered = false;
@@ -215,7 +222,7 @@ impl FileChooserHandle {
     #[must_use]
     pub fn relay_open(&self, multiple: bool, accept: String, origin: String) -> u64 {
         self.enable();
-        self.open(multiple, accept, origin)
+        self.open_request(multiple, accept, origin, true)
     }
 
     /// The person's answer to a relayed request. The request stays open, with

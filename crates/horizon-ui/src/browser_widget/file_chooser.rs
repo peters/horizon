@@ -25,7 +25,10 @@ impl FilePicker {
         let mut picker = Self {
             id: request.id,
             modal: PickerModalState::new(directory_query(&directory)),
-            files: FilePickerState::new(directory, request.multiple, &request.accept),
+            files: {
+                let files = FilePickerState::new(directory, request.multiple, &request.accept);
+                if request.relayed { files.relayed() } else { files }
+            },
             listing: None,
             loading: None,
             error: None,
@@ -359,6 +362,11 @@ pub(super) fn show(
     if let Some(error) = handle.take_error() {
         picker.error = Some(error);
         picker.submitted = false;
+        // A relayed request checks the files only in its transfer, so a failed
+        // path must not stay selected: a dropped one may have no row to clear it.
+        if request.relayed {
+            picker.files.selected.clear();
+        }
     }
     let answer = picker.show(ctx, &request, &format!("file-picker-{panel:?}"));
     let cancelled_by_escape =

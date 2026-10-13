@@ -129,6 +129,10 @@ pub(super) fn send(
     let chunk = usize::try_from(plan.chunk).unwrap_or(usize::MAX);
     let mut buffer = vec![0_u8; chunk];
     for (path, name, size) in &plan.files {
+        // Before the open too: an open on a slow mount can block for long.
+        if stop.load(Ordering::Acquire) {
+            return Err("The upload stopped".into());
+        }
         let mut file = std::fs::File::open(path).map_err(|error| format!("Cannot read {}: {error}", path.display()))?;
         let mut digest = Sha256::new();
         let mut offset = 0_u64;
