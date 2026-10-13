@@ -80,7 +80,7 @@ These names apply in the steps:
 > **CAUTION:** THIS STEP RENTS A HETZNER SERVER AND A VOLUME. Hetzner bills
 > them until you delete them in W09.
 
-1. In the client, open **Cloud**, then **New cloud**. Select the synthetic
+1. In the client, open **Menu**, then **New cloud**. Select the synthetic
    repository, **Quick start** and Hetzner. Start the cloud.
 
    Result: The cloud card shows **Ready**. Write the server in the ledger.

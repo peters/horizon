@@ -43,12 +43,7 @@ pub(in crate::app) fn row(
     };
     // A screen reader reads the whole row, as it is painted.
     response.widget_info(|| {
-        let mut label = format!("{title}. {detail}");
-        for extra in [note, shortcut].into_iter().flatten() {
-            label.push_str(". ");
-            label.push_str(extra);
-        }
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label)
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, spoken(title, detail, note, shortcut))
     });
     let hot = enabled && (response.hovered() || response.has_focus());
     if hot {
@@ -112,6 +107,21 @@ pub(in crate::app) fn row(
         }
     });
     response
+}
+
+/// The row's text as one sentence list: each part ends with a full stop.
+fn spoken(title: &str, detail: &str, note: Option<&str>, shortcut: Option<&str>) -> String {
+    let mut label = String::new();
+    for part in [Some(title), Some(detail), note, shortcut].into_iter().flatten() {
+        if !label.is_empty() {
+            label.push(' ');
+        }
+        label.push_str(part);
+        if !part.ends_with('.') {
+            label.push('.');
+        }
+    }
+    label
 }
 
 /// A thin divider between groups of rows.
@@ -196,4 +206,55 @@ fn screen(painter: &Painter, center: Pos2, ink: Color32) {
         ],
         Stroke::new(1.4, ink),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Glyph, row, spoken};
+    use crate::test_egui::DiscardTextures as _;
+
+    #[test]
+    fn a_row_reads_all_its_text() {
+        assert_eq!(
+            spoken(
+                "Cloud",
+                "Agents run on a cloud worker.",
+                Some("2 vCPU · 4 GB"),
+                Some("Ctrl+K")
+            ),
+            "Cloud. Agents run on a cloud worker. 2 vCPU · 4 GB. Ctrl+K."
+        );
+        assert_eq!(
+            spoken("Settings", "Theme and shortcuts", None, None),
+            "Settings. Theme and shortcuts."
+        );
+    }
+
+    #[test]
+    fn a_screen_reader_gets_the_whole_row() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let output = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                let _ = row(
+                    ui,
+                    Some(Glyph::Screen),
+                    "This PC",
+                    "Runs here.",
+                    None,
+                    Some("Ctrl+P"),
+                    true,
+                );
+            })
+            .discard_textures();
+        let update = output.platform_output.accesskit_update.expect("an AccessKit update");
+        assert!(
+            update
+                .nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some("This PC. Runs here. Ctrl+P.")),
+            "{:?}",
+            update.nodes
+        );
+    }
 }

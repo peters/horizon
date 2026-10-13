@@ -59,3 +59,57 @@ fn new_offers_the_cloud_first_above_the_sidebar_and_a_cancel_leaves_no_workspace
     assert!(!app.cloud_creation_open());
     assert_eq!(app.board.workspaces.len(), workspaces, "the empty workspace goes");
 }
+
+#[test]
+fn the_toolbar_split_button_makes_a_cloud_workspace_or_opens_the_place_menu() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    app.root_viewport_stabilizer = None;
+    app.cloud_prototype.root = Some(temp.path().join("clouds"));
+    app.cloud_prototype.ready = true;
+    let _existing = app.board.create_workspace("existing workspace");
+    for _ in 0..2 {
+        frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    }
+    let workspaces = app.board.workspaces.len();
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    let create = label_position(&output, "+  New workspace");
+    // The place part shows where the left part makes the workspace.
+    let place = label_position(&output, "Cloud");
+    assert!(
+        place.x > create.x && (place.y - create.y).abs() < 1.0,
+        "Cloud ▾ follows + New workspace"
+    );
+
+    // The left part makes a cloud workspace and opens New cloud for it.
+    click(&ctx, &mut app, create);
+    assert!(
+        app.cloud_prototype.production.creating,
+        "+ New workspace opens New cloud"
+    );
+    assert_eq!(app.board.workspaces.len(), workspaces + 1);
+    key(&ctx, &mut app, Key::Escape, Modifiers::NONE);
+    frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    assert_eq!(app.board.workspaces.len(), workspaces, "the cancelled workspace goes");
+
+    // The place part opens the place menu; This PC makes a workspace without a dialog.
+    click(&ctx, &mut app, place);
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    let this_pc = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            Shape::Text(text) if text.galley.job.text == "This PC" => {
+                Some(Rect::from_min_size(text.pos, text.galley.size()).center())
+            }
+            _ => None,
+        })
+        // The sidebar's This PC group is at the left; the menu opens under the toolbar's right.
+        .max_by(|a, b| a.x.total_cmp(&b.x))
+        .filter(|position| position.x > place.x - 500.0)
+        .expect("a This PC row in the place menu");
+    click(&ctx, &mut app, this_pc);
+    assert!(!app.cloud_prototype.production.creating, "This PC opens no dialog");
+    assert_eq!(app.board.workspaces.len(), workspaces + 1);
+}

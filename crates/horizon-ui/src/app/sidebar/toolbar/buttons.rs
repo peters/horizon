@@ -1,8 +1,6 @@
 //! The toolbar's two controls: the primary New workspace button and the Menu that holds
 //! Quick Nav, Remote Hosts, Cloud, Sessions and Settings.
-use egui::{
-    Align2, CornerRadius, CursorIcon, FontId, Popup, Pos2, Rect, RichText, Sense, Shape, Stroke, StrokeKind, Ui, Vec2,
-};
+use egui::{Align2, CornerRadius, CursorIcon, FontId, Popup, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::app::HorizonApp;
 use crate::app::root_chrome::{
@@ -146,18 +144,13 @@ impl HorizonApp {
 
     /// One menu for everything that used to be its own toolbar button.
     pub(super) fn render_toolbar_menu(&mut self, ui: &mut Ui) {
-        let button = ui.add(
-            egui::Button::new(RichText::new("     Menu").size(12.0).color(theme::FG_SOFT()))
-                .fill(theme::PANEL_BG_ALT())
-                .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 210)))
-                .corner_radius(10)
-                .min_size(Vec2::new(ROOT_TOOLBAR_MENU_WIDTH, ROOT_TOOLBAR_BUTTON_HEIGHT)),
+        let (rect, button) = ui.allocate_exact_size(
+            Vec2::new(ROOT_TOOLBAR_MENU_WIDTH, ROOT_TOOLBAR_BUTTON_HEIGHT),
+            Sense::click(),
         );
-        paint_lines(
-            ui.painter(),
-            Pos2::new(button.rect.min.x + 18.0, button.rect.center().y),
-            theme::FG_SOFT(),
-        );
+        let button = button.on_hover_cursor(CursorIcon::PointingHand);
+        button.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Menu"));
+        paint_menu_button(ui.painter(), rect, &button);
         let popup = Popup::menu(&button).kind(egui::PopupKind::Tooltip);
         let popup_layer = egui::LayerId::new(egui::Order::Tooltip, popup.get_id());
         let mut chosen = None;
@@ -314,6 +307,34 @@ fn paint_chevron(painter: &egui::Painter, center: Pos2, color: egui::Color32) {
         ],
         Stroke::new(1.5, color),
     ));
+}
+
+/// Paints the Menu button: a framed pill with three lines and the word Menu.
+fn paint_menu_button(painter: &egui::Painter, rect: Rect, button: &egui::Response) {
+    let fill = if button.hovered() || button.has_focus() {
+        theme::blend(theme::PANEL_BG_ALT(), theme::FG(), 0.08)
+    } else {
+        theme::PANEL_BG_ALT()
+    };
+    painter.rect_filled(rect, 10, fill);
+    painter.rect_stroke(
+        rect,
+        10,
+        Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 210)),
+        StrokeKind::Inside,
+    );
+    let ink = theme::FG_SOFT();
+    paint_lines(painter, Pos2::new(rect.min.x + 18.0, rect.center().y), ink);
+    painter.text(
+        Pos2::new(rect.min.x + 32.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        "Menu",
+        FontId::proportional(12.0),
+        ink,
+    );
+    if button.has_focus() {
+        painter.rect_stroke(rect.expand(2.0), 12, Stroke::new(2.0, theme::FG()), StrokeKind::Outside);
+    }
 }
 
 fn paint_lines(painter: &egui::Painter, center: Pos2, color: egui::Color32) {

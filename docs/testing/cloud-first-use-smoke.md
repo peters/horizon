@@ -66,7 +66,7 @@ capabilities and missing authentication plainly.
    time, transfer speed and ETA only when measurable. Ready retains the measured
    time to worker readiness; it is not called application-visible startup time.
 6. Verify narrow and 4K viewports, scaling, resize/fit, nested fullscreen and
-   Escape. The Cloud menu remains accessible through toolbar overflow, settings
+   Escape. The cloud actions stay in the toolbar **Menu** at each width, settings
    scroll without hiding their actions, and no controls overlap.
 7. Restart only the task-owned instance. Settings bindings, authentication modes,
    cloud membership and worker/session identities survive. Repeat failure,
@@ -109,7 +109,7 @@ remote authentication, cloud/session persistence and post-review smoke remain op
 
 ### Setup from an existing cloud workspace
 
-With a cloud workspace active, open Cloud > New cloud, select a local repository
+With a cloud workspace active, open Menu > New cloud, select a local repository
 without YAML and choose Open setup agent. Verify the real setup panel opens in an
 ordinary local workspace, has the selected repository as its working directory,
 and is not a child of the existing cloud. Repeat with a local workspace already
