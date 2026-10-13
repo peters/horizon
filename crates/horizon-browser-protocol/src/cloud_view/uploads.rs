@@ -79,6 +79,9 @@ pub struct CloudStagedFiles {
 /// Staged files dropped at a point of the page, in page pixels.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct CloudFileDrop {
+    /// [`CloudUploadState::page`] when the person dropped the files. The worker
+    /// refuses the drop when the page navigated since then.
+    pub page: u64,
     pub x: f64,
     pub y: f64,
     pub files: CloudStagedFiles,
@@ -120,6 +123,9 @@ pub struct CloudUploadState {
     pub file_chooser: bool,
     /// The browser accepts dropped files.
     pub drops: bool,
+    /// Grows with each navigation of the top-level page, so that a drop that
+    /// arrives after a navigation never reaches the new page.
+    pub page: u64,
     /// The page waits for the person to pick files or cancel.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request: Option<CloudChooserRequest>,
@@ -138,6 +144,7 @@ impl Default for CloudUploadState {
             limits: CloudUploadLimits::default(),
             file_chooser: false,
             drops: false,
+            page: 0,
             request: None,
             error: None,
             notice: None,
@@ -236,6 +243,7 @@ mod tests {
                 }),
             }),
             drop: Some(CloudFileDrop {
+                page: 3,
                 x: 10.5,
                 y: 20.0,
                 files: CloudStagedFiles {
@@ -281,6 +289,7 @@ mod tests {
             limits: CloudUploadLimits::default(),
             file_chooser: true,
             drops: true,
+            page: 3,
             request: Some(CloudChooserRequest {
                 id: 4,
                 multiple: true,
@@ -303,7 +312,7 @@ mod tests {
         assert!(poll.answer.is_none() && poll.drop.is_none());
         let state: CloudUploadState = serde_json::from_str(
             r#"{"version":2,"limits":{"max_files":4,"max_batch_bytes":10,"max_chunk_bytes":5,"later":1},
-                "file_chooser":true,"drops":false,"later":[]}"#,
+                "file_chooser":true,"drops":false,"page":0,"later":[]}"#,
         )
         .unwrap();
         assert_eq!(state.limits.max_files, 4);

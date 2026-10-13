@@ -30,6 +30,10 @@ a host path to the worker.
   Both sides check them with `valid_upload_batch` and `valid_upload_name`.
 - An answer names the request that it answers, so a worker can refuse an answer
   to a replaced or closed request.
+- A drop names the `page` generation of the upload state that the person saw,
+  so a worker can refuse a drop that arrives after a navigation. A scroll or a
+  layout change during the transfer is not a navigation: the drop then goes to
+  the same point of the changed page.
 - A host that predates uploads sends no `uploads`, and a worker that predates
   them sends no `uploads` state and no `staged` receipt. New versions only add
   fields.
@@ -41,3 +45,5 @@ a host path to the worker.
 - A file name or batch ID that the checks accept but that can leave its folder.
 - A change of the wire format that an older host or worker cannot read.
 - Text from the page or the worker that the format presents as trusted.
+- An answer or a drop that the format cannot bind to the request or page that
+  the person saw.
