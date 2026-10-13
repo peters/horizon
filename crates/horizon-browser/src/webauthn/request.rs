@@ -266,6 +266,10 @@ fn canonical_b64u(text: &str, min_bytes: usize, max_bytes: usize) -> Option<Stri
         .then(|| URL_SAFE_NO_PAD.encode(bytes))
 }
 
+/// `userVerification` and `residentKey` are `DOMString`s, not IDL enums:
+/// the `WebAuthn` specification says client platforms MUST ignore unknown
+/// values and treat them as absent, so an unknown value gets the default
+/// instead of a `TypeError`, as in browsers.
 fn one_of<'a>(value: Option<&'a str>, allowed: &[&'static str], default: &'static str) -> &'a str {
     value.filter(|value| allowed.contains(value)).unwrap_or(default)
 }
