@@ -47,6 +47,10 @@ a cloud panel, also when the cloud is not connected or the upload fails.
   a worker run as one user.
 - The files stay on the workspace volume until the cloud is deleted.
 - A drop that contains a folder is refused. Folders are not uploaded.
+- Horizon removes the folders of a cancelled or failed drop after it shows the
+  result, over a new connection. When that connection fails, or the cleanup runs
+  before a cut-off preparation made its folder, an empty batch folder or partial
+  files in the private folder stay. Horizon never pasted their paths.
 - An agent without agent isolation is `root` on its worker and can read or
   change anything there, the dropped files included.
 

@@ -27,9 +27,11 @@ pub(in crate::app::ssh_upload) fn start_cloud_upload(
         let mut leftover = None;
         let result = upload(&destination, paths, &control_rx, &progress_tx, &mut leftover);
         let _ = progress_tx.send(UploadMessage::Finished(result));
-        // After the failure is shown, so an unreachable worker does not delay it.
-        if let Some((connection, batch)) = leftover {
-            remove(&connection, &batch);
+        // After the cancel or failure is shown, so an unreachable worker does not delay it.
+        if let Some((connection, batch)) = leftover
+            && !remove(&connection, &batch)
+        {
+            tracing::warn!(folder = %batch.directory(), "cloud file drop left its batch folder on the worker");
         }
     });
     UploadWorkerHandle {
@@ -38,8 +40,8 @@ pub(in crate::app::ssh_upload) fn start_cloud_upload(
     }
 }
 
-/// `leftover` gets the batch folder that a failed preparation may have made before the
-/// failure reached Horizon, such as when the connection ended before the exit status.
+/// `leftover` gets the batch folder of a drop that stopped, also one that a failed
+/// preparation may have made before its failure reached Horizon.
 fn upload(
     destination: &Destination,
     paths: Vec<PathBuf>,
@@ -75,24 +77,16 @@ fn upload(
     };
     let prepare = connection.pinned_command(&batch.prepare_command());
     if let Err(exit) = wait_for_command(spawn(prepare), control_rx) {
-        if matches!(exit, WorkerExit::Cancelled) {
-            remove(&connection, &batch);
-        } else {
-            *leftover = Some((connection, batch));
-        }
-        return stopped(exit, progress, "");
+        *leftover = Some((connection, batch));
+        return stopped(exit, progress);
     }
     let mut remote_paths = Vec::with_capacity(total_files);
     for (file, name) in files.iter().zip(&names) {
         let mut command = connection.pinned_command(&batch.write_command(name, file.size_bytes));
         let detail = format!("Uploading {} to the cloud worker", file.name);
         if let Err(exit) = stream_file(&mut command, file, &detail, progress, control_rx, progress_tx) {
-            let left = if remove(&connection, &batch) {
-                String::new()
-            } else {
-                format!(" Horizon could not remove {} from the worker.", batch.directory())
-            };
-            return stopped(exit, progress, &left);
+            *leftover = Some((connection, batch));
+            return stopped(exit, progress);
         }
         progress.completed_files += 1;
         progress.completed_bytes += file.size_bytes;
@@ -130,8 +124,8 @@ fn spawn(mut command: Command) -> Result<std::process::Child, String> {
         .map_err(|error| format!("failed to start SSH: {error}"))
 }
 
-/// Why the drop stopped; `left` names a partial folder that stayed on the worker.
-fn stopped(exit: WorkerExit, progress: UploadProgressContext, left: &str) -> Result<UploadOutcome, String> {
+/// Why the drop stopped. Its batch folder is removed after this is shown.
+fn stopped(exit: WorkerExit, progress: UploadProgressContext) -> Result<UploadOutcome, String> {
     match exit {
         WorkerExit::Cancelled => Ok(UploadOutcome {
             cancelled: true,
@@ -140,12 +134,12 @@ fn stopped(exit: WorkerExit, progress: UploadProgressContext, left: &str) -> Res
             completed_bytes: progress.completed_bytes,
             total_bytes: progress.total_bytes,
             detail: format!(
-                "Cancelled after {} of {} files. No path was inserted.{left}",
+                "Cancelled after {} of {} files. No path was inserted, and Horizon removes the files from the worker.",
                 progress.completed_files, progress.total_files
             ),
             remote_paths: Vec::new(),
         }),
-        WorkerExit::Failed(error) => Err(format!("{}{left}", explain(&error))),
+        WorkerExit::Failed(error) => Err(explain(&error)),
     }
 }
 
@@ -163,7 +157,6 @@ fn remove(connection: &Connection, batch: &Batch) -> bool {
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
-                tracing::warn!(folder = %batch.directory(), "cloud file drop cleanup did not finish");
                 return false;
             }
         }
