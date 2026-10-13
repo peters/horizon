@@ -56,7 +56,8 @@ fn configured(root: &Path, settings: &Settings) -> bool {
 
 /// The account and a usable access token of this computer's sign-in, renewed when close
 /// to its expiry, or `None` when it must sign in first. A Disconnect since the settings
-/// were read ends it.
+/// were read ends it. The account is the one the sign-in was stored for, which the kept
+/// list and its checks compare with: an account renamed on GitHub since stays one sign-in.
 /// # Errors
 /// GitHub out of reach or not confirming the sign-in, which is then kept, or a local file
 /// that cannot be read or written.
@@ -72,7 +73,7 @@ fn renewed(root: &Path, settings: &Settings, client: &Client) -> Result<Option<(
     }
     // A chain from a web sign-in renews with the secret whatever the setting says now; a
     // device chain needs none, and the secret is then not read.
-    stored::current(
+    let signed_in = stored::current(
         &path(root, settings),
         client,
         &settings.client_id,
@@ -82,7 +83,12 @@ fn renewed(root: &Path, settings: &Settings, client: &Client) -> Result<Option<(
         Kept::Unreachable => Error::Invalid("GitHub could not be reached. Check the network and try again."),
         Kept::Unconfirmed => Error::Invalid("GitHub did not confirm this computer's sign-in. Try again."),
         Kept::Local(error) => error,
-    })
+    })?;
+    // Still under the lock: the stored account is this very sign-in's.
+    Ok(signed_in.map(|(live, token)| {
+        let stored = stored::load(&path(root, settings)).map_or(live, |chain| chain.login);
+        (stored, token)
+    }))
 }
 
 /// Signs this computer in for the app of `settings`. `show` gets the code to approve, or
