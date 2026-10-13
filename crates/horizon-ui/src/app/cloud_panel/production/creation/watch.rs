@@ -10,7 +10,7 @@ pub(super) fn selection(form: &Production) -> Result<Selection, &'static str> {
         .profiles
         .as_ref()
         .and_then(|config| config.profiles.get(&form.selected_profile))
-        .ok_or("Read the repository profile before watching stock.")?;
+        .ok_or("Choose a profile of the repository before watching stock.")?;
     let profile = provider::sized(provider::current(form.provider, profile), profile, form.size)
         .map_err(|_| "Choose a supported size before watching stock.")?;
     Selection::new(profile, form.placement.clone())

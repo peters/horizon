@@ -206,7 +206,8 @@ fn start_cloud_says_why_it_is_disabled() {
         "the footer says it: {both}"
     );
     assert!(
-        both.contains("Name the cloud to start it.") && both.contains("Read the repository profile before starting."),
+        both.contains("Name the cloud to start it.")
+            && both.contains("The repository has no usable cloud settings yet."),
         "{both}"
     );
 
@@ -224,7 +225,7 @@ fn start_cloud_says_why_it_is_disabled() {
     let profile = painted(&ctx, &mut titled);
     assert!(!profile.contains("A cloud title is required"), "{profile}");
     assert!(
-        profile.contains("Read the repository profile before starting."),
+        profile.contains("The repository has no usable cloud settings yet."),
         "{profile}"
     );
 }

@@ -573,8 +573,9 @@ is checked; they do not mean a worker is missing or authorize a replacement.
 
 ## Repository setup and deployment
 
-If the selected commit has no `.horizon/cloud.yml`, **New cloud** shows
-**No cloud setup yet**. This is not an error. The dialog then shows two choices:
+If the selected commit has no `.horizon/cloud.yml`, and the working copy has no
+profile that can start before a commit, **New cloud** shows **No cloud setup
+yet**. This is not an error. The dialog then shows two choices:
 
 - **Quick start** starts the repository on the base image. See
   [Quick start](#quick-start).
@@ -799,30 +800,71 @@ Quick start has these limits:
 - The profile names RunPod. If this computer also has a Hetzner token, **Provider**
   also offers Hetzner. Quick start is tested on RunPod only.
 
-To go back to the committed settings, open **More options** and choose **Read
-.horizon/cloud.yml**. A different repository also ends quick start. The
+To go back to the settings of the repository, click **Use .horizon/cloud.yml**
+below the quick start note. A different repository also ends quick start. The
 `cloud_deploy` harness has the same choice, `--quick-start`. Cloud creation has no
 MCP operation, thus quick start has no MCP operation either.
 
 For the default launch path, commit `.horizon/cloud.yml` using the
 [example](../crates/horizon-cloud/examples/cloud.yml).
 
-To test an existing worker image without committing the test settings, open
-**More options** and select **Use local image-only settings**. Horizon reads the
-working copy of `.horizon/cloud.yml`, including untracked files, and offers only
-profiles with no `build` section. Set the local default to an image-only profile;
-a build default is refused instead of selecting another CPU or GPU profile.
-Set `image` to a registry-accessible tag or
-digest, resource minimums, GPU requirement and explicit capabilities. The image
-still passes the worker contract check before allocation and is pinned by its
-resolved registry digest. Use **Read .horizon/cloud.yml** after editing settings.
+### Settings from the working copy
 
-Local mode captures the selected profile in this cloud's machine-local state;
-later file edits do not change that cloud or its reconnect settings. The selected
-**Committed base revision** independently controls the application source.
-Local mode cannot change source packaging or declare companion repositories;
-those remain committed-source features. Credentials always stay in machine-local
-bindings. Closing the dialog resets the next launch to committed configuration.
+**New cloud** reads `.horizon/cloud.yml` when it opens. While **Committed base
+revision** is empty, it reads the file again when you save it, and when the
+checked-out commit changes. You do not have to commit an edit of the size or the
+provider before you start a cloud. If a read fails for a cause outside the file,
+for example a Git lock, click **Try again**.
+
+When **Committed base revision** is the checked-out commit (`HEAD` is the
+default), **New cloud** uses the working copy of the file, also when the file is
+not tracked. Some fields always come from the commit, because the image builds
+from the committed tree and the worker gets a committed archive of the source:
+
+| Field | Comes from |
+|---|---|
+| `provider`, `cpu` or `min_cpu`, `memory_gb` or `min_memory_gb`, `gpu`, `min_cuda_version`, `min_gpu_memory_gb`, `storage`, `bootstrap`, `idle_stop_minutes` | The working copy |
+| `default`, the set of profiles, `placement` | The working copy |
+| `image` and `capabilities` of a profile without `build` in the commit and the working copy | The working copy |
+| `build`, and the `image` and `capabilities` of a profile with `build` in the commit or the working copy | The commit. The capabilities are build arguments of the image |
+| `source`, `companions` | The commit |
+
+These rules apply:
+
+- A profile that is only in the working copy is in the list when it has no
+  `build`. A profile with `build` that is only in the working copy is not in the
+  list. A note tells you to commit it.
+- When the working copy changes a field that comes from the commit, a note below
+  **Profile** names the fields, for example `Uncommitted changes to build are not
+  used until you commit them.`
+- When the working copy has no `.horizon/cloud.yml`, or the file is not valid,
+  **New cloud** uses the committed file and says so.
+- When the committed file is not valid, **New cloud** shows the error, also if
+  the working copy is valid. The worker gets its source settings from the
+  commit, thus commit a valid file first.
+- When the working copy changes a profile in a way that does not agree with the
+  committed build settings, for example hosted devices on a Hetzner profile,
+  **New cloud** uses the committed file and says so.
+- When **Committed base revision** is a different commit, **New cloud** uses the
+  file of that commit. It does not use the working copy.
+- A new read keeps the profile, size, provider, place and storage that you chose
+  while they are still valid. The dialog shows the previous values until the read
+  is complete.
+- **New cloud** does not change the settings while it starts a cloud, while it
+  waits for stock, or while a setup agent works on the repository. It reads the
+  file again when this is complete.
+
+An image-only profile in the working copy lets you test an existing worker image
+before you commit the settings. Set `image` to a tag or a digest that the
+registry can supply. The image passes the worker contract check before Horizon
+allocates compute. Horizon then pins the image by its registry digest.
+
+The new cloud keeps the profile that it was started with in the machine-local
+state of the cloud. A later edit of the file does not change that cloud or its
+reconnect settings. **Rebuild image & restart** compares the bound profile with
+the latest committed profile. Thus commit the settings that you started the cloud
+with before you rebuild it. See [Rebuilding a cloud's image](#rebuilding-a-clouds-image).
+Credentials always stay in machine-local bindings.
 
 Image-only profiles omit `build`. Repository Dockerfiles build from the selected
 committed tree, honor `.dockerignore`, and reuse local BuildKit layers. Dirty and

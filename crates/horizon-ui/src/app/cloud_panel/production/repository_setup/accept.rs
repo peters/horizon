@@ -189,7 +189,7 @@ impl HorizonApp {
                 }
                 // The setup was made and committed on HEAD, so the dialog reads HEAD again.
                 self.cloud_prototype.production.revision.clear();
-                set_configuration(&mut self.cloud_prototype.production, Configuration::Committed);
+                set_configuration(&mut self.cloud_prototype.production, Configuration::WorkingCopy);
                 self.read_cloud_profiles(ctx);
                 if let commit::Committed::IndexBehind(error) = committed {
                     self.cloud_prototype.error = Some(format!(

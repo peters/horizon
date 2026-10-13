@@ -356,7 +356,7 @@ Use `smoke-r`. It is a RunPod CPU cloud.
 
    Result: The field shows `<repo>`.
 
-5. Click **Read .horizon/cloud.yml**.
+5. Wait until the dialog reads `.horizon/cloud.yml`.
 
    Result: **Profile** lists the profiles that area B committed.
 
@@ -592,8 +592,8 @@ with other storage values, then rebuilds it at the same commit
 
    Result: The New cloud dialog opens.
 
-3. Type the path `<repo>` as the repository and `smoke-hb` as the title. Click
-   **Read .horizon/cloud.yml**.
+3. Type the path `<repo>` as the repository and `smoke-hb` as the title. Wait until the
+   dialog reads `.horizon/cloud.yml`.
 
    Result: The dialog shows the worker catalog.
 
@@ -688,8 +688,8 @@ must refuse the rebuild before it changes the worker
 
    Result: The New cloud dialog opens.
 
-2. Type the path `<repo>` as the repository and `smoke-hd` as the title. Click
-   **Read .horizon/cloud.yml**.
+2. Type the path `<repo>` as the repository and `smoke-hd` as the title. Wait until the
+   dialog reads `.horizon/cloud.yml`.
 
    Result: The dialog shows the worker catalog.
 

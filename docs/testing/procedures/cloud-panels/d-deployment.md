@@ -140,7 +140,7 @@ fixture terminal.
 
    Result: The field shows `<repo>`.
 
-6. Click **Read .horizon/cloud.yml**.
+6. Wait until the dialog reads `.horizon/cloud.yml`.
 
    Result: **Profile** lists the profiles that area B committed.
 
@@ -223,7 +223,7 @@ fixture terminal.
 
    Result: The field shows `<repo>`.
 
-5. Click **Read .horizon/cloud.yml**.
+5. Wait until the dialog reads `.horizon/cloud.yml`.
 
    Result: **Profile** lists the profiles that area B committed.
 
@@ -304,7 +304,7 @@ fixture terminal.
 
    Result: The field shows `<repo>`.
 
-5. Click **Read .horizon/cloud.yml**.
+5. Wait until the dialog reads `.horizon/cloud.yml`.
 
    Result: **Profile** lists the profiles that area B committed.
 

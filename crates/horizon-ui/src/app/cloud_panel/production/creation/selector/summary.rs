@@ -40,7 +40,7 @@ pub(in super::super) fn show(ui: &mut Ui, form: &mut Production) {
                     });
                 }
             } else {
-                widgets::note(ui, "Read the repository profile to choose a worker.");
+                widgets::note(ui, "Choose a profile of the repository to choose a worker.");
             }
             if form.launch.watch.is_some() {
                 ui.add_space(8.0);

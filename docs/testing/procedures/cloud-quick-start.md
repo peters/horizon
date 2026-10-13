@@ -150,7 +150,7 @@ items:
    Result: The line names `ghcr.io/peters/horizon-worker-base` and the first
    12 characters of the pinned digest.
 
-4. Open **More options** and click **Read .horizon/cloud.yml**.
+4. Click **Use .horizon/cloud.yml** below the quick start note.
 
    Result: The dialog shows **No cloud setup yet** again.
 
