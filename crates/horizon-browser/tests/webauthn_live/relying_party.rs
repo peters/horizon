@@ -48,6 +48,7 @@ struct Shared {
     frame_port: u16,
     state: Mutex<State>,
     abort: AtomicBool,
+    navigate: AtomicBool,
     reports: Mutex<mpsc::Sender<Report>>,
 }
 
@@ -66,6 +67,7 @@ impl RelyingParty {
             frame_port: frame.local_addr().expect("addr").port(),
             state: Mutex::new(State::default()),
             abort: AtomicBool::new(false),
+            navigate: AtomicBool::new(false),
             reports: Mutex::new(sender),
         });
         for listener in [main, frame] {
@@ -86,6 +88,10 @@ impl RelyingParty {
 
     pub(crate) fn insecure_url(&self, path: &str) -> String {
         format!("http://127.0.0.1:{}{path}", self.shared.port)
+    }
+
+    pub(crate) fn release_navigation(&self) {
+        self.shared.navigate.store(true, Ordering::Release);
     }
 
     pub(crate) fn release_abort(&self) {
@@ -136,6 +142,20 @@ fn serve(shared: &Shared, stream: TcpStream) {
             "text/plain",
             if shared.abort.load(Ordering::Acquire) { "1" } else { "0" }.to_string(),
         ),
+        "/navigate-now" => (
+            "text/plain",
+            if shared.navigate.load(Ordering::Acquire) {
+                "1"
+            } else {
+                "0"
+            }
+            .to_string(),
+        ),
+        "/no-content" => {
+            let mut stream = stream;
+            let _ = stream.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
+            return;
+        }
         "/favicon.ico" => ("text/plain", String::new()),
         page => ("text/html; charset=utf-8", page_html(shared, page)),
     };
@@ -209,6 +229,14 @@ fn page_html(shared: &Shared, page: &str) -> String {
         "/frame" => r#"outcome("cross_origin_iframe", navigator.credentials.get({ publicKey: { challenge: anyChallenge() } }));"#
             .to_string(),
         "/insecure" => r#"outcome("insecure_origin", navigator.credentials.get({ publicKey: { challenge: anyChallenge() } }));"#
+            .to_string(),
+        "/stalled-navigation" => r#"navigator.credentials.get({ publicKey: { challenge: anyChallenge() } }).catch(() => {});
+(async () => {
+    while ((await (await fetch("/navigate-now")).text()) !== "1") await new Promise((done) => setTimeout(done, 100));
+    location.href = "/no-content";
+    await new Promise((done) => setTimeout(done, 1500));
+    await report("stalled_navigation", { verdict: "stayed" });
+})();"#
             .to_string(),
         "/abort" => r#"const controller = new AbortController();
 const pending = navigator.credentials.get({ publicKey: { challenge: anyChallenge() }, signal: controller.signal });

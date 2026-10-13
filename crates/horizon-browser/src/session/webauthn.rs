@@ -121,6 +121,14 @@ impl DriverState {
                 self.forget_passkey_contexts(event_tx, |_| true);
                 false
             }
+            // A navigation of the calling frame ends its request even when
+            // the navigation stops before a new document replaces the old one.
+            "Page.frameStartedLoading" => {
+                if let Some(frame) = event.params.get("frameId").and_then(Value::as_str) {
+                    self.cancel_passkeys_in_frame(event_tx, frame);
+                }
+                false
+            }
             _ => false,
         }
     }
@@ -248,6 +256,19 @@ impl DriverState {
             context.pointer("/auxData/frameId").and_then(Value::as_str),
         ) {
             passkeys.contexts.insert(id, frame.to_string());
+        }
+    }
+
+    fn cancel_passkeys_in_frame(&mut self, event_tx: &BrowserEventSender, frame: &str) {
+        let Some(passkeys) = self.passkeys.as_mut() else {
+            return;
+        };
+        let contexts = &passkeys.contexts;
+        if passkeys
+            .bridge
+            .cancel_for(|context| contexts.get(context).is_some_and(|owner| owner == frame))
+        {
+            self.note_passkey_change(event_tx);
         }
     }
 

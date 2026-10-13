@@ -91,7 +91,9 @@ The `browser_panel` and `browser_list` MCP results report
   never starts the command. `PublicKeyCredential.isConditionalMediationAvailable()` resolves
   `false`. A conditional request stays pending until the page aborts it.
 - When the page aborts a request with its `AbortSignal`, the driver kills the
-  command process. A navigation of the calling frame also kills it.
+  command process. The start of a navigation of the calling frame also kills
+  it (CDP `Page.frameStartedLoading`, BiDi `browsingContext.navigationStarted`),
+  even when that navigation stops before it commits.
 - One request runs at a time in a panel. The bridge starts the command a
   maximum of six times in 60 seconds for each panel.
 - The driver examines the output before the page gets it:

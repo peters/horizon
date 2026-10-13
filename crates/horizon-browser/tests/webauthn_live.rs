@@ -125,24 +125,7 @@ fn run_engine(backend: BackendKind) {
     assert_eq!(insecure.verdict, "SecurityError", "insecure: {insecure:?}");
     assert_eq!(calls(&state), 2, "insecure_origin reached the command");
 
-    std::fs::write(state.join("mode"), "hang").expect("mode");
-    navigate(&session, &rp.url("/abort"));
-    let pid_file = state.join("hang.pid");
-    wait_for(&session, "the hanging command to start", || pid_file.exists());
-    wait_for(&session, "the panel to show a waiting passkey request", || {
-        frame_slot.passkey_pending()
-    });
-    rp.release_abort();
-    let aborted = rp.wait_report("abort", REPORT_TIMEOUT, &session);
-    assert_eq!(aborted.verdict, "AbortError", "abort: {aborted:?}");
-    let pid = std::fs::read_to_string(&pid_file).expect("pid");
-    wait_for(&session, "the aborted command to be killed", || {
-        !process_alive(pid.trim())
-    });
-    wait_for(&session, "the waiting indicator to clear", || {
-        !frame_slot.passkey_pending()
-    });
-    assert_eq!(calls(&state), 3);
+    check_hanging_requests(&session, &rp, &frame_slot, &state);
 
     assert!(session.send(BrowserCommand::Stop));
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -157,6 +140,46 @@ fn run_engine(backend: BackendKind) {
     if std::env::var_os("HORIZON_LIVE_PROFILE_ROOT").is_some() {
         let _ = std::fs::remove_dir_all(profiles);
     }
+}
+
+/// A navigation start and an abort each kill a command that waits.
+fn check_hanging_requests(session: &BrowserSession, rp: &RelyingParty, frame_slot: &FrameSlot, state: &Path) {
+    std::fs::write(state.join("mode"), "hang").expect("mode");
+    let pid_file = state.join("hang.pid");
+    navigate(session, &rp.url("/stalled-navigation"));
+    wait_for(session, "the hanging command to start", || pid_file.exists());
+    wait_for(session, "the panel to show a waiting passkey request", || {
+        frame_slot.passkey_pending()
+    });
+    let pid = std::fs::read_to_string(&pid_file).expect("pid");
+    rp.release_navigation();
+    let stalled = rp.wait_report("stalled_navigation", REPORT_TIMEOUT, session);
+    assert_eq!(stalled.verdict, "stayed", "the 204 navigation must leave the document");
+    wait_for(session, "a navigation start to kill the command", || {
+        !process_alive(pid.trim())
+    });
+    wait_for(session, "the waiting indicator to clear", || {
+        !frame_slot.passkey_pending()
+    });
+    assert_eq!(calls(state), 3);
+    std::fs::remove_file(&pid_file).expect("reset pid");
+
+    navigate(session, &rp.url("/abort"));
+    wait_for(session, "the hanging command to start", || pid_file.exists());
+    wait_for(session, "the panel to show a waiting passkey request", || {
+        frame_slot.passkey_pending()
+    });
+    rp.release_abort();
+    let aborted = rp.wait_report("abort", REPORT_TIMEOUT, session);
+    assert_eq!(aborted.verdict, "AbortError", "abort: {aborted:?}");
+    let pid = std::fs::read_to_string(&pid_file).expect("pid");
+    wait_for(session, "the aborted command to be killed", || {
+        !process_alive(pid.trim())
+    });
+    wait_for(session, "the waiting indicator to clear", || {
+        !frame_slot.passkey_pending()
+    });
+    assert_eq!(calls(state), 4);
 }
 
 fn wait_ready(session: &BrowserSession) {
