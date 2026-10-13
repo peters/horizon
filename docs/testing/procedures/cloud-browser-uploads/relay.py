@@ -166,6 +166,9 @@ def main():
         if uploads is None:
             sys.exit('the worker has no upload support: an older worker, or HORIZON_CLOUD_BROWSER_UPLOADS is not 1')
         print('ready: file_chooser', uploads['file_chooser'], 'drops', uploads['drops'], 'limits', uploads['limits'])
+        # A worker Chromium supports both, so a missing one is a failure, not a skipped check.
+        if args.engine == 'chromium' and not (uploads['file_chooser'] and uploads['drops']):
+            sys.exit('the worker Chromium does not relay its chooser or accept drops')
         if uploads['file_chooser']:
             poll(None, click(100, 75), lambda state: page_report(state)[1] == 'cancelled', 'older host')
             print('older host: the worker cancelled the chooser at once')

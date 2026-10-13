@@ -3,7 +3,7 @@ procedure: cloud-browser-uploads
 feature: Local files into the pages of cloud browsers
 platforms: [linux]
 cost: none
-destructive: no
+destructive: yes
 secrets: none
 owner: peters
 ---
@@ -88,17 +88,18 @@ Give each task an ID. A report uses the ID to give a result.
 
 ### 6.2 U02: Relay without a locale
 
-1. Start the control service in a private root that has a `/workspace`
-   directory and no locale variables.
+1. In the repository root, start the control service in a private root that
+   has a `/workspace` directory and no locale variables. The host directories
+   are read-only for the service. Only `$state` is writable.
 
    ```sh
-   state=$(mktemp -d)
+   state=$(mktemp -d /var/tmp/cloud-uploads.XXXXXX)
    mkdir -p "$state/workspace" "$state/home"
    printf '{"agents":["claude"],"browsers":["chromium"]}' > "$state/workspace/capabilities.json"
    env -i PATH="<chrome-bin>:/usr/bin:/bin" HOME="$state/home" \
      HORIZON_CLOUD_BROWSER_UPLOADS=1 bwrap --tmpfs / \
-     --dev-bind /usr /usr --dev-bind /etc /etc --dev-bind /home /home --dev-bind /var /var \
-     --dev-bind "$state" "$state" --proc /proc --dev /dev --tmpfs /tmp \
+     --ro-bind /usr /usr --ro-bind /etc /etc --ro-bind /home /home --ro-bind /var /var \
+     --bind "$state" "$state" --proc /proc --dev /dev --tmpfs /tmp \
      --symlink usr/lib /lib --symlink usr/lib64 /lib64 --symlink usr/bin /bin \
      --bind "$state/workspace" /workspace --die-with-parent --unshare-pid \
      "$PWD/target/debug/horizon-cloud-worker" serve &
@@ -126,7 +127,7 @@ Give each task an ID. A report uses the ID to give a result.
 3. Examine the staged files.
 
    ```sh
-   find "$state/home/.horizon/cloud-browser-history/.uploads" -mindepth 1
+   find "$state/home/.horizon/cloud-browser-history/.uploads" -mindepth 1 2>/dev/null
    ```
 
    Result: The output is empty, because the driver closed its browser.
@@ -149,7 +150,8 @@ Give each task an ID. A report uses the ID to give a result.
 2. Remove the state directory of U02.
 
    > **CAUTION:** THIS STEP DELETES A DIRECTORY. Make sure that `$state` is the
-   > directory that `mktemp -d` made in U02 before you delete it.
+   > directory that `mktemp -d /var/tmp/cloud-uploads.XXXXXX` made in U02
+   > before you delete it.
 
    ```sh
    rm -rf "$state"

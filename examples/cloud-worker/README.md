@@ -256,8 +256,8 @@ The control service guarantees these conditions to the host and the page:
 - An answer applies only to the request that it names. A drop names the page
   generation that the person saw, and the control service refuses it after a
   navigation of the page. Each change of the page URL is a navigation, also a
-  change of the fragment or of the history state. A scroll during the transfer
-  is not a navigation.
+  change of the fragment or of the history state, and so is each new load of
+  the page. A scroll during the transfer is not a navigation.
 
 A host that relays uploads must obey these rules:
 

@@ -213,6 +213,8 @@ impl Host {
                         browser.state.url = url;
                         browser.relay.navigated();
                     }
+                    // A reload keeps the URL, but the drop target is a new document.
+                    BrowserEvent::Loading(true) => browser.relay.navigated(),
                     BrowserEvent::HandoffRequested(reason) => {
                         browser.state.handoff = Some(reason);
                         browser.state.handoff_error = None;

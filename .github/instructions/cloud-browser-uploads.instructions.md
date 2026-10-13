@@ -67,8 +67,8 @@ worker and never sends a host path to the worker.
 - A drop names the `page` generation of the upload state that the person saw,
   so a worker can refuse a drop that arrives after a navigation. The worker
   counts each change of the top-level URL as a navigation, also a change of the
-  fragment or of the history state, so it can refuse a drop on the same
-  document. A scroll or a layout change during the transfer is not a
+  fragment or of the history state, and each new load of the page, so it can
+  also refuse a drop on the same document. A scroll or a layout change during the transfer is not a
   navigation: the drop then goes to the same point of the changed page.
 - A host that predates uploads sends no `uploads`, and a worker that predates
   them sends no `uploads` state and no `staged` receipt. New versions only add
