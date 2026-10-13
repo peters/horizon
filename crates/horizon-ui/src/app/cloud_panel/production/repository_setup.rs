@@ -248,14 +248,19 @@ fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str, wide: bool)
     let mut open = false;
     ui.horizontal(|ui| {
         let label = format!("{verb} {chosen}");
-        let primary = egui::Button::new(RichText::new(label).size(14.0).strong().color(theme::BG()))
+        // A long preset name is cut short on one line, and named in full on hover.
+        let primary = egui::Button::new(RichText::new(&label).size(14.0).strong().color(theme::BG()))
+            .truncate()
             .fill(theme::ACCENT())
             .corner_radius(10)
             .min_size(Vec2::new(
                 if wide { ui.available_width().max(120.0) } else { 120.0 },
                 40.0,
             ));
-        open = ui.add_enabled(!form.repository.trim().is_empty(), primary).clicked();
+        open = ui
+            .add_enabled(!form.repository.trim().is_empty(), primary)
+            .on_hover_text(&label)
+            .clicked();
     });
     // The agent presets of the New Workspace menu, as chips: no popup to hide behind the
     // dialog, and every choice in view.
@@ -284,8 +289,9 @@ fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str, wide: bool)
                 },
             ))
             .corner_radius(8)
-            .min_size(Vec2::new(0.0, 28.0));
-            if ui.add(chip).clicked() {
+            .min_size(Vec2::new(0.0, 28.0))
+            .truncate();
+            if ui.add(chip).on_hover_text(&preset.name).clicked() {
                 form.setup_preset = Some(preset.name.clone());
             }
         }

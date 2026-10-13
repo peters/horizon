@@ -324,6 +324,19 @@ mod tests {
 
     fn draw_in(ctx: &egui::Context, width: f32) -> (Vec<(String, Rect)>, [Rect; 2]) {
         let mut form = Production::default();
+        // A long custom preset name must not push the button or its chip out of the card.
+        let long = "Claude Code with a very long custom preset name for this team";
+        form.setup_presets = vec![horizon_core::PresetConfig {
+            name: long.into(),
+            alias: None,
+            kind: horizon_core::PanelKind::Claude,
+            command: None,
+            args: Vec::new(),
+            resume: horizon_core::PanelResume::default(),
+            ssh_connection: None,
+        }];
+        form.setup_preset = Some(long.into());
+        form.repository = "/synthetic/repository".into();
         let mut cards = [Rect::NOTHING; 2];
         let mut texts = Vec::new();
         // Later passes draw with the heights the earlier ones measured.
