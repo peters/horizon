@@ -402,6 +402,8 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
   - The local review loop found nothing actionable for the same file changes.
 
   A new commit message or an empty commit does not change the files. The local loop does not run again for it. Copilot must still review that exact head. A summary without findings is not a finding.
+- Branch protection does not require a PR branch to be up to date with `main`. Do not rebase only to catch up with `main`. Rebase when the PR has a conflict, or when `main` gained a change that the PR depends on or that touches the same code paths. Then run the affected checks again on the new head.
+- Main CI runs after each merge. When main CI fails because of a merged PR, fix or revert that PR at once, before other merges continue.
 - For an authorized merge, use squash with an expected-head guard, for example `gh pr merge <PR#> --squash --match-head-commit <sha>`. Afterward, verify GitHub's merged state and resulting base commit and monitor all relevant post-merge workflows on the squash commit to a successful terminal state. Before cleanup, prove the task worktree is clean, the task branch still equals the guarded PR head with no later commits, and the squash commit contains the merged patch; then remove only task-created worktrees and branches, never a dirty or shared checkout.
 - Merge approval is not release approval. Do not create a tag, publish a GitHub Release, trigger a release workflow, or claim deployment without a separate explicit request and verification.
 - Treat pull-request evidence as public by default. Anonymize unrelated user, host, customer, or operational identifiers, and never publish credentials, tokens, private keys, signed URLs, or secret-bearing configuration.
