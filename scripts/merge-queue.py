@@ -328,6 +328,11 @@ def cmd_enqueue(args):
     run(["gh", "pr", "comment", str(args.pr), "--repo", repo, "--body-file", "-"],
         stdin=entry_comment(args.head, args.subject, body))
     run(["gh", "pr", "edit", str(args.pr), "--repo", repo, "--add-label", LABEL])
+    entry = latest_entry(gh_pages(f"repos/{repo}/issues/{args.pr}/comments"))
+    if entry is None or entry["head"] != args.head:
+        run(["gh", "pr", "edit", str(args.pr), "--repo", repo, "--remove-label", LABEL],
+            check=False)
+        raise QueueError("the entry is not trusted: post it with the repository owner account")
     print(f"#{args.pr} queued at {args.head}")
 
 
