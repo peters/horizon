@@ -17,8 +17,9 @@ terminal was attached appears too, and nothing of an earlier attach stays above 
 tmux stays the terminal of the session: it answers the session's terminal queries and it adds
 paste brackets only when the session asked for them. This terminal therefore never sees those
 queries, and it never reports focus or color scheme changes, which tmux does not pass on. tmux
-3.4 cannot learn the colors of a control mode client, so it answers color queries with its default
-colors. It does not report the current text style of a pane either, so a style that a program set
+3.4 cannot learn the colors of a control mode client, so at each attach the helper asks this
+terminal for its colors and gives them to tmux as the window style, from which tmux answers color
+queries. tmux does not report the current text style of a pane, so a style that a program set
 before the attach and did not use yet is not restored.
 """
 import contextlib
@@ -75,6 +76,12 @@ PASTE_START, PASTE_END = b'\x1b[200~', b'\x1b[201~'
 KEEP_BRACKETS = b'\x1b[?2004h'
 # Leaves no mouse report, paste bracket or key mode on in the panel after the attach ends.
 RESET_MODES = b'\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?2004l\x1b[?1l\x1b>\x1b[?25h\x1b[0m'
+# Asks this terminal for its foreground and background colors. A terminal answers in order and
+# always answers the identity request last, so that answer ends the wait.
+COLOR_QUERY = b'\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b[c'
+COLOR_REPLY = re.compile(rb'\x1b\](1[01]);rgb:([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})(?:\x07|\x1b\\)')
+IDENTITY_REPLY = re.compile(rb'\x1b\[\?[0-9;]*c')
+COLOR_SECONDS = 2
 LITERAL = frozenset(b'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ,./:=@_+-')
 
 
@@ -483,6 +490,17 @@ def render(state, normal, alternate, cursor_row=()):
     return bytes(out + b'\x1b]2;' + title.encode() + b'\x07\x1b[?2004h')
 
 
+def colors(data):
+    """The tmux style of the colors that the terminal reported in `data`, and `data` without its
+    answers: what is left was typed."""
+    found = {}
+    for match in COLOR_REPLY.finditer(data):
+        found['fg' if match.group(1) == b'10' else 'bg'] = '#' + ''.join(
+            '%02x' % round(int(value, 16) * 255 / (16 ** len(value) - 1)) for value in match.groups()[1:])
+    typed = IDENTITY_REPLY.sub(b'', COLOR_REPLY.sub(b'', data), count=1)
+    return ','.join('%s=%s' % (name, found[name]) for name in ('fg', 'bg') if name in found), typed
+
+
 def write(fd, data):
     """Writes all of `data`; False when the terminal is gone."""
     view = memoryview(data)
@@ -542,10 +560,36 @@ class Attachment:
             self.control.read()
         return True
 
+    def probe(self):
+        """Asks this terminal for its colors: the tmux style of them, and the input typed meanwhile."""
+        write(self.terminal + 1, COLOR_QUERY)
+        data = b''
+        deadline = time.monotonic() + COLOR_SECONDS
+        while not IDENTITY_REPLY.search(data):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not select.select([self.terminal], [], [], remaining)[0]:
+                break
+            try:
+                chunk = os.read(self.terminal, 65536)
+            except OSError:
+                chunk = b''
+            if not chunk:
+                break
+            data += chunk
+        return colors(data)
+
     def synchronize(self):
+        """Shows the session in this terminal; returns the input typed meanwhile."""
         target = self.target
         self.control.send(['refresh-client -C %dx%d' % window_size(self.terminal)])
         self.wait(1)
+        # tmux answers the color queries of a pane from its window style. The style of the server
+        # also gives the colors to sessions that start later, before their first attach.
+        style, typed = self.probe()
+        if style:
+            self.control.send(["set-option -p -t %s window-style '%s'" % (target, style),
+                               "set-option -wg window-style '%s'" % style])
+            self.wait(2)
         query = ' '.join('#{%s}' % name for name in STATE)
         # In the alternate screen, the pane's grid holds its normal history above the alternate
         # screen, and the normal screen is saved apart (-a). One command line, so tmux reads no
@@ -568,6 +612,7 @@ class Attachment:
             normal, alternate = [whole], []
         shown = render(state, normal, alternate, cursor_row)
         write(self.terminal + 1, shown + b''.join(self.output.feed(data) for pane, data in later if pane == self.pane))
+        return typed
 
     def run(self):
         wake_read, wake_write = os.pipe()
@@ -575,9 +620,10 @@ class Attachment:
         signal.set_wakeup_fd(wake_write)
         resized = []
         signal.signal(signal.SIGWINCH, lambda *_: resized.append(True))
-        self.synchronize()
+        typed = self.synchronize()
         stdin, stdout, tmux = self.terminal, self.terminal + 1, self.control.process.stdout
         last_input = time.monotonic()
+        self.control.send(self.input.feed(typed))
         while not self.control.ended:
             waiting = self.input.waiting()
             timeout = None if waiting is None else max(0, last_input + waiting - time.monotonic())

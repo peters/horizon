@@ -503,9 +503,16 @@ limit.
 tmux stays the terminal of the session:
 
 - tmux answers the terminal queries of the session. The helper removes these
-  queries from the output, so the panel does not send a second answer. tmux 3.4
-  cannot get the colors of the panel from a control mode client, so it answers
-  a color query with its default colors.
+  queries from the output, so the panel does not send a second answer.
+- tmux 3.4 cannot get the colors of the panel from a control mode client. At
+  each attach, the helper asks the panel for its foreground and background
+  colors (OSC 10 and 11). It sets them as the window style of the pane and as
+  the default window style of the tmux server, and tmux answers the color
+  queries of the session from that style. A session that starts later gets
+  these colors before its first attach. A program that asks before the first
+  attach to a new tmux server gets no answer or black. tmux does not answer
+  palette queries (OSC 4). If the panel colors change while a panel is
+  attached, the session gets the new colors at the next attach.
 - The session cannot read or change the clipboard of the computer, because the
   helper removes its clipboard requests (OSC 52), as tmux did.
 - The panel always brackets a paste. The helper gives the paste to tmux, and
