@@ -286,7 +286,7 @@ Do this task after B02. It needs the synthetic repository.
 
    Result: The field shows the repository.
 
-6. Click **Read .horizon/cloud.yml**.
+6. Wait until the dialog reads `.horizon/cloud.yml`.
 
    Result: The dialog loads the profiles. **BEFORE YOU START** shows that a key is not available.
 

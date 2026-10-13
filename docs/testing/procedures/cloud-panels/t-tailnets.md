@@ -186,7 +186,7 @@ D01 starts `smoke-a` on the test tailnet and records it in the ledger. If D01 di
 
    Result: The field shows `<repo>`.
 
-4. Click **Read .horizon/cloud.yml**.
+4. Wait until the dialog reads `.horizon/cloud.yml`.
 
    Result: **Profile** lists the profiles that area B committed.
 
@@ -389,7 +389,7 @@ path between clouds. Do not add a Tailscale Serve setting for this test.
 
    Result: The field shows `<repo>`.
 
-5. Click **Read .horizon/cloud.yml**.
+5. Wait until the dialog reads `.horizon/cloud.yml`.
 
    Result: **Profile** lists the profiles that area B committed.
 

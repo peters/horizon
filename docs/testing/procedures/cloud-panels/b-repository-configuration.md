@@ -13,8 +13,8 @@ owner: peters
 ## 1. Purpose
 
 This area makes the synthetic repositories for the run. It also makes sure that
-**New cloud** reads `.horizon/cloud.yml`, refuses YAML that is not valid, offers
-the setup agent and reads local image-only settings. It makes sure that
+**New cloud** reads `.horizon/cloud.yml`, offers the setup agent and reads the
+working copy of the settings without a button. It makes sure that
 `check-markers.py` names the contract markers that an image does not report.
 
 ## 2. Applicability
@@ -245,7 +245,7 @@ bind of S02 alone does not change the socket that the candidate uses.
 
    Result: The dialog reads the repository.
 
-8. Click **Read .horizon/cloud.yml**.
+8. Wait until the dialog reads `.horizon/cloud.yml`.
 
    Result: **Profile** lists `hetzner-cpu`, `hetzner-idle`, `runpod-small`,
    `runpod-cpu`, `runpod-gpu` and `runpod-build`. The default is `hetzner-cpu`.
@@ -254,63 +254,73 @@ bind of S02 alone does not change the socket that the candidate uses.
 
    Result: The dialog shows GPU workers. Select `hetzner-cpu` again.
 
-### 6.3 B03 — Show an error for YAML that is not valid
+### 6.3 B03 — Use the commit when the working copy is not valid
 
 1. Add the line `profiles: [` to the end of the local file `app/.horizon/cloud.yml`.
 
    Result: The local file is not valid YAML. The committed file does not change.
 
-2. In the New cloud dialog, expand **More options**.
+2. Wait two seconds. Do not click a button.
 
-   Result: The dialog shows **Committed base revision** and **Use local image-only settings**.
+   Result: Below **Profile**, the dialog shows `The working copy of
+   .horizon/cloud.yml is not valid, so the committed settings apply.` **Profile**
+   lists the six committed profiles.
 
-3. Select **Use local image-only settings**.
-
-   Result: The dialog reads the local file, not the committed file.
-
-4. Click **Read .horizon/cloud.yml**.
-
-   Result: The dialog shows `Invalid .horizon/cloud.yml. Check its syntax, default
-   profile and supported fields.` **Profile** shows no profile.
-
-5. Restore the committed version of the local file.
+3. Restore the committed version of the local file.
 
    ```sh
    git -C <data-home>/smoke/app checkout -- .horizon/cloud.yml
    ```
 
-   Result: `git status --short` shows no change.
+   Result: `git status --short` shows no change. The note goes away.
 
-### 6.4 B04 — Offer only image-only profiles in local mode
+### 6.4 B04 — Read sizes from the working copy and builds from the commit
 
-1. In the local file `app/.horizon/cloud.yml`, change `default: hetzner-cpu` to `default: runpod-build`.
+1. In the local file `app/.horizon/cloud.yml`, change `min_cpu: 4` of
+   `hetzner-cpu` to `min_cpu: 8`.
 
-   Result: The local default is a build profile.
+   Result: Without a click, **Profile** shows `hetzner-cpu` with `from 8 vCPU`.
+   The dialog shows no note.
 
-2. With **Use local image-only settings** selected, click **Read .horizon/cloud.yml**.
+2. Select `runpod-cpu` in **Profile**. In the local file, change `min_cpu: 4` of
+   `runpod-cpu` to `min_cpu: 16`.
 
-   Result: The dialog refuses the build default with a clear message. It does not
-   select another profile.
+   Result: `runpod-cpu` stays selected and shows `from 16 vCPU`.
 
-3. In the local file, change the default back to `hetzner-cpu`.
+3. In the local file, change `dockerfile: .horizon/Dockerfile` of `runpod-build`
+   to `dockerfile: .horizon/Other.Dockerfile`.
 
-   Result: The local default is an image-only profile.
+   Result: The dialog shows `Uncommitted changes to build are not used until you
+   commit them.`
 
-4. Click **Read .horizon/cloud.yml**.
+4. In the local file, copy the profile `runpod-build` to a new profile
+   `local-build`.
 
-   Result: **Profile** lists all profiles except `runpod-build`.
+   Result: **Profile** does not list `local-build`. The dialog shows `Profile
+   local-build builds an image, so New cloud offers it after you commit it.`
 
-5. Restore the committed version of the local file.
+5. Expand **More options** and type `HEAD~1` in **Committed base revision**.
+
+   Result: The dialog reads the earlier commit, which has no
+   `.horizon/cloud.yml`. It shows **No cloud setup yet**. The working copy does
+   not apply to a commit that is not checked out.
+
+6. Remove the text from **Committed base revision**.
+
+   Result: **Profile** lists the profiles of the working copy again.
+
+7. Restore the committed version of the local file.
 
    ```sh
    git -C <data-home>/smoke/app checkout -- .horizon/cloud.yml
    ```
 
-   Result: `git status --short` shows no change.
+   Result: `git status --short` shows no change. **Profile** shows `from 4 vCPU`
+   for `runpod-cpu` and the dialog shows no note.
 
-6. Click **Cancel**.
+8. Click **Cancel**.
 
-   Result: The dialog closes. The next dialog uses the committed configuration.
+   Result: The dialog closes.
 
 ### 6.5 B05 — Name the contract markers that an image does not report
 
@@ -350,8 +360,9 @@ bind of S02 alone does not change the socket that the candidate uses.
 - B01 shows **No cloud setup yet** with the **Quick start** and **Set up from CI**
   cards and one chip for each agent, and no error.
 - B02 lists the six profiles from the committed file.
-- B03 shows the error and clears the profiles.
-- B04 refuses a build default and offers only profiles without `build`.
+- B03 shows the note and keeps the committed profiles.
+- B04 shows working-copy sizes without a click, names the uncommitted build
+  changes and does not offer a new build profile.
 - B05 names the absent markers of an older image and none for the test images.
 
 ## 8. Cleanup

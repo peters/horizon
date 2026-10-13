@@ -230,7 +230,7 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 
    Result: The field shows the repository.
 
-3. Click **Read .horizon/cloud.yml**.
+3. Wait until the dialog reads `.horizon/cloud.yml`.
 
    Result: The dialog shows `Fetching prices and stock…` and then the worker catalog.
 
@@ -370,7 +370,7 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 
     Result: The field shows the repository.
 
-14. Click **Read .horizon/cloud.yml**.
+14. Wait until the dialog reads `.horizon/cloud.yml`.
 
     Result: The dialog shows current RunPod prices. C08 uses this dialog.
 
@@ -429,7 +429,7 @@ For a detailed check of the refresh, use the
 
    Result: The field shows the repository.
 
-3. Click **Read .horizon/cloud.yml**.
+3. Wait until the dialog reads `.horizon/cloud.yml`.
 
    Result: **Profile** lists the profiles that area B committed.
 
