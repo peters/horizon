@@ -13,13 +13,40 @@ fn open_creation(ctx: &egui::Context, app: &mut HorizonApp, root: std::path::Pat
     }
 }
 
+/// Types `text` into the focused source field.
+fn type_text(ctx: &egui::Context, app: &mut HorizonApp, text: &str) {
+    frame(ctx, app, vec![Event::Text(text.into())], Modifiers::NONE);
+}
+
+/// Draws frames until `text` shows, such as a finder row's title; folders are read on a
+/// thread.
+fn wait_for_text(ctx: &egui::Context, app: &mut HorizonApp, text: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let output = run_app_frame_with_input(ctx, app, raw_input([1400.0, 900.0], None));
+        let shown = output
+            .shapes
+            .iter()
+            .any(|shape| matches!(&shape.shape, Shape::Text(shown) if shown.galley.job.text == text));
+        if shown {
+            return;
+        }
+        assert!(Instant::now() < deadline, "the finder never showed {text}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// A link to a host that never resolves, so nothing reaches the network.
+const LINK: &str = "https://git.invalid/demo-org/demo-atlas";
+
 #[test]
-fn keyboard_chooses_a_typed_repository_and_returns_focus_to_the_field() {
+fn keyboard_chooses_a_folder_result_and_keeps_focus_in_the_field() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
     let repository = temp.path().join("repository");
-    std::fs::create_dir(&repository).unwrap();
+    std::fs::create_dir_all(repository.join(".git")).unwrap();
+    std::fs::create_dir(temp.path().join("plain-folder")).unwrap();
     open_creation(&ctx, &mut app, temp.path().join("clouds"));
     app.cloud_prototype.production.profiles = Some(
         CloudConfig::parse(
@@ -27,20 +54,10 @@ fn keyboard_chooses_a_typed_repository_and_returns_focus_to_the_field() {
         )
         .unwrap(),
     );
-    key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
+    type_text(&ctx, &mut app, &format!("{}/", temp.path().display()));
+    wait_for_text(&ctx, &mut app, "repository");
     key(&ctx, &mut app, Key::Enter, Modifiers::NONE);
-    assert!(
-        app.dir_picker.is_some(),
-        "Enter on Browse… opens the picker without also confirming it"
-    );
-    frame(
-        &ctx,
-        &mut app,
-        vec![Event::Text(format!("{}/", repository.display()))],
-        Modifiers::NONE,
-    );
-    key(&ctx, &mut app, Key::Enter, Modifiers::NONE);
-    assert!(app.dir_picker.is_none());
+    assert!(app.dir_picker.is_none(), "no picker opens for a typed path");
     assert_eq!(app.cloud_prototype.production.repository, repository.to_string_lossy());
     assert!(
         app.cloud_prototype.production.profiles.is_none(),
@@ -48,19 +65,33 @@ fn keyboard_chooses_a_typed_repository_and_returns_focus_to_the_field() {
     );
     assert!(
         ctx.memory(|memory| memory.has_focus(Id::new("cloud-source"))),
-        "focus returns to the field after choosing"
+        "focus stays in the field after choosing"
     );
+    app.cloud_prototype
+        .production
+        .source
+        .edit_for_test(&format!("{}/plain", temp.path().display()));
+    // Only the folder that matches is listed once this path's folders are read.
+    wait_for_text(&ctx, &mut app, "1 FOLDER");
     key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
-    key(&ctx, &mut app, Key::Enter, Modifiers::COMMAND);
-    assert!(app.dir_picker.is_some(), "Browse… opens the picker again");
-    key(&ctx, &mut app, Key::Escape, Modifiers::NONE);
-    assert!(app.dir_picker.is_none());
-    assert!(app.cloud_creation_open(), "Escape closes only the picker");
-    assert_eq!(app.cloud_prototype.production.repository, repository.to_string_lossy());
-    assert!(
-        ctx.memory(|memory| memory.has_focus(Id::new("cloud-source"))),
-        "focus also returns after cancelling"
+    let opened = format!(
+        "{}{}",
+        temp.path().join("plain-folder").display(),
+        std::path::MAIN_SEPARATOR
     );
+    assert_eq!(
+        app.cloud_prototype.production.source.input(),
+        opened,
+        "Tab opens the folder"
+    );
+    assert!(ctx.memory(|memory| memory.has_focus(Id::new("cloud-source"))));
+}
+
+/// Opens the dialog with a link in the field, so its clone folder can be chosen.
+fn open_with_link(ctx: &egui::Context, app: &mut HorizonApp, root: std::path::PathBuf) {
+    open_creation(ctx, app, root);
+    type_text(ctx, app, LINK);
+    frame(ctx, app, Vec::new(), Modifiers::NONE);
 }
 
 #[test]
@@ -68,10 +99,10 @@ fn clicking_outside_the_picker_cancels_it_and_keeps_the_dialog() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
-    open_creation(&ctx, &mut app, temp.path().join("clouds"));
+    open_with_link(&ctx, &mut app, temp.path().join("clouds"));
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
-    click(&ctx, &mut app, label_position(&output, "Browse…"));
-    assert!(app.dir_picker.is_some(), "the repository field opens the picker");
+    click(&ctx, &mut app, label_position(&output, "Choose folder…"));
+    assert!(app.dir_picker.is_some(), "the clone folder opens the picker");
     let outside = Pos2::new(8.0, 892.0);
     click(&ctx, &mut app, outside);
     assert!(app.dir_picker.is_none(), "an outside click cancels the picker");
@@ -106,11 +137,11 @@ fn release(ctx: &egui::Context, app: &mut HorizonApp, held: Key) {
 }
 
 #[test]
-fn holding_enter_on_browse_leaves_the_picker_open_and_empty() {
+fn holding_enter_on_choose_folder_leaves_the_picker_open_and_empty() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
-    open_creation(&ctx, &mut app, temp.path().join("clouds"));
+    open_with_link(&ctx, &mut app, temp.path().join("clouds"));
     key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
     hold(&ctx, &mut app, Key::Enter);
     assert!(app.dir_picker.is_some(), "repeats must not confirm the picker");
@@ -125,7 +156,7 @@ fn holding_escape_in_the_picker_keeps_the_dialog_open() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
-    open_creation(&ctx, &mut app, temp.path().join("clouds"));
+    open_with_link(&ctx, &mut app, temp.path().join("clouds"));
     app.cloud_prototype.production.title = "Held keys".into();
     key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
     key(&ctx, &mut app, Key::Enter, Modifiers::NONE);
@@ -145,11 +176,11 @@ fn clicking_the_dialog_body_cancels_the_picker_and_keeps_the_dialog() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
-    open_creation(&ctx, &mut app, temp.path().join("clouds"));
+    open_with_link(&ctx, &mut app, temp.path().join("clouds"));
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
     let cancel = label_position(&output, "Cancel");
-    click(&ctx, &mut app, label_position(&output, "Browse…"));
-    assert!(app.dir_picker.is_some(), "the repository field opens the picker");
+    click(&ctx, &mut app, label_position(&output, "Choose folder…"));
+    assert!(app.dir_picker.is_some(), "the clone folder opens the picker");
     click(&ctx, &mut app, cancel);
     assert!(
         app.dir_picker.is_none(),
@@ -157,6 +188,7 @@ fn clicking_the_dialog_body_cancels_the_picker_and_keeps_the_dialog() {
     );
     assert!(app.cloud_creation_open(), "the disabled Cancel button does not act");
     assert!(app.cloud_prototype.production.repository.is_empty());
+    assert_eq!(app.cloud_prototype.production.source.input(), LINK, "the link stays");
 }
 
 #[test]
@@ -261,7 +293,7 @@ fn a_picker_closed_without_a_repository_reads_nothing() {
         runtime_state: Box::new(RuntimeState::default()),
     });
     open_creation(&ctx, &mut app, temp.path().join("clouds"));
-    app.cloud_prototype.production.choosing_repository = true;
+    app.cloud_prototype.production.picking_for_source = true;
     for _ in 0..3 {
         frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     }

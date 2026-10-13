@@ -83,7 +83,7 @@ pub(super) struct Production {
     pub(super) focus_title_on_open: bool,
     title: String,
     repository: String,
-    choosing_repository: bool,
+    picking_for_source: bool,
     /// Where the new cloud's code comes from: a link to clone, or a folder.
     source: creation::source::State,
     /// What Start depends on, confirmed before it is offered.

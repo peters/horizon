@@ -1,5 +1,6 @@
 //! Where a new cloud's code comes from: a pasted link is cloned, a folder is used as it is.
 //! Git's own credentials do the signing in; a token is asked for only when Git has none.
+mod finder;
 mod github;
 mod progress;
 mod view;
@@ -84,6 +85,10 @@ pub(in crate::app::cloud_panel::production) struct State {
     /// The repository the connected account's token was asked for; a token that arrives
     /// once the field names another is dropped.
     account_for: Option<Remote>,
+    /// Finds checkouts, folders and the account's repositories as the field is typed in.
+    finder: finder::Finder,
+    /// A result put text in the field, which keeps the focus for more typing.
+    refocus: bool,
 }
 
 impl State {
@@ -388,7 +393,7 @@ impl State {
             return Err("Cloning…");
         }
         let Some(remote) = self.remote().cloned() else {
-            return Err("Paste a GitHub or GitLab link, or choose a folder.");
+            return Err("Choose a repository, type a folder path, or paste a link.");
         };
         // Nothing is cloned before the link has been looked up, unless it is already on disk.
         let looked_up = self.probed.as_deref() == Some(remote.url.as_str()) && self.probe.is_none();
@@ -464,7 +469,7 @@ mod tests {
     fn continue_says_what_is_missing() {
         assert_eq!(
             typed("").next_step(),
-            Err("Paste a GitHub or GitLab link, or choose a folder.")
+            Err("Choose a repository, type a folder path, or paste a link.")
         );
         let mut link = typed("github.com/demo-org/demo-atlas");
         assert_eq!(

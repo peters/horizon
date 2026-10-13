@@ -498,11 +498,24 @@ token at once.
 
 ### Your repositories in New cloud
 
-With GitHub connected, **New cloud** offers **Pick from your GitHub
-repositories** under **Where is your code?**. It lists the repositories your
-GitHub App is installed on, and typing narrows the list. A click puts the
-repository's link in the field, and Continue clones it on this computer as
-before. For a private repository on github.com, the token card becomes **Clone
+**Where is your code?** in **New cloud** is one search field:
+
+- Type words to search the Git checkouts on this computer and, with GitHub
+  connected, the repositories that your GitHub App is installed on. The letters
+  must only come in order: `acwb` finds `acme/web-board`. With nothing typed,
+  the checkouts that changed last come first.
+- A repository that is on GitHub and on this computer shows one time, with both
+  badges. If you choose it, Horizon uses the checkout.
+- Type a path that starts with `/`, `~` or `.` to see its folders. **Tab** opens
+  the highlighted folder, and **Enter** uses a repository.
+- Paste a link to clone a repository. Choosing a GitHub repository that is not
+  on this computer puts its link in the field. Continue clones it on this
+  computer as before.
+
+The arrow keys move through the results. Horizon looks for checkouts up to four
+folders below your home folder, on a background thread. It does not look in
+hidden folders or build folders. Before this computer signs in to your GitHub
+App, **Show your GitHub repositories** signs it in and lists them. For a private repository on github.com, the token card becomes **Clone
 with GitHub**, which clones with your connected account; **Use a token instead**
 keeps the old way.
 

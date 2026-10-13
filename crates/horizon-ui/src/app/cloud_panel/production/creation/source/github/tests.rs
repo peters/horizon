@@ -51,26 +51,6 @@ fn a_private_github_link_offers_the_connected_account_unless_a_token_was_chosen(
 }
 
 #[test]
-fn the_list_shows_the_connected_repositories() {
-    let mut account = account();
-    account.repositories = Some(vec!["acme/web".into(), "acme/api".into()]);
-    let texts: Vec<String> = egui::Context::default()
-        .run_ui(egui::RawInput::default(), |ui| {
-            assert!(account.picker(ui, "web").is_none(), "nothing is chosen without a click");
-        })
-        .discard_textures()
-        .shapes
-        .iter()
-        .filter_map(|shape| match &shape.shape {
-            egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
-            _ => None,
-        })
-        .collect();
-    assert!(texts.iter().any(|text| text == "acme/web"));
-    assert!(!texts.iter().any(|text| text == "acme/api"));
-}
-
-#[test]
 fn ending_a_request_ends_only_its_own_sign_in() {
     let (mine, other) = (Cancellation::default(), Cancellation::default());
     drop(Abort(mine.clone()));
@@ -141,7 +121,9 @@ fn a_typed_name_narrows_the_list_and_a_link_sets_it_aside() {
     state.account = Some(account);
     let texts = |state: &mut super::super::State| -> Vec<String> {
         egui::Context::default()
-            .run_ui(egui::RawInput::default(), |ui| state.github_section(ui))
+            .run_ui(egui::RawInput::default(), |ui| {
+                let _ = state.finder(ui);
+            })
             .discard_textures()
             .shapes
             .iter()
