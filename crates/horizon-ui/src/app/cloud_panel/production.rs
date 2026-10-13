@@ -894,12 +894,12 @@ impl HorizonApp {
                 return Ok(());
             }
             if options.kind == PanelKind::Device {
-                let endpoint = runtime
+                let desktop = runtime
                     .desktop
                     .as_ref()
-                    .ok_or(cloud_runtime::Error::Invalid("Desktop tunnel is connecting"))?
-                    .endpoint;
-                options.command = Some(endpoint.to_string());
+                    .ok_or(cloud_runtime::Error::Invalid("Desktop tunnel is connecting"))?;
+                options.command = Some(desktop.endpoint.to_string());
+                options.device_input = desktop.input;
                 options.local_id = Some(id);
                 options.cwd = None;
                 return Ok(());

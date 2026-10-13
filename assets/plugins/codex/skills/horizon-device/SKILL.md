@@ -117,7 +117,9 @@ confirms input delivery, not application success. On stale geometry take another
 screenshot. On indeterminate input observe before deciding whether another
 action is appropriate; never replay blindly. The native Device panel is
 read-only for agents: a person may turn its Interact toggle on in the UI, but
-no tool operation can.
+no tool operation can. A cloud desktop viewer offers no Interact, because the
+worker's VNC server ignores input by design; agents on the worker use the device
+tools instead.
 
 The local CLI has the same contract:
 `horizon-device --target <private-target.json> doctor|screenshot|act|resize <JSON>`.

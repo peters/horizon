@@ -241,7 +241,11 @@ real request.
 
    Result: The agent reports a screenshot. The Device panel continues to show the desktop.
 
-3. Click on the image in the Device panel.
+3. Examine **Interact** in the Device panel.
+
+   Result: **Interact** is disabled. The panel shows `View only: the VNC server of this desktop ignores mouse and keyboard input`.
+
+4. Click on the image in the Device panel.
 
    Result: The worker desktop does not change. The Device panel only shows the desktop.
 
@@ -377,7 +381,7 @@ real request.
 - Claude Code that you start in a Shell panel replies without a login prompt.
 - Codex replies, or it gives a clear reason.
 - The Browser panel loads the page and names its controller.
-- The desktop viewer shows the worker desktop and sends no input.
+- The desktop viewer shows the worker desktop, disables **Interact** with the reason and sends no input.
 - The layout buttons, the full screen view, F11, Escape and the resize corner work.
 - `agent-mcp.json` lists the four worker MCP servers.
 - SSH connects with the pinned host key and refuses an unknown host key.

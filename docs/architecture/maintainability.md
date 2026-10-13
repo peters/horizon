@@ -45,7 +45,7 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   like an SSH panel, in which case the target is the endpoint as seen from that
   host. Restored panels require manual reconnect.
 - Device panel requests are claimed on the UI thread by `app/device_request_pump.rs` when a request file appears. Wayland does not deliver `RedrawRequested` while a frame callback is outstanding and the compositor is not presenting the surface, and it reports neither visibility nor minimization, so the queue cannot wait for `App::ui`.
-- `horizon-ui::device_widget` owns presentation and, only while a person has Interact on, event capture in `capture.rs` and the pointer and keyboard mapping in `input.rs`; agents never get that path. `details` renders
+- `horizon-ui::device_widget` owns presentation and, only while a person has Interact on, event capture in `capture.rs` and the pointer and keyboard mapping in `input.rs`; agents never get that path. The creator of a viewer sets `DevicePanelState::input`. RFB cannot report a server that ignores input, so a `ViewOnly` viewer disables Interact and shows the reason. The cloud desktop viewer takes `ViewOnly` from its `DesktopTunnel`. `details` renders
   labelled connection facts, while core selects and bounds the displayed name. `frame` validates
   and composites decoded rectangles; `session` owns a cancellable socket/decoder
   worker and a single latest-frame slot. `session/tunnel.rs` owns one `ssh -W`

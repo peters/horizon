@@ -1,4 +1,4 @@
-use crate::{DevicePanelState, DeviceViewTarget, Error, Result, SshConnection, editor::PanelContent};
+use crate::{DeviceInput, DevicePanelState, DeviceViewTarget, Error, Result, SshConnection, editor::PanelContent};
 
 use super::{Panel, PanelKind, StaticPanelSeed};
 
@@ -7,6 +7,7 @@ pub(super) fn spawn_device(
     command: Option<&str>,
     is_restore: bool,
     mut identity: Option<crate::browser::manifest::device::DeviceIdentity>,
+    input: DeviceInput,
     ssh_tunnel: Option<SshConnection>,
 ) -> Result<Panel> {
     if let Some(identity) = &mut identity {
@@ -31,6 +32,7 @@ pub(super) fn spawn_device(
         PanelKind::Device,
         PanelContent::Device(DevicePanelState {
             target,
+            input,
             identity,
             connect_on_start: !is_restore,
             ssh_tunnel: ssh_tunnel.clone(),

@@ -358,6 +358,9 @@ impl PanelState {
         };
         PanelOptions {
             device_identity: self.device_identity.clone(),
+            // Not saved: a cloud desktop viewer restores as a cloud placeholder, which has
+            // no viewer, and the cloud sets the input again when it attaches the viewer.
+            device_input: crate::DeviceInput::default(),
             name: if self.name.is_empty() {
                 None
             } else {

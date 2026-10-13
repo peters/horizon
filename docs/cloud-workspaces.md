@@ -1320,6 +1320,9 @@ the live process retains the provider's release result and need not query it aga
 Browser panels display their actual controller. Native VNC Device panels are
 read-only viewers; worker-local device tools perform input and report its agent.
 Choose **Add desktop viewer** on a ready cloud to view its worker desktop.
+The worker desktop is view-only by design: its VNC server ignores mouse and keyboard
+input. Thus this Device panel does not offer **Interact** and shows the reason.
+Agents on the worker use the device tools for input. Local and SSH Device panels keep **Interact**.
 All agent tools run on the worker, independently of the laptop connection.
 The worker supports the public browser tools and standalone device input tools.
 `device_panel` manages viewers in a running Horizon window, so it is unavailable

@@ -2,6 +2,7 @@
 mod relay;
 
 use super::{Cancellation, Error, Result, ssh::Connection};
+use crate::DeviceInput;
 use std::{
     io::{self, Read},
     net::{SocketAddr, TcpListener, TcpStream},
@@ -21,6 +22,8 @@ const MAX_CONNECTIONS: usize = 4;
 #[derive(Debug)]
 pub struct DesktopTunnel {
     pub endpoint: SocketAddr,
+    /// What the worker's VNC server does with a viewer's input.
+    pub input: DeviceInput,
     stop: Arc<AtomicBool>,
     /// Set after the accept thread has closed the listening socket.
     listener_released: Arc<AtomicBool>,
@@ -105,6 +108,9 @@ impl DesktopTunnel {
             })?;
         Ok(Self {
             endpoint,
+            // Tunnels reach the worker's 127.0.0.1:5900, where x11vnc runs `-viewonly`
+            // (horizon-worker-supervise) and drops all input.
+            input: DeviceInput::ViewOnly,
             stop,
             listener_released,
             server: Some(server),

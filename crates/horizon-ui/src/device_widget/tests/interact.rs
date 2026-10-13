@@ -785,3 +785,63 @@ fn a_wheel_without_a_move_is_sent_at_the_current_pointer() {
         "the notch is at the pointer, not dropped: {sent:?}"
     );
 }
+
+#[test]
+fn a_view_only_desktop_offers_no_interact_and_receives_nothing() {
+    let (ctx, mut device, mut state, mut receiver) = viewer_with_input();
+    device.input = horizon_core::DeviceInput::ViewOnly;
+    let labels = crate::test_egui::accesskit_labels(|ui| state.show(ui, &device, true));
+    assert!(icon_disabled(&labels, "Interact"));
+    let output = frame(&ctx, &mut state, &device, Vec::new());
+    text_center(&output, super::super::capture::VIEW_ONLY_REASON);
+    let middle = image_rect(&output).center();
+    let narrow = ctx
+        .run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(360.0, 600.0))),
+                ..Default::default()
+            },
+            |ui| state.show(ui, &device, true),
+        )
+        .discard_textures();
+    let reason = text_right(&narrow, super::super::capture::VIEW_ONLY_REASON);
+    assert!(
+        reason <= 360.0,
+        "the reason wraps inside a narrow viewer, ends at {reason}"
+    );
+
+    click_label(&ctx, &mut state, &device, "Interact");
+    assert!(!state.interact, "a disabled toggle cannot turn Interact on");
+    // Interact left on from before cannot reach the view-only desktop either.
+    state.interact = true;
+    frame(&ctx, &mut state, &device, Vec::new());
+    assert!(!state.interact);
+    frame(&ctx, &mut state, &device, click_events(middle, true));
+    frame(&ctx, &mut state, &device, click_events(middle, false));
+    frame(&ctx, &mut state, &device, vec![egui::Event::Text("a".into())]);
+    assert!(
+        drain(&mut receiver).is_empty(),
+        "nothing is sent to a view-only desktop"
+    );
+    assert!(!state.captured);
+
+    // A viewer whose server takes input gets Interact back.
+    device.input = horizon_core::DeviceInput::Accepted;
+    let labels = crate::test_egui::accesskit_labels(|ui| state.show(ui, &device, true));
+    assert!(!icon_disabled(&labels, "Interact"));
+    click_label(&ctx, &mut state, &device, "Interact");
+    assert!(state.interact);
+    frame(&ctx, &mut state, &device, vec![egui::Event::PointerMoved(middle)]);
+    assert_eq!(pointers(&drain(&mut receiver)), vec![(80, 40, 0)]);
+}
+
+fn text_right(output: &egui::FullOutput, label: &str) -> f32 {
+    output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == label => Some(text.pos.x + text.galley.size().x),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("missing label {label}"))
+}
