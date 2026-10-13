@@ -79,7 +79,7 @@ impl DriverState {
         if let Some(passkeys) = self.passkeys.as_mut() {
             passkeys.contexts.clear();
             // The session is gone, so the reply cannot reach the page.
-            if passkeys.bridge.cancel_for(|_| true).is_some() {
+            if !passkeys.bridge.cancel_for(|_| true).is_empty() {
                 self.manifest_dirty = true;
             }
         }
@@ -111,8 +111,12 @@ impl DriverState {
                     // round trips, so it waits for the driver loop.
                     if matches!(message, PageMessage::Abort { .. }) {
                         self.handle_passkey_message(link, event_tx, frame_slot, context, message);
-                    } else if let Some(passkeys) = self.passkeys.as_mut() {
-                        passkeys.bridge.enqueue(context, message);
+                    } else if let Some(reply) = self
+                        .passkeys
+                        .as_mut()
+                        .and_then(|passkeys| passkeys.bridge.enqueue(context, message))
+                    {
+                        self.deliver_passkey_reply(link, context, &reply);
                     }
                 }
                 true
@@ -304,11 +308,13 @@ impl DriverState {
             return;
         };
         let contexts = &passkeys.contexts;
-        if let Some((context, reply)) = passkeys
+        let replies = passkeys
             .bridge
-            .cancel_for(|context| contexts.get(context).is_some_and(|owner| owner == frame))
-        {
-            self.deliver_passkey_reply(link, context, &reply);
+            .cancel_for(|context| contexts.get(context).is_some_and(|owner| owner == frame));
+        for (context, reply) in &replies {
+            self.deliver_passkey_reply(link, *context, reply);
+        }
+        if !replies.is_empty() {
             self.note_passkey_change(event_tx);
         }
     }
@@ -319,7 +325,7 @@ impl DriverState {
         };
         passkeys.contexts.retain(|id, _| !matches(*id));
         // The context is gone, so the reply cannot reach the page.
-        if passkeys.bridge.cancel_for(|context| matches(*context)).is_some() {
+        if !passkeys.bridge.cancel_for(|context| matches(*context)).is_empty() {
             self.note_passkey_change(event_tx);
         }
     }

@@ -252,14 +252,16 @@ impl<T: Clone + PartialEq> Bridge<T> {
     }
 
     /// Queue a request or malformed message for the driver loop. Returns
-    /// `false` when the queue is full and the message was dropped.
-    pub(crate) fn enqueue(&mut self, target: T, message: PageMessage) -> bool {
+    /// the busy reply for the page when the queue is full.
+    pub(crate) fn enqueue(&mut self, target: T, message: PageMessage) -> Option<String> {
         if self.inbox.len() >= MAX_QUEUED_MESSAGES {
-            tracing::warn!(target: "browser", "a page sent too many passkey requests; dropping one");
-            return false;
+            let id = match message {
+                PageMessage::Request { id, .. } | PageMessage::Malformed { id } | PageMessage::Abort { id } => id,
+            };
+            return Some(error_reply(id, PageError::busy()));
         }
         self.inbox.push_back((target, message));
-        true
+        None
     }
 
     /// The next queued page message.
@@ -353,13 +355,24 @@ impl<T: Clone + PartialEq> Bridge<T> {
             .is_some()
     }
 
-    /// The realm that sent the request navigated or went away: kill its
-    /// command. Returns the `NotAllowedError` reply for that realm, which
-    /// still settles the promise when a navigation stops before it commits.
-    pub(crate) fn cancel_for(&mut self, matches: impl Fn(&T) -> bool) -> Option<(T, String)> {
+    /// The realm that sent requests navigated or went away: kill the
+    /// running command and drop its queued requests. Returns a
+    /// `NotAllowedError` reply for each, which still settles the promises
+    /// when a navigation stops before it commits.
+    pub(crate) fn cancel_for(&mut self, matches: impl Fn(&T) -> bool) -> Vec<(T, String)> {
         self.withdraw_where(Withdrawal::Ended, |admitted| matches(&admitted.target));
-        let ended = self.cancel_where(|active| matches(&active.target))?;
-        Some((ended.target, error_reply(ended.page_id, PageError::not_allowed())))
+        let mut replies = Vec::new();
+        self.inbox.retain(|(target, message)| {
+            let keep = !matches(target);
+            if !keep && let PageMessage::Request { id, .. } | PageMessage::Malformed { id } = message {
+                replies.push((target.clone(), error_reply(*id, PageError::not_allowed())));
+            }
+            keep
+        });
+        if let Some(ended) = self.cancel_where(|active| matches(&active.target)) {
+            replies.push((ended.target, error_reply(ended.page_id, PageError::not_allowed())));
+        }
+        replies
     }
 
     fn withdraw_where(&mut self, reason: Withdrawal, matches: impl Fn(&Admitted<T>) -> bool) {
@@ -537,7 +550,7 @@ mod tests {
         );
 
         let ticket = bridge.admit(1, id).expect("admitted");
-        assert!(bridge.cancel_for(|target| *target == 1).is_none());
+        assert!(bridge.cancel_for(|target| *target == 1).is_empty());
         let (target, ended) = bridge
             .start(ticket, op, &options, origin.clone(), None)
             .expect("a navigation still settles the promise");
@@ -548,7 +561,7 @@ mod tests {
         let ticket = bridge.admit(1, id).expect("the panel is free again");
         assert!(bridge.start(ticket, op, &options, origin, None).is_none());
         assert!(bridge.frame_slot.passkey_pending());
-        let (target, ended) = bridge.cancel_for(|target| *target == 1).expect("reply");
+        let (target, ended) = bridge.cancel_for(|target| *target == 1).pop().expect("reply");
         assert_eq!(target, 1);
         assert!(ended.contains("NotAllowedError"));
         assert!(!bridge.frame_slot.passkey_pending());
@@ -558,21 +571,27 @@ mod tests {
     fn queued_requests_are_bounded_and_an_abort_removes_its_request() {
         let mut bridge = bridge(vec!["authenticator".into()]).expect("bridge");
         for page_id in 0..MAX_QUEUED_MESSAGES as u64 {
-            assert!(bridge.enqueue(1, PageMessage::Malformed { id: page_id }));
+            assert!(bridge.enqueue(1, PageMessage::Malformed { id: page_id }).is_none());
         }
-        assert!(
-            !bridge.enqueue(1, PageMessage::Malformed { id: 99 }),
-            "a flood is dropped"
-        );
+        let busy = bridge
+            .enqueue(1, PageMessage::Malformed { id: 99 })
+            .expect("a flood gets a busy reply");
+        assert!(busy.contains("\"id\":99") && busy.contains("NotAllowedError"));
         while bridge.next_message().is_some() {}
-        assert!(bridge.enqueue(1, get_request()));
-        assert!(bridge.enqueue(2, get_request()));
+        assert!(bridge.enqueue(1, get_request()).is_none());
+        assert!(bridge.enqueue(2, get_request()).is_none());
         bridge.abort(&1, 7);
         assert!(matches!(
             bridge.next_message(),
             Some((2, PageMessage::Request { id: 7, .. }))
         ));
         assert!(bridge.next_message().is_none());
+
+        assert!(bridge.enqueue(3, get_request()).is_none());
+        let ended = bridge.cancel_for(|target| *target == 3);
+        assert_eq!(ended.len(), 1, "a navigation settles a queued request");
+        assert!(ended[0].1.contains("NotAllowedError"));
+        assert!(bridge.next_message().is_none(), "and drops it");
     }
 
     #[test]

@@ -35,6 +35,12 @@ const MESSAGES_PER_TICK: usize = 4;
 const MAX_QUEUED_REPLIES: usize = 32;
 
 impl BidiPasskeys {
+    fn queue_reply(&mut self, reply: (Source, String)) {
+        if self.outbox.len() < MAX_QUEUED_REPLIES {
+            self.outbox.push_back(reply);
+        }
+    }
+
     pub(super) fn from_config(config: &crate::BrowserSessionConfig) -> Option<Self> {
         Bridge::from_config(config).map(|bridge| Self {
             bridge,
@@ -88,13 +94,15 @@ impl Driver {
         ) {
             // The old realm gets the reply until a navigation commits; a
             // navigation that stops before it commits still settles it.
-            if let Some(context) = params.get("context").and_then(Value::as_str)
-                && let Some(reply) = passkeys.bridge.cancel_for(|source| source.context == context)
-            {
-                if passkeys.outbox.len() < MAX_QUEUED_REPLIES {
-                    passkeys.outbox.push_back(reply);
+            if let Some(context) = params.get("context").and_then(Value::as_str) {
+                let replies = passkeys.bridge.cancel_for(|source| source.context == context);
+                let ended = !replies.is_empty();
+                for reply in replies {
+                    passkeys.queue_reply(reply);
                 }
-                self.note_passkey_change(events);
+                if ended {
+                    self.note_passkey_change(events);
+                }
             }
             return false;
         }
@@ -117,8 +125,10 @@ impl Driver {
             // whose replies carry more events, so it waits for the loop.
             if matches!(message, PageMessage::Abort { .. }) {
                 self.handle_passkey_message(&source, message, events);
-            } else if let Some(passkeys) = self.passkeys.as_mut() {
-                passkeys.bridge.enqueue(source, message);
+            } else if let Some(passkeys) = self.passkeys.as_mut()
+                && let Some(reply) = passkeys.bridge.enqueue(source.clone(), message)
+            {
+                passkeys.queue_reply((source, reply));
             }
         }
         true
