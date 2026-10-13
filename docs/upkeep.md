@@ -30,7 +30,8 @@ The `upkeep` panel kind is the board of one Upkeep. The board shows these items:
 A click on a row opens its pull request page in the browser panel **Pull request**
 next to the board. The board uses the same panel for the next row. A browser panel
 that the board did not open is never used, also when it has the same name. After a
-click, the view fits the workspace, so the board and the page are both in view.
+click, the view fits the workspace, so the board and the page are both in view. In a
+workspace with a layout preset, the preset places the new panel.
 
 The board is read-only. It reads the status document that the panel `command` names.
 When the command is empty, it reads `~/.horizon/upkeep/status.json`. A config file

@@ -57,7 +57,13 @@ impl HorizonApp {
             self.fit_workspace_visible(ctx, workspace);
             return;
         }
-        let position = self.board.panel(board).map(|panel| {
+        // Beside the board, unless the workspace arranges its panels itself: an explicit
+        // position would turn that arrangement off.
+        let arranged = self
+            .board
+            .workspace(workspace)
+            .is_some_and(|workspace| workspace.layout.is_some());
+        let position = (!arranged).then(|| self.board.panel(board)).flatten().map(|panel| {
             let layout = &panel.layout;
             [layout.position[0] + layout.size[0] + 24.0, layout.position[1]]
         });
