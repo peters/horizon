@@ -337,10 +337,8 @@ try:
             if identity.strip() != b'10001':
                 raise ValueError('Worker agent identity does not match the isolation launcher')
         if shutil.which('tailscale') and shutil.which('tailscaled'):
-            print('horizon-tailnet-contract=1')
-            # Contract 2: the device name stays the same for the cloud's life.
-            if helper_declares('horizon-worker-tailnet', '--stable-name-contract', 'horizon-tailnet-contract=2'):
-                print('horizon-tailnet-contract=2')
+            if helper_declares('horizon-worker-tailnet', '--tagged-enrollment-contract', 'horizon-tailnet-contract=4'):
+                print('horizon-tailnet-contract=4')
     # Session restart: horizon-worker-session --relaunch replaces a lost process in its worktree.
     print('horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n'
           'horizon-session-restart-contract=1\nhorizon-shared-checkout-contract=1\nhorizon-prepare-checkout-contract=1\n'

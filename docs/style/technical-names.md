@@ -26,7 +26,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | operator | The person who runs the procedure and owns the provider accounts. | tester, user |
 | Secret Service | The D-Bus service that keeps the keys of applications on Linux, for example `gnome-keyring-daemon`. | keyring (as a service name) |
 | test tailnet | A tailnet that only tests use. | — |
-| contract marker | A line, for example `horizon-tailnet-contract=1`, that a worker image reports to show a function. | — |
+| contract marker | A line, for example `horizon-tailnet-contract=4`, that a worker image reports to show a function. | — |
 | nonce | A random value that a run makes one time. A reply that contains it is current. | token |
 | proof | The image build, worker check, CI run and fast rerun that Horizon does for a `.horizon` setup that the setup agent wrote. | - |
 | setup gate | The tool `scripts/setup-gate.py`. It runs the proof and the desktop preview on a list of real repositories. | real-repository harness |

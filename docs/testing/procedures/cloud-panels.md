@@ -71,11 +71,12 @@ resource, sends a secret or changes tailnet access.
 - For each image-only profile, a public worker image that reports all contract
   markers. Pin the image by digest, for example `<registry>/<image>@sha256:<digest>`.
   A private image needs a pull credential that can read it.
-- A worker image that reports all contract markers, with
-  `horizon-tailnet-contract=1` and `horizon-tailnet-contract=2`. The image must contain Claude, Codex, a browser
+- A worker image that reports all required contract markers, including
+  `horizon-tailnet-contract=4`. The image must contain Claude, Codex, a browser
   and a desktop.
-- A test tailnet with a reusable, pre-authorized, non-ephemeral auth key. For the
-  tests from PC to cloud, the PC must be on the same tailnet.
+- A test tailnet with a reusable, pre-authorized, non-ephemeral auth key with only
+  `tag:horizon-worker`. The policy defines the tag in `tagOwners`.
+  For the tests from PC to cloud, the PC must be on the same tailnet.
 - A private evidence directory, `<evidence>`, outside the repository.
 - Permission from the operator to rent compute, with a cost limit and a time
   limit for cleanup.

@@ -270,11 +270,16 @@ fn the_newest_stop_an_agent_asked_for_is_read_only_when_well_formed() {
 }
 
 #[test]
-fn tailnet_v2_implies_enrollment_and_stable_naming() {
+fn only_tagged_tailnet_v4_allows_enrollment() {
     for (marker, enrollment, stable) in [
         ("", false, false),
-        ("horizon-tailnet-contract=1", true, false),
-        ("horizon-tailnet-contract=2", true, true),
+        ("horizon-tailnet-contract=1", false, false),
+        ("horizon-tailnet-contract=2", false, true),
+        ("horizon-tailnet-contract=3", false, false),
+        ("horizon-tailnet-contract=4", true, true),
+        ("horizon-tailnet-contract=40", false, false),
+        (" horizon-tailnet-contract=4", false, false),
+        ("horizon-tailnet-contract=4 extra", false, false),
         ("horizon-tailnet-contract=20", false, false),
         ("prefix horizon-tailnet-contract=2", false, false),
     ] {

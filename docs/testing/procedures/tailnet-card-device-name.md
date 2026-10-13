@@ -40,8 +40,8 @@ This procedure tests the device name and copy action in **Connections** >
    cargo test -p horizon-core cloud_runtime::worker_contract
    ```
 
-   Result: Contract 2 supports enrollment and stable names. Contract 1 does not
-   support derived names. Incidental text does not enable either function.
+   Result: Only contract 4 supports enrollment. Contracts 2 and 4 support derived
+   stable names. Incidental text does not enable either function.
 
 2. Run the device identity tests.
 
@@ -54,7 +54,7 @@ This procedure tests the device name and copy action in **Connections** >
    does not select a peer. Zero or one final DNS dot is valid; more dots are not.
    A first in-progress publication does not establish freshness. Two later atomic
    generations supply the saved observation. A failed bounded read supplies a stable fallback only
-   for contract 2. Cancellation returns an error. No selection makes no read.
+   for contract 2 or 4. Cancellation returns an error. No selection makes no read.
 
 3. Run the saved record test.
 

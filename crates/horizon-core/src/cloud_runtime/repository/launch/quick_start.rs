@@ -242,14 +242,18 @@ mod tests {
     }
 
     #[test]
-    fn the_trusted_report_is_the_current_checker_contract_and_satisfies_the_builtin_profile() {
+    fn the_pinned_report_satisfies_the_builtin_profile_but_cannot_enroll_a_tailnet() {
         let checker = include_str!("../../../../../../examples/cloud-worker/horizon-worker-check");
         let lines: Vec<_> = CONTRACT.lines().collect();
         assert!(!lines.is_empty());
         for line in &lines {
+            // The digest still names the older image; its tailnet markers must stay in its attestation.
             assert!(
-                line.starts_with("horizon-") && line.contains("-contract=") && checker.contains(line),
-                "{line} is a marker that the checker prints"
+                line.starts_with("horizon-")
+                    && line.contains("-contract=")
+                    && (checker.contains(line)
+                        || matches!(*line, "horizon-tailnet-contract=1" | "horizon-tailnet-contract=2")),
+                "{line} is a current or pinned legacy checker marker"
             );
         }
         let unique: std::collections::BTreeSet<_> = lines.iter().collect();
@@ -259,7 +263,8 @@ mod tests {
         crate::cloud_runtime::worker_contract::validate(report, &profile.capabilities, true, true).unwrap();
         crate::cloud_runtime::worker_contract::validate_idle_report(report, true).unwrap();
         let contract = crate::cloud_runtime::WorkerContract::reported(report);
-        assert!(contract.tailnet && contract.session_restart && contract.prepare_checkout);
+        assert!(!contract.tailnet, "the pinned image predates tagged enrollment");
+        assert!(contract.tailnet_stable_name && contract.session_restart && contract.prepare_checkout);
         assert!(contract.pinned_submodules && contract.lfs_selection);
     }
 

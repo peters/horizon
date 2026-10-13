@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import runpy
 import sys
 import tempfile
 import threading
@@ -76,6 +77,7 @@ class TailnetTests(unittest.TestCase):
         self.state.mkdir(); self.runtime.mkdir()
         self.calls = []
         self.joined = False
+        self.tags = [worker.WORKER_TAG]
         # The daemon's host name: the container's own until a preference names the device.
         self.hostname = 'd1021da2f9b5'
         for name, value in [('STATE', self.state), ('RUNTIME', self.runtime), ('PUBLIC', root / 'public')]:
@@ -90,7 +92,7 @@ class TailnetTests(unittest.TestCase):
         self.assertNotIn('TS_AUTHKEY', os.environ)
         if args[0] == 'status':
             return json.dumps({'BackendState': 'Running' if self.joined else 'NeedsLogin',
-                               'Self': {'HostName': self.hostname}}).encode()
+                               'Self': {'HostName': self.hostname, 'Tags': self.tags}}).encode()
         if args[0] in {'up', 'set'}:
             for arg in args:
                 if arg.startswith('--hostname='):
@@ -148,6 +150,7 @@ class TailnetTests(unittest.TestCase):
         self.assertEqual(self.configure('work', None), 'needs_key\n')
         self.assertEqual(self.configure('work', KEY), 'ready\n')
         [up] = [args for args in self.calls if args[0] == 'up']
+        self.assertIn('--advertise-tags=tag:horizon-worker', up)
         self.assertIn('--hostname=' + NAME, up)
         self.assertEqual(self.hostname, NAME)
         self.assertFalse(any(args[0] == 'set' for args in self.calls))
@@ -162,7 +165,7 @@ class TailnetTests(unittest.TestCase):
                 self.resume(container=container)
                 self.assertEqual(self.configure('work', None), 'ready\n')
                 self.assertEqual(self.hostname, NAME)
-                self.assertEqual(self.calls, [('status', '--json'), ('status', '--json')])
+                self.assertEqual(self.calls, [('status', '--json')] * 3)
 
     def test_resume_renames_a_cloud_enrolled_with_the_container_host_name(self):
         self.configure('work', None); self.configure('work', KEY)
@@ -222,12 +225,24 @@ class TailnetTests(unittest.TestCase):
                 with self.assertRaises(ValueError): self.configure('work', KEY)
                 self.assertFalse(any(args[0] in {'up', 'set'} for args in self.calls))
 
-    def test_helper_declares_the_stable_name_contract(self):
-        with patch.object(worker.sys, 'argv', ['worker', '--stable-name-contract']), \
+    def test_invalid_name_does_not_mask_a_running_untagged_identity(self):
+        (self.state / 'selection').write_text('work')
+        (self.runtime / 'device-name').write_text('invalid name')
+        self.joined, self.tags = True, []
+        self.assertEqual(self.configure('work', None), 'tag_required\n')
+        self.assertIn(('logout',), self.calls)
+        self.assertFalse(self.joined)
+        self.assertFalse((self.state / 'selection').exists())
+        self.assertFalse(any(args[0] in {'up', 'set'} for args in self.calls))
+
+    def test_helper_declares_only_the_tagged_enrollment_contract(self):
+        with patch.object(worker.sys, 'argv', ['worker', '--tagged-enrollment-contract']), \
                 patch('sys.stdout', new_callable=io.StringIO) as output:
             worker.main()
-        self.assertEqual(output.getvalue(), 'horizon-tailnet-contract=2\n')
+        self.assertEqual(output.getvalue(), 'horizon-tailnet-contract=4\n')
         self.assertEqual(self.calls, [])
+        with patch.object(worker.sys, 'argv', ['worker', '--stable-name-contract']):
+            with self.assertRaises(ValueError): worker.main()
 
     def test_join_has_no_retained_auth_key_and_retries_do_not_reuse_one_time_key(self):
         self.assertEqual(self.configure('work', None), 'needs_key\n')
@@ -248,9 +263,184 @@ class TailnetTests(unittest.TestCase):
                 raise TimeoutError('Synthetic lost reply')
             return result
         with patch.object(worker, 'call', lost):
-            with self.assertRaises(TimeoutError): self.configure('work', KEY)
-        self.assertEqual(self.configure('work', None), 'ready\n')
+            self.assertEqual(self.configure('work', KEY), 'tag_required\n')
+        self.assertEqual(self.configure('work', None), 'needs_key\n')
         self.assertEqual(sum(args[0] == 'up' for args in self.calls), 1)
+
+    def test_first_enrollment_rejects_untagged_extra_or_malformed_tags_and_logs_out(self):
+        for tags in [None, [], ['tag:other'], [worker.WORKER_TAG, 'tag:other'],
+                     worker.WORKER_TAG, {worker.WORKER_TAG: True}]:
+            with self.subTest(tags=tags):
+                self.tags = tags
+                self.calls.clear()
+                self.assertEqual(self.configure('work', KEY), 'tag_required\n')
+                self.assertIn(('logout',), self.calls)
+                self.assertFalse(self.joined)
+                self.assertFalse((self.state / 'selection').exists())
+                self.assertEqual(json.loads((worker.PUBLIC / 'devices.json').read_text()), {'devices': []})
+
+    def test_a_running_identity_with_missing_or_malformed_self_is_rejected(self):
+        original = self.call
+        for own in [None, 'invalid', {}, {'Tags': None}]:
+            with self.subTest(own=own):
+                self.joined = True
+                (self.state / 'selection').write_text('work')
+                def reply(*args, **kwargs):
+                    if args[0] == 'status' and self.joined:
+                        return json.dumps({'BackendState': 'Running', 'Self': own}).encode()
+                    return original(*args, **kwargs)
+                with patch.object(worker, 'call', reply):
+                    self.assertEqual(self.configure('work', None), 'tag_required\n')
+                self.assertFalse(self.joined)
+                self.assertFalse((self.state / 'selection').exists())
+
+    def test_resume_logs_out_an_untagged_existing_cloud_and_rejects_startup(self):
+        self.configure('work', KEY)
+        self.tags = []
+        self.calls.clear()
+        with self.assertRaisesRegex(worker.WorkerTagRequired, 'tag:horizon-worker.*tagOwners'):
+            self.resume()
+        self.assertEqual(self.calls, [('status', '--json'), ('logout',), ('status', '--json')])
+        self.assertFalse((self.state / 'selection').exists())
+        self.assertFalse(self.joined)
+
+    def test_failed_logout_rejects_ready_and_preserves_selection_for_reconciliation(self):
+        original = self.call
+        for failure in ['command', 'timeout', 'still_running']:
+            with self.subTest(failure=failure):
+                self.joined = True
+                self.tags = []
+                (self.state / 'selection').write_text('work')
+                worker.write_devices([{'name': 'stale'}])
+                def fail(*args, **kwargs):
+                    if args[0] == 'logout':
+                        if failure == 'command':
+                            raise subprocess.CalledProcessError(1, args, stderr=KEY.encode())
+                        if failure == 'timeout':
+                            raise subprocess.TimeoutExpired(args, 35)
+                        return b''
+                    return original(*args, **kwargs)
+                with patch.object(worker, 'call', fail), \
+                        patch('sys.stderr', new_callable=io.StringIO) as errors:
+                    self.assertEqual(self.configure('work', None), 'tag_required\n')
+                    with self.assertRaises(worker.WorkerTagRequired): self.resume()
+                self.assertNotIn(KEY, errors.getvalue())
+                self.assertEqual((self.state / 'selection').read_text(), 'work')
+                self.assertTrue(self.joined)
+                self.assertEqual(json.loads((worker.PUBLIC / 'devices.json').read_text()), {'devices': []})
+
+    def test_tagging_refusal_and_lost_up_reply_revoke_partial_enrollment_without_exposing_key(self):
+        original = self.call
+        for error in [subprocess.CalledProcessError(1, ['up'], stderr=KEY.encode()),
+                      subprocess.TimeoutExpired(['up'], 35, stderr=KEY.encode())]:
+            with self.subTest(error=type(error).__name__):
+                self.calls.clear()
+                self.tags = []
+                descriptor = []
+                def fail(*args, **kwargs):
+                    result = original(*args, **kwargs)
+                    if args[0] == 'up':
+                        descriptor.append(kwargs['pass_fds'][0])
+                        raise error
+                    return result
+                with patch.object(worker, 'call', fail), \
+                        patch('sys.stderr', new_callable=io.StringIO) as errors:
+                    self.assertEqual(self.configure('work', KEY), 'tag_required\n')
+                self.assertNotIn(KEY, errors.getvalue())
+                self.assertFalse(self.joined)
+                self.assertIn(('logout',), self.calls)
+                self.assertFalse((self.state / 'selection').exists())
+                with self.assertRaises(OSError): os.fstat(descriptor[0])
+
+    def test_unreadable_post_join_status_is_logged_out_before_ready(self):
+        original = self.call
+        for report in [b'invalid json', b'[]', b'{"BackendState":[]}', b'{"BackendState":"NeedsLogin"}']:
+            with self.subTest(report=report):
+                self.calls.clear()
+                def reply(*args, **kwargs):
+                    if args[0] == 'status' and self.joined:
+                        return report
+                    return original(*args, **kwargs)
+                with patch.object(worker, 'call', reply):
+                    self.assertEqual(self.configure('work', KEY), 'tag_required\n')
+                self.assertFalse(self.joined)
+                self.assertIn(('logout',), self.calls)
+                self.assertFalse((self.state / 'selection').exists())
+
+    def test_unreadable_resumed_status_is_logged_out_and_rejected(self):
+        original = self.call
+        for report in [b'invalid json', b'[]', b'{"BackendState":[]}']:
+            with self.subTest(report=report):
+                self.joined = True
+                (self.state / 'selection').write_text('work')
+                def reply(*args, **kwargs):
+                    if args[0] == 'status' and self.joined:
+                        return report
+                    return original(*args, **kwargs)
+                with patch.object(worker, 'call', reply):
+                    with self.assertRaises(worker.WorkerTagRequired): self.resume()
+                self.assertFalse(self.joined)
+                self.assertFalse((self.state / 'selection').exists())
+
+    def test_invalid_private_input_keeps_the_generic_error_without_echoing_input(self):
+        result = subprocess.run([sys.executable, '-B', str(Path(__file__).with_name('horizon-worker-tailnet')), 'configure'],
+                                input=json.dumps({'tailnet': 'work', 'key': KEY + '\n'}),
+                                capture_output=True, text=True, check=False, timeout=10)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr, 'Tailnet operation failed. Check key validity, worker storage permissions and restart privileged sessions.\n')
+        self.assertNotIn(KEY, result.stdout + result.stderr)
+
+    def test_entrypoint_reports_tag_prerequisites_only_for_tagged_enrollment_failure(self):
+        real_path, real_stat = Path, os.stat
+        workspace = Path(self.temp.name) / 'workspace'
+        workspace.mkdir()
+        workspace.chmod(0o777)  # Unsafe even if this test is run as root.
+        (self.state / 'selection').write_text('work')
+        (self.runtime / 'tailscaled.sock').touch()
+        started = Path('/proc', str(os.getpid()), 'stat').read_text().rsplit(') ', 1)[1].split()[19]
+        (self.runtime / 'supervisor.pid').write_text(f'{os.getpid()} {started}')
+        self.joined, self.tags = True, []
+
+        def path(*parts):
+            value = real_path(*parts)
+            if value == real_path('/workspace/.horizon-tailnet'):
+                return self.state
+            if value == real_path('/run/horizon-tailnet'):
+                return self.runtime
+            if value == real_path('/run/horizon-tailnet-devices'):
+                return worker.PUBLIC
+            if value == real_path('/workspace'):
+                return workspace
+            return value
+
+        def stat(path, *args, **kwargs):
+            info = real_stat(path, *args, **kwargs)
+            if real_path(path) in {self.state, self.runtime}:
+                fields = list(info)
+                fields[4] = 0  # The private control roots are root-owned on a worker.
+                return os.stat_result(fields)
+            return info
+
+        def run(command, **kwargs):
+            self.assertEqual(command[:2], [worker.CLI, '--socket=' + str(self.runtime / 'tailscaled.sock')])
+            return subprocess.CompletedProcess(command, 0, stdout=self.call(*command[2:]))
+
+        for command, expected in [('resume', worker.TAG_ERROR),
+                                  ('isolate', 'Tailnet operation failed. Check key validity, worker storage permissions and restart privileged sessions.')]:
+            with self.subTest(command=command), \
+                    patch('pathlib.Path', side_effect=path), patch('os.stat', side_effect=stat), \
+                    patch('subprocess.run', side_effect=run), \
+                    patch.object(worker.sys, 'argv', ['worker', command]), \
+                    patch('sys.stderr', new_callable=io.StringIO) as errors, \
+                    patch('sys.stdout', new_callable=io.StringIO) as output:
+                with self.assertRaises(SystemExit) as stopped:
+                    runpy.run_path(str(real_path(__file__).with_name('horizon-worker-tailnet')), run_name='__main__')
+                self.assertEqual(stopped.exception.code, 1)
+                self.assertEqual(errors.getvalue(), expected + '\n')
+                self.assertEqual(output.getvalue(), '')
+                self.assertNotIn(KEY, errors.getvalue())
+        self.assertIn(('logout',), self.calls)
+        self.assertFalse(self.joined)
 
     def test_invalid_secret_types_and_extra_fields_do_not_reach_daemon(self):
         for key in ['tskey-api-synthetic12345678901234567890', 'short', KEY + '\n', {'key': KEY}]:
@@ -291,7 +481,8 @@ class TailnetTests(unittest.TestCase):
 
     def test_resume_waits_for_persistent_identity_before_requesting_a_key(self):
         (self.state / 'selection').write_text('work')
-        reports = [b'{"BackendState":"Starting"}', b'{"BackendState":"Running"}']
+        reports = [b'{"BackendState":"Starting"}',
+                   json.dumps({'BackendState': 'Running', 'Self': {'Tags': self.tags}}).encode()]
         with patch.object(worker, 'call', side_effect=reports) as call, patch.object(worker.time, 'sleep'):
             self.assertEqual(self.configure('work', None), 'ready\n')
         self.assertEqual([args.args for args in call.call_args_list], [('status', '--json')] * 2)
@@ -302,15 +493,76 @@ class TailnetTests(unittest.TestCase):
             for key in [None, KEY]:
                 with self.subTest(state=state, key_supplied=key is not None):
                     with patch.object(worker, 'call', return_value=json.dumps({'BackendState': state}).encode()) as call, \
-                            patch.object(worker.time, 'monotonic', side_effect=[0, 6]), \
+                            patch.object(worker.time, 'monotonic', side_effect=[0, 6, 6, 12]), \
                             patch('sys.stdout', new_callable=io.StringIO) as output:
-                        with self.assertRaises(ValueError): self.configure('work', key)
+                        self.assertEqual(self.configure('work', key), 'tag_required\n')
                     self.assertEqual(output.getvalue(), '')
-                    self.assertEqual([args.args for args in call.call_args_list], [('status', '--json')])
+                    self.assertEqual([args.args for args in call.call_args_list],
+                                     [('status', '--json'), ('logout',), ('status', '--json')])
                     self.assertEqual((self.state / 'selection').read_text(), 'work')
         self.joined = True
         self.assertEqual(self.configure('work', None), 'ready\n')
         self.assertFalse(any(args[0] in {'up', 'logout'} for args in self.calls))
+
+    def test_initial_status_command_failures_reject_configure_and_resume_and_reconcile_logout(self):
+        original = self.call
+        failures = [OSError('Synthetic daemon unavailable'),
+                    subprocess.CalledProcessError(1, ['status'], stderr=KEY.encode()),
+                    subprocess.TimeoutExpired(['status'], 35, stderr=KEY.encode())]
+        for operation in ['configure', 'resume']:
+            for failure in failures:
+                for cleanup in ['confirmed', 'logout_failure', 'status_failure', 'bad_backend']:
+                    with self.subTest(operation=operation, failure=type(failure).__name__, cleanup=cleanup):
+                        (self.state / 'selection').write_text('work')
+                        self.joined = True
+                        self.calls.clear()
+                        worker.write_devices([{'name': 'stale'}])
+                        status_reads = 0
+                        clock = 0
+
+                        def monotonic():
+                            nonlocal clock
+                            clock += 6
+                            return clock
+
+                        def reply(*args, **kwargs):
+                            nonlocal status_reads
+                            if args[0] == 'status':
+                                status_reads += 1
+                                if status_reads == 1 or cleanup == 'status_failure':
+                                    self.calls.append(args)
+                                    raise failure
+                                if cleanup == 'bad_backend':
+                                    self.calls.append(args)
+                                    return b'{"BackendState":"Stopped"}'
+                            if args[0] == 'logout' and cleanup == 'logout_failure':
+                                self.calls.append(args)
+                                raise subprocess.CalledProcessError(1, args, stderr=KEY.encode())
+                            return original(*args, **kwargs)
+
+                        with patch.object(worker, 'call', reply), \
+                                patch.object(worker.time, 'monotonic', side_effect=monotonic), \
+                                patch('sys.stderr', new_callable=io.StringIO) as errors:
+                            if operation == 'configure':
+                                self.assertEqual(self.configure('work', KEY), 'tag_required\n')
+                            else:
+                                with self.assertRaises(worker.WorkerTagRequired): self.resume()
+                        self.assertNotIn(KEY, errors.getvalue())
+                        self.assertIn(('logout',), self.calls)
+                        self.assertFalse(any(args[0] in {'up', 'set'} for args in self.calls))
+                        self.assertEqual((self.state / 'selection').exists(), cleanup != 'confirmed')
+                        self.assertEqual(json.loads((worker.PUBLIC / 'devices.json').read_text()), {'devices': []})
+
+    def test_resume_backend_wait_failure_rejects_and_attempts_logout_without_requesting_a_key(self):
+        for backend in ['Starting', 'NoState', 'Stopped', 'NeedsMachineAuth', 'InUseOtherUser', 'Unknown']:
+            with self.subTest(backend=backend):
+                (self.state / 'selection').write_text('work')
+                with patch.object(worker, 'call', return_value=json.dumps({'BackendState': backend}).encode()) as call, \
+                        patch.object(worker.time, 'monotonic', side_effect=[0, 6, 6, 12]):
+                    with self.assertRaises(worker.WorkerTagRequired): self.resume()
+                self.assertEqual([args.args for args in call.call_args_list],
+                                 [('status', '--json'), ('logout',), ('status', '--json')])
+                self.assertEqual((self.state / 'selection').read_text(), 'work')
 
     def test_explicit_login_required_state_can_request_a_key_after_resume(self):
         (self.state / 'selection').write_text('work')
@@ -325,7 +577,7 @@ class TailnetTests(unittest.TestCase):
                 if selected: selection.write_text('work')
                 else: selection.unlink(missing_ok=True)
                 with patch.object(worker.sys, 'argv', ['worker', 'status']), \
-                        patch.object(worker, 'call', return_value=json.dumps({'BackendState': state}).encode()), \
+                        patch.object(worker, 'call', return_value=json.dumps({'BackendState': state, 'Self': {'Tags': self.tags}}).encode()), \
                         patch('sys.stdout', new_callable=io.StringIO) as output:
                     worker.main()
                 self.assertEqual(output.getvalue(), expected + '\n')
@@ -336,7 +588,7 @@ class TailnetTests(unittest.TestCase):
         worker.start.assert_called_once()
         self.assertTrue((self.runtime / 'agent-isolation').exists())
         self.assertEqual((self.runtime / 'device-name').stat().st_mode & 0o777, 0o600)
-        self.assertEqual(self.calls, [])
+        self.assertEqual(self.calls, [('status', '--json')])
 
     def test_daemon_uses_persistent_private_state_and_restarts(self):
         class Exit(Exception): pass

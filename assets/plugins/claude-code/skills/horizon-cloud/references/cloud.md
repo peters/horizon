@@ -131,6 +131,33 @@ cannot claim readiness. Use returned SSH aliases and isolated worktrees for
 ordinary SSH, Git, or rsync work within the authorized task. A stopped or
 unavailable target needs owner action; inspection grants no new access.
 
+## Tagged tailnet enrollment
+
+A new cloud defaults to **None**. For an authorized companion, use a saved
+tailnet ID from `cloud_companions`, or `none`, with `cloud_companion_ensure_ready`.
+Omit `tailnet` to keep its saved choice. An allocated cloud retains its network.
+The existing owner/grant and first-allocation confirmation gates still apply.
+Never pass an auth key to a tool.
+
+A selected tailnet requires an image with `horizon-tailnet-contract=4` before
+allocation. The actual worker must report this marker before reconnect or a new
+session. Markers 1, 2 and 3 do not qualify. **None** permits older images.
+The current quick-start pin predates marker 4 and refuses a selected tailnet.
+A later image publication and pin update enable that path.
+
+Use a preauthorized, non-ephemeral auth key with only `tag:horizon-worker`.
+Reuse needs a reusable key. The tailnet policy must define the tag in `tagOwners`.
+The worker requests this tag and checks `Self.Tags` after enrollment and once at
+each resume. An untagged node or a node with extra tags is refused and logged out.
+An unreadable status fails the check. Existing keys that cannot assign the worker
+tag fail enrollment; an already-joined untagged cloud logs out on resume.
+
+There is no continuous tag monitoring or separate tag for each workspace.
+The tailnet administrator controls the services that the tag can reach.
+Horizon does not change policy. A successful check proves the reported tags at
+that instant; it does not prove isolation between workspaces or continued isolation.
+Logout does not delete the node from the tailnet administration service.
+
 ## Tailnet device identity
 
 In a cloud card, open **Connections** and read **Tailnet** > **Device name**.
@@ -145,9 +172,11 @@ enrollment during each deployment or reconnection. The worker needs its existing
 snapshot generations. The second generation excludes an earlier status read that
 was still in progress during reconnection. The read has a 15-second limit and
 can be cancelled. It does not poll the tailnet from the drawer. If freshness
-cannot be confirmed, only an image with
-`horizon-tailnet-contract=2` supplies the derived stable name. Older images do
-not supply a derived name. This fallback is an expected short name; it is not a
+cannot be confirmed, an image with `horizon-tailnet-contract=2` or
+`horizon-tailnet-contract=4` supplies the derived stable name. Marker 2 qualifies
+this display fallback only; selected-tailnet operations require marker 4.
+Images without stable-name support do not supply a derived name.
+This fallback is an expected short name; it is not a
 confirmed device identity or full MagicDNS address. No tailnet selection means
 no saved device identity.
 

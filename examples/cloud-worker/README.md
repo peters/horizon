@@ -282,7 +282,7 @@ The stock image includes pinned Tailscale v1.102.5 binaries. Startup isolates
 workspace services before they can execute user code. `horizon-worker-tailnet`
 is a root control helper; agents cannot enroll, retrieve credentials, or open the
 administrative socket. `configure` accepts bounded private JSON on stdin and
-returns only `ready` or `needs_key`. Enrollment uses an anonymous memory file,
+returns `ready`, `needs_key` or `tag_required`. Enrollment uses an anonymous memory file,
 never an auth key in argv, environment or a retained file.
 
 `/workspace/.horizon-tailnet` and `/run/horizon-tailnet` are root-only. The volume
@@ -290,10 +290,18 @@ root stays root-owned and non-writable by agents. The supervisor restarts the
 userspace daemon and resumes its persistent node state after worker restart.
 Agents use HTTP/SOCKS proxies and the sanitized device inventory in
 `/run/horizon-tailnet-devices/devices.json`; this image does not require TUN or
-NET_ADMIN. Image qualification reports `horizon-tailnet-contract=1` only when the
-binaries and isolated launcher are installed. It also reports
-`horizon-tailnet-contract=2` when `horizon-worker-tailnet --stable-name-contract`
-declares it. Then the device name comes from the cloud ID and stays the same for
+NET_ADMIN. Image qualification reports only `horizon-tailnet-contract=4` when the
+binaries and isolated launcher are installed and the helper declares tagged enrollment.
+Enrollment advertises `tag:horizon-worker`. The helper checks `Self.Tags` after
+login and on each resume. It requires exactly that tag. Define its `tagOwners`
+entry in the tailnet policy and use an auth key with only that tag.
+The helper logs out an invalid enrollment and rejects the operation.
+It does not monitor tag changes between those checks. The tailnet policy
+controls network access; the tag alone does not isolate each workspace.
+Keys that cannot assign the worker tag fail enrollment. Untagged workers fail resume.
+Rebuild older images before tailnet use. The current quick-start image retains
+its earlier contract and cannot use a selected tailnet until its pin changes.
+The device name comes from the cloud ID and stays the same for
 the life of the cloud. It is not the random container host name. A UUID cloud ID
 gives `horizon-cloud-<cloud ID>`. An ID that needs a change or a shorter form
 gives a digest form; see the tailnet section of the cloud workspaces guide.

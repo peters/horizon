@@ -1,6 +1,6 @@
 //! Thin deployment adapter for cloud-only tailnet enrollment.
 mod keychain;
-use super::{Error, Result, command::Runner, ssh::Connection, state};
+use super::{Error, Result, WorkerContract, command::Runner, ssh::Connection, state};
 pub use horizon_cloud::tailnet::{Catalog, Selection, Store, Tailnet, valid_key};
 use sha2::{Digest, Sha256};
 use std::{path::Path, time::Duration};
@@ -20,11 +20,12 @@ struct Enrollment<'a> {
 /// Called under the deployment lock, before any agent sessions are started.
 /// # Errors
 /// Refuses unavailable workers, unsafe permissions and inaccessible credentials.
-pub fn configure(connection: &Connection, cloud: &Path, runner: &Runner<'_>) -> Result<()> {
+pub fn configure(connection: &Connection, cloud: &Path, runner: &Runner<'_>, contract: &WorkerContract) -> Result<()> {
     if !cloud.join("tailnet.json").exists() {
         return Ok(());
     }
     let selected = Selection::load(cloud).map_err(mapped)?;
+    validate_worker_contract(&selected, contract)?;
     if selected.tailnet.is_none() {
         return Ok(());
     }
@@ -60,14 +61,33 @@ pub fn configure(connection: &Connection, cloud: &Path, runner: &Runner<'_>) -> 
                 .ok()
                 .filter(|key| valid_key(key))
                 .ok_or_else(|| mapped(horizon_cloud::tailnet::Error::Invalid))?;
-            if invoke(&payload(Some(key))?)? == b"ready\n" {
-                Ok(())
-            } else {
-                Err(Error::Invalid("Tailnet enrollment was not confirmed"))
-            }
+            enrollment_confirmed(&invoke(&payload(Some(key))?)?)
         }
-        _ => Err(Error::Invalid("Unexpected tailnet enrollment response")),
+        _ => enrollment_confirmed(&reply),
     }
+}
+
+fn enrollment_confirmed(reply: &[u8]) -> Result<()> {
+    match reply {
+        b"ready\n" => Ok(()),
+        b"tag_required\n" => Err(Error::Invalid(
+            "Tailnet enrollment requires tag:horizon-worker in Self.Tags; authorize it in tagOwners and use an auth key permitted to advertise that tag",
+        )),
+        _ => Err(Error::Invalid("Tailnet enrollment was not confirmed")),
+    }
+}
+
+/// Enforce the same tailnet requirement before allocation and on every reconnect.
+pub(in crate::cloud_runtime) fn validate_worker_contract(
+    selection: &Selection,
+    contract: &WorkerContract,
+) -> Result<()> {
+    if selection.tailnet.is_some() && !contract.tailnet {
+        return Err(Error::Invalid(
+            "This worker cannot enforce tag:horizon-worker enrollment; rebuild with the current cloud worker and authorize the tag in tagOwners before deployment or reconnect",
+        ));
+    }
+    Ok(())
 }
 /// # Errors
 /// Caller-visible settings errors; every write uses the existing cloud lifecycle lock.
@@ -235,7 +255,7 @@ pub(super) fn configure_and_record(
     contract: &super::worker_contract::WorkerContract,
     runner: &Runner<'_>,
 ) -> Result<()> {
-    configure(connection, store.root(), runner)?;
+    configure(connection, store.root(), runner, contract)?;
     state.tailnet_device = device_name(connection, store.root(), &state.cloud_id, contract, runner)?;
     store.save(state)
 }
@@ -285,6 +305,67 @@ fn observe_device_name(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tagged_enrollment_is_required_only_when_a_tailnet_is_selected() {
+        let selected = Selection {
+            tailnet: Some("work".into()),
+        };
+        for marker in ["", "horizon-tailnet-contract=1", "horizon-tailnet-contract=2"] {
+            let contract = WorkerContract::reported(marker);
+            assert!(validate_worker_contract(&Selection::default(), &contract).is_ok());
+            let error = validate_worker_contract(&selected, &contract).unwrap_err().to_string();
+            assert!(
+                error.contains("tag:horizon-worker") && error.contains("tagOwners"),
+                "{error}"
+            );
+        }
+        assert!(validate_worker_contract(&selected, &WorkerContract::reported("horizon-tailnet-contract=4")).is_ok());
+    }
+
+    #[test]
+    fn reconnect_refuses_an_older_worker_before_private_transport_or_credentials() {
+        let cloud = tempfile::tempdir().unwrap();
+        std::fs::write(cloud.path().join("tailnet.json"), br#"{"tailnet":"work"}"#).unwrap();
+        let connection = Connection {
+            host: "unreachable.invalid".into(),
+            port: 22,
+            identity: cloud.path().join("absent-identity"),
+            known_hosts: cloud.path().join("absent-host-key"),
+            host_key_alias: "fixture".into(),
+        };
+        let cancel = horizon_cloud::Cancellation::default();
+        cancel.cancel();
+        let runner = Runner {
+            cancel: &cancel,
+            emit: &|_| panic!("rejected enrollment emits no private output"),
+            secrets: Vec::new(),
+        };
+        let error = configure(&connection, cloud.path(), &runner, &WorkerContract::default())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("tag:horizon-worker") && error.contains("tagOwners"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn worker_tag_rejection_names_the_policy_prerequisite_without_private_output() {
+        let error = enrollment_confirmed(b"tag_required\n").unwrap_err().to_string();
+        assert!(
+            error.contains("tag:horizon-worker") && error.contains("tagOwners"),
+            "{error}"
+        );
+        assert!(enrollment_confirmed(b"ready\n").is_ok());
+        let private = "private-key-or-status-content";
+        assert!(
+            !enrollment_confirmed(private.as_bytes())
+                .unwrap_err()
+                .to_string()
+                .contains(private)
+        );
+    }
 
     #[test]
     fn selection_actual_names_and_unavailable_legacy_snapshots() {

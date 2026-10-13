@@ -130,9 +130,14 @@ def check():
             count += 1
     for source in SOURCES.keys() - discovered_sources:
         errors.append(f'{source}: coverage route no longer names an MCP server')
-    for term in ('Device name', 'MagicDNS', 'horizon-tailnet-contract=2', 'Connect again'):
+    for term in ('Device name', 'MagicDNS', 'horizon-tailnet-contract=4', 'Connect again'):
         if term not in documents.get('horizon-cloud', ''):
             errors.append(f'horizon-cloud: tailnet device identity guidance missing {term}')
+    for term in ('tag:horizon-worker', 'tagOwners', 'Self.Tags',
+                 'once at each resume', 'no continuous tag monitoring',
+                 'quick-start pin'):
+        if term not in documents.get('horizon-cloud', ''):
+            errors.append(f'horizon-cloud: tagged enrollment guidance missing {term}')
     cast_document = documents.get('horizon-cast', '')
     for name in enum_variants((ROOT / 'crates/horizon-browser-control/src/manifest/cast.rs').read_text(), 'CastSource'):
         if f'`kind: {snake_case(name)}`' not in cast_document:

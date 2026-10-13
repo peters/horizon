@@ -579,21 +579,9 @@ fn quick_start_request(
     )
 }
 
-/// Quick start reaches the provider request with no `docker` program and no Docker daemon:
-/// no digest lookup, no pull and no local contract check. The same image with another
-/// selection of tools keeps the local check, so it stops here and says that Docker is
-/// missing. The test cancels at Provision, before any provider request, so it allocates
-/// nothing.
-#[test]
-fn quick_start_reaches_allocation_without_local_docker() {
-    use repository::launch::{Configuration, quick_start};
-    if !super::super::image::without_docker::child(
-        "cloud_runtime::deployment::tests::quick_start_reaches_allocation_without_local_docker",
-    ) {
-        return;
-    }
-    let root = tempfile::tempdir().unwrap();
-    let plain = root.path().join("plain");
+fn prepare_quick_start_fixture(root: &std::path::Path, cancel: &Cancellation) -> repository::launch::Prepared {
+    use repository::launch::Configuration;
+    let plain = root.join("plain");
     std::fs::create_dir(&plain).unwrap();
     std::fs::write(plain.join("README"), "Hello World!\n").unwrap();
     for args in [
@@ -619,19 +607,31 @@ fn quick_start_reaches_allocation_without_local_docker() {
                 .success()
         );
     }
-    let cancel = Cancellation::default();
     let quiet = Runner {
-        cancel: &cancel,
+        cancel,
         emit: &|_| {},
         secrets: Vec::new(),
     };
-    let launch = repository::launch::prepare_with_configuration(
-        plain.to_str().unwrap(),
-        "HEAD",
-        Configuration::QuickStart,
-        &quiet,
-    )
-    .unwrap();
+    repository::launch::prepare_with_configuration(plain.to_str().unwrap(), "HEAD", Configuration::QuickStart, &quiet)
+        .unwrap()
+}
+
+/// Quick start reaches the provider request with no `docker` program and no Docker daemon:
+/// no digest lookup, no pull and no local contract check. The same image with another
+/// selection of tools keeps the local check, so it stops here and says that Docker is
+/// missing. The test cancels at Provision, before any provider request, so it allocates
+/// nothing.
+#[test]
+fn quick_start_reaches_allocation_without_local_docker() {
+    use repository::launch::quick_start;
+    if !super::super::image::without_docker::child(
+        "cloud_runtime::deployment::tests::quick_start_reaches_allocation_without_local_docker",
+    ) {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let cancel = Cancellation::default();
+    let launch = prepare_quick_start_fixture(root.path(), &cancel);
     let profile = launch.config.profiles[quick_start::PROFILE].clone();
     let request = quick_start_request(root.path(), &launch, profile.clone());
     let stages = std::cell::RefCell::new(Vec::new());
@@ -684,5 +684,41 @@ fn quick_start_reaches_allocation_without_local_docker() {
             .unwrap()
             .spec
             .is_none()
+    );
+}
+
+#[test]
+fn quick_start_refuses_tailnet_before_allocation_without_local_docker() {
+    use repository::launch::quick_start;
+    if !super::super::image::without_docker::child(
+        "cloud_runtime::deployment::tests::quick_start_refuses_tailnet_before_allocation_without_local_docker",
+    ) {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let launch = prepare_quick_start_fixture(root.path(), &Cancellation::default());
+    let profile = launch.config.profiles[quick_start::PROFILE].clone();
+    let request = quick_start_request(root.path(), &launch, profile);
+    std::fs::create_dir(&request.state_root).unwrap();
+    std::fs::write(request.state_root.join("tailnet.json"), br#"{"tailnet":"work"}"#).unwrap();
+    let stages = std::cell::RefCell::new(Vec::new());
+    let error = deploy(&request, &Cancellation::default(), &|event| {
+        if let Event::Stage(stage, _) = event {
+            stages.borrow_mut().push(stage);
+        }
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("tag:horizon-worker") && error.contains("tagOwners"),
+        "{error}"
+    );
+    assert_eq!(*stages.borrow(), [Stage::Validate]);
+    let state = Store::lock(&request.state_root).unwrap().load().unwrap().unwrap();
+    assert!(state.worker.is_none());
+    assert_eq!(
+        state.operation,
+        CreateState::Prepared,
+        "no provider allocation was requested"
     );
 }
