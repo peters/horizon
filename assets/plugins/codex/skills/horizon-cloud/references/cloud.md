@@ -48,6 +48,8 @@ auto mode gives these agents access to the worker's credentials and repositories
 Set `capabilities.agent_approvals: ask` to select the interactive approval preset.
 This setting requires an image with `horizon-agent-approvals-contract=1`.
 The launcher reads the root-owned `/run/horizon-worker/agent-approvals` policy.
+New tmux sessions reset their executable search path and shell startup variables; image-layer
+session environment files still configure the agent after the policy check.
 Changes to `/workspace/capabilities.json` do not change that policy. Missing or
 invalid policy data, or a root agent process, keeps the prompts.
 
@@ -56,7 +58,8 @@ a saved bypass mode for new and resumed sessions. The launcher does not add fold
 trust for Codex. It sets the
 approval policy to `on-request` and the sandbox to `workspace-write` through CLI
 options, which override repository and user settings, including stricter defaults.
-This preset permits sandboxed workspace edits without a prompt. Providers that block user namespaces
+This preset controls the agent launch; it does not restrict programs that the agent account
+starts itself. It permits sandboxed workspace edits without a prompt. Providers that block user namespaces
 can require approval to run commands outside this sandbox. The installed worker
 image must contain this launcher; changing a profile does not update an old image.
 

@@ -346,6 +346,16 @@ if sys.argv[1:] == ['--help']:
                 self.assertNotIn('--dangerously-skip-permissions', child['args'])
                 self.assertEqual(settings.read_text(), saved)
 
+    def test_policy_reader_does_not_use_a_python_from_the_session_path(self):
+        self.as_uid(10001)
+        self.select(agent_approvals='ask')
+        python = self.tools / 'python3'
+        python.write_text('#!/bin/sh\necho auto\n')
+        python.chmod(0o700)
+        child = self.launch('codex', CODEX_DAEMON='1')
+        self.assertEqual(child['args'], ['--no-daemon', '--config', 'approval_policy="on-request"',
+                                         '--sandbox', 'workspace-write'])
+
     def test_auto_mode_codex_skips_prompts_and_the_sandbox_and_trusts_its_folder(self):
         self.as_uid(10001)
         self.select()

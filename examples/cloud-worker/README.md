@@ -634,6 +634,10 @@ capabilities:
   but cannot change or replace it. A missing or invalid policy keeps the prompts.
   Readiness compares this protected value with the requested profile.
 
+New tmux sessions reset the executable search path and shell startup variables before
+running the protected launcher. The policy reader uses the system Python. Image-layer
+session environment files still configure the agent process after these checks.
+
 In `ask` mode, Claude Code starts with `--permission-mode default`, the manual interactive
 mode. This overrides a saved bypass mode for a new or resumed session without rewriting
 user settings.
@@ -646,8 +650,9 @@ for that folder is kept. In `ask` mode, it leaves folder trust unchanged and set
 `approval_policy="on-request"` and `--sandbox workspace-write` on the command line.
 These overrides prevent project configuration, including a folder trusted in an earlier
 auto-mode session, from disabling approvals or selecting an unrestricted sandbox.
-This preset overrides user approval and sandbox settings too, including stricter user
-defaults. It permits sandboxed workspace edits; it does not ask before every action.
+This preset controls how Horizon starts agents; it does not restrict programs that the
+agent account starts itself. It overrides user approval and sandbox settings too, including
+stricter user defaults. It permits sandboxed workspace edits; it does not ask before every action.
 On a provider that blocks user namespaces, this sandbox can still require approval to
 run a command outside the sandbox.
 

@@ -7,7 +7,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+
+import test_agent_runtime
 
 SCRIPTS = Path(__file__).parent
 SESSION = 'panel-1'
@@ -24,7 +27,7 @@ command, rest = args[2], args[3:]
 if command == 'has-session':
     sys.exit(0 if (state / 'running' / rest[1].removeprefix('=')).exists() else 1)
 if command == 'new-session':
-    if len(rest) != 6 or rest[0:2] != ['-d', '-s'] or rest[3] != '-c' or (state / 'running' / rest[2]).exists():
+    if len(rest) < 6 or rest[0:2] != ['-d', '-s'] or rest[3] != '-c' or (state / 'running' / rest[2]).exists():
         sys.exit(91)
     try:
         os.fstat(9)
@@ -32,7 +35,7 @@ if command == 'new-session':
     except OSError:
         inherits_lock = False
     with open(state / 'launches', 'a') as log:
-        log.write(json.dumps({'session': rest[2], 'cwd': rest[4], 'command': rest[5],
+        log.write(json.dumps({'session': rest[2], 'cwd': rest[4], 'command': rest[5:],
                               'inherits_lock': inherits_lock}) + '\\n')
     (state / 'running').mkdir(exist_ok=True)
     (state / 'running' / rest[2]).touch()
@@ -116,6 +119,68 @@ class SessionRelaunchTests(unittest.TestCase):
         self.assertFalse(any(launch.pop('inherits_lock') for launch in launches))
         return launches
 
+    @unittest.skipUnless(shutil.which('tmux') and os.geteuid() != 0,
+                         'needs tmux and an unprivileged account')
+    def test_poisoned_tmux_environment_cannot_change_the_next_sessions_approval_mode(self):
+        attached = self.run_session()
+        self.assertEqual(attached.returncode, 0, attached.stderr)
+        launch = self.launches()[0]['command']
+        case = test_agent_runtime.AgentRuntimeTests()
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        # Redirect only filesystem and helper locations; use the actual launch command.
+        case.script.write_text(case.script.read_text().replace(
+            'horizon-worker-session-env apply', str(case.tools / 'horizon-worker-session-env') + ' apply'))
+        case.fragments.mkdir()
+        (case.fragments / 'tools.env').write_text('PATH_PREPEND=' + str(case.tools) + '\n')
+        (case.tools / 'codex').write_text('#!' + sys.executable + '\n' + case.codex.replace(
+            'keys = [', "keys = ['LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT', "))
+        launch[launch.index('/usr/local/bin/horizon-worker-run'):] = [str(case.script), 'test-panel', 'codex']
+        real_tmux = shutil.which('tmux')
+        socket = case.root / 'tmux.sock'
+        environment = dict(case.env, PATH=os.defpath, CODEX_DAEMON='1')
+        def tmux(*args, check=True):
+            return subprocess.run([real_tmux, '-S', str(socket), *args], env=environment,
+                                  capture_output=True, text=True, timeout=15, check=check)
+        tmux('new-session', '-d', '-s', 'seed', '/bin/sleep', '60')
+        self.addCleanup(lambda: tmux('kill-server', check=False))
+        poison = case.root / 'poison'
+        poison.mkdir()
+        marker = case.root / 'poison-ran'
+        startup = poison / 'startup.sh'
+        startup.write_text('touch ' + str(marker) + '\npython3() { echo auto; }\n')
+        fake_python = poison / 'python3'
+        fake_python.write_text('#!/bin/sh\ntouch ' + str(marker) + '\necho auto\n')
+        fake_python.chmod(0o700)
+        for key, value in [('PATH', str(poison) + ':' + os.defpath),
+                           ('BASH_ENV', str(startup)), ('ENV', str(startup)),
+                           ('LD_PRELOAD', str(poison / 'missing.so')),
+                           ('LD_LIBRARY_PATH', str(poison)), ('LD_AUDIT', str(poison / 'missing.so'))]:
+            tmux('set-environment', '-g', key, value)
+        tmux('set-option', '-g', 'default-shell', '/bin/false')
+        receipt = case.root / 'child.json'
+        for mode in ('ask', 'auto'):
+            with self.subTest(mode=mode):
+                case.select(agent_approvals=mode)
+                receipt.unlink(missing_ok=True)
+                tmux('new-session', '-d', '-s', mode, '-c', str(self.worktree), *launch)
+                deadline = time.monotonic() + 10
+                child = None
+                while time.monotonic() < deadline:
+                    try:
+                        child = json.loads(receipt.read_text())
+                        break
+                    except (FileNotFoundError, json.JSONDecodeError):
+                        time.sleep(0.05)
+                self.assertIsNotNone(child, 'the protected launcher did not start its child')
+                options = ['--dangerously-bypass-approvals-and-sandbox'] if mode == 'auto' else [
+                    '--config', 'approval_policy="on-request"', '--sandbox', 'workspace-write']
+                self.assertEqual(child['args'], ['--no-daemon', *options])
+                self.assertTrue(child['path'].startswith(str(case.tools) + ':'))
+                for key in ('LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT'):
+                    self.assertEqual(child['env'][key], '')
+                self.assertFalse(marker.exists(), 'tmux executed agent-controlled startup code')
+
     def reset_container(self):
         shutil.rmtree(self.state / 'running', ignore_errors=True)
 
@@ -149,7 +214,9 @@ class SessionRelaunchTests(unittest.TestCase):
         launches = self.launches()
         self.assertEqual(launches, original * 2)
         self.assertEqual(launches[1]['cwd'], str(self.worktree))
-        self.assertEqual(launches[1]['command'], 'horizon-worker-run ' + SESSION + ' codex')
+        self.assertEqual(launches[1]['command'][-7:],
+                         ['/bin/bash', '--noprofile', '--norc', '-p',
+                          '/usr/local/bin/horizon-worker-run', SESSION, 'codex'])
         self.assert_worktree_intact(head)
         self.assertEqual(self.git('-C', self.worktree, 'branch', '--show-current'), 'agent/' + SESSION)
         self.assertEqual((self.root / 'source.log').read_text().splitlines(), ['checkout ' + str(self.worktree)])

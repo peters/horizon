@@ -434,19 +434,25 @@ key file.
 This task uses synthetic worker files and child executables. It allocates no cloud
 and sends no agent prompt.
 
-1. Run these tests from `examples/cloud-worker`:
+1. Run these tests from `examples/cloud-worker` as an unprivileged user with tmux installed:
 
    ```bash
-   python3 -B -m unittest test_agent_runtime test_capabilities
+   python3 -B -m unittest test_agent_runtime test_capabilities test_session_relaunch
    ```
 
    Result: The tests pass. The launcher keeps `ask` after the workspace selection
    changes. Missing or invalid protected policy data keeps the prompts. Readiness
    refuses a different protected policy. A repository with bypass settings gets
    explicit CLI approval and sandbox options, including after an auto-mode session.
-   New and resumed Claude Code sessions override a saved bypass mode.
+   New and resumed Claude Code sessions override a saved bypass mode. A private tmux server
+   with a poisoned PATH, shell startup file and default shell still launches both modes
+   with the correct options. Image-layer PATH additions still reach the agent.
 
-2. On a disposable Linux test runner with root access, run the same tests as root.
+2. On a disposable Linux test runner with root access, run these modules as root:
+
+   ```bash
+   python3 -B -m unittest test_agent_runtime test_capabilities
+   ```
 
    Result: The two-user test runs. UID 10001 reads the policy that root publishes
    with a restrictive startup umask, including when the directory was agent-owned.

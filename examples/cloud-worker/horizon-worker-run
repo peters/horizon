@@ -55,7 +55,7 @@ fi
 # selection cannot be read.
 approvals=ask
 if [ "$(id -u)" != 0 ]; then
-    approvals="$(python3 -I - <<'PY' 2>/dev/null
+    approvals="$(/usr/bin/python3 -I - <<'PY' 2>/dev/null
 with open('/run/horizon-worker/agent-approvals') as policy:
     approvals = policy.read()
 if approvals not in ('auto\n', 'ask\n'):

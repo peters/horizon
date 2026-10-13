@@ -176,23 +176,29 @@ class WorkflowTests(unittest.TestCase):
         jobs = dict(re.findall(r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)", workflow, re.M | re.S))
         prefix = "bash scripts/install-ci-ubuntu-dependencies.sh "
         expected = {
-            "device": ["libxkbcommon-dev", "libwayland-dev", "pkg-config", "xvfb", "xauth", "bubblewrap"],
-            "clippy": ["libasound2-dev", "pkg-config"],
-            "rust-test": ["libasound2-dev", "pkg-config"],
+            "device": [["libxkbcommon-dev", "libwayland-dev", "pkg-config", "xvfb", "xauth", "bubblewrap"]],
+            "clippy": [["libasound2-dev", "pkg-config"]],
+            "rust-test": [["libasound2-dev", "pkg-config"], ["tmux"]],
         }
-        self.assertEqual(workflow.count(prefix), len(expected))
+        sites = sum(len(commands) for commands in expected.values())
+        self.assertEqual(workflow.count(prefix), sites)
         self.assertNotIn("apt-get", workflow)
         # localci runs the workflow on a developer computer; the installer must not run there.
         guarded = re.findall(r"- if: \$\{\{ !env\.LOCALCI[^\n]*\n\s+run: " + re.escape(prefix), workflow)
-        self.assertEqual(len(guarded), len(expected))
+        self.assertEqual(len(guarded), sites)
         for name, packages in expected.items():
             with self.subTest(job=name):
                 commands = re.findall(r"run: " + re.escape(prefix) + r"([^\n]+)", jobs[name])
-                self.assertEqual([shlex.split(command) for command in commands], [packages])
+                self.assertEqual([shlex.split(command) for command in commands], packages)
                 if name == "rust-test":
                     self.assertIn(
                         "- if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'speech' }}\n"
                         "        run: " + prefix,
+                        jobs[name],
+                    )
+                    self.assertIn(
+                        "- if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'libs' }}\n"
+                        "        run: " + prefix + "tmux",
                         jobs[name],
                     )
                 else:
