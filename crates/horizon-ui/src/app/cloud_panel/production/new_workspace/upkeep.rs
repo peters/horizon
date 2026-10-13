@@ -170,7 +170,8 @@ impl HorizonApp {
             tracing::warn!(%error, "could not open the Upkeep board");
         }
         self.start_production_deployment(id, ctx);
-        // The first run starts once the loop is installed, not at the next full period.
+        // The first run starts once the loop is installed, not at the next full period; the
+        // marker saved with the choice keeps it across a restart until it is sent.
         self.upkeep
             .syncs
             .entry(cloud_id.to_owned())
@@ -195,7 +196,9 @@ fn prepare(root: &Path, cloud_id: &str, config: &Config) -> Result<Prepared, Str
     let primary = config.primary().ok_or("Choose at least one repository.")?;
     let path = checkout(root, &settings, primary)?;
     let revision = repository::resolve(&path, "HEAD").map_err(|error| format!("{error}."))?;
-    worker::save(cloud_id, config).map_err(|error| format!("Upkeep could not save its settings: {error}."))?;
+    worker::save(cloud_id, config)
+        .and_then(|_| worker::mark_first_run(cloud_id))
+        .map_err(|error| format!("Upkeep could not save its settings: {error}."))?;
     Ok(Prepared { path, revision })
 }
 

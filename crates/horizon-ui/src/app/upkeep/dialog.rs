@@ -222,8 +222,10 @@ fn summary(ui: &mut Ui, form: &Form) {
             };
             ui.label(RichText::new(headline).size(22.0).strong().color(color));
             let open = form.catalog.open_in(&form.selected);
+            let counted = form.find_error.is_none() && form.catalog.search_error.is_none();
             ui.label(
                 RichText::new(match open {
+                    _ if !counted => "Open pull requests could not be counted".to_string(),
                     0 => "No open pull requests right now".to_string(),
                     1 => "1 open pull request to move now".to_string(),
                     open => format!("{open} open pull requests to move now"),

@@ -21,12 +21,14 @@ use horizon_core::upkeep::worker::{self, Config, Signals};
 use horizon_core::{PanelKind, PanelOptions};
 
 use super::super::super::{HorizonApp, Stage};
-use crate::app::upkeep::{Answer, Saved};
+use crate::app::upkeep::{Answer, Exchanged, Saved};
 
 /// How often a ready Upkeep cloud's worker is asked for its state.
 const POLL: Duration = Duration::from_secs(30);
 /// How often while a run is active: the agent's `github_access` call waits about a minute.
 const POLL_RUNNING: Duration = Duration::from_secs(8);
+/// How many allowed requests are remembered to keep them off the cloud card.
+const ALLOWED_KEPT: usize = 64;
 
 impl HorizonApp {
     pub(super) fn sync_upkeeps(&mut self, ctx: &egui::Context) {
@@ -52,14 +54,22 @@ impl HorizonApp {
             let mut answered = false;
             if let Some(rx) = &sync.inflight {
                 match rx.try_recv() {
-                    Ok(answer) => {
+                    Ok((allowed, answer)) => {
                         sync.inflight = None;
                         answered = true;
+                        sync.allowed.extend(allowed);
+                        let excess = sync.allowed.len().saturating_sub(ALLOWED_KEPT);
+                        sync.allowed.drain(..excess);
                         sync.last = answer.unwrap_or_else(|error| {
                             tracing::warn!(cloud = %cloud_id, %error, "the Upkeep exchange failed");
                             requeue(&mut sync.signals, sync.sent);
                             Answer::default()
                         });
+                        // A run that just started is polled at its own pace from now on.
+                        if sync.last.running {
+                            let soon = now + POLL_RUNNING;
+                            sync.next = Some(sync.next.map_or(soon, |next| next.min(soon)));
+                        }
                     }
                     Err(TryRecvError::Disconnected) => {
                         sync.inflight = None;
@@ -69,9 +79,17 @@ impl HorizonApp {
                 }
             }
             let group = &self.cloud_prototype.groups.0[index];
-            let Some(runtime) = self.cloud_prototype.production.runtimes.get(&group.issue) else {
+            let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&group.issue) else {
                 continue;
             };
+            // The card never offers a request that this Upkeep allowed, also when the card's
+            // own poll listed it just before the exchange allowed it.
+            if !sync.allowed.is_empty() {
+                runtime
+                    .github_requests
+                    .list
+                    .retain(|request| !sync.allowed.contains(&request.id));
+            }
             let Some(state) = runtime
                 .state
                 .as_ref()
@@ -119,15 +137,28 @@ impl HorizonApp {
             let (tx, rx) = channel();
             let repaint = ctx.clone();
             std::thread::spawn(move || {
-                let _ = tx.send(Saved::new(worker::saved()));
+                let saved = worker::saved();
+                let first_runs = saved
+                    .iter()
+                    .filter(|(cloud, _)| worker::first_run_pending(cloud))
+                    .map(|(cloud, _)| cloud.clone())
+                    .collect();
+                let _ = tx.send((Saved::new(saved), first_runs));
                 repaint.request_repaint();
             });
             rx
         });
         match rx.try_recv() {
-            Ok(saved) => {
+            Ok((saved, first_runs)) => {
                 self.upkeep.reading = None;
                 self.upkeep.saved = Some(saved.clone());
+                // Only for a cloud this run of Horizon has not exchanged with yet: a marker
+                // that is still there may belong to an exchange under way.
+                for cloud in first_runs {
+                    if let std::collections::hash_map::Entry::Vacant(entry) = self.upkeep.syncs.entry(cloud) {
+                        entry.insert(crate::app::upkeep::Sync::default()).signals.run_now = true;
+                    }
+                }
                 Some(saved)
             }
             Err(TryRecvError::Empty) => None,
@@ -185,40 +216,70 @@ fn exchange(
     state: &cloud_runtime::state::Deployment,
     config: &Config,
     signals: Signals,
-) -> Result<Answer, String> {
-    let settings = Settings::load(&root.join("settings.json")).map_err(|error| error.to_string())?;
-    let state_root = cloud_runtime::state::cloud_directory(root, cloud_id).map_err(|error| error.to_string())?;
-    let worker_state = state.worker.as_ref().ok_or("The cloud has no worker")?;
-    let connection = Connection::new(worker_state, &settings, &state_root).map_err(|error| error.to_string())?;
+) -> Exchanged {
+    let connection = (|| -> Result<Connection, String> {
+        let settings = Settings::load(&root.join("settings.json")).map_err(|error| error.to_string())?;
+        let state_root = cloud_runtime::state::cloud_directory(root, cloud_id).map_err(|error| error.to_string())?;
+        let worker_state = state.worker.as_ref().ok_or("The cloud has no worker")?;
+        Connection::new(worker_state, &settings, &state_root).map_err(|error| error.to_string())
+    })();
+    let connection = match connection {
+        Ok(connection) => connection,
+        Err(error) => return (Vec::new(), Err(error)),
+    };
     let cancel = Cancellation::default();
     let runner = Runner {
         cancel: &cancel,
         emit: &|_| {},
         secrets: Vec::new(),
     };
-    allow_chosen(&connection, &runner, cloud_id, config);
+    let allowed = allow_chosen(&connection, &runner, cloud_id, config);
     let answer = worker::exchange(&connection, &runner, cloud_id, revision, config, signals)
-        .map_err(|error| error.to_string())?;
+        .map(|answer| learned(cloud_id, config, signals, &answer))
+        .map_err(|error| error.to_string());
+    (allowed, answer)
+}
+
+/// What Horizon keeps of an exchange that reached the worker: it forgets the first-run
+/// marker the exchange delivered and writes the board's status document.
+fn learned(cloud_id: &str, config: &Config, signals: Signals, answer: &worker::Exchange) -> Answer {
+    if signals.run_now {
+        worker::first_run_sent(cloud_id);
+    }
+    // The worker has the signals now: a status that cannot be written is only logged, so
+    // they are not sent again. The next exchange writes it again.
+    if let Err(error) = write_status(cloud_id, answer, config) {
+        tracing::warn!(cloud = %cloud_id, %error, "could not write the Upkeep status");
+    }
+    Answer {
+        settled: answer.loop_running && answer.settled,
+        running: answer.running(),
+    }
+}
+
+/// Writes the board's status document of `cloud_id`.
+fn write_status(cloud_id: &str, answer: &worker::Exchange, config: &Config) -> Result<(), String> {
     let folder: PathBuf = worker::directory(cloud_id);
     std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
     let text = serde_json::to_string_pretty(&answer.document(config)).map_err(|error| error.to_string())?;
-    worker::write_atomically(&folder.join("status.json"), &text).map_err(|error| error.to_string())?;
-    Ok(Answer {
-        settled: answer.loop_running && answer.settled,
-        running: answer.running(),
-    })
+    worker::write_atomically(&folder.join("status.json"), &text).map_err(|error| error.to_string())
 }
 
 /// Allows, for the loop's session only, its requests for repositories the person chose.
-/// Every other request stays on the cloud card for the person.
-fn allow_chosen(connection: &Connection, runner: &Runner<'_>, cloud_id: &str, config: &Config) {
+/// Every other request, and one the worker refused, stays on the cloud card for the person.
+/// Returns the ids of the requests the worker applied.
+fn allow_chosen(connection: &Connection, runner: &Runner<'_>, cloud_id: &str, config: &Config) -> Vec<String> {
     let Ok(pending) = requests::list(connection, runner) else {
-        return;
+        return Vec::new();
     };
     let session = worker::session(cloud_id);
+    let mut applied = Vec::new();
     for request in pending.iter().filter(|request| allowed(request, &session, config)) {
         match requests::decide(connection, runner, &request.id, Decision::AllowTask) {
-            Ok(None) => tracing::info!(repository = %request.repository, "Upkeep allowed GitHub access"),
+            Ok(None) => {
+                tracing::info!(repository = %request.repository, "Upkeep allowed GitHub access");
+                applied.push(request.id.clone());
+            }
             Ok(Some(refused)) => {
                 tracing::warn!(repository = %request.repository, %refused, "the worker refused Upkeep's GitHub access");
             }
@@ -227,6 +288,7 @@ fn allow_chosen(connection: &Connection, runner: &Runner<'_>, cloud_id: &str, co
             }
         }
     }
+    applied
 }
 
 /// Puts back the signals of a failed exchange: the worker may not have them. One the board

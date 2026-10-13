@@ -204,6 +204,14 @@ impl Form {
         self.finding = None;
         match answer {
             Ok(found) => {
+                // A repository the app can no longer reach cannot be chosen.
+                self.selected.retain(|name| {
+                    found
+                        .catalog
+                        .repositories
+                        .iter()
+                        .any(|repository| repository.name == *name)
+                });
                 self.catalog = found.catalog;
                 self.codex_login = Some(found.codex_login);
                 self.find_error = None;
@@ -217,8 +225,13 @@ impl Form {
 fn codex_login(root: &std::path::Path) -> bool {
     use horizon_core::cloud_runtime::{codex_login, settings::Settings};
     let signed_in = codex_login::account(&codex_login::home(root)).is_ok_and(|account| account.is_some());
+    // A key binding counts only when deployment would accept its file.
     signed_in
-        || Settings::load(&root.join("settings.json")).is_ok_and(|settings| settings.openai_api_key_file.is_some())
+        || Settings::load(&root.join("settings.json")).is_ok_and(|settings| {
+            settings
+                .openai_api_key_file
+                .is_some_and(|path| horizon_core::cloud_runtime::settings::validate_private_key_file(&path).is_ok())
+        })
 }
 
 #[cfg(test)]
@@ -260,6 +273,30 @@ mod tests {
         assert_eq!(form.blocked(), None);
         form.starting = true;
         assert_eq!(form.blocked().as_deref(), Some("Starting Upkeep..."));
+    }
+
+    #[test]
+    fn a_repository_the_app_no_longer_reaches_is_no_longer_chosen() {
+        use horizon_core::upkeep::{Catalog, CatalogRepository};
+        let mut form = Form::default();
+        form.selected.insert("acme/web".into());
+        form.selected.insert("acme/gone".into());
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Ok(Found {
+            catalog: Catalog {
+                repositories: vec![CatalogRepository {
+                    name: "acme/web".into(),
+                    open: 0,
+                }],
+                search_error: None,
+            },
+            codex_login: true,
+        }))
+        .unwrap();
+        form.finding = Some(rx);
+        form.receive();
+        assert_eq!(form.selected.iter().collect::<Vec<_>>(), ["acme/web"]);
+        assert_eq!(form.codex_login, Some(true));
     }
 
     #[test]

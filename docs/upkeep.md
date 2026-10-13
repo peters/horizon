@@ -78,11 +78,14 @@ cause, and **Try again**.
    complete. The clone of a large repository can take minutes. **Cancel** closes
    the dialog, but the start continues. When the start fails, the dialog shows
    again with the cause.
-2. It saves the choice in `~/.horizon/upkeep/<cloud>/upkeep.json`.
+2. It saves the choice in `~/.horizon/upkeep/<cloud>/upkeep.json`, and the marker
+   `first-run` next to it.
 3. It makes the workspace **Upkeep** with the cloud card and the board.
 4. It starts a quick-start cloud on Hetzner. The cloud has no idle stop, because
    the loop must run while this computer sleeps. The first exchange with the
    worker sends **Run now**, so the first run starts when the loop is installed.
+   The exchange removes the `first-run` marker. Thus a restart of Horizon before
+   that exchange does not lose the first run.
 
 **Start Upkeep** is unavailable until Codex has a login to give to the worker: the
 ChatGPT sign-in or an OpenAI API key in Cloud settings.
@@ -99,10 +102,13 @@ runs on a separate thread and does these steps:
 1. It reads the GitHub access requests on the worker. It allows the requests of
    the loop, as the section
    [Trust boundary of the loop's GitHub access](#trust-boundary-of-the-loops-github-access)
-   describes. The cloud card shows all other requests to the person.
+   describes. The cloud card shows all other requests to the person. It never
+   shows a request that Horizon allows without the person.
 2. It does the exchange of the section [The worker loop](#the-worker-loop).
 3. It writes the status document of the board to
-   `~/.horizon/upkeep/<cloud>/status.json`.
+   `~/.horizon/upkeep/<cloud>/status.json`. When this write fails, Horizon logs
+   the cause and writes the document again with the next exchange. It does not
+   send **Run now** or **Pause** again, because the worker has them.
 
 After the loop runs and survived its start, Horizon opens the panel
 **Upkeep agent**. This Codex panel shows the tmux session of the loop.

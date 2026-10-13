@@ -76,7 +76,18 @@ pub(super) fn show(ui: &mut Ui, form: &mut Form) {
 /// One tab per owner, with how many of its repositories are chosen, and the filter.
 fn tabs(ui: &mut Ui, form: &mut Form, owners: &[String], current: &str) {
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.add_sized(
+            [ui.available_width().min(320.0), 30.0],
+            TextEdit::singleline(&mut form.search)
+                .id(Id::new("upkeep-repository-filter"))
+                .font(egui::FontId::proportional(13.0))
+                .margin(Vec2::new(10.0, 7.0))
+                .hint_text("Filter repositories"),
+        );
+    });
+    // Many or long owner names wrap to more rows rather than leave the dialog.
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
         for owner in owners {
             let chosen = form
                 .catalog
@@ -93,16 +104,6 @@ fn tabs(ui: &mut Ui, form: &mut Form, owners: &[String], current: &str) {
                 form.owner = Some(owner.clone());
             }
         }
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.add_sized(
-                [220.0, 30.0],
-                TextEdit::singleline(&mut form.search)
-                    .id(Id::new("upkeep-repository-filter"))
-                    .font(egui::FontId::proportional(13.0))
-                    .margin(Vec2::new(10.0, 7.0))
-                    .hint_text("Filter repositories"),
-            );
-        });
     });
 }
 
@@ -110,9 +111,7 @@ fn tabs(ui: &mut Ui, form: &mut Form, owners: &[String], current: &str) {
 fn list(ui: &mut Ui, form: &mut Form, owner: &str) {
     let needle = form.search.trim().to_lowercase();
     // Without counts the filter would hide every repository.
-    let only_open = form.only_open
-        && form.catalog.search_error.is_none()
-        && form.catalog.repositories.iter().any(|repository| repository.open > 0);
+    let only_open = form.only_open && form.catalog.search_error.is_none();
     let shown: Vec<&CatalogRepository> = form
         .catalog
         .repositories
@@ -145,7 +144,11 @@ fn list(ui: &mut Ui, form: &mut Form, owner: &str) {
             if shown.is_empty() {
                 ui.add_space(10.0);
                 ui.label(
-                    RichText::new("No repositories match.")
+                    RichText::new(if only_open && form.search.trim().is_empty() {
+                        "No open pull requests from these bots. Clear Only with open pull requests to see every repository."
+                    } else {
+                        "No repositories match."
+                    })
                         .size(12.5)
                         .color(theme::FG_SOFT()),
                 );

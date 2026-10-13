@@ -16,7 +16,7 @@ mod repositories;
 mod state;
 
 #[cfg(feature = "cloud-workspaces")]
-pub(super) use state::{Answer, Prepared, Preparing, Saved, State};
+pub(super) use state::{Answer, Exchanged, Prepared, Preparing, Saved, State, Sync};
 
 /// Without cloud workspaces there is no Upkeep to keep.
 #[cfg(not(feature = "cloud-workspaces"))]
