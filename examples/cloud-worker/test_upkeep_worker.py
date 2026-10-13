@@ -63,6 +63,16 @@ class ExchangeTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.worker = Worker(directory.name)
 
+    def test_a_new_loop_is_announced_only_after_the_whole_install(self):
+        self.worker.exchange()
+        self.assertTrue((self.worker.upkeep / 'restart').is_file())
+        (self.worker.upkeep / 'restart').unlink()
+        self.worker.exchange()
+        self.assertFalse((self.worker.upkeep / 'restart').exists())
+        self.worker.exchange(payload(scheduler='print(2)\n'))
+        self.assertTrue((self.worker.upkeep / 'restart').is_file())
+        self.assertEqual((self.worker.upkeep / 'run.py').read_text(), 'print(2)\n')
+
     def test_installs_the_loop_and_binding_and_starts_the_session(self):
         answer = self.worker.exchange(payload(run_now=True))
         upkeep = self.worker.upkeep
@@ -229,7 +239,7 @@ class LoopTests(unittest.TestCase):
 
     def test_invalid_names_never_reach_a_command(self):
         config = {'repositories': ['acme/web', '--repo=x/y', 'acme/..', 'acme/web', 'a/b/c', 7],
-                  'authors': ['app/dependabot', 'renovate[bot]', '--state=closed', 'a b'],
+                  'authors': ['app/dependabot', 'renovate[bot]', '--state=closed', 'a b', 'app/dependabot[bot]'],
                   'order': ['acme/web', '../x']}
         with contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(RUN['names'](config, 'repositories', RUN['REPOSITORY']), ['acme/web'])

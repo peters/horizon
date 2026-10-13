@@ -95,7 +95,7 @@ def write(parent, name, text, mode=0o600):
         raise Refused(f'{name} is a folder')
     if (current is not None and stat.S_ISREG(current.st_mode) and stat.S_IMODE(current.st_mode) == mode
             and read(parent, name, len(data) + 1) == data):
-        return
+        return False
     temporary = f'.{name}.{secrets.token_hex(8)}'
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=parent)
     try:
@@ -103,6 +103,7 @@ def write(parent, name, text, mode=0o600):
             handle.write(data)
             os.fchmod(handle.fileno(), mode)
         os.replace(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
+        return True
     except BaseException:
         try:
             os.unlink(temporary, dir_fd=parent)
@@ -123,12 +124,13 @@ def create(parent, name):
 
 
 def install(payload, upkeep):
-    """Writes the loop, its settings and the session binding."""
+    """Writes the loop, its settings and the session binding. Returns whether the loop's own
+    files changed."""
     session = payload['session']
     write(upkeep, 'config.json', json.dumps(payload['config'], indent=1))
     write(upkeep, 'prompt.md', payload['prompt'])
-    write(upkeep, 'run.sh', payload['run'], 0o700)
-    write(upkeep, 'run.py', payload['scheduler'])
+    changed = write(upkeep, 'run.sh', payload['run'], 0o700)
+    changed = write(upkeep, 'run.py', payload['scheduler']) or changed
     # The binding that makes the session a Codex session to the worker's services: its
     # processes may ask for GitHub access and open browser panels for this cloud.
     sessions = owned_folder(SESSIONS)
@@ -148,6 +150,7 @@ def install(payload, upkeep):
         os.close(folder(data, session))
     finally:
         os.close(data)
+    return changed
 
 
 def remove(parent, name):
@@ -254,8 +257,12 @@ def exchange(payload):
     try:
         upkeep = folder(home, FOLDER)
         try:
-            install(payload, upkeep)
+            changed = install(payload, upkeep)
             signal(payload, upkeep)
+            # Last, after every file is in place: a running loop starts the new one between two
+            # runs, and only ever sees a complete install.
+            if changed:
+                write(upkeep, 'restart', '')
             loop, settled = keep_loop(session, HOME + '/' + FOLDER)
             return report(upkeep, loop, settled)
         finally:

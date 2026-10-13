@@ -111,11 +111,13 @@ impl Config {
         self.repositories.len() - before
     }
 
-    /// Removes `names`, ignoring case. Returns how many were removed.
+    /// Removes `names`, ignoring case, from the repositories and the order. Returns how many
+    /// repositories were removed.
     pub fn remove(&mut self, names: &[String]) -> usize {
         let before = self.repositories.len();
-        self.repositories
-            .retain(|held| !names.iter().any(|name| name.trim().eq_ignore_ascii_case(held)));
+        let removed = |held: &String| names.iter().any(|name| name.trim().eq_ignore_ascii_case(held));
+        self.repositories.retain(|held| !removed(held));
+        self.order.retain(|held| !removed(held));
         before - self.repositories.len()
     }
 
@@ -180,8 +182,10 @@ impl Config {
 
 /// A login that `gh pr list --author` accepts: `name`, `name[bot]` or `app/name`.
 fn valid_author(name: &str) -> bool {
-    let name = name.strip_prefix("app/").unwrap_or(name);
-    let name = name.strip_suffix("[bot]").unwrap_or(name);
+    let name = match name.strip_prefix("app/") {
+        Some(app) => app,
+        None => name.strip_suffix("[bot]").unwrap_or(name),
+    };
     (1..=39).contains(&name.len())
         && !name.starts_with('-')
         && !name.ends_with('-')

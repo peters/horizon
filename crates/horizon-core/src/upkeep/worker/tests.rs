@@ -21,7 +21,9 @@ fn repositories_are_added_once_and_removed_ignoring_case() {
         1
     );
     assert_eq!(config.repositories, ["acme/web", "acme/api", "acme/docs"]);
+    config.order = vec!["acme/api".into()];
     assert_eq!(config.remove(&["ACME/API".into(), "acme/missing".into()]), 1);
+    assert!(config.order.is_empty());
     assert_eq!(config.repositories, ["acme/web", "acme/docs"]);
 }
 
@@ -65,6 +67,7 @@ fn settings_that_could_reach_a_command_line_or_path_are_refused() {
     assert!(refused(|config| config.authors.push("--state=closed".into())));
     assert!(refused(|config| config.authors.push("app/".into())));
     assert!(refused(|config| config.authors.push("bot;id".into())));
+    assert!(refused(|config| config.authors.push("app/dependabot[bot]".into())));
     assert!(refused(|config| config.agent = "claude".into()));
     assert!(refused(|config| config.every_minutes = 5));
     assert!(refused(
@@ -99,7 +102,7 @@ fn the_command_runs_as_the_agent_where_the_worker_isolates_it() {
         .map(|n| format!("{}/{n:0>100}", "o".repeat(39)))
         .collect();
     long.order.clone_from(&long.repositories);
-    long.authors = (0..AUTHOR_LIMIT).map(|n| format!("app/{n:0>39}[bot]")).collect();
+    long.authors = (0..AUTHOR_LIMIT).map(|n| format!("{n:0>39}[bot]")).collect();
     assert!(long.validate().is_ok());
     let longest = command("abc-123", &"a".repeat(40), &long, Signals::default()).unwrap();
     // Room for the scripts to grow before this limit is a concern.

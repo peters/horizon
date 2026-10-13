@@ -37,7 +37,7 @@ REFRESH = 5
 # The names Horizon accepts. They reach command lines, file names and prompts, so the loop
 # checks them again: config.json is a file in the agent's own folder.
 REPOSITORY = re.compile(r'(?!-)[A-Za-z0-9-]{1,39}(?<!-)/(?!\.\.?$)[A-Za-z0-9._-]{1,100}')
-AUTHOR = re.compile(r'(app/)?(?!-)[A-Za-z0-9-]{1,39}(?<!-)(\[bot\])?')
+AUTHOR = re.compile(r'app/(?!-)[A-Za-z0-9-]{1,39}(?<!-)|(?!-)[A-Za-z0-9-]{1,39}(?<!-)(\[bot\])?')
 
 
 def refuse_constant(name):
@@ -125,19 +125,6 @@ def session_environment():
     except OSError:
         pass
     return environment
-
-
-def sources(folder):
-    """The loop's files in `folder`, so it can start again when an exchange installed new ones.
-    run.sh copies them to .active before it runs the copy, so .active holds what runs."""
-    digest = hashlib.sha256()
-    for name in ('run.sh', 'run.py'):
-        try:
-            with open(os.path.join(folder, name), 'rb') as handle:
-                digest.update(handle.read())
-        except OSError:
-            pass
-    return digest.hexdigest()
 
 
 def codex_command(environment):
@@ -581,10 +568,23 @@ def main():
     cfg = config()
     minutes = every(cfg)
     upcoming = next_slot(cfg)
+    # A run that was due when a new loop replaced this one still runs.
+    try:
+        with open(DIR + '/next-run') as handle:
+            earlier = int(handle.read().strip())
+        if upcoming - minutes * 60 <= earlier < upcoming:
+            upcoming = earlier
+    except (OSError, ValueError):
+        pass
     write_next(upcoming)
     print(f'Upkeep waits for its next run at {time.strftime("%H:%M", time.gmtime(upcoming))} UTC.', flush=True)
-    installed = sources(DIR + '/.active')
     while True:
+        # The exchange asks for a restart after it installed a complete new loop. Here, at the
+        # top, no run is going, and a due run or Run now is left for the new loop.
+        if os.path.exists(DIR + '/restart'):
+            os.remove(DIR + '/restart')
+            print('\nAn exchange installed a new loop; starting it.', flush=True)
+            os.execv('/bin/bash', ['/bin/bash', '--noprofile', '--norc', DIR + '/run.sh', *sys.argv[1:]])
         cfg = config()
         paused = os.path.exists(DIR + '/paused')
         # A pause skips the runs it covers; the next run is the next one on the schedule.
@@ -624,11 +624,6 @@ def main():
             upcoming = next_slot(cfg)
             write_next(upcoming)
             print(f'\nUpkeep waits for its next run at {time.strftime("%H:%M", time.gmtime(upcoming))} UTC.', flush=True)
-        # Between runs only, and never when one is due, so an update stops no agent and skips
-        # no run.
-        elif sources(DIR) != installed:
-            print('\nAn exchange installed a new loop; starting it.', flush=True)
-            os.execv('/bin/bash', ['/bin/bash', '--noprofile', '--norc', DIR + '/run.sh', *sys.argv[1:]])
         time.sleep(10)
 
 
