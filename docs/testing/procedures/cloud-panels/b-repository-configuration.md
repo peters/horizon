@@ -13,7 +13,7 @@ owner: peters
 ## 1. Purpose
 
 This area makes the synthetic repositories for the run. It also makes sure that
-**New cloud…** reads `.horizon/cloud.yml`, refuses YAML that is not valid, offers
+**New cloud** reads `.horizon/cloud.yml`, refuses YAML that is not valid, offers
 the setup agent and reads local image-only settings. It makes sure that
 `check-markers.py` names the contract markers that an image does not report.
 

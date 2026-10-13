@@ -2,7 +2,7 @@
 
 Use these names in Horizon procedures, reports and guides. Use one name for one
 thing. Write a UI label exactly as the UI shows it, in bold, for example
-**New cloud…**. Add a new name here before you use it in a procedure.
+**New cloud**. Add a new name here before you use it in a procedure.
 
 ## Test equipment
 

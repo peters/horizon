@@ -12,7 +12,7 @@ owner: peters
 
 ## 1. Purpose
 
-This area makes sure that **Cloud settings…** saves provider keys, Hetzner
+This area makes sure that **Cloud settings** saves provider keys, Hetzner
 placement, coding agents, a private registry credential and a Git credential. It
 also makes sure that the settings file holds only paths. An absent account
 setting must open a repair form.

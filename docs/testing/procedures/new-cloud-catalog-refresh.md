@@ -12,7 +12,7 @@ owner: peters
 
 ## 1. Purpose
 
-This procedure proves that a background price refresh in the **New cloud…**
+This procedure proves that a background price refresh in the **New cloud**
 dialog keeps the last comparison, the account check and the layout. While the
 refresh runs, only the text **Updated N s ago** and the **Refresh** button change.
 It also makes sure that the dialog body uses the full height of the dialog in a

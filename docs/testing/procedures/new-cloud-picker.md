@@ -12,7 +12,7 @@ owner: peters
 
 ## 1. Purpose
 
-This procedure proves that the worker picker in the **New cloud…** dialog shows
+This procedure proves that the worker picker in the **New cloud** dialog shows
 the correct offers. It examines the worker list, the filters, the search, the
 estimated totals, the **Cheapest**, **Balanced** and **Most powerful** cards,
 and the data center chips. It also examines the `cloud_offers` MCP tool where

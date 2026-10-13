@@ -12,7 +12,7 @@ owner: peters
 
 ## 1. Purpose
 
-This area makes sure that the **New cloud…** dialog opens from each entry point
+This area makes sure that the **New cloud** dialog opens from each entry point
 and refuses a cloud where it must. It also audits the worker picker. The audit
 examines the catalog size, the rows, the filters, the prices, the order and the
 picks. It also examines the data centers and the storage choice. The last task makes sure that a worker

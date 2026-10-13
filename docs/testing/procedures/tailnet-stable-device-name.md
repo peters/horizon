@@ -47,7 +47,7 @@ service on the first cloud with the same name before and after the resume.
 - A worker image built from the candidate commit.
 - A test tailnet with a saved auth key in **Settings > Tailnets**. The key is
   reusable, preauthorized and not ephemeral.
-- Provider keys in **Cloud settings…** for each lane.
+- Provider keys in **Cloud settings** for each lane.
 - A private evidence directory, `<evidence>`.
 - A tailnet policy that lets cloud B reach cloud A on TCP `<port>`. If the
   policy blocks this port, T02 and T04 fail for a reason that is not this fix.
@@ -66,7 +66,7 @@ address. Thus, cloud B reaches the server, but the public network does not.
 
    Result: The Device panel shows the candidate and the frames advance.
 
-2. In **New cloud…**, select the test tailnet for cloud A on Hetzner.
+2. In **New cloud**, select the test tailnet for cloud A on Hetzner.
 
    Result: The dialog shows the test tailnet.
 
@@ -77,7 +77,7 @@ address. Thus, cloud B reaches the server, but the public network does not.
 
    Result: The card of cloud A shows Ready.
 
-4. In **New cloud…**, select the same tailnet for cloud B.
+4. In **New cloud**, select the same tailnet for cloud B.
 
    Result: The dialog shows the test tailnet.
 

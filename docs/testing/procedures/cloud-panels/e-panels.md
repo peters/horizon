@@ -132,7 +132,7 @@ real request.
    > **CAUTION:** ONLY THE OPERATOR ENTERS THE KEY. A device action can change
    > the key, and a screenshot can show it.
 
-2. If the panel shows a `401` error, ask the operator to enter the key again in **Cloud settings…**.
+2. If the panel shows a `401` error, ask the operator to enter the key again in **Cloud settings**.
 
    Result: The operator saves the key. Nobody types it with a device action.
 

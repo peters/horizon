@@ -13,7 +13,7 @@ owner: peters
 ## 1. Purpose
 
 This procedure makes sure that **Replace** and **Keep saved key** work on each
-saved key in the **Cloud settings…** dialog. It also makes sure that the card
+saved key in the **Cloud settings** dialog. It also makes sure that the card
 layout stays compact when a replacement field is open. The dialog must not move
 or change size after it opens.
 

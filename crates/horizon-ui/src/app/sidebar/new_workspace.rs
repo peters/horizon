@@ -19,6 +19,7 @@ impl NewWorkspace {
     /// In the order the menu shows them: the default first, and This PC second.
     pub(in crate::app) const ALL: [Self; 2] = [Self::Cloud, Self::ThisPc];
     /// The cloud choices of the canvas picker.
+    #[cfg(feature = "cloud-workspaces")]
     pub(in crate::app) const CLOUDS: [Self; 2] = [Self::Cloud, Self::CloudGpu];
 
     pub(in crate::app) fn label(self) -> &'static str {

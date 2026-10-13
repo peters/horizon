@@ -13,17 +13,17 @@ functions. Keep the application's existing proportional font: 26 px modal title,
 14–15 px field text and 12–13 px supporting text. Left-align the form, with clear
 groups and one primary action. Do not add an issue or device picker.
 
-The global Cloud menu owns New cloud, Cloud settings and Fit all. Remove the
+The toolbar **Menu** holds New cloud, Cloud settings and Fit all clouds. Remove the
 floating Cloud/RunPod control strip from the canvas. Settings uses a compact
 modal sharing the New cloud surface, with RunPod access followed by individual
 agent choices and API-key/subscription options. Advanced paths and registry
 bindings remain available without making them the first-use experience.
 
 ```text
-Cloud menu                  Cloud settings
+Menu (Cloud group)          Cloud settings
   New cloud                 RunPod access       [masked key]
   Cloud settings            Coding agents       [choices]
-  Fit all                   Authentication       [API key | Login]
+  Fit all clouds            Authentication       [API key | Login]
                             Advanced             [collapsed]
                             [Cancel]             [Save settings]
 ```
