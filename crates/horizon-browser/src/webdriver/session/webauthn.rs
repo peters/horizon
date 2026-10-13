@@ -33,10 +33,14 @@ pub(super) struct BidiPasskeys {
 /// Queued page messages handled in one pass of the driver loop.
 const MESSAGES_PER_TICK: usize = 4;
 const MAX_QUEUED_REPLIES: usize = 32;
+const MAX_REPLIES_PER_TICK: usize = 8;
 
 impl BidiPasskeys {
-    fn queue_reply(&mut self, reply: (Source, String)) {
-        if self.outbox.len() < MAX_QUEUED_REPLIES {
+    /// A busy reply to a flood is dropped once the outbox is full. A reply
+    /// that ends a request is always kept: there is at most one for each
+    /// queued or running request, so these stay bounded too.
+    fn queue_reply(&mut self, reply: (Source, String), ends_request: bool) {
+        if ends_request || self.outbox.len() < MAX_QUEUED_REPLIES {
             self.outbox.push_back(reply);
         }
     }
@@ -98,7 +102,7 @@ impl Driver {
                 let replies = passkeys.bridge.cancel_for(|source| source.context == context);
                 let ended = !replies.is_empty();
                 for reply in replies {
-                    passkeys.queue_reply(reply);
+                    passkeys.queue_reply(reply, true);
                 }
                 if ended {
                     self.note_passkey_change(events);
@@ -128,14 +132,20 @@ impl Driver {
             } else if let Some(passkeys) = self.passkeys.as_mut()
                 && let Some(reply) = passkeys.bridge.enqueue(source.clone(), message)
             {
-                passkeys.queue_reply((source, reply));
+                passkeys.queue_reply((source, reply), false);
             }
         }
         true
     }
 
     pub(super) fn tick_passkeys(&mut self, events: &BrowserEventSender) {
-        while let Some((source, reply)) = self.passkeys.as_mut().and_then(|passkeys| passkeys.outbox.pop_front()) {
+        // Only the replies present now: each delivery is a round trip whose
+        // events can queue more, and a flood must not hold the loop here.
+        let ready = self.passkeys.as_ref().map_or(0, |passkeys| passkeys.outbox.len());
+        for _ in 0..ready.min(MAX_REPLIES_PER_TICK) {
+            let Some((source, reply)) = self.passkeys.as_mut().and_then(|passkeys| passkeys.outbox.pop_front()) else {
+                break;
+            };
             self.deliver_passkey_reply(&source, &reply, events);
         }
         for _ in 0..MESSAGES_PER_TICK {
