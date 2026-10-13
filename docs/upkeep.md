@@ -10,11 +10,15 @@ This page describes the parts that exist so far.
 The `upkeep` panel kind is the board of one Upkeep. It shows:
 
 - the agent, the schedule, the worker and the number of repositories;
-- **Next run**, or **Running** while a run is in progress, or **Paused**;
+- **Next run**, or **Running** while a run is in progress, or **Paused**. It shows
+  **Late** when the planned run is more than 10 minutes overdue, and **No report**
+  when a run still shows as running after two schedule periods (at least three
+  hours), for example because the worker stopped;
 - **Last 24 hours**: one bar for each hour, with the runs that failed, were skipped or
   merged pull requests, and the total merged;
 - the pull requests by state (**Blocked**, **Fixing**, **Needs review**,
-  **Checks running**, **Ready to merge**, **Merged**), with chips that filter them.
+  **Checks running**, **Ready to merge**, **Merged**, and **Other** for a state this
+  Horizon does not know), with chips that filter them.
   Merged pull requests stay for seven days;
 - **Latest run**: the last lines that the agent wrote about its work.
 

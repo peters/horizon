@@ -136,9 +136,21 @@ names made-up repositories and one public pull request.
 
    Result: The board shows **Upkeep has not reported yet.** and the path that it reads.
 
+### 6.5 UPK-05 — The board comes back with the session
+
+1. Start the candidate with `horizon --config <folder>/board.yaml`, without
+   `--ephemeral`, as a test user whose Horizon home holds no session.
+
+   Result: Horizon shows the board as in UPK-01.
+
+2. Close Horizon and start it again with the same command.
+
+   Result: Horizon restores the session. The board shows the same status from
+   `<folder>/status.json`.
+
 ## 7. Pass criteria
 
-- UPK-01 to UPK-04 give the results above.
+- UPK-01 to UPK-05 give the results above.
 
 ## 8. Cleanup
 

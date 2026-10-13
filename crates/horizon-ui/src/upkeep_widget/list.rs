@@ -30,7 +30,8 @@ pub(super) fn chips(ui: &mut Ui, shown: &[&PullRequest], filter: &mut Filter) {
             Some(theme::PALETTE_YELLOW()),
         );
         for state in PrState::ORDER {
-            if state.needs_person() {
+            // "Other" appears only for a state this Horizon does not know.
+            if state.needs_person() || (state == PrState::Other && count(&|s| s == state) == 0) {
                 continue;
             }
             let label = if state == PrState::Merged {
