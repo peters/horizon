@@ -1,4 +1,4 @@
-//! Local relying party for the live WebAuthn bridge test. It serves one
+//! Local relying party for the live `WebAuthn` bridge test. It serves one
 //! page per scenario and verifies created credentials and assertions.
 
 use std::io::{BufRead, BufReader, Read, Write};

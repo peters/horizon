@@ -1,4 +1,4 @@
-//! Host-side origin and relying-party rules for the WebAuthn bridge.
+//! Host-side origin and relying-party rules for the `WebAuthn` bridge.
 //!
 //! The origin always comes from the browser's record of the calling frame
 //! (CDP frame tree, `BiDi` realm), never from the page message.
@@ -70,7 +70,7 @@ impl CallerOrigin {
     }
 }
 
-/// Build `clientDataJSON` in the member order that the WebAuthn
+/// Build `clientDataJSON` in the member order that the `WebAuthn`
 /// specification serializes. Cross-origin callers are refused before this
 /// point, so `crossOrigin` is always `false`.
 pub(crate) fn client_data_json(operation: Operation, challenge: &str, origin: &CallerOrigin) -> Vec<u8> {

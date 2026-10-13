@@ -864,6 +864,8 @@ impl DriverState {
         self.runtime_enable_requested.clear();
         self.runtime_enable_inflight.clear();
         self.clipboard.pending_capture = false;
+        // Passkey caller contexts belong to the Runtime domain of the session.
+        self.reset_passkeys();
     }
 
     fn navigate_to(

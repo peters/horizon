@@ -1,4 +1,4 @@
-//! Chromium `CDP` side of the WebAuthn bridge.
+//! Chromium `CDP` side of the `WebAuthn` bridge.
 //!
 //! The page script posts through a `Runtime.addBinding` binding. The
 //! binding call names the execution context; the host maps that context to
@@ -34,10 +34,30 @@ impl CdpPasskeys {
 }
 
 impl DriverState {
+    /// Install the bridge on a newly bound page session. Returns `false`
+    /// when a setup command failed and the attach must stop.
+    pub(super) fn install_passkey_bridge(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        session: &str,
+    ) -> bool {
+        for (method, params) in self.passkey_setup_commands() {
+            if !self.setup_command(link, event_tx, frame_slot, method, &params, Some(session)) {
+                return false;
+            }
+            if method == "Runtime.enable" {
+                self.runtime_enable_requested.insert(session.to_string());
+            }
+        }
+        true
+    }
+
     /// Page-session setup for the bridge. The binding survives a
     /// cross-process navigation only while the Runtime domain is enabled,
     /// so a configured bridge enables it at attach.
-    pub(super) fn passkey_setup_commands(&self) -> Vec<(&'static str, Value)> {
+    fn passkey_setup_commands(&self) -> Vec<(&'static str, Value)> {
         let Some(passkeys) = self.passkeys.as_ref() else {
             return Vec::new();
         };

@@ -43,6 +43,7 @@ impl Driver {
             self.disable_optional_bidi(slot, events);
         }
         self.tick_file_chooser(events);
+        self.tick_passkeys(events);
         true
     }
 

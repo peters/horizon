@@ -1,4 +1,4 @@
-//! Firefox `WebDriver` `BiDi` side of the WebAuthn bridge.
+//! Firefox `WebDriver` `BiDi` side of the `WebAuthn` bridge.
 //!
 //! A preload script posts through a `script.channel`. Each `script.message`
 //! names its source realm and browsing context; the host reads the realm's
@@ -98,7 +98,7 @@ impl Driver {
             && !source.realm.is_empty()
             && !source.context.is_empty()
         {
-            self.handle_passkey_message(source, message, events);
+            self.handle_passkey_message(&source, message, events);
         }
         true
     }
@@ -111,19 +111,19 @@ impl Driver {
         events.wake_ui();
     }
 
-    fn handle_passkey_message(&mut self, source: Source, message: PageMessage, events: &BrowserEventSender) {
+    fn handle_passkey_message(&mut self, source: &Source, message: PageMessage, events: &BrowserEventSender) {
         match message {
             PageMessage::Abort { id } => {
                 if self
                     .passkeys
                     .as_mut()
-                    .is_some_and(|passkeys| passkeys.bridge.abort(&source, id))
+                    .is_some_and(|passkeys| passkeys.bridge.abort(source, id))
                 {
                     events.wake_ui();
                 }
             }
             PageMessage::Request { id, op, options } => {
-                let origin = self.passkey_caller_origin(&source, events);
+                let origin = self.passkey_caller_origin(source, events);
                 let agent = self.owner_seen.clone();
                 let Some(passkeys) = self.passkeys.as_mut() else {
                     return;
@@ -132,7 +132,7 @@ impl Driver {
                     .bridge
                     .start(source.clone(), id, op, &options, origin, agent.as_deref())
                 {
-                    self.deliver_passkey_reply(&source, &reply, events);
+                    self.deliver_passkey_reply(source, &reply, events);
                 }
                 events.wake_ui();
             }

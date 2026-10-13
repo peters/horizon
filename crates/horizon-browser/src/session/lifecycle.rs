@@ -38,7 +38,6 @@ impl DriverState {
             self.reset_clipboard_tracking();
             self.invalidate_scrollbar_layout(event_tx);
             self.reset_runtime_enable_state();
-            self.reset_passkeys();
         }
         self.session_id = Some(session.to_string());
         self.target_id = Some(target.to_string());
@@ -100,13 +99,8 @@ impl DriverState {
             return false;
         }
         self.restore_network_capture(link, event_tx, frame_slot, session);
-        for (method, params) in self.passkey_setup_commands() {
-            if !self.setup_command(link, event_tx, frame_slot, method, &params, Some(session)) {
-                return false;
-            }
-            if method == "Runtime.enable" {
-                self.runtime_enable_requested.insert(session.to_string());
-            }
+        if !self.install_passkey_bridge(link, event_tx, frame_slot, session) {
+            return false;
         }
         if self.config.browser.automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals
             && !self.install_common_signal_minimization(link, event_tx, frame_slot, session)
@@ -352,7 +346,7 @@ impl DriverState {
         true
     }
 
-    fn setup_command(
+    pub(super) fn setup_command(
         &mut self,
         link: &mut CdpLink,
         event_tx: &BrowserEventSender,

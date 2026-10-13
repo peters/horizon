@@ -1,4 +1,4 @@
-//! Optional bridge that forwards a page's WebAuthn request to an external
+//! Optional bridge that forwards a page's `WebAuthn` request to an external
 //! authenticator command.
 //!
 //! A page script replaces `navigator.credentials.get/create` for `publicKey`
@@ -114,7 +114,7 @@ pub(crate) enum PageMessage {
         id: u64,
         op: Operation,
         #[serde(default)]
-        options: PageOptions,
+        options: Box<PageOptions>,
     },
     Abort {
         id: u64,

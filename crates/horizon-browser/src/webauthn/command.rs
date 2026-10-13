@@ -74,11 +74,11 @@ impl Drop for CommandRun {
 }
 
 fn supervise(argv: &[String], input: Vec<u8>, timeout: Duration, cancel: &AtomicBool) -> CommandOutcome {
-    let Some((program, args)) = argv.split_first() else {
+    let Some((program, arguments)) = argv.split_first() else {
         return CommandOutcome::Failed("the authenticator command is empty".to_string());
     };
     let mut child = match Command::new(program)
-        .args(args)
+        .args(arguments)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

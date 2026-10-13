@@ -334,7 +334,6 @@ impl DriverState {
         self.reset_clipboard_tracking();
         self.pending_reattach = false;
         self.reset_runtime_enable_state();
-        self.reset_passkeys();
         self.manifest_dirty = true;
         self.stop_requested.store(true, std::sync::atomic::Ordering::Release);
         true

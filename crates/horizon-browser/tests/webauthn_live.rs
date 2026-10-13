@@ -1,4 +1,4 @@
-//! Live check of the WebAuthn bridge in real Chromium and Firefox panels.
+//! Live check of the `WebAuthn` bridge in real Chromium and Firefox panels.
 //!
 //! A local relying party serves the pages and verifies every credential on
 //! the server side. This test binary is also the fake authenticator

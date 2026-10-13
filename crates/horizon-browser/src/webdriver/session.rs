@@ -237,7 +237,6 @@ pub(crate) fn run_webdriver(
             }
         }
         driver.tick_firefox_http_response_bodies(event_tx);
-        driver.tick_passkeys(event_tx);
         if let Some(message) = driver.challenge_loop.take_rejection() {
             let _ = event_tx.send(BrowserEvent::NavigationFailed(message.to_string()));
         }
