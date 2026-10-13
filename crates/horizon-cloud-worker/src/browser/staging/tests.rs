@@ -4,7 +4,7 @@ use base64::Engine;
 const BROWSER: &str = "browser-1";
 
 fn staging(root: &Path) -> Staging {
-    let mut staging = Staging::new(root.join(".uploads")).unwrap();
+    let mut staging = Staging::new(root.join(".uploads"));
     staging.limits = CloudUploadLimits {
         max_files: 2,
         max_batch_bytes: 8,
@@ -214,7 +214,7 @@ fn a_new_service_removes_the_files_of_the_previous_one() {
     let left = root.path().join(".uploads/browser-9/b1");
     std::fs::create_dir_all(&left).unwrap();
     std::fs::write(left.join("old.txt"), b"old").unwrap();
-    let staging = Staging::new(root.path().join(".uploads")).unwrap();
+    let staging = Staging::new(root.path().join(".uploads"));
     assert!(!root.path().join(".uploads").exists());
     assert_eq!(staging.limits(), CloudUploadLimits::default());
 }
@@ -245,4 +245,20 @@ fn a_planted_link_never_moves_a_staged_file_out_of_its_batch() {
         "nothing was written outside"
     );
     assert!(staging.batches.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn files_that_an_earlier_service_left_stop_uploads_but_not_the_service() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let locked = root.path().join(".uploads/browser-9");
+    std::fs::create_dir_all(locked.join("b1")).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let mut staging = Staging::new(root.path().join(".uploads"));
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+    if !locked.exists() {
+        return; // Root removes the folder anyway.
+    }
+    assert!(refused(&mut staging, &chunk("b1", "a.txt", b"ab", 0, 2)).contains("earlier start"));
 }

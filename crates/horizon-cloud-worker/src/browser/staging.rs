@@ -33,6 +33,8 @@ pub(super) struct Staging {
     /// Keyed by browser ID and batch ID.
     batches: BTreeMap<(String, String), Batch>,
     next_order: u64,
+    /// Files of an earlier service stayed, so uploads would escape the limits.
+    stale: bool,
 }
 
 struct Batch {
@@ -52,21 +54,22 @@ struct StagedFile {
 }
 
 impl Staging {
-    /// Removes what an earlier service left: its browsers stopped with it.
-    pub(super) fn new(root: PathBuf) -> io::Result<Self> {
-        match std::fs::remove_dir_all(&root) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
-        Ok(Self {
+    /// Removes what an earlier service left: its browsers stopped with it. A
+    /// folder that stays makes later uploads fail, never the cloud browsers.
+    pub(super) fn new(root: PathBuf) -> Self {
+        let stale = match std::fs::remove_dir_all(&root) {
+            Ok(()) => false,
+            Err(error) => error.kind() != io::ErrorKind::NotFound,
+        };
+        Self {
             root,
             limits: CloudUploadLimits::default(),
             max_staged_bytes: MAX_STAGED_BYTES,
             max_batches: MAX_BATCHES,
             batches: BTreeMap::new(),
             next_order: 0,
-        })
+            stale,
+        }
     }
 
     pub(super) fn limits(&self) -> CloudUploadLimits {
@@ -76,6 +79,12 @@ impl Staging {
     /// Writes one chunk. The caller has checked that `chunk.id` is a live
     /// browser that accepts uploads.
     pub(super) fn stage(&mut self, chunk: &CloudStageChunk, now: Instant) -> Result<CloudStageReceipt, String> {
+        if self.stale {
+            return Err(
+                "The worker could not remove the uploads of an earlier start. Restart the cloud to upload files."
+                    .into(),
+            );
+        }
         if !valid_upload_batch(&chunk.batch) || !valid_upload_name(&chunk.name) {
             return Err("The upload has an invalid batch or file name".into());
         }

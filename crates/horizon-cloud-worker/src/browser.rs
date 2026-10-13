@@ -32,8 +32,7 @@ pub struct Host {
     stopping: BTreeMap<String, horizon_browser::BrowserShutdownSignal>,
     pub catalog: super::catalog::Host,
     pub remote_allocations: super::remote::Allocations,
-    /// `None` while uploads are off: the service then acts as one that predates them.
-    staging: Option<staging::Staging>,
+    staging: staging::Staging,
 }
 impl Host {
     pub fn new() -> io::Result<Self> {
@@ -55,14 +54,7 @@ impl Host {
         };
         let remote_allocations = super::remote::Allocations::new(root.join("remote-holds"))?;
         // A browser identity cannot contain a dot, so no history marker uses this name.
-        // Also with uploads off: this removes what an earlier service with uploads left.
-        // Only a service with uploads fails to start when it cannot.
         let staging = staging::Staging::new(root.join(".uploads"));
-        let staging = if uploads_enabled(std::env::var_os(UPLOADS_ENV).as_deref()) {
-            Some(staging?)
-        } else {
-            None
-        };
         Ok(Self {
             capabilities,
             staging,
@@ -144,7 +136,7 @@ impl Host {
         };
         let frame_slot = Arc::new(FrameSlot::new());
         // A provider device cannot read worker files, so only a worker engine relays choosers.
-        if remote.is_none() && self.staging.is_some() {
+        if remote.is_none() {
             frame_slot.file_chooser().register_consumer();
         }
         let session = start_fenced(&marker, || {
@@ -243,9 +235,8 @@ impl Host {
             }
         }
         let browsers = &self.browsers;
-        if let Some(staging) = &mut self.staging {
-            staging.sweep(|id| browsers.get(id).is_some_and(|browser| !browser.state.lost), now);
-        }
+        self.staging
+            .sweep(|id| browsers.get(id).is_some_and(|browser| !browser.state.lost), now);
     }
     pub fn request(&mut self, request: CloudViewRequest) -> CloudViewResponse {
         match request {
@@ -354,19 +345,18 @@ impl Host {
                     );
                 }
             }
-            if let (Some(uploads), Some(staging)) = (uploads, &mut self.staging) {
-                browser.relay_uploads(id, uploads, staging);
+            if let Some(uploads) = uploads {
+                browser.relay_uploads(id, uploads, &mut self.staging);
             }
         }
         self.snapshot(id, after)
     }
     /// An error ends only the upload: the host sends each upload on its own connection.
     fn stage(&mut self, chunk: &horizon_browser_protocol::cloud_view::CloudStageChunk) -> CloudViewResponse {
-        let result = match &mut self.staging {
-            Some(staging) if self.browsers.get(&chunk.id).is_some_and(HostedBrowser::accepts_uploads) => {
-                staging.stage(chunk, std::time::Instant::now())
-            }
-            _ => Err("This cloud browser does not accept uploads".into()),
+        let result = if self.browsers.get(&chunk.id).is_some_and(HostedBrowser::accepts_uploads) {
+            self.staging.stage(chunk, std::time::Instant::now())
+        } else {
+            Err("This cloud browser does not accept uploads".into())
         };
         match result {
             Ok(receipt) => CloudViewResponse {
@@ -429,13 +419,11 @@ impl Host {
             return lost_response(id, None, None);
         };
         let mut state = browser.state.clone();
-        state.uploads = self.staging.as_ref().map(|staging| {
-            browser.relay.state(
-                browser.session.frame_slot.file_chooser(),
-                browser.accepts_uploads(),
-                staging.limits(),
-            )
-        });
+        state.uploads = Some(browser.relay.state(
+            browser.session.frame_slot.file_chooser(),
+            browser.accepts_uploads(),
+            self.staging.limits(),
+        ));
         if let Some(frame) = browser.session.frame_slot.latest() {
             if frame.width > 4096 || frame.height > 4096 {
                 return CloudViewResponse {
@@ -483,13 +471,6 @@ impl HostedBrowser {
                 .drop_files(staging, id, &drop, now, |command| session.send(command));
         }
     }
-}
-
-/// Uploads stay off until hosts relay them. The upload tests and procedure set `1`.
-const UPLOADS_ENV: &str = "HORIZON_CLOUD_BROWSER_UPLOADS";
-
-fn uploads_enabled(value: Option<&std::ffi::OsStr>) -> bool {
-    value.is_some_and(|value| value == "1")
 }
 
 const LOST_PROCESS: &str = "Browser process was lost; create a new browser explicitly";
@@ -590,39 +571,6 @@ fn encode_frame(frame: &horizon_browser::frames::FrameData) -> io::Result<String
 mod tests {
     use super::*;
     #[test]
-    fn uploads_stay_off_unless_the_service_is_told_to_relay_them() {
-        for value in [None, Some(""), Some("0"), Some("true"), Some("1 ")] {
-            assert!(!uploads_enabled(value.map(std::ffi::OsStr::new)), "{value:?}");
-        }
-        assert!(uploads_enabled(Some(std::ffi::OsStr::new("1"))));
-        let root = tempfile::tempdir().unwrap();
-        let mut host = Host {
-            capabilities: horizon_cloud::Capabilities::default(),
-            catalog: crate::catalog::Host::default(),
-            browsers: BTreeMap::new(),
-            pending: Vec::new(),
-            pending_cleanup: std::collections::BTreeSet::new(),
-            root: root.path().into(),
-            closed: std::collections::BTreeSet::default(),
-            stopping: BTreeMap::new(),
-            remote_allocations: super::super::remote::Allocations::new(root.path().join("remote-holds")).unwrap(),
-            staging: None,
-        };
-        let staged = host.request(CloudViewRequest::Stage(
-            horizon_browser_protocol::cloud_view::CloudStageChunk {
-                id: "browser-1".into(),
-                batch: "b1".into(),
-                name: "notes.txt".into(),
-                size: 0,
-                offset: 0,
-                data: String::new(),
-                sha256: None,
-            },
-        ));
-        assert!(staged.error.as_deref().unwrap().contains("does not accept uploads"));
-        assert!(!root.path().join(".uploads").exists());
-    }
-    #[test]
     fn fenced_browser_returns_typed_loss_before_credentials_or_capacity_validation() {
         let root = tempfile::tempdir().unwrap();
         let mut host = Host {
@@ -635,7 +583,7 @@ mod tests {
             closed: std::collections::BTreeSet::default(),
             stopping: BTreeMap::new(),
             remote_allocations: super::super::remote::Allocations::new(root.path().join("remote-holds")).unwrap(),
-            staging: Some(staging::Staging::new(root.path().join(".uploads")).unwrap()),
+            staging: staging::Staging::new(root.path().join(".uploads")),
         };
         std::fs::write(root.path().join("lost"), "").unwrap();
         let response = host.request(CloudViewRequest::Open {
@@ -699,7 +647,7 @@ mod tests {
             closed: std::collections::BTreeSet::default(),
             stopping: BTreeMap::new(),
             remote_allocations: super::super::remote::Allocations::new(root.path().join("remote-holds")).unwrap(),
-            staging: Some(staging::Staging::new(root.path().join(".uploads")).unwrap()),
+            staging: staging::Staging::new(root.path().join(".uploads")),
         };
         let (completion, signal) = std::sync::mpsc::channel();
         host.stopping

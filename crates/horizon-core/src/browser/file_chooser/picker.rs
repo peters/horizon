@@ -22,6 +22,9 @@ pub struct FilePickerState {
     pub show_hidden: bool,
     multiple: bool,
     accept: horizon_browser::FileAcceptPolicy,
+    /// `false` for a relayed request: its transfer thread checks the files,
+    /// so the UI thread reads no file metadata for a drop on the picker.
+    check_files: bool,
 }
 
 impl FilePickerState {
@@ -33,7 +36,15 @@ impl FilePickerState {
             show_hidden: false,
             multiple,
             accept: horizon_browser::FileAcceptPolicy::new(accept),
+            check_files: true,
         }
+    }
+
+    /// Leaves the file checks of dropped paths to the transfer of a relayed request.
+    #[must_use]
+    pub fn relayed(mut self) -> Self {
+        self.check_files = false;
+        self
     }
 
     /// A path query lists its parent; a trailing separator lists the directory.
@@ -91,7 +102,7 @@ impl FilePickerState {
             return Err(FileSelectionError::SingleFile);
         }
         for path in paths {
-            if !path.is_file() {
+            if self.check_files && !path.is_file() {
                 return Err(FileSelectionError::NotFile);
             }
             if !self.accept.allows(path) {
@@ -187,6 +198,10 @@ mod tests {
         std::fs::write(&invalid, "synthetic").expect("file");
         let mut state = FilePickerState::new(root.path().into(), true, ".pdf");
         state.select_dropped(std::slice::from_ref(&valid)).expect("selection");
+        let mut relayed = FilePickerState::new(root.path().into(), true, ".pdf").relayed();
+        relayed
+            .select_dropped(&[root.path().join("not read on this thread.pdf")])
+            .expect("a relayed picker leaves the file check to its transfer");
         assert!(state.select_dropped(&[valid.clone(), invalid]).is_err());
         assert_eq!(state.selected, [valid]);
     }

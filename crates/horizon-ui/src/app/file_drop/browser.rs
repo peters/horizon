@@ -10,8 +10,9 @@ impl HorizonApp {
             .panel(panel)
             .and_then(horizon_core::Panel::browser)
             .is_some_and(|browser| {
-                !browser.is_remote()
-                    && matches!(browser.backend(), BackendKind::ChromiumCdp | BackendKind::FirefoxBidi)
+                (browser.accepts_cloud_drops()
+                    || !browser.is_remote()
+                        && matches!(browser.backend(), BackendKind::ChromiumCdp | BackendKind::FirefoxBidi))
                     && self
                         .panel_render_caches
                         .browser_ui_state
@@ -59,7 +60,12 @@ impl HorizonApp {
         let Some(browser) = self.board.panel_mut(panel).and_then(horizon_core::Panel::browser_mut) else {
             return false;
         };
-        if browser.is_remote() || !matches!(browser.backend(), BackendKind::ChromiumCdp | BackendKind::FirefoxBidi) {
+        // A cloud browser explains itself why it cannot take the files yet.
+        let cloud = browser.is_cloud();
+        if !cloud
+            && (browser.is_remote()
+                || !matches!(browser.backend(), BackendKind::ChromiumCdp | BackendKind::FirefoxBidi))
+        {
             browser.navigation_error =
                 Some("File drops require local Chromium or Firefox. Use the page's upload button.".into());
             return true;
@@ -73,14 +79,19 @@ impl HorizonApp {
             return true;
         };
         let offset = position - rect.min;
-        let accepted = browser.try_send(BrowserCommand::DropFiles {
-            x: f64::from(offset.x / rect.width() * size[0]),
-            y: f64::from(offset.y / rect.height() * size[1]),
-            paths: dropped.iter().map(|file| file.path().to_path_buf()).collect(),
-        });
-        browser.navigation_error = (!accepted).then(|| {
-            "The browser could not accept the file drop. Wait for the page to reconnect, then try again.".into()
-        });
+        let (x, y) = (
+            f64::from(offset.x / rect.width() * size[0]),
+            f64::from(offset.y / rect.height() * size[1]),
+        );
+        let paths = dropped.iter().map(|file| file.path().to_path_buf()).collect();
+        browser.navigation_error = if cloud {
+            // The files go to the worker first; a host path never reaches it.
+            browser.drop_cloud_files(paths, x, y).err()
+        } else {
+            (!browser.try_send(BrowserCommand::DropFiles { x, y, paths })).then(|| {
+                "The browser could not accept the file drop. Wait for the page to reconnect, then try again.".into()
+            })
+        };
         self.board.focus(panel);
         ctx.request_repaint();
         true
