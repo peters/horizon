@@ -669,7 +669,8 @@ user of the worker, `root`. The boundary is as follows:
   existing file. After Horizon saw every file arrive, it removes the empty private
   folder. Until then a cancel can remove the complete batch folder.
 - After a failure or a cancel, Horizon pastes nothing and removes the batch folder
-  and its private folder. `TOKEN` is new for each drop, and the worker makes the
+  and its private folder. A cancel that comes after every file arrived keeps the
+  files and shows their worker paths instead. `TOKEN` is new for each drop, and the worker makes the
   private folder after the batch folder. Thus the cleanup removes a batch folder
   only when this drop made it, and it follows no symbolic link.
 

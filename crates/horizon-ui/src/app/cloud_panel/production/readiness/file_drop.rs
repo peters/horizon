@@ -65,7 +65,8 @@ impl HorizonApp {
     }
 
     /// The panel that shows the session of `drop` on the same worker now, if any. A panel
-    /// of that session that reconnected counts; a detached panel or another worker does not.
+    /// of that session that reconnected counts; a detached panel, one whose SSH client
+    /// exited, or another worker does not.
     pub(in crate::app) fn cloud_file_drop_recipient(&self, drop: &CloudDrop) -> Option<PanelId> {
         let session = drop.destination.session();
         let group = self
@@ -91,7 +92,7 @@ impl HorizonApp {
         }
         let panel_id = self.board.panel_id_by_local_id(session)?;
         let panel = self.board.panel(panel_id)?;
-        (panel.cloud_wait().is_none() && panel.terminal().is_some()).then_some(panel_id)
+        (panel.cloud_wait().is_none() && panel.terminal().is_some() && !panel.child_exited()).then_some(panel_id)
     }
 }
 

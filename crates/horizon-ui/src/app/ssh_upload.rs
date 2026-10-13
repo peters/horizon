@@ -309,6 +309,8 @@ impl HorizonApp {
                 && let Some(handle) = &flow.upload_handle
             {
                 handle.cancel();
+                #[cfg(feature = "cloud-workspaces")]
+                flow.note_cloud_cancel();
             }
             if actions.contains(&UploadUiAction::BackToReady) {
                 flow.mode = UploadMode::Ready;

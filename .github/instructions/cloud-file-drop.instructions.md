@@ -55,14 +55,17 @@ a cloud panel, also when the cloud is not connected or the upload fails.
   before a cut-off preparation made its folder, an empty batch folder or partial
   files in the private folder stay. Horizon never pasted their paths.
 - Horizon removes the empty private folder of a finished drop over a new
-  connection after it pasted the paths. When that fails, the empty folder stays.
+  connection after it showed the result. When that fails, the empty folder stays.
+- The files of a finished drop stay when the person cancels after every file
+  arrived, or when the session or Horizon closes before the paste. Horizon shows
+  the worker paths in the first case and pastes nothing in either case.
 - An agent without agent isolation is `root` on its worker and can read or
   change anything there, the dropped files included.
 
 ## Report
 
-- A drop that pastes a local path into a cloud panel, or pastes worker paths
-  before every file arrived.
+- A drop that pastes a local path into a cloud panel, pastes worker paths
+  before every file arrived, or pastes after the person clicked **Cancel Upload**.
 - A worker command that writes outside the batch folder and its private
   folder, follows a symbolic link, replaces a file or puts a partial file in the
   batch folder.

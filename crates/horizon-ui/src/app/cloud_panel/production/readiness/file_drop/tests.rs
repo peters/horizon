@@ -126,3 +126,40 @@ fn finished_paths_keep_a_focus_the_person_moved_during_the_upload() {
     assert!(app.ssh_upload_flow.is_none(), "the paths went to the panel");
     assert_eq!(app.board.focused, Some(two));
 }
+
+#[test]
+fn a_cancel_after_the_worker_reported_wins_over_the_paste() {
+    let (temp, mut app) = attached_cloud();
+    let one = member(&app, "one");
+    let paths = vec!["/workspace/.horizon-drops/one/0123456789ab/late.txt".to_string()];
+    assert!(app.maybe_start_ssh_file_drop(one, &[upload(&temp)], ViewportId::ROOT));
+    let flow = app.ssh_upload_flow.as_mut().unwrap();
+    flow.test_finish(Ok(paths.clone()));
+    flow.test_cancel();
+    app.poll_ssh_upload_flow();
+    let summary = app
+        .ssh_upload_flow
+        .as_ref()
+        .expect("the paths are shown, not pasted")
+        .test_summary();
+    assert!(
+        summary.starts_with("Finished: The cancel came after every file arrived"),
+        "{summary}"
+    );
+    assert!(summary.ends_with(&paths[0]));
+}
+
+#[test]
+fn a_panel_whose_ssh_client_exited_does_not_get_the_paths() {
+    let (_temp, mut app) = attached_cloud();
+    let one = member(&app, "one");
+    let drop = app.cloud_file_drop_target(one).unwrap().drop.unwrap();
+    // The fixture worker refuses SSH, so the attached client exits soon.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !app.board.panel(one).unwrap().child_exited() {
+        assert!(std::time::Instant::now() < deadline, "the SSH client did not exit");
+        app.board.panel_mut(one).unwrap().process_output();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(app.cloud_file_drop_recipient(&drop), None);
+}

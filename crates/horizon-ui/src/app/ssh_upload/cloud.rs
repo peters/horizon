@@ -30,6 +30,9 @@ pub(in crate::app) struct CloudDropTarget {
 pub(super) struct CloudUpload {
     pub(super) drop: CloudDrop,
     paths: Vec<PathBuf>,
+    /// The person clicked **Cancel Upload**. It wins over a success that the worker
+    /// thread reported before the cancel reached it.
+    cancelled: bool,
 }
 
 impl SshUploadFlow {
@@ -48,16 +51,21 @@ impl SshUploadFlow {
             .collect();
         let mut flow = Self::with_mode(target_viewport_id, host_label, UploadMode::Preparing);
         flow.files = files;
-        flow.cloud = Some(CloudUpload { drop, paths });
+        flow.cloud = Some(CloudUpload {
+            drop,
+            paths,
+            cancelled: false,
+        });
         flow.start_cloud_upload();
         flow
     }
 
     /// Starts the upload, again on **Try Again**, to the session captured at the drop.
     pub(super) fn start_cloud_upload(&mut self) {
-        let Some(cloud) = &self.cloud else {
+        let Some(cloud) = self.cloud.as_mut() else {
             return;
         };
+        cloud.cancelled = false;
         self.transport_choice = UploadTransportChoice::Ssh;
         self.upload_snapshot = Some(UploadSnapshot {
             completed_files: 0,
@@ -71,6 +79,14 @@ impl SshUploadFlow {
         self.upload_started_at = Some(Instant::now());
         self.upload_handle = Some(start_cloud_upload(cloud.drop.destination.clone(), cloud.paths.clone()));
         self.mode = UploadMode::Uploading;
+    }
+}
+
+impl SshUploadFlow {
+    pub(super) fn note_cloud_cancel(&mut self) {
+        if let Some(cloud) = self.cloud.as_mut() {
+            cloud.cancelled = true;
+        }
     }
 }
 
@@ -106,14 +122,28 @@ impl HorizonApp {
     /// Pastes the worker paths into the panel of the session that the files went to. When
     /// that panel is gone, detached or on another worker, the flow shows the paths instead.
     pub(super) fn finish_cloud_upload(&mut self, outcome: UploadOutcome) {
-        let Some(drop) = self
+        let Some((drop, cancelled)) = self
             .ssh_upload_flow
             .as_ref()
             .and_then(|flow| flow.cloud.as_ref())
-            .map(|cloud| cloud.drop.clone())
+            .map(|cloud| (cloud.drop.clone(), cloud.cancelled))
         else {
             return;
         };
+        if cancelled {
+            if let Some(flow) = self.ssh_upload_flow.as_mut() {
+                let detail = format!(
+                    "The cancel came after every file arrived, so Horizon did not insert the paths. The files are on the worker at:\n{}",
+                    outcome.remote_paths.join("\n")
+                );
+                flow.mode = UploadMode::Finished(UploadOutcome {
+                    cancelled: true,
+                    detail,
+                    ..outcome
+                });
+            }
+            return;
+        }
         let recipient = self.cloud_file_drop_recipient(&drop);
         // The drop focused the panel, and the upload window held the keys since. Give
         // them back to it, as a local drop does, unless the person chose another panel.
@@ -155,6 +185,11 @@ impl SshUploadFlow {
             UploadMode::Finished(outcome) => format!("Finished: {}", outcome.detail),
             UploadMode::Ready | UploadMode::Preparing => "Ready".into(),
         }
+    }
+
+    /// As a click on **Cancel Upload** that comes after the worker thread reported.
+    pub(in crate::app) fn test_cancel(&mut self) {
+        self.note_cloud_cancel();
     }
 
     /// Replaces the upload worker with one that reports `result` at the next poll.
