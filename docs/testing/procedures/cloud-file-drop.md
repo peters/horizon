@@ -3,7 +3,7 @@ procedure: cloud-file-drop
 feature: Local files dropped on a cloud agent or shell panel
 platforms: [linux]
 cost: rents compute  # F05 only; F01 to F04 and F06 use only the local fixture
-destructive: no
+destructive: yes  # only the F05 cleanup, which deletes the paid cloud of F05
 secrets: [provider API key, Claude API key]  # F05 only
 owner: peters
 ---
@@ -277,19 +277,50 @@ the display of the fixture. Start `drag.py` with `DISPLAY` set to that display.
 
 ## 8. Cleanup
 
-1. Close the Device panel.
+If you did F05, do steps 1 to 5 first. If not, start at step 6.
+
+> **CAUTION:** DELETE ONLY THE CLOUD THAT F05 STARTED. Its worker and its volume
+> cannot come back.
+
+1. On the card of the F05 cloud, click **Delete cloud resources…**.
+
+   Result: The card shows **Delete resources permanently**.
+
+   > **CAUTION:** DELETE ONLY THE RESOURCES OF THE F05 CLOUD. The worker and the
+   > volume cannot come back after the next step.
+
+2. Click **Delete resources permanently**.
+
+   Result: The card shows **Deleted**. The provider stops the charges.
+
+   > **CAUTION:** REMOVE ONLY THE F05 CLOUD. Horizon removes the cloud and its
+   > panels from the board.
+
+3. Click **Remove cloud**.
+
+   Result: The cloud is not on the board.
+
+4. Close the Device panel of the F05 fixture.
 
    Result: The Device panel closes. The fixture continues.
 
-2. Stop the fixture with SIGTERM on the exact PID of `serve.py`.
+5. Stop the F05 fixture with Ctrl-C.
+
+   Result: The fixture removes its private home.
+
+6. Close the Device panel of the stand-in fixture.
+
+   Result: The Device panel closes. The fixture continues.
+
+7. Stop the stand-in fixture with SIGTERM on the exact PID of `serve.py`.
 
    Result: The fixture stops its processes and removes its private data.
 
-3. Stop the stand-in worker with Ctrl-C.
+8. Stop the stand-in worker with Ctrl-C.
 
    Result: The SSH server stops.
 
-4. Remove `<seed>`, `<files>`, the large file and the worker directory.
+9. Remove `<seed>`, `<files>`, the large file and the worker directory.
 
    Result: No fixture file stays.
 
