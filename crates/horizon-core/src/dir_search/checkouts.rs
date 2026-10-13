@@ -50,11 +50,13 @@ pub fn spawn_checkouts() -> mpsc::Receiver<Vec<Checkout>> {
         // What is found so far goes out every second, so one slow folder hides nothing
         // found before it; the channel closes when the search is done.
         let mut last = std::time::Instant::now();
+        // A closed dialog stops the search: nobody reads it any more.
         let found = checkouts_while(&home_dir(), &mut |so_far| {
-            if last.elapsed() >= std::time::Duration::from_secs(1) {
-                last = std::time::Instant::now();
-                let _ = sender.send(settled(so_far.to_vec()));
+            if last.elapsed() < std::time::Duration::from_secs(1) {
+                return true;
             }
+            last = std::time::Instant::now();
+            sender.send(settled(so_far.to_vec())).is_ok()
         });
         let _ = sender.send(found);
     });
@@ -65,11 +67,12 @@ pub fn spawn_checkouts() -> mpsc::Receiver<Vec<Checkout>> {
 /// not searched further, and neither are hidden or build folders.
 #[must_use]
 pub fn checkouts(root: &Path) -> Vec<Checkout> {
-    checkouts_while(root, &mut |_| {})
+    checkouts_while(root, &mut |_| true)
 }
 
-/// As [`checkouts`], telling `progress` what was found after each folder read.
-fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout])) -> Vec<Checkout> {
+/// As [`checkouts`], telling `progress` what was found after each folder read; it stops
+/// when `progress` says so.
+fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -> Vec<Checkout> {
     let mut found = Vec::new();
     let mut queue = VecDeque::from([(root.to_owned(), 0)]);
     // The home folder itself counts as read, so a link back to it is not followed.
@@ -123,7 +126,9 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout])) -> Vec<Ch
                 queue.push_back((child, depth + 1));
             }
         }
-        progress(&found);
+        if !progress(&found) {
+            break;
+        }
     }
     settled(found)
 }

@@ -237,6 +237,8 @@ impl Finder {
                 self.highlighted = 0;
             }
             self.highlighted = self.highlighted.min(self.rows.len().saturating_sub(1));
+            // The list shows its highlight, wherever it scrolled before.
+            self.scroll_to_highlight = true;
             self.made_for = Some(key);
         }
         &self.rows
