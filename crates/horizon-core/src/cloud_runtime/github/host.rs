@@ -204,13 +204,14 @@ pub fn keep_repositories(
     stored::write_private(&root.join("credentials"), &listed_name(settings.app_id), &bytes)
 }
 
-/// Forgets the kept list, as when this computer turns out not to be signed in, unless the
-/// request that found that out was `cancel`led and replaced: a newer list stays.
+/// Forgets the kept list when this computer turns out not to be signed in. Checked again
+/// under the lock: a request that was `cancel`led and replaced, or a sign-in that another
+/// window finished since, keeps the list.
 /// # Errors
 /// A file that cannot be removed.
 pub fn forget_repositories(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<()> {
     let _lock = lock(root, settings)?;
-    if cancel.is_cancelled() {
+    if cancel.is_cancelled() || (configured(root, settings) && stored::load(&path(root, settings)).is_some()) {
         return Ok(());
     }
     stored::forget(&listed(root, settings)).map(|_| ())
