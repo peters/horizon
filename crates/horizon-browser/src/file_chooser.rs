@@ -210,6 +210,39 @@ impl FileChooserHandle {
         state.supported = false;
     }
 
+    /// Shows the pending chooser of a remote browser, such as a cloud worker
+    /// browser, as a request of this panel. Returns the local request ID.
+    #[must_use]
+    pub fn relay_open(&self, multiple: bool, accept: String, origin: String) -> u64 {
+        self.enable();
+        self.open(multiple, accept, origin)
+    }
+
+    /// The person's answer to a relayed request. The request stays open, with
+    /// its answer submitted, until [`Self::relay_close`] or [`Self::relay_fail`].
+    #[must_use]
+    pub fn relay_take_answer(&self, id: u64) -> Option<FileChooserAnswer> {
+        self.take_answer(id)
+    }
+
+    /// Lets the person answer a relayed request again, and shows why the last answer failed.
+    pub fn relay_fail(&self, id: u64, message: String) {
+        self.retry(id, message);
+    }
+
+    /// Ends a relayed request that the remote browser closed or replaced.
+    pub fn relay_close(&self, id: u64) {
+        self.invalidate_request(id);
+    }
+
+    /// Records whether the remote browser relays its chooser.
+    pub fn relay_supported(&self, supported: bool) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .supported = supported;
+    }
+
     /// Opens a request as a browser session does, for host tests.
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]

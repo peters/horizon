@@ -164,7 +164,7 @@ def main():
         state = poll(until=lambda state: state['ready'] and state['url'].startswith(url), label='ready', timeout=120)
         uploads = state.get('uploads')
         if uploads is None:
-            sys.exit('the worker has no upload support: an older worker, or HORIZON_CLOUD_BROWSER_UPLOADS is not 1')
+            sys.exit('the worker has no upload support (an older worker)')
         print('ready: file_chooser', uploads['file_chooser'], 'drops', uploads['drops'], 'limits', uploads['limits'])
         # A worker Chromium supports both, so a missing one is a failure, not a skipped check.
         if args.engine == 'chromium' and not (uploads['file_chooser'] and uploads['drops']):

@@ -193,6 +193,51 @@ impl BrowserPanelState {
         self.remote.is_some()
     }
 
+    /// Whether a cloud worker hosts this browser, rather than this computer or a provider.
+    #[must_use]
+    pub fn is_cloud(&self) -> bool {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud.is_some() {
+            return true;
+        }
+        false
+    }
+
+    /// Whether the cloud worker browser accepts files dropped on its page.
+    #[must_use]
+    pub fn accepts_cloud_drops(&self) -> bool {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud.is_some() {
+            return self.cloud_drops();
+        }
+        false
+    }
+
+    /// Sends local files to the cloud worker on a separate thread, then drops
+    /// them at the page point `x`, `y` of the page that the person saw.
+    ///
+    /// # Errors
+    /// The panel is not a cloud browser, the worker accepts no drops, or an
+    /// upload already runs.
+    pub fn drop_cloud_files(&mut self, paths: Vec<std::path::PathBuf>, x: f64, y: f64) -> Result<(), String> {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud.is_some() {
+            return self.drop_cloud_files_now(paths, x, y);
+        }
+        let _ = (paths, x, y);
+        Err("Only a cloud browser takes uploads this way".into())
+    }
+
+    /// Bytes sent and bytes in all of the running cloud upload.
+    #[must_use]
+    pub fn cloud_upload_progress(&self) -> Option<(u64, u64)> {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud.is_some() {
+            return self.cloud_upload();
+        }
+        None
+    }
+
     /// The allocated device as the provider's evidence describes it, once
     /// verified; `None` before verification or for a local panel.
     #[must_use]

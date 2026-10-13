@@ -296,6 +296,11 @@ or an explicitly permitted attachment root. These paths are on the server host.
 Do not widen roots or upload private files without task authorization.
 Read attached names and sizes for `set_files`, then examine page acceptance.
 A dispatched drop does not prove that an application accepted the files.
+On a cloud worker, these paths are worker paths. The files of a person's own
+computer reach a cloud browser only through Horizon's file picker or a drop on
+the panel. A click on an upload button opens that picker for the person who
+views the panel, and page actions return `file_chooser_pending` until that
+person answers, so use `set_files` on the input instead of clicking the button.
 
 `browser_screenshot` returns retained viewport pixels as a private PNG path and
 original dimensions. It requires a ready panel and a live supporting Horizon

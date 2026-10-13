@@ -192,14 +192,7 @@ of the agents.
 A person can give local files to a page in a cloud browser. The page's upload
 button and a file drop on the panel both use this function. The presentation
 protocol in `crates/horizon-browser-protocol/src/cloud_view/uploads.rs` has
-version 1 of it.
-
-The function is off until Horizon hosts relay uploads. The control service
-turns it on only when the variable `HORIZON_CLOUD_BROWSER_UPLOADS` has the
-value `1`. Without it, the control service does not catch file choosers,
-refuses each upload and sends no upload state, as a service that predates the
-function. It still removes the staged files of an earlier control service
-when it starts. When the function is on, the control service does these steps:
+version 1 of it. The control service does these steps:
 
 1. Each worker Chromium or Firefox browser sends its page file chooser to the
    control service. A remote device of a provider does not, because it cannot
@@ -212,6 +205,12 @@ when it starts. When the function is on, the control service does these steps:
    It accepts a file only after its size and its SHA-256 agree with the host.
 4. The answer or the drop names the batch and the file names, not paths. The
    control service gives the browser only complete files of the same browser.
+
+In Horizon, the upload button of the page opens the Horizon file picker, and a
+drop on the page of the panel sends the dropped files. Horizon reads the files
+and sends them on a separate SSH connection, and the panel shows the progress.
+A folder, a file over the limits or a failed transfer gives an error, and the
+page gets nothing.
 
 A chooser waits only while a host that sends uploads polls. If no such host
 polled in the last 10 seconds, the control service cancels the chooser. It also

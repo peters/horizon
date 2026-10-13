@@ -1,4 +1,6 @@
 //! An SSH presentation connection. Dropping it never stops the worker browser.
+mod transfer;
+mod uploads;
 use super::{BrowserCommand, BrowserDrainOutput, BrowserEventWaker, BrowserPanelState, BrowserStatus, FrameSlot};
 use crate::cloud_runtime::ssh::Connection;
 use horizon_browser_protocol::cloud_view::{CloudViewRequest, CloudViewResponse, CloudViewState, MAX_CLOUD_VIEW_BYTES};
@@ -32,6 +34,7 @@ pub(super) struct CloudView {
     stop: Arc<AtomicBool>,
     child: Arc<Mutex<Child>>,
     handoff_sequence: std::sync::atomic::AtomicU64,
+    uploads: uploads::Relay,
 }
 impl CloudView {
     fn start(
@@ -99,12 +102,14 @@ impl CloudView {
             stop,
             child,
             handoff_sequence: std::sync::atomic::AtomicU64::new(0),
+            uploads: uploads::Relay::default(),
         };
-        let (latest, waker, stop, child) = (
+        let (latest, waker, stop, child, outgoing) = (
             view.latest.clone(),
             view.waker.clone(),
             view.stop.clone(),
             view.child.clone(),
+            view.uploads.outgoing.clone(),
         );
         let open = CloudViewRequest::Open {
             id: view.id.clone(),
@@ -113,7 +118,7 @@ impl CloudView {
             target: view.target.clone(),
         };
         thread::spawn(move || {
-            let result = pump(input, &responses, &rx, &frames, &latest, &waker, &stop, open);
+            let result = pump(input, &responses, &rx, &frames, &latest, &waker, &stop, &outgoing, open);
             // Drop the receiver before publishing a follow-up error so a send
             // cannot succeed after the pump has stopped reading.
             drop(rx);
@@ -184,6 +189,7 @@ fn pump(
     latest: &Latest,
     waker: &Waker,
     stop: &AtomicBool,
+    outgoing: &uploads::SharedOutgoing,
     mut request: CloudViewRequest,
 ) -> io::Result<()> {
     let id = match &request {
@@ -234,7 +240,7 @@ fn pump(
             id: id.clone(),
             after,
             commands: commands.try_iter().take(128).collect(),
-            uploads: None,
+            uploads: Some(uploads::next_poll(outgoing)),
         };
     }
     Ok(())
@@ -272,6 +278,7 @@ impl BrowserPanelState {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take()
         });
+        self.relay_uploads(state.as_ref());
         let Some(state) = state else {
             return BrowserDrainOutput::default();
         };
@@ -338,11 +345,61 @@ impl BrowserPanelState {
             config_changed: false,
         }
     }
+    /// Mirrors the worker chooser, sends answered or dropped files and shows worker notices.
+    fn relay_uploads(&mut self, state: Option<&CloudViewState>) {
+        let chooser = self.frame_slot.file_chooser().clone();
+        let Some(CloudView {
+            uploads,
+            connection,
+            id,
+            waker,
+            ..
+        }) = self.cloud.as_mut()
+        else {
+            return;
+        };
+        let mut notices = Vec::new();
+        notices.extend(uploads.finish(&chooser));
+        if let Some(state) = state {
+            notices.extend(uploads.apply(state.uploads.clone(), &chooser));
+        }
+        uploads.take_answer(&chooser, &|paths, limits, purpose| {
+            start_transfer(connection, id, waker, paths, limits, purpose)
+        });
+        if let Some(notice) = notices.pop() {
+            self.navigation_error = Some(notice);
+        }
+    }
+    pub(super) fn drop_cloud_files_now(
+        &mut self,
+        paths: Vec<std::path::PathBuf>,
+        x: f64,
+        y: f64,
+    ) -> Result<(), String> {
+        let CloudView {
+            uploads,
+            connection,
+            id,
+            waker,
+            ..
+        } = self.cloud.as_mut().ok_or("This browser is not a cloud browser")?;
+        uploads.drop_files(paths, x, y, &|paths, limits, purpose| {
+            start_transfer(connection, id, waker, paths, limits, purpose)
+        })
+    }
+    pub(super) fn cloud_drops(&self) -> bool {
+        self.cloud.as_ref().is_some_and(|cloud| cloud.uploads.drops())
+    }
+    pub(super) fn cloud_upload(&self) -> Option<(u64, u64)> {
+        self.cloud.as_ref().and_then(|cloud| cloud.uploads.progress())
+    }
     pub(super) fn relaunch_cloud(&mut self) {
         if !self.can_retry() {
             return;
         }
-        let Some(old) = self.cloud.take() else { return };
+        let Some(mut old) = self.cloud.take() else { return };
+        // The new connection mirrors the worker request again.
+        old.uploads.close(self.frame_slot.file_chooser());
         let next = CloudView::start(
             old.connection.clone(),
             old.id.clone(),
@@ -362,6 +419,72 @@ impl BrowserPanelState {
             }
         }
     }
+}
+
+/// Sends the files on a new SSH connection, on its own thread.
+fn start_transfer(
+    connection: &Connection,
+    browser: &str,
+    waker: &Waker,
+    paths: Vec<std::path::PathBuf>,
+    limits: horizon_browser_protocol::cloud_view::CloudUploadLimits,
+    purpose: uploads::Purpose,
+) -> uploads::Transfer {
+    let (finished, done) = mpsc::channel();
+    let progress = Arc::new(transfer::Progress::default());
+    let stop = Arc::new(AtomicBool::new(false));
+    let child = uploads::ChildSlot::default();
+    let (connection, browser, waker) = (connection.clone(), browser.to_owned(), waker.clone());
+    let (sending, stopping, process) = (progress.clone(), stop.clone(), child.clone());
+    thread::spawn(move || {
+        let result = send_files(&connection, &browser, &paths, limits, &sending, &stopping, &process);
+        // The UI thread can lock the slot to stop a transfer, so never wait while holding it.
+        let child = process.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+        if let Some(mut child) = child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        let _ = finished.send(result);
+        wake(&waker);
+    });
+    uploads::Transfer {
+        purpose,
+        progress,
+        stop,
+        child,
+        done,
+    }
+}
+fn send_files(
+    connection: &Connection,
+    browser: &str,
+    paths: &[std::path::PathBuf],
+    limits: horizon_browser_protocol::cloud_view::CloudUploadLimits,
+    progress: &transfer::Progress,
+    stop: &AtomicBool,
+    process: &uploads::ChildSlot,
+) -> Result<horizon_browser_protocol::cloud_view::CloudStagedFiles, String> {
+    let plan = transfer::plan(paths, limits)?;
+    // Only a host key that the presentation connection already pinned.
+    let mut child = connection
+        .pinned_command("horizon-cloud-worker connect")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("Cannot connect to the cloud worker: {error}"))?;
+    let pipes = (child.stdin.take(), child.stdout.take());
+    // From here a dropped transfer kills the process, so a blocked read ends.
+    *process.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(child);
+    let (Some(input), Some(output)) = pipes else {
+        return Err("Cannot connect to the cloud worker".into());
+    };
+    let mut link = transfer::StreamLink {
+        input,
+        output: BufReader::new(output),
+    };
+    let batch = uuid::Uuid::new_v4().simple().to_string();
+    transfer::send(&plan, browser, &batch, &mut link, progress, stop)
 }
 
 #[cfg(test)]

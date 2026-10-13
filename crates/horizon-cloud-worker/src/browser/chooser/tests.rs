@@ -9,7 +9,7 @@ const NAME: &str = "notes 1.txt";
 
 /// A staging store with one complete file `NAME` in each batch.
 fn staged(root: &std::path::Path, batches: &[&str]) -> Staging {
-    let mut staging = Staging::new(root.join(".uploads")).unwrap();
+    let mut staging = Staging::new(root.join(".uploads"));
     for batch in batches {
         stage(&mut staging, batch, NAME).unwrap();
     }

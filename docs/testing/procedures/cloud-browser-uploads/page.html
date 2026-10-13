@@ -1,0 +1,48 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Upload demo</title>
+<style>
+  body { margin: 0; font: 15px/1.4 system-ui, sans-serif; background: #f6f7f9; color: #1d2330; }
+  main { max-width: 760px; margin: 24px auto; padding: 0 20px; }
+  h1 { font-size: 22px; margin: 0 0 14px; }
+  .row { display: flex; gap: 16px; }
+  label.pick { display: inline-block; padding: 12px 20px; background: #2f6fed; color: #fff; border-radius: 8px; cursor: pointer; font-weight: 600; }
+  input[type=file] { position: absolute; left: -9999px; }
+  #zone { flex: 1; border: 2px dashed #8a94a8; border-radius: 10px; padding: 26px; text-align: center; color: #56607a; background: #fff; }
+  #zone.over { border-color: #2f6fed; background: #eef3ff; }
+  table { width: 100%; border-collapse: collapse; margin-top: 18px; background: #fff; border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e3e6ec; font-size: 14px; }
+  td.hash { font-family: ui-monospace, monospace; font-size: 12.5px; }
+  #status { margin-top: 12px; color: #56607a; }
+</style>
+<main>
+  <h1>Upload demo page (on the cloud worker)</h1>
+  <div class="row">
+    <div><label class="pick" for="pick">Choose files…</label><input id="pick" type="file" multiple></div>
+    <div id="zone">Drop files here</div>
+  </div>
+  <div id="status">No files yet.</div>
+  <table id="files"><thead><tr><th>How</th><th>Name</th><th>Size</th><th>SHA-256</th></tr></thead><tbody></tbody></table>
+</main>
+<script>
+let reports = 0;
+const hex = buffer => [...new Uint8Array(buffer)].map(b => b.toString(16).padStart(2, '0')).join('');
+async function show(how, files) {
+  const body = document.querySelector('#files tbody');
+  const parts = [];
+  for (const file of files) {
+    const sum = hex(await crypto.subtle.digest('SHA-256', await file.arrayBuffer()));
+    parts.push(`${file.name}|${file.size}|${sum}`);
+    const row = body.insertRow();
+    for (const text of [how, file.name, `${file.size} B`, sum.slice(0, 24) + '…']) row.insertCell().textContent = text;
+    row.cells[3].className = 'hash';
+  }
+  document.getElementById('status').textContent = `${how}: ${files.length} file(s) received`;
+  location.hash = ++reports + ':' + encodeURIComponent(how + ':' + parts.sort().join(';'));
+}
+pick.addEventListener('change', () => show('picked', pick.files));
+pick.addEventListener('cancel', () => { document.getElementById('status').textContent = 'Selection cancelled'; location.hash = ++reports + ':cancelled'; });
+zone.addEventListener('dragover', event => { event.preventDefault(); zone.classList.add('over'); });
+zone.addEventListener('dragleave', () => zone.classList.remove('over'));
+zone.addEventListener('drop', event => { event.preventDefault(); zone.classList.remove('over'); show('dropped', event.dataTransfer.files); });
+</script>

@@ -4,7 +4,7 @@ use base64::Engine;
 const BROWSER: &str = "browser-1";
 
 fn staging(root: &Path) -> Staging {
-    let mut staging = Staging::new(root.join(".uploads")).unwrap();
+    let mut staging = Staging::new(root.join(".uploads"));
     staging.limits = CloudUploadLimits {
         max_files: 2,
         max_batch_bytes: 8,
@@ -214,7 +214,7 @@ fn a_new_service_removes_the_files_of_the_previous_one() {
     let left = root.path().join(".uploads/browser-9/b1");
     std::fs::create_dir_all(&left).unwrap();
     std::fs::write(left.join("old.txt"), b"old").unwrap();
-    let staging = Staging::new(root.path().join(".uploads")).unwrap();
+    let staging = Staging::new(root.path().join(".uploads"));
     assert!(!root.path().join(".uploads").exists());
     assert_eq!(staging.limits(), CloudUploadLimits::default());
 }

@@ -52,21 +52,18 @@ struct StagedFile {
 }
 
 impl Staging {
-    /// Removes what an earlier service left: its browsers stopped with it.
-    pub(super) fn new(root: PathBuf) -> io::Result<Self> {
-        match std::fs::remove_dir_all(&root) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
-        Ok(Self {
+    /// Removes what an earlier service left: its browsers stopped with it. A
+    /// folder that stays makes later uploads fail, never the cloud browsers.
+    pub(super) fn new(root: PathBuf) -> Self {
+        let _ = std::fs::remove_dir_all(&root);
+        Self {
             root,
             limits: CloudUploadLimits::default(),
             max_staged_bytes: MAX_STAGED_BYTES,
             max_batches: MAX_BATCHES,
             batches: BTreeMap::new(),
             next_order: 0,
-        })
+        }
     }
 
     pub(super) fn limits(&self) -> CloudUploadLimits {

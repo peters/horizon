@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-browser-protocol/src/cloud_view.rs,crates/horizon-browser-protocol/src/cloud_view/**,crates/horizon-cloud-worker/src/browser.rs,crates/horizon-cloud-worker/src/browser/chooser.rs,crates/horizon-cloud-worker/src/browser/chooser/**,crates/horizon-cloud-worker/src/browser/staging.rs,crates/horizon-cloud-worker/src/browser/staging/**"
+applyTo: "crates/horizon-browser-protocol/src/cloud_view.rs,crates/horizon-browser-protocol/src/cloud_view/**,crates/horizon-cloud-worker/src/browser.rs,crates/horizon-cloud-worker/src/browser/chooser.rs,crates/horizon-cloud-worker/src/browser/chooser/**,crates/horizon-cloud-worker/src/browser/staging.rs,crates/horizon-cloud-worker/src/browser/staging/**,crates/horizon-core/src/browser/cloud.rs,crates/horizon-core/src/browser/cloud/**,crates/horizon-ui/src/app/file_drop/browser.rs"
 ---
 
 # Trust boundary of cloud browser uploads
@@ -9,14 +9,6 @@ upload button or a drop on the panel. Horizon sends the bytes to the control
 service of the worker, and the worker browser attaches the staged files. The
 design is in the module comments and in the section "Browser uploads" of
 `examples/cloud-worker/README.md`.
-
-## Off by default
-
-The control service relays uploads only when `HORIZON_CLOUD_BROWSER_UPLOADS`
-is `1`. Without it, the service must act as one that predates uploads: it does
-not register a file chooser consumer, refuses each `stage` request and sends no
-`uploads` state. It still removes the staged files of an earlier service when it
-starts.
 
 ## Trusted: the host
 
@@ -56,6 +48,16 @@ The limits, errors and notices come from the control service, and `accept` and
 long text, and use a worker limit only to lower its own limits. A host sends
 only the files that the person picked or dropped, never reads a path from the
 worker and never sends a host path to the worker.
+
+## The host side
+
+`crates/horizon-core/src/browser/cloud/uploads.rs` shows the worker request in
+the panel's own picker and sends the answer or the drop only after the transfer
+in `cloud/transfer.rs` completed. A transfer reads the files and their sizes on
+its own thread, never on the UI thread, and uses a new SSH connection that
+accepts only the host key that the cloud already pinned. It sends file bytes,
+names and sizes, never a host path. An answer goes only to the worker request
+that the person saw; a replaced or closed request stops its transfer.
 
 ## Rules of the wire format
 
@@ -103,6 +105,7 @@ worker and never sends a host path to the worker.
 - A file name or batch ID that the checks accept but that can leave its folder.
 - A change of the wire format that an older host or worker cannot read.
 - Text from the page or the worker that the format presents as trusted.
+- A host read of a file on the UI thread, a host path that reaches the worker, or
+  an SSH connection for uploads that can enroll a new host key.
 - An answer or a drop that the format cannot bind to the request or page that
   the person saw.
-- Upload behavior while `HORIZON_CLOUD_BROWSER_UPLOADS` is not `1`.

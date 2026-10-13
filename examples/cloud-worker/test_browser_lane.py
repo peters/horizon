@@ -520,8 +520,6 @@ class BrowserLaneTests(unittest.TestCase):
             return self.nested()
         warm_chromium(self.root)
         url = self.page(UPLOAD_PAGE)
-        # Uploads stay off until hosts relay them.
-        self.environment['HORIZON_CLOUD_BROWSER_UPLOADS'] = '1'
         service = self.serve(agent=True, host='agent-host', workspace=self.workspace())
         self.addCleanup(subprocess.run, ['pkill', '-KILL', '-f', '--', f'--user-data-dir={self.home}'], check=False)
         self.await_answer(service)

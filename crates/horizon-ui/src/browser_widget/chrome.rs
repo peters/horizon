@@ -98,10 +98,23 @@ pub fn show(
         ui.label(RichText::new(error).size(10.5).color(theme::PALETTE_RED()));
     }
 
+    if let Some((sent, total)) = browser.cloud_upload_progress() {
+        // The total is zero until the transfer thread read the file sizes.
+        let text = match sent.saturating_mul(100).checked_div(total) {
+            Some(percent) => format!("Uploading files to the cloud browser… {percent}%"),
+            None => "Uploading files to the cloud browser…".to_owned(),
+        };
+        ui.label(RichText::new(text).size(10.5).color(theme::FG_SOFT()));
+    }
     if matches!(browser.status, horizon_core::browser::BrowserStatus::Ready)
         && !browser.frame_slot.file_chooser().supported()
     {
-        ui.label(RichText::new("Manual upload selection is unavailable. Use local Chromium, or update local Firefox to a build with file-dialog support.").size(10.5).color(theme::PALETTE_YELLOW()));
+        let message = if browser.is_cloud() {
+            "This cloud browser cannot take files from this computer. A provider device never can; for a worker browser, rebuild the cloud with a newer image."
+        } else {
+            "Manual upload selection is unavailable. Use local Chromium, or update local Firefox to a build with file-dialog support."
+        };
+        ui.label(RichText::new(message).size(10.5).color(theme::PALETTE_YELLOW()));
     }
     let reason = browser.handoff_reason.clone();
     if let Some(reason) = reason {

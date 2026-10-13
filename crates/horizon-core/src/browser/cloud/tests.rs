@@ -43,6 +43,7 @@ fn orientation_fixture() -> OrientationFixture {
         stop: Arc::new(AtomicBool::new(false)),
         child: Arc::new(Mutex::new(child)),
         handoff_sequence: std::sync::atomic::AtomicU64::new(0),
+        uploads: uploads::Relay::default(),
     });
     OrientationFixture { panel, receiver, alive }
 }
@@ -226,6 +227,7 @@ fn orientation_requires_a_provider_target_on_cloud_presentations() {
                 stop: Arc::new(AtomicBool::new(false)),
                 child: child.clone(),
                 handoff_sequence: std::sync::atomic::AtomicU64::new(0),
+                uploads: uploads::Relay::default(),
             });
             assert!(panel.is_remote(), "cloud presentation uses the remote transport");
             assert_eq!(panel.remote_target(), target);
@@ -345,6 +347,7 @@ fn stopped_cloud_keeps_its_environment_and_refuses_local_backend_switch() {
         stop: Arc::new(AtomicBool::new(false)),
         child: Arc::new(Mutex::new(child)),
         handoff_sequence: std::sync::atomic::AtomicU64::new(0),
+        uploads: uploads::Relay::default(),
     });
     for shutdown in [false, true] {
         if shutdown {
@@ -380,6 +383,7 @@ fn stopped_cloud_keeps_its_environment_and_refuses_local_backend_switch() {
         &latest,
         &Waker::default(),
         &AtomicBool::new(false),
+        &uploads::SharedOutgoing::default(),
         CloudViewRequest::Open {
             id: "fixture".into(),
             url: None,
@@ -510,6 +514,7 @@ fn polling_retries_missing_or_rejected_pixels_until_a_frame_is_stored() {
         &Latest::default(),
         &Waker::default(),
         &AtomicBool::new(false),
+        &uploads::SharedOutgoing::default(),
         CloudViewRequest::Open {
             id: "fixture".into(),
             url: None,
@@ -526,7 +531,11 @@ fn polling_retries_missing_or_rejected_pixels_until_a_frame_is_stored() {
     let acknowledgments: Vec<u64> = requests
         .into_iter()
         .filter_map(|request| match request {
-            CloudViewRequest::Poll { after, .. } => Some(after),
+            CloudViewRequest::Poll { after, uploads, .. } => {
+                // Every poll states that this host relays uploads.
+                assert_eq!(uploads.map(|uploads| uploads.version), Some(1));
+                Some(after)
+            }
             _ => None,
         })
         .collect();
@@ -683,4 +692,42 @@ fn cloud_command_channel_rejects_sends_after_its_liveness_marker_exits() {
     assert!(!fixture.panel.can_accept_commands());
     assert!(!fixture.panel.try_send(BrowserCommand::Reload));
     assert!(matches!(fixture.receiver.try_recv(), Err(mpsc::TryRecvError::Empty)));
+}
+
+#[test]
+fn a_cloud_panel_mirrors_the_worker_chooser_and_takes_drops_only_from_a_relaying_worker() {
+    use horizon_browser_protocol::cloud_view::{CloudChooserRequest, CloudUploadState};
+    let mut fixture = orientation_fixture();
+    let panel = &mut fixture.panel;
+    assert!(panel.is_cloud() && !panel.accepts_cloud_drops());
+    let refused = panel.drop_cloud_files(vec!["/local/a.txt".into()], 1.0, 2.0);
+    assert!(refused.unwrap_err().contains("connected"), "no state arrived yet");
+    let state = |request: Option<u64>| CloudViewState {
+        ready: true,
+        uploads: Some(CloudUploadState {
+            file_chooser: true,
+            drops: true,
+            request: request.map(|id| CloudChooserRequest {
+                id,
+                multiple: false,
+                accept: String::new(),
+                origin: "https://upload.test".into(),
+            }),
+            ..CloudUploadState::default()
+        }),
+        ..Default::default()
+    };
+    let deliver = |panel: &mut BrowserPanelState, state: CloudViewState| {
+        *panel.cloud.as_ref().unwrap().latest.lock().unwrap() = Some(state);
+        panel.drain_cloud();
+    };
+    deliver(panel, state(Some(3)));
+    assert!(panel.accepts_cloud_drops());
+    let chooser = panel.frame_slot.file_chooser().clone();
+    assert_eq!(chooser.request().unwrap().origin, "https://upload.test");
+    deliver(panel, state(None));
+    assert!(chooser.request().is_none(), "the worker ended the request");
+    deliver(panel, state(Some(4)));
+    panel.relaunch_cloud();
+    assert!(chooser.request().is_none(), "a reconnect closes the mirrored request");
 }
