@@ -63,6 +63,21 @@ starts itself. It permits sandboxed workspace edits without a prompt. Providers 
 can require approval to run commands outside this sandbox. The installed worker
 image must contain this launcher; changing a profile does not update an old image.
 
+## Codex ChatGPT sign-in on workers
+
+When Codex is permitted and no OpenAI API key is bound, every deployment, reconnect,
+resume and rebuild gives the worker this computer's ChatGPT login for Codex. The person
+signs in once in **Cloud settings > Coding agents > ChatGPT sign-in**, which runs the
+Codex CLI's `codex login` into the private home `~/.horizon/cloud/credentials/codex`.
+The worker gets the login as `/workspace/home/.codex/auth.json`, mode 0600, so Codex
+there starts signed in. `codex login status` as the agent user says "Logged in using
+ChatGPT".
+
+ChatGPT refresh tokens are single use. A worker that renewed the login on its own keeps
+that renewal, and the renewal comes back to this computer at the next connect. Never run
+`codex login` or `codex logout` on a worker: both revoke the login that every cloud
+shares. Without a sign-in, Codex asks for a sign-in in its own terminal on the worker.
+
 ## Source transfer errors
 
 Use relative source paths without redundant separators or `.` components in a

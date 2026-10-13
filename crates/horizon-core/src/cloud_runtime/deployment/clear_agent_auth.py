@@ -18,9 +18,10 @@ def clear_api_auth(root, anthropic, openai, workspace):
             return
         if not isinstance(auth, dict):
             raise ValueError("Invalid agent authentication record")
-        # A ChatGPT login can carry an API key from its own token exchange; it stays.
+        # A ChatGPT login can carry an API key from its own token exchange; it stays. Any
+        # other record with an API key is an unbound key and goes.
         mode = auth.get("auth_mode")
-        if mode == "apikey" or (mode is None and auth.get("OPENAI_API_KEY") and not auth.get("tokens")):
+        if mode == "apikey" or (mode != "chatgpt" and auth.get("OPENAI_API_KEY")):
             path.unlink()
 
 

@@ -14,6 +14,10 @@ class AgentAuthRemovalTests(unittest.TestCase):
     def test_unbound_keys_are_removed_but_subscription_login_survives(self):
         for auth in ({"auth_mode": "apikey", "OPENAI_API_KEY": "synthetic"},
                      {"OPENAI_API_KEY": "synthetic"},
+                     # Unbound keys beside tokens in a record that is not a ChatGPT login.
+                     {"auth_mode": "oauth", "OPENAI_API_KEY": "synthetic",
+                      "tokens": {"access_token": "synthetic"}},
+                     {"OPENAI_API_KEY": "synthetic", "tokens": {"access_token": "synthetic"}},
                      {"auth_mode": "chatgpt", "OPENAI_API_KEY": None,
                       "tokens": {"access_token": "synthetic-subscription"}},
                      # A ChatGPT login whose token exchange also gave it an API key.

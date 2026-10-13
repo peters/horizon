@@ -61,8 +61,8 @@ pub fn account(home: &Path) -> Result<Option<Account>> {
 }
 
 /// Signs in with the system browser through `codex login` and returns the account. A
-/// sign-in replaces the earlier login of `home`, which is revoked first, so clouds holding
-/// it get the new one when they next connect. Blocks until the browser flow ends; run it
+/// sign-in replaces the earlier login of `home`, which is revoked once the new login is in
+/// place, so clouds holding it get the new one when they next connect. Blocks until the browser flow ends; run it
 /// off the UI thread.
 /// # Errors
 /// Codex is missing, the person cancelled, or Codex reported that the sign-in failed.
