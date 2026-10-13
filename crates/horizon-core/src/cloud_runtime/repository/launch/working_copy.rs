@@ -170,7 +170,7 @@ fn unoffered_note(names: &[String]) -> String {
 /// `None` when there is no such file. A setup agent or an editor can swap the file or its
 /// folder while Horizon reads, so on Unix both are opened without following a link and the
 /// file without waiting on a pipe, and the opened handle is checked, not the path. Windows
-/// refuses a link by path before it opens the file.
+/// opens a link itself, never its target, and holds the folder so it cannot be swapped.
 fn contents(repository: &Path) -> Option<Result<String, ()>> {
     let file = match open(repository) {
         Ok(file) => file,
@@ -210,16 +210,32 @@ fn open(repository: &Path) -> std::io::Result<File> {
     Ok(File::from(file))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 fn open(repository: &Path) -> std::io::Result<File> {
-    let folder = repository.join(FOLDER);
-    let path = folder.join(FILE);
-    for part in [&folder, &path] {
-        if std::fs::symlink_metadata(part)?.file_type().is_symlink() {
-            return Err(std::io::Error::other("is a link"));
-        }
+    use std::os::windows::fs::OpenOptionsExt;
+    // Win32 values: open a link itself rather than its target, open a folder, and share
+    // the folder for reading and writing but not for deletion or renaming.
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_SHARE_READ_WRITE: u32 = 0x1 | 0x2;
+    let not_followed = || std::io::Error::other("is a link or not the expected kind of entry");
+    // Held open while the file opens, so the path keeps naming this real folder.
+    let folder = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(repository.join(FOLDER))?;
+    if !folder.metadata()?.is_dir() {
+        return Err(not_followed());
     }
-    File::open(path)
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(repository.join(FOLDER).join(FILE))?;
+    if !file.metadata()?.is_file() {
+        return Err(not_followed());
+    }
+    Ok(file)
 }
 
 /// What New cloud's settings depend on besides the typed revision: the checked-out commit
