@@ -47,6 +47,6 @@ gives the design, the command contract and the full boundary.
 - A path where a page value decides the origin, the `rp_id` check or
   `crossOrigin`.
 - A refused request that still starts the command.
-- A command process that continues after an abort, a navigation, the time
+- A command process that continues after an abort, a cross-document navigation, the time
   limit or the end of the session.
 - A page message or command output that the host reads without a size limit.
