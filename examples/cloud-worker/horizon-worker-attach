@@ -89,6 +89,8 @@ PARTIAL_REPLY = re.compile(rb'\x1b(?:\](?:1(?:[01](?:;[^\x07\x1b]*\x1b?)?)?)?|\[
 # The attach waits this long for the answer before it shows the session. A later answer is removed
 # from the input when it comes, and gives tmux the colors then.
 COLOR_SECONDS = 10
+# Input typed during that wait waits with it; this much of it ends the wait early.
+PROBE_BYTES = 1 << 20
 LITERAL = frozenset(b'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ,./:=@_+-')
 
 
@@ -579,9 +581,12 @@ class Attachment:
         """Asks this terminal for its colors and waits COLOR_SECONDS for the answer: the tmux
         commands that give tmux the colors, and the input typed meanwhile."""
         write(self.terminal + 1, COLOR_QUERY)
-        data = b''
+        data = bytearray()
+        searched = 0
         deadline = time.monotonic() + COLOR_SECONDS
-        while not IDENTITY_REPLY.search(data):
+        while not IDENTITY_REPLY.search(data, searched) and len(data) < PROBE_BYTES:
+            # Only the end of the input can hold an answer that the next piece completes.
+            searched = max(0, len(data) - 64)
             remaining = deadline - time.monotonic()
             if remaining <= 0 or not select.select([self.terminal], [], [], remaining)[0]:
                 break
@@ -593,7 +598,7 @@ class Attachment:
                 break
             data += chunk
         self.outstanding = True
-        commands, typed = self.answered(data)
+        commands, typed = self.answered(bytes(data))
         if not commands:
             # No colors of this panel, so none of an earlier panel either; a later answer sets them.
             commands = ['set-option -p -u -t %s window-style' % self.target, 'set-option -w -g -u window-style']
