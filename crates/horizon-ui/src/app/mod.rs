@@ -55,6 +55,7 @@ mod startup_session;
 mod tailnets;
 #[cfg(test)]
 mod test_support;
+mod upkeep;
 pub(crate) mod util;
 mod view;
 mod work_resume;
@@ -432,6 +433,7 @@ impl HorizonApp {
             }
         }
         self.render_active_view(ui, block_root_interaction);
+        self.apply_upkeep_requests(ctx);
         if block_root_interaction {
             Self::render_root_viewport_stabilizing_overlay(ctx);
         }

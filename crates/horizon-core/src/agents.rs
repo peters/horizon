@@ -252,6 +252,7 @@ pub const fn agent_definition(kind: PanelKind) -> Option<AgentDefinition> {
         | PanelKind::Editor
         | PanelKind::GitChanges
         | PanelKind::Usage
+        | PanelKind::Upkeep
         | PanelKind::Browser
         | PanelKind::Device => None,
     }

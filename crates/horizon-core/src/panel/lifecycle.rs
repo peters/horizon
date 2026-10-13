@@ -39,6 +39,11 @@ impl Panel {
             return Ok(());
         }
 
+        if let PanelContent::Upkeep(board) = &self.content {
+            self.content = PanelContent::Upkeep(crate::UpkeepBoard::new(Some(board.path().to_path_buf())));
+            return Ok(());
+        }
+
         if let PanelContent::Usage(_) = &self.content {
             self.content = PanelContent::Usage(UsageDashboard::new());
             return Ok(());

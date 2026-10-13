@@ -35,6 +35,7 @@ pub mod speech_model;
 mod ssh;
 mod terminal;
 mod transcript;
+pub mod upkeep;
 mod usage_dashboard;
 mod usage_stats;
 mod util;
@@ -92,6 +93,7 @@ pub use shortcuts::{AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifier
 pub use ssh::{DiscoveredSshHost, SshConnection, SshConnectionStatus, discover_ssh_hosts};
 pub use terminal::{ClipboardTarget, ClipboardWrite, Terminal, open_url};
 pub use transcript::PanelTranscript;
+pub use upkeep::UpkeepBoard;
 pub use usage_dashboard::UsageDashboard;
 pub use usage_stats::{DailyUsage, ToolUsage, UsageSnapshot, format_cost, format_tokens};
 pub use util::truncate_chars;

@@ -168,6 +168,15 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: Pane
             let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
             Ok(spawn_usage(seed))
         }
+        PanelKind::Upkeep => {
+            let status = opts
+                .command
+                .take()
+                .filter(|path| !path.trim().is_empty())
+                .map(PathBuf::from);
+            let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
+            Ok(spawn_upkeep(seed, status))
+        }
         PanelKind::Device => {
             let command = opts.command.take();
             let is_restore = opts.is_restore;
@@ -333,6 +342,21 @@ fn spawn_git_changes(mut seed: StaticPanelSeed, cwd: Option<PathBuf>) -> Panel {
     )
 }
 
+fn spawn_upkeep(mut seed: StaticPanelSeed, status: Option<PathBuf>) -> Panel {
+    let (title, has_custom_name) = seed.take_title(|| "Upkeep".to_string());
+    tracing::info!("created upkeep panel '{}' (id={})", title, seed.id.0);
+    let board = crate::UpkeepBoard::new(status);
+    let command = board.path().display().to_string();
+    seed.into_panel(
+        title,
+        PanelKind::Upkeep,
+        PanelContent::Upkeep(board),
+        Some(command),
+        None,
+        has_custom_name,
+    )
+}
+
 fn spawn_usage(mut seed: StaticPanelSeed) -> Panel {
     let (title, has_custom_name) = seed.take_title(|| "Usage".to_string());
     tracing::info!("created usage panel '{}' (id={})", title, seed.id.0);
@@ -422,9 +446,12 @@ pub(super) fn resolve_launch_command(
     launch: AgentLaunchContext<'_>,
 ) -> (String, Vec<String>) {
     match kind {
-        PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage | PanelKind::Browser | PanelKind::Device => {
-            (String::new(), Vec::new())
-        }
+        PanelKind::Editor
+        | PanelKind::GitChanges
+        | PanelKind::Usage
+        | PanelKind::Upkeep
+        | PanelKind::Browser
+        | PanelKind::Device => (String::new(), Vec::new()),
         PanelKind::Shell => {
             let use_login_shell = command.is_none() && PLATFORM_USES_LOGIN_SHELL;
             let program = command.unwrap_or_else(default_shell);
@@ -717,7 +744,12 @@ pub(super) fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
     } else {
         match kind {
             PanelKind::Shell | PanelKind::Ssh | PanelKind::Command => DEFAULT_PANEL_SCROLLBACK_LIMIT,
-            PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage | PanelKind::Browser | PanelKind::Device => 0,
+            PanelKind::Editor
+            | PanelKind::GitChanges
+            | PanelKind::Usage
+            | PanelKind::Upkeep
+            | PanelKind::Browser
+            | PanelKind::Device => 0,
             PanelKind::Codex
             | PanelKind::Claude
             | PanelKind::OpenCode
