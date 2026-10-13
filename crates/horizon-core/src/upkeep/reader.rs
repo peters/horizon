@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use super::Status;
+use super::{PrState, Status};
 
 /// Largest status document read.
 const STATUS_LIMIT: u64 = 4 * 1024 * 1024;
@@ -140,7 +140,10 @@ fn bound(status: &mut Status) {
     keep_last(&mut status.runs, MAX_RUNS);
     status.activity.sort_by_key(|entry| entry.at);
     keep_last(&mut status.activity, MAX_ACTIVITY);
-    status.pull_requests.sort_by_key(|pr| std::cmp::Reverse(pr.updated_at));
+    // Open pull requests first, so a person never misses one for a merged one.
+    status
+        .pull_requests
+        .sort_by_key(|pr| (pr.state == PrState::Merged, std::cmp::Reverse(pr.updated_at)));
     status.pull_requests.truncate(MAX_PULL_REQUESTS);
     status.repositories.truncate(MAX_REPOSITORIES);
     for text in [
@@ -251,6 +254,18 @@ mod tests {
             read_status(&path).unwrap_err(),
             "The Upkeep status is too large to read."
         );
+    }
+
+    #[test]
+    fn the_cut_keeps_open_pull_requests_before_merged_ones() {
+        let mut pull_requests: Vec<serde_json::Value> = (0..MAX_PULL_REQUESTS + 20)
+            .map(|n| serde_json::json!({"repository": "o/r", "number": n, "state": "merged", "updated_at": "2026-10-13T10:00:00Z"}))
+            .collect();
+        pull_requests.push(serde_json::json!({"repository": "o/r", "number": 9999, "state": "blocked", "updated_at": "2026-01-01T00:00:00Z"}));
+        let mut status: Status = serde_json::from_value(serde_json::json!({"pull_requests": pull_requests})).unwrap();
+        bound(&mut status);
+        assert_eq!(status.pull_requests.len(), MAX_PULL_REQUESTS);
+        assert_eq!(status.pull_requests[0].number, 9999);
     }
 
     #[test]

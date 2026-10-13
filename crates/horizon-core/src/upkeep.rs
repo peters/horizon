@@ -27,7 +27,7 @@ pub struct Status {
     pub worker: Worker,
     #[serde(default, deserialize_with = "lenient")]
     pub schedule: Schedule,
-    #[serde(default, deserialize_with = "lenient")]
+    #[serde(default, deserialize_with = "lenient_list")]
     pub repositories: Vec<String>,
     #[serde(default, deserialize_with = "lenient_list")]
     pub runs: Vec<Run>,
@@ -406,6 +406,7 @@ mod tests {
             r#"{"agent":7,"schedule":{"every_minutes":-1,"next_run_at":"","paused":"yes"},
                 "runs":[{"started_at":"2026-10-13T10:00:00Z","merged":5000000000},{"merged":1}],
                 "pull_requests":[{"repository":"o/r","number":1,"checks":null},{"title":"no repository"}],
+                "repositories":["a/b",7],
                 "activity":"none"}"#,
         )
         .unwrap();
@@ -418,6 +419,7 @@ mod tests {
         assert_eq!(status.pull_requests[0].state, PrState::Other);
         assert_eq!(status.pull_requests[0].checks, Checks::None);
         assert!(status.activity.is_empty());
+        assert_eq!(status.repositories, ["a/b"]);
     }
 
     #[test]

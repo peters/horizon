@@ -9,9 +9,20 @@ const HOURS: i64 = 24;
 const BAR_GAP: f32 = 3.0;
 const BAR_HEIGHT: f32 = 26.0;
 
-/// The run in progress, if the status shows one.
-pub(super) fn running(status: &Status) -> Option<&Run> {
-    status.runs.last().filter(|run| run.outcome == RunOutcome::Running)
+/// How far ahead of this computer's clock a start time may be and still count.
+const CLOCK_SKEW: time::Duration = time::Duration::minutes(5);
+
+/// The run in progress, if the status shows one: the newest run that ran, when it is still
+/// running. A skipped run after it only says that it was still busy, and a start in the
+/// future is not believed.
+pub(super) fn running(status: &Status, now: OffsetDateTime) -> Option<&Run> {
+    status
+        .runs
+        .iter()
+        .rev()
+        .filter(|run| run.started_at <= now + CLOCK_SKEW)
+        .find(|run| !matches!(run.outcome, RunOutcome::Skipped | RunOutcome::Other))
+        .filter(|run| run.outcome == RunOutcome::Running)
 }
 
 /// How long after its start a run that still shows as running counts as no longer
@@ -54,7 +65,7 @@ fn next_run(ui: &mut Ui, status: &Status, now: OffsetDateTime) {
 
 /// The headline, its color and the line under it.
 fn next_run_text(status: &Status, now: OffsetDateTime) -> (String, egui::Color32, String) {
-    if let Some(run) = running(status) {
+    if let Some(run) = running(status, now) {
         let started = relative(run.started_at, now);
         if now - run.started_at > stale_after(status) {
             (
@@ -319,6 +330,29 @@ mod tests {
             "within the grace"
         );
         assert_eq!(text(&status("", "2026-10-13T12:00:00Z")), "Late / Was due at 12:00 UTC");
+    }
+
+    #[test]
+    fn a_skipped_run_does_not_hide_the_run_that_is_still_busy() {
+        let now = parse_time("2026-10-13T15:10:00Z").unwrap();
+        let status: Status = serde_json::from_str(
+            r#"{"runs":[{"started_at":"2026-10-13T14:00:00Z","outcome":"running"},
+                        {"started_at":"2026-10-13T15:00:00Z","outcome":"skipped"},
+                        {"started_at":"2026-10-16T15:00:00Z","outcome":"running"}]}"#,
+        )
+        .unwrap();
+        let run = running(&status, now).unwrap();
+        assert_eq!(
+            run.started_at,
+            parse_time("2026-10-13T14:00:00Z").unwrap(),
+            "the future run is not believed"
+        );
+        let done: Status = serde_json::from_str(
+            r#"{"runs":[{"started_at":"2026-10-13T14:00:00Z","outcome":"running"},
+                        {"started_at":"2026-10-13T15:00:00Z","outcome":"done"}]}"#,
+        )
+        .unwrap();
+        assert!(running(&done, now).is_none(), "a later finished run ends an old one");
     }
 
     #[test]

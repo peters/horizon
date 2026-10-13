@@ -50,6 +50,8 @@ impl HorizonApp {
                 browser.submit_navigation(url);
             }
             self.board.focus(panel);
+            // The panel may be out of view; show it beside the board.
+            self.fit_workspace_visible(ctx, workspace);
             return;
         }
         let position = self.board.panel(board).map(|panel| {

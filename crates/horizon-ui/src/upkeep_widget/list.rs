@@ -18,6 +18,10 @@ const MERGED_ROWS: usize = 6;
 
 pub(super) fn chips(ui: &mut Ui, shown: &[&PullRequest], filter: &mut Filter) {
     let count = |admit: &dyn Fn(PrState) -> bool| shown.iter().filter(|pr| admit(pr.state)).count();
+    // The Other chip leaves with its last row; its filter goes with it.
+    if *filter == Filter::State(PrState::Other) && count(&|s| s == PrState::Other) == 0 {
+        *filter = Filter::Open;
+    }
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
         chip(ui, filter, Filter::Open, "Open", count(&|s| s != PrState::Merged), None);
