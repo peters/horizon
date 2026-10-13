@@ -178,30 +178,16 @@ impl Drop for Terminal {
             return;
         }
         // The unreaped child cannot be replaced by PID reuse. Never signal a
-        // saved server/pane identity on a terminal disconnect. A hangup first
-        // lets the helper delete the tmux buffer of a paste that the disconnect
-        // cut off; the private proxy takes no second client to do it later.
-        if let Some(pid) = i32::try_from(self.child.id())
-            .ok()
-            .and_then(rustix::process::Pid::from_raw)
-        {
-            let _ = rustix::process::kill_process(pid, rustix::process::Signal::HUP);
-        }
-        if !exited(&mut self.child, Duration::from_secs(2)) {
-            let _ = self.child.kill();
-            exited(&mut self.child, Duration::from_secs(2));
+        // saved server/pane identity on a terminal disconnect.
+        let _ = self.child.kill();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if self.child.try_wait().is_ok_and(|s| s.is_some()) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
         }
     }
-}
-fn exited(child: &mut Child, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if child.try_wait().is_ok_and(|s| s.is_some()) {
-            return true;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-    false
 }
 
 pub(super) fn child() -> io::Result<()> {
@@ -280,28 +266,6 @@ impl Drop for Mode<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn a_dropped_terminal_hangs_up_its_child_before_it_kills_it() {
-        let directory = tempfile::tempdir().unwrap();
-        let marker = directory.path().join("hangup");
-        let master = rustix::pty::openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC).unwrap();
-        let child = Command::new("/bin/sh")
-            .arg("-c")
-            .arg("trap 'echo hangup > \"$0\"; exit 0' HUP; echo ready; while :; do sleep 0.05; done")
-            .arg(&marker)
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let mut child = child;
-        let mut ready = [0; 6];
-        child.stdout.take().unwrap().read_exact(&mut ready).unwrap();
-        drop(Terminal {
-            child,
-            master,
-            slave: None,
-        });
-        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "hangup\n");
-    }
     #[test]
     fn exited_child_drains_queued_output_under_backpressure_and_reports_failure() {
         for status in [0, 17] {
