@@ -262,6 +262,7 @@ class Job:
         self.finished = None
         self.peak_mb = 0
         self.code = None
+        self.launched = False
         self.log = DIR + '/logs/' + self.slug + '.log'
 
     def last_line(self):
@@ -277,14 +278,14 @@ class Job:
         except OSError:
             return ''
 
-    def run(self, template, environment):
+    def run(self, template):
         self.started = time.time()
         try:
-            self.attempt(template, environment)
+            self.attempt(template)
             # The model service sometimes has no capacity for a moment; one later try often works.
             if self.code != 0 and 'at capacity' in self.tail(4096):
                 time.sleep(60)
-                self.attempt(template, environment)
+                self.attempt(template)
         except Exception as error:  # noqa: BLE001 - the run records the job as failed
             self.code = None
             with open(self.log, 'a') as log:
@@ -301,14 +302,17 @@ class Job:
         except OSError:
             return ''
 
-    def attempt(self, template, environment):
-        # The policy can change during a run that lasts hours; each agent starts under the
-        # policy of that moment.
-        if approvals() != 'auto':
+    def attempt(self, template):
+        # A run can last hours: each agent starts under the policy and with the session
+        # environment of its own moment, as a panel would.
+        environment = session_environment() if approvals() == 'auto' else None
+        if environment is None:
             self.code = None
             with open(self.log, 'a') as log:
-                log.write('\nThe worker now asks before an agent runs a command; this agent did not start.\n')
+                log.write('\nThe worker asks before an agent runs a command, or refused its session '
+                          'environment; this agent did not start.\n')
             return
+        self.launched = True
         prompt = (template.replace('@@REPOSITORY@@', self.repository)
                   .replace('@@STATUS@@', DIR + '/status.d/' + self.slug + '.json'))
         # The prompt goes on standard input: as an argument, text that starts with a dash
@@ -465,8 +469,7 @@ def run_once(cfg, forced):
         print('This worker asks before an agent runs a command (agent approvals: ask), and an Upkeep '
               'agent has nobody to ask. Upkeep starts no agent. Use a worker with auto approvals.', flush=True)
         return False
-    environment = session_environment()
-    if environment is None:
+    if session_environment() is None:
         return False
     with open(DIR + '/prompt.md') as handle:
         template = handle.read()
@@ -508,7 +511,7 @@ def run_once(cfg, forced):
     started = time.time()
 
     def start(job):
-        thread = threading.Thread(target=job.run, args=(template, environment), daemon=True)
+        thread = threading.Thread(target=job.run, args=(template,), daemon=True)
         thread.start()
         running.append((job, thread))
 
@@ -538,7 +541,8 @@ def run_once(cfg, forced):
         for _, thread in running:
             thread.join()
     merge_status(repositories)
-    for job in jobs:
+    # Only agents that started say what a repository costs.
+    for job in (job for job in jobs if job.launched):
         cost = costs.get(job.repository, {})
         minutes = (job.finished - job.started) / 60
         runs = cost.get('runs', 0)

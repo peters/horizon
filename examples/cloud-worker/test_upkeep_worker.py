@@ -248,6 +248,8 @@ class LoopTests(unittest.TestCase):
             codex.write_text('#!/bin/sh\n[ "$1" = --help ] && { echo "  --no-daemon"; exit 0; }\n'
                              'printf "args:%s env:%s\\n" "$*" "$UPKEEP_TEST"\ncat\n')
             codex.chmod(0o700)
+            (tools / 'horizon-worker-session-env').write_text('#!/bin/sh\nprintf "UPKEEP_TEST=1\\0"\n')
+            (tools / 'horizon-worker-session-env').chmod(0o700)
             for folder in ('repos', 'logs', 'status.d'):
                 (directory / folder).mkdir()
             policy = directory / 'agent-approvals'
@@ -257,7 +259,7 @@ class LoopTests(unittest.TestCase):
                     mock.patch('os.geteuid', return_value=10001), \
                     mock.patch.dict(os.environ, PATH=f'{tools}:{os.environ["PATH"]}'):
                 job = RUN['Job']('acme/web')
-                job.run('--help\nWork on @@REPOSITORY@@ and write @@STATUS@@.', dict(os.environ, UPKEEP_TEST='1'))
+                job.run('--help\nWork on @@REPOSITORY@@ and write @@STATUS@@.')
             log = Path(job.log).read_text()
             self.assertEqual(job.code, 0)
             self.assertIn('args:--no-daemon exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - '
@@ -268,8 +270,9 @@ class LoopTests(unittest.TestCase):
             with mock.patch.dict(names, DIR=str(directory), REFRESH=0.05, APPROVALS=str(policy)), \
                     mock.patch('os.geteuid', return_value=10001):
                 job = RUN['Job']('acme/web')
-                job.run('Work on @@REPOSITORY@@.', dict(os.environ))
+                job.run('Work on @@REPOSITORY@@.')
             self.assertIsNone(job.code)
+            self.assertFalse(job.launched)
             self.assertIn('this agent did not start', Path(job.log).read_text())
 
 
