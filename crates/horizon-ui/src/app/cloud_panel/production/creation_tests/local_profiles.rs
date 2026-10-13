@@ -457,3 +457,27 @@ fn commit(path: &std::path::Path) {
         );
     }
 }
+
+/// A read that failed outside the file, here a folder that is no Git checkout, can be
+/// tried again: nothing in the checkout changes to start another read.
+#[test]
+fn a_read_that_failed_outside_the_file_can_be_tried_again() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    let form = &mut app.cloud_prototype.production;
+    form.creating = true;
+    form.repository = temp.path().to_string_lossy().into();
+    form.title = "Retry".into();
+    app.read_cloud_profiles(&ctx);
+    finish_read(&ctx, &mut app);
+    assert!(app.cloud_prototype.error.is_some());
+    assert!(!app.cloud_prototype.production.launch.unconfigured);
+    tall_click(&ctx, &mut app, "Try again");
+    assert!(
+        app.cloud_prototype.production.launch.loading(),
+        "the click starts a read"
+    );
+    finish_read(&ctx, &mut app);
+    assert!(app.cloud_prototype.error.is_some());
+}
