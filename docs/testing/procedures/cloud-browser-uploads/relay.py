@@ -157,14 +157,15 @@ def main():
     # Also after an early exit: no page server stays on the worker.
     atexit.register(stop_page)
     opened = view.call({'operation': 'open', 'id': browser, 'url': url, 'backend': args.engine})
-    if opened.get('error'):
-        sys.exit(f'open: {opened["error"]}')
-    state = poll(until=lambda state: state['ready'] and state['url'].startswith(url), label='ready', timeout=120)
-    uploads = state.get('uploads')
-    if uploads is None:
-        sys.exit('the worker has no upload support: an older worker, or HORIZON_CLOUD_BROWSER_UPLOADS is not 1')
-    print('ready: file_chooser', uploads['file_chooser'], 'drops', uploads['drops'], 'limits', uploads['limits'])
+    # From here every exit closes the worker browser: a closed connection does not.
     try:
+        if opened.get('error'):
+            sys.exit(f'open: {opened["error"]}')
+        state = poll(until=lambda state: state['ready'] and state['url'].startswith(url), label='ready', timeout=120)
+        uploads = state.get('uploads')
+        if uploads is None:
+            sys.exit('the worker has no upload support: an older worker, or HORIZON_CLOUD_BROWSER_UPLOADS is not 1')
+        print('ready: file_chooser', uploads['file_chooser'], 'drops', uploads['drops'], 'limits', uploads['limits'])
         if uploads['file_chooser']:
             poll(None, click(100, 75), lambda state: page_report(state)[1] == 'cancelled', 'older host')
             print('older host: the worker cancelled the chooser at once')
