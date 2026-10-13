@@ -680,6 +680,11 @@ def main(argv=None):
     if not binary:
         print("setup-gate: the build of the horizon test binary failed", file=sys.stderr)
         return 2
+    # Once more: the build can use enough of the same disk to go below the limit.
+    problem = check_preconditions(out, args.min_free_gb)
+    if problem:
+        print(f"setup-gate: after the build, {problem}", file=sys.stderr)
+        return 2
     token = secrets.token_hex(3)
     out = out / f"{time.strftime('%Y%m%d-%H%M%S')}-{token}"
     (out / "lanes").mkdir(parents=True)

@@ -210,7 +210,7 @@ that is not a folder or a `leave_out` job that `spec.jobs` does not name.
 |---|---|---|
 | `--out DIR` | `/var/tmp/horizon-setup-gate` | The output folder. Each run makes a run folder in it. The runner refuses a folder below `/tmp`, because `/tmp` can be a RAM file system. |
 | `--lanes N` | `2` | The number of gate lanes in parallel. More lanes increase the load. |
-| `--min-free-gb N` | `100` | The free disk, in GB, that the runner needs to start. If the runner cannot read the free disk, it does not start. `0` stops the check. |
+| `--min-free-gb N` | `100` | The free disk, in GB, that the runner needs to start. The runner examines it before and after the build. If the runner cannot read the free disk, it does not start. `0` stops the check. |
 | `--only PATTERN` | all entries | Run only the entries whose label or repo agrees with the shell pattern. Use it more than one time for more patterns. |
 | `--binary PATH` | a new build | Use this horizon test binary, and do not build. |
 
