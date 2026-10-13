@@ -86,6 +86,7 @@ Workspaces stay visible. There are no hidden tabs. If something is off-screen, p
 | `editor` | Markdown split view (syntax + preview) |
 | `git_changes` | Changed files, diffs, and hunks for the workspace repo |
 | `usage` | Token spend across agent panels |
+| `upkeep` | Read-only board of an Upkeep agent: next run, the last 24 hours of runs, and its dependency pull requests by state. A row opens its pull request in a browser panel. `command` names the status file; see [Upkeep](docs/upkeep.md) |
 | `command` | Run an arbitrary command as a panel |
 | `device` | Native VNC view of a loopback desktop, or of a remote desktop reached through an SSH tunnel (the host's key must already be trusted, for example by opening it over SSH once). Read-only until you turn **Interact** on, which sends your mouse and keyboard to that desktop |
 
@@ -810,7 +811,7 @@ workspaces:
 
 ## Speech Input (opt-in)
 
-Dictate into a terminal, editor, or browser page. Terminal, Editor, and Browser panels get a mic button in the title bar (Git Changes and Usage do not). A Ventrilo-style **push-to-talk hotkey** (default `F9`, hold to record) dictates into the focused text-input panel. Audio is transcribed locally by [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) — nothing leaves the machine — and the text is inserted as if typed. Browser dictation targets the page element that currently owns DOM focus. Editor dictation inserts at the caret.
+Dictate into a terminal, editor, or browser page. Terminal, Editor, and Browser panels get a mic button in the title bar (Git Changes, Usage and Upkeep do not). A Ventrilo-style **push-to-talk hotkey** (default `F9`, hold to record) dictates into the focused text-input panel. Audio is transcribed locally by [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) — nothing leaves the machine — and the text is inserted as if typed. Browser dictation targets the page element that currently owns DOM focus. Editor dictation inserts at the caret.
 
 Speech is a compile-time opt-in because it builds a native C++ inference library, so the release downloads and package-manager installs don't include it. You need **CMake and a C++ compiler**, plus on Linux the ALSA headers (`libasound2-dev` / `alsa-lib-devel`):
 

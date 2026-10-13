@@ -39,6 +39,14 @@ impl Panel {
             return Ok(());
         }
 
+        if let PanelContent::Upkeep(board) = &self.content {
+            let mut fresh = crate::UpkeepBoard::new(Some(board.path().to_path_buf()));
+            // The pull request panel it opened stays its own.
+            fresh.browser = board.browser;
+            self.content = PanelContent::Upkeep(fresh);
+            return Ok(());
+        }
+
         if let PanelContent::Usage(_) = &self.content {
             self.content = PanelContent::Usage(UsageDashboard::new());
             return Ok(());

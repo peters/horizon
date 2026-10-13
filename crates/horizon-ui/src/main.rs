@@ -28,6 +28,7 @@ mod terminal_widget;
 mod test_egui;
 mod text;
 mod theme;
+mod upkeep_widget;
 mod usage_widget;
 
 use std::fmt::Write as _;
