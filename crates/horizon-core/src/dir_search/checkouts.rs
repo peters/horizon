@@ -13,7 +13,10 @@ const DEPTH: usize = 4;
 const LIMIT: usize = 2000;
 
 /// The most folders read while looking, so a huge home never keeps the search busy.
-const VISITS: usize = 20_000;
+const VISITS: usize = 50_000;
+
+/// Folders that usually hold checkouts, read first so a full home reaches them.
+const FIRST: [&str; 5] = ["github", "code", "src", "projects", "dev"];
 
 /// A folder with a repository in it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,14 +72,24 @@ pub fn checkouts(root: &Path) -> Vec<Checkout> {
             .filter(|path| {
                 path.file_name()
                     .map(|name| name.to_string_lossy())
-                    .is_some_and(|name| !name.starts_with('.') && !SKIP_NAMES.contains(&name.as_ref()))
+                    .is_some_and(|name| !name.starts_with('.'))
             })
             .collect();
-        children.sort();
+        children.sort_by_key(|path| {
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            (depth > 0 || !FIRST.contains(&name.as_str()), path.clone())
+        });
         for child in children {
+            // A build folder may itself be a checkout, but is never searched further.
+            let skipped = child
+                .file_name()
+                .is_some_and(|name| SKIP_NAMES.contains(&name.to_string_lossy().as_ref()));
             if let Some(checkout) = read(&child) {
                 found.push(checkout);
-            } else if depth + 1 < DEPTH {
+            } else if depth + 1 < DEPTH && !skipped {
                 queue.push_back((child, depth + 1));
             }
         }
@@ -190,5 +203,18 @@ mod tests {
         let found = checkouts(home.path());
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].path.ends_with("acme/web"));
+    }
+
+    #[test]
+    fn a_checkout_named_like_a_build_folder_is_listed_but_build_folders_are_not_searched() {
+        let home = tempfile::tempdir().unwrap();
+        for repo in ["code/vendor", "code/node_modules/pkg"] {
+            let git = home.path().join(repo).join(".git");
+            fs::create_dir_all(&git).unwrap();
+            fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        }
+        let found = checkouts(home.path());
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].path.ends_with("code/vendor"));
     }
 }

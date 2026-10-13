@@ -373,7 +373,21 @@ fn folder_rows(typed: &str, folders: &[(PathBuf, bool)]) -> Vec<Row> {
         .filter(|(path, _)| dotted || !name(path).starts_with('.'))
         .map(|(path, checkout)| (*checkout, path))
         .collect();
-    shown.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| name(a.1).cmp(&name(b.1))));
+    // The folder named as typed first, then those that start so, then repositories.
+    let typed_name = typed.rsplit(['/', '\\']).next().unwrap_or_default().to_lowercase();
+    let rank = |checkout: bool, path: &Path| {
+        let name = name(path);
+        (
+            name == typed_name,
+            !typed_name.is_empty() && name.starts_with(&typed_name),
+            checkout,
+        )
+    };
+    shown.sort_by(|a, b| {
+        rank(b.0, b.1)
+            .cmp(&rank(a.0, a.1))
+            .then_with(|| name(a.1).cmp(&name(b.1)))
+    });
     shown
         .into_iter()
         .take(LISTED)
@@ -406,21 +420,26 @@ impl super::State {
     /// Arrow keys, Enter and Tab for the results, taken before the field sees them.
     pub(super) fn finder_keys(&mut self, ui: &egui::Ui, focused: bool) -> Option<PathBuf> {
         use egui::{Key, Modifiers};
-        if !focused || !self.searching() || self.finder.current_rows().is_empty() {
+        // Shift+Tab and other chords keep their own meaning, and an earlier path's rows take
+        // no keys while this path's folders are read.
+        let plain = ui.input(|input| input.modifiers.is_none());
+        if !focused || !plain || !self.searching() || !self.finder.settled() || self.finder.current_rows().is_empty() {
             return None;
         }
+        // A typed `owner/name` is a repository to clone: Enter is Continue's, not a result's.
+        let takes_enter = self.remote.is_none();
         let (down, up, enter, tab) = ui.input_mut(|input| {
             (
                 input.consume_key(Modifiers::NONE, Key::ArrowDown),
                 input.consume_key(Modifiers::NONE, Key::ArrowUp),
-                input.consume_key(Modifiers::NONE, Key::Enter),
+                takes_enter && input.consume_key(Modifiers::NONE, Key::Enter),
                 self.finder.takes_tab() && input.consume_key(Modifiers::NONE, Key::Tab),
             )
         });
         if down || up {
             self.finder.move_highlight(down);
         }
-        if !(enter || tab) || !self.finder.settled() {
+        if !(enter || tab) {
             return None;
         }
         let row = self.finder.current_rows().get(self.finder.highlighted)?.clone();

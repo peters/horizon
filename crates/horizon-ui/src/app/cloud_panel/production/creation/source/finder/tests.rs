@@ -1,4 +1,5 @@
 use super::{Kind, Pick, folder_rows, is_path, names_a_host, pick, search_rows};
+use crate::test_egui::DiscardTextures as _;
 use horizon_core::dir_search::Checkout;
 use std::path::PathBuf;
 
@@ -89,4 +90,79 @@ fn letters_scattered_over_a_path_find_nothing() {
         1,
         "a run in the path still finds it"
     );
+}
+
+#[test]
+fn the_folder_named_as_typed_comes_before_a_repository_beside_it() {
+    let rows = folder_rows(
+        "~/code/tools",
+        &[
+            (PathBuf::from("/x/code/my-tools"), true),
+            (PathBuf::from("/x/code/tools"), false),
+        ],
+    );
+    assert_eq!(rows[0].title, "tools");
+}
+
+/// A state whose field holds `typed`, with one checkout to find, and the rows made.
+fn searching(typed: &str) -> super::super::State {
+    let mut state = super::super::State::default();
+    state.input = typed.into();
+    state.finder.checkouts = Some(vec![checkout(
+        "/home/x/code/rust-analyzer",
+        Some("https://github.com/rust-lang/rust-analyzer"),
+    )]);
+    let _ = state.finder.rows(typed, &[]);
+    state
+}
+
+/// Presses `key` with `modifiers` in a frame where the field has the focus; returns what
+/// the finder chose and whether the key was left for the field.
+fn press(state: &mut super::super::State, key: egui::Key, modifiers: egui::Modifiers) -> (Option<PathBuf>, bool) {
+    let ctx = egui::Context::default();
+    let input = egui::RawInput {
+        events: vec![egui::Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }],
+        ..Default::default()
+    };
+    let mut result = (None, false);
+    let _ = ctx
+        .run_ui(input, |ui| {
+            let _ = state.remote();
+            let chosen = state.finder_keys(ui, true);
+            result = (chosen, ui.input(|input| input.key_pressed(key)));
+        })
+        .discard_textures();
+    result
+}
+
+#[test]
+fn enter_uses_the_highlighted_checkout() {
+    let mut state = searching("analyzer");
+    let (chosen, left) = press(&mut state, egui::Key::Enter, egui::Modifiers::NONE);
+    assert_eq!(chosen, Some(PathBuf::from("/home/x/code/rust-analyzer")));
+    assert!(!left, "the field never sees that Enter");
+}
+
+#[test]
+fn a_typed_owner_and_name_leaves_enter_to_continue() {
+    let mut state = searching("rust-lang/rust");
+    let (chosen, left) = press(&mut state, egui::Key::Enter, egui::Modifiers::NONE);
+    assert_eq!(chosen, None, "the look-alike checkout is not taken");
+    assert!(left, "Enter goes on to clone rust-lang/rust");
+}
+
+#[test]
+fn shift_tab_keeps_its_way_back() {
+    let mut state = searching("~/");
+    state.finder.rows = folder_rows("~/", &[(PathBuf::from("/x/code"), false)]);
+    state.finder.folders_for = "~/".into();
+    let (chosen, left) = press(&mut state, egui::Key::Tab, egui::Modifiers::SHIFT);
+    assert_eq!(chosen, None);
+    assert!(left, "Shift+Tab is not taken by the results");
 }

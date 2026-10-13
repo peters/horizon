@@ -40,7 +40,7 @@ pub(in super::super) fn step(ui: &mut Ui, form: &mut Production, refocus: bool) 
     let focused = ui.memory(|memory| memory.has_focus(id));
     let keyed = form.source.finder_keys(ui, focused);
     // Only while results show: a hidden list never keeps Tab in the field.
-    let tab = form.source.searching() && form.source.finder.takes_tab();
+    let tab = form.source.searching() && form.source.finder.takes_tab() && ui.input(|input| input.modifiers.is_none());
     // While a clone runs the field is not a request for something else.
     let response = ui
         .add_enabled_ui(form.source.job.is_none(), |ui| {

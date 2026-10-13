@@ -126,7 +126,8 @@ pub(super) fn show(ui: &mut Ui, state: &mut State) -> Option<Pick> {
                         if response.hovered() {
                             hovered = Some(index);
                         }
-                        if response.clicked() {
+                        // An earlier path's row is not this path's to choose.
+                        if response.clicked() && state.finder.settled() {
                             clicked = Some(pick(row, false));
                         }
                     }
