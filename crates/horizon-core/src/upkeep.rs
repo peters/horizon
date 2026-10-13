@@ -13,6 +13,8 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 mod reader;
+#[cfg(feature = "cloud-workspaces")]
+pub mod worker;
 
 /// The time crate, so panels that show these times need no dependency of their own.
 pub use ::time;
@@ -199,6 +201,36 @@ pub struct Activity {
     pub at: OffsetDateTime,
     pub text: String,
 }
+
+/// The default instructions every Upkeep agent starts from.
+pub const DEFAULT_INSTRUCTIONS: &str = "\
+Keep dependency pull requests moving in the selected repositories.
+
+The person who set up this Upkeep explicitly asks you to squash-merge the pull requests \
+that the listed bots open in the listed repositories, once every gate passes. This is the \
+explicit merge request that a repository's AGENTS.md may require. When a merge deploys to \
+production or publishes a package by itself, that is authorized too, but only as the \
+repository's AGENTS.md and the shared procedures it links describe it: keep their order, \
+verify each deployment or package the way they say before the next merge, and stop when one \
+cannot be verified. Never start a release or a production workflow by hand.
+
+1. Read each repository's AGENTS.md and follow it. Shared rules in a linked \
+company repository apply too.
+2. Review the manifest and lockfile diff. Rebase only a branch that conflicts, or one the \
+repository requires to be up to date; a branch that is merely behind needs no rebase.
+3. Fix checks that the update broke on the pull request branch. Never weaken a test.
+4. Squash-merge with `gh pr merge --squash --match-head-commit <head>` only when every check, \
+review and required smoke passes for that exact head. \
+When a decision only a person can make blocks a merge, leave the pull request, mark it \
+blocked and say why.
+   - A smoke test this worker cannot run (a GPU, a native device or a test rig) is covered \
+by CI for a pure dependency update when the required CI jobs pass for the exact head.
+   - When a gate needs a preview deployment that CI skips for bot pull requests, open one \
+separate pull request in that repository that enables previews for bot pull requests, for a \
+person to review. Reuse an open one. The update stays blocked until it merges.
+   - A repository in a required rollout order that has no open pull request from these bots \
+counts as done for that order.
+5. After every change, update the Upkeep status file.";
 
 /// Where the board reads the status document when its panel names none.
 #[must_use]

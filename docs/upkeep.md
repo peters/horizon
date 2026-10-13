@@ -90,3 +90,144 @@ The board guarantees these items:
 
 The board does not guarantee that the status is true. The agent writes it, and an
 agent can make errors. Check a merge on GitHub before you act on it.
+
+## The worker loop
+
+Horizon keeps the Upkeep loop on the cloud worker with an exchange. An exchange is
+one SSH command. The code is in `crates/horizon-core/src/upkeep/worker.rs` and
+`crates/horizon-core/src/upkeep/worker/`. No part of the Horizon window starts an
+exchange yet. The exchange does these steps:
+
+1. It writes the loop (`run.sh` and `run.py`), the settings without the
+   instructions (`config.json`) and the agent instructions (`prompt.md`) to
+   `/workspace/home/upkeep`.
+2. It writes the session binding in `/workspace/sessions/upkeep-<cloud>`. Thus
+   the agents of the loop can ask for GitHub access and open browser panels.
+3. It writes the Run now and Pause signals.
+4. It starts the loop in the tmux session `upkeep-<cloud>` when the session does
+   not run the loop.
+5. It reads back the runs, the next run time and the status that the agents wrote.
+
+The loop starts one run on the schedule, or sooner after **Run now**. A run lists
+the open pull requests of the bots in each repository. It starts one Codex agent
+for each repository whose pull requests changed after the start of its last agent
+that ended without an error. When a repository had no open pull requests from the
+bots in a run, its next pull requests count as changed. A run that **Run now**
+started also starts agents for the repositories that did not change.
+
+- The repositories in the order list run one at a time first. Then the other
+  repositories run side by side. The number of agents that run side by side
+  depends on the processor cores, the memory and the peak memory of earlier runs.
+- The loop stops an agent and its child processes after 90 minutes. A process
+  that the agent detached from its process tree continues.
+- The loop records the number of pull requests that each run merged. A pull
+  request counts when the status shows it as merged after the run and not before.
+- The pause signal stops the schedule. The runs that the pause covers do not
+  occur. **Run now** has no effect while the schedule stops or while a run
+  continues.
+- When the schedule changes, the loop calculates the next run again.
+- Before an exchange writes a new loop, it writes an installing signal. After
+  all other files, it replaces that signal with the restart signal. When an
+  exchange stops before the end, the next exchange completes the change. The loop
+  starts the new loop before it starts the next run, and never while the
+  installing signal is there. **Run now**, and a run that was due but did not
+  start, stay for the new loop when the schedule did not change. The loop records
+  the schedule of each planned run with its time.
+- When the loop starts, it records a run that did not end (for example, because
+  the loop was stopped) as failed.
+- The loop keeps the last 1 MiB of an agent log that grew to more than 8 MiB.
+
+## Trust boundary of the worker loop
+
+The worker loop runs as the agent account. The agent can change all files in
+`/workspace/home/upkeep`, the loop included. Thus the exchange treats each file in
+that folder as untrusted input.
+
+Untrusted input:
+
+- The files in `/workspace/home/upkeep`, `/workspace/sessions/upkeep-<cloud>` and
+  `/workspace/session-data/upkeep-<cloud>`. The agent can replace a file with a
+  link, a pipe or a folder.
+- The status, the runs and the next run time that the exchange reads back.
+- The content of the pull requests on GitHub: titles, bodies, comments, code,
+  check logs and pages that the agent opens.
+
+Trusted input:
+
+- The settings of the person: the repositories, the bots, the schedule, the
+  worker name and the instructions. Horizon examines them before it sends them.
+
+The exchange and the loop guarantee these items:
+
+- The exchange runs as the account that owns `/workspace/home`. On a worker that
+  isolates agents, Horizon starts the exchange through
+  `horizon-worker-tailnet agent`, as the agent account. On other workers, the
+  exchange and the loop run as root, as the agent panels do there. The loop then
+  starts no agent, because the approval policy for root is always "ask". The
+  exchange stops with an error when it runs as a different account from the
+  owner of `/workspace/home`. Thus root never writes into a folder that the agent
+  account controls.
+- The exchange opens each folder without links and makes sure that the folder
+  belongs to its account. It does not use a folder that is a link.
+- The exchange writes each file to a new temporary file with a random name. Then
+  it moves the temporary file into place. When the agent replaced a file with a
+  link, the exchange replaces the link. It never writes through the link.
+- The exchange stops with an error when a folder has the name of a file that it
+  writes.
+- The exchange reads only regular files. It does not read a link, a pipe, a
+  device or a folder. It reads at most 1 MiB of status and the last 256 KiB of
+  runs. It sends back no status when the answer is more than 3 MiB.
+- From each run, the exchange sends back only an integer start time, an integer
+  end time and a short outcome text. It sends back the next run time only when it
+  is an integer in the range of Horizon. Thus a run file of the agent cannot make
+  the answer invalid.
+- Horizon accepts these settings only:
+  - 1 to 50 repositories. Each repository is a GitHub `owner/name` that is
+    listed one time.
+  - An order list that has only repositories of the list.
+  - 1 to 20 bots. Each bot is a GitHub login, `name[bot]` or `app/name`.
+  - The Codex agent.
+  - A schedule from every 15 minutes to every 24 hours.
+  - Instructions of at most 8 KiB and a worker name of at most 200 bytes,
+    without control characters. The instructions can have line breaks and tabs.
+  - A cloud ID of letters, digits, `-` and `_`, and a revision of 40 or 64
+    lowercase hexadecimal characters.
+- The loop merges the reports of the agents into one status. It keeps only list
+  entries that are valid JSON objects of at most 2 KiB and 32 levels. It keeps at
+  most 300 pull requests and the newest 80 activity lines. Open pull requests come
+  first, one from each repository in turn, then the merged pull requests. Thus the
+  status stays below the 1 MiB that the exchange reads, and Horizon can parse it.
+- When a repository has no open pull requests from the bots, the loop removes
+  its open pull requests from the status. It keeps the merged pull requests.
+- The live panel of the loop shows lines from the logs of the agents. The loop
+  removes control characters from these lines. Thus text from a pull request
+  cannot send a control sequence to the terminal panel.
+- The loop examines the repositories and the bots in `config.json` again. It
+  leaves out the names that Horizon does not accept. Thus no name can start an
+  option of `gh`, or change a file name or the agent instructions.
+- The loop gives the instructions to Codex on the standard input. Thus
+  instructions that start with `-` are not options.
+- The loop starts Codex without approvals only when the worker lets agents run
+  without approvals: the agents do not run as root, and the worker policy
+  `/run/horizon-worker/agent-approvals` is `auto`. On other workers the loop
+  starts no agent, and the run fails with the reason. This is the same rule that
+  `horizon-worker-run` uses for agent panels. Before each agent, the loop also
+  asks `horizon-worker-check --agent codex` whether the cloud profile enables
+  Codex, as `horizon-worker-session` does. The loop examines the policy again
+  immediately before it starts each agent. Like `horizon-worker-run`, it starts
+  Codex with `--no-daemon` when the installed Codex has that option.
+- The loop gives each agent the session environment of the worker image, as
+  `horizon-worker-run` does. When the worker refuses that environment, the run
+  starts no agent.
+
+The exchange and the loop do not guarantee these items:
+
+- They do not prevent that the agent changes its own loop, its settings or its
+  status. The agent account can write all of these files.
+- They do not prevent prompt injection. The agent reads pull requests that other
+  people and bots write, and it runs with push access to the repositories of this
+  Upkeep. Give an Upkeep only the repositories and the bots that you trust it to
+  merge.
+- They do not make the status true. The board treats it as untrusted input, as
+  the section [Trust boundary of the status document](#trust-boundary-of-the-status-document)
+  describes.
