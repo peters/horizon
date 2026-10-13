@@ -58,7 +58,7 @@ and that a renewal on a worker comes back to this computer.
 
 ### 6.1 C01 — The settings ask for a sign-in
 
-1. Open **Cloud › Cloud settings…**.
+1. Open **Menu › Cloud settings**.
 
    Result: The Coding agents card shows **Codex**.
 
