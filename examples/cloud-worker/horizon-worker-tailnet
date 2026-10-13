@@ -565,6 +565,9 @@ def main():
 if __name__ == '__main__':
     try:
         main()
+    except WorkerTagRequired:
+        print(TAG_ERROR, file=sys.stderr)
+        sys.exit(1)
     except Exception:
-        print(TAG_ERROR + ' Check worker storage permissions and restart privileged sessions.', file=sys.stderr)
+        print('Tailnet operation failed. Check key validity, worker storage permissions and restart privileged sessions.', file=sys.stderr)
         sys.exit(1)

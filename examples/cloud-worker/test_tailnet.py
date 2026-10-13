@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import runpy
 import sys
 import tempfile
 import threading
@@ -371,14 +372,65 @@ class TailnetTests(unittest.TestCase):
                 self.assertFalse(self.joined)
                 self.assertFalse((self.state / 'selection').exists())
 
-    def test_public_error_names_the_tag_and_policy_prerequisite_without_echoing_input(self):
+    def test_invalid_private_input_keeps_the_generic_error_without_echoing_input(self):
         result = subprocess.run([sys.executable, '-B', str(Path(__file__).with_name('horizon-worker-tailnet')), 'configure'],
                                 input=json.dumps({'tailnet': 'work', 'key': KEY + '\n'}),
                                 capture_output=True, text=True, check=False, timeout=10)
         self.assertEqual(result.returncode, 1)
-        self.assertIn('tag:horizon-worker', result.stderr)
-        self.assertIn('tagOwners', result.stderr)
+        self.assertEqual(result.stderr, 'Tailnet operation failed. Check key validity, worker storage permissions and restart privileged sessions.\n')
         self.assertNotIn(KEY, result.stdout + result.stderr)
+
+    def test_entrypoint_reports_tag_prerequisites_only_for_tagged_enrollment_failure(self):
+        real_path, real_stat = Path, os.stat
+        workspace = Path(self.temp.name) / 'workspace'
+        workspace.mkdir()
+        workspace.chmod(0o777)  # Unsafe even if this test is run as root.
+        (self.state / 'selection').write_text('work')
+        (self.runtime / 'tailscaled.sock').touch()
+        started = Path('/proc', str(os.getpid()), 'stat').read_text().rsplit(') ', 1)[1].split()[19]
+        (self.runtime / 'supervisor.pid').write_text(f'{os.getpid()} {started}')
+        self.joined, self.tags = True, []
+
+        def path(*parts):
+            value = real_path(*parts)
+            if value == real_path('/workspace/.horizon-tailnet'):
+                return self.state
+            if value == real_path('/run/horizon-tailnet'):
+                return self.runtime
+            if value == real_path('/run/horizon-tailnet-devices'):
+                return worker.PUBLIC
+            if value == real_path('/workspace'):
+                return workspace
+            return value
+
+        def stat(path, *args, **kwargs):
+            info = real_stat(path, *args, **kwargs)
+            if real_path(path) in {self.state, self.runtime}:
+                fields = list(info)
+                fields[4] = 0  # The private control roots are root-owned on a worker.
+                return os.stat_result(fields)
+            return info
+
+        def run(command, **kwargs):
+            self.assertEqual(command[:2], [worker.CLI, '--socket=' + str(self.runtime / 'tailscaled.sock')])
+            return subprocess.CompletedProcess(command, 0, stdout=self.call(*command[2:]))
+
+        for command, expected in [('resume', worker.TAG_ERROR),
+                                  ('isolate', 'Tailnet operation failed. Check key validity, worker storage permissions and restart privileged sessions.')]:
+            with self.subTest(command=command), \
+                    patch('pathlib.Path', side_effect=path), patch('os.stat', side_effect=stat), \
+                    patch('subprocess.run', side_effect=run), \
+                    patch.object(worker.sys, 'argv', ['worker', command]), \
+                    patch('sys.stderr', new_callable=io.StringIO) as errors, \
+                    patch('sys.stdout', new_callable=io.StringIO) as output:
+                with self.assertRaises(SystemExit) as stopped:
+                    runpy.run_path(str(real_path(__file__).with_name('horizon-worker-tailnet')), run_name='__main__')
+                self.assertEqual(stopped.exception.code, 1)
+                self.assertEqual(errors.getvalue(), expected + '\n')
+                self.assertEqual(output.getvalue(), '')
+                self.assertNotIn(KEY, errors.getvalue())
+        self.assertIn(('logout',), self.calls)
+        self.assertFalse(self.joined)
 
     def test_invalid_secret_types_and_extra_fields_do_not_reach_daemon(self):
         for key in ['tskey-api-synthetic12345678901234567890', 'short', KEY + '\n', {'key': KEY}]:
