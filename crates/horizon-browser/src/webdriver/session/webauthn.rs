@@ -76,9 +76,12 @@ impl Driver {
             method,
             "browsingContext.navigationStarted" | "browsingContext.contextDestroyed"
         ) {
+            // The old realm gets the reply until a navigation commits; a
+            // navigation that stops before it commits still settles it.
             if let Some(context) = params.get("context").and_then(Value::as_str)
-                && passkeys.bridge.cancel_for(|source| source.context == context)
+                && let Some((source, reply)) = passkeys.bridge.cancel_for(|source| source.context == context)
             {
+                self.deliver_passkey_reply(&source, &reply, events);
                 self.note_passkey_change(events);
             }
             return false;

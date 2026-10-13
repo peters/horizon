@@ -230,17 +230,20 @@ fn page_html(shared: &Shared, page: &str) -> String {
             .to_string(),
         "/insecure" => r#"outcome("insecure_origin", navigator.credentials.get({ publicKey: { challenge: anyChallenge() } }));"#
             .to_string(),
-        "/stalled-navigation" => r#"navigator.credentials.get({ publicKey: { challenge: anyChallenge() } }).catch(() => {});
+        "/stalled-navigation" => r#"const pending = navigator.credentials.get({ publicKey: { challenge: anyChallenge() } });
 (async () => {
     while ((await (await fetch("/navigate-now")).text()) !== "1") await new Promise((done) => setTimeout(done, 100));
     location.href = "/no-content";
-    await new Promise((done) => setTimeout(done, 1500));
-    await report("stalled_navigation", { verdict: "stayed" });
-})();"#
+})();
+outcome("stalled_navigation", pending);"#
             .to_string(),
         "/abort" => r#"const controller = new AbortController();
 const pending = navigator.credentials.get({ publicKey: { challenge: anyChallenge() }, signal: controller.signal });
 (async () => {
+    await new Promise((done) => setTimeout(done, 500));
+    location.hash = "same-document";
+    history.pushState({}, "", "/abort?same-document");
+    await report("same_document", { verdict: "changed" });
     while ((await (await fetch("/abort-now")).text()) !== "1") await new Promise((done) => setTimeout(done, 100));
     controller.abort();
 })();

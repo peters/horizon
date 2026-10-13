@@ -155,7 +155,16 @@ pub(crate) fn malformed_reply(page_id: u64) -> String {
 struct Admitted<T> {
     target: T,
     page_id: u64,
-    withdrawn: bool,
+    withdrawn: Option<Withdrawal>,
+}
+
+/// Why an admitted request ended before its command started.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Withdrawal {
+    /// The page aborted it and already rejected the promise.
+    Aborted,
+    /// Its realm navigated or went away; the page gets `NotAllowedError`.
+    Ended,
 }
 
 #[derive(Debug)]
@@ -252,14 +261,15 @@ impl<T: Clone + PartialEq> Bridge<T> {
         self.admitted = Some(Admitted {
             target,
             page_id,
-            withdrawn: false,
+            withdrawn: None,
         });
         None
     }
 
     /// Start the admitted request once the engine resolved its caller
     /// origin. Returns a reply for the page when the request ends at once;
-    /// a withdrawn request ends without a reply and without a command.
+    /// a request withdrawn by an abort ends without a reply, and one ended
+    /// by its realm gets `NotAllowedError`. Neither starts a command.
     pub(crate) fn start(
         &mut self,
         operation: Operation,
@@ -272,8 +282,10 @@ impl<T: Clone + PartialEq> Bridge<T> {
             page_id,
             withdrawn,
         } = self.admitted.take()?;
-        if withdrawn {
-            return None;
+        match withdrawn {
+            Some(Withdrawal::Aborted) => return None,
+            Some(Withdrawal::Ended) => return Some((target, error_reply(page_id, PageError::not_allowed()))),
+            None => {}
         }
         let prepared = match origin.and_then(|origin| request::prepare(operation, options, &origin, agent)) {
             Ok(prepared) => prepared,
@@ -294,29 +306,34 @@ impl<T: Clone + PartialEq> Bridge<T> {
     /// The page aborted request `page_id`: kill its command. No reply is
     /// sent; the page already rejected the promise.
     pub(crate) fn abort(&mut self, target: &T, page_id: u64) -> bool {
-        self.withdraw_where(|admitted| admitted.target == *target && admitted.page_id == page_id);
+        self.withdraw_where(Withdrawal::Aborted, |admitted| {
+            admitted.target == *target && admitted.page_id == page_id
+        });
         self.cancel_where(|active| active.target == *target && active.page_id == page_id)
+            .is_some()
     }
 
-    /// The realm that sent the request is gone.
-    pub(crate) fn cancel_for(&mut self, matches: impl Fn(&T) -> bool) -> bool {
-        self.withdraw_where(|admitted| matches(&admitted.target));
-        self.cancel_where(|active| matches(&active.target))
+    /// The realm that sent the request navigated or went away: kill its
+    /// command. Returns the `NotAllowedError` reply for that realm, which
+    /// still settles the promise when a navigation stops before it commits.
+    pub(crate) fn cancel_for(&mut self, matches: impl Fn(&T) -> bool) -> Option<(T, String)> {
+        self.withdraw_where(Withdrawal::Ended, |admitted| matches(&admitted.target));
+        let ended = self.cancel_where(|active| matches(&active.target))?;
+        Some((ended.target, error_reply(ended.page_id, PageError::not_allowed())))
     }
 
-    fn withdraw_where(&mut self, matches: impl Fn(&Admitted<T>) -> bool) {
+    fn withdraw_where(&mut self, reason: Withdrawal, matches: impl Fn(&Admitted<T>) -> bool) {
         if let Some(admitted) = self.admitted.as_mut().filter(|admitted| matches(admitted)) {
-            admitted.withdrawn = true;
+            admitted.withdrawn.get_or_insert(reason);
         }
     }
 
-    fn cancel_where(&mut self, matches: impl Fn(&Active<T>) -> bool) -> bool {
+    fn cancel_where(&mut self, matches: impl Fn(&Active<T>) -> bool) -> Option<Active<T>> {
         if !self.active.as_ref().is_some_and(matches) {
-            return false;
+            return None;
         }
-        self.active = None;
         self.frame_slot.set_passkey_pending(false);
-        true
+        self.active.take()
     }
 
     /// A finished request and the reply for its realm.
@@ -480,10 +497,21 @@ mod tests {
         );
 
         assert!(bridge.admit(1, id).is_none());
-        bridge.cancel_for(|target| *target == 1);
-        assert!(bridge.start(op, &options, origin, None).is_none());
+        assert!(bridge.cancel_for(|target| *target == 1).is_none());
+        let (target, ended) = bridge
+            .start(op, &options, origin.clone(), None)
+            .expect("a navigation still settles the promise");
+        assert_eq!(target, 1);
+        assert!(ended.contains("NotAllowedError"));
         assert!(!bridge.frame_slot.passkey_pending());
+
         assert!(bridge.admit(1, id).is_none(), "the panel is free again");
+        assert!(bridge.start(op, &options, origin, None).is_none());
+        assert!(bridge.frame_slot.passkey_pending());
+        let (target, ended) = bridge.cancel_for(|target| *target == 1).expect("reply");
+        assert_eq!(target, 1);
+        assert!(ended.contains("NotAllowedError"));
+        assert!(!bridge.frame_slot.passkey_pending());
     }
 
     #[cfg(unix)]

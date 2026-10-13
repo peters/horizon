@@ -154,7 +154,10 @@ fn check_hanging_requests(session: &BrowserSession, rp: &RelyingParty, frame_slo
     let pid = std::fs::read_to_string(&pid_file).expect("pid");
     rp.release_navigation();
     let stalled = rp.wait_report("stalled_navigation", REPORT_TIMEOUT, session);
-    assert_eq!(stalled.verdict, "stayed", "the 204 navigation must leave the document");
+    assert_eq!(
+        stalled.verdict, "NotAllowedError",
+        "a navigation that stops before it commits must settle the promise"
+    );
     wait_for(session, "a navigation start to kill the command", || {
         !process_alive(pid.trim())
     });
@@ -169,10 +172,19 @@ fn check_hanging_requests(session: &BrowserSession, rp: &RelyingParty, frame_slo
     wait_for(session, "the panel to show a waiting passkey request", || {
         frame_slot.passkey_pending()
     });
+    let pid = std::fs::read_to_string(&pid_file).expect("pid");
+    let same_document = rp.wait_report("same_document", REPORT_TIMEOUT, session);
+    assert_eq!(same_document.verdict, "changed");
+    thread::sleep(Duration::from_millis(500));
+    drain(session);
+    assert!(
+        process_alive(pid.trim()),
+        "a same-document navigation must not end the request"
+    );
+    assert!(frame_slot.passkey_pending());
     rp.release_abort();
     let aborted = rp.wait_report("abort", REPORT_TIMEOUT, session);
     assert_eq!(aborted.verdict, "AbortError", "abort: {aborted:?}");
-    let pid = std::fs::read_to_string(&pid_file).expect("pid");
     wait_for(session, "the aborted command to be killed", || {
         !process_alive(pid.trim())
     });

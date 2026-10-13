@@ -91,9 +91,11 @@ The `browser_panel` and `browser_list` MCP results report
   never starts the command. `PublicKeyCredential.isConditionalMediationAvailable()` resolves
   `false`. A conditional request stays pending until the page aborts it.
 - When the page aborts a request with its `AbortSignal`, the driver kills the
-  command process. The start of a navigation of the calling frame also kills
-  it (CDP `Page.frameStartedLoading`, BiDi `browsingContext.navigationStarted`),
-  even when that navigation stops before it commits.
+  command process. The start of a navigation of the calling frame to another
+  document also kills it (CDP `Page.frameStartedNavigating`, BiDi
+  `browsingContext.navigationStarted`), and the page gets `NotAllowedError`
+  when that navigation stops before it commits. A same-document navigation
+  (fragment or history API) does not end the request.
 - One request runs at a time in a panel. The bridge starts the command a
   maximum of six times in 60 seconds for each panel.
 - The driver examines the output before the page gets it:
@@ -126,6 +128,8 @@ The `browser_panel` and `browser_list` MCP results report
   browser's own WebAuthn behavior and never reaches the command.
 - When the driver kills the command, child processes of the command can
   continue.
+- A Chromium without the `Page.frameStartedNavigating` event ends the request
+  only when the navigation commits and the old context goes away.
 - When Chromium detaches the page session during a request, the driver
   kills the command, but it cannot reply to the old session. The page
   promise then stays pending until the page aborts it or navigates.

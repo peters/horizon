@@ -75,7 +75,8 @@ impl DriverState {
     pub(super) fn reset_passkeys(&mut self) {
         if let Some(passkeys) = self.passkeys.as_mut() {
             passkeys.contexts.clear();
-            if passkeys.bridge.cancel_for(|_| true) {
+            // The session is gone, so the reply cannot reach the page.
+            if passkeys.bridge.cancel_for(|_| true).is_some() {
                 self.manifest_dirty = true;
             }
         }
@@ -121,11 +122,18 @@ impl DriverState {
                 self.forget_passkey_contexts(event_tx, |_| true);
                 false
             }
-            // A navigation of the calling frame ends its request even when
-            // the navigation stops before a new document replaces the old one.
-            "Page.frameStartedLoading" => {
-                if let Some(frame) = event.params.get("frameId").and_then(Value::as_str) {
-                    self.cancel_passkeys_in_frame(event_tx, frame);
+            // A navigation of the calling frame to another document ends its
+            // request, even when it stops before a new document replaces the
+            // old one. Same-document navigations (fragment, history API) do
+            // not.
+            "Page.frameStartedNavigating" => {
+                let same_document = event
+                    .params
+                    .get("navigationType")
+                    .and_then(Value::as_str)
+                    .is_some_and(|kind| kind.to_ascii_lowercase().contains("samedocument"));
+                if !same_document && let Some(frame) = event.params.get("frameId").and_then(Value::as_str) {
+                    self.cancel_passkeys_in_frame(link, event_tx, frame);
                 }
                 false
             }
@@ -259,15 +267,18 @@ impl DriverState {
         }
     }
 
-    fn cancel_passkeys_in_frame(&mut self, event_tx: &BrowserEventSender, frame: &str) {
+    /// The document of the calling frame stays until a navigation commits,
+    /// so it gets the reply; a navigation that stops still settles it.
+    fn cancel_passkeys_in_frame(&mut self, link: &mut CdpLink, event_tx: &BrowserEventSender, frame: &str) {
         let Some(passkeys) = self.passkeys.as_mut() else {
             return;
         };
         let contexts = &passkeys.contexts;
-        if passkeys
+        if let Some((context, reply)) = passkeys
             .bridge
             .cancel_for(|context| contexts.get(context).is_some_and(|owner| owner == frame))
         {
+            self.deliver_passkey_reply(link, context, &reply);
             self.note_passkey_change(event_tx);
         }
     }
@@ -277,7 +288,8 @@ impl DriverState {
             return;
         };
         passkeys.contexts.retain(|id, _| !matches(*id));
-        if passkeys.bridge.cancel_for(|context| matches(*context)) {
+        // The context is gone, so the reply cannot reach the page.
+        if passkeys.bridge.cancel_for(|context| matches(*context)).is_some() {
             self.note_passkey_change(event_tx);
         }
     }
