@@ -401,7 +401,7 @@ this task and G11 use.
 3. Approve the code on GitHub if one shows.
 
    Result: The dialog lists `<owner>/<repo-a>` and `<owner>/<repo-b>`.
-   `stat -c '%a' ~/.horizon/cloud/credentials/github-host-*.json` shows `600`.
+   `stat -c '%a' ~/.horizon/cloud/credentials/github-host-[0-9]*[0-9].json` shows `600`.
 
 4. Type `repo-b`, then click `<owner>/<repo-b>`.
 
@@ -415,10 +415,24 @@ this task and G11 use.
    remote.origin.url` shows the plain `https://github.com/<owner>/<repo-b>.git` link,
    and `.git/config` holds no token.
 
-6. Close the dialog, open **New cloud** again and click **Pick from your GitHub
-   repositories**.
+6. Close the dialog and open **New cloud** again.
 
-   Result: The list shows without a sign-in.
+   Result: The list shows immediately, without a click or a sign-in.
+   `stat -c '%a' ~/.horizon/cloud/credentials/github-host-*-repositories.json`
+   shows `600`, and the file holds the listed names.
+
+> **CAUTION:** THE NEXT STEP TURNS OFF THE NETWORK OF THIS COMPUTER. Running clouds,
+> remote panels and other sessions lose their connection until step 8 turns it on.
+
+7. Close the dialog. Turn off the network of this computer, then open **New cloud**
+   again.
+
+   Result: The list shows with the yellow line **This list may be out of date:**
+   and a **Refresh from GitHub** button. The dialog shows no red error.
+
+8. Turn the network on again and wait 30 seconds, or click **Refresh from GitHub**.
+
+   Result: The yellow line goes away and the list stays.
 
 ### 6.11 G11: Install the app on an organization
 
@@ -467,7 +481,8 @@ this task and G11 use.
   allowed for the cloud reaches every agent session of the cloud.
 - The first push to `ghcr.io` asks once to publish images, and a later push does not.
 - New cloud lists the connected repositories after one sign-in of this computer and
-  clones a private one without a token.
+  clones a private one without a token. The list then shows as soon as New cloud
+  opens, says when it may be out of date, and goes with a Disconnect.
 - A new app is public. An organization installs it and its cloud gets access.
 
 ## 8. Cleanup
@@ -480,14 +495,22 @@ this task and G11 use.
 
    Result: The board does not show them. The provider shows no worker for them.
 
-2. On GitHub, open the settings of the first test app, then **Advanced**.
+> **CAUTION:** THE NEXT STEP REMOVES THIS COMPUTER'S GITHUB SIGN-IN AND ITS KEPT
+> REPOSITORY LIST. New clouds lose GitHub access until GitHub is connected again.
+
+2. In Cloud settings, click **Disconnect** on the GitHub card.
+
+   Result: `ls ~/.horizon/cloud/credentials/` shows no `github-host-*-repositories.json`
+   and no `github-host-` sign-in of the second test app.
+
+3. On GitHub, open the settings of the first test app, then **Advanced**.
 
    Result: GitHub shows **Delete GitHub App**.
 
 > **CAUTION:** THE NEXT STEP DELETES THE GITHUB APP AND ENDS EVERY TOKEN IT GAVE
 > OUT. Delete only the two test apps of this procedure.
 
-3. Click **Delete GitHub App**, type the name and confirm. Do steps 2 and 3 again
+4. Click **Delete GitHub App**, type the name and confirm. Do steps 3 and 4 again
    for the second test app from G10.
 
    Result: GitHub deletes the two apps. All their tokens stop working.
@@ -495,7 +518,7 @@ this task and G11 use.
 > **CAUTION:** THE NEXT STEP DELETES A BRANCH. Delete only `gh-ask-check` in the
 > test repository.
 
-4. Delete the branch `gh-ask-check` from `<repo-a>` if it exists.
+5. Delete the branch `gh-ask-check` from `<repo-a>` if it exists.
 
    Result: GitHub does not show the branch.
 

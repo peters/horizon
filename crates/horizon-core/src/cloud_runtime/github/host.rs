@@ -24,6 +24,16 @@ fn path(root: &Path, settings: &Settings) -> PathBuf {
         .join(format!("github-host-{}.json", settings.app_id))
 }
 
+/// The name of the file that keeps the repositories last listed with this computer's
+/// sign-in for the app `app_id`, beside the sign-in itself.
+fn listed_name(app_id: u64) -> String {
+    format!("github-host-{app_id}-repositories.json")
+}
+
+fn listed(root: &Path, settings: &Settings) -> PathBuf {
+    root.join("credentials").join(listed_name(settings.app_id))
+}
+
 /// Holds the lock of this computer's chain, so two Horizon windows never renew it at once:
 /// a renewal ends the old chain, and the second would lose it.
 fn lock(root: &Path, settings: &Settings) -> Result<std::fs::File> {
@@ -46,7 +56,8 @@ fn configured(root: &Path, settings: &Settings) -> bool {
 
 /// The account and a usable access token of this computer's sign-in, renewed when close
 /// to its expiry, or `None` when it must sign in first. A Disconnect since the settings
-/// were read ends it.
+/// were read ends it. The account is the one the sign-in was stored for, which the kept
+/// list and its checks compare with: an account renamed on GitHub since stays one sign-in.
 /// # Errors
 /// GitHub out of reach or not confirming the sign-in, which is then kept, or a local file
 /// that cannot be read or written.
@@ -57,11 +68,14 @@ pub fn current(root: &Path, settings: &Settings) -> Result<Option<(String, Secre
 fn renewed(root: &Path, settings: &Settings, client: &Client) -> Result<Option<(String, Secret)>> {
     let _lock = lock(root, settings)?;
     if !configured(root, settings) {
-        return stored::forget(&path(root, settings));
+        let forgotten = stored::forget(&path(root, settings));
+        // The list is only a head start: one that cannot be removed never keeps the sign-in.
+        let _ = stored::forget(&listed(root, settings));
+        return forgotten;
     }
     // A chain from a web sign-in renews with the secret whatever the setting says now; a
     // device chain needs none, and the secret is then not read.
-    stored::current(
+    let signed_in = stored::current(
         &path(root, settings),
         client,
         &settings.client_id,
@@ -71,7 +85,12 @@ fn renewed(root: &Path, settings: &Settings, client: &Client) -> Result<Option<(
         Kept::Unreachable => Error::Invalid("GitHub could not be reached. Check the network and try again."),
         Kept::Unconfirmed => Error::Invalid("GitHub did not confirm this computer's sign-in. Try again."),
         Kept::Local(error) => error,
-    })
+    })?;
+    // Still under the lock: the stored account is this very sign-in's.
+    Ok(signed_in.map(|(live, token)| {
+        let stored = stored::load(&path(root, settings)).map_or(live, |chain| chain.login);
+        (stored, token)
+    }))
 }
 
 /// Signs this computer in for the app of `settings`. `show` gets the code to approve, or
@@ -142,6 +161,105 @@ pub fn repositories(token: &Secret) -> std::result::Result<Vec<String>, String> 
     Ok(found)
 }
 
+/// A kept list and the account it was listed for.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Listed {
+    login: String,
+    repositories: Vec<String>,
+}
+
+/// The account and the repositories last listed with this computer's sign-in for the app
+/// of `settings`, so **New cloud** shows them before GitHub answers again. `None` while
+/// this computer is not signed in to that app, when the list belongs to another account,
+/// or when no list was kept, it cannot be read or the lock cannot be taken.
+#[must_use]
+pub fn kept_repositories(root: &Path, settings: &Settings) -> Option<(String, Vec<String>)> {
+    // Read with the sign-in under its lock, so a sign-in as another account in another
+    // window never falls between the two reads.
+    let _lock = lock(root, settings).ok()?;
+    if !configured(root, settings) {
+        return None;
+    }
+    let login = stored::load(&path(root, settings))?.login;
+    let bytes = stored::read_private(&listed(root, settings)).ok()??;
+    let kept: Listed = serde_json::from_slice(&bytes).ok()?;
+    (kept.login == login).then_some((kept.login, kept.repositories))
+}
+
+/// Keeps `repositories`, listed for the account `login`, for the next **New cloud**: private
+/// beside the sign-in and under its lock. A Disconnect forgets them with it, and a list
+/// that arrives after one, after a sign-in as another account, or for a request that was
+/// `cancel`led and replaced, is not kept: checked under the lock, so a newer list written
+/// after the cancel is never overwritten by an older one. A list too large to read back is
+/// not kept, and an older one is forgotten so it is not shown in its place.
+///
+/// Returns whether `login` is still this computer's sign-in, so a list of an account that
+/// another window replaced in the meantime is not shown either.
+/// # Errors
+/// A file that cannot be written.
+pub fn keep_repositories(
+    root: &Path,
+    settings: &Settings,
+    login: &str,
+    repositories: &[String],
+    cancel: &Cancellation,
+) -> Result<bool> {
+    let _lock = lock(root, settings)?;
+    let current =
+        configured(root, settings) && stored::load(&path(root, settings)).is_some_and(|chain| chain.login == login);
+    if !current || cancel.is_cancelled() {
+        return Ok(current);
+    }
+    let kept = Listed {
+        login: login.to_owned(),
+        repositories: repositories.to_vec(),
+    };
+    let bytes = serde_json::to_vec(&kept).map_err(|_| Error::Json)?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > stored::MAX_FILE {
+        stored::forget(&listed(root, settings))?;
+        return Ok(true);
+    }
+    stored::write_private(&root.join("credentials"), &listed_name(settings.app_id), &bytes)?;
+    Ok(true)
+}
+
+/// Whether `login` is still this computer's sign-in for the app of `settings`, read under
+/// the sign-in's lock: a list that failed for an account that another window has replaced
+/// since is not shown as that account's either. A lock that cannot be taken says no, so
+/// an unsure answer never shows one account's names to another.
+#[must_use]
+pub fn still_signed_in_as(root: &Path, settings: &Settings, login: &str) -> bool {
+    let Ok(_lock) = lock(root, settings) else {
+        return false;
+    };
+    configured(root, settings) && stored::load(&path(root, settings)).is_some_and(|chain| chain.login == login)
+}
+
+/// The account this computer is signed in as for the app of `settings`, read from the
+/// stored sign-in under its lock and without the network; `None` when it is not signed in
+/// or the lock cannot be taken.
+#[must_use]
+pub fn stored_login(root: &Path, settings: &Settings) -> Option<String> {
+    let _lock = lock(root, settings).ok()?;
+    if !configured(root, settings) {
+        return None;
+    }
+    stored::load(&path(root, settings)).map(|chain| chain.login)
+}
+
+/// Forgets the kept list when this computer turns out not to be signed in. Checked again
+/// under the lock: a request that was `cancel`led and replaced, or a sign-in that another
+/// window finished since, keeps the list.
+/// # Errors
+/// A file that cannot be removed.
+pub fn forget_repositories(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<()> {
+    let _lock = lock(root, settings)?;
+    if cancel.is_cancelled() || (configured(root, settings) && stored::load(&path(root, settings)).is_some()) {
+        return Ok(());
+    }
+    stored::forget(&listed(root, settings)).map(|_| ())
+}
+
 /// Disconnects the app of `settings`: forgets this computer's sign-in for it and runs
 /// `save`, which stores the settings without it, both under the sign-in's lock. No renewal
 /// or sign-in in another Horizon window can store a chain between the two, and one that
@@ -151,6 +269,8 @@ pub fn repositories(token: &Secret) -> std::result::Result<Vec<String>, String> 
 pub fn disconnect<T>(root: &Path, settings: &Settings, save: impl FnOnce() -> Result<T>) -> Result<T> {
     let _lock = lock(root, settings)?;
     stored::forget(&path(root, settings))?;
+    // The list is only a head start, and it is shown only with its own sign-in.
+    let _ = stored::forget(&listed(root, settings));
     save()
 }
 

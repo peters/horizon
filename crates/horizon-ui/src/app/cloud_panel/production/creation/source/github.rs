@@ -20,6 +20,13 @@ use zeroize::Zeroize as _;
 /// At most this many repositories show at once; typing narrows them.
 const SHOWN: usize = 8;
 
+/// How long an out-of-date list waits before a quiet refresh tries again.
+const RETRY: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Said when this computer's sign-in changed or ended, in another window, while a list was on
+/// its way.
+const ANOTHER_ACCOUNT: &str = "This computer's GitHub sign-in changed while the list was on its way. Try again.";
+
 /// What a finished exchange with GitHub is for.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Purpose {
@@ -27,6 +34,20 @@ pub(super) enum Purpose {
     List,
     /// A token to clone the repository in the field.
     Clone,
+    /// A fresh list behind the one kept from last time, only when this computer is
+    /// already signed in: nothing is asked of the person for it.
+    Refresh,
+    /// Which account this computer is signed in as, read without the network, so a shown
+    /// list of an account that another window replaced or signed out goes.
+    Check,
+}
+
+impl Purpose {
+    /// A refresh or check that runs by itself: it shows nothing and gives way to the
+    /// person's requests.
+    fn quiet(self) -> bool {
+        matches!(self, Self::Refresh | Self::Check)
+    }
 }
 
 enum Answer {
@@ -36,6 +57,22 @@ enum Answer {
         repositories: Option<Vec<String>>,
     },
     Failed(String),
+    /// The account and the names kept from its last list, read before a refresh asks GitHub.
+    Cached {
+        login: String,
+        repositories: Vec<String>,
+    },
+    /// The account this computer is signed in as, once that is known.
+    SignedIn(String),
+    /// This computer turned out not to be signed in; a sign-in for the request follows.
+    SignedOut,
+    /// A check found this computer still signed in.
+    Checked,
+    /// Another window signed this computer in as another account while the list was on its
+    /// way: no list of the earlier account is shown.
+    Replaced,
+    /// A refresh found no sign-in to use.
+    Quiet,
 }
 
 /// Ends its own request's sign-in when dropped, as on Cancel or when the dialog closes,
@@ -63,6 +100,17 @@ pub(super) struct Account {
     prompt: Option<Prompt>,
     pub(super) repositories: Option<Vec<String>>,
     pub(super) failed: Option<String>,
+    /// Why the shown list could not be refreshed; it may be out of date.
+    pub(super) stale: Option<String>,
+    /// The account the shown list belongs to.
+    listed_for: Option<String>,
+    /// The account the running request signed in as.
+    signed_in_as: Option<String>,
+    /// When a quiet refresh that failed tries again, while its list is out of date.
+    retry_at: Option<std::time::Instant>,
+    /// When the account of a shown list is checked again.
+    check_at: Option<std::time::Instant>,
+    refreshed: bool,
 }
 
 impl Account {
@@ -76,6 +124,12 @@ impl Account {
             prompt: None,
             repositories: None,
             failed: None,
+            stale: None,
+            listed_for: None,
+            signed_in_as: None,
+            retry_at: None,
+            check_at: None,
+            refreshed: false,
         })
     }
 
@@ -84,13 +138,62 @@ impl Account {
         self.settings.installation_url()
     }
 
+    /// Whether a request the person made is under way; a quiet refresh or check is not one.
     pub(super) fn busy(&self) -> bool {
-        self.job.is_some()
+        self.job.as_ref().is_some_and(|job| !job.purpose.quiet())
+    }
+
+    /// Asks for a fresh list when the dialog opens, when this computer is already signed in,
+    /// and again every little while as long as the shown list is out of date: each try
+    /// first checks, without the network, which account this computer is signed in as.
+    pub(super) fn refresh_once(&mut self, ctx: &Context) {
+        // Tests never reach GitHub, or the machine's own list, by themselves.
+        if cfg!(test) {
+            return;
+        }
+        if !std::mem::replace(&mut self.refreshed, true) {
+            self.request(Purpose::Refresh, ctx);
+            return;
+        }
+        if self.job.is_some() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        // An out-of-date list keeps a retry planned, also after a request of the person's
+        // took the place of one.
+        if self.stale.is_some() && self.repositories.is_some() && self.retry_at.is_none() {
+            self.retry_at = Some(now + RETRY);
+        }
+        if let Some(at) = self.retry_at {
+            if now >= at {
+                self.retry_at = None;
+                self.request(Purpose::Refresh, ctx);
+                return;
+            }
+            ctx.request_repaint_after(at - now);
+        }
+        // A shown list is checked against the signed-in account every little while; the
+        // timer starts again whenever a list shows and nothing runs.
+        if self.repositories.is_some() && self.check_at.is_none() {
+            self.check_at = Some(now + RETRY);
+        }
+        if let Some(at) = self.check_at.filter(|_| self.repositories.is_some()) {
+            if now >= at {
+                self.check_at = None;
+                self.request(Purpose::Check, ctx);
+            } else {
+                ctx.request_repaint_after(at - now);
+            }
+        }
     }
 
     /// Asks GitHub for a token, signing this computer in first when it has none, and for
     /// the repositories too when they are to be listed.
     pub(super) fn request(&mut self, purpose: Purpose, ctx: &Context) {
+        // A quiet refresh or check gives way to what the person asked for.
+        if self.job.as_ref().is_some_and(|job| job.purpose.quiet()) && !purpose.quiet() {
+            self.finish();
+        }
         if self.job.is_some() {
             return;
         }
@@ -101,16 +204,55 @@ impl Account {
             purpose,
             _abort: Abort(cancel.clone()),
         });
-        self.failed = None;
+        // A quiet retry leaves an error that the person is reading in place.
+        if !purpose.quiet() {
+            self.failed = None;
+        }
         let (root, settings, ctx) = (self.root.clone(), self.settings.clone(), ctx.clone());
         std::thread::spawn(move || {
+            // The names kept from last time show while GitHub is asked.
+            if purpose == Purpose::Refresh
+                && let Some((login, repositories)) = host::kept_repositories(&root, &settings)
+            {
+                let _ = sender.send(Answer::Cached { login, repositories });
+                ctx.request_repaint();
+            }
+            // Which account this computer is signed in as, read without the network, so a list
+            // of another account goes also while GitHub cannot be reached.
+            if purpose == Purpose::Refresh
+                && let Some(login) = host::stored_login(&root, &settings)
+            {
+                let _ = sender.send(Answer::SignedIn(login));
+                ctx.request_repaint();
+            }
             let shown = sender.clone();
             let repaint = ctx.clone();
             let show = move |prompt: Prompt| {
                 let _ = shown.send(Answer::Prompt(prompt));
                 repaint.request_repaint();
             };
-            let answer = exchange(&root, &settings, &cancel, &show, purpose);
+            let told = sender.clone();
+            let signed = move |login: Option<&str>| {
+                let said = login.map_or(Answer::SignedOut, |login| Answer::SignedIn(login.to_owned()));
+                let _ = told.send(said);
+            };
+            let answer = if purpose == Purpose::Check {
+                match host::stored_login(&root, &settings) {
+                    Some(login) => {
+                        signed(Some(&login));
+                        Answer::Checked
+                    }
+                    None => Answer::Quiet,
+                }
+            } else {
+                exchange(&root, &settings, &cancel, &show, &signed, purpose)
+            };
+            // Without a sign-in no list stays on this computer.
+            if matches!(answer, Answer::Quiet)
+                && let Err(error) = host::forget_repositories(&root, &settings, &cancel)
+            {
+                tracing::debug!(%error, "could not forget the GitHub repository list");
+            }
             let _ = sender.send(answer);
             ctx.request_repaint();
         });
@@ -131,15 +273,85 @@ impl Account {
                     self.prompt = Some(prompt);
                 }
                 Ok(Answer::Done { token, repositories }) => {
+                    let login = self.signed_in_as.take();
                     self.finish();
                     if repositories.is_some() {
                         self.repositories = repositories;
+                        self.stale = None;
+                        self.listed_for = login;
+                        self.retry_at = None;
+                        self.check_at = Some(std::time::Instant::now() + RETRY);
+                        self.failed = None;
                     }
                     return (purpose == Purpose::Clone).then_some(token);
                 }
                 Ok(Answer::Failed(reason)) => {
                     self.finish();
-                    self.failed = Some(reason);
+                    // The list kept from last time still stands when a refresh fails, marked
+                    // as possibly out of date.
+                    if purpose == Purpose::Refresh {
+                        if self.repositories.is_some() {
+                            self.stale = Some(reason);
+                            self.retry_at = Some(std::time::Instant::now() + RETRY);
+                        }
+                    } else {
+                        // A failed refresh the person asked for keeps the quiet retries going.
+                        if self.stale.is_some() && self.repositories.is_some() {
+                            self.retry_at = Some(std::time::Instant::now() + RETRY);
+                        }
+                        self.failed = Some(reason);
+                    }
+                    return None;
+                }
+                Ok(Answer::Cached { login, repositories }) => {
+                    if self.repositories.is_none() {
+                        self.repositories = Some(repositories);
+                        self.listed_for = Some(login);
+                        self.check_at = Some(std::time::Instant::now() + RETRY);
+                    }
+                }
+                Ok(Answer::Checked) => {
+                    self.finish();
+                    self.check_at = Some(std::time::Instant::now() + RETRY);
+                    return None;
+                }
+                Ok(Answer::SignedOut) => {
+                    self.repositories = None;
+                    self.stale = None;
+                    self.listed_for = None;
+                    self.retry_at = None;
+                    self.check_at = None;
+                }
+                // Another account's list is not this one's, even when its own list fails.
+                Ok(Answer::SignedIn(login)) => {
+                    if self.listed_for.as_ref().is_some_and(|listed| *listed != login) {
+                        self.repositories = None;
+                        self.stale = None;
+                        self.listed_for = None;
+                    }
+                    self.signed_in_as = Some(login);
+                }
+                Ok(Answer::Replaced) => {
+                    self.finish();
+                    self.repositories = None;
+                    self.stale = None;
+                    self.listed_for = None;
+                    self.retry_at = None;
+                    self.check_at = None;
+                    // Only a request the person made says why it shows nothing.
+                    if !purpose.quiet() {
+                        self.failed = Some(ANOTHER_ACCOUNT.into());
+                    }
+                    return None;
+                }
+                // Signed out after all: a kept list is not shown, and the sign-in button is.
+                Ok(Answer::Quiet) => {
+                    self.finish();
+                    // Not signed in: no list of any account stays, confirmed or kept.
+                    self.repositories = None;
+                    self.listed_for = None;
+                    self.stale = None;
+                    self.retry_at = None;
                     return None;
                 }
                 Err(TryRecvError::Empty) => return None,
@@ -154,11 +366,13 @@ impl Account {
     fn finish(&mut self) {
         self.job = None;
         self.prompt = None;
+        self.signed_in_as = None;
     }
 
     /// The sign-in box while this computer signs in, with a way out.
     pub(super) fn sign_in_box(&mut self, ui: &mut Ui) {
-        if prompt(ui, self.prompt.as_ref(), self.job.is_some()) {
+        // A quiet refresh is no request of the person's and shows no spinner.
+        if prompt(ui, self.prompt.as_ref(), self.busy()) {
             // The request goes, and its sign-in ends with it.
             self.finish();
         }
@@ -283,21 +497,55 @@ fn exchange(
     settings: &github::Settings,
     cancel: &Cancellation,
     show: &dyn Fn(Prompt),
+    signed: &dyn Fn(Option<&str>),
     purpose: Purpose,
 ) -> Answer {
-    let token = match host::current(root, settings) {
-        Ok(Some((_, token))) => token,
-        Ok(None) => match host::sign_in(root, settings, cancel, show) {
-            Ok(Ok((_, token))) => token,
-            Ok(Err(reason)) => return Answer::Failed(reason),
-            Err(error) => return Answer::Failed(error.to_string()),
-        },
+    // A request replaced before it starts asks GitHub nothing.
+    if cancel.is_cancelled() {
+        return Answer::Quiet;
+    }
+    let (login, token) = match host::current(root, settings) {
+        Ok(Some(signed_in)) => signed_in,
+        Ok(None) if purpose == Purpose::Refresh => return Answer::Quiet,
+        // Signed out: no list of the account that was signed in stays while a new sign-in runs.
+        Ok(None) => {
+            signed(None);
+            match host::sign_in(root, settings, cancel, show) {
+                Ok(Ok(signed_in)) => signed_in,
+                Ok(Err(reason)) => return Answer::Failed(reason),
+                Err(error) => return Answer::Failed(error.to_string()),
+            }
+        }
         Err(error) => return Answer::Failed(error.to_string()),
     };
+    signed(Some(&login));
+    // Replaced while the sign-in was checked: the request that took over lists instead.
+    if cancel.is_cancelled() {
+        return Answer::Quiet;
+    }
     let repositories = match purpose {
-        Purpose::Clone => None,
-        Purpose::List => match host::repositories(&token) {
-            Ok(found) => Some(found),
+        Purpose::Clone | Purpose::Check => None,
+        Purpose::List | Purpose::Refresh => match host::repositories(&token) {
+            Ok(found) => {
+                // Kept for the account it was listed for; losing it only costs the next
+                // dialog its head start. A list of an account that another window replaced
+                // meanwhile is not shown.
+                match host::keep_repositories(root, settings, &login, &found, cancel) {
+                    Ok(true) => {}
+                    Ok(false) => return Answer::Replaced,
+                    // The list could not be kept; it is shown only once the account is confirmed.
+                    Err(error) => {
+                        tracing::debug!(%error, "could not keep the GitHub repository list");
+                        if !host::still_signed_in_as(root, settings, &login) {
+                            return Answer::Replaced;
+                        }
+                    }
+                }
+                Some(found)
+            }
+            // A list that failed for an account that another window replaced meanwhile is not
+            // kept on screen as that account's.
+            Err(_) if !host::still_signed_in_as(root, settings, &login) => return Answer::Replaced,
             Err(reason) => return Answer::Failed(reason),
         },
     };
@@ -433,7 +681,11 @@ impl super::State {
         }
         let mut chosen = None;
         ui.add_space(4.0);
+        // The list kept from last time shows at once, and a fresh one replaces it.
+        account.refresh_once(ui.ctx());
         if account.repositories.is_none() {
+            // A quiet refresh shows nothing until it has a list: the button stays, and a
+            // click on it takes over.
             if account.busy() {
                 if !picked {
                     account.sign_in_box(ui);
@@ -445,6 +697,21 @@ impl super::State {
             super::super::selector::widgets::caption(ui, "YOUR GITHUB REPOSITORIES");
             let filter = self.input.trim().to_owned();
             chosen = account.picker(ui, &filter);
+            // A list that could not be refreshed says so, with a way to sign in again.
+            if let Some(stale) = account.stale.clone() {
+                ui.label(
+                    RichText::new(format!("This list may be out of date: {stale}"))
+                        .size(12.5)
+                        .color(theme::PALETTE_YELLOW()),
+                );
+                if ui.add(chrome_button("Refresh from GitHub")).clicked() {
+                    account.request(Purpose::List, ui.ctx());
+                }
+            }
+            // A refresh the person asked for may need a sign-in, shown here.
+            if account.busy() {
+                account.sign_in_box(ui);
+            }
             if ui
                 .add(chrome_button("Add repositories on GitHub"))
                 .on_hover_text("Choose which repositories your GitHub App can reach.")
