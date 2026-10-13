@@ -22,7 +22,7 @@ a stop and a resume keep that start correct.
 - Candidate: a build that shows Hetzner rates in euros.
 - Platforms: Linux. Providers: Hetzner and RunPod.
 - Task 6.1 uses a synthetic cloud of a debug build and rents no compute.
-  Tasks 6.2 to 6.6 rent compute.
+  Tasks 6.2 to 6.5 rent compute.
 - This procedure does not test these functions:
   - The total since creation of a Hetzner cloud. Hetzner reports no billing
     for each server.
@@ -45,9 +45,9 @@ a stop and a resume keep that start correct.
 - A frozen debug candidate and its SHA-256.
 - The [local device smoke fixture](../../../scripts/device-smoke/README.md),
   `scripts/device-smoke/serve.py`, with `--native-view`.
-- For tasks 6.2 to 6.6: a Hetzner API token and a RunPod API key in the Cloud
+- For tasks 6.2 to 6.5: a Hetzner API token and a RunPod API key in the Cloud
   settings of the test account, and a synthetic repository with one commit.
-- For task 6.5: an agent panel kind and `horizon-browser` from the candidate on
+- For task 6.4: an agent panel kind and `horizon-browser` from the candidate on
   the `PATH` of Horizon.
 
 ## 5. Setup
@@ -104,38 +104,44 @@ a stop and a resume keep that start correct.
 > **CAUTION:** THIS TASK RENTS A HETZNER SERVER. Do the cleanup at the end.
 
 1. Use a candidate without `HORIZON_CLOUD_COST_PREVIEW`. Deploy a Hetzner
-   CPU cloud from the synthetic repository. Wait for **Ready**.
+   CPU cloud from the synthetic repository with **Quick start** and the
+   cheapest server type. Wait for **Ready**.
 
-   Result: The header shows the hourly rate in euros with four decimals, and
-   a run amount in euros.
+   Result: The header of the group of the cloud in the sidebar shows the hourly
+   rate in euros with four decimals.
 
-2. In the Hetzner Console, find the server of the cloud and its creation time.
+2. Open the drawer of the card. Scroll the tab **Machine** to the section
+   **Cost**.
 
-   Result: The hourly price of the server type in its location, without VAT,
-   is the rate on the card. The run started at the creation time of the server.
+   Result: **Rate** shows the rate in euros and `compute, net of VAT`. The line
+   under the figures shows `This run · <time> · €<amount> · €<rate>/h`.
 
-### 6.3 RECONNECT: A reconnect keeps the run
+3. With the Hetzner API or the Hetzner Console, find the server of the cloud,
+   its creation time and the hourly price of its type in its location.
 
-1. Write down the run time on the card. On the card, click **Reconnect**.
+   Result: The rate on the card is that price without VAT. The run time on the
+   card starts at the creation time of the server. **Last start** in the tab
+   **Machine** shows that creation time.
 
-   Result: The card shows the steps of the reconnect. Then it shows **Ready**.
+4. Wait until the run is more than 35 minutes old.
+
+   Result: The run amount increases. On a type of €0.0088 an hour, it changes
+   from `€0.00` to `€0.01` after about 34 minutes.
+
+### 6.3 RECONNECT: A restart and a reconnect keep the run
+
+1. Write down the run time on the card. Close Horizon normally. Start the same
+   candidate again on the same saved session.
+
+   Result: The cloud reconnects. The card shows **Ready** and
+   `Reconnected in <time>`.
 
 2. Look at the run time and the run amount.
 
-   Result: The run continues from the time that you wrote down. It does not
+   Result: The run continues from the creation time of the server. It does not
    start again from zero.
 
-### 6.4 RESTART: A restart keeps the run
-
-1. Close Horizon normally. Start the same candidate again.
-
-   Result: The cloud reconnects and shows **Ready**.
-
-2. Look at the run time.
-
-   Result: The run continues from the creation time of the server.
-
-### 6.5 STOP: A stop and a resume
+### 6.4 STOP: A stop and a resume
 
 1. On the card, click **Stop worker…** and accept.
 
@@ -156,7 +162,7 @@ a stop and a resume keep that start correct.
    Result: The entry of the cloud shows `"hourly_rate"` with the rate of the
    card and `"currency": "EUR"`.
 
-### 6.6 RUNPOD: Rates in US dollars
+### 6.5 RUNPOD: Rates in US dollars
 
 > **CAUTION:** THIS TASK RENTS A RUNPOD WORKER. Do the cleanup at the end.
 
@@ -186,7 +192,7 @@ a stop and a resume keep that start correct.
 
    Result: The fixture removes its private state.
 
-2. Delete each cloud of tasks 6.2 to 6.6 with its storage.
+2. Delete each cloud of tasks 6.2 to 6.5 with its storage.
 
    Result: The provider consoles show no server, pod or volume of this run.
 
