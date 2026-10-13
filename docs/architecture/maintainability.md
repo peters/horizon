@@ -116,6 +116,12 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   selection, and validation. `horizon-ui::browser_widget::file_chooser` uses the
   shared `dir_picker::modal` for the host dialog. Public panel metadata reports support and pending
   selection without exposing selected paths.
+- `webauthn` owns the passkey bridge: `origin` (origin and `rp_id` rules,
+  `clientDataJSON`), `request` (the command contract), `command` (the
+  supervised process) and `page.js`. The CDP and BiDi leaf modules
+  `session::webauthn` and `webdriver::session::webauthn` resolve the caller's
+  origin from the browser and deliver replies. The host UI reads only
+  `FrameSlot::passkey_pending`.
 - `session::file_drop` sends native Chromium file drops. The WebDriver
   `session::file_drop` leaf delivers local Firefox file drops. The UI
   `app::file_drop::browser` leaf routes desktop drops to page coordinates.
