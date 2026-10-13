@@ -298,7 +298,8 @@ class SchedulerTests(unittest.TestCase):
         (self.dir / 'status.d' / 'acme__web.json').write_text('[]')
         (self.dir / 'status.d' / 'acme__api.json').write_text(json.dumps({
             'pull_requests': [{'number': n, 'note': 'x' * (5000 if n == 0 else 2000)} for n in range(600)] + [7],
-            'activity': [{'at': 'b', 'text': '\ud800'}, {'at': 'a', 'text': 'kept'}]}))
+            'activity': [{'at': 'b', 'text': '\ud800'}, {'at': 'a', 'text': 'kept'},
+                         {'at': 'c', 'x': json.loads('[' * 40 + ']' * 40)}]}))
         RUN['merge_status'](['acme/web', 'acme/api'])
         text = (self.dir / 'status.json').read_bytes()
         self.assertLess(len(text), EXCHANGE['STATUS_LIMIT'])

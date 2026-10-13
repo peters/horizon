@@ -314,9 +314,18 @@ def heavy(costs, repository, memory):
     return cost.get('minutes', 0) >= 20 or cost.get('peak_mb', 0) >= memory * 0.35
 
 
+def nesting(value):
+    """How deep lists and objects nest in `value`."""
+    children = value.values() if isinstance(value, dict) else value if isinstance(value, list) else None
+    return 0 if children is None else 1 + max(map(nesting, children), default=0)
+
+
 def entry_size(value):
-    """The size of an entry as Horizon gets it, or None when Horizon could not read it."""
+    """The size of an entry as Horizon gets it, or None when Horizon could not read it (Horizon
+    reads at most 128 levels, of which the status takes three)."""
     try:
+        if nesting(value) > 32:
+            return None
         return len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode())
     except (ValueError, RecursionError):
         return None
@@ -416,6 +425,7 @@ def run_once(cfg, forced):
     order = [repository for repository in names(cfg, 'order', REPOSITORY) if repository in repositories]
     print(f'Listing open pull requests in {len(repositories)} repositories...', flush=True)
     seen = load(DIR + '/fingerprints.json', {})
+    seen = seen if isinstance(seen, dict) else {}
     todo, prints, unchanged = [], {}, []
     for repository in repositories:
         found = open_pull_requests(repository, authors)
@@ -437,6 +447,7 @@ def run_once(cfg, forced):
     first = [repository for repository in order if repository in todo]
     rest = [repository for repository in todo if repository not in first]
     costs = load(DIR + '/costs.json', {})
+    costs = {name: cost for name, cost in costs.items() if isinstance(cost, dict)} if isinstance(costs, dict) else {}
     memory = memory_mb()
     capacity = slots(costs)
     # Heavy repositories last, so the light ones finish while one heavy one runs alone.
@@ -453,7 +464,13 @@ def run_once(cfg, forced):
 
     try:
         while queue or running:
-            running[:] = [(job, thread) for job, thread in running if thread.is_alive()]
+            for job, thread in [entry for entry in running if not entry[1].is_alive()]:
+                running.remove((job, thread))
+                # Remembered as seen only after a clean finish, as the agent left it, so a change
+                # later in the run is not taken for one the agent saw.
+                found = open_pull_requests(job.repository, authors) if job.code == 0 else None
+                if found is not None:
+                    seen[job.repository] = fingerprint(found, template)
             merge_status(repositories)
             if queue:
                 job = queue[0]
@@ -482,13 +499,6 @@ def run_once(cfg, forced):
         cost['runs'] = min(runs + 1, 10)
         costs[job.repository] = cost
     save(DIR + '/costs.json', costs)
-    # A repository is remembered as seen only when its agent finished cleanly; after a failure
-    # the next run looks again. Its pull requests may have moved during the run: read them again.
-    for job in jobs:
-        if job.code == 0:
-            found = open_pull_requests(job.repository, authors)
-            if found is not None:
-                seen[job.repository] = fingerprint(found, template)
     save(DIR + '/fingerprints.json', seen)
     draw(started, jobs, [], capacity)
     return all(job.code == 0 for job in jobs)
@@ -507,16 +517,15 @@ def main():
     installed = sources()
     while True:
         cfg = config()
-        if every(cfg) != minutes:
+        paused = os.path.exists(DIR + '/paused')
+        # A pause skips the runs it covers; the next run is the next one on the schedule.
+        if every(cfg) != minutes or (paused and time.time() >= upcoming):
             minutes = every(cfg)
             upcoming = next_slot(cfg)
             with open(DIR + '/next-run', 'w') as handle:
                 handle.write(str(upcoming))
-        if os.path.exists(DIR + '/paused'):
-            time.sleep(10)
-            continue
-        forced = os.path.exists(DIR + '/run-now')
-        if forced or time.time() >= upcoming:
+        forced = not paused and os.path.exists(DIR + '/run-now')
+        if not paused and (forced or time.time() >= upcoming):
             try:
                 os.remove(DIR + '/run-now')
             except OSError:
@@ -532,6 +541,11 @@ def main():
             ended = int(time.time())
             record({'started_at': begun, 'finished_at': ended, 'outcome': 'done' if ok else 'failed',
                     'exit': 0 if ok else 1})
+            # Run now during this run asked for the run that just ended.
+            try:
+                os.remove(DIR + '/run-now')
+            except OSError:
+                pass
             # Slots that passed while the run was busy were skipped, never run beside it.
             slot = (begun // (every(cfg) * 60) + 1) * every(cfg) * 60
             while slot < ended:
