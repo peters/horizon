@@ -277,6 +277,7 @@ impl Account {
                         self.listed_for = login;
                         self.retry_at = None;
                         self.check_at = Some(std::time::Instant::now() + RETRY);
+                        self.failed = None;
                     }
                     return (purpose == Purpose::Clone).then_some(token);
                 }
@@ -290,6 +291,10 @@ impl Account {
                             self.retry_at = Some(std::time::Instant::now() + RETRY);
                         }
                     } else {
+                        // A failed refresh the person asked for keeps the quiet retries going.
+                        if self.stale.is_some() && self.repositories.is_some() {
+                            self.retry_at = Some(std::time::Instant::now() + RETRY);
+                        }
                         self.failed = Some(reason);
                     }
                     return None;
@@ -517,7 +522,13 @@ fn exchange(
                 match host::keep_repositories(root, settings, &login, &found, cancel) {
                     Ok(true) => {}
                     Ok(false) => return Answer::Replaced,
-                    Err(error) => tracing::debug!(%error, "could not keep the GitHub repository list"),
+                    // The list could not be kept; it is shown only once the account is confirmed.
+                    Err(error) => {
+                        tracing::debug!(%error, "could not keep the GitHub repository list");
+                        if !host::still_signed_in_as(root, settings, &login) {
+                            return Answer::Replaced;
+                        }
+                    }
                 }
                 Some(found)
             }

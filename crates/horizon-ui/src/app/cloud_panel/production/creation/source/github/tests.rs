@@ -337,6 +337,21 @@ fn a_failed_refresh_the_person_asked_for_keeps_the_way_to_try_again() {
     assert!(account.poll().is_none());
     assert!(account.stale.is_some(), "Refresh from GitHub stays in view");
     assert_eq!(account.failed.as_deref(), Some("Still offline."));
+    assert!(account.retry_at.is_some(), "the quiet retries go on");
+    let (sender, receiver) = channel();
+    account.job = Some(Job {
+        receiver,
+        purpose: Purpose::Refresh,
+        _abort: Abort(Cancellation::default()),
+    });
+    sender
+        .send(Answer::Done {
+            token: Secret::new("ghu_synthetic".into()),
+            repositories: Some(vec!["acme/fresh".into()]),
+        })
+        .unwrap();
+    assert!(account.poll().is_none());
+    assert!(account.failed.is_none(), "a fresh list ends the old error");
 }
 
 #[test]
