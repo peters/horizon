@@ -331,6 +331,11 @@ changes. A sync waits at most 15 seconds for one worker and asks no more clouds 
 minutes per pass; the rest, with the clouds that failed last time asked last, wait for the
 next sync.
 
+This needs Codex 0.162 or newer on the worker, as the worker images ship it: such a Codex
+reads its login file again before it renews. An older Codex keeps the login it loaded
+until it restarts, and its first renewal after Horizon renewed fails. Rebuild the image of
+such a cloud.
+
 A worker that renewed its login while Horizon was closed keeps that renewal, and the
 renewal comes back to this computer and replaces the spent copy, so the next cloud gets
 it. Only a later renewal of the same account wins; a new sign-in here, also of another
