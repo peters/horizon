@@ -209,6 +209,8 @@ pub struct UpkeepBoard {
     pub error: Option<String>,
     pub request: Option<Request>,
     latest: Option<reader::Latest>,
+    /// The reader thread could not start; the board does not try again.
+    reader_failed: bool,
     alive: Arc<AtomicBool>,
 }
 
@@ -221,6 +223,7 @@ impl UpkeepBoard {
             error: None,
             request: None,
             latest: None,
+            reader_failed: false,
             alive: Arc::new(AtomicBool::new(true)),
         }
     }
@@ -234,8 +237,12 @@ impl UpkeepBoard {
     /// the first call. Never touches the file itself. Returns true when anything changed.
     pub fn poll(&mut self) -> bool {
         if self.latest.is_none() {
+            if self.reader_failed {
+                return false;
+            }
             self.latest = reader::spawn(self.path.clone(), self.alive.clone());
             if self.latest.is_none() {
+                self.reader_failed = true;
                 self.error = Some("The Upkeep status reader could not start.".into());
                 return true;
             }

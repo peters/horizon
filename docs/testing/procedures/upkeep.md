@@ -148,9 +148,29 @@ names made-up repositories and one public pull request.
    Result: Horizon restores the session. The board shows the same status from
    `<folder>/status.json`.
 
+### 6.6 UPK-06 — Unusual states are shown as such
+
+1. In `<folder>/status.json`, change the `state` of `acme/api` #88 to `closed`. Wait
+   2 seconds.
+
+   Result: The board shows the chip **1 Other**, and the row is in the group
+   **Other**. The other rows stay.
+
+2. Change the `state` of `acme/api` #88 back to `waiting_checks`. Wait 2 seconds.
+
+   Result: The **Other** chip is gone.
+
+3. Change `schedule.next_run_at` to a time one hour before now. Wait 2 seconds.
+
+   Result: **Next run** shows **Late** in yellow and **Was due at** that time.
+
+4. Change `schedule.paused` to `true`. Wait 2 seconds.
+
+   Result: **Next run** shows **Paused** and **No runs until resumed**.
+
 ## 7. Pass criteria
 
-- UPK-01 to UPK-05 give the results above.
+- UPK-01 to UPK-06 give the results above.
 
 ## 8. Cleanup
 

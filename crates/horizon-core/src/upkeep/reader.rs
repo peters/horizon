@@ -15,7 +15,8 @@ const STATUS_LIMIT: u64 = 4 * 1024 * 1024;
 const CHECK_EVERY: Duration = Duration::from_secs(2);
 /// The most pull requests, runs, activity lines and repositories a board keeps.
 const MAX_PULL_REQUESTS: usize = 500;
-const MAX_RUNS: usize = 100;
+/// Runs: one a minute for a day at most.
+const MAX_RUNS: usize = 1500;
 const MAX_ACTIVITY: usize = 100;
 const MAX_REPOSITORIES: usize = 1000;
 /// The longest text a board keeps, in characters.
