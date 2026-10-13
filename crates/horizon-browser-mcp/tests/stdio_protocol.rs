@@ -344,6 +344,19 @@ fn assert_companion_tools_contract(tools: &Value) {
         }
         assert!(properties.get("worker").is_none() && properties.get("credentials").is_none());
     }
+    let uncheck = listed_tool(tools, "cloud_companion_uncheck");
+    let fields = &uncheck["inputSchema"]["properties"];
+    assert!(fields.get("cloud").is_some() && fields.get("alias").is_some());
+    assert!(
+        fields.get("operation_id").is_none(),
+        "an uncheck is not an operation to poll"
+    );
+    assert!(
+        uncheck["description"]
+            .as_str()
+            .is_some_and(|text| text.contains("never check")),
+        "agents remove access but never grant it"
+    );
     let status = listed_tool(tools, "cloud_companion_operation");
     assert!(
         status["description"]
@@ -402,7 +415,7 @@ fn assert_resize_contract(tools: &Value) {
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(32));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(33));
     assert_output_schemas_describe_objects(tools);
     assert_catalog_contract(tools);
     assert_device_panel_contract(tools);

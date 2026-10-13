@@ -14,6 +14,8 @@ mod machine;
 mod next;
 mod output;
 pub(super) mod placement;
+#[cfg(test)]
+mod preparation_tests;
 mod rebuild;
 pub(super) mod section;
 mod self_stop;
@@ -59,6 +61,10 @@ fn reveal_confirmation(runtime: &mut super::Runtime, button: &egui::Response) {
     }
 }
 
+/// A panel's session save failed for so long that it released the cloud.
+const UNRECORDED_SESSION: &str = "A panel's session is not in this cloud's record yet: Stop, Resume or a rebuild \
+                                  would not restart that panel. Horizon keeps trying to record it.";
+
 fn accent_button<'a>(ui: &egui::Ui, label: &'a str) -> egui::Button<'a> {
     action_button(label).min_size(Vec2::new(ui.available_width(), 34.0))
 }
@@ -75,7 +81,7 @@ fn deleted_runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runt
     {
         ui.colored_label(egui::Color32::LIGHT_RED, error);
     }
-    if runtime.receiver.is_some() {
+    if runtime.receiver.is_some() || runtime.preparation.is_some() {
         ui.label("Redeploying cloud…");
         progress_output(ui, id, runtime);
         return None;
@@ -118,6 +124,13 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
     if deleted_or_redeploying(runtime) {
         return deleted_runtime_actions(ui, id, runtime);
     }
+    // Every lifecycle action waits for a preparation or a session save that still runs,
+    // so none is offered.
+    if runtime.preparation.is_some() || runtime.sessions.saving() {
+        ui.spinner();
+        ui.label("Saving the session and the deployment record…");
+        return None;
+    }
     if runtime.state.as_ref().is_some_and(|state| {
         matches!(
             state.operation,
@@ -149,6 +162,9 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
     for error in runtime.error.iter().chain(&runtime.remote_release_error) {
         ui.colored_label(egui::Color32::LIGHT_RED, error);
     }
+    if runtime.sessions.unrecorded() {
+        ui.colored_label(egui::Color32::LIGHT_RED, UNRECORDED_SESSION);
+    }
     if let Some(action) = super::resize::controls(ui, id, runtime) {
         return Some(action);
     }
@@ -167,6 +183,7 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
     }
     let removable = !runtime.state_unavailable
         && runtime.receiver.is_none()
+        && runtime.preparation.is_none()
         && runtime
             .state
             .as_ref()
@@ -193,8 +210,11 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
             return Some(Action::Remove);
         }
     }
+    // A deletion waits for the reconnect, resume, stop or resize that runs, including a
+    // resize that reported Ready before its result, so it is offered once that ends.
+    let busy = runtime.busy();
     bound_provider_check(ui, runtime)
-        .or_else(|| deletion_action(ui, runtime))
+        .or_else(|| (!busy).then(|| deletion_action(ui, runtime)).flatten())
         .or(action)
 }
 
@@ -432,20 +452,31 @@ fn recovery_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<A
 }
 
 fn desktop_button(ui: &mut egui::Ui, runtime: &super::Runtime) -> bool {
-    let enabled = runtime
-        .state
-        .as_ref()
-        .is_some_and(|state| state.profile.capabilities.desktop);
+    let unavailable = desktop_unavailable(runtime);
     ui.add_enabled(
-        enabled && runtime.desktop.is_some(),
+        unavailable.is_none(),
         section::row_button(ui, action_button("Add desktop viewer")),
     )
-    .on_disabled_hover_text(if enabled {
-        "Desktop tunnel is not connected"
-    } else {
-        "Desktop is disabled by this cloud profile"
-    })
+    .on_disabled_hover_text(unavailable.unwrap_or_default())
     .clicked()
+}
+
+/// Why the desktop viewer cannot open now. A preparation refuses new panels, so the
+/// button waits for it too.
+fn desktop_unavailable(runtime: &super::Runtime) -> Option<&'static str> {
+    if !runtime
+        .state
+        .as_ref()
+        .is_some_and(|state| state.profile.capabilities.desktop)
+    {
+        Some("Desktop is disabled by this cloud profile")
+    } else if runtime.preparation.is_some() {
+        Some("Wait until the cloud has saved its session and record")
+    } else if runtime.desktop.is_none() {
+        Some("Desktop tunnel is not connected")
+    } else {
+        None
+    }
 }
 
 fn deleting(runtime: &super::Runtime) -> bool {

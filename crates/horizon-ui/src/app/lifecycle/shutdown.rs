@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use horizon_core::ForcedBrowserShutdownStatus;
 
@@ -39,7 +39,7 @@ impl HorizonApp {
         self.git_watchers.clear();
         self.abandon_device_reveals("Horizon is exiting");
         self.panel_render_caches.device_ui_state.clear();
-        self.retire_pending_browser_closes_for_shutdown();
+        self.retire_browser_requests();
         let mut progress = self
             .pending_session_switch
             .take()
@@ -61,6 +61,15 @@ impl HorizonApp {
         #[cfg(target_os = "linux")]
         let complete = complete && self.casting.finished();
         let timed_out = progress.started_at().elapsed() > MAX_SHUTDOWN_WAIT;
+        // The record of a cloud must hold the session of each panel the board saves.
+        #[cfg(feature = "cloud-workspaces")]
+        let recorded = Self::cloud_sessions_recorded();
+        #[cfg(feature = "cloud-workspaces")]
+        if timed_out && !recorded {
+            tracing::warn!("exiting while a cloud panel session is not yet in its cloud record");
+        }
+        #[cfg(feature = "cloud-workspaces")]
+        let complete = complete && recorded;
         let mut browser_outcome = if progress.browser_shutdown_is_complete() {
             BrowserShutdownOutcome::Complete
         } else {
@@ -76,16 +85,20 @@ impl HorizonApp {
         if !shutdown_ready_to_exit(complete, timed_out, browser_outcome) {
             return;
         }
-        // Browser sessions publish their committed URL before resolving the
-        // teardown signal. Persist that final state only after every driver
-        // is known to be finished.
-        let _ = self.drain_panel_output();
-        let _ = self.auto_save_runtime_state();
+        // Requests claimed and results queued are answered before the exit,
+        // within a bound, so no agent waits for a request Horizon took.
+        if self.browser_host_io_holds_exit() {
+            return;
+        }
+        if self.session_saves_hold_exit() {
+            return;
+        }
         self.abandon_device_reveals("Horizon is exiting");
         #[cfg(target_os = "linux")]
         self.observed_keyboard_inputs.clear_native_transfer_files();
         self.exit_cleanup_complete = true;
         self.release_active_session_lease();
+        self.end_cloud_repository_setup_for_exit();
         if browser_outcome == BrowserShutdownOutcome::ForcedCleanupFailed {
             tracing::error!("forced browser cleanup failed; exiting after the bounded shutdown deadline");
             crate::plugin_install::exit_after_releasing_plugins(1);
@@ -138,7 +151,11 @@ impl HorizonApp {
         self.wait_for_saved_session_deletion();
         #[cfg(target_os = "linux")]
         self.observed_keyboard_inputs.clear_native_transfer_files();
+        self.retire_browser_requests();
         self.exit_cleanup_complete = true;
+        // Outcomes that the flush applies can still change the board, so they
+        // land before the saves below.
+        self.flush_browser_host_io();
         let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();
         if let Some(progress) = self
@@ -172,8 +189,46 @@ impl HorizonApp {
         }
         let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();
+        self.flush_session_saves_for_exit();
         self.git_watchers.clear();
         self.release_active_session_lease();
+        // After the terminals shut down, so a setup agent has had its hang-up.
+        self.end_cloud_repository_setup_for_exit();
+    }
+
+    /// Queues the last save once, then holds the exit on each frame until the session
+    /// writer made every save durable, for at most [`MAX_SHUTDOWN_WAIT`]. The frames do
+    /// not wait for the writer.
+    fn session_saves_hold_exit(&mut self) -> bool {
+        let deadline = if let Some(deadline) = self.exit_save_deadline {
+            deadline
+        } else {
+            // Browser sessions publish their committed URL before resolving the
+            // teardown signal. Persist that final state only after every driver
+            // is known to be finished.
+            let _ = self.drain_panel_output();
+            let _ = self.auto_save_runtime_state();
+            *self.exit_save_deadline.insert(Instant::now() + MAX_SHUTDOWN_WAIT)
+        };
+        if !self.session_store.runtime_states_pending() {
+            if !self.session_store.flush_runtime_states(Duration::ZERO) {
+                tracing::warn!("exiting with a session save that failed");
+            }
+            return false;
+        }
+        if Instant::now() < deadline {
+            return true;
+        }
+        tracing::warn!("exiting before the session writer saved the newest board");
+        false
+    }
+
+    /// The session writer saves on its own thread; the last saves land before the exit,
+    /// within the shutdown limit. The exit that runs without further frames uses it.
+    fn flush_session_saves_for_exit(&self) {
+        if !self.session_store.flush_runtime_states(MAX_SHUTDOWN_WAIT) {
+            tracing::warn!("exiting before the session writer saved the newest board");
+        }
     }
 }
 
@@ -221,5 +276,97 @@ mod tests {
             true,
             BrowserShutdownOutcome::ForcedCleanupFailed
         ));
+    }
+
+    #[cfg(unix)]
+    mod session_saves {
+        use std::time::{Duration, Instant};
+
+        use horizon_core::{RuntimeState, StartupDecision};
+
+        use crate::app::HorizonApp;
+        use crate::app::test_support::{editor_workspace_state, test_app_with_startup};
+
+        fn persistent_app() -> (tempfile::TempDir, HorizonApp, String, std::path::PathBuf) {
+            let state = RuntimeState {
+                workspaces: vec![editor_workspace_state("workspace", [0.0, 0.0])],
+                ..RuntimeState::default()
+            };
+            let (temp, _ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+                runtime_state: Box::new(state.clone()),
+            });
+            let session = app.session_store.create_session_from_runtime(state).expect("session");
+            app.activate_persistent_session(&session);
+            app.root_viewport_stabilizer = None;
+            crate::app::test_support::wait_for_session_saves(&app);
+            (temp, app, session.session_id, session.runtime_state_path)
+        }
+
+        /// Calls the exit hook on each frame until it lets the exit go, and returns how long it held.
+        fn frames_until_exit(app: &mut HorizonApp) -> Duration {
+            let started = Instant::now();
+            while app.session_saves_hold_exit() {
+                assert!(started.elapsed() < Duration::from_secs(30), "the exit is never let go");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            started.elapsed()
+        }
+
+        #[test]
+        fn the_exit_queues_the_last_save_once_and_frames_do_not_wait_for_the_disk() {
+            let (_temp, mut app, session_id, _) = persistent_app();
+            // A named pipe at the session index holds the writer in the last save until the
+            // test answers it.
+            let index = app.session_store.home().session_index_path();
+            let saved_index = std::fs::read_to_string(&index).unwrap();
+            std::fs::remove_file(&index).unwrap();
+            assert!(
+                std::process::Command::new("mkfifo")
+                    .arg(&index)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            let before = app.session_store.queued_runtime_state(&session_id);
+            let started = Instant::now();
+            assert!(app.session_saves_hold_exit(), "the exit waits for the last save");
+            let last = app.session_store.queued_runtime_state(&session_id);
+            assert!(last > before, "the first exit frame queues the last save");
+            for _ in 0..20 {
+                assert!(app.session_saves_hold_exit());
+            }
+            assert_eq!(
+                app.session_store.queued_runtime_state(&session_id),
+                last,
+                "the last save is queued once"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "a frame never waits for the disk"
+            );
+            std::fs::write(&index, saved_index).unwrap();
+            frames_until_exit(&mut app);
+            assert!(
+                app.session_store.flush_runtime_states(Duration::ZERO),
+                "the last save is durable"
+            );
+        }
+
+        #[test]
+        fn the_exit_does_not_wait_for_a_last_save_that_fails() {
+            let (_temp, mut app, _, runtime) = persistent_app();
+            // A folder where the board goes refuses every save of the session.
+            std::fs::remove_file(&runtime).unwrap();
+            std::fs::create_dir(&runtime).unwrap();
+            let held = frames_until_exit(&mut app);
+            assert!(
+                held < super::super::MAX_SHUTDOWN_WAIT / 2,
+                "a failed save lets the exit go before the shutdown limit"
+            );
+            assert!(
+                !app.session_store.flush_runtime_states(Duration::ZERO),
+                "the save failed"
+            );
+        }
     }
 }

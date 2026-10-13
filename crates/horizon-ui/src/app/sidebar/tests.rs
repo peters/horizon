@@ -1,4 +1,3 @@
-use super::rows::sidebar_workspace_name_width;
 use super::{
     SidebarPanelEntry, SidebarWorkspaceInsert, sidebar_workspace_drop_should_dock, sidebar_workspace_insert_dock_side,
     sidebar_workspace_shows_panels,
@@ -187,34 +186,16 @@ fn sidebar_shows_panels_for_the_active_workspace_when_accordion_is_enabled() {
     assert!(sidebar_workspace_shows_panels(true, true));
 }
 
-#[test]
-fn accordion_name_width_fits_detached_row_at_minimum_sidebar() {
-    // 168px sidebar minus 14+3+8 leading chrome leaves 143px for name + badges.
-    let width = sidebar_workspace_name_width(143.0, true, true);
-    assert!(width < 48.0);
-    assert!((width - 29.0).abs() <= f32::EPSILON);
-}
-
-#[test]
-fn flat_name_width_reserves_only_the_detached_badge() {
-    // Flat rows draw no panel count, so the name keeps that room.
-    assert!((sidebar_workspace_name_width(143.0, false, false) - 133.0).abs() <= f32::EPSILON);
-    assert!((sidebar_workspace_name_width(143.0, true, false) - 57.0).abs() <= f32::EPSILON);
-}
-
-#[test]
-fn name_width_never_goes_negative() {
-    assert!(sidebar_workspace_name_width(20.0, true, true).abs() <= f32::EPSILON);
-}
-
 // `is_focused` is decorative in these tests: the reveal helpers read the
 // board's own focus state, not the sidebar entry flag.
 fn sidebar_entry(id: horizon_core::PanelId, is_focused: bool) -> SidebarPanelEntry {
     SidebarPanelEntry {
         id,
         title: "panel".to_string(),
+        label: "panel".to_string(),
         kind: horizon_core::PanelKind::Editor,
         is_focused,
+        working: false,
     }
 }
 
@@ -340,7 +321,8 @@ fn a_compact_parked_dot_tells_a_screen_reader_its_status_line() {
         false,
     );
     let labels = crate::test_egui::accesskit_texts(|ui| {
-        ui.horizontal(|ui| super::rows::render_sidebar_workspace_row_contents(ui, &workspace, false));
+        let row = ui.allocate_space(egui::vec2(210.0, super::rows::COMPACT_ROW_HEIGHT)).1;
+        super::rows::paint_workspace_row_contents(ui, row, &workspace, false, crate::theme::BG_ELEVATED());
     });
     assert!(
         labels
@@ -365,4 +347,134 @@ fn a_dragged_workspace_drops_only_in_its_own_group() {
         Group::Cloud,
         &workspace_entry(row(Group::Cloud), true)
     ));
+}
+
+#[test]
+fn the_new_window_badge_gives_way_to_the_name_at_the_minimum_sidebar() {
+    use super::rows::name_right;
+    // The minimum sidebar is 168 wide: the name starts at 64 and the first line ends at 150.
+    let (right, badge) = name_right(64.0, 150.0, Some(7.0), Some(58.0));
+    assert!(!badge, "a narrow row keeps the room for the name");
+    assert!((right - 135.0).abs() <= f32::EPSILON);
+    // The default sidebar is 210 wide: the badge fits and the name keeps 49.
+    let (right, badge) = name_right(64.0, 192.0, Some(7.0), Some(58.0));
+    assert!(badge);
+    assert!((right - 113.0).abs() <= f32::EPSILON);
+    // Without a count or a badge the name runs to the right edge.
+    assert_eq!(name_right(64.0, 192.0, None, None), (192.0, false));
+}
+
+#[test]
+fn the_badge_ring_takes_the_color_of_the_card_in_every_state() {
+    use super::rows::{card_fill, row_surface};
+    use crate::theme;
+    let accent = egui::Color32::from_rgb(137, 180, 250);
+    assert_eq!(
+        row_surface(card_fill(accent, false, false, false)),
+        theme::BG_ELEVATED()
+    );
+    assert_eq!(
+        row_surface(card_fill(accent, true, false, false)),
+        theme::PANEL_BG_ALT()
+    );
+    let hovered = row_surface(card_fill(accent, false, true, false));
+    assert_eq!(
+        hovered,
+        theme::composite_over(theme::BG_ELEVATED(), theme::alpha(theme::PANEL_BG_ALT(), 170))
+    );
+    assert_ne!(hovered, theme::BG_ELEVATED());
+    assert_eq!(
+        row_surface(card_fill(accent, true, true, true)),
+        theme::blend(theme::PANEL_BG_ALT(), accent, 0.22)
+    );
+}
+
+#[test]
+fn keyboard_focus_on_a_panel_row_shows_its_close_button() {
+    use crate::test_egui::DiscardTextures;
+    use egui::epaint::Shape;
+
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    app.template_config.features.sidebar_accordion = true;
+    let workspace = app.board.create_workspace("Quiet zone");
+    let first = app
+        .board
+        .create_panel(editor_panel_options("first"), workspace)
+        .expect("panel");
+    let second = app
+        .board
+        .create_panel(editor_panel_options("second"), workspace)
+        .expect("panel");
+    app.board.active_workspace = Some(workspace);
+    app.board.focus(first);
+    let ctx = egui::Context::default();
+    let frame = |app: &mut crate::app::HorizonApp| {
+        let input = crate::app::test_support::raw_input([1400.0, 900.0], None);
+        ctx.run_ui(input, |ui| app.render_sidebar(ui.ctx())).discard_textures()
+    };
+    let crosses_on = |output: &egui::FullOutput, label: &str| {
+        let texts: Vec<(String, egui::Pos2)> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                Shape::Text(text) => Some((
+                    text.galley.job.text.clone(),
+                    egui::Rect::from_min_size(text.pos, text.galley.size()).center(),
+                )),
+                _ => None,
+            })
+            .collect();
+        let row = texts
+            .iter()
+            .find(|(text, _)| text == label)
+            .map(|(_, at)| *at)
+            .expect(label);
+        texts
+            .iter()
+            .any(|(text, at)| text == "\u{00D7}" && (at.y - row.y).abs() < 4.0)
+    };
+    // An area shows from its second frame on.
+    frame(&mut app);
+    assert!(
+        !crosses_on(&frame(&mut app), "second"),
+        "a resting row hides its close button"
+    );
+
+    ctx.memory_mut(|memory| memory.request_focus(super::sidebar_panel_row_id(second)));
+    frame(&mut app);
+    assert!(
+        crosses_on(&frame(&mut app), "second"),
+        "a keyboard-focused row shows it"
+    );
+}
+
+#[test]
+fn the_snapshot_labels_only_the_panel_rows_that_show() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let shown = app.board.create_workspace("shown");
+    let hidden = app.board.create_workspace("hidden");
+    app.board
+        .create_panel(editor_panel_options("first"), shown)
+        .expect("panel");
+    app.board
+        .create_panel(editor_panel_options("second"), hidden)
+        .expect("panel");
+    app.board.active_workspace = Some(shown);
+    let labels = |app: &crate::app::HorizonApp, workspace| {
+        app.sidebar_workspace_data()
+            .into_iter()
+            .find(|entry| entry.id == workspace)
+            .expect("workspace")
+            .panels
+            .into_iter()
+            .map(|panel| panel.label)
+            .collect::<Vec<_>>()
+    };
+
+    app.template_config.features.sidebar_accordion = true;
+    assert_eq!(labels(&app, shown), ["first"]);
+    assert_eq!(labels(&app, hidden), [""], "a collapsed workspace builds no labels");
+
+    app.template_config.features.sidebar_accordion = false;
+    assert_eq!(labels(&app, hidden), ["second"], "flat rows all show");
 }

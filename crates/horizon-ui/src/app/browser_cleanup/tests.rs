@@ -125,7 +125,6 @@ fn pending_create_keeps_its_failure_until_the_request_is_completed() {
         true,
     );
     app.mark_browser_create_pending_for_tests(crate::app::browser_requests::PendingBrowserCreateProbe {
-        panel_id: failed,
         panel_local_id: app.board.panel(failed).expect("panel").local_id.clone(),
     });
 

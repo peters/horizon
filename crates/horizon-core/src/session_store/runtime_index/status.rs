@@ -79,6 +79,19 @@ impl SessionStore {
             .map_err(Into::into)
     }
 
+    /// Queues the park state and the last status of cloud panels for the session writer,
+    /// so the caller never waits for the runtime index.
+    pub fn queue_cloud_panels(&self, session_id: &str, panels: &[ParkedPanel<'_>]) {
+        let parks = (panels.iter())
+            .map(|panel| super::super::writer::Park {
+                local_id: panel.local_id.to_owned(),
+                parked: panel.parked,
+                status: panel.status.cloned(),
+            })
+            .collect();
+        self.writer.queue_parks(self, session_id, parks);
+    }
+
     /// The park state and the last status of each cloud panel of `session_id`, by
     /// panel local id. Changes nothing in the index.
     ///

@@ -118,8 +118,9 @@ items:
 
 3. Examine the dialog below the cloud title.
 
-   Result: An open section shows **This commit has no .horizon/cloud.yml**. It
-   shows **Quick start on the public base image** and **Open setup agent**.
+   Result: The section **No cloud setup yet** shows the cards **Quick start**, with
+   **Start on the base image**, and **Set up from CI**, with **Set up with** and
+   one chip for each agent.
 
 4. Examine the dialog for a red error.
 
@@ -131,7 +132,7 @@ items:
 
    Result: The title field shows the text.
 
-2. Click **Quick start on the public base image**.
+2. Click **Start on the base image**.
 
    Result: The dialog shows the profile `quick-start` with 2 vCPU and 4 GB.
 
@@ -142,9 +143,9 @@ items:
 
 4. Open **More options** and click **Read .horizon/cloud.yml**.
 
-   Result: The dialog shows **This commit has no .horizon/cloud.yml** again.
+   Result: The dialog shows **No cloud setup yet** again.
 
-5. Click **Quick start on the public base image** again.
+5. Click **Start on the base image** again.
 
    Result: The dialog shows the profile `quick-start` again.
 
@@ -155,7 +156,7 @@ This task allocates nothing.
 1. In the New cloud dialog, type `<configured>` as the repository.
 
    Result: **Profile** shows the RunPod CPU profile of `<configured>`. The dialog
-   does not show **Quick start on the public base image**.
+   does not show **Start on the base image**.
 
 2. Read the line under the profile.
 
@@ -164,8 +165,8 @@ This task allocates nothing.
 
 3. Type `<plain>` as the repository again.
 
-   Result: The dialog shows **This commit has no .horizon/cloud.yml** and does not
-   show the line of step 2.
+   Result: The dialog shows **No cloud setup yet** and does not show the line of
+   step 2.
 
 4. Type this command in a terminal outside the fixture:
 

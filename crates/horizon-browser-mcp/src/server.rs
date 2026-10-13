@@ -144,7 +144,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "cloud_companions",
-        description = "List the clouds in your Horizon workspace with the companion clouds their repositories declare: alias, repository, profile, whether the owner checked it on the source cloud's card, its status and target cloud ID. Use a cloud ID and alias from here with cloud_companion_ensure_ready and cloud_companion_stop. Reading starts nothing."
+        description = "List the clouds in your Horizon workspace with the companion clouds their repositories declare: alias, repository, profile, whether the owner checked it on the source cloud's card, its status and target cloud ID. Use a cloud ID and alias from here with cloud_companion_ensure_ready, cloud_companion_stop and cloud_companion_uncheck. Reading starts nothing."
     )]
     async fn cloud_companions(&self) -> Result<Json<crate::model::HostJson>, String> {
         self.controller
@@ -183,6 +183,20 @@ impl HorizonBrowserMcp {
                 horizon_browser_control::manifest::provider_usage::CompanionAction::Stop,
                 input,
             )
+            .await
+            .map(|value| Json(crate::model::HostJson(value)))
+    }
+
+    #[tool(
+        name = "cloud_companion_uncheck",
+        description = "Uncheck a companion on the source cloud's card, as the owner's checkbox does, when the task no longer needs it. The answer acknowledges the queued removal: the source's SSH alias, key and your copy go first, and the target's grant once both workers confirm. The removal is complete only when cloud_companions shows status unselected; selected false comes before the cleanup, and status revocation_pending means it is not done. It never starts, stops or deletes a cloud. Agents can uncheck but never check: checking stays the owner's authorization on the card. Answers changed false when the companion was not checked, and cloud_companion_busy while a companion change is in progress on that cloud, the owner's or an earlier uncheck's. Requires the running Horizon that owns the source cloud."
+    )]
+    async fn cloud_companion_uncheck(
+        &self,
+        Parameters(input): Parameters<crate::controller::companion::CompanionUncheckInput>,
+    ) -> Result<Json<crate::model::HostJson>, String> {
+        self.controller
+            .cloud_companion_uncheck(input)
             .await
             .map(|value| Json(crate::model::HostJson(value)))
     }
@@ -847,6 +861,7 @@ mod tests {
                 "cloud_companion_ensure_ready",
                 "cloud_companion_operation",
                 "cloud_companion_stop",
+                "cloud_companion_uncheck",
                 "cloud_companions",
                 "cloud_list",
                 "cloud_offers",

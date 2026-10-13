@@ -33,12 +33,17 @@ pub fn resolve_with_runner(repository: &Path, revision: &str, runner: &Runner<'_
     }
     let output = runner.run(
         "Resolve committed revision",
-        Command::new("git").arg("-C").arg(repository).args([
-            "rev-parse",
-            "--verify",
-            "--end-of-options",
-            &format!("{revision}^{{commit}}"),
-        ]),
+        // Replace refs could name other content for the same commit, so none are read.
+        Command::new("git")
+            .arg("--no-replace-objects")
+            .arg("-C")
+            .arg(repository)
+            .args([
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                &format!("{revision}^{{commit}}"),
+            ]),
         Duration::from_secs(30),
     )?;
     let sha = output.trim().to_owned();
@@ -54,6 +59,10 @@ pub(crate) fn is_commit_id(revision: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
+/// How long one export or extraction of a build snapshot may take: a repository with
+/// tens of thousands of files, such as LFS pointers to training data, takes minutes on
+/// a busy computer, and Stop still ends it at once.
+const SNAPSHOT_STEP: Duration = Duration::from_mins(10);
 /// # Errors
 /// Reports export/extraction failures. Local uncommitted files are never copied.
 pub fn snapshot(repository: &Path, revision: &str, root: &Path, runner: &Runner<'_>) -> Result<PathBuf> {
@@ -70,12 +79,12 @@ pub fn snapshot(repository: &Path, revision: &str, root: &Path, runner: &Runner<
     runner.run(
         "git archive",
         archive_command(repository).arg(&archive).arg(&sha),
-        Duration::from_secs(120),
+        SNAPSHOT_STEP,
     )?;
     runner.run(
         "extract committed source",
-        Command::new("tar").arg("-xf").arg(&archive).arg("-C").arg(&path),
-        Duration::from_secs(120),
+        Command::new("tar").arg("-xpf").arg(&archive).arg("-C").arg(&path),
+        SNAPSHOT_STEP,
     )?;
     for (index, module) in material.modules.iter().enumerate() {
         let archive = root.join(format!("module-{index}.tar"));
@@ -84,12 +93,12 @@ pub fn snapshot(repository: &Path, revision: &str, root: &Path, runner: &Runner<
         runner.run(
             "Export committed submodule",
             archive_command(&module.repository).arg(&archive).arg(&module.revision),
-            Duration::from_secs(120),
+            SNAPSHOT_STEP,
         )?;
         runner.run(
             "Extract committed submodule",
-            Command::new("tar").arg("-xf").arg(archive).arg("-C").arg(destination),
-            Duration::from_secs(120),
+            Command::new("tar").arg("-xpf").arg(archive).arg("-C").arg(destination),
+            SNAPSHOT_STEP,
         )?;
     }
     material.hydrate(&path, runner)?;
@@ -99,11 +108,23 @@ pub fn snapshot(repository: &Path, revision: &str, root: &Path, runner: &Runner<
 /// The Linux worker builds the snapshot, so pin the conversion to a Linux
 /// checkout's: Windows defaults (`core.autocrlf=true`, a CRLF `core.eol`) would
 /// otherwise turn committed LF text into CRLF. Explicit `eol` attributes still
-/// apply. The caller appends the output path and revision.
+/// apply. The file modes are pinned too: git keeps only whether a file is
+/// executable, so the archive holds 0644 and 0755, which extraction keeps (`-p`)
+/// whatever this computer's umask, and the image copies the committed modes.
+/// The caller appends the output path and revision.
 fn archive_command(repository: &Path) -> Command {
     let mut command = Command::new("git");
     command
-        .args(["-c", "core.autocrlf=false", "-c", "core.eol=lf", "-C"])
+        .arg("--no-replace-objects")
+        .args([
+            "-c",
+            "core.autocrlf=false",
+            "-c",
+            "core.eol=lf",
+            "-c",
+            "tar.umask=0022",
+            "-C",
+        ])
         .arg(repository)
         .args(["archive", "--format=tar", "--output"]);
     command

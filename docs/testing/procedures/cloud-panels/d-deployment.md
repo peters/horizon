@@ -159,7 +159,8 @@ fixture terminal.
    > **CAUTION:** SELECT ONLY THE TEST TAILNET. The worker joins the tailnet and
    > can reach the devices that its policy permits.
 
-10. In **Tailnet**, select the test tailnet.
+10. Open **More options** if it is closed. In **Tailnet**, select the test
+    tailnet.
 
     Result: The test tailnet is selected. **None** is not selected.
 
@@ -245,7 +246,8 @@ fixture terminal.
    > **CAUTION:** SELECT ONLY THE TEST TAILNET. The worker joins the tailnet and
    > can reach the devices that its policy permits.
 
-10. In **Tailnet**, select the test tailnet.
+10. Open **More options** if it is closed. In **Tailnet**, select the test
+    tailnet.
 
     Result: The test tailnet is selected.
 
@@ -314,7 +316,7 @@ fixture terminal.
 
    Result: The summary shows the GPU type and a pod volume.
 
-8. In **Tailnet**, select **None**.
+8. Open **More options** if it is closed. In **Tailnet**, select **None**.
 
    Result: **None** is selected.
 

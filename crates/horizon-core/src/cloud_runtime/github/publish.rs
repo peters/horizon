@@ -18,6 +18,10 @@ use zeroize::{Zeroize as _, Zeroizing};
 /// Horizon's own OAuth app "Horizon": public, with device sign-in on. Its tokens carry
 /// scopes, which the package registry requires.
 const CLIENT_ID: &str = "Ov23liPNCPgWraJDo6XM";
+
+/// The GitHub page where the person sees Horizon's OAuth app and grants it to an
+/// organization that limits OAuth apps.
+pub const APP_PAGE: &str = "https://github.com/settings/connections/applications/Ov23liPNCPgWraJDo6XM";
 const SCOPE: &str = "write:packages";
 const REGISTRY: &str = "ghcr.io";
 /// The chain, private, in Horizon's Docker configuration directory.
@@ -90,6 +94,151 @@ pub fn login(docker_config: &Path, image: &str, cloud_id: &str, runner: &Runner<
         None => sign_in(docker_config, &client, cloud_id, runner)?,
     };
     write_auth(docker_config, &login, &token)
+}
+
+/// A throwaway Docker configuration for building on this computer: only Horizon's own
+/// `ghcr.io` login, renewed without asking when it is close to expiry, so private
+/// `ghcr.io` bases pull without the machine's credential helpers. Without a stored login
+/// it holds none, and public images pull anonymously. No registry login or credential
+/// helper of the machine's carries over. Its Docker context and CLI plugins do, so
+/// `buildx` and the daemon are the ones Docker normally uses; a remote context brings
+/// its own connection settings and TLS files with it, as Docker reads them anyway.
+/// Returns the directory, deleted on drop, and whether it carries the login.
+/// # Errors
+/// The directory or its file cannot be written.
+pub fn build_config(docker_config: &Path) -> Result<(tempfile::TempDir, bool)> {
+    let machine = std::env::var_os("DOCKER_CONFIG")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".docker")));
+    build_config_with(docker_config, machine.as_deref())
+}
+
+/// The settings of the machine's Docker configuration that hold no credentials; proxy
+/// URLs can, so `proxies` stays out. The context it names resolves only where its
+/// folders are linked in, so only there.
+#[cfg(unix)]
+const MACHINE_SETTINGS: &[&str] = &["currentContext", "cliPluginsExtraDirs"];
+#[cfg(not(unix))]
+const MACHINE_SETTINGS: &[&str] = &["cliPluginsExtraDirs"];
+
+fn build_config_with(docker_config: &Path, machine: Option<&Path>) -> Result<(tempfile::TempDir, bool)> {
+    let directory = tempfile::Builder::new().prefix("horizon-build-docker-").tempdir()?;
+    let login = if docker_config.join(STORE).is_file() {
+        // The lock is held while the login renews; a renewal that fails says so instead of
+        // turning into an anonymous pull that a private base then refuses.
+        let client = Client::new();
+        let _lock = stored::lock(&docker_config.join(LOCK), || Ok(()))?;
+        current(docker_config, &client)?
+    } else {
+        None
+    };
+    let signed_in = login.is_some();
+    let mut config = match login {
+        Some((login, token)) => {
+            let plain = Zeroizing::new(format!("{login}:{}", token.expose()));
+            let auth = Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(plain.as_bytes()));
+            Config(serde_json::json!({ "auths": { REGISTRY: { "auth": auth.as_str() } } }))
+        }
+        None => Config(serde_json::json!({ "auths": {} })),
+    };
+    if let Some(machine) = machine {
+        // Contexts (with any TLS files a remote context keeps) and plugins: what Docker
+        // needs to reach its daemon. Never registry logins or credential helpers.
+        let settings = std::fs::read(machine.join("config.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+        if let (Some(settings), Some(target)) = (settings, config.0.as_object_mut()) {
+            for &key in MACHINE_SETTINGS {
+                if let Some(value) = settings.get(key) {
+                    target.insert(key.to_owned(), value.clone());
+                }
+            }
+        }
+        #[cfg(unix)]
+        for folder in ["contexts", "cli-plugins"] {
+            if machine.join(folder).is_dir() {
+                let _ = std::os::unix::fs::symlink(machine.join(folder), directory.path().join(folder));
+            }
+        }
+    }
+    let bytes = stored::serialized(|writer| serde_json::to_writer(writer, &config.0))?;
+    write_private(directory.path(), "config.json", &bytes)?;
+    Ok((directory, signed_in))
+}
+
+/// The organization that keeps Horizon's own login from pulling a `ghcr.io` image named
+/// in `text`, a build's output, because it limits OAuth apps, as GitHub's packages API
+/// says. `None` without a stored login, without such an image, when GitHub cannot be
+/// asked, or once `cancelled` says so; it is asked before each request.
+#[must_use]
+pub fn restricting_organization(docker_config: &Path, text: &str, cancelled: &dyn Fn() -> bool) -> Option<String> {
+    let packages = ghcr_packages(text);
+    if packages.is_empty() || !docker_config.join(STORE).is_file() || cancelled() {
+        return None;
+    }
+    let client = Client::new();
+    // Another cloud may hold the login while it publishes or signs in: a stop ends the
+    // wait, and nothing is renewed after it.
+    let (_, token) = stored::lock(&docker_config.join(LOCK), || {
+        if cancelled() {
+            Err(std::io::Error::other("the proof stopped").into())
+        } else {
+            Ok(())
+        }
+    })
+    .ok()
+    .filter(|_| !cancelled())
+    .and_then(|_lock| current(docker_config, &client).ok().flatten())?;
+    // The first answer that is neither yes nor no (an outage, a rate limit) ends the
+    // probing: asking the next image would only wait out another timeout.
+    for (owner, name) in packages {
+        if cancelled() {
+            return None;
+        }
+        match client.oauth_restricted(&token, &owner, &name) {
+            Ok(true) => return Some(owner),
+            Ok(false) => {}
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
+/// The most images one diagnosis asks GitHub about.
+const MAX_PACKAGES: usize = 8;
+
+/// The owner and name of each distinct `ghcr.io` image named in `text`, without its tag
+/// or digest; at most [`MAX_PACKAGES`], the first ones named.
+fn ghcr_packages(text: &str) -> Vec<(String, String)> {
+    let mut packages = Vec::new();
+    for (index, _) in text.match_indices("ghcr.io/") {
+        if packages.len() == MAX_PACKAGES {
+            break;
+        }
+        // A registry API address such as https://ghcr.io/v2/OWNER/NAME/manifests/TAG
+        // names no image in that form; the image reference beside it does.
+        if text[..index].ends_with("://") {
+            continue;
+        }
+        let reference: String = text[index + "ghcr.io/".len()..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || "._-/:@".contains(*c))
+            .collect();
+        let path = reference.split('@').next().unwrap_or_default();
+        // A tag follows the first colon after the last slash.
+        let last = path.rfind('/').map_or(0, |slash| slash + 1);
+        let path = path[last..].find(':').map_or(path, |colon| &path[..last + colon]);
+        // A sentence may end right after the image: its full stop is no part of the name.
+        let path = path.trim_end_matches(['/', '.', '_', '-']);
+        let Some((owner, name)) = path.split_once('/') else {
+            continue;
+        };
+        let package = (owner.to_ascii_lowercase(), name.to_ascii_lowercase());
+        if !name.is_empty() && !packages.contains(&package) {
+            packages.push(package);
+        }
+    }
+    packages
 }
 
 /// The stored chain's account and a usable access token, renewed when it is close to its

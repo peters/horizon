@@ -231,7 +231,10 @@ pub fn default_tag(operation_id: &str) -> String {
     format!("horizon-{operation_id}")
 }
 /// Capability selections plus the exact agent releases that key each install layer.
-fn build_arguments(capabilities: &Capabilities, releases: &agents::Releases) -> Vec<String> {
+/// The `--build-arg` options deployment passes for `capabilities`: its capability
+/// switches and the agent CLI releases, so a setup proof builds the same image.
+#[must_use]
+pub fn build_arguments(capabilities: &Capabilities, releases: &agents::Releases) -> Vec<String> {
     [
         format!("HORIZON_AGENTS={}", capabilities.agents_argument()),
         format!("HORIZON_BROWSERS={}", capabilities.browsers_argument()),

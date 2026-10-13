@@ -471,21 +471,151 @@ is checked; they do not mean a worker is missing or authorize a replacement.
 ## Repository setup and deployment
 
 If the selected commit has no `.horizon/cloud.yml`, **New cloud** shows
-**This commit has no .horizon/cloud.yml**. This is not an error. The dialog then
-shows two choices:
+**No cloud setup yet**. This is not an error. The dialog then shows two choices:
 
-- **Quick start on the public base image** starts the repository on the base image.
-  See [Quick start](#quick-start).
-- **Open setup agent** opens a local agent panel that prepares the settings of the
-  repository.
+- **Quick start** starts the repository on the base image. See
+  [Quick start](#quick-start).
+- **Set up from CI** starts a setup agent, Claude or Codex, that prepares the
+  settings of the repository. It runs on Linux with a systemd user session:
+  Horizon starts the agent in a systemd user scope, which holds every process the
+  agent starts as its descendant, so it can end them all before it commits. The
+  scope is not a sandbox: the agent runs as you, and a program it hands to another
+  service of yours, such as Docker or your systemd user manager, runs outside it,
+  as any program you start does. What **Use this setup** commits does not rest on
+  the scope: it is the setup Horizon proved, read after the agent ended, with every
+  other change named first. On macOS and Windows the dialog does not offer it, and
+  on Linux without a systemd user session the agent does not start; use
+  **Quick start** or write `.horizon` yourself.
 
-The setup agent is a normal local agent panel with its existing local login.
-Horizon does not export the API-key bindings of remote workers to it. The agent
-examines the repository requirements and proposes the capabilities before it
-prepares files. Review its changes and prerequisites, run the repository checks
-and commit the setup. Then go back to **New cloud** and choose **Read
-.horizon/cloud.yml**. A change of the repository or YAML that is not valid clears
-the profiles that the dialog read before. Thus you cannot deploy an old profile
+The setup agent is a normal local agent session with its existing local login.
+Horizon does not export the API-key bindings of remote workers to it. Its panel is
+hidden: the dialog becomes a preparation view, **Set up REPOSITORY**, because
+nothing is rented yet. The left column shows the steps (Read CI, Find tools,
+Write Dockerfile, Build image, Run CI in image, Fast rerun, Desktop preview), each
+with a short detail and its elapsed time. The right column is the agent's own
+terminal without panel chrome. Click it to type to the agent, for example to
+answer a question or to change its plan. A question also shows above the steps.
+**Stop** closes the agent. **Close** keeps it working, and **New cloud** shows it
+again for the same repository.
+
+The agent reads the CI of the repository first, the GitHub Actions workflows in
+`.github/workflows`: the Linux jobs that restore, build and test, the tool versions
+they use and where those versions come from. Horizon proves GitHub Actions jobs
+only, so a repository without a GitHub Actions workflow that builds or tests on
+Linux cannot finish the setup yet; the agent says so. It uses
+[localci](https://github.com/peters/localci) when it is installed: `localci plan`
+resolves the jobs, and each `uses:` step that localci skips is a tool that the
+image must supply. Then it reads `AGENTS.md`, the README and existing Dockerfiles.
+It writes `.horizon/Dockerfile` on the public worker base of
+[Quick start](#quick-start) and `.horizon/cloud.yml`. The image also gets a pinned
+localci release, so agents on the worker run the CI jobs with
+`localci run --fast`. The agent does not build the image or run the CI itself:
+it names the CI jobs in its status file, and Horizon proves the image on this
+computer with Docker. Horizon builds it, runs the worker check, runs the jobs
+in a container of the image as the worker account with the localci that a worker
+session finds first on its `PATH`, as the agents on the worker do, then once more
+with `--fast` to show the warm rerun, and tells the agent the result. A wrapper
+there that starts what the CI needs, such as a database, and then runs localci
+is allowed. A job that runs no command here, because its `if:` is false on this
+computer, such as a publish job, or because the proof skips each step of it that
+runs one, is left out of the proof and named in its output. The proof shows that
+the setup works, not that the image is honest: every program the CI runs comes
+from the image, its shell included. The
+dialog shows these steps as proved by Horizon, with their times. **Use this
+setup** is available only after the proof that the agent asked for passed and
+only while the `.horizon` files and the commit are the ones it tested. A build
+context outside `.horizon` is built from the committed tree with the proposed
+`.horizon` files over it, which is the image that deployment builds, and a build
+path that leaves the repository is refused. Each profile's distinct build is
+built and checked, and the CI runs in the default profile's image; a default
+profile that runs a published image is pulled and checked instead of built. Each
+image the setup builds must have localci on a worker session's `PATH`, with mode
+755; a published image runs as it is published, so its workers have localci only
+when the image does, and its proof runs Horizon's own. The CI runs
+with the session environment a worker gives, not the image's `ENV`. A
+setup with a GPU profile is proved only on a computer with an NVIDIA GPU, and the
+CI uses that GPU when the default profile asks for one. The proof
+gets the tested commit and its history as a bundle, never this computer's git
+folder, checked out on its branch with the tags in its history, as
+`actions/checkout` leaves a push build, and each setup run has its own image and volume, removed when it ends. For a .NET repository
+with private feeds, check **Restore private NuGet packages on this computer for
+the proof**: Horizon then runs `dotnet restore` here, with this computer's feed
+logins, copies the packages that restore used into the proof's volume for the
+worker's account, and the container restores again from them, without any
+credential; the CI reads only those packages. A restore here or in the container
+that fails, fails the proof. It is off by default, because the restore runs the repository's
+build files on this computer. For a Rust repository whose committed `Cargo.lock` pins git
+dependencies on GitHub, the dialog names those repositories under **Fetch private
+Rust git dependencies on this computer for the proof**. When you check it, Horizon
+clones each named repository with plain `git clone --mirror` and this computer's
+Git login into a private folder in its own home, and the container reads each clone
+read-only in place of its GitHub address. Horizon runs no Cargo, rustup or
+repository configuration on this computer for this, and clones nothing that the box
+does not name. The clones of one proof may hold at most 4 GiB on this computer; past
+that the proof stops. It is off by default, because the proof's CI can read every
+repository that the box names. When you clear the box after a proof that cloned,
+the next proof starts on a new volume, so no copy stays in its caches. A
+repository without GitHub Actions is proved with the commands its README,
+`AGENTS.md` or build files give, run in order in the same container on the same
+checkout and restore; its images need no localci. For a
+desktop app the agent names the command that starts it, and after the proof
+passes Horizon starts the app in a container of the image on the proof's volume,
+with a virtual desktop on `:99` like the worker's. When a window appears, Horizon
+takes a screenshot (when the image has ImageMagick's `import`) and opens the
+desktop live in a Device panel beside the agent,
+on this computer's loopback, before anything is rented. A new proof or a new
+preview request replaces the live desktop, and **Stop** or **Use this setup**
+removes it. The preview of a GPU profile gets this computer's GPU, and it gets
+`/dev/kvm` when the app asks for it, such as an x86_64 Android emulator. With
+rootless Docker, only the container's root account can open `/dev/kvm`, so that
+preview runs as root, which is your own account. When this computer has no
+`/dev/kvm`, or a container cannot open it (with rootless Docker the person's
+account needs access to it), Horizon skips that preview, says why, and accepts the
+setup without it. The agent asks before it uses a credential of yours, such as your
+GitHub token for a private package feed. It does not allocate compute, push
+images, commit or open a pull request.
+
+The agent pins each toolchain version in `.horizon/Dockerfile` as an `ARG`
+and writes `.horizon/pins.json`, which names the repository file that each
+version comes from, for example `global.json` for the .NET SDK. Horizon writes
+`.horizon/verify-pins.py` beside it, the same file in every repository, and
+checks the pins at the start of each proof with its own copy of that file. The
+agent does not change the CI: its summary gives the one step to add to the main
+CI job after the checkout, `python3 -I .horizon/verify-pins.py`. With that step, a
+later pull request that moves a toolchain, such as a new SDK in `global.json`,
+fails in its own CI until the setup moves with it.
+
+The agent also declares the repository's [companions](#companion-declarations).
+It finds them in `AGENTS.md` and in the product map that `AGENTS.md` points to,
+such as `../company/docs/products.json`, whose edges point from the consumer to
+the provider and say whether the two sides must be checked together. The agent
+declares no `same_worker` sibling, because the proof does not build sibling layers
+yet: where `AGENTS.md` requires another repository's tests for this repository's
+changes, such as a native library and the app that consumes its packages, the
+summary names that repository instead. A runtime contract that must be checked
+together, such as a REST API, a message queue or a shared key, gets a
+separate-cloud companion in the repository that consumes it, and in the provider
+only when its `AGENTS.md` says its changes are checked against that consumer. A package that a repository only uses is
+not a companion: a library that the app uses does not declare the app. Each
+repository stays usable on its own, because a declaration only offers the
+companion in **New cloud**.
+
+Some build failures are account problems, not Dockerfile problems. Horizon
+pulls private `ghcr.io` bases with its own GitHub login. If an organization
+limits OAuth apps, GitHub refuses that pull. Horizon then shows the cause,
+**ORGANIZATION blocks Horizon's GitHub app**, and tells the agent not to change
+files for it. **Let the agent do it** opens a **GitHub access** browser panel on
+the page of Horizon's app, beside the agent, and the agent clicks **Grant** for
+that organization. When GitHub asks you to sign in, the agent hands the browser
+to you: sign in, then press **Done**. The agent never types a password or a
+code. **Open GitHub myself** opens the same panel for you; **Prove again**
+then runs the proof again. Only an owner of the organization can grant access.
+For other members, GitHub shows **Request**, and an owner must approve it.
+
+When the agent is done, **Use this setup** commits the files in `.horizon` and
+reads them as the repository profile, so **Start cloud** can use them. A change
+of the repository or YAML that is not valid clears the profiles that the dialog
+read before. Thus you cannot deploy an old profile
 by accident.
 
 If the read fails for a different cause, for example a committed
@@ -903,6 +1033,32 @@ then, the panel shows that Horizon reconnects the cloud. When the cloud is
 stopped, the panel shows that the cloud is stopped and that **Resume worker** on
 the card restores the panel.
 
+### Close a cloud
+
+The **×** on the header of a cloud opens a dialog. If the cloud has a worker or
+storage at its provider, the primary action is **Delete cloud resources**.
+Horizon deletes them in the background, and the card shows the steps. When the
+deletion is complete, Horizon removes the cloud and its panels. A cloud that
+has no worker or storage shows **Remove cloud** instead. If Horizon then finds
+storage in the record of the cloud, the dialog shows the reason and
+**Delete cloud resources**.
+
+If the deletion fails or cannot start, or if Horizon cannot read the resource
+state of the cloud, the dialog shows the reason and **Remove from Horizon
+anyway**. This action removes the cloud and its panels from Horizon, but it
+does not delete the resources at the provider. The dialog names the resources
+that can remain. They can cost money until you delete them at the provider.
+Horizon keeps the state directory of the cloud, including its operation lock.
+This keeps all controllers on the same lock file. **Cancel** keeps the cloud.
+
+While a different operation of the cloud runs, for example a deployment or a
+provider check, the dialog tells you to wait and shows only **Cancel**. This is
+also true for an operation in a different Horizon instance. When the operation
+ends, the open dialog shows the actions again. If another instance takes the
+record lock between a dialog refresh and a removal click, Horizon refuses the
+removal and keeps the cloud. The dialog shows only **Cancel** until that
+operation ends.
+
 ### Parked terminals
 
 When no terminal of a ready cloud is on the screen for 2 minutes, Horizon parks
@@ -950,18 +1106,25 @@ Each group header shows how many workspaces it has. At the right of the header
 line, a summary in secondary text shows the hourly rate of the running workers of
 the group, **no local cost** for **Parked**, and **live** for **This PC**. The
 summary never wraps. When the sidebar is narrow, it shows fewer parts, and then a
-shortened first part. Hover over it to see all of it.
+shortened first part. Hover over it to see all of it. If no part fits, for example
+next to **Stop idle…** on the narrowest sidebar, the header does not show the
+summary. A screen reader still reads it after the group name and count.
 
-Each row shows a status dot, the workspace name and one status line. The status
-line is the last line with words on the screen of the primary terminal (the first
-agent, else the focused terminal, else the first terminal). Frames, prompts and
-footer hints are not status lines. For a parked cloud, the line comes from the
-session status that the worker sends. A parked row is compact: it shows only the
-dot and the name, and its dot shows the status line on hover. A filled dot is
+Each row shows a tile, the workspace name and one status line. The tile has the
+color of the workspace on the canvas and the first letters of the first two words
+of its name. The status line is the last line with words on the screen of the
+primary terminal (the first agent, else the focused terminal, else the first
+terminal). Frames, prompts and footer hints are not status lines, and terminal
+padding becomes single spaces. For a parked cloud, the line comes from the session
+status that the worker sends. A parked row is compact: it shows only a smaller
+tile and the name, and its tile shows the status line on hover.
+
+A badge on the lower-right corner of the tile shows the status. A filled badge is
 green when an agent works, yellow when the workspace waits for you, red when an
-operation failed, the accent color while Horizon works on the cloud, and grey when
-nothing runs. A ring is a parked cloud (green when an agent still works on the
-worker), or a stopped worker.
+operation failed, and the accent color while Horizon works on the cloud. A ring is
+a parked cloud (green when an agent still works on the worker), or a stopped
+worker. A workspace where nothing runs has no badge. Hover over the tile to see
+what the badge means.
 
 Click a row to go to its workspace. A parked cloud then attaches, as described in
 [Parked terminals](#parked-terminals).
@@ -1375,6 +1538,11 @@ checked on the source cloud's card, through the browser MCP server:
 - `cloud_companion_stop` stops the companion's worker and keeps its workspace
   storage and worktrees. It stays stopped until an explicit Ensure Ready:
   checking its box or restarting Horizon does not start it.
+- `cloud_companion_uncheck` unchecks a companion as the box on the card does,
+  when the task no longer needs it: the source's access goes, and the target's
+  grant once both workers confirm. It never starts, stops or deletes a cloud.
+  Agents can uncheck but never check, because checking is the owner's
+  authorization.
 - `cloud_companion_operation` reads an operation's phase from the original
   request's `cloud` and `alias` and its `operation_id`, without changing
   anything: polling never starts or continues an operation.

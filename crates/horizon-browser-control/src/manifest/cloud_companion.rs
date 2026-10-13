@@ -3,7 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 /// What an agent asks of a source cloud's companions. Ensure Ready and Stop are
-/// explicit lifecycle requests; `list` and `status` only read.
+/// explicit lifecycle requests; `list` and `status` only read. `uncheck` removes the
+/// source's access as the owner's checkbox does; nothing checks one.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CompanionAction {
@@ -11,6 +12,7 @@ pub enum CompanionAction {
     EnsureReady,
     Stop,
     Status,
+    Uncheck,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -69,6 +71,7 @@ impl CompanionRequest {
             CompanionAction::EnsureReady | CompanionAction::Stop | CompanionAction::Status => {
                 name(&self.cloud) && name(&self.alias) && operation
             }
+            CompanionAction::Uncheck => name(&self.cloud) && name(&self.alias) && self.operation_id.is_none(),
         }
     }
 }
@@ -102,6 +105,20 @@ mod tests {
             invalid[field] = "synthetic".into();
             assert!(serde_json::from_value::<CompanionRequest>(invalid).is_err());
         }
+        let uncheck = serde_json::json!({"action":"uncheck","cloud":"source","alias":"worker"});
+        assert!(
+            serde_json::from_value::<CompanionRequest>(uncheck.clone())
+                .unwrap()
+                .valid()
+        );
+        let mut with_operation = uncheck;
+        with_operation["operation_id"] = new_operation_id().into();
+        assert!(
+            !serde_json::from_value::<CompanionRequest>(with_operation)
+                .unwrap()
+                .valid(),
+            "an uncheck is not an operation to poll"
+        );
         let mut invalid = value;
         invalid["tailnet"] = "tskey-auth-synthetic12345678901234567890".into();
         assert!(!serde_json::from_value::<CompanionRequest>(invalid).unwrap().valid());

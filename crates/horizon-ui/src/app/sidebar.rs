@@ -1,7 +1,9 @@
 mod list;
 mod menus;
 mod new_workspace;
+mod panel_rows;
 mod rows;
+mod text;
 mod toolbar;
 
 pub(in crate::app) use list::{IdleCloud, ListCache};
@@ -9,16 +11,12 @@ pub(in crate::app) use new_workspace::NewWorkspace;
 
 use std::collections::HashMap;
 
-use egui::{
-    Align, Button, Color32, Context, CornerRadius, CursorIcon, Id, Layout, Order, Pos2, Rect, Sense, Stroke, UiBuilder,
-    Vec2,
-};
+use egui::{Align, Color32, Context, CornerRadius, CursorIcon, Id, Layout, Order, Pos2, Rect, Sense, Stroke, Vec2};
 use horizon_core::cloud_list::{Group, Row};
 use horizon_core::{PanelId, PanelKind, WorkspaceDockSide, WorkspaceId, WorkspaceLayout};
 
 use crate::theme;
 
-use super::panels::panel_kind_icon;
 use super::root_chrome::effective_sidebar_width;
 use super::util;
 use super::workspace::WorkspaceLayoutCapabilities;
@@ -39,15 +37,14 @@ struct WorkspaceSidebarEntry {
 #[derive(Clone)]
 struct SidebarPanelEntry {
     id: PanelId,
+    /// The panel's whole title.
     title: String,
+    /// What the row says: an agent's task, or the title. Empty while the row
+    /// does not show.
+    label: String,
     kind: PanelKind,
     is_focused: bool,
-}
-
-#[derive(Clone, Copy)]
-struct SidebarWorkspaceRowInteraction {
-    hovered: bool,
-    clicked: bool,
+    working: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -122,38 +119,34 @@ impl HorizonApp {
     }
 
     fn sidebar_workspace_data(&self) -> Vec<WorkspaceSidebarEntry> {
-        let panel_data = self
+        let accordion = self.template_config.features.sidebar_accordion;
+        // One pass over the panels: rows read their panel from here, never by a
+        // lookup on the board.
+        let panels_by_id = self
             .board
             .panels
             .iter()
-            .map(|panel| {
-                (
-                    panel.id,
-                    SidebarPanelEntry {
-                        id: panel.id,
-                        title: panel.display_title().into_owned(),
-                        kind: panel.kind,
-                        is_focused: self.board.focused == Some(panel.id),
-                    },
-                )
-            })
+            .map(|panel| (panel.id, panel))
             .collect::<HashMap<_, _>>();
 
         self.board
             .workspaces
             .iter()
             .map(|workspace| {
+                let is_active = self.board.active_workspace == Some(workspace.id);
+                let shows_panels = sidebar_workspace_shows_panels(is_active, accordion);
                 let panels = workspace
                     .panels
                     .iter()
-                    .filter_map(|panel_id| panel_data.get(panel_id).cloned())
+                    .filter_map(|panel_id| panels_by_id.get(panel_id))
+                    .map(|panel| self.sidebar_panel_entry(panel, shows_panels))
                     .collect::<Vec<_>>();
 
                 WorkspaceSidebarEntry {
                     id: workspace.id,
                     name: workspace.name.clone(),
                     color: theme::workspace_accent(workspace.color_idx),
-                    is_active: self.board.active_workspace == Some(workspace.id),
+                    is_active,
                     detached: self.workspace_is_detached(workspace.id),
                     capabilities: self.workspace_layout_capabilities(workspace.id),
                     panels,
@@ -161,6 +154,24 @@ impl HorizonApp {
                 }
             })
             .collect()
+    }
+
+    /// The sidebar entry of `panel`, with its row label when the row `shows`.
+    fn sidebar_panel_entry(&self, panel: &horizon_core::Panel, shows: bool) -> SidebarPanelEntry {
+        let title = panel.display_title().into_owned();
+        let label = if shows {
+            self.sidebar_panel_label(panel, &title)
+        } else {
+            String::new()
+        };
+        SidebarPanelEntry {
+            id: panel.id,
+            title,
+            label,
+            kind: panel.kind,
+            is_focused: self.board.focused == Some(panel.id),
+            working: panel.agent_status() == horizon_core::AgentStatus::Working,
+        }
     }
 
     fn paint_sidebar_frame(ui: &mut egui::Ui, sidebar_origin: Pos2, sidebar_size: Vec2, sidebar_width: f32) {
@@ -196,6 +207,8 @@ impl HorizonApp {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
+                // Rows and headers set their own gaps.
+                ui.spacing_mut().item_spacing.y = 0.0;
 
                 self.render_sidebar_groups(ui, workspace_data, actions, &mut drag_state);
             });
@@ -214,12 +227,14 @@ impl HorizonApp {
         ui.add_space(16.0);
         ui.horizontal(|ui| {
             ui.add_space(18.0);
-            ui.label(
-                egui::RichText::new("WORKSPACES")
-                    .color(theme::FG_DIM())
-                    .size(10.5)
-                    .strong(),
-            );
+            ui.label(text::line(
+                ui,
+                "Workspaces",
+                13.0,
+                text::SEMIBOLD,
+                theme::FG_SOFT(),
+                120.0,
+            ));
             ui.add_space(6.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.add_space(12.0);
@@ -255,18 +270,13 @@ impl HorizonApp {
         drag_state: &mut SidebarWorkspaceDragState,
     ) {
         let accordion = self.template_config.features.sidebar_accordion;
-        let compact = rows::is_compact(workspace);
-        ui.add_space(if compact { 1.0 } else { 2.0 });
+        ui.add_space(2.0);
 
-        let height = if compact {
-            rows::COMPACT_ROW_HEIGHT
-        } else {
-            rows::ROW_HEIGHT
-        };
-        let row_rect = ui.allocate_space(Vec2::new(ui.available_width(), height)).1;
+        let row_rect = ui
+            .allocate_space(Vec2::new(ui.available_width(), rows::row_height(workspace)))
+            .1;
         let mut click_target_hovered = ui.rect_contains_pointer(row_rect);
-        let mut row_clicked = false;
-        rows::paint_workspace_row_bg(
+        let surface = rows::paint_workspace_row_bg(
             ui,
             row_rect,
             workspace.color,
@@ -274,24 +284,21 @@ impl HorizonApp {
             click_target_hovered,
             self.sidebar_drag_workspace == Some(workspace.id),
         );
-        ui.scope_builder(
-            UiBuilder::new()
-                .max_rect(row_rect)
-                .layout(Layout::left_to_right(Align::Center)),
-            |ui| {
-                let interaction = rows::render_sidebar_workspace_row_contents(ui, workspace, accordion);
-                click_target_hovered |= interaction.hovered;
-                row_clicked |= interaction.clicked;
-            },
-        );
-
         let row_response = ui.interact(
             row_rect,
             ui.make_persistent_id(("sidebar_ws_click", workspace.id.0)),
             Sense::click_and_drag(),
         );
-        click_target_hovered |= row_response.hovered();
-        row_clicked |= row_response.clicked();
+        row_response.widget_info(|| {
+            let panels = accordion.then_some(workspace.panels.len());
+            let spoken = text::workspace_spoken(&workspace.name, panels, workspace.detached);
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, spoken)
+        });
+        // The tile, name and line tooltips go after the row: egui hovers a widget that
+        // only senses hover when it lies above the row's click target.
+        let tile_response = rows::paint_workspace_row_contents(ui, row_rect, workspace, accordion, surface);
+        click_target_hovered |= row_response.hovered() || tile_response.hovered();
+        let row_clicked = row_response.clicked();
         self.handle_sidebar_workspace_drag(ui, workspace, row_rect, &row_response, drag_state, click_target_hovered);
 
         if row_clicked {
@@ -311,11 +318,12 @@ impl HorizonApp {
 
         if sidebar_workspace_shows_panels(workspace.is_active, accordion) {
             ui.add_space(2.0);
-            for panel in &workspace.panels {
-                self.render_sidebar_panel(ui, workspace, panel, actions);
+            let count = workspace.panels.len();
+            for (index, panel) in workspace.panels.iter().enumerate() {
+                self.render_sidebar_panel(ui, workspace, panel, index + 1 == count, actions);
             }
         }
-        ui.add_space(if compact { 1.0 } else { 4.0 });
+        ui.add_space(2.0);
     }
 
     /// The panel a workspace-row click reveals. Accordion rows (where panel
@@ -391,89 +399,94 @@ impl HorizonApp {
         ui: &mut egui::Ui,
         workspace: &WorkspaceSidebarEntry,
         panel: &SidebarPanelEntry,
+        last: bool,
         actions: &mut SidebarActions,
     ) {
-        let row_rect = ui.allocate_space(Vec2::new(ui.available_width(), 30.0)).1;
-        let mut click_target_hovered = ui.rect_contains_pointer(row_rect);
-        let mut row_clicked = false;
-        rows::paint_panel_row_bg(ui, row_rect, workspace.color, panel.is_focused, click_target_hovered);
-
-        let mut close_clicked = false;
-        ui.scope_builder(
-            UiBuilder::new().max_rect(row_rect).layout(Layout::top_down(Align::Min)),
-            |ui| {
-                ui.horizontal(|ui| {
-                    ui.set_min_height(30.0);
-                    ui.add_space(30.0);
-
-                    let (icon, icon_color) = panel_kind_icon(panel.kind, workspace.color, panel.is_focused);
-                    let icon_response = ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(icon)
-                                .color(icon_color)
-                                .size(10.0)
-                                .monospace()
-                                .strong(),
-                        )
-                        .sense(Sense::click()),
-                    );
-                    click_target_hovered |= icon_response.hovered();
-                    row_clicked |= icon_response.clicked();
-                    ui.add_space(4.0);
-
-                    let title_width = (ui.available_width() - 28.0).max(48.0);
-                    let title_response = ui.add_sized(
-                        Vec2::new(title_width, 18.0),
-                        egui::Label::new(
-                            egui::RichText::new(&panel.title)
-                                .color(if panel.is_focused {
-                                    theme::FG()
-                                } else {
-                                    theme::FG_SOFT()
-                                })
-                                .size(12.5),
-                        )
-                        .truncate()
-                        .sense(Sense::click()),
-                    );
-                    click_target_hovered |= title_response.hovered();
-                    row_clicked |= title_response.clicked();
-
-                    let close = ui.add(
-                        Button::new(egui::RichText::new("\u{00D7}").size(16.0).color(theme::FG_DIM())).frame(false),
-                    );
-                    if close.clicked() {
-                        close_clicked = true;
-                    }
-                });
+        let row_rect = ui
+            .allocate_space(Vec2::new(ui.available_width(), panel_rows::PANEL_ROW_HEIGHT))
+            .1;
+        let label = &panel.label;
+        let hovered = ui.rect_contains_pointer(row_rect);
+        let close_rect = panel_rows::close_rect(row_rect);
+        // The close button always takes clicks and tells a screen reader its name,
+        // but shows only on the hovered or focused row, or while the row or the
+        // button has keyboard focus.
+        let close = ui
+            .interact(
+                close_rect,
+                ui.make_persistent_id(("sidebar_panel_close", panel.id.0)),
+                Sense::click(),
+            )
+            .on_hover_text("Close panel");
+        close.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close panel"));
+        let row_id = sidebar_panel_row_id(panel.id);
+        let row_focused = ui.memory(|memory| memory.has_focus(row_id));
+        let close_shows = hovered || panel.is_focused || row_focused || close.hovered() || close.has_focus();
+        // A pointer press closes only a button that the person could see before the
+        // press began: a tap on the hidden button of another row focuses that row
+        // instead. The decision is kept from pointer-down until the release.
+        let shown_id = ui.make_persistent_id(("sidebar_panel_close_shown", panel.id.0));
+        let armed_id = ui.make_persistent_id(("sidebar_panel_close_armed", panel.id.0));
+        let shown_before = ui.ctx().data(|data| data.get_temp::<bool>(shown_id)).unwrap_or(false);
+        let (pressed, press_origin) = ui.input(|input| (input.pointer.any_pressed(), input.pointer.press_origin()));
+        if pressed && press_origin.is_some_and(|origin| close_rect.contains(origin)) {
+            ui.ctx().data_mut(|data| data.insert_temp(armed_id, shown_before));
+        }
+        ui.ctx().data_mut(|data| data.insert_temp(shown_id, close_shows));
+        let armed = ui.ctx().data(|data| data.get_temp::<bool>(armed_id)).unwrap_or(false);
+        let by_pointer = ui.input(|input| input.pointer.any_click());
+        let close_clicked = close.clicked() && (armed || close.has_focus() || !by_pointer);
+        let blind_tap = close.clicked() && !close_clicked;
+        let title_elided = panel_rows::paint_panel_row(
+            ui,
+            row_rect,
+            workspace,
+            panel,
+            label,
+            panel_rows::PanelRowState {
+                hovered,
+                close: close_shows.then(|| close.hovered() || close.has_focus()),
+                last,
             },
         );
 
-        let row_click_rect = Rect::from_min_max(row_rect.min, Pos2::new(row_rect.max.x - 28.0, row_rect.max.y));
-        let row_response = ui.interact(
-            row_click_rect,
-            ui.make_persistent_id(("sidebar_panel_click", panel.id.0)),
-            Sense::click(),
-        );
-        click_target_hovered |= row_response.hovered();
-        row_clicked |= row_response.clicked();
-
-        if click_target_hovered {
+        let row_click_rect = Rect::from_min_max(row_rect.min, Pos2::new(close_rect.min.x, row_rect.max.y));
+        let row_response = ui.interact(row_click_rect, row_id, Sense::click());
+        row_response.widget_info(|| {
+            let spoken = text::panel_spoken(panel.kind, label, panel.working);
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, spoken)
+        });
+        // The whole title, when the row cuts it or shows only the agent's task.
+        let row_response = if title_elided || *label != panel.title {
+            row_response.on_hover_text(&panel.title)
+        } else {
+            row_response
+        };
+        if hovered {
             ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
         }
 
         if close_clicked {
             actions.close_panel = Some(panel.id);
-        }
-
-        let row_clicked = row_clicked && !close_clicked;
-        if row_clicked {
+        } else if row_response.clicked() || blind_tap {
             actions.focus_panel = Some(panel.id);
             actions.pan_to_panel = Some(panel.id);
         }
 
         self.show_sidebar_panel_context_menu(&row_response, workspace, panel.id, panel.kind, actions);
         ui.add_space(1.0);
+    }
+
+    /// What the row of `panel` says: an agent's task, or `display_title`.
+    fn sidebar_panel_label(&self, panel: &horizon_core::Panel, display_title: &str) -> String {
+        let own_name = (!text::name_labels_agent(
+            panel.kind,
+            &panel.title,
+            panel.name_is_custom(),
+            &self.template_config.presets,
+        ))
+        .then_some(panel.title.as_str());
+        text::panel_label(panel.kind, own_name, display_title, &panel.terminal_title)
     }
 
     fn apply_sidebar_actions(&mut self, ctx: &Context, actions: &SidebarActions) {
@@ -571,6 +584,12 @@ impl HorizonApp {
             self.mark_runtime_dirty();
         }
     }
+}
+
+/// The widget id of a panel row: global, so that the close button can read the
+/// row's keyboard focus before the row is registered.
+fn sidebar_panel_row_id(panel: PanelId) -> Id {
+    Id::new(("sidebar_panel_click", panel.0))
 }
 
 fn sidebar_workspace_insert_dock_side(insert: SidebarWorkspaceInsert) -> WorkspaceDockSide {

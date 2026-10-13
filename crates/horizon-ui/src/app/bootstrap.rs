@@ -206,6 +206,7 @@ impl HorizonApp {
             config_last_check: None,
             shutdown_progress: None,
             pending_session_switch: None, exit_cleanup_complete: false,
+            exit_save_deadline: None,
         }
     }
 }

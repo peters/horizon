@@ -213,3 +213,116 @@ fn cloud_settings_name_the_publishing_account_without_asking_github() {
     .unwrap();
     assert_eq!(publisher(docker.path()).as_deref(), Some("octo-cat"));
 }
+
+#[test]
+fn a_build_without_a_stored_login_pulls_anonymously() {
+    let home = tempfile::tempdir().unwrap();
+    let (directory, signed_in) = build_config_with(home.path(), None).unwrap();
+    assert!(!signed_in);
+    let config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.path().join("config.json")).unwrap()).unwrap();
+    assert_eq!(config, serde_json::json!({ "auths": {} }), "no helper, no login");
+    assert_eq!(mode(&directory.path().join("config.json")) & 0o077, 0, "private");
+    let path = directory.path().to_path_buf();
+    drop(directory);
+    assert!(!path.exists(), "the configuration goes with the build");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_build_keeps_the_machines_docker_context_and_plugins_but_none_of_its_credentials() {
+    let home = tempfile::tempdir().unwrap();
+    let machine = tempfile::tempdir().unwrap();
+    std::fs::write(
+        machine.path().join("config.json"),
+        r#"{"auths":{"ghcr.io":{"auth":"c3ludGhldGlj"}},"credsStore":"desktop","currentContext":"rootless","cliPluginsExtraDirs":["/opt/plugins"]}"#,
+    )
+    .unwrap();
+    std::fs::create_dir(machine.path().join("contexts")).unwrap();
+    let (directory, _) = build_config_with(home.path(), Some(machine.path())).unwrap();
+    let config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.path().join("config.json")).unwrap()).unwrap();
+    assert_eq!(config["currentContext"], "rootless");
+    assert_eq!(config["cliPluginsExtraDirs"], serde_json::json!(["/opt/plugins"]));
+    assert_eq!(config["auths"], serde_json::json!({}), "the machine's logins stay out");
+    assert!(config.get("credsStore").is_none(), "and its credential helpers");
+    assert!(
+        directory.path().join("contexts").is_dir(),
+        "the context it names resolves"
+    );
+}
+
+#[test]
+fn the_app_page_is_the_page_of_horizons_own_oauth_app() {
+    assert_eq!(
+        APP_PAGE,
+        format!("https://github.com/settings/connections/applications/{CLIENT_ID}")
+    );
+}
+
+#[test]
+fn a_build_log_names_the_ghcr_packages_it_pulled() {
+    let log = "#3 [internal] load metadata for ghcr.io/peters/horizon-worker-base@sha256:9f23\n\
+               #4 [internal] load metadata for ghcr.io/FinterMobilityAS/sdk/runtime:1.0@sha256:bb51\n\
+               ERROR: failed to resolve ghcr.io/fintermobilityas/sdk/runtime:1.0: denied\n\
+               FROM mcr.microsoft.com/dotnet/sdk:11.0\n";
+    assert_eq!(
+        ghcr_packages(log),
+        [
+            ("peters".to_owned(), "horizon-worker-base".to_owned()),
+            ("fintermobilityas".to_owned(), "sdk/runtime".to_owned()),
+        ]
+    );
+    let home = tempfile::tempdir().unwrap();
+    assert_eq!(
+        restricting_organization(home.path(), log, &|| false),
+        None,
+        "nobody to ask without a stored login"
+    );
+    let flood = (0..20)
+        .map(|n| format!("ghcr.io/owner/image-{n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        ghcr_packages(&flood).len(),
+        8,
+        "a log that names many images asks about a few"
+    );
+    assert_eq!(
+        ghcr_packages("the build pulls ghcr.io/acme/base."),
+        [("acme".to_owned(), "base".to_owned())],
+        "a full stop after the image is no part of its name"
+    );
+    assert_eq!(
+        ghcr_packages(
+            "ghcr.io/acme/base:1: unexpected status from HEAD request to https://ghcr.io/v2/acme/base/manifests/1: 403 Forbidden"
+        ),
+        [("acme".to_owned(), "base".to_owned())],
+        "the registry API address is no image"
+    );
+}
+
+#[test]
+fn a_stopped_proof_stops_waiting_for_the_login_another_cloud_holds() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join(STORE), "{}").unwrap();
+    let held = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(home.path().join(LOCK))
+        .unwrap();
+    held.lock().unwrap();
+    let asked = std::cell::Cell::new(0);
+    let started = std::time::Instant::now();
+    let found = restricting_organization(home.path(), "ERROR: ghcr.io/acme/base:1: denied", &|| {
+        asked.set(asked.get() + 1);
+        asked.get() > 1
+    });
+    assert_eq!(found, None);
+    assert!(asked.get() >= 2, "the wait asked whether the proof stopped");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "and ended at once"
+    );
+}

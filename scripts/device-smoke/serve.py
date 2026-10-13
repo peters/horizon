@@ -7,7 +7,6 @@ from pathlib import Path
 import shutil
 import signal
 import re
-import subprocess
 import time
 
 import sandbox
@@ -117,7 +116,7 @@ def main():
     def spawn(name, command, child_env=env):
         log = (args.state / f'{name}.log').open('wb')
         logs.append(log)
-        process = subprocess.Popen(namespace + command, env=child_env, stdout=log, stderr=log)
+        process = sandbox.start(namespace + command, env=child_env, stdout=log, stderr=log)
         children.append(process)
         return process
 
@@ -130,7 +129,7 @@ def main():
         read_fd, write_fd = os.pipe()
         log = (args.state / 'xvfb.log').open('wb')
         logs.append(log)
-        xvfb = subprocess.Popen(['Xvfb', '-displayfd', str(write_fd), '-screen', '0',
+        xvfb = sandbox.start(['Xvfb', '-displayfd', str(write_fd), '-screen', '0',
                                  '1600x1000x24', '-nolisten', 'tcp', '-extension', 'MIT-SHM'],
                                 pass_fds=(write_fd,), stdout=log, stderr=log, env=host_env)
         children.append(xvfb)
@@ -191,16 +190,10 @@ def main():
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         # Expire the endpoint before its display number can be reused.
         (args.state / 'target.json').unlink(missing_ok=True)
+        # Each child's whole process group, since ending bwrap alone leaves the
+        # program it runs, and a bus daemon's activated services, running.
         for child in reversed(children):
-            if child.poll() is None:
-                child.terminate()
-        for child in reversed(children):
-            if child.poll() is None:
-                try:
-                    child.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    child.kill()
-                    child.wait()
+            sandbox.end(child)
         for log in logs:
             log.close()
         shutil.rmtree(args.state / 'data', ignore_errors=True)

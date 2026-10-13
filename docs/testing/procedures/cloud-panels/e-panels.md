@@ -86,6 +86,38 @@ worker MCP servers and the SSH route.
 
    Result: The output is `10001`.
 
+   > **CAUTION:** THE NEXT STEP REMOVES WRITE ACCESS TO
+   > `<data-home>/.horizon/cloud/<cloud-id>`. Horizon cannot save the cloud's record
+   > until step 7 gives the access back. Do step 7 also when the test stops early.
+
+5. In the fixture terminal, find `<cloud-id>` of `smoke-a` as in E09 step 1. Then
+   make the cloud's folder read-only.
+
+   ```sh
+   chmod u-w <data-home>/.horizon/cloud/<cloud-id>
+   ```
+
+   Result: `ls -ld <data-home>/.horizon/cloud/<cloud-id>` shows no `w` for the user.
+
+6. Open a second Shell panel in `smoke-a` as in steps 1 and 2. Wait 90 seconds.
+   Then open **Manage** on the card.
+
+   Result: The second Shell panel shows a prompt. **Manage** shows **A panel's
+   session is not in this cloud's record yet** and offers **Stop worker…** again.
+
+   > **CAUTION:** THE NEXT STEP CHANGES THE ACCESS TO
+   > `<data-home>/.horizon/cloud/<cloud-id>` again. It gives back the write access
+   > that step 5 removed.
+
+7. Make the cloud's folder writable again, and wait 10 seconds.
+
+   ```sh
+   chmod u+w <data-home>/.horizon/cloud/<cloud-id>
+   ```
+
+   Result: The warning is gone from **Manage**. `deployment.json` in the folder
+   holds the session of the second Shell panel.
+
 ### 6.2 E02 — Start a Claude Code panel that is signed in
 
 Device `type` actions can change a typed key
@@ -118,6 +150,25 @@ real request.
 5. Type the request of step 5 of H01 again.
 
    Result: The agent replies `ready`.
+
+6. Start Claude Code in the first Shell panel from E01. If step 2 saved the key
+   again, open a new Shell panel as in E01 steps 1 and 2. Use that panel.
+
+   ```sh
+   claude
+   ```
+
+   Result: Claude Code starts. It shows no login prompt and no question about the API key.
+
+7. Type the request of step 5 of H01. Then type `/exit`.
+
+   Result: The agent replies `ready`. The panel does not show `Not logged in`.
+
+8. Open a new Shell panel as in E01 steps 1 and 2. Start Claude Code in it as in
+   step 6. Then do step 7.
+
+   Result: The agent replies `ready`. A Shell panel that opens after a Claude Code
+   panel also uses the saved key.
 
 ### 6.3 E03 — Start a Codex panel
 
@@ -308,6 +359,7 @@ real request.
 
 - The Shell panel opens at the expected commit as UID 10001.
 - Claude Code replies to a request without a `401` error.
+- Claude Code that you start in a Shell panel replies without a login prompt.
 - Codex replies, or it gives a clear reason.
 - The Browser panel loads the page and names its controller.
 - The desktop viewer shows the worker desktop and sends no input.

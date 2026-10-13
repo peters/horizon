@@ -305,9 +305,20 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
 - `app/` leaf modules stay focused:
   - `actions/`: overlay/layout math, panel lifecycle helpers, palette/shortcut
     dispatch, picker flows, and canvas interaction helpers
-  - `browser_requests`: transient host polling, panel creation, visibility
-    changes for authenticated requests routed from a live agent panel, and the
-    host-owned workspace stamp that keeps MCP authorization current
+  - `browser_requests`: transient host polling and panel creation for
+    authenticated requests routed from a live agent panel, and the host-owned
+    workspace stamp that keeps MCP authorization current
+  - `browser_host_io`: the one coordination worker that runs the claims,
+    audits, manifest stamps and results of the browser request pumps in the
+    order they were asked for; a later frame applies each outcome in the same
+    order; an outcome asked for on a board that a session switch or a cloud
+    prototype restore replaced refuses its request and changes no panel of the
+    board that stands now
+  - `browser_request_claims`: the claims of create, visibility and close
+    requests, which run on the coordination worker
+  - `browser_visibility_requests`: visibility changes for agent requests; the
+    board decides whether a request may apply, the worker audits and publishes
+    it, and a later frame shows or hides the panel
   - `browser_close_requests`: the audited close queue, kept pending until the
     panel's teardown signal settles and the remote release is established
   - `browser_cleanup`: closes ended browser panels on the host polling cadence,
@@ -385,6 +396,9 @@ Use these checks during implementation and review:
 - Is render code mutating domain state directly when it could emit a deferred
   action instead?
 - Is a module tree clearer than one more helper stuffed into the current file?
+- Does code that runs during a frame wait for file I/O, a lock, a process or
+  the network? Move it to a worker thread. The
+  [UI thread guide](ui-thread.md) gives the patterns and a review checklist.
 
 If the answer to any of those is "yes", follow the
 [pull-request scope rules](../../AGENTS.md#pull-request-scope): land purely

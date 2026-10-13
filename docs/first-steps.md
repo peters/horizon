@@ -354,8 +354,8 @@ from `origin` before deploy. Commit and update the branch before you start.
 4. If the code is on a Git server, paste the repository link.
 5. If the code is on this computer, click **Browse…**.
 6. If you clicked **Browse…**, select the folder.
-7. If the dialog shows **This commit has no .horizon/cloud.yml**, click **Quick
-   start on the public base image**.
+7. If the dialog shows **No cloud setup yet**, click **Start on the base image**
+   in the **Quick start** card.
 
    Result: The dialog shows the profile `quick-start`. See
    [Quick start](cloud-workspaces.md#quick-start).

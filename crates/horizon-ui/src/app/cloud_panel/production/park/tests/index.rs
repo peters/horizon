@@ -22,7 +22,10 @@ fn persist(app: &mut HorizonApp) -> String {
 fn a_saved_session_keeps_the_park_state_and_the_last_status_line_in_its_runtime_index() {
     let (_temp, mut app) = ready_cloud();
     let session = persist(&mut app);
-    let recorded = |app: &HorizonApp| app.session_store.cloud_panel_statuses(&session).unwrap();
+    let recorded = |app: &HorizonApp| {
+        crate::app::test_support::wait_for_session_saves(app);
+        app.session_store.cloud_panel_statuses(&session).unwrap()
+    };
     app.board.focused = None;
     app.sync_cloud_presentations();
     assert_eq!(recorded(&app).len(), MEMBERS.len());
@@ -79,6 +82,7 @@ fn a_later_session_restore_in_a_parked_cloud_records_the_new_panel_as_parked() {
     cloud.next_attachment_attempt = None;
     app.sync_cloud_presentations();
 
+    crate::app::test_support::wait_for_session_saves(&app);
     let statuses = app.session_store.cloud_panel_statuses(&session).unwrap();
     let late = statuses.iter().find(|status| status.panel_local_id == "late");
     assert!(late.expect("the late panel is recorded").parked);

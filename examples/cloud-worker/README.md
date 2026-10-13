@@ -589,6 +589,13 @@ an Anthropic API key is bound, approval of that key by its last 20 characters, n
 whole key. Existing entries are kept, the update is atomic and locked, and a failure to
 write it only brings the dialogs back. Subscription workers keep Claude's own sign-in.
 
+A Shell panel gets the same setup, because a person can start `claude` in it by hand. The
+shell receives the bound Anthropic API key as `ANTHROPIC_API_KEY` and the bound workspace as
+`ANTHROPIC_WORKSPACE_ID` with its request header, and the same `~/.claude.json` entries are
+recorded. This is true if the Shell panel opens first or after a Claude panel. A shell
+without a bound key or workspace starts without these variables. Other agent panels do not
+receive them.
+
 ## Codex background server
 
 Codex 0.156 and later start a shared background server. This server refuses a control

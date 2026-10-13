@@ -12,7 +12,7 @@ use horizon_core::{
     cloud_runtime::{
         self, Cancellation, Event, Stage,
         companions::{
-            Context, intent, inventory,
+            Action, Context, intent, inventory,
             lifecycle::{self, Operation, Phase},
         },
         settings::Settings,
@@ -39,6 +39,8 @@ pub(super) struct State {
     held: BTreeMap<String, usize>,
     /// Target clouds with an operation running on this Horizon.
     executing: BTreeSet<String>,
+    /// Source clouds with an uncheck whose deselection is being saved.
+    unchecking: BTreeSet<String>,
 }
 
 enum Message {
@@ -50,6 +52,14 @@ enum Message {
     Executed {
         source: String,
         target: String,
+    },
+    /// An uncheck's deselection was saved in the source's journal, or why not.
+    Unchecked {
+        request: Box<UsageRequest>,
+        source: String,
+        owner: Owner,
+        alias: String,
+        saved: Result<bool, String>,
     },
 }
 
@@ -119,6 +129,27 @@ impl HorizonApp {
                         self.release_companion_source(&source);
                     }
                     complete(&request, answer);
+                }
+                Message::Unchecked {
+                    request,
+                    source,
+                    owner,
+                    alias,
+                    saved,
+                } => {
+                    let companions = &mut self.cloud_prototype.production.companions;
+                    companions.agent.unchecking.remove(&source);
+                    // The saved deselection is removed as the card's box removes one, by
+                    // the card that saved it; a card replaced meanwhile reads it from the
+                    // journal when it refreshes.
+                    if saved == Ok(true)
+                        && let Some(entry) = companions.entries.get_mut(&source)
+                        && entry.owner == owner
+                    {
+                        entry.queue(Action::Clear { alias: alias.clone() });
+                    }
+                    self.release_companion_source(&source);
+                    complete(&request, uncheck::answer(&source, &alias, saved));
                 }
                 Message::Executed { source, target } => {
                     self.cloud_prototype
@@ -202,17 +233,54 @@ impl HorizonApp {
             .0
             .iter()
             .any(|group| group.workspace == workspace && group.remote.as_ref().is_some_and(|l| l.id == source));
+        let root = self.cloud_prototype.root.clone();
         let companions = &mut self.cloud_prototype.production.companions;
         let entry = companions
             .entries
             .get_mut(&source)
             .filter(|entry| in_workspace && !entry.blocked)
             .ok_or("cloud_companion_unknown_cloud: no cloud with this ID in your workspace's saved session")?;
-        let root = self
-            .cloud_prototype
-            .root
-            .clone()
-            .ok_or("cloud_companion_unavailable: Horizon has no cloud state directory")?;
+        // Without the cloud state directory the card never runs or saves a change: an
+        // uncheck queued then would be acknowledged and never done.
+        let root = root.ok_or("cloud_companion_unavailable: Horizon has no cloud state directory")?;
+        if companion.action == CompanionAction::Uncheck {
+            // An agent that stopped waiting may since have decided it still needs the
+            // companion: a late uncheck changes nothing.
+            expired(request)?;
+            let alias = companion.alias.clone().unwrap_or_default();
+            if companions.agent.unchecking.contains(&source) {
+                return Err(uncheck::BUSY.into());
+            }
+            match uncheck::uncheck(entry, &source, &alias) {
+                // The deselection is saved in the source's journal first, and the card
+                // queues the removal only then, so a crash cannot lose an acknowledged
+                // uncheck and a failed save changes nothing. A refresh holds the journal
+                // while it reaches workers: it stops, and starts again after the save.
+                Ok(None) => {
+                    let owner = entry.owner.clone();
+                    entry.cancel_job();
+                    companions.agent.hold(&source);
+                    companions.agent.unchecking.insert(source.clone());
+                    let sender = companions.agent.sender();
+                    let (request, wake) = (Box::new(request.clone()), ctx.clone());
+                    std::thread::spawn(move || {
+                        let deadline = request.deadline_at_millis;
+                        let saved = uncheck::save(&root, &owner, &alias, deadline);
+                        let _ = sender.send(Message::Unchecked {
+                            request,
+                            source,
+                            owner,
+                            alias,
+                            saved,
+                        });
+                        wake.request_repaint();
+                    });
+                }
+                answer => complete(request, answer.map(Option::unwrap_or_default)),
+            }
+            ctx.request_repaint();
+            return Ok(());
+        }
         let id = serde_json::from_value::<OperationId>(json!(companion.operation_id))
             .map_err(|_| "cloud_companion_invalid_request: operation_id must be a UUID")?;
         expired(request)?;
@@ -500,7 +568,7 @@ fn submit(
             };
             lifecycle::submit_with_tailnet(&request, action, id, companion.tailnet.as_deref())
         }),
-        CompanionAction::List => return Err("cloud_companion_invalid_request".into()),
+        CompanionAction::List | CompanionAction::Uncheck => return Err("cloud_companion_invalid_request".into()),
     }
     .map_err(|error| match error {
         cloud_runtime::Error::Busy => {
@@ -515,16 +583,17 @@ fn submit(
     })
 }
 
-const EXPIRED: &str =
-    "cloud_companion_expired: the request expired before Horizon recorded it; nothing was started or stopped";
+const EXPIRED: &str = "cloud_companion_expired: the request expired before Horizon recorded it; nothing was started, stopped or unchecked, and no removal of access was queued";
 
-/// An Ensure Ready or Stop whose caller has stopped waiting is refused before it is
-/// recorded; a status poll is always answered.
+/// An Ensure Ready, Stop or Uncheck whose caller has stopped waiting is refused before
+/// it is recorded or queued; a status poll is always answered.
 fn expired(request: &UsageRequest) -> Result<(), String> {
-    let lifecycle = request
-        .cloud_companion
-        .as_ref()
-        .is_some_and(|companion| matches!(companion.action, CompanionAction::EnsureReady | CompanionAction::Stop));
+    let lifecycle = request.cloud_companion.as_ref().is_some_and(|companion| {
+        matches!(
+            companion.action,
+            CompanionAction::EnsureReady | CompanionAction::Stop | CompanionAction::Uncheck
+        )
+    });
     if lifecycle && manifest::now_millis() >= request.deadline_at_millis {
         return Err(EXPIRED.into());
     }
@@ -602,3 +671,4 @@ fn complete(request: &UsageRequest, answer: Result<Value, String>) {
 
 #[cfg(test)]
 mod tests;
+mod uncheck;

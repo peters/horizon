@@ -47,7 +47,6 @@ if host_value="$(cat "$host_instance" 2>/dev/null)" && [ -n "$host_value" ]; the
 else
     printf 'The worker has not published its browser host instance (%s); browser tools in this session cannot identify their workspace.\n' "$host_instance" >&2
 fi
-[ "$agent" != shell ] || agent=bash
 # Auto mode: Claude and Codex run commands and edit files without asking. The worker is a
 # disposable container and this process runs as the unprivileged agent account, so the
 # container is the boundary. A profile with `agent_approvals: ask` keeps the prompts, and so
@@ -66,7 +65,9 @@ PY
 )" || approvals=ask
     [ "$approvals" = auto ] || approvals=ask
 fi
-if [ "$agent" = claude ]; then
+# A person can start claude by hand in a Shell panel, so the shell gets the same key,
+# workspace and first-run settings as a Claude panel, whichever of the two opened first.
+if [ "$agent" = claude ] || [ "$agent" = shell ]; then
     # Readiness requires the runtime version recorded by the image.
     export DISABLE_AUTOUPDATER=1
     if [ -f /workspace/credentials/anthropic-api-key ]; then
@@ -152,6 +153,9 @@ with open(path + '.horizon-lock', 'a') as lock:
             os.replace(pending, path)
             break
 PY
+fi
+[ "$agent" != shell ] || agent=bash
+if [ "$agent" = claude ]; then
     # The first launch assigns an id. Resume only after Claude has written that
     # session's transcript; an id with no transcript must be started again.
     session_file="/workspace/sessions/$id/agent-session"

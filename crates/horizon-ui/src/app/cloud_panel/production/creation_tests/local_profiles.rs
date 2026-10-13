@@ -149,12 +149,8 @@ fn quick_start_is_offered_openly_and_creates_an_image_only_cloud() {
         frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     }
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
-    label_position(&output, "This commit has no .horizon/cloud.yml");
-    click(
-        &ctx,
-        &mut app,
-        label_position(&output, "Quick start on the public base image"),
-    );
+    label_position(&output, "No cloud setup yet");
+    click(&ctx, &mut app, label_position(&output, "Start on the base image"));
     finish_read(&ctx, &mut app);
     let form = &mut app.cloud_prototype.production;
     assert_eq!(form.launch.configuration, Configuration::QuickStart);

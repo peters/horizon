@@ -202,24 +202,17 @@ fn start_cloud_says_why_it_is_disabled() {
     app.cloud_prototype.production.repository = "/work/atlas".into();
     let both = painted(&ctx, &mut app);
     assert!(
-        both.contains("A cloud title is required before Start cloud can be used."),
-        "{both}"
+        !both.contains("A cloud title is required"),
+        "the footer says it: {both}"
     );
     assert!(
-        both.contains("Enter a cloud title and read the repository profile."),
+        both.contains("Name the cloud to start it.") && both.contains("Read the repository profile before starting."),
         "{both}"
     );
 
     let _loading = app.cloud_prototype.production.launch.hold_loading_for_test();
     let while_loading = painted(&ctx, &mut app);
-    assert!(
-        while_loading.contains("A cloud title is required before Start cloud can be used."),
-        "{while_loading}"
-    );
-    assert!(
-        while_loading.contains("Enter a cloud title to start this cloud."),
-        "{while_loading}"
-    );
+    assert!(while_loading.contains("Name the cloud to start it."), "{while_loading}");
 
     let (_temp, ctx, mut titled) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),

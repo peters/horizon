@@ -138,6 +138,60 @@ fn delete_session_removes_browser_profiles_from_the_saved_profile_root() {
 }
 
 #[test]
+#[cfg(unix)]
+fn a_delete_that_fails_keeps_the_newest_board_that_is_not_written() {
+    let root_dir = test_root("failed-delete");
+    let home = HorizonHome::from_root(root_dir.path().to_path_buf());
+    let store = SessionStore::new(home.clone(), home.config_path());
+    let session = store
+        .create_session_from_runtime(RuntimeState::default())
+        .expect("create session");
+    let id = session.session_id;
+    // A folder where the board goes refuses every save, so the newest board stays queued.
+    std::fs::remove_file(&session.runtime_state_path).expect("remove board");
+    std::fs::create_dir(&session.runtime_state_path).expect("block board");
+    let board = RuntimeState {
+        workspaces: vec![WorkspaceState {
+            panels: vec![PanelState {
+                local_id: "browser".into(),
+                kind: PanelKind::Browser,
+                ..PanelState::default()
+            }],
+            ..WorkspaceState::default()
+        }],
+        ..RuntimeState::default()
+    };
+    let config = board.workspaces[0].panels[0].browser_config_for_restore(&board.browser);
+    let profile = crate::browser::profile_dir_for_home(&config, &home, "browser");
+    // A file where the profile of the browser goes fails the delete.
+    std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
+    std::fs::write(&profile, b"not a folder").unwrap();
+    let generation = store.queue_runtime_state(&id, board);
+    let wait = std::time::Duration::from_secs(30);
+    assert!(matches!(
+        store.wait_runtime_state_durable(&id, generation, wait),
+        Err(Some(_))
+    ));
+    // The writer may try the board again just now; then the delete is refused.
+    let delete = || loop {
+        match store.delete_session(&id) {
+            Err(error) if error.to_string().contains("still saving") => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            deleted => return deleted,
+        }
+    };
+    assert!(delete().is_err(), "the profile is not a folder");
+    let kept = store.writer.unwritten(&id).expect("the board is still queued");
+    assert_eq!(kept.workspaces[0].panels[0].local_id, "browser");
+    assert!(home.session_dir(&id).exists());
+    std::fs::remove_file(&profile).unwrap();
+    delete().expect("delete session");
+    assert!(store.writer.unwritten(&id).is_none());
+    assert!(!home.session_dir(&id).exists());
+}
+
+#[test]
 fn delete_session_rejects_live_sessions() {
     let root_dir = test_root("delete-live-store");
     let root = root_dir.path().to_path_buf();
@@ -229,18 +283,17 @@ fn test_root(label: &str) -> tempfile::TempDir {
 }
 
 #[test]
-fn durable_cloud_gate_requires_supported_platform_and_saved_files() {
-    let root_dir = test_root("durable-cloud-gate");
+#[cfg(unix)]
+fn a_queued_save_is_durable_on_disk_even_after_its_file_was_removed() {
+    let root_dir = test_root("durable-queued-save");
     let home = HorizonHome::from_root(root_dir.path().into());
     let store = SessionStore::new(home.clone(), home.config_path());
     let created = store.create_new_session(&Config::default()).unwrap();
-    if cfg!(unix) {
-        store.sync_runtime_state(&created.session_id).unwrap();
-        std::fs::remove_file(&created.runtime_state_path).unwrap();
-        assert!(store.sync_runtime_state(&created.session_id).is_err());
-    } else {
-        assert!(store.sync_runtime_state(&created.session_id).is_err());
-        assert!(created.runtime_state_path.exists());
-        assert!(RuntimeState::load(&created.runtime_state_path).is_ok());
-    }
+    std::fs::remove_file(&created.runtime_state_path).unwrap();
+    let generation = store.queue_runtime_state(&created.session_id, RuntimeState::default());
+    assert_eq!(
+        store.wait_runtime_state_durable(&created.session_id, generation, std::time::Duration::from_secs(30)),
+        Ok(())
+    );
+    assert!(RuntimeState::load(&created.runtime_state_path).unwrap().is_some());
 }

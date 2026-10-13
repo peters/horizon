@@ -722,3 +722,43 @@ fn snapshots_keep_committed_line_endings_under_windows_checkout_defaults() {
         );
     }
 }
+
+#[test]
+fn a_replace_ref_does_not_change_the_exported_commit() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["-c", "user.name=Test", "-c", "user.email=test@example.invalid"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    };
+    git(&["init", "--quiet"]);
+    std::fs::write(repo.join("file.txt"), "committed\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "--quiet", "-m", "real"]);
+    let real = git(&["rev-parse", "HEAD"]);
+    std::fs::write(repo.join("file.txt"), "planted\n").unwrap();
+    git(&["commit", "--quiet", "-am", "planted"]);
+    let planted = git(&["rev-parse", "HEAD"]);
+    git(&["reset", "--quiet", "--hard", &real]);
+    git(&["replace", &real, &planted]);
+    let cancel = horizon_cloud::Cancellation::default();
+    let emit = |_| {};
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &emit,
+        secrets: vec![],
+    };
+    let out = temp.path().join("out");
+    std::fs::create_dir(&out).unwrap();
+    assert_eq!(resolve_with_runner(&repo, "HEAD", &runner).unwrap(), real);
+    let export = snapshot(&repo, &real, &out, &runner).unwrap();
+    assert_eq!(std::fs::read_to_string(export.join("file.txt")).unwrap(), "committed\n");
+}

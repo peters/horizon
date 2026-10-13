@@ -520,3 +520,36 @@ fn a_repository_size_is_read_in_bytes_with_or_without_a_token() {
     );
     assert!(client.repository_size("acme/../x", None).is_err(), "never sent");
 }
+
+#[test]
+fn an_organization_that_limits_oauth_apps_says_so_for_its_package() {
+    let restricted = "Although you appear to have the correct authorization credentials, the `acme` organization has enabled OAuth App access restrictions, meaning that data access to third-parties is limited.";
+    let (client, requests, task) = github(vec![
+        (403, json!({"message": restricted})),
+        (403, json!({"message": "Permission denied"})),
+        (200, json!({"name": "runtime"})),
+        (503, json!({"message": "Service unavailable"})),
+        (401, json!({"message": "Bad credentials"})),
+    ]);
+    let token = Secret::new("gho_synthetic".into());
+    assert_eq!(client.oauth_restricted(&token, "acme", "sdk/runtime"), Ok(true));
+    assert_eq!(client.oauth_restricted(&token, "acme", "runtime"), Ok(false));
+    assert_eq!(client.oauth_restricted(&token, "acme", "runtime"), Ok(false));
+    assert_eq!(
+        client.oauth_restricted(&token, "acme", "runtime"),
+        Err(Error::Refused("HTTP 503".into())),
+        "an outage is no answer"
+    );
+    assert_eq!(client.oauth_restricted(&token, "acme", "runtime"), Err(Error::Revoked));
+    task.join().unwrap();
+    let requests = requests.lock().unwrap();
+    assert_eq!(
+        requests[0].0, "GET /orgs/acme/packages/container/sdk%2Fruntime HTTP/1.1",
+        "a nested name is one path segment"
+    );
+    assert_eq!(
+        client.oauth_restricted(&token, "acme", "../x"),
+        Err(Error::InvalidResponse),
+        "never sent"
+    );
+}

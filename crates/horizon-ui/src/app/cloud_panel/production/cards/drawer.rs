@@ -303,7 +303,7 @@ fn overview(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context
     if let Some((line, _)) = super::github::summary(runtime) {
         ui.horizontal(|ui| {
             ui.label(RichText::new(line).size(12.5).color(theme::FG_DIM()));
-            if super::github::renew_button(ui, &context.launch.id, runtime) {
+            if super::github::renew_button(ui, runtime) {
                 response.action = Some(Action::Deploy);
             }
         });

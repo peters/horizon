@@ -128,9 +128,13 @@ Use `smoke-a`.
 
    Result: The output lists the sessions. Record them in the evidence.
 
-3. On the card of `smoke-a`, click **Reconnect cloud**.
+3. On the card of `smoke-a`, click **Reconnect cloud**. While the card shows the
+   reconnect stages, open **Manage**.
 
-   Result: The card shows the reconnect stages, then **Ready**.
+   Result: The card shows the reconnect stages, then **Ready**. While the reconnect
+   runs, **Manage** does not show **Delete cloud resources…**: it shows that Horizon
+   saves the session and the record, then **Cancel operation**. After **Ready**,
+   **Manage** shows **Delete cloud resources…** again.
 
 4. In the second Shell panel, show the tmux sessions again.
 
@@ -356,7 +360,7 @@ Use `smoke-r`. It is a RunPod CPU cloud.
 
    Result: The summary shows a Hetzner worker.
 
-7. In **Tailnet**, select **None**.
+7. Open **More options** if it is closed. In **Tailnet**, select **None**.
 
    Result: **None** is selected.
 

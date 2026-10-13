@@ -5,11 +5,14 @@ mod browser_close_requests;
 mod browser_connectors;
 mod browser_duplicate;
 mod browser_file_chooser;
+mod browser_host_io;
 mod browser_provider_catalog;
 mod browser_provider_usage;
 mod browser_recovery;
 mod browser_remote_create;
+mod browser_request_claims;
 mod browser_requests;
+mod browser_visibility_requests;
 mod canvas;
 mod canvas_drag;
 mod canvas_gesture;
@@ -339,6 +342,8 @@ pub struct HorizonApp {
     shutdown_progress: Option<ShutdownProgress>,
     pending_session_switch: Option<PendingSessionSwitch>,
     exit_cleanup_complete: bool,
+    /// When the exit stops waiting for the session writer.
+    exit_save_deadline: Option<Instant>,
 }
 
 fn resolve_shortcuts(config: &Config) -> AppShortcuts {
@@ -367,6 +372,10 @@ impl HorizonApp {
             ctx.request_repaint_after(delay);
         }
         self.exit_on_close_request(ctx);
+        // Also while the board is torn down, so every claimed request is
+        // answered; a finished job wakes this context to apply its outcome.
+        self.browser_create_host.io.wake_with(ctx);
+        self.apply_browser_host_io();
 
         if self.shutdown_progress.is_some() {
             self.render_shutdown_overlay(ui);
@@ -519,6 +528,19 @@ impl eframe::App for HorizonApp {
             }
             while !self.finish_cloud_companion_shutdown(&ctx) {
                 std::thread::sleep(Duration::from_millis(25));
+            }
+            // A cloud session save that keeps failing must not keep Horizon open. The limit
+            // counts from the start of a shutdown that already waited for it.
+            let started = self
+                .shutdown_progress
+                .as_ref()
+                .map_or_else(std::time::Instant::now, horizon_core::ShutdownProgress::started_at);
+            let deadline = started + Duration::from_secs(10);
+            while !Self::cloud_sessions_recorded() && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            if !Self::cloud_sessions_recorded() {
+                tracing::warn!("exiting while a cloud panel session is not yet in its cloud record");
             }
         }
         self.run_exit_cleanup();

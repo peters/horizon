@@ -14,7 +14,7 @@ owner: peters
 
 This procedure makes sure that the sidebar groups the workspaces in **Needs you**,
 **Cloud**, **Parked** and **This PC**. It also makes sure that each row shows a
-status dot, the name and a status line, that each group header shows its count
+tile with a status badge, the name and a status line, that each group header shows its count
 and summary on one line, and that a click on a parked row attaches its cloud.
 It also makes sure that an agent in the cloud workspace can read the list and
 attach, park and stop its cloud with `cloud_list`, that **Stop idle…** stops the
@@ -66,8 +66,8 @@ whose session ends goes to **Needs you**.
 
 2. Make the sidebar visible.
 
-   Result: The sidebar shows the header **CLOUD 1** above the cloud workspace,
-   and the header **THIS PC** with the count of the local workspaces.
+   Result: The sidebar shows the header **Cloud 1** above the cloud workspace,
+   and the header **This PC** with the count of the local workspaces.
 
 ## 6. Tasks
 
@@ -75,15 +75,16 @@ whose session ends goes to **Needs you**.
 
 1. Look at the row of the cloud workspace.
 
-   Result: The row shows a dot, the name and, under the name, the line
+   Result: The row shows a tile with the initials of the workspace name, the
+   name and, under the name, the line
    `synthetic output <n>`. The line changes about each second.
 
-2. Look at the header line of **CLOUD**.
+2. Look at the header line of **Cloud**.
 
    Result: At the right of the header line, the hourly rate of the worker shows
    in secondary text, for example `$0.006/h`.
 
-3. Look at the header line of **THIS PC**.
+3. Look at the header line of **This PC**.
 
    Result: At the right of the header line, the text `live` shows.
 
@@ -91,7 +92,8 @@ whose session ends goes to **Needs you**.
    narrower with the window.
 
    Result: No header summary goes to a second line. A summary that does not fit
-   becomes shorter.
+   becomes shorter. If no part fits, for example next to **Stop idle…**, the
+   summary goes away.
 
 ### 6.2 PARKED: A parked row
 
@@ -103,11 +105,11 @@ whose session ends goes to **Needs you**.
 
 2. Wait 2 minutes and 15 seconds.
 
-   Result: The cloud workspace moves to the group **PARKED**. Its row is compact:
-   it shows a ring and the name, without a status line. The header of
-   **PARKED** shows the hourly rate and `no local cost`.
+   Result: The cloud workspace moves to the group **Parked**. Its row is compact:
+   it shows a small tile with a ring badge and the name, without a status line.
+   The header of **Parked** shows the hourly rate and `no local cost`.
 
-3. Hold the pointer on the ring of the parked row.
+3. Hold the pointer on the tile of the parked row.
 
    Result: A tooltip shows `Parked` and the last line of the session.
 
@@ -116,7 +118,7 @@ whose session ends goes to **Needs you**.
 1. Click the name of the parked row.
 
    Result: The canvas moves to the cloud workspace. In about 1 second, the cloud
-   attaches. The row moves back to **CLOUD** and shows the status line again.
+   attaches. The row moves back to **Cloud** and shows the status line again.
 
 ### 6.4 AGENT: The cloud list from an agent
 
@@ -141,18 +143,18 @@ whose session ends goes to **Needs you**.
    park command again.
 
    Result: The report shows `"park": "parking"`. In about 1 second, the row of
-   the cloud moves to **PARKED**.
+   the cloud moves to **Parked**.
 
 4. Run `horizon-browser cloud attach <cloud> -o -`.
 
    Result: The report shows `"attach": "in_view"`. The canvas moves to the
    cloud, and in about 1 second the cloud attaches. The row moves back to
-   **CLOUD**.
+   **Cloud**.
 
 ### 6.5 STOP: Stop idle workers
 
 1. Make sure that no agent works in the cloud. Look at the header line of
-   **CLOUD**.
+   **Cloud**.
 
    Result: The header shows **Stop idle…** after the count.
 
@@ -174,8 +176,8 @@ whose session ends goes to **Needs you**.
 5. Click **Stop idle…** again, and then click **Stop 1 worker**.
 
    Result: The dialog closes. The cloud card shows that the worker stops, and
-   then that it is stopped. The row moves to **PARKED** with a ring. The header
-   of **PARKED** shows no **Stop idle…**.
+   then that it is stopped. The row moves to **Parked** with a ring badge. The
+   header of **Parked** shows no **Stop idle…**.
 
 ### 6.6 NEEDS YOU: A parked session ends
 
@@ -193,27 +195,27 @@ whose session ends goes to **Needs you**.
 
 3. Do step 1 of task 6.2. Wait 2 minutes and 15 seconds.
 
-   Result: The cloud workspace moves to the group **PARKED**.
+   Result: The cloud workspace moves to the group **Parked**.
 
 4. Wait 2 more minutes.
 
-   Result: The cloud workspace moves to the group **NEEDS YOU**. Its row shows a
-   yellow dot, the name and the line `Ended with status 3`.
+   Result: The cloud workspace moves to the group **Needs you**. Its tile shows
+   a yellow badge. The row shows the name and the line `Ended with status 3`.
 
-5. Hold the pointer on the yellow dot.
+5. Hold the pointer on the tile of the row.
 
    Result: A tooltip shows `Waiting for you`.
 
 ## 7. Pass criteria
 
 - 6.1 shows the rows, the counts and the summaries on one header line.
-- 6.2 moves the parked cloud to **PARKED** with a compact row.
+- 6.2 moves the parked cloud to **Parked** with a compact row.
 - 6.3 attaches the cloud from a click on its row.
 - 6.4 lists the cloud for the agent, refuses to park it in view, parks it out of
   view and attaches it again.
 - 6.5 shows the hourly saving before the confirmation and stops only the selected
   worker.
-- 6.6 moves the parked cloud whose session ended to **NEEDS YOU** with the line
+- 6.6 moves the parked cloud whose session ended to **Needs you** with the line
   `Ended with status 3`.
 
 ## 8. Cleanup

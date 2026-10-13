@@ -23,6 +23,8 @@ pub(in crate::app::cloud_panel::production) struct State {
     show_below_minimums: bool,
     /// The person checked "Start new cloud once available".
     pub wait_for_stock: bool,
+    /// Every worker and the filters, past the three picks; closed by default.
+    pub show_all: bool,
 }
 
 impl Default for State {
@@ -34,6 +36,7 @@ impl Default for State {
             in_stock_only: true,
             show_below_minimums: false,
             wait_for_stock: false,
+            show_all: false,
         }
     }
 }
@@ -315,27 +318,26 @@ pub(super) fn section(ui: &mut Ui, form: &mut Production) {
     };
     widgets::heading(ui, "Machine", &requirement(&profile, &form.selected_profile));
     freshness(ui, form, &profile);
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Compare for");
-        ui.add(
-            egui::DragValue::new(&mut form.launch.selector.hours)
-                .range(1.0..=8760.0)
-                .suffix(" hours"),
-        );
-        ui.selectable_value(&mut form.launch.selector.provider_filter, None, "All providers");
-        for provider in super::provider::choices(&form.prices, &profile) {
-            ui.selectable_value(
-                &mut form.launch.selector.provider_filter,
-                Some(provider.label.to_owned()),
-                provider.label,
-            );
-        }
-    });
     let Some(mut catalog) = catalog(form) else {
         return;
     };
-    cards::filters(ui, &catalog, form);
-    ui.add_space(4.0);
+    // The three picks answer most starts; every worker and the filters are one click away.
+    // Open, the filters sit above the picks, so a refreshed ranking never moves them.
+    let open = form.launch.selector.show_all;
+    let header = RichText::new(format!("{} All machines and filters", if open { "▾" } else { "▸" }))
+        .size(14.0)
+        .color(theme::FG_SOFT());
+    // A frameless button, so keyboard users reach it and Enter or Space opens it.
+    if ui
+        .add(egui::Button::new(header).frame(false))
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .clicked()
+    {
+        form.launch.selector.show_all = !open;
+    }
+    if open {
+        filters(ui, form, &catalog, &profile);
+    }
     if catalog.matching == 0 {
         widgets::note(ui, super::storage::empty_catalog_reason(form, &profile));
     }
@@ -366,6 +368,60 @@ pub(super) fn section(ui: &mut Ui, form: &mut Production) {
             "Comparison incomplete: waiting for current provider prices and exchange rates. Choose a worker explicitly.",
         );
     }
+    let mut chosen = cards::picks(ui, &catalog, form);
+    ui.add_space(4.0);
+    if open {
+        chosen = cards::all(ui, &catalog, form).or(chosen);
+        if super::provider::current(form.provider, &profile).placement
+            != horizon_core::cloud_runtime::provider::Placement::DataCenters
+        {
+            widgets::note(
+                ui,
+                "Hetzner availability is advisory. Choosing a row fixes that server type and location; no fallback is rented.",
+            );
+        }
+    }
+    if let Some(index) = chosen.filter(|&index| index < catalog.matching) {
+        choose(form, catalog.gpu, &catalog.offers[index]);
+    }
+    if super::provider::current(form.provider, &profile).placement
+        != horizon_core::cloud_runtime::provider::Placement::DataCenters
+    {
+        return;
+    }
+    ui.add_space(10.0);
+    widgets::heading(ui, "Data center", "");
+    let sized = sized(form, &profile);
+    if let Some(placement) = placement::field(ui, &form.prices, &sized, &form.placement) {
+        form.placement = placement;
+    }
+}
+
+/// The comparison period, the providers, the filters and the currency notes.
+fn filters(ui: &mut Ui, form: &mut Production, catalog: &Catalog, profile: &Profile) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Compare for");
+        let unit = if form.launch.selector.hours <= 1.0 {
+            " hour"
+        } else {
+            " hours"
+        };
+        ui.add(
+            egui::DragValue::new(&mut form.launch.selector.hours)
+                .range(1.0..=8760.0)
+                .suffix(unit),
+        );
+        ui.selectable_value(&mut form.launch.selector.provider_filter, None, "All providers");
+        for provider in super::provider::choices(&form.prices, profile) {
+            ui.selectable_value(
+                &mut form.launch.selector.provider_filter,
+                Some(provider.label.to_owned()),
+                provider.label,
+            );
+        }
+    });
+    cards::filters(ui, catalog, form);
+    ui.add_space(4.0);
     if catalog.currency != horizon_core::cloud_runtime::provider::RUNPOD.currency {
         widgets::note(
             ui,
@@ -384,27 +440,6 @@ pub(super) fn section(ui: &mut Ui, form: &mut Production) {
                 rates.date
             ),
         );
-    }
-    let mut chosen = cards::picks(ui, &catalog, form);
-    ui.add_space(4.0);
-    chosen = cards::all(ui, &catalog, form).or(chosen);
-    if let Some(index) = chosen.filter(|&index| index < catalog.matching) {
-        choose(form, catalog.gpu, &catalog.offers[index]);
-    }
-    if super::provider::current(form.provider, &profile).placement
-        != horizon_core::cloud_runtime::provider::Placement::DataCenters
-    {
-        widgets::note(
-            ui,
-            "Hetzner availability is advisory. Choosing a row fixes that server type and location; no fallback is rented.",
-        );
-        return;
-    }
-    ui.add_space(10.0);
-    widgets::heading(ui, "Data center", "");
-    let sized = sized(form, &profile);
-    if let Some(placement) = placement::field(ui, &form.prices, &sized, &form.placement) {
-        form.placement = placement;
     }
 }
 

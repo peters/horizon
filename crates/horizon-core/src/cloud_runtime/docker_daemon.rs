@@ -169,6 +169,14 @@ impl Target {
         }
     }
 
+    /// The daemon address the Docker CLI uses for this target, read with commands that
+    /// change nothing; none when the CLI cannot say.
+    #[must_use]
+    pub fn daemon(&self) -> Option<Endpoint> {
+        let inherited = std::env::var("DOCKER_HOST").ok().filter(|host| !host.is_empty());
+        self.endpoint(inherited).1
+    }
+
     /// The context name and daemon address the CLI uses. As for the CLI, an explicit
     /// host wins, then the `inherited` `DOCKER_HOST`, then the context.
     fn endpoint(&self, inherited: Option<String>) -> (Option<String>, Option<Endpoint>) {

@@ -88,6 +88,8 @@ fn prepare(app: &mut HorizonApp, ctx: &egui::Context, directory: &std::path::Pat
     app.cloud_prototype.production.profiles = Some(config);
     app.cloud_prototype.production.selected_profile = "development".into();
     app.cloud_prototype.production.launch.accounts_checked = true;
+    // These tests work with every worker and filter, past the three picks people start with.
+    app.cloud_prototype.production.launch.selector.show_all = true;
     app.cloud_prototype.production.prices.runpod_answered();
     app.add_mock_cloud(ctx);
     for _ in 0..3 {

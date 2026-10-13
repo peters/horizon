@@ -28,6 +28,7 @@ fn flush_and_restore(app: &mut HorizonApp, path: &std::path::Path) {
     app.runtime_dirty_since = Some(Instant::now().checked_sub(Duration::from_secs(1)).expect("clock"));
     app.flush_runtime_if_dirty();
     assert!(!app.runtime_is_dirty());
+    crate::app::test_support::wait_for_session_saves(app);
     let saved = RuntimeState::load(path)
         .expect("load saved state")
         .expect("saved state");

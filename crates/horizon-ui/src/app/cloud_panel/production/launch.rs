@@ -27,6 +27,8 @@ pub(super) struct State {
     /// The last read found no `.horizon/cloud.yml` in the selected commit: the dialog
     /// offers quick start and the setup agent instead of an error.
     pub unconfigured: bool,
+    /// Why the committed settings did not load; the Fix card starts the agent from it.
+    pub read_error: Option<String>,
     pub submitted: bool,
     pub watch: Option<cloud_runtime::prices::watch::Selection>,
     /// The hourly compute price shown when the watch started.
@@ -102,6 +104,7 @@ impl HorizonApp {
         form.launch.cancel = cloud_runtime::Cancellation::default();
         form.launch.revision = None;
         form.launch.unconfigured = false;
+        form.launch.read_error = None;
         form.launch.accounts_checked = false;
         form.launch.ready_profiles.clear();
         form.profiles = None;
@@ -215,6 +218,10 @@ impl HorizonApp {
                         return;
                     }
                     if !form.launch.unconfigured {
+                        // Only settings an agent can repair in .horizon offer the fixing agent;
+                        // a missing folder, Git or a bad revision is shown as it is.
+                        form.launch.read_error =
+                            cloud_runtime::repository::launch::is_config_error(&error).then(|| error.to_string());
                         self.cloud_prototype.error = Some(error.to_string());
                     }
                 }
@@ -300,6 +307,8 @@ mod tests {
         std::fs::remove_file(&runtime_path).unwrap();
         std::fs::create_dir(&runtime_path).unwrap();
         app.start_production_deployment(101, &ctx);
+        // The session writer reports the failed save to the preparation that waits for it.
+        app.finish_cloud_preparations(&ctx);
         assert!(!root.exists(), "persistence failure must not create a state directory");
         assert!(
             !app.cloud_prototype.groups.0[0]
@@ -318,6 +327,7 @@ mod tests {
         );
         std::fs::remove_dir(&runtime_path).unwrap();
         app.start_production_deployment(101, &ctx);
+        app.finish_cloud_preparations(&ctx);
         let saved = RuntimeState::load(&runtime_path).unwrap().unwrap();
         assert_eq!(saved.cloud_groups.0.len(), 1);
         assert_eq!(saved.cloud_groups.0[0].remote.as_ref().unwrap().id, cloud_id);

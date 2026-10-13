@@ -201,6 +201,7 @@ mod tests {
         app.toggle_cloud_fullscreen(&ctx, 1);
         app.canvas_view = CanvasViewState::new([40.0, 80.0], 1.4);
         assert!(app.auto_save_runtime_state());
+        crate::app::test_support::wait_for_session_saves(&app);
         let saved: horizon_core::RuntimeState =
             serde_yaml::from_str(&std::fs::read_to_string(session.runtime_state_path).unwrap()).unwrap();
         assert_eq!(saved.canvas_view_or_default(), overview);

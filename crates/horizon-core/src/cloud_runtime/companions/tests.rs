@@ -729,3 +729,19 @@ fn a_grant_from_a_journal_before_key_removal_still_drops_the_source_key() {
         fixture.transport.calls
     );
 }
+
+#[test]
+fn a_saved_deselection_reads_back_as_deselected() {
+    let mut fixture = Fixture::new();
+    fixture.select();
+    let root = fixture.root.path();
+    assert!(!deselected(root, &fixture.owner, "app").unwrap());
+    persist_deselections(root, &fixture.owner, &["app".to_owned()]).unwrap();
+    assert!(deselected(root, &fixture.owner, "app").unwrap());
+    assert!(
+        deselected(root, &fixture.owner, "other").unwrap(),
+        "no grant is nothing selected"
+    );
+    let _held = journal::Store::open(root, &fixture.owner).unwrap();
+    assert!(matches!(deselected(root, &fixture.owner, "app"), Err(Error::Busy)));
+}

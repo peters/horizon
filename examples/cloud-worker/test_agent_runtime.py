@@ -71,13 +71,15 @@ if sys.argv[1:] == ['--help']:
         self.env = {'PATH': str(tools) + os.pathsep + os.defpath,
                     'CHILD_RECEIPT': str(self.root / 'child.json'), 'HORIZON': 'parent-host'}
 
-    def launch(self, agent='claude', cwd=None, **environment):
-        result = subprocess.run(['bash', str(self.script), 'test-panel', agent],
+    def launch(self, agent='claude', panel='test-panel', commands=None, cwd=None, **environment):
+        (self.workspace / 'sessions' / panel).mkdir(exist_ok=True)
+        (self.root / 'child.json').unlink(missing_ok=True)
+        result = subprocess.run(['bash', str(self.script), panel, agent], input=commands,
                                 env=dict(self.env, **environment), capture_output=True,
                                 text=True, timeout=10, check=True, cwd=cwd)
-        self.assertEqual((self.workspace / 'sessions/test-panel/exit-status').read_text(), '23\n')
+        self.assertEqual((self.workspace / 'sessions' / panel / 'exit-status').read_text(), '23\n')
         self.assertIn('Session process exited with status 23', result.stdout)
-        self.stderr = result.stderr
+        self.stdout, self.stderr = result.stdout, result.stderr
         return json.loads((self.root / 'child.json').read_text())
 
     def test_minimal_launch_disables_background_updates_and_preserves_contract(self):
@@ -246,6 +248,38 @@ if sys.argv[1:] == ['--help']:
         self.assertEqual(child['args'][0], '--session-id', 'the agent still starts')
         self.assertTrue(self.claude_config()['hasCompletedOnboarding'])
 
+    def test_claude_started_in_a_new_shell_uses_the_saved_key_and_workspace(self):
+        key = 'sk-ant-api03-' + 's' * 30 + 'ABCDEFGHIJKLMNOPQRST'
+        (self.workspace / 'credentials/anthropic-api-key').write_text(key + '\n')
+        child = self.launch('shell', commands='claude\n')
+        self.assertEqual(child['args'], [], 'the person started claude by hand')
+        self.assertEqual(child['env']['ANTHROPIC_API_KEY'], key)
+        self.assertEqual(child['env']['ANTHROPIC_WORKSPACE_ID'], 'synthetic-workspace')
+        self.assertEqual(child['env']['ANTHROPIC_CUSTOM_HEADERS'], 'anthropic-workspace-id: synthetic-workspace')
+        self.assertEqual(child['env']['DISABLE_AUTOUPDATER'], '1')
+        config = self.claude_config()
+        self.assertTrue(config['hasCompletedOnboarding'])
+        self.assertEqual(config['customApiKeyResponses'], {'approved': [key[-20:]], 'rejected': []})
+        self.assertFalse((self.workspace / 'sessions/test-panel/agent-session').exists())
+        self.assertNotIn(key, self.stdout + self.stderr)
+
+    def test_a_shell_opened_after_a_claude_panel_also_gets_the_saved_key(self):
+        self.launch()
+        child = self.launch('shell', panel='shell-panel', commands='claude\n')
+        self.assertEqual(child['args'], [])
+        self.assertEqual(child['env']['ANTHROPIC_API_KEY'], 'synthetic-key')
+        self.assertEqual(child['env']['ANTHROPIC_CUSTOM_HEADERS'], 'anthropic-workspace-id: synthetic-workspace')
+        self.assertEqual(child['env']['HORIZON_SESSION_DIR'], str(self.workspace / 'session-data/shell-panel'))
+
+    def test_a_shell_without_a_key_binding_starts_normally(self):
+        for name in ['anthropic-api-key', 'anthropic-workspace']:
+            (self.workspace / 'credentials' / name).unlink()
+        child = self.launch('shell', commands='claude\n')
+        self.assertEqual(self.stderr, '')
+        for name in ['ANTHROPIC_API_KEY', 'ANTHROPIC_WORKSPACE_ID', 'ANTHROPIC_CUSTOM_HEADERS']:
+            self.assertIsNone(child['env'][name], name)
+        self.assertNotIn('customApiKeyResponses', self.claude_config())
+
     def test_other_agents_leave_the_claude_config_alone(self):
         self.launch('grok')
         self.assertFalse((self.workspace / 'home/.claude.json').exists())
@@ -265,6 +299,7 @@ if sys.argv[1:] == ['--help']:
         self.assertEqual(child['args'], ['--no-daemon', '--config', 'approval_policy="on-request"',
                                          '--sandbox', 'workspace-write'])
         self.assertEqual(child['env']['HOME'], str(self.workspace / 'home'))
+        self.assertIsNone(child['env']['ANTHROPIC_API_KEY'])
 
     def test_codex_without_the_server_option_starts_with_only_approval_arguments(self):
         self.assertEqual(self.launch('codex')['args'],

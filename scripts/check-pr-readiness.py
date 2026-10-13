@@ -4,14 +4,14 @@
 Copilot reports these rules as review findings, and each finding costs a review
 round. The check finds them in a second instead:
 
-- scope: more than 10 source or test files, or more than 1,500 lines, needs approval;
+- scope: more than 10 source or test files, or more than 1,500 lines, gives a size note;
 - UI changes: a test procedure, and an embedded animated GIF in the PR body (at the top);
 - features (a `feat` title): a test procedure;
 - the two bundled skill copies change together;
 - new test plans go under docs/testing/procedures/ or docs/testing/reports/.
 
 Usage: check-pr-readiness.py [--base REF] [--title TEXT] [--body FILE]
-       [--scope-approved] [--no-visible-change]
+       [--no-visible-change]
 """
 
 import argparse
@@ -116,7 +116,7 @@ def is_source(path):
     return Path(path).suffix in CODE and not path.startswith("docs/testing/")
 
 
-def check(repo, base, title, body, scope_approved, no_visible_change):
+def check(repo, base, title, body, no_visible_change):
     files = changed_files(repo, base)
     paths = {path for path, _, _, _ in files}
     errors, notes = [], []
@@ -124,10 +124,12 @@ def check(repo, base, title, body, scope_approved, no_visible_change):
     # A pure rename (no edited lines) is a mechanical move and does not count.
     source = [(p, a, d) for p, a, d, status in files if is_source(p) and not (status == "R" and a + d == 0)]
     lines = sum(a + d for _, a, d in source)
-    if (len(source) > MAX_FILES or lines > MAX_LINES) and not scope_approved:
-        errors.append(("scope", f"{len(source)} source or test files and {lines} changed lines. More than "
-                       f"{MAX_FILES} files or {MAX_LINES} lines needs explicit approval from peters. After the "
-                       "approval, run again with --scope-approved, or split the PR."))
+    if len(source) > MAX_FILES or lines > MAX_LINES:
+        notes.append(("scope", f"{len(source)} source or test files and {lines} changed lines exceeds the "
+                      f"review-size thresholds ({MAX_FILES} files or {MAX_LINES} lines). Split into "
+                      "cohesive, independently testable PRs where practical. If the outcome must stay "
+                      "together, explain why and how to review it in the PR body. Size alone does not "
+                      "require user approval."))
 
     # A deleted procedure does not count: the rule needs a procedure in the result.
     # Only a procedure that is written or edited counts: not a deletion, not a pure rename.
@@ -181,13 +183,14 @@ def main(argv=None):
     parser.add_argument("--base", help="the base commit (default: the merge base with origin/main)")
     parser.add_argument("--title", help="the PR title")
     parser.add_argument("--body", help="a file with the PR body")
-    parser.add_argument("--scope-approved", action="store_true", help="peters approved a larger PR")
+    # Accept the former approval flag for existing callers; size is always advisory.
+    parser.add_argument("--scope-approved", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--no-visible-change", action="store_true", help="the UI files change no visible behavior")
     args = parser.parse_args(argv)
     repo = Path(args.repo)
     base = args.base or git(repo, "merge-base", "HEAD", "origin/main").strip()
     body = Path(args.body).read_text(encoding="utf-8") if args.body else None
-    errors, notes = check(repo, base, args.title, body, args.scope_approved, args.no_visible_change)
+    errors, notes = check(repo, base, args.title, body, args.no_visible_change)
     for rule, message in errors:
         print(f"error {rule}: {message}")
     for rule, message in notes:

@@ -92,9 +92,16 @@ fn form(profile: &str) -> Production {
         ..Production::default()
     };
     form.launch.accounts_checked = true;
+    // These tests work with every worker and filter, past the three picks people start with.
+    form.launch.selector.show_all = true;
     form.prices.answered(list(None), preferences(), Vec::new());
     form.prices.hetzner.answered(None);
     form
+}
+
+#[test]
+fn people_start_with_the_three_picks_and_the_full_list_closed() {
+    assert!(!State::default().show_all);
 }
 
 #[test]

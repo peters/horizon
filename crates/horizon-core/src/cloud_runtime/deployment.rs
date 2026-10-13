@@ -52,6 +52,9 @@ pub struct Request {
     pub profile: horizon_cloud::Profile,
     pub state_root: PathBuf,
     pub settings: Settings,
+    /// The person asked this deployment to sign in to GitHub again, for example to add a
+    /// repository, although the worker holds access. Only this deployment signs in again.
+    pub renew_github: bool,
 }
 
 impl Request {
@@ -71,6 +74,7 @@ impl Request {
             profile,
             state_root,
             settings,
+            renew_github: false,
         }
     }
 }
@@ -233,7 +237,7 @@ fn deploy_with(
     source::transfer(&connection, store, &mut state, packed, &contract, &runner, emit)?;
     begin_sessions(&mut state, store, emit)?;
     configure_agent_auth(&connection, &request.settings, &state.profile.capabilities, &runner)?;
-    configure_git_auth(git_auth, request.settings.github.as_ref(), &state, &connection, &runner)?;
+    configure_git_auth(git_auth, request, &state, &connection, &runner)?;
     if let Some(browser_auth) = browser_auth {
         state.browserstack_targets.clone_from(browser_auth.targets());
         store.arm_browserstack(&mut state)?;

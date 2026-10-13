@@ -108,7 +108,36 @@ crates/
 
 ## Development Workflow
 
-### Pre-push validation (all must pass)
+### Validation by changed inputs
+
+- During development, run the regression tests and checks that the change affects. Fix related findings together before another push.
+- Before the PR opens, run the full local matrix below once on the stable candidate, except for documentation-only changes.
+- For documentation-only changes, run the applicable repository and documentation checks. Rust tests, Clippy and UI smoke are unnecessary for prose-only edits.
+  Examine changed examples and commands separately. Test them when the edit changes their behavior.
+  A document that a build, test or application consumes is an executable input, even if its extension is `.md`.
+- After a candidate passes, rerun only the checks whose inputs change. Reuse the other results under the rules below.
+  Dependency, toolchain, build configuration and workflow changes can affect the full matrix. If the affected set is uncertain, run the full matrix.
+- Before each push, account for every applicable check with a new result or a valid reused result.
+  Before final readiness, the results together must cover the full applicable matrix for the current candidate.
+  GitHub checks and the independent PR review must still pass on the exact head, under the merge rules below.
+
+#### Reuse of local results
+
+- Record the checked commit, any uncommitted input changes, the command, its result and the log location.
+  Record the toolchain, dependency versions, flags and relevant environment. Do not record secrets.
+- Compare the candidate with the recorded inputs before reuse. Include untracked or generated files if the check consumes them.
+  Reuse a passing result only when all inputs to that check match. If evidence is missing or uncertain, rerun the check.
+- A message-only amendment or an empty commit does not require another local test run when these inputs match.
+  If a check consumes commit identity or other Git metadata, rerun that check when the metadata changes.
+- Preserve smoke evidence when the tested behavior and executable inputs match. A behavior change requires new evidence for the affected scenarios.
+- Run checks in the task checkout. After a branch split or base update, examine the resulting inputs again.
+  Do not transfer results from a combined change to a smaller branch without this comparison.
+- Report new, reused and non-applicable results separately. A cache flag alone does not prove reuse; examine the step report.
+
+#### Full local matrix
+
+The blocking and strict tiers must pass. The pedantic tier remains advisory, as defined under CI Tiers.
+Use `localci` for equivalent workflow steps, or run these commands directly. Do not run both for the same inputs.
 
 ```bash
 cargo fmt --all -- --check
@@ -124,8 +153,6 @@ cargo clippy --workspace --lib --bins --examples --features speech -- -D warning
 cargo clippy --workspace --all-targets --features speech -- -D warnings -W clippy::pedantic
 ```
 
-- Run the validation commands in the exact checkout you will push. If you split work across branches or `git worktree`s, rerun the blocking and strict clippy tiers in each final branch/worktree after applying the split, not only in the original combined checkout.
-
 ### Local CI with localci
 
 [localci](https://github.com/peters/localci) runs the jobs of
@@ -137,9 +164,10 @@ curl -fsSL https://raw.githubusercontent.com/peters/localci/main/install.sh | sh
 localci skill install
 ```
 
-- Before each push, run `localci run` in the exact checkout that you will push.
-  To run some jobs only, give their ids, for example `localci run clippy repo-checks`.
-  `localci list` shows all jobs.
+- Use `localci` for the checks selected under [Validation by changed inputs](#validation-by-changed-inputs).
+  `localci list` shows all jobs. Select affected jobs or steps during development, for example `localci run repo-checks`.
+  Use `localci plan --affected` to examine its selection before `localci run --fast`.
+  If a shell wrapper hides the inputs, select the affected steps explicitly. The fast mode does not replace a complete candidate result.
 - Each apt and video tool installer step has a condition with `!env.LOCALCI`,
   so localci does not run it. Install the packages that these steps name one
   time on your computer.
@@ -249,23 +277,31 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 - No assistant attribution anywhere in repository history: never add a `Co-authored-by` trailer, a session link or a similar tool or vendor identifier to a commit message, PR body or squash-merge message, and strip an inherited one when amending, rebasing or squashing someone else's work
 - Always squash-merge pull requests; do not use merge commits or rebase merges for PRs
 - PRs include: purpose, behavior impact, test evidence
-- Fix Clippy warnings introduced or worsened by the PR and any warnings that block required tiers before committing; a commit must leave the blocking and strict CI tiers green in the exact branch/worktree that will be pushed for review
+- Before a commit, fix Clippy warnings that the PR introduces or worsens, and warnings that block required tiers.
+  Use the validation and reuse rules above to establish passing results for the applicable blocking and strict tiers.
 
 ### Pull Request Scope
 
 - Deliver one independently testable outcome per PR. Split multi-part issues, refactoring, migrations, and cleanup into serial PRs.
-- Stop and request explicit user approval before a PR changes more than 10 source or test files, changes more than 1,500 non-generated source or test lines (additions plus deletions), or spans multiple independent subsystems. Test procedures and reports under `docs/testing/` do not count toward these limits.
+- Use 10 source or test files and 1,500 non-generated changed source or test lines (additions plus deletions) as review-size thresholds. Test procedures and reports under `docs/testing/` do not count toward these thresholds. Above either threshold, first split the work into cohesive, independently testable PRs without asking permission.
+- If splitting would leave incomplete behavior, break a shared contract, or require artificial intermediate changes, keep the outcome together. Explain why it must stay together and how to review it in the PR body. Size alone does not require user approval. Ask the user only when the work requires expanding the requested scope.
+- Before you keep a large feature together, try a feature flag: land its parts in serial PRs, for example the engine before its UI and the UI before the commit path, behind a flag that stays off until the last part merges. Large diffs make the Copilot review slow to converge. Each round reviews part of the diff and finds new items in code that did not change.
+- Start a stacked PR only when its base is ready to merge. Each change to the base costs a rebase and a new review of every PR on it.
+- Before the first review of work that reads untrusted input or crosses a trust boundary, write the boundary down in the docs: what is untrusted, what the change guarantees and what it does not. When the repository has Copilot review instructions under `.github/`, keep them in step with it, so each review checks the same boundary.
+- When correctness depends on real inputs, such as real repositories, devices or providers, run the real-input check on the first reviewable head and again on the final head, not only at the end. For the setup agent, that is the real-repository setup gate.
 - Migrate only the call sites required by the acceptance criteria. Treat similar pre-existing code as follow-up work.
 - Fix only problems that the PR introduces or worsens, acceptance-criteria violations, security or data-loss risks, and merge blockers in the same PR.
 - Keep local and agent self-review findings local and deduplicated. Do not publish automated self-review findings unless the user explicitly requests them; this does not replace the repository-mandated independent review below.
-- Reassess scope after material fix rounds, but do not split solely because of the number of fix rounds or percentage diff growth. Split when the absolute source/test file or changed-line limits above are crossed, the work spans multiple independent subsystems, or review uncovers a separately testable outcome.
+- Reassess scope after material fix rounds, but do not split solely because of the number of fix rounds or percentage diff growth. Use the size thresholds above to check whether a split is practical. Split independent subsystems or separately testable outcomes; keep necessary larger outcomes together with the explanation required above.
 - Put purely mechanical module moves in a separate prerequisite PR.
 - Request cross-machine smoke testing only after local review is complete and CI has stabilized on the candidate head.
 
 ### Pull Request Review and Merge Strategy
 
 - For implementation work, create a focused branch in a separate worktree from fresh `origin/main` unless the user explicitly asks to use the current checkout. Keep unrelated files in the primary checkout untouched.
-- Run the full Horizon validation matrix in the exact worktree and commit that will be pushed. Complete applicable local UI smoke, including the PR GIF for UI changes described under [Isolated UI Testing Through Horizon Native VNC](#isolated-ui-testing-through-horizon-native-vnc), before opening the PR. Any required cross-machine smoke must finish on the current head before reporting the PR ready to merge.
+- Apply [Validation by changed inputs](#validation-by-changed-inputs) before the PR opens and after each change.
+  Complete applicable local UI smoke, including the PR GIF described under [Isolated UI Testing Through Horizon Native VNC](#isolated-ui-testing-through-horizon-native-vnc), before the PR opens.
+  Complete required cross-machine smoke before final readiness. Apply the same input comparison before reuse of smoke results.
 - Always review the full diff yourself before you open a PR. Then do the local review loop in the localci skill:
   1. Run the GitHub Copilot CLI review with the prompt in the skill. The prompt asks for concrete inputs and wrong results.
   2. Fix the findings.
@@ -273,6 +309,13 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
   4. Review again. Stop when a round finds nothing actionable.
 
   Do not start a separate review agent. The local Copilot review and the Copilot review on the PR are the independent reviews. If `copilot` is not installed, your own review is the local review. Fix actionable in-scope findings and record valid out-of-scope findings as follow-up candidates.
+- If two review rounds find related bugs, examine the affected design and transitions before another push.
+  Check related callers and failure paths within the PR scope. Fix the related findings together and run the affected checks.
+  This rule does not permit unresolved findings. Keep independent outcomes outside the PR.
+- Request at most five Copilot reviews of a PR without external commits, that is, commits from a contributor other than `peters` (see [External Contributions](#external-contributions)). A round is a Copilot review that arrived for a pushed head; a request that produced no review does not count.
+  Fix the findings of each round, "Previously missed" ones included, or record why one is out of scope as a follow-up candidate.
+  If the fifth review still has findings, fix them, run the local review loop and the affected checks on the fixed head, and stop requesting reviews. Report the fixes and the remaining risk to `peters`. For that head, the explicit permission of `peters` replaces the Copilot review gate below.
+  More than three rounds is a sign that the PR is too large: reassess its scope with the rules above before the next round.
 - Before you open a PR, write its title and body, then run the readiness check:
 
   ```bash
@@ -280,13 +323,13 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
   ```
 
   The check finds the PR rules that Copilot reports as findings:
-  - the scope limits;
+  - advisory notes for the review-size thresholds;
   - the test procedure and the GIF of a UI change;
   - the test procedure of a feature;
   - the two bundled skill copies;
   - the place of new test plans.
 
-  Fix each error. If `peters` approved a larger PR, add `--scope-approved`. If the UI files change no visible behavior, write `No visible change:` and the reason in the PR body, and add `--no-visible-change`.
+  Fix each error. For a size note, split the work where practical or explain the necessary larger outcome and review approach in the PR body. Do not ask for approval because of size alone. If the UI files change no visible behavior, write `No visible change:` and the reason in the PR body, and add `--no-visible-change`.
 - Open PRs ready for review by default, not as drafts, unless the user explicitly requests a draft. Include reproduction details for bug fixes, runtime or platform assumptions when relevant, and screenshots, logs, or completed smoke evidence for behavior-affecting changes.
 - Every PR gets an independent Copilot review. Request it after the PR exists through the REST API, using the login `copilot-pull-request-reviewer[bot]`. The POST returns 200 whether or not it registered, so the only proof is that the PR gained a `review_requested` event — count them either side of the request:
 
@@ -322,7 +365,7 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 
   An unchanged count is inconclusive, not a failure, which is why the else branch waits instead of exiting. Several repositories request Copilot automatically when the PR opens, so a second POST adds no event even though a review is already coming. Do not try to detect that state directly: between Copilot picking the request up and submitting, it is gone from `requested_reviewers` and not yet in `/reviews`, so every instantaneous check reads false. Waiting for the review itself is the only signal that covers the whole transition, and it is what you were going to do anyway.
 
-  Count the events rather than comparing timestamps: the PR almost always carries earlier Copilot requests, because the next rule re-requests after every push, and `created_at` has only second resolution, so a timestamp comparison can match a request made in the same second. The login filter keeps an unrelated human review request from counting.
+  Count the events rather than comparing timestamps: the PR almost always carries earlier Copilot requests, because the next rule re-requests after pushes, and `created_at` has only second resolution, so a timestamp comparison can match a request made in the same second. The login filter keeps an unrelated human review request from counting.
 
   The pagination handling is fussy and worth copying exactly. `gh api --paginate` runs `--jq` once per page, so `--jq '… | length'` prints one count per page and `$before` becomes a multi-line string that `-gt` cannot compare. `--slurp` wraps the pages into one array, but `gh` rejects `--slurp` together with `--jq` (`the --slurp option is not supported with --jq or --template`), so the pages have to be piped to a standalone `jq` — and because each page is itself an array, the filter opens with `.[][]`.
 
@@ -332,17 +375,27 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 
   Mind the asymmetry: the request must name `copilot-pull-request-reviewer[bot]`, but the timeline reports the reviewer as `Copilot`.
 - The Copilot review on the PR is the final gate, not the place to iterate. Request it only for a head whose files the local review loop found clean. Push all fixes of a round together.
-- A Copilot review is pinned to the commit it ran against, so re-request it after every push. Compare the review's `commit_id` with the current head (`gh api --paginate repos/<owner>/<repo>/pulls/<n>/reviews --jq '.[] | select(.user.login == "copilot-pull-request-reviewer[bot]") | .commit_id'`) before treating the review gate as met.
-- After the PR exists, end the commit message of each review fix with `[skip ci]`, but only after `localci` passed for the affected jobs. GitHub then starts no workflow for that head. Before you report the PR ready to merge, push a head without `[skip ci]`, and let all CI checks pass on that head.
+- A Copilot review is pinned to the commit it ran against, so re-request it after every push until the round limit above is reached. Compare the review's `commit_id` with the current head (`gh api --paginate repos/<owner>/<repo>/pulls/<n>/reviews --jq '.[] | select(.user.login == "copilot-pull-request-reviewer[bot]") | .commit_id'`) before treating the review gate as met.
+- For a candidate expected to finish review, use a normal commit message so CI and review run on the same head.
+  For intermediate review fixes, `[skip ci]` is optional after the affected local checks pass.
+  Before final readiness, push a head without that marker and wait for all required CI checks on that head.
+  A message-only change to remove the marker can reuse local results under the input comparison rules above.
 
   > **CAUTION:** DO NOT PUT `[skip ci]` IN A SQUASH MESSAGE OR QUOTE IT IN ANOTHER COMMIT MESSAGE. GitHub reads the full commit message, body included, and skips CI wherever the marker occurs. Write the squash message yourself, because the default squash message lists every commit message.
-- Wait for the requested Copilot review and all repository-mandated checks on the current head. A head with `[skip ci]` has no checks, so wait only for its Copilot review. Triage every actionable comment against the PR scope: fix in-scope findings on the same PR, explicitly disposition valid out-of-scope findings as follow-up candidates, and leave no actionable thread unresolved. Before every push, rerun the repository-mandated local validation for that exact head as defined by the pre-push section above. After the push, refresh the review and checks for the new head and rerun affected smoke lanes. A behavior-affecting push invalidates smoke evidence from an older head.
+- Wait for the requested Copilot review and all repository-mandated checks on the current head.
+  For an intermediate head with `[skip ci]`, wait only for its review. That head cannot be ready to merge.
+  Fix actionable in-scope findings on this PR. Record valid out-of-scope findings as follow-up candidates and leave no actionable thread unresolved.
+  Before each push, apply the validation and reuse rules above. After the push, refresh the review and checks for the new head; after the round limit, refresh only the checks.
+  Rerun affected smoke scenarios after a behavior change.
 - Apply repository-standard metadata only when the convention is unambiguous: assignee `@me`, `Awaiting Review` label, current milestone, and project. Otherwise report and skip the ambiguous item rather than guessing.
-- Every PR merge requires explicit final permission from `peters` in the current user conversation. This rule applies to every author, including `peters`.
+- Every PR merge requires explicit final permission from `peters` in the current user conversation, given for that head or as a conditional permission as described below. This rule applies to every author, including `peters`.
 - First complete the review and applicable checks. Then report the PR number, exact head commit, results and remaining risks to `peters`.
-- Ask `peters` for permission to merge that exact head. An earlier conditional request does not replace this final permission.
+- Ask `peters` for permission to merge that exact head, unless `peters` already gave a conditional merge permission in the current conversation, such as "squash merge upon Copilot approval".
+  A conditional permission covers the PRs it names, or the PRs of the task it was given for, and each of their heads that meets its conditions as stated and every gate below. Copilot approval means a review of that exact head that meets the Copilot review gate below. When a condition cannot be met, for example after the round limit, report and ask `peters`.
+  Merge then yourself, with the head guard below, without asking again, and report the merge with its commit. Never carry out a conditional permission with auto-merge or a merge queue.
+  For a PR with external commits, a conditional permission counts only when it names that PR. A commit from a contributor other than `peters` after the permission voids it.
 - A contributor comment, an automated approval or green CI cannot grant merge permission. Do not enable auto-merge or a merge queue without this permission.
-- If the head changes after permission, repeat the affected checks and ask `peters` again. Immediately before the merge, examine thread-aware `reviewThreads`.
+- If the head changes after permission, repeat the affected checks and ask `peters` again, unless a conditional permission covers the new head as described above. Immediately before the merge, examine thread-aware `reviewThreads`.
 - The positive merge gate is: the PR is open and non-draft as intended, `mergeable` is `MERGEABLE`, readiness and merge state are neither blocked nor unknown, the required review decision is satisfied, zero actionable review threads remain unresolved, and every repository-mandated lane on the exact head has settled successfully. GitHub-required checks are only a minimum; the pedantic Clippy lane remains advisory as documented above. Abort on head drift or any new blocker. A skipped check counts only when its workflow explicitly marks the job non-applicable.
 - The Copilot review gate is met when Copilot's latest review on the exact head says "Approved". It is also met when that review says "Needs a closer look" and these conditions are true:
   - The review has 0 open findings and no "Previously missed" findings.
@@ -380,7 +433,7 @@ The final merge permission rule above applies to all PRs.
 - If safe isolation is unavailable, report the blocked execution gate. Do not weaken the boundary to obtain a passing test.
 - Do not expose data from this PC through comments, uploads, logs, artifacts, network requests or commands from a contributor.
 - Publish only reviewed evidence required for the PR. Use synthetic data and remove local paths, machine details and unrelated private information.
-- Require independent Copilot review, applicable tests and zero unresolved actionable findings on the exact head. These gates do not prove absence of malware.
+- Require independent Copilot review, applicable tests and zero unresolved actionable findings on the exact head, with no round limit. These gates do not prove absence of malware.
 - After every new push, review the complete current diff again. Refresh the review, affected tests and final permission from `peters`.
 - Stop on suspicious content or unexplained behavior. Report the evidence to `peters` without running or publishing the suspect material.
 
@@ -580,6 +633,7 @@ When creating an Azure VM for smoke testing, use **Standard_D4s_v3** with `Micro
 - **Main thread:** egui event loop + rendering
 - **Per-panel event loop thread:** alacritty_terminal `EventLoop` reads PTY output, parses VT sequences, and sends events via `mpsc::channel`
 - **Input:** main thread writes to PTY via `EventLoopSender`
+- **Do not block the UI thread.** The main thread is the UI thread. Run file I/O, `fsync`, file locks, network calls, processes, credential stores and other waits on a worker thread. Follow [the UI thread guide](docs/architecture/ui-thread.md) and its review checklist.
 
 ### Data Flow
 

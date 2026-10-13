@@ -10,6 +10,7 @@ use horizon_core::{AgentStatus, WorkspaceId};
 use crate::theme;
 
 use super::super::HorizonApp;
+use super::text;
 use super::{SidebarActions, SidebarWorkspaceDragState, WorkspaceSidebarEntry};
 
 const REFRESH: Duration = Duration::from_secs(1);
@@ -146,8 +147,13 @@ pub(super) fn accepts_drop(dragged: Group, target: &WorkspaceSidebarEntry) -> bo
     dragged == target.row.group && super::sidebar_workspace_drop_should_dock(target.detached)
 }
 
-const HEADER_TEXT_SIZE: f32 = 10.5;
+const HEADER_HEIGHT: f32 = 34.0;
+const HEADER_TEXT_SIZE: f32 = 12.0;
+const SUMMARY_TEXT_SIZE: f32 = 10.5;
+const HEADER_LEFT_MARGIN: f32 = 18.0;
 const HEADER_RIGHT_MARGIN: f32 = 14.0;
+/// The least room for the summary: about one short part, such as `live`.
+const MIN_SUMMARY_WIDTH: f32 = 24.0;
 
 /// The header of a group: its name, how many workspaces it has, a bulk stop when
 /// `idle` clouds of the group can stop and, at the right, its summary on the same
@@ -159,60 +165,138 @@ pub(super) fn render_group_header(
     summary: &[String],
     idle: usize,
 ) -> bool {
+    let rect = ui.allocate_space(egui::vec2(ui.available_width(), HEADER_HEIGHT)).1;
+    let center_y = rect.max.y - 13.0;
+    let (caption, mut x) = paint_caption(ui, rect, group, count, center_y);
+
     let mut stop = false;
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        ui.add_space(18.0);
-        ui.label(
-            egui::RichText::new(group.label().to_uppercase())
-                .color(theme::FG_DIM())
-                .size(HEADER_TEXT_SIZE)
-                .strong(),
-        );
-        ui.label(
-            egui::RichText::new(count.to_string())
-                .color(theme::FG_DIM())
-                .size(HEADER_TEXT_SIZE),
-        );
-        if idle > 0 {
-            let text = egui::RichText::new("Stop idle…")
-                .color(theme::ACCENT())
-                .size(HEADER_TEXT_SIZE);
-            let clouds = if idle == 1 { "1 idle cloud" } else { "idle clouds" };
-            stop = ui
-                .add(egui::Button::new(text).frame(false))
-                .on_hover_text(format!(
-                    "Choose which workers of the {clouds} in {} to stop",
-                    group.label()
-                ))
-                .clicked();
+    if idle > 0 {
+        let button;
+        (stop, button) = stop_idle_button(ui, group, idle, egui::pos2(x, center_y));
+        x = button.max.x + 6.0;
+    }
+
+    let right = rect.max.x - HEADER_RIGHT_MARGIN;
+    // A narrow header leaves the summary out rather than draw it over the button;
+    // a screen reader then hears it with the group name.
+    let summary_fits = right - x >= MIN_SUMMARY_WIDTH;
+    let caption_response = ui.interact(
+        caption,
+        ui.make_persistent_id(("sidebar_group_caption", group.key())),
+        egui::Sense::hover(),
+    );
+    caption_response.widget_info(|| {
+        let mut spoken = format!("{} {count}", group.label());
+        if !summary_fits && !summary.is_empty() {
+            spoken = format!("{spoken}, {}", summary.join(" · "));
         }
-        let width = ui.available_width() - HEADER_RIGHT_MARGIN - ui.spacing().item_spacing.x;
-        let Some(text) = fitted_summary(summary, width, |text| {
-            ui.painter()
-                .layout_no_wrap(
-                    text.to_owned(),
-                    egui::FontId::proportional(HEADER_TEXT_SIZE),
-                    theme::FG_DIM(),
-                )
-                .size()
-                .x
-        }) else {
-            return;
-        };
-        let full = summary.join(" · ");
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add_space(HEADER_RIGHT_MARGIN);
-            let response = ui.add(
-                egui::Label::new(egui::RichText::new(&text).color(theme::FG_DIM()).size(HEADER_TEXT_SIZE)).truncate(),
-            );
-            // A screen reader gets the whole summary, also when the header drops parts.
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &full));
-            response.on_hover_text(full);
-        });
+        egui::WidgetInfo::labeled(egui::WidgetType::Label, true, spoken)
     });
-    ui.add_space(2.0);
+    if !summary_fits {
+        return stop;
+    }
+    let Some(fitted) = fitted_summary(summary, right - x, |text| {
+        ui.painter()
+            .layout_no_wrap(
+                text.to_owned(),
+                egui::FontId::proportional(SUMMARY_TEXT_SIZE),
+                theme::FG_DIM(),
+            )
+            .size()
+            .x
+    }) else {
+        return stop;
+    };
+    let galley = text::line(
+        ui,
+        &fitted,
+        SUMMARY_TEXT_SIZE,
+        text::REGULAR,
+        theme::FG_DIM(),
+        (right - x).max(0.0),
+    );
+    let summary_rect = egui::Rect::from_min_size(
+        egui::pos2(right - galley.size().x, center_y - galley.size().y / 2.0),
+        galley.size(),
+    );
+    ui.painter().galley(summary_rect.min, galley, theme::FG_DIM());
+    // A screen reader gets the whole summary, also when the header drops parts.
+    let full = summary.join(" · ");
+    let response = ui.interact(
+        summary_rect,
+        ui.make_persistent_id(("sidebar_group_summary", group.key())),
+        egui::Sense::hover(),
+    );
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &full));
+    response.on_hover_text(full);
     stop
+}
+
+/// Paints the group name and its count at the left of the header. Returns the
+/// rect of both and where the next part starts.
+fn paint_caption(ui: &egui::Ui, rect: egui::Rect, group: Group, count: usize, center_y: f32) -> (egui::Rect, f32) {
+    let painter = ui.painter();
+    let left = rect.min.x + HEADER_LEFT_MARGIN;
+    let label = text::line(
+        ui,
+        group.label(),
+        HEADER_TEXT_SIZE,
+        text::SEMIBOLD,
+        theme::FG_SOFT(),
+        rect.width(),
+    );
+    let label_width = label.size().x;
+    painter.galley(
+        egui::pos2(left, center_y - label.size().y / 2.0),
+        label,
+        theme::FG_SOFT(),
+    );
+    let count_left = left + label_width + 7.0;
+    let count = text::mono(ui, &count.to_string(), 11.0, theme::FG_DIM());
+    let count_right = count_left + count.size().x;
+    painter.galley(
+        egui::pos2(count_left, center_y - count.size().y / 2.0),
+        count,
+        theme::FG_DIM(),
+    );
+    (
+        egui::Rect::from_x_y_ranges(left..=count_right, rect.y_range()),
+        count_right + 8.0,
+    )
+}
+
+/// The `Stop idle…` button of a header, left-centered on `at`. It is painted with
+/// its own click area, not placed with `ui.put`, which would move the list's cursor.
+/// Returns whether it was clicked, and its rect.
+fn stop_idle_button(ui: &egui::Ui, group: Group, idle: usize, at: egui::Pos2) -> (bool, egui::Rect) {
+    let label = text::line(ui, "Stop idle…", SUMMARY_TEXT_SIZE, text::MEDIUM, theme::ACCENT(), 80.0);
+    let button = egui::Rect::from_min_size(egui::pos2(at.x, at.y - label.size().y / 2.0), label.size());
+    ui.painter().galley(button.min, label, theme::ACCENT());
+    let response = ui.interact(
+        button.expand2(egui::vec2(2.0, 4.0)),
+        ui.make_persistent_id(("sidebar_group_stop", group.key())),
+        egui::Sense::click(),
+    );
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Stop idle…"));
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            response.rect,
+            4,
+            egui::Stroke::new(1.5_f32, theme::ACCENT()),
+            egui::StrokeKind::Outside,
+        );
+    }
+    let clouds = if idle == 1 { "1 idle cloud" } else { "idle clouds" };
+    let clicked = response
+        .on_hover_text(format!(
+            "Choose which workers of the {clouds} in {} to stop",
+            group.label()
+        ))
+        .clicked();
+    (clicked, button)
 }
 
 /// The most parts of `summary` that fit in `width`, joined. When not even the first
@@ -276,6 +360,61 @@ mod tests {
         assert!(
             labels.iter().any(|(label, _)| label == "$0.254/h · no local cost"),
             "{labels:?}"
+        );
+    }
+
+    #[test]
+    fn a_header_with_stop_idle_keeps_the_list_where_it_was() {
+        use crate::test_egui::DiscardTextures;
+
+        let ctx = egui::Context::default();
+        let mut heights = Vec::new();
+        for idle in [0, 1] {
+            let _output = ctx
+                .run_ui(egui::RawInput::default(), |ui| {
+                    let top = ui.cursor().min.y;
+                    super::render_group_header(ui, horizon_core::cloud_list::Group::Cloud, 2, &[], idle);
+                    heights.push(ui.cursor().min.y - top);
+                })
+                .discard_textures();
+        }
+        assert!((heights[0] - heights[1]).abs() <= f32::EPSILON, "{heights:?}");
+    }
+
+    #[test]
+    fn a_narrow_header_leaves_the_summary_out_instead_of_covering_stop_idle() {
+        use crate::test_egui::DiscardTextures;
+
+        let summary = ["$0.254/h".to_owned()];
+        let ctx = egui::Context::default();
+        let output = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                ui.allocate_ui(egui::vec2(168.0, 40.0), |ui| {
+                    super::render_group_header(ui, horizon_core::cloud_list::Group::NeedsYou, 2, &summary, 1);
+                });
+            })
+            .discard_textures();
+        let texts: Vec<String> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        assert!(texts.iter().any(|text| text == "Stop idle…"), "{texts:?}");
+        assert!(
+            texts.iter().all(|text| !text.contains("$0.254") && text != "…"),
+            "{texts:?}"
+        );
+        let labels = crate::test_egui::accesskit_texts(|ui| {
+            ui.allocate_ui(egui::vec2(168.0, 40.0), |ui| {
+                super::render_group_header(ui, horizon_core::cloud_list::Group::NeedsYou, 2, &summary, 1);
+            });
+        });
+        assert!(
+            labels.iter().any(|(label, _)| label == "Needs you 2, $0.254/h"),
+            "a screen reader still hears the summary: {labels:?}"
         );
     }
 }

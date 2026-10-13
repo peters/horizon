@@ -17,21 +17,32 @@ fn new_offers_the_cloud_first_above_the_sidebar_and_a_cancel_leaves_no_workspace
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
     click(&ctx, &mut app, label_position(&output, "New"));
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
-    let this_pc = label_position(&output, "This PC");
+    let positions = |matches: &dyn Fn(&str) -> bool| {
+        output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                Shape::Text(text) if matches(&text.galley.job.text) => {
+                    Some(Rect::from_min_size(text.pos, text.galley.size()).center())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    // The sidebar has a This PC group too: the menu's row is the one right above Cloud GPU.
+    let cloud_gpu = label_position(&output, "Cloud GPU");
+    let this_pc = positions(&|text| text == "This PC")
+        .into_iter()
+        .filter(|position| position.y < cloud_gpu.y && (position.x - cloud_gpu.x).abs() < 80.0)
+        .max_by(|a, b| a.y.total_cmp(&b.y))
+        .expect("a This PC row above Cloud GPU");
     // The toolbar has a Cloud menu too: the menu's own row is the one right above This PC.
-    let cloud = output
-        .shapes
-        .iter()
-        .filter_map(|shape| match &shape.shape {
-            Shape::Text(text) if text.galley.job.text == "Cloud" => {
-                Some(Rect::from_min_size(text.pos, text.galley.size()).center())
-            }
-            _ => None,
-        })
+    let cloud = positions(&|text| text == "Cloud")
+        .into_iter()
         .filter(|position| position.y < this_pc.y && (position.x - this_pc.x).abs() < 80.0)
         .max_by(|a, b| a.y.total_cmp(&b.y))
         .expect("a Cloud row above This PC");
-    let rows = [cloud, this_pc, label_position(&output, "Cloud GPU")];
+    let rows = [cloud, this_pc, cloud_gpu];
     assert!(
         rows[0].y < rows[1].y && rows[1].y < rows[2].y,
         "the cloud comes first, and This PC second"

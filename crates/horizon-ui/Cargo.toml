@@ -47,6 +47,10 @@ tracing-subscriber.workspace = true
 profiling.workspace = true
 serde_yaml.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+tar.workspace = true
+git2.workspace = true
+libc.workspace = true
 toml_edit.workspace = true
 tempfile.workspace = true
 png.workspace = true
@@ -60,6 +64,9 @@ cpal = { workspace = true, optional = true }
 [dev-dependencies]
 horizon-browser = { workspace = true, features = ["test-support"] }
 rusqlite.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb.workspace = true

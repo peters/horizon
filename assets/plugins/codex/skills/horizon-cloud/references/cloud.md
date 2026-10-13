@@ -3,8 +3,8 @@
 ## Servers and offer inspection
 
 The host Horizon browser MCP (`horizon --browser-mcp`) provides `cloud_offers`,
-`cloud_list`, `cloud_companions`, `cloud_companion_ensure_ready`, `cloud_companion_stop`, and
-`cloud_companion_operation`. Host operations require the owning Horizon to run.
+`cloud_list`, `cloud_companions`, `cloud_companion_ensure_ready`, `cloud_companion_stop`,
+`cloud_companion_uncheck`, and `cloud_companion_operation`. Host operations require the owning Horizon to run.
 
 On a configured worker, `horizon-cloud-worker companions mcp` provides
 `cloud_companions_list`, `cloud_companion_inspect`, and `cloud_offers`.
@@ -85,6 +85,14 @@ that the source import or checkout completed.
 4. If `resend` is true, send the same original tool, cloud, alias, and tailnet with
    the returned `operation_id` to continue it.
    A status read never starts or continues an operation.
+5. When the task no longer needs a companion, `cloud_companion_uncheck` with the
+   same `cloud` and `alias` queues the removal of its access as the box on the card
+   does. The removal is complete only when `cloud_companions` shows
+   `status: unselected`: `selected: false` comes before the cleanup, and
+   `status: revocation_pending` means the cleanup is not done. It starts, stops and
+   deletes nothing. You can uncheck but never check: checking is the owner's
+   authorization. A `cloud_companion_busy` answer means a companion change is in
+   progress on that cloud, the owner's or an earlier uncheck's; ask again in a moment.
 
 Only owner-selected existing companion clouds are eligible. An agent cannot
 create a missing companion. A never-started checked cloud can return
@@ -250,6 +258,25 @@ GitHub and chooses its repositories; agents cannot set it up.
   signs in once. No MCP tool lists or clones them: to start a cloud from a private
   repository, ask the person to pick it in **New cloud**. A repository missing from the
   list needs **Add repositories on GitHub** there.
+- A repository without `.horizon/cloud.yml` is set up in **New cloud** with **Set up
+  from CI**: a setup agent writes `.horizon` from the repository's CI, Horizon proves
+  the image on this computer (build, worker check, the CI jobs with localci, a fast
+  rerun; a repository without GitHub Actions is proved with the commands its README or
+  build files give), shows a desktop app live in a Device panel when the agent names
+  one, and **Use this setup** commits it. No MCP tool starts a setup: ask the person
+  to open **New cloud** for the repository.
+- When that proof's build fails because an organization limits OAuth apps, Horizon names
+  the organization and offers the fix on GitHub; the Dockerfile is not the cause. If the
+  person lets the setup agent make the fix, the agent gets one **GitHub access** browser
+  panel: it uses that panel, hands sign-in pages to the person with `browser_handoff`,
+  never types a password or code, and asks for a new proof once access is granted.
+- A desktop app that needs hardware virtualization, such as an x86_64 Android
+  emulator, gets `/dev/kvm` in the setup's live preview when the agent adds
+  `"kvm": true` to the preview in the status file; with rootless Docker that preview
+  runs as the container's root. When this computer has no `/dev/kvm`, or a
+  container cannot open it, Horizon skips the preview, tells the agent why, and
+  accepts the setup without it. A GPU profile's
+  proof and preview get this computer's GPU; a computer without one fails the proof.
 
 ## Development-only registry
 

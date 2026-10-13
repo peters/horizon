@@ -73,9 +73,12 @@ fn creatable(mut config: CloudConfig) -> super::Result<CloudConfig> {
             .is_some_and(|provider| provider.creatable && provider.supports(profile))
     });
     if !config.profiles.contains_key(&config.default) {
-        config.default = config.profiles.keys().next().cloned().ok_or(Error::Invalid(
-            "No profile in this repository's .horizon/cloud.yml can run on a provider Horizon creates clouds on.",
-        ))?;
+        config.default = config
+            .profiles
+            .keys()
+            .next()
+            .cloned()
+            .ok_or(Error::Invalid(NO_CREATABLE_PROFILE))?;
     }
     Ok(config)
 }
@@ -83,6 +86,17 @@ fn creatable(mut config: CloudConfig) -> super::Result<CloudConfig> {
 /// The answer for a commit without `.horizon/cloud.yml`. It is not a fault: New cloud
 /// shows it as guidance next to quick start and the setup agent.
 pub const MISSING_CONFIG: &str = "The selected commit has no readable .horizon/cloud.yml. Quick start on the public base image, let a setup agent prepare the repository, choose another revision, or use local image-only settings in More options.";
+
+/// The refusal of a configuration none of whose profiles Horizon can create a cloud for.
+pub(crate) const NO_CREATABLE_PROFILE: &str =
+    "No profile in this repository's .horizon/cloud.yml can run on a provider Horizon creates clouds on.";
+
+/// Whether `error` is about the committed `.horizon/cloud.yml` itself, which an agent can
+/// fix there, rather than about the folder, Git or the revision.
+#[must_use]
+pub fn is_config_error(error: &Error) -> bool {
+    matches!(error, Error::Invalid(message) if *message == INVALID_CONFIG || *message == NO_CREATABLE_PROFILE)
+}
 
 /// Whether `error` says only that the commit has no `.horizon/cloud.yml`.
 #[must_use]
@@ -107,11 +121,12 @@ pub fn committed_config(repository: &Path, revision: &str, runner: &Runner<'_>) 
     }
     .run(
         "Read committed cloud configuration",
-        Command::new("git").arg("-C").arg(repository).args([
-            "cat-file",
-            "blob",
-            &format!("{revision}:.horizon/cloud.yml"),
-        ]),
+        // Replace refs could put other settings under the same commit, so none are read.
+        Command::new("git")
+            .arg("--no-replace-objects")
+            .arg("-C")
+            .arg(repository)
+            .args(["cat-file", "blob", &format!("{revision}:.horizon/cloud.yml")]),
         Duration::from_secs(30),
     );
     runner.cancel.check()?;
@@ -224,6 +239,41 @@ fn ssh_ready_with_cancel(path: &Path, cancel: &super::super::Cancellation) -> bo
 mod tests {
     use super::*;
     pub(super) const CONFIG: &str = "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n";
+
+    #[test]
+    fn a_replace_ref_does_not_change_the_committed_settings() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path();
+        repository(path);
+        let output = |args: &[&str]| {
+            let output = Command::new("git").arg("-C").arg(path).args(args).output().unwrap();
+            assert!(output.status.success());
+            String::from_utf8_lossy(&output.stdout).trim().to_owned()
+        };
+        let real = output(&["rev-parse", "HEAD"]);
+        std::fs::write(path.join(".horizon/cloud.yml"), CONFIG.replace("cpu: 4", "cpu: 64")).unwrap();
+        let identity = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid"];
+        output(&[identity.as_slice(), &["commit", "-q", "-am", "planted"]].concat());
+        let planted = output(&["rev-parse", "HEAD"]);
+        output(&["reset", "-q", "--hard", &real]);
+        output(&["replace", &real, &planted]);
+        let cancel = crate::cloud_runtime::Cancellation::default();
+        let runner = Runner {
+            cancel: &cancel,
+            emit: &|_| {},
+            secrets: Vec::new(),
+        };
+        let config = committed_config(path, &real, &runner).unwrap().unwrap();
+        assert_eq!(config.profiles["dev"].cpu, 4, "the real commit's settings");
+    }
+
+    #[test]
+    fn only_settings_errors_offer_the_fixing_agent() {
+        assert!(is_config_error(&Error::Invalid(INVALID_CONFIG)));
+        assert!(is_config_error(&Error::Invalid(NO_CREATABLE_PROFILE)));
+        assert!(!is_config_error(&Error::Invalid(MISSING_CONFIG)));
+        assert!(!is_config_error(&Error::Invalid("Select a committed Git revision")));
+    }
 
     pub(super) fn git(path: &Path, args: &[&str]) {
         assert!(

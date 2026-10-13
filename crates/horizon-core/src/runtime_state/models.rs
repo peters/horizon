@@ -395,6 +395,7 @@ impl PanelState {
             cloud_connection: None,
             restore_as_disconnected_snapshot: false,
             is_restore: true,
+            launch_wrapper: Vec::new(),
         }
     }
 }

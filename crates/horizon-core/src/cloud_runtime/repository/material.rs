@@ -326,7 +326,9 @@ fn media_directory(repository: &Path, runner: &Runner<'_>) -> Result<PathBuf> {
     };
     let output = quiet.run(
         "Locate local LFS objects",
-        Command::new("git").arg("-C").arg(repository).args(["lfs", "env"]),
+        // git-lfs itself, never `git lfs`, so a repository's own `alias.lfs`, which a
+        // setup agent can write, never runs, whatever git does with aliases.
+        lfs_command(repository).arg("env"),
         Duration::from_secs(30),
     )?;
     output
@@ -477,6 +479,14 @@ impl Material {
     }
 }
 
+/// The git-lfs program run in `repository`, with the git commands it starts ignoring
+/// replace refs as Horizon's own git commands do.
+fn lfs_command(repository: &Path) -> Command {
+    let mut command = Command::new("git-lfs");
+    command.current_dir(repository).env("GIT_NO_REPLACE_OBJECTS", "1");
+    command
+}
+
 /// The repository's LFS paths at `revision` that git-lfs lists under `filters`, one per
 /// `\n`-terminated line as the worker reads them, so other separators such as U+2028
 /// stay in a name. The listing is streamed to a file: a repository at the collection
@@ -499,10 +509,8 @@ fn lfs_paths(
     std::fs::File::create_new(&empty)?;
     quiet.to_file(
         "List selected LFS paths",
-        Command::new("git")
-            .arg("-C")
-            .arg(repository)
-            .args(["lfs", "ls-files", "--name-only"])
+        lfs_command(repository)
+            .args(["ls-files", "--name-only"])
             .args(filters)
             .arg(revision),
         &empty,

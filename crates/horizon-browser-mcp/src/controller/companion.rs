@@ -25,6 +25,15 @@ pub(crate) struct CompanionInput {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct CompanionUncheckInput {
+    /// The source cloud's ID from `cloud_companions`, in your workspace.
+    pub cloud: String,
+    /// The companion's alias from the source repository's `.horizon/cloud.yml`.
+    pub alias: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct CompanionOperationInput {
     /// The source cloud's ID.
     pub cloud: String,
@@ -71,6 +80,17 @@ impl BrowserController {
                 error
             }
         })
+    }
+
+    pub(crate) async fn cloud_companion_uncheck(&self, input: CompanionUncheckInput) -> Result<Value, String> {
+        self.companion_request(CompanionRequest {
+            action: CompanionAction::Uncheck,
+            cloud: Some(input.cloud),
+            alias: Some(input.alias),
+            operation_id: None,
+            tailnet: None,
+        })
+        .await
     }
 
     pub(crate) async fn cloud_companion_operation(&self, input: CompanionOperationInput) -> Result<Value, String> {
