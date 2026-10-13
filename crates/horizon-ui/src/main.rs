@@ -56,7 +56,13 @@ fn main() -> eframe::Result {
         return Ok(());
     }
 
-    let horizon_home = HorizonHome::resolve();
+    let horizon_home = match HorizonHome::prepare() {
+        Ok(home) => home,
+        Err(problem) => {
+            eprintln!("error: {problem}");
+            std::process::exit(2);
+        }
+    };
     let _agent_plugin_host = plugin_install::install_agent_plugins(&horizon_home);
 
     let cli_args = match parse_cli_args(std::env::args().skip(1)) {
@@ -151,6 +157,10 @@ fn browser_mcp_mode_requested() -> bool {
 }
 
 fn run_browser_mcp_server() {
+    if let Err(error) = HorizonHome::override_root() {
+        tracing::error!(%error, "Horizon browser MCP server cannot find its Horizon home");
+        std::process::exit(1);
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build();
     let result = match runtime {
         Ok(runtime) => runtime

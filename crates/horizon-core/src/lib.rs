@@ -62,7 +62,7 @@ pub use error::{Error, Result};
 pub use git_changes::DiffViewer;
 pub use git_status::{DiffHunk, DiffLine, DiffLineKind, FileChange, FileDiff, FileStatus, GitStatus};
 pub use git_watcher::GitWatcher;
-pub use horizon_home::{HorizonHome, browser_mcp_executable};
+pub use horizon_home::{HorizonHome, HorizonHomeError, browser_mcp_executable};
 pub use local_store::{codex_home_dir, grok_home_dir, user_home_dir};
 pub use panel::{
     CloudWait, DEFAULT_PANEL_SIZE, PANEL_SCROLLBACK_LIMIT, Panel, PanelId, PanelKind, PanelLayout, PanelOptions,

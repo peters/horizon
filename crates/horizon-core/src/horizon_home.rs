@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use horizon_browser_control::paths::RuntimePathError;
 pub(crate) use horizon_browser_control::paths::safe_local_id;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -7,10 +8,54 @@ pub struct HorizonHome {
     root: PathBuf,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum HorizonHomeError {
+    #[error(transparent)]
+    Override(#[from] RuntimePathError),
+    #[error("could not create HORIZON_HOME {}: {source}", path.display())]
+    Create { path: PathBuf, source: std::io::Error },
+    #[error("HORIZON_HOME {} is not a directory", .0.display())]
+    NotDirectory(PathBuf),
+    #[error("HORIZON_HOME {} belongs to another user", .0.display())]
+    NotOwned(PathBuf),
+    #[error("HORIZON_HOME {} is open to other users; make it private with chmod 700", .0.display())]
+    NotPrivate(PathBuf),
+}
+
 impl HorizonHome {
+    /// The home from `HORIZON_HOME`, else `.horizon` in the user's home directory.
     #[must_use]
     pub fn resolve() -> Self {
         Self::from_root(horizon_browser_control::paths::default_horizon_root())
+    }
+
+    /// Resolve the home of a process that keeps its state there. A `HORIZON_HOME` override
+    /// must be an absolute path. Horizon creates it with owner-only permissions when it is
+    /// missing; an existing one must be a directory that only its owner can open.
+    ///
+    /// # Errors
+    ///
+    /// Returns why the override cannot hold private state. The default home is not checked.
+    pub fn prepare() -> Result<Self, HorizonHomeError> {
+        Self::prepare_with(Self::override_root()?)
+    }
+
+    /// The absolute root that `HORIZON_HOME` names, or `None` when it is unset or empty.
+    /// Nothing is created.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a value that is not an absolute path.
+    pub fn override_root() -> Result<Option<PathBuf>, HorizonHomeError> {
+        Ok(horizon_browser_control::paths::home_override()?)
+    }
+
+    fn prepare_with(override_root: Option<PathBuf>) -> Result<Self, HorizonHomeError> {
+        let Some(root) = override_root else {
+            return Ok(Self::resolve());
+        };
+        prepare_private_root(&root)?;
+        Ok(Self::from_root(root))
     }
 
     #[must_use]
@@ -136,6 +181,40 @@ impl HorizonHome {
     }
 }
 
+fn prepare_private_root(root: &Path) -> Result<(), HorizonHomeError> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    if let Err(source) = builder.create(root) {
+        if std::fs::metadata(root).is_ok_and(|metadata| !metadata.is_dir()) {
+            return Err(HorizonHomeError::NotDirectory(root.to_path_buf()));
+        }
+        return Err(HorizonHomeError::Create {
+            path: root.to_path_buf(),
+            source,
+        });
+    }
+    let metadata = std::fs::metadata(root).map_err(|source| HorizonHomeError::Create {
+        path: root.to_path_buf(),
+        source,
+    })?;
+    if !metadata.is_dir() {
+        return Err(HorizonHomeError::NotDirectory(root.to_path_buf()));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if metadata.uid() != rustix::process::geteuid().as_raw() {
+            return Err(HorizonHomeError::NotOwned(root.to_path_buf()));
+        }
+        if metadata.mode() & 0o077 != 0 {
+            return Err(HorizonHomeError::NotPrivate(root.to_path_buf()));
+        }
+    }
+    Ok(())
+}
+
 #[must_use]
 pub fn browser_mcp_executable() -> Option<PathBuf> {
     browser_mcp_executable_for_process(std::process::id(), std::env::current_exe().ok())
@@ -159,7 +238,7 @@ fn browser_mcp_executable_for_process(process_id: u32, current_executable: Optio
 mod tests {
     use std::path::PathBuf;
 
-    use super::{HorizonHome, browser_mcp_executable_for_process};
+    use super::{HorizonHome, HorizonHomeError, browser_mcp_executable_for_process};
 
     #[test]
     fn session_paths_live_under_horizon_home() {
@@ -250,6 +329,75 @@ mod tests {
                 "{local_id} must use the canonical path encoding"
             );
         }
+    }
+
+    #[test]
+    fn without_an_override_the_prepared_home_is_the_default_home() {
+        assert_eq!(
+            HorizonHome::prepare_with(None).expect("default"),
+            HorizonHome::resolve()
+        );
+    }
+
+    #[test]
+    fn a_missing_override_is_created_privately() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("parent").join("horizon-home");
+
+        let home = HorizonHome::prepare_with(Some(root.clone())).expect("created");
+
+        assert_eq!(home.root(), root);
+        assert!(root.is_dir());
+        assert_eq!(home.config_path(), root.join("config.yaml"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = |path: &std::path::Path| std::fs::metadata(path).expect("metadata").permissions().mode() & 0o777;
+            assert_eq!(mode(&root), 0o700);
+            assert_eq!(
+                mode(&temp.path().join("parent")),
+                0o700,
+                "created parents are private too"
+            );
+        }
+        HorizonHome::prepare_with(Some(root)).expect("an existing private home is reused");
+    }
+
+    #[test]
+    fn an_override_that_is_a_file_is_rejected() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let file = temp.path().join("file");
+        std::fs::write(&file, b"not a directory").expect("file");
+
+        assert!(matches!(
+            HorizonHome::prepare_with(Some(file.clone())),
+            Err(HorizonHomeError::NotDirectory(path)) if path == file
+        ));
+        assert!(matches!(
+            HorizonHome::prepare_with(Some(file.join("child"))),
+            Err(HorizonHomeError::Create { .. })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_existing_override_open_to_other_users_is_rejected() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("shared");
+        std::fs::create_dir(&root).expect("directory");
+        for mode in [0o755, 0o750, 0o701, 0o770] {
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(mode)).expect("permissions");
+            assert!(
+                matches!(
+                    HorizonHome::prepare_with(Some(root.clone())),
+                    Err(HorizonHomeError::NotPrivate(path)) if path == root
+                ),
+                "mode {mode:o} must be rejected"
+            );
+        }
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("permissions");
+        HorizonHome::prepare_with(Some(root)).expect("an owner-only directory is accepted");
     }
 
     #[cfg(target_os = "linux")]

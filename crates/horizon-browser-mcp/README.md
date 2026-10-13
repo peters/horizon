@@ -11,9 +11,13 @@ MCP server during development:
 ```toml
 [mcp_servers.horizon-browser]
 command = "/path/to/horizon-browser-mcp"
-env_vars = ["HORIZON_BROWSER_ACTOR", "HORIZON_BROWSER_HOST_INSTANCE"]
+env_vars = ["HORIZON_BROWSER_ACTOR", "HORIZON_BROWSER_HOST_INSTANCE", "HORIZON_HOME"]
 default_tools_approval_mode = "approve"
 ```
+
+Pass `HORIZON_HOME` through too: a Horizon that runs with a private home (see
+the [configuration](../../README.md#configuration)) keeps its panels there, and
+without the variable the server looks in `~/.horizon` instead.
 
 The workspace's [`horizon-browser-cli`](../horizon-browser-cli) crate provides a
 second launcher for this exact server (`horizon-browser mcp`) plus a JSON
