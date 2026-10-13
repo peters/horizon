@@ -175,7 +175,10 @@ impl Account {
             purpose,
             _abort: Abort(cancel.clone()),
         });
-        self.failed = None;
+        // A quiet retry leaves an error that the person is reading in place.
+        if purpose != Purpose::Refresh {
+            self.failed = None;
+        }
         let (root, settings, ctx) = (self.root.clone(), self.settings.clone(), ctx.clone());
         std::thread::spawn(move || {
             // The names kept from last time show while GitHub is asked.

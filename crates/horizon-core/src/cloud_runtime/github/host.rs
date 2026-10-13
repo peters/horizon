@@ -68,8 +68,10 @@ pub fn current(root: &Path, settings: &Settings) -> Result<Option<(String, Secre
 fn renewed(root: &Path, settings: &Settings, client: &Client) -> Result<Option<(String, Secret)>> {
     let _lock = lock(root, settings)?;
     if !configured(root, settings) {
-        stored::forget(&listed(root, settings))?;
-        return stored::forget(&path(root, settings));
+        let forgotten = stored::forget(&path(root, settings));
+        // The list is only a head start: one that cannot be removed never keeps the sign-in.
+        let _ = stored::forget(&listed(root, settings));
+        return forgotten;
     }
     // A chain from a web sign-in renews with the secret whatever the setting says now; a
     // device chain needs none, and the secret is then not read.
@@ -266,8 +268,9 @@ pub fn forget_repositories(root: &Path, settings: &Settings, cancel: &Cancellati
 /// A file that cannot be removed, which leaves the settings unsaved, or `save`'s error.
 pub fn disconnect<T>(root: &Path, settings: &Settings, save: impl FnOnce() -> Result<T>) -> Result<T> {
     let _lock = lock(root, settings)?;
-    stored::forget(&listed(root, settings))?;
     stored::forget(&path(root, settings))?;
+    // The list is only a head start, and it is shown only with its own sign-in.
+    let _ = stored::forget(&listed(root, settings));
     save()
 }
 
