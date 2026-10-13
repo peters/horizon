@@ -420,10 +420,11 @@ def trim(path):
         pass
 
 
-def write_next(upcoming):
-    """Replaces next-run in one step, so the exchange never reads it half written."""
+def write_next(upcoming, minutes):
+    """Replaces next-run in one step, so the exchange never reads it half written. The second
+    field is the schedule it was planned for."""
     with open(DIR + '/next-run.tmp', 'w') as handle:
-        handle.write(str(upcoming))
+        handle.write(f'{upcoming} {minutes}\n')
     os.replace(DIR + '/next-run.tmp', DIR + '/next-run')
 
 
@@ -581,13 +582,13 @@ def main():
     # A run that was due, but had not started, when a new loop replaced this one still runs.
     try:
         with open(DIR + '/next-run') as handle:
-            earlier = int(handle.read().strip())
-        if (upcoming - minutes * 60 <= earlier <= time.time() and earlier % (minutes * 60) == 0
+            earlier, planned = (int(field) for field in handle.read().split())
+        if (planned == minutes and upcoming - minutes * 60 <= earlier <= time.time()
                 and last_start() < earlier):
             upcoming = earlier
     except (OSError, ValueError):
         pass
-    write_next(upcoming)
+    write_next(upcoming, minutes)
     print(f'Upkeep waits for its next run at {time.strftime("%H:%M", time.gmtime(upcoming))} UTC.', flush=True)
     while True:
         # The exchange asks for a restart after it installed a complete new loop. Here, at the
@@ -602,7 +603,7 @@ def main():
         if every(cfg) != minutes or (paused and time.time() >= upcoming):
             minutes = every(cfg)
             upcoming = next_slot(cfg)
-            write_next(upcoming)
+            write_next(upcoming, minutes)
         forced = not paused and os.path.exists(DIR + '/run-now')
         if not paused and (forced or time.time() >= upcoming):
             try:
@@ -633,7 +634,7 @@ def main():
                 slot += every(cfg) * 60
             minutes = every(cfg)
             upcoming = next_slot(cfg)
-            write_next(upcoming)
+            write_next(upcoming, minutes)
             print(f'\nUpkeep waits for its next run at {time.strftime("%H:%M", time.gmtime(upcoming))} UTC.', flush=True)
         time.sleep(10)
 

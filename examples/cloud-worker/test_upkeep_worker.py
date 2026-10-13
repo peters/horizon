@@ -194,7 +194,7 @@ class ExchangeTests(unittest.TestCase):
     def test_a_status_too_large_to_send_back_is_left_out(self):
         self.worker.upkeep.mkdir(mode=0o700)
         (self.worker.upkeep / 'status.json').write_bytes(b'\x01' * EXCHANGE['STATUS_LIMIT'])
-        (self.worker.upkeep / 'next-run').write_text('1800000000\n')
+        (self.worker.upkeep / 'next-run').write_text('1800000000 60\n')
         answer = self.worker.exchange()
         self.assertIsNone(answer['status'])
         self.assertEqual(answer['next_run'], 1800000000)

@@ -238,8 +238,8 @@ def report(upkeep, loop, settled):
     lines = (read(upkeep, 'runs.jsonl', RUNS_LIMIT, tail=True) or b'').splitlines()[-200:]
     runs = [record for record in map(run_record, lines) if record is not None]
     try:
-        next_run = moment(int((read(upkeep, 'next-run', 32) or b'').strip()))
-    except ValueError:
+        next_run = moment(int((read(upkeep, 'next-run', 64) or b'').split()[0]))
+    except (ValueError, IndexError):
         next_run = None
     answer = {'loop': loop, 'settled': settled, 'runs': runs, 'next_run': next_run,
               'paused': read(upkeep, 'paused', 0) is not None,
