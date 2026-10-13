@@ -153,6 +153,10 @@ impl DriverState {
                 self.deliver_passkey_reply(link, context, &crate::webauthn::malformed_reply(id));
             }
             PageMessage::Request { id, op, options } => {
+                if let Some(reply) = self.passkeys.as_mut().and_then(|passkeys| passkeys.bridge.admit(id)) {
+                    self.deliver_passkey_reply(link, context, &reply);
+                    return;
+                }
                 let origin = self.passkey_caller_origin(link, event_tx, frame_slot, context);
                 let agent = self.owner_seen.clone();
                 let Some(passkeys) = self.passkeys.as_mut() else {

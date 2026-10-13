@@ -135,9 +135,15 @@ impl Driver {
                 self.deliver_passkey_reply(source, &crate::webauthn::malformed_reply(id), events);
             }
             PageMessage::Request { id, op, options } => {
-                if let Some(passkeys) = self.passkeys.as_mut() {
-                    passkeys.navigated = Some(HashSet::new());
+                let Some(passkeys) = self.passkeys.as_mut() else {
+                    return;
+                };
+                if let Some(reply) = passkeys.bridge.admit(id) {
+                    self.deliver_passkey_reply(source, &reply, events);
+                    return;
                 }
+                // Only one admitted request reads an origin at a time.
+                passkeys.navigated = Some(HashSet::new());
                 let origin = self.passkey_caller_origin(source, events);
                 let agent = self.owner_seen.clone();
                 let Some(passkeys) = self.passkeys.as_mut() else {
