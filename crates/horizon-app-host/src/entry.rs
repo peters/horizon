@@ -103,12 +103,18 @@ pub fn execute(arguments: &[String]) {
         arguments.first().map(String::as_str),
         Some("--guard" | "--tunnel-guard")
     );
+    // `--run` reports progress and errors as NDJSON on stderr.
+    let run_mode = arguments.first().is_some_and(|argument| argument == "--run");
     if !guard && let Err(problem) = horizon_core::HorizonHome::prepare() {
-        eprintln!("error: {problem}");
+        if run_mode {
+            crate::cli::report_message(&problem.to_string());
+        } else {
+            eprintln!("error: {problem}");
+        }
         std::process::exit(2);
     }
     if let Err(error) = run(arguments) {
-        if arguments.first().is_some_and(|argument| argument == "--run") {
+        if run_mode {
             if error != crate::Error::RunFailed {
                 crate::cli::report_error(&error);
             }
