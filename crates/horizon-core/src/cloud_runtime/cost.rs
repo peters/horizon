@@ -1,9 +1,10 @@
 //! Worker cost estimated from the provider's hourly rate. Amounts use the
-//! provider's billing currency, which `RunPod` prices in US dollars.
+//! provider's billing currency, as its [`Description::currency`] names it: US
+//! dollars on `RunPod`, euros net of VAT on Hetzner. Amounts are never converted.
 use super::progress;
-use crate::usage_stats::format_cost;
 use horizon_cloud::{
     Worker, WorkerStatus,
+    provider::{Description, Kind},
     runpod::billing::{BillingBucket, BucketSize},
 };
 use std::time::{Duration, SystemTime};
@@ -21,15 +22,66 @@ pub struct RunCost {
 }
 
 impl RunCost {
-    /// For example `This run · 1h 12m · $0.83 · $0.690/h`.
+    /// For example `This run · 1h 12m · $0.83 · $0.690/h` in `currency`.
     #[must_use]
-    pub fn summary(&self) -> String {
+    pub fn summary(&self, currency: &str) -> String {
         format!(
             "This run · {} · {} · {}",
             progress::duration(self.elapsed),
-            format_cost(self.amount),
-            format_rate(self.rate)
+            format_amount(self.amount, currency),
+            format_rate(self.rate, currency)
         )
+    }
+}
+
+/// An hourly rate in the currency it bills in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rate {
+    pub hourly: f64,
+    /// An ISO 4217 code, such as `USD`.
+    pub currency: &'static str,
+}
+
+impl Rate {
+    /// The rate rounded down to the decimals [`format_rate`] shows, so that a lower
+    /// bound never says more than it is. A sum of decimal prices can land just
+    /// below a shown unit in binary, such as `0.0001 + 0.0003`, so it is first
+    /// rounded to a millionth of that unit.
+    #[must_use]
+    pub fn floored(self) -> Self {
+        let scale = 10_f64.powi(i32::from(rate_decimals(self.currency)));
+        let units = (self.hourly * scale * 1e6).round() / 1e6;
+        Self {
+            hourly: units.floor() / scale,
+            ..self
+        }
+    }
+}
+
+/// `rates` summed per currency, in currency code order. Amounts in different
+/// currencies are never added together.
+#[must_use]
+pub fn sum_by_currency(rates: impl IntoIterator<Item = Rate>) -> Vec<Rate> {
+    let mut sums = std::collections::BTreeMap::<&'static str, f64>::new();
+    for rate in rates {
+        *sums.entry(rate.currency).or_default() += rate.hourly;
+    }
+    sums.into_iter()
+        .map(|(currency, hourly)| Rate { hourly, currency })
+        .collect()
+}
+
+/// What a worker's hourly rate on `provider` covers, and what it leaves out.
+#[must_use]
+pub fn rate_coverage(provider: &Description) -> &'static str {
+    match provider.kind {
+        Kind::RunPod => "Last reported worker hourly rate. Storage and other provider charges may be additional.",
+        Kind::Hetzner => {
+            "Hetzner's hourly price for the server type, in euros net of VAT: compute only. Not included: the \
+             workspace volume, which a stop keeps, the primary IPv4 address, traffic over the included amount and \
+             VAT. Hetzner bills each started hour, up to a monthly cap, so the run estimate can trail its bill by up \
+             to an hour."
+        }
     }
 }
 
@@ -77,11 +129,11 @@ impl TotalCost {
         self.billed + self.estimated
     }
 
-    /// For example `Since creation · $4.20 (billed $3.37 + $0.83 estimated)`, or
-    /// `Past 12 months · …` when older charges are not included. The parts are
-    /// rounded to cents first, so the shown sum adds up.
+    /// For example `Since creation · $4.20 (billed $3.37 + $0.83 estimated)` in
+    /// `currency`, or `Past 12 months · …` when older charges are not included. The
+    /// parts are rounded to cents first, so the shown sum adds up.
     #[must_use]
-    pub fn summary(&self) -> String {
+    pub fn summary(&self, currency: &str) -> String {
         let (billed, estimated) = (cents(self.billed), cents(self.estimated));
         format!(
             "{} · {} (billed {} + {} estimated)",
@@ -90,20 +142,20 @@ impl TotalCost {
             } else {
                 "Since creation"
             },
-            format_cost(billed + estimated),
-            format_cost(billed),
-            format_cost(estimated)
+            format_amount(billed + estimated, currency),
+            format_amount(billed, currency),
+            format_amount(estimated, currency)
         )
     }
 
     /// `$4.20 total` for a lifetime total, `$4.20 12 mo` for the read window.
-    fn badge(&self) -> String {
+    fn badge(&self, currency: &str) -> String {
         let span = if self.excludes_before.is_some() {
             "12 mo"
         } else {
             "total"
         };
-        format!("{} {span}", format_cost(self.shown_total()))
+        format!("{} {span}", format_amount(self.shown_total(), currency))
     }
 
     fn shown_total(&self) -> f64 {
@@ -212,22 +264,49 @@ impl Billing {
     }
 }
 
-/// Compact header text: `$0.83 run · $4.20 total`, `$4.20 total` or `$0.83 run`,
-/// with `12 mo` instead of `total` when older charges are not included.
+/// Compact header text in `currency`: `$0.83 run · $4.20 total`, `$4.20 total` or
+/// `$0.83 run`, with `12 mo` instead of `total` when older charges are not included.
 #[must_use]
-pub fn badge(run: Option<&RunCost>, total: Option<&TotalCost>) -> Option<String> {
+pub fn badge(run: Option<&RunCost>, total: Option<&TotalCost>, currency: &str) -> Option<String> {
+    let run = run.map(|run| format!("{} run", format_amount(run.amount, currency)));
     match (run, total) {
-        (Some(run), Some(total)) => Some(format!("{} run · {}", format_cost(run.amount), total.badge())),
-        (None, Some(total)) => Some(total.badge()),
-        (Some(run), None) => Some(format!("{} run", format_cost(run.amount))),
-        (None, None) => None,
+        (Some(run), Some(total)) => Some(format!("{run} · {}", total.badge(currency))),
+        (None, Some(total)) => Some(total.badge(currency)),
+        (run, None) => run,
     }
 }
 
-/// For example `$0.690/h`; sub-cent rates stay distinguishable.
+/// An amount with cents in `currency`, an ISO 4217 code: `$4.20`, `€4.20`, or the
+/// code after the amount for a currency without a symbol here.
 #[must_use]
-pub fn format_rate(rate: f64) -> String {
-    format!("${rate:.3}/h")
+pub fn format_amount(amount: f64, currency: &str) -> String {
+    match symbol(currency) {
+        Some(symbol) => format!("{symbol}{amount:.2}"),
+        None => format!("{amount:.2} {currency}"),
+    }
+}
+
+/// For example `$0.690/h`, or `€0.0240/h` with the four decimals of Hetzner's
+/// euro prices; sub-cent rates stay distinguishable.
+#[must_use]
+pub fn format_rate(rate: f64, currency: &str) -> String {
+    let decimals = usize::from(rate_decimals(currency));
+    match symbol(currency) {
+        Some(symbol) => format!("{symbol}{rate:.decimals$}/h"),
+        None => format!("{rate:.decimals$} {currency}/h"),
+    }
+}
+
+fn rate_decimals(currency: &str) -> u8 {
+    if currency == "EUR" { 4 } else { 3 }
+}
+
+fn symbol(currency: &str) -> Option<&'static str> {
+    match currency {
+        "USD" => Some("$"),
+        "EUR" => Some("€"),
+        _ => None,
+    }
 }
 
 /// Start and hourly rate of a running worker's current run.
@@ -295,9 +374,9 @@ mod tests {
         assert_eq!(run.elapsed, Duration::from_mins(72));
         assert!((run.rate - 0.69).abs() < f64::EPSILON);
         assert!((run.amount - 0.828).abs() < 1e-9);
-        assert_eq!(run.summary(), "This run · 1h 12m · $0.83 · $0.690/h");
+        assert_eq!(run.summary("USD"), "This run · 1h 12m · $0.83 · $0.690/h");
         let early = current_run(&worker(&json!({})), started() + Duration::from_secs(307)).unwrap();
-        assert_eq!(early.summary(), "This run · 5m 07s · $0.06 · $0.690/h");
+        assert_eq!(early.summary("USD"), "This run · 5m 07s · $0.06 · $0.690/h");
     }
 
     #[test]
@@ -311,7 +390,7 @@ mod tests {
         let unpriced = worker(&json!({"adjustedCostPerHr": null, "costPerHr": null}));
         assert_eq!(hourly_rate(&unpriced), None);
         assert_eq!(current_run(&unpriced, started()), None);
-        assert_eq!(format_rate(0.0042), "$0.004/h");
+        assert_eq!(format_rate(0.0042, "USD"), "$0.004/h");
     }
 
     #[test]
@@ -528,7 +607,7 @@ mod tests {
             excludes_before: None,
         };
         assert_eq!(
-            total.summary(),
+            total.summary("USD"),
             "Since creation · $4.20 (billed $3.37 + $0.83 estimated)"
         );
         let run = RunCost {
@@ -537,22 +616,22 @@ mod tests {
             rate: 0.69,
         };
         assert_eq!(
-            badge(Some(&run), Some(&total)).as_deref(),
+            badge(Some(&run), Some(&total), "USD").as_deref(),
             Some("$0.83 run · $4.20 total")
         );
-        assert_eq!(badge(None, Some(&total)).as_deref(), Some("$4.20 total"));
-        assert_eq!(badge(Some(&run), None).as_deref(), Some("$0.83 run"));
-        assert_eq!(badge(None, None), None);
+        assert_eq!(badge(None, Some(&total), "USD").as_deref(), Some("$4.20 total"));
+        assert_eq!(badge(Some(&run), None, "USD").as_deref(), Some("$0.83 run"));
+        assert_eq!(badge(None, None, "USD"), None);
         total.excludes_before = Some(window());
         assert_eq!(
-            total.summary(),
+            total.summary("USD"),
             "Past 12 months · $4.20 (billed $3.37 + $0.83 estimated)"
         );
         assert_eq!(
-            badge(Some(&run), Some(&total)).as_deref(),
+            badge(Some(&run), Some(&total), "USD").as_deref(),
             Some("$0.83 run · $4.20 12 mo")
         );
-        assert_eq!(badge(None, Some(&total)).as_deref(), Some("$4.20 12 mo"));
+        assert_eq!(badge(None, Some(&total), "USD").as_deref(), Some("$4.20 12 mo"));
     }
 
     #[test]
@@ -612,5 +691,110 @@ mod tests {
             value["adjustedCostPerHr"] = invalid;
             assert!(serde_json::from_value::<Worker>(value).is_err());
         }
+    }
+
+    /// A running Hetzner worker as its server describes it: the type's euro price
+    /// and the server's creation time.
+    fn hetzner(fields: &Value) -> Worker {
+        let mut server = json!({
+            "id":"42","publicIp":"192.0.2.10","portMappings":{"22":22},"adjustedCostPerHr":null,
+            "costPerHr":0.024,"lastStartedAt":"2026-10-12T08:30:00+00:00"
+        });
+        for (key, field) in fields.as_object().unwrap() {
+            server[key] = field.clone();
+        }
+        worker(&server)
+    }
+
+    #[test]
+    fn a_hetzner_run_is_estimated_in_euros_from_the_creation_of_its_server() {
+        let created = at("2026-10-12T08:30:00Z");
+        let run = current_run(&hetzner(&json!({})), created + Duration::from_mins(45)).unwrap();
+        assert_eq!(run.elapsed, Duration::from_mins(45));
+        assert!((run.amount - 0.018).abs() < 1e-9);
+        assert_eq!(run.summary("EUR"), "This run · 45m 00s · €0.02 · €0.0240/h");
+        assert_eq!(badge(Some(&run), None, "EUR").as_deref(), Some("€0.02 run"));
+
+        // A restart reads the saved record, and a reconnect describes the same server
+        // again: both keep the server's creation as the start.
+        let later = created + Duration::from_mins(95);
+        let saved = serde_json::to_string(&hetzner(&json!({}))).unwrap();
+        let restored: Worker = serde_json::from_str(&saved).unwrap();
+        assert_eq!(current_run(&restored, later).unwrap().elapsed, Duration::from_mins(95));
+        assert_eq!(
+            current_run(&hetzner(&json!({})), later).unwrap().elapsed,
+            Duration::from_mins(95)
+        );
+
+        // A stop deletes the server and bills no compute; a resume creates a new one.
+        let stopped = hetzner(&json!({"desiredStatus": "EXITED"}));
+        assert_eq!(current_run(&stopped, later), None);
+        let resumed = hetzner(&json!({"id": "43", "lastStartedAt": "2026-10-12T10:00:00Z"}));
+        let run = current_run(&resumed, at("2026-10-12T10:10:00Z")).unwrap();
+        assert_eq!(run.elapsed, Duration::from_mins(10));
+    }
+
+    #[test]
+    fn amounts_and_rates_keep_their_currency() {
+        assert_eq!(format_amount(4.2, "USD"), "$4.20");
+        assert_eq!(format_amount(4.2, "EUR"), "€4.20");
+        assert_eq!(format_amount(4.2, "CHF"), "4.20 CHF");
+        assert_eq!(format_rate(0.69, "USD"), "$0.690/h");
+        assert_eq!(format_rate(0.0088, "EUR"), "€0.0088/h");
+        assert_eq!(format_rate(0.024, "CHF"), "0.024 CHF/h");
+        let total = TotalCost {
+            billed: 1.0,
+            estimated: 0.5,
+            billed_through: None,
+            excludes_before: None,
+        };
+        assert_eq!(
+            total.summary("EUR"),
+            "Since creation · €1.50 (billed €1.00 + €0.50 estimated)"
+        );
+        let rates = [
+            Rate {
+                hourly: 0.69,
+                currency: "USD",
+            },
+            Rate {
+                hourly: 0.024,
+                currency: "EUR",
+            },
+            Rate {
+                hourly: 0.1,
+                currency: "USD",
+            },
+        ];
+        let sums = sum_by_currency(rates);
+        let texts: Vec<_> = sums.iter().map(|sum| format_rate(sum.hourly, sum.currency)).collect();
+        assert_eq!(texts, ["€0.0240/h", "$0.790/h"], "never one sum across currencies");
+        assert!(sum_by_currency([]).is_empty());
+        let lower = |hourly, currency| Rate { hourly, currency }.floored().hourly;
+        assert!((lower(0.03629, "EUR") - 0.0362).abs() < 1e-12);
+        assert!((lower(0.0129, "USD") - 0.012).abs() < 1e-12);
+        let binary = sum_by_currency([0.0001, 0.0003].map(|hourly| Rate {
+            hourly,
+            currency: "EUR",
+        }));
+        assert!((binary[0].floored().hourly - 0.0004).abs() < 1e-12, "{binary:?}");
+    }
+
+    #[test]
+    fn the_hetzner_rate_says_what_it_covers() {
+        let hetzner = rate_coverage(&horizon_cloud::provider::HETZNER);
+        for named in [
+            "euros net of VAT",
+            "compute only",
+            "workspace volume",
+            "IPv4",
+            "started hour",
+        ] {
+            assert!(hetzner.contains(named), "{named}: {hetzner}");
+        }
+        assert_eq!(
+            rate_coverage(&horizon_cloud::provider::RUNPOD),
+            "Last reported worker hourly rate. Storage and other provider charges may be additional."
+        );
     }
 }

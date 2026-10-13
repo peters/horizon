@@ -1104,7 +1104,9 @@ The sidebar groups the workspaces by what they need from you:
 
 Each group header shows how many workspaces it has. At the right of the header
 line, a summary in secondary text shows the hourly rate of the running workers of
-the group, **no local cost** for **Parked**, and **live** for **This PC**. The
+the group, **no local cost** for **Parked**, and **live** for **This PC**. The rate
+has one sum for each currency, for example `€0.0240/h + $0.690/h`: Hetzner bills in
+euros net of VAT and RunPod in US dollars. The
 summary never wraps. When the sidebar is narrow, it shows fewer parts, and then a
 shortened first part. Hover over it to see all of it. If no part fits, for example
 next to **Stop idle…** on the narrowest sidebar, the header does not show the

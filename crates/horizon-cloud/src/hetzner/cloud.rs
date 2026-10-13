@@ -325,7 +325,10 @@ fn registry_host(host: &str) -> String {
 
 /// The server as a worker. Hetzner reports the host image, not the container
 /// image, so the digest is the one the cloud's user data pins; the server's
-/// identity is checked through its name and label.
+/// identity is checked through its name and label. The rate is the server type's
+/// hourly price in euros net of VAT, and the run starts when the server was
+/// created: Hetzner bills it from then until it is deleted, and every stop or
+/// rebuild deletes it, so a reconnect never moves that start.
 /// # Errors
 /// Fails only if the server cannot be described.
 pub fn worker(server: &Server, spec: &WorkerSpec, volume: &Volume) -> Result<Worker, CloudError> {
@@ -356,6 +359,8 @@ pub fn worker(server: &Server, spec: &WorkerSpec, volume: &Volume) -> Result<Wor
         "dataCenterId": server.location.name,
         "privateIp": crate::hetzner::networks::horizon_address(&server.private_net).map(|ip| ip.to_string()),
         "networkZone": server.location.network_zone,
+        "costPerHr": server.hourly_net(),
+        "lastStartedAt": server.created,
         "env": env,
     }))
     .map_err(|_| CloudError::Invalid("Hetzner server could not be described as a worker"))

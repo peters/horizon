@@ -2,6 +2,7 @@
 //! its one status line. A cloud workspace shows in **Needs you**, **Cloud** or
 //! **Parked** by the state of its clouds; a workspace without a cloud shows in
 //! **This PC**. The UI, the CLI and MCP read the same rows.
+use crate::cloud_runtime::cost::{self, Rate};
 use crate::{Panel, PanelId};
 
 /// A group of the cloud list, in the order the sidebar shows them.
@@ -118,7 +119,7 @@ pub struct CloudFacts {
     /// The status line: what the worker last showed, or what the cloud does.
     pub line: String,
     /// What the worker bills each hour now, when its provider reports a rate.
-    pub hourly_rate: Option<f64>,
+    pub hourly_rate: Option<Rate>,
     /// A stop of the worker can start now: its card offers Stop.
     pub stoppable: bool,
     /// `working` is known: for a parked cloud, a status read without error covers
@@ -138,28 +139,37 @@ impl CloudFacts {
     }
 }
 
-/// An hourly rate as the cloud list shows it. Three decimals keep sub-cent rates apart,
-/// as on a cloud card.
+/// An hourly rate as the cloud list shows it, as a cloud card does: `$0.690/h`, or
+/// `€0.0240/h` with the decimals of Hetzner's prices.
 #[must_use]
-pub fn rate_text(rate: f64) -> String {
-    format!("${rate:.3}/h")
+pub fn rate_text(rate: Rate) -> String {
+    cost::format_rate(rate.hourly, rate.currency)
+}
+
+/// Hourly rates, one sum per currency: `€0.0240/h + $0.690/h`.
+#[must_use]
+pub fn rates_text(rates: &[Rate]) -> String {
+    rates
+        .iter()
+        .map(|rate| rate_text(*rate))
+        .collect::<Vec<_>>()
+        .join(" + ")
 }
 
 /// What stopping the workers of `clouds` saves each hour, said before the stop is
-/// confirmed. A worker without a reported rate makes the sum a lower bound, which is
-/// rounded down so that it never says more than the sum.
+/// confirmed, with one sum per currency. A worker without a reported rate makes the
+/// sums lower bounds, which are rounded down so that they never say more than the sums.
 #[must_use]
 pub fn saving_text<'a>(clouds: impl IntoIterator<Item = &'a CloudFacts>) -> String {
-    let (mut sum, mut known, mut unknown) = (0.0, 0_usize, 0_usize);
+    let (mut rates, mut unknown) = (Vec::new(), 0_usize);
     for cloud in clouds {
         match cloud.hourly_rate {
-            Some(rate) => {
-                sum += rate;
-                known += 1;
-            }
+            Some(rate) => rates.push(rate),
             None => unknown += 1,
         }
     }
+    let known = rates.len();
+    let sums = cost::sum_by_currency(rates);
     let without = |count: usize| {
         if count == 1 {
             "1 worker reports no rate".to_owned()
@@ -170,12 +180,11 @@ pub fn saving_text<'a>(clouds: impl IntoIterator<Item = &'a CloudFacts>) -> Stri
     match (known, unknown) {
         (0, 0) => String::new(),
         (0, _) => "Saving unknown".to_owned(),
-        (_, 0) => format!("Saves {}", rate_text(sum)),
-        _ => format!(
-            "Saves at least {}; {}",
-            rate_text((sum * 1000.0).floor() / 1000.0),
-            without(unknown)
-        ),
+        (_, 0) => format!("Saves {}", rates_text(&sums)),
+        _ => {
+            let floored: Vec<Rate> = sums.into_iter().map(Rate::floored).collect();
+            format!("Saves at least {}; {}", rates_text(&floored), without(unknown))
+        }
     }
 }
 
@@ -185,8 +194,9 @@ pub struct Row {
     pub group: Group,
     pub dot: Dot,
     pub line: String,
-    /// What the workspace's workers bill each hour now; `None` when no worker reports a rate.
-    pub hourly_rate: Option<f64>,
+    /// What the workspace's workers bill each hour now, one sum per currency; `None`
+    /// when no worker reports a rate.
+    pub hourly_rate: Option<Vec<Rate>>,
 }
 
 impl Row {
@@ -212,12 +222,12 @@ impl Row {
             Condition::Parked => Dot::Parked { working },
             Condition::Stopped => Dot::Stopped,
         };
-        let rates: Vec<f64> = clouds.iter().filter_map(|cloud| cloud.hourly_rate).collect();
+        let rates = cost::sum_by_currency(clouds.iter().filter_map(|cloud| cloud.hourly_rate));
         Self {
             group: first.condition.group(),
             dot,
             line: first.line.clone(),
-            hourly_rate: (!rates.is_empty()).then(|| rates.iter().sum()),
+            hourly_rate: (!rates.is_empty()).then_some(rates),
         }
     }
 }
@@ -226,8 +236,14 @@ impl Row {
 /// to the least important. A narrow sidebar shows only the first parts.
 #[must_use]
 pub fn group_summary<'a>(group: Group, rows: impl IntoIterator<Item = &'a Row>) -> Vec<String> {
-    let rate: f64 = rows.into_iter().filter_map(|row| row.hourly_rate).sum();
-    let rate = (rate > 0.0).then(|| rate_text(rate));
+    let rates = cost::sum_by_currency(
+        rows.into_iter()
+            .filter_map(|row| row.hourly_rate.as_ref())
+            .flatten()
+            .copied(),
+    );
+    let rates: Vec<Rate> = rates.into_iter().filter(|rate| rate.hourly > 0.0).collect();
+    let rate = (!rates.is_empty()).then(|| rates_text(&rates));
     match group {
         Group::NeedsYou | Group::Cloud => rate.into_iter().collect(),
         Group::Parked => rate.into_iter().chain(["no local cost".to_owned()]).collect(),
@@ -375,6 +391,17 @@ mod tests {
     use super::*;
 
     fn cloud(condition: Condition, working: bool, rate: Option<f64>) -> CloudFacts {
+        priced(
+            condition,
+            working,
+            rate.map(|hourly| Rate {
+                hourly,
+                currency: "USD",
+            }),
+        )
+    }
+
+    fn priced(condition: Condition, working: bool, rate: Option<Rate>) -> CloudFacts {
         CloudFacts {
             id: 1,
             name: "sample".to_owned(),
@@ -435,6 +462,31 @@ mod tests {
         assert_eq!(saving_text(&[]), "");
     }
 
+    fn euros(hourly: f64) -> Rate {
+        Rate {
+            hourly,
+            currency: "EUR",
+        }
+    }
+
+    #[test]
+    fn rates_in_different_currencies_are_never_added_together() {
+        let hetzner = priced(Condition::Ready, false, Some(euros(0.0240)));
+        let other = priced(Condition::Ready, false, Some(euros(0.01229)));
+        let runpod = cloud(Condition::Parked, false, Some(0.69));
+        assert_eq!(saving_text([&hetzner, &runpod]), "Saves €0.0240/h + $0.690/h");
+        let unknown = cloud(Condition::Ready, false, None);
+        // A lower bound is rounded down in each currency's decimals.
+        assert_eq!(
+            saving_text([&hetzner, &other, &unknown]),
+            "Saves at least €0.0362/h; 1 worker reports no rate"
+        );
+        let row = Row::of(&[hetzner.clone(), runpod.clone(), other], false, None);
+        assert_eq!(rates_text(row.hourly_rate.as_deref().unwrap()), "€0.0363/h + $0.690/h");
+        let rows = [row, Row::of(&[runpod], false, None)];
+        assert_eq!(group_summary(Group::Cloud, &rows), ["€0.0363/h + $1.380/h"]);
+    }
+
     #[test]
     fn a_workspace_without_a_cloud_is_on_this_pc() {
         let row = Row::of(&[], true, Some("cargo build"));
@@ -478,7 +530,7 @@ mod tests {
         );
         assert_eq!(row.group, Group::NeedsYou);
         assert_eq!(row.line, "Attention");
-        assert_eq!(row.hourly_rate, Some(0.75));
+        assert_eq!(rates_text(row.hourly_rate.as_deref().unwrap()), "$0.750/h");
     }
 
     #[test]

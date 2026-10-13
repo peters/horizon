@@ -287,18 +287,25 @@ impl super::Runtime {
         })
     }
 
-    /// Frame header text, for example `$0.83 run · $4.20 total`.
+    /// Frame header text in the provider's currency, for example `$0.83 run · $4.20 total`.
     pub(in crate::app::cloud_panel) fn cost_badge(&self, now: std::time::SystemTime) -> Option<String> {
-        cloud_runtime::cost::badge(self.current_run_cost(now).as_ref(), self.total_cost(now).as_ref())
+        cloud_runtime::cost::badge(
+            self.current_run_cost(now).as_ref(),
+            self.total_cost(now).as_ref(),
+            cost::provider(self).currency,
+        )
     }
 }
 
 /// The current run's live cost while Ready, otherwise the worker's hourly rate,
 /// then the cost since creation.
 fn worker_cost(ui: &mut egui::Ui, runtime: &super::Runtime, now: std::time::SystemTime) {
+    let provider = cost::provider(runtime);
     if let Some(run) = runtime.current_run_cost(now) {
-        ui.label(run.summary())
-            .on_hover_text("Estimated from the worker's hourly rate and the time since it last started.");
+        ui.label(run.summary(provider.currency)).on_hover_text(format!(
+            "Estimated from the worker's hourly rate and the time since it last started.\n{}",
+            cloud_runtime::cost::rate_coverage(provider)
+        ));
     } else if let Some(rate) = runtime
         .state
         .as_ref()
@@ -307,7 +314,11 @@ fn worker_cost(ui: &mut egui::Ui, runtime: &super::Runtime, now: std::time::Syst
         // A stopped or deleted worker's last rate is not what bills now.
         .filter(|_| !cost::compute_idle(runtime))
     {
-        ui.label(format!("Worker rate: {}", cloud_runtime::cost::format_rate(rate)));
+        ui.label(format!(
+            "Worker rate: {}",
+            cloud_runtime::cost::format_rate(rate, provider.currency)
+        ))
+        .on_hover_text(cloud_runtime::cost::rate_coverage(provider));
     }
     total_cost(ui, runtime, now);
 }
@@ -315,9 +326,10 @@ fn worker_cost(ui: &mut egui::Ui, runtime: &super::Runtime, now: std::time::Syst
 /// Billing failures only hide the total; the run above never depends on billing.
 fn total_cost(ui: &mut egui::Ui, runtime: &super::Runtime, now: std::time::SystemTime) {
     if let Some(total) = runtime.total_cost(now) {
-        ui.label(total.summary()).on_hover_ui(|ui| {
-            ui.label(runtime.billing.explanation(&total, std::time::Instant::now()));
-        });
+        ui.label(total.summary(cost::provider(runtime).currency))
+            .on_hover_ui(|ui| {
+                ui.label(runtime.billing.explanation(&total, std::time::Instant::now()));
+            });
     } else if let Some(error) = runtime.billing.error() {
         ui.label(format!("Total unavailable: {error}"))
             .on_hover_text("RunPod billing could not be read. Horizon tries again every few minutes.");

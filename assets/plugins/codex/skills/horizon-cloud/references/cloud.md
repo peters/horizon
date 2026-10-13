@@ -160,7 +160,8 @@ with parked terminals or a stopped worker. **This PC** holds workspaces without 
 cloud. Each row shows a status dot and one status line, for example the last line
 of a parked agent. A **Parked** row is compact: its status line is the hover and
 accessibility text of its dot. A group header shows the hourly cost of its running
-workers. A click on a row goes to its workspace, and a parked cloud then attaches.
+workers, with one sum per currency: RunPod bills in US dollars and Hetzner in euros
+net of VAT. A click on a row goes to its workspace, and a parked cloud then attaches.
 A group with idle clouds shows **Stop idle…**: the person selects idle clouds and
 sees the hourly saving before their workers stop. To find a cloud for the person,
 name its workspace and its group.
@@ -168,8 +169,9 @@ name its workspace and its group.
 `cloud_list` reads and acts on the clouds in your own workspace only.
 `cloud_list` operations are `list`, `attach`, `park` and `stop`. `list` (the
 default) returns each cloud's `cloud` ID, name, group (`needs_you`, `cloud` or
-`parked`), status line, hourly rate, `working` and `idle`. The others take the
-`cloud` ID from `list`:
+`parked`), status line, `hourly_rate` with its ISO 4217 `currency` (both `null`
+when the worker reports no rate), `working` and `idle`. Never add rates in
+different currencies. The others take the `cloud` ID from `list`:
 
 - `attach` moves the person's view to the cloud, as a click on its row does.
 - `park` parks the terminals of a cloud that is out of view now. Horizon refuses

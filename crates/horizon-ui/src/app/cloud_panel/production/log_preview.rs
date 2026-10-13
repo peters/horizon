@@ -1,9 +1,9 @@
 //! Synthetic cloud cards for a debug build. Deploy logs live only in memory, so an
 //! isolated viewer has nothing to scroll unless this is asked for, and an idle stop
-//! needs a real worker and half an hour, and a stuck Docker would stop every other
-//! container of the computer. It never runs in a release build, only on
-//! an ephemeral session, and it leaves a session alone when that session already
-//! has a cloud.
+//! needs a real worker and half an hour, a stuck Docker would stop every other
+//! container of the computer, and a running Hetzner server bills. It never runs in a
+//! release build, only on an ephemeral session, and it leaves a session alone when
+//! that session already has a cloud.
 use super::{Deployment, Stage, idle::Report};
 use crate::app::HorizonApp;
 use horizon_core::cloud_panel::{CloudConfig, CloudGroup, CloudLaunch};
@@ -28,6 +28,13 @@ pub(super) fn seed(app: &mut HorizonApp, ctx: &egui::Context) {
     }
     if std::env::var_os("HORIZON_CLOUD_DOCKER_STUCK_PREVIEW").is_some() {
         seed_docker_stuck(app);
+    }
+    // Minutes the synthetic Hetzner server has run.
+    if let Some(minutes) = std::env::var("HORIZON_CLOUD_COST_PREVIEW")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+    {
+        seed_cost(app, Duration::from_mins(minutes));
     }
 }
 
@@ -159,6 +166,103 @@ fn seed_docker_stuck(app: &mut HorizonApp) -> bool {
         runtime.error = Some(stuck.to_string());
     }
     true
+}
+
+/// A ready synthetic Hetzner cloud whose server was created `ran` ago, priced at €0.0240
+/// an hour, so its card bills in euros and its run advances. No provider is asked: the
+/// record binds no worker, so billing and worker operations have nothing to reach.
+fn seed_cost(app: &mut HorizonApp, ran: Duration) -> bool {
+    if !super::preview::accepts(app) {
+        return false;
+    }
+    let created = std::time::SystemTime::now().checked_sub(ran).and_then(utc);
+    let Some((launch, ready)) = created.and_then(|created| cost_launch(&created)) else {
+        return false;
+    };
+    // A workspace of its own, so the sidebar lists the cloud and its rate.
+    let workspace = app.board.create_workspace("Synthetic Hetzner cost");
+    let Some(workspace) = app.board.workspace(workspace).map(|item| item.local_id.clone()) else {
+        return false;
+    };
+    let mut group = CloudGroup::new(
+        PREVIEW_ISSUE,
+        "Synthetic Hetzner cost".into(),
+        workspace,
+        "/synthetic".into(),
+        [40.0, 60.0],
+    );
+    group.size = [1140.0, 620.0];
+    group.environment.provider = Some(launch.profile.provider.clone());
+    group.environment.profile = Some(launch.profile_name.clone());
+    group.remote = Some(launch);
+    app.cloud_prototype.groups.0.push(group);
+    let runtime = app
+        .cloud_prototype
+        .production
+        .runtimes
+        .entry(PREVIEW_ISSUE)
+        .or_default();
+    runtime.progress.stage(Stage::Validate, Instant::now());
+    runtime.progress.stage(Stage::Ready, Instant::now());
+    runtime.stage = Some(Stage::Ready);
+    runtime.state = Some(ready);
+    // The card stays connected for as long as Horizon runs.
+    let (connection, receiver) = std::sync::mpsc::channel();
+    runtime.receiver = Some(receiver);
+    runtime.sender = Some(connection);
+    true
+}
+
+/// A running cx33 in hel1 as Horizon describes a Hetzner server, created at `created`.
+fn cost_launch(created: &str) -> Option<(CloudLaunch, Deployment)> {
+    let config = CloudConfig::parse(
+        "version: 1\ndefault: cpu\nprofiles:\n  cpu:\n    provider: hetzner\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n    gpu: false\n",
+    )
+    .ok()?;
+    let profile = config.profiles.get("cpu")?.clone();
+    let state = serde_json::from_value(serde_json::json!({
+        "version": 1, "cloud_id": "synthetic-cost", "repository": "/synthetic", "revision": "a".repeat(40),
+        "profile": profile, "stage": "Ready", "operation": {"state": "prepared"},
+        "spec": null, "sessions": [], "source_ready": true,
+        "worker": {"id": "synthetic1", "name": "synthetic-cost", "imageName": "example.invalid/worker",
+            "desiredStatus": "RUNNING", "publicIp": "192.0.2.10", "portMappings": {"22": 22},
+            "vcpuCount": 4, "memoryInGb": 8, "dataCenterId": "hel1", "costPerHr": 0.024, "lastStartedAt": created}
+    }))
+    .ok()?;
+    let launch = CloudLaunch {
+        deployment_started: true,
+        id: "synthetic-cost".into(),
+        revision: "a".repeat(40),
+        profile_name: "cpu".into(),
+        profile,
+        placement: horizon_core::cloud_panel::Placement::default(),
+    };
+    Some((launch, state))
+}
+
+/// `at` in RFC 3339 form in UTC, with whole seconds.
+fn utc(at: std::time::SystemTime) -> Option<String> {
+    let seconds = at.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    let (days, time) = (seconds / 86_400, seconds % 86_400);
+    // The civil date of a day count since 1970-01-01, in 400-year eras of 146,097 days.
+    let shifted = days + 719_468;
+    let (era, day_of_era) = (shifted / 146_097, shifted % 146_097);
+    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_from_march = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_from_march + 2) / 5 + 1;
+    let month = if month_from_march < 10 {
+        month_from_march + 3
+    } else {
+        month_from_march - 9
+    };
+    let year = era * 400 + year_of_era + u64::from(month <= 2);
+    Some(format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        time / 3600,
+        time % 3600 / 60,
+        time % 60
+    ))
 }
 
 fn idle_launch() -> Option<(CloudLaunch, Deployment)> {
@@ -303,8 +407,35 @@ mod tests {
         assert!(!seed_lines(&mut app, 400));
         assert!(!seed_idle_stop(&mut app, Duration::ZERO, &egui::Context::default()));
         assert!(!seed_docker_stuck(&mut app));
+        assert!(!seed_cost(&mut app, Duration::ZERO));
         assert!(app.cloud_prototype.groups.0.is_empty());
         assert!(app.board.cloud_groups.0.is_empty());
+    }
+
+    #[test]
+    fn the_cost_preview_bills_a_connected_hetzner_worker_in_euros_without_a_provider() {
+        let (_temp, mut app) = test_app();
+        assert!(seed_cost(&mut app, Duration::from_mins(32)));
+        assert!(!seed_cost(&mut app, Duration::ZERO), "one preview only");
+        let runtime = &app.cloud_prototype.production.runtimes[&PREVIEW_ISSUE];
+        assert!(runtime.connected_ready());
+        let state = runtime.state.as_ref().expect("record");
+        assert_eq!(state.operation, horizon_core::cloud_runtime::CreateState::Prepared);
+        let run = runtime.current_run_cost(std::time::SystemTime::now()).expect("a run");
+        assert!(run.elapsed >= Duration::from_mins(32) && run.elapsed < Duration::from_mins(33));
+        assert_eq!(
+            runtime.cost_badge(std::time::SystemTime::now()).as_deref(),
+            Some("€0.01 run")
+        );
+        assert_eq!(
+            utc(std::time::UNIX_EPOCH + Duration::from_mins(29_863_230)).as_deref(),
+            Some("2026-10-12T08:30:00Z")
+        );
+        assert_eq!(
+            utc(std::time::UNIX_EPOCH + Duration::from_hours(264_384)).as_deref(),
+            Some("2000-02-29T00:00:00Z"),
+            "a leap day"
+        );
     }
 
     #[test]

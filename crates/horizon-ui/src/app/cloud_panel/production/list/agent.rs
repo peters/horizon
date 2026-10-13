@@ -182,7 +182,8 @@ fn entry(id: &str, facts: &CloudFacts) -> Value {
         "name": facts.name,
         "group": facts.condition.group().key(),
         "line": facts.line,
-        "hourly_rate": facts.hourly_rate,
+        "hourly_rate": facts.hourly_rate.map(|rate| rate.hourly),
+        "currency": facts.hourly_rate.map(|rate| rate.currency),
         "working": facts.working,
         "idle": facts.idle(),
     })
