@@ -216,7 +216,7 @@ fn card(ui: &mut Ui, key: &str, tint: Color32, paired: bool, add: impl FnOnce(&m
         Pos2::new(rect.right() - 16.0, rect.top() + 2.0),
     );
     ui.painter()
-        .rect_filled(top, 1, theme::alpha(tint, (90.0 + 110.0 * strength) as u8));
+        .rect_filled(top, 1, tint.gamma_multiply(0.35 + 0.45 * strength));
 }
 
 /// The mark, the title and a small pill on the right, which steps aside when the card is
