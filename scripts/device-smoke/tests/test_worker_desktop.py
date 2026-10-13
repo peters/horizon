@@ -36,6 +36,7 @@ WORKER_ENVIRONMENT = {
     'HORIZON_HOME': '/operator/horizon-home',
     'CODEX_HOME': '/workspace/home/.codex',
     'XDG_CONFIG_HOME': '/workspace/home/.config',
+    'HORIZON_AGENT_INTEGRATIONS': 'on',
 }
 
 
@@ -56,6 +57,7 @@ class ChildEnvironmentTests(unittest.TestCase):
         self.assertEqual(self.env['HOME'], '/workspace/home')
         self.assertEqual(self.env['HORIZON_SESSION_DIR'], '/workspace/session-data/s1')
         self.assertEqual(self.env['HORIZON_HOME'], str(self.state / 'horizon-home'))
+        self.assertEqual(self.env['HORIZON_AGENT_INTEGRATIONS'], 'off', 'nothing is installed in HOME')
         for key in ('CODEX_HOME', 'GROK_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME'):
             self.assertTrue(Path(self.env[key]).is_relative_to(self.state), key)
 

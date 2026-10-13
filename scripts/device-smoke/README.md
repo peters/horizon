@@ -287,10 +287,13 @@ The command does these steps:
 2. It runs the build at nice 19, with the idle CPU scheduler and the idle I/O
    class. The worker container has no `CAP_SYS_NICE`, so a lower priority cannot
    go up again. For this reason, only the build child gets the low priority, and
-   your shell keeps its priority. Browser panels stay usable during the build.
-3. It copies the binary to `<state>/bin/horizon` and writes its SHA-256 to
-   `<state>/bin/SHA256SUMS`. The state directory is
-   `$HORIZON_SESSION_DIR/worker-desktop/<time>-<pid>`, mode 700.
+   your shell keeps its priority. The CPU priority keeps browser panels usable,
+   but the disk writes of the build can stop them for some seconds. See
+   [Build stalls on the workspace volume](#build-stalls-on-the-workspace-volume).
+3. It links the binary to `<state>/bin/horizon` and writes its SHA-256 to
+   `<state>/bin/SHA256SUMS`. A hard link writes no data. When the target and the
+   state are on different file systems, the command copies the binary. The state
+   directory is `$HORIZON_SESSION_DIR/worker-desktop/<time>-<pid>`, mode 700.
 4. It starts the frozen binary on `:99` with the disposable fixture config and
    `--ephemeral`. It makes sure that `/proc/<pid>/exe` has the frozen hash.
 5. It prints one JSON manifest line and writes the same data to
@@ -308,12 +311,13 @@ The debug Horizon gets a changed environment:
   client. It also removes `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID`,
   `ANTHROPIC_CUSTOM_HEADERS` and `WAYLAND_DISPLAY`. The manifest lists the
   removed names, never their values.
+- `HORIZON_AGENT_INTEGRATIONS` is `off`. The debug app does not install agent
+  skills, plugins, MCP registrations or a desktop entry in `HOME`, and takes no
+  skill leases there. The worker's own agents use those folders.
 - `CODEX_HOME`, `GROK_HOME`, `XDG_DATA_HOME`, `XDG_CONFIG_HOME` and
-  `XDG_CACHE_HOME` go to the state directory. Horizon installs its agent skills
-  and its desktop entry there.
+  `XDG_CACHE_HOME` go to the state directory. The agents and tools that the
+  debug app starts keep their files there.
 - `HOME` does not change. Terminals in the debug app keep `/workspace/home`.
-  Horizon still makes empty `.horizon-leases` directories in the other skill
-  folders under `HOME`, for example `~/.claude/skills`.
 
 The manifest has these fields:
 
@@ -322,6 +326,7 @@ The manifest has these fields:
 | `pid` | The process ID of the debug Horizon. |
 | `launcher_pid` | The process ID of this command. Send it `SIGTERM` to stop. |
 | `sha256` | The hash of the frozen binary and of `/proc/<pid>/exe`. |
+| `frozen_by` | `link` or `copy`: how the binary got to `<state>/bin/horizon`. |
 | `state`, `horizon_home` | The state directory and the Horizon home in it. |
 | `log`, `config` | The Horizon log and the config that it loaded. |
 | `display` | The worker desktop, `:99`. |
@@ -339,10 +344,13 @@ click in it. For evidence, use `device_screenshot` with the target
 service's root, examine it:
 
 ```sh
+find /workspace/home -newermt "<started_at>" -not -path '/workspace/home/.horizon/*'
 find /workspace/home/.horizon -newermt "<started_at>"
 ```
 
-Result: The output is empty.
+Result: The first command shows only files that the worker's own agents and
+services changed, never a file of the debug app. The second output is empty
+when no browser panel of the worker changed meanwhile.
 
 To stop, press Ctrl-C, or send `SIGTERM` to `launcher_pid`. A command that runs
 in the background ignores `SIGINT`. The command sends `WM_DELETE_WINDOW` to the
@@ -354,9 +362,39 @@ Options:
 - `--horizon PATH` uses this binary and does not build.
 - `--state DIR` uses a new state directory.
 - `--config PATH` uses this config instead of the disposable fixture.
-- `--target-dir DIR` builds into this directory.
+- `--target-dir DIR` builds into this directory. See the next section.
 - `--display NAME` uses another X display, for example for a local test.
 - Set `CARGO_BUILD_JOBS` to use fewer build jobs when the worker has little memory.
+
+### Build stalls on the workspace volume
+
+Measured on an 8 vCPU Hetzner worker, with a probe that called
+`browser_navigate` and `browser_snapshot` every 2 seconds through the worker's
+browser service:
+
+| Load during the probe | Result |
+|---|---|
+| None | Median navigation 208 ms. |
+| 8 busy loops at normal priority | Median navigation 409 ms. |
+| 8 busy loops at nice 19 with the idle scheduler | Median navigation 220 ms. |
+| A 3 GB write with `fsync` to `/workspace`, idle I/O class | Navigation stops for 3 to 4 seconds; one action failed with `host coordination timed out` after 7 seconds. |
+| The same write to the container's own disk | No change. |
+
+The browser service keeps its coordination files on the workspace volume, in
+`/workspace/home/.horizon`. The low CPU priority therefore protects the browser
+panels, but the idle I/O class does not: the volume is slow for all writers. A
+build into `$HORIZON_SESSION_DIR`, which is on the volume, causes some stops of
+several seconds and one or two timeouts per build.
+
+To prevent this, build on the container's own disk and keep the state there
+too, so that the freeze can link the binary:
+
+```sh
+python3 scripts/device-smoke/serve.py --worker-desktop --target-dir /var/tmp/horizon-target --state /var/tmp/horizon-desktop/run-1
+```
+
+The container's own disk is small on some providers, and a container reset
+deletes it. Then the next build starts cold.
 
 ## Video evidence and cleanup
 
