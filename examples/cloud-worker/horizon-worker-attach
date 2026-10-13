@@ -641,8 +641,8 @@ def main(argv):
         except termios.error:
             pass
         # A paste that did not end left its tmux buffer, which nothing else pastes or deletes. When
-        # tmux ended this client first, a second client deletes it; the private socket of a project
-        # session takes no second client.
+        # tmux ended this client first, a second client deletes it. The private proxy of a project
+        # session accepts no second client, so there the buffer stays until the session ends.
         if attachment is not None and attachment.input is not None and attachment.input.paste is not None \
                 and attachment.input.buffered and not attachment.discard(attachment.input.name()) \
                 and attachment.tmux == TMUX:

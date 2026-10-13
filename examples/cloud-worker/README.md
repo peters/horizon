@@ -2194,8 +2194,10 @@ peer authentication and a final signed state check ordered with stop. The relay
 holds no allocation lock and bounds each direction to 64 KiB and 16 ancillary
 descriptors. Managed terminal bindings cannot create, split or respawn panes.
 
-Disconnect detaches without stopping the agent. Reconnect preserves processes,
-checkout edits and private home data. Multiple clients may attach concurrently;
+Disconnect detaches without stopping the agent. A paste that a disconnect cuts
+off leaves its tmux buffer on the private server of the session until the
+session ends, because the private proxy accepts no second client to delete it.
+Reconnect preserves processes, checkout edits and private home data. Multiple clients may attach concurrently;
 tmux selects the smallest client terminal size. Explicit stop closes attachments
 and never relaunches. This internal transport does not expose public UI/CLI/MCP
 project admission, grant credentials, or complete shared-worker delivery.
