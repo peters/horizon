@@ -633,6 +633,44 @@ the [GPU lock](#gpu-lock) for GPU builds, or point a repository's build output a
 `HORIZON_SESSION_DIR`. Legacy sessions keep their build output in their own worktree
 under `/workspace/agents/SESSION`.
 
+### Dropped files
+
+When a person drops local files on a cloud agent or shell panel, Horizon sends them
+to the worker of that panel. It pastes their worker paths into the panel only after
+all files arrived. Each drop gets a new folder:
+
+```text
+/workspace/.horizon-drops/SESSION/BATCH/NAME
+```
+
+- `SESSION` is the session of the panel. The worker must have
+  `/workspace/sessions/SESSION`, or Horizon sends nothing.
+- `BATCH` is 12 random hexadecimal digits. Horizon makes the folder before the first
+  file and refuses a folder that exists, so two drops never share a folder.
+- `NAME` is the local file name. Horizon replaces control characters with `_` and
+  shortens a name to 255 bytes. A name that occurs again in the same drop gets
+  ` (2)`, ` (3)` and so on before its extension.
+- Horizon refuses a drop that contains a folder before it sends a file.
+
+Horizon uses the SSH connection of the cloud with the host key that it recorded for
+that worker. It never records a new host key for a drop. The upload runs as the SSH
+user of the worker, `root`. The boundary is as follows:
+
+- The SSH user owns `.horizon-drops`, the session folder and the batch folder.
+  Horizon refuses to write when one of them is a symbolic link or has another owner.
+  Thus an agent cannot select the place where the SSH user writes.
+- With agent isolation, the folders and files belong to the group of
+  `horizon-agent`. The folders have mode `0750` and the files have mode `0640`. The
+  agent can read the files, but it cannot change or remove them.
+- A file is complete or absent. The worker writes only new files, never over an
+  existing file. It removes a file whose size is not the size of the local file.
+- After a failure or a cancel, Horizon removes the batch folder and pastes nothing.
+
+The files stay on the workspace volume until the cloud is deleted. They are not
+private between the sessions of one worker, because all agents run as the same user.
+The person who drops the files supplies their names, sizes and contents. Horizon does
+not examine the contents.
+
 ## Claude Code first-run dialogs
 
 A worker is a disposable container whose person has already chosen to run Claude Code in

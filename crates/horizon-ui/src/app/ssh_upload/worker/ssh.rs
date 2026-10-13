@@ -99,16 +99,30 @@ pub(super) fn run_ssh_upload(
     control_rx: &Receiver<UploadControl>,
     progress_tx: &std::sync::mpsc::Sender<UploadMessage>,
 ) -> Result<(), WorkerExit> {
+    let mut command = Command::new("ssh");
+    command
+        .args(connection.ssh_transport_args())
+        .arg(build_remote_upload_command(destination_dir, &file.name));
     let detail = format!("Uploading {} over SSH", file.name);
-    send_upload_snapshot(progress_tx, progress.snapshot_for(file, 0, &detail));
+    stream_file(&mut command, file, &detail, progress, control_rx, progress_tx)
+}
+
+/// Streams `file` to the standard input of `command`, an SSH command that writes it on
+/// the remote host, with progress and cancellation.
+pub(super) fn stream_file(
+    command: &mut Command,
+    file: &LocalUploadFile,
+    detail: &str,
+    progress: UploadProgressContext,
+    control_rx: &Receiver<UploadControl>,
+    progress_tx: &std::sync::mpsc::Sender<UploadMessage>,
+) -> Result<(), WorkerExit> {
+    send_upload_snapshot(progress_tx, progress.snapshot_for(file, 0, detail));
 
     let mut local_file = File::open(&file.path)
         .map_err(|error| WorkerExit::Failed(format!("failed to read {}: {error}", file.path.display())))?;
 
-    let remote_command = build_remote_upload_command(destination_dir, &file.name);
-    let mut child = Command::new("ssh")
-        .args(connection.ssh_transport_args())
-        .arg(remote_command)
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -170,14 +184,14 @@ pub(super) fn run_ssh_upload(
             current_file_bytes = current_file_bytes.saturating_add(u64::try_from(count).unwrap_or(u64::MAX));
 
             if last_snapshot_at.elapsed() >= SSH_PROGRESS_INTERVAL || current_file_bytes >= file.size_bytes {
-                send_upload_snapshot(progress_tx, progress.snapshot_for(file, current_file_bytes, &detail));
+                send_upload_snapshot(progress_tx, progress.snapshot_for(file, current_file_bytes, detail));
                 last_snapshot_at = Instant::now();
             }
         }
     }
 
     drop(stdin);
-    send_upload_snapshot(progress_tx, progress.snapshot_for(file, file.size_bytes, &detail));
+    send_upload_snapshot(progress_tx, progress.snapshot_for(file, file.size_bytes, detail));
     wait_for_child(&mut child, control_rx)
 }
 

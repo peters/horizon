@@ -1,3 +1,5 @@
+#[cfg(feature = "cloud-workspaces")]
+mod cloud;
 mod destination_picker;
 mod render;
 mod worker;
@@ -16,6 +18,9 @@ use self::worker::{
     UploadWorkerHandle, build_local_upload_files, spawn_preparation, start_upload,
 };
 use super::HorizonApp;
+
+#[cfg(feature = "cloud-workspaces")]
+pub(super) use cloud::{CloudDrop, CloudDropTarget};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum UploadTransportChoice {
@@ -53,6 +58,9 @@ pub(super) struct SshUploadFlow {
     upload_handle: Option<UploadWorkerHandle>,
     upload_snapshot: Option<UploadSnapshot>,
     upload_started_at: Option<Instant>,
+    /// Set for a drop on a cloud panel, which uploads to its worker session.
+    #[cfg(feature = "cloud-workspaces")]
+    cloud: Option<cloud::CloudUpload>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,6 +99,35 @@ impl SshUploadFlow {
             upload_handle: None,
             upload_snapshot: None,
             upload_started_at: None,
+            #[cfg(feature = "cloud-workspaces")]
+            cloud: None,
+        }
+    }
+
+    /// A flow that shows only `error`, with no files to try again.
+    fn failed(target_viewport_id: ViewportId, host_label: String, error: String) -> Self {
+        Self::with_mode(target_viewport_id, host_label, UploadMode::Failed(error))
+    }
+
+    /// A flow in `mode` with no files, no destination and no work running.
+    fn with_mode(target_viewport_id: ViewportId, host_label: String, mode: UploadMode) -> Self {
+        Self {
+            target_viewport_id,
+            host_label,
+            connection: SshConnection::default(),
+            files: Vec::new(),
+            destination_input: String::new(),
+            ssh_upload_error: None,
+            taildrop_target: None,
+            transport_choice: UploadTransportChoice::Ssh,
+            mode,
+            destination_picker: None,
+            preparation_rx: None,
+            upload_handle: None,
+            upload_snapshot: None,
+            upload_started_at: None,
+            #[cfg(feature = "cloud-workspaces")]
+            cloud: None,
         }
     }
 }
@@ -111,6 +148,20 @@ impl HorizonApp {
                 panel_id = panel_id.0,
                 "remote development has been removed; file upload is disabled for this retired view"
             );
+            return true;
+        }
+        #[cfg(feature = "cloud-workspaces")]
+        if self.maybe_start_cloud_file_drop(panel_id, dropped, viewport_id) {
+            return true;
+        }
+        if let Some(panel) = self.board.panel(panel_id).filter(|panel| panel.cloud_wait().is_some()) {
+            // A cloud member that does not run its session: its process is on a worker,
+            // so a local path would name a file that the session cannot read.
+            self.ssh_upload_flow = Some(SshUploadFlow::failed(
+                viewport_id,
+                panel.display_title().into_owned(),
+                "This panel is not attached to its cloud session, so Horizon cannot send files to it. Drop the files again when the panel shows its session.".into(),
+            ));
             return true;
         }
         let Some((panel_kind, host_label, connection)) = self.board.panel(panel_id).map(|panel| {
@@ -137,22 +188,7 @@ impl HorizonApp {
         let files = match build_local_upload_files(paths) {
             Ok(files) => files,
             Err(error) => {
-                self.ssh_upload_flow = Some(SshUploadFlow {
-                    target_viewport_id: viewport_id,
-                    host_label,
-                    connection: connection.unwrap_or_default(),
-                    files: Vec::new(),
-                    destination_input: String::new(),
-                    ssh_upload_error: None,
-                    taildrop_target: None,
-                    transport_choice: UploadTransportChoice::Ssh,
-                    mode: UploadMode::Failed(error),
-                    destination_picker: None,
-                    preparation_rx: None,
-                    upload_handle: None,
-                    upload_snapshot: None,
-                    upload_started_at: None,
-                });
+                self.ssh_upload_flow = Some(SshUploadFlow::failed(viewport_id, host_label, error));
                 return true;
             }
         };
@@ -180,6 +216,8 @@ impl HorizonApp {
 
     pub(super) fn poll_ssh_upload_flow(&mut self) {
         let mut remembered_destination = None;
+        #[cfg(feature = "cloud-workspaces")]
+        let mut cloud_delivery = None;
 
         if let Some(flow) = self.ssh_upload_flow.as_mut() {
             if let Some(rx) = flow.preparation_rx.take() {
@@ -215,6 +253,10 @@ impl HorizonApp {
                 if let Some(result) = finished_result {
                     flow.upload_started_at = None;
                     match result {
+                        #[cfg(feature = "cloud-workspaces")]
+                        Ok(outcome) if !outcome.cancelled && flow.cloud.is_some() => {
+                            cloud_delivery = Some(outcome);
+                        }
                         Ok(outcome) => {
                             if !outcome.cancelled && matches!(flow.transport_choice, UploadTransportChoice::Ssh) {
                                 remembered_destination =
@@ -234,6 +276,10 @@ impl HorizonApp {
 
         if let Some((key, path)) = remembered_destination {
             self.ssh_upload_destinations.insert(key, path);
+        }
+        #[cfg(feature = "cloud-workspaces")]
+        if let Some(outcome) = cloud_delivery {
+            self.finish_cloud_upload(outcome);
         }
     }
 
@@ -269,6 +315,9 @@ impl HorizonApp {
                 flow.upload_snapshot = None;
                 flow.upload_handle = None;
                 flow.upload_started_at = None;
+                // A cloud drop has no destination to choose: it tries the same session again.
+                #[cfg(feature = "cloud-workspaces")]
+                flow.start_cloud_upload();
             }
             if actions.contains(&UploadUiAction::StartUpload) {
                 start_flow_upload(flow);
@@ -568,22 +617,7 @@ mod tests {
         let ctx = egui::Context::default();
         run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
         for viewport in [ViewportId::ROOT, ViewportId::from_hash_of("detached-test")] {
-            app.ssh_upload_flow = Some(SshUploadFlow {
-                target_viewport_id: viewport,
-                host_label: "Synthetic".into(),
-                connection: SshConnection::default(),
-                files: Vec::new(),
-                destination_input: String::new(),
-                ssh_upload_error: None,
-                taildrop_target: None,
-                transport_choice: UploadTransportChoice::Ssh,
-                mode: UploadMode::Failed("Synthetic".into()),
-                destination_picker: None,
-                preparation_rx: None,
-                upload_handle: None,
-                upload_snapshot: None,
-                upload_started_at: None,
-            });
+            app.ssh_upload_flow = Some(SshUploadFlow::failed(viewport, "Synthetic".into(), "Synthetic".into()));
             assert_eq!(app.canvas_gesture_enabled(), viewport != ViewportId::ROOT);
         }
     }

@@ -12,6 +12,7 @@ pub mod deployment;
 pub mod diagnosis;
 pub mod docker_daemon;
 pub mod docker_host;
+pub mod file_drop;
 pub mod git_auth;
 pub mod github;
 pub mod image;
