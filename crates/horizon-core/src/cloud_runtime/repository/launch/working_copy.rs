@@ -168,8 +168,9 @@ fn unoffered_note(names: &[String]) -> String {
 
 /// The text of `.horizon/cloud.yml` in `repository`, a regular file of at most 1 MiB;
 /// `None` when there is no such file. A setup agent or an editor can swap the file or its
-/// folder while Horizon reads, so both are opened without following a link and the file
-/// without waiting on a pipe, and the opened handle is checked, not the path.
+/// folder while Horizon reads, so on Unix both are opened without following a link and the
+/// file without waiting on a pipe, and the opened handle is checked, not the path. Windows
+/// refuses a link by path before it opens the file.
 fn contents(repository: &Path) -> Option<Result<String, ()>> {
     let file = match open(repository) {
         Ok(file) => file,
