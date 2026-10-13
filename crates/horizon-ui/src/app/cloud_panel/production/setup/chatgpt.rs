@@ -41,6 +41,12 @@ impl Card {
         self.pending.is_some()
     }
 
+    /// Ends a sign-in under way, as when Codex no longer signs in with `ChatGPT`, so the
+    /// form never waits for a sign-in whose Cancel button is not shown.
+    pub(super) fn cancel_sign_in(&mut self) {
+        self.abort = None;
+    }
+
     fn sign_in(&mut self, ctx: &egui::Context, home: std::path::PathBuf) {
         let cancel = Cancellation::default();
         self.abort = Some(Abort(cancel.clone()));
@@ -180,6 +186,23 @@ mod tests {
         assert_eq!(signed_in, Some(account));
         assert!(cancel.is_cancelled(), "codex login ends with the attempt");
         assert!(!card.busy() && !card.signing_in);
+    }
+
+    #[test]
+    fn leaving_chatgpt_sign_in_cancels_the_sign_in() {
+        let cancel = horizon_core::cloud_runtime::Cancellation::default();
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        let mut card = Card {
+            pending: Some(receiver),
+            signing_in: true,
+            abort: Some(Abort(cancel.clone())),
+            ..Card::default()
+        };
+        card.cancel_sign_in();
+        assert!(
+            cancel.is_cancelled(),
+            "codex login stops, and its outcome releases Save"
+        );
     }
 
     #[test]

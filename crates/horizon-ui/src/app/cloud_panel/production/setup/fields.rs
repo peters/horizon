@@ -193,6 +193,9 @@ pub(super) fn agents(
                     }
                 }
                 if !selected {
+                    if agent == Agent::Codex {
+                        chatgpt.cancel_sign_in();
+                    }
                     return;
                 }
                 ui.horizontal_wrapped(|ui| {
@@ -205,6 +208,9 @@ pub(super) fn agents(
                     ui.selectable_value(mode, Authentication::Subscription, sign_in);
                 });
                 if *mode == Authentication::ApiKey {
+                    if agent == Agent::Codex {
+                        chatgpt.cancel_sign_in();
+                    }
                     if saved && value.is_empty() && !*replacing {
                         *replacing = saved_key(ui);
                     } else {
