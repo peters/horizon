@@ -495,6 +495,9 @@ this task and G11 use.
 
    Result: The board does not show them. The provider shows no worker for them.
 
+> **CAUTION:** THE NEXT STEP REMOVES THIS COMPUTER'S GITHUB SIGN-IN AND ITS KEPT
+> REPOSITORY LIST. New clouds lose GitHub access until GitHub is connected again.
+
 2. In Cloud settings, click **Disconnect** on the GitHub card.
 
    Result: `ls ~/.horizon/cloud/credentials/` shows no `github-host-*-repositories.json`

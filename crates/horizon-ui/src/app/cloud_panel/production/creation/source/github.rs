@@ -20,8 +20,9 @@ use zeroize::Zeroize as _;
 /// At most this many repositories show at once; typing narrows them.
 const SHOWN: usize = 8;
 
-/// Said when this computer signed in as another account while a list was on its way.
-const ANOTHER_ACCOUNT: &str = "This computer signed in to GitHub as another account meanwhile. Try again.";
+/// Said when this computer's sign-in changed or ended, in another window, while a list was on
+/// its way.
+const ANOTHER_ACCOUNT: &str = "This computer's GitHub sign-in changed while the list was on its way. Try again.";
 
 /// What a finished exchange with GitHub is for.
 #[derive(Clone, Copy, PartialEq, Eq)]
