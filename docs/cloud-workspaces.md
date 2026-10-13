@@ -873,8 +873,12 @@ allocates compute. Horizon then pins the image by its registry digest.
 The new cloud keeps the profile that it was started with in the machine-local
 state of the cloud. A later edit of the file does not change that cloud or its
 reconnect settings. **Rebuild image & restart** compares the bound profile with
-the latest committed profile. Thus commit the settings that you started the cloud
-with before you rebuild it. See [Rebuilding a cloud's image](#rebuilding-a-clouds-image).
+the latest committed profile. The cloud takes the committed values of the rebuild
+settings, and Horizon refuses a difference in another field. Thus commit the
+settings that you started the cloud with before you rebuild it. If you do not, the
+rebuild changes the agents, the idle stop and the other rebuild settings back to the
+committed values, and the confirmation lists these changes. See
+[Rebuilding a cloud's image](#rebuilding-a-clouds-image).
 Credentials always stay in machine-local bindings.
 
 Image-only profiles omit `build`. Repository Dockerfiles build from the selected
