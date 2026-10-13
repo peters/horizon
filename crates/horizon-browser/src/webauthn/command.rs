@@ -44,8 +44,13 @@ impl CommandRun {
             });
         if let Err(error) = spawned {
             let (failed_tx, failed) = mpsc::channel();
-            let _ = failed_tx.send(CommandOutcome::Failed(format!("could not start a supervisor thread: {error}")));
-            return Self { cancel, outcome: failed };
+            let _ = failed_tx.send(CommandOutcome::Failed(format!(
+                "could not start a supervisor thread: {error}"
+            )));
+            return Self {
+                cancel,
+                outcome: failed,
+            };
         }
         Self { cancel, outcome }
     }
@@ -174,10 +179,20 @@ mod tests {
 
     #[test]
     fn missing_programs_and_oversized_output_fail() {
-        let missing = CommandRun::start(&["/nonexistent/authenticator".to_string()], Vec::new(), Duration::from_secs(5));
-        assert!(matches!(wait(&missing, Duration::from_secs(5)), Some(CommandOutcome::Failed(_))));
+        let missing = CommandRun::start(
+            &["/nonexistent/authenticator".to_string()],
+            Vec::new(),
+            Duration::from_secs(5),
+        );
+        assert!(matches!(
+            wait(&missing, Duration::from_secs(5)),
+            Some(CommandOutcome::Failed(_))
+        ));
         let noisy = CommandRun::start(&shell("head -c 400000 /dev/zero"), Vec::new(), Duration::from_secs(5));
-        assert!(matches!(wait(&noisy, Duration::from_secs(5)), Some(CommandOutcome::Failed(_))));
+        assert!(matches!(
+            wait(&noisy, Duration::from_secs(5)),
+            Some(CommandOutcome::Failed(_))
+        ));
     }
 
     #[test]

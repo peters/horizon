@@ -90,7 +90,10 @@ impl Driver {
             realm: string_at(params, "/source/realm"),
             context: string_at(params, "/source/context"),
         };
-        let message = params.pointer("/data/value").and_then(Value::as_str).and_then(PageMessage::parse);
+        let message = params
+            .pointer("/data/value")
+            .and_then(Value::as_str)
+            .and_then(PageMessage::parse);
         if let Some(message) = message
             && !source.realm.is_empty()
             && !source.context.is_empty()
@@ -138,7 +141,11 @@ impl Driver {
 
     /// The origin of the source realm, when the source context and every
     /// ancestor up to this panel's top-level context share that origin.
-    fn passkey_caller_origin(&mut self, source: &Source, events: &BrowserEventSender) -> Result<CallerOrigin, PageError> {
+    fn passkey_caller_origin(
+        &mut self,
+        source: &Source,
+        events: &BrowserEventSender,
+    ) -> Result<CallerOrigin, PageError> {
         let top = self.context_id.clone().ok_or_else(PageError::not_allowed)?;
         let origin = self.window_realm_origin(&source.context, Some(&source.realm), events)?;
         let tree = self
@@ -162,7 +169,11 @@ impl Driver {
         events: &BrowserEventSender,
     ) -> Result<String, PageError> {
         let realms = self
-            .call_bidi("script.getRealms", &json!({ "context": context, "type": "window" }), events)
+            .call_bidi(
+                "script.getRealms",
+                &json!({ "context": context, "type": "window" }),
+                events,
+            )
             .map_err(|error| refused(&error))?;
         let mut page_realms = realms
             .get("realms")
@@ -170,7 +181,9 @@ impl Driver {
             .into_iter()
             .flatten()
             .filter(|candidate| candidate.get("sandbox").is_none_or(Value::is_null))
-            .filter(|candidate| realm.is_none_or(|realm| candidate.get("realm").and_then(Value::as_str) == Some(realm)));
+            .filter(|candidate| {
+                realm.is_none_or(|realm| candidate.get("realm").and_then(Value::as_str) == Some(realm))
+            });
         let found = page_realms.next().ok_or_else(PageError::not_allowed)?;
         if page_realms.next().is_some() {
             return Err(PageError::not_allowed());
@@ -233,7 +246,11 @@ fn ancestors(tree: &Value, context: &str) -> Option<Vec<String>> {
 }
 
 fn string_at(value: &Value, pointer: &str) -> String {
-    value.pointer(pointer).and_then(Value::as_str).unwrap_or_default().to_string()
+    value
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn refused(error: &str) -> PageError {

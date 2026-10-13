@@ -145,7 +145,10 @@ mod tests {
     fn rp_id_must_be_the_host_or_a_multi_label_parent_domain() {
         let origin = CallerOrigin::parse("https://login.example.com").expect("origin");
         assert_eq!(origin.rp_id(None).ok().as_deref(), Some("login.example.com"));
-        assert_eq!(origin.rp_id(Some("login.example.com")).ok().as_deref(), Some("login.example.com"));
+        assert_eq!(
+            origin.rp_id(Some("login.example.com")).ok().as_deref(),
+            Some("login.example.com")
+        );
         assert_eq!(origin.rp_id(Some("Example.COM")).ok().as_deref(), Some("example.com"));
         for foreign in [
             "com",

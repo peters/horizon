@@ -191,7 +191,9 @@ impl<T: Clone + PartialEq> Bridge<T> {
     /// `(reply) => ...`: hands one reply to the page script in its realm.
     pub(crate) fn deliver_function(&self) -> String {
         let key = serde_json::Value::String(self.deliver_key.clone()).to_string();
-        format!("(reply) => {{ const deliver = globalThis[{key}]; if (typeof deliver === \"function\") deliver(reply); }}")
+        format!(
+            "(reply) => {{ const deliver = globalThis[{key}]; if (typeof deliver === \"function\") deliver(reply); }}"
+        )
     }
 
     /// Start a request whose caller origin the engine resolved. Returns a
@@ -330,8 +332,18 @@ mod tests {
 
     #[test]
     fn page_messages_are_bounded_and_typed() {
-        assert!(matches!(get_request(), PageMessage::Request { id: 7, op: Operation::Get, .. }));
-        assert!(matches!(PageMessage::parse(r#"{"kind":"abort","id":3}"#), Some(PageMessage::Abort { id: 3 })));
+        assert!(matches!(
+            get_request(),
+            PageMessage::Request {
+                id: 7,
+                op: Operation::Get,
+                ..
+            }
+        ));
+        assert!(matches!(
+            PageMessage::parse(r#"{"kind":"abort","id":3}"#),
+            Some(PageMessage::Abort { id: 3 })
+        ));
         assert!(PageMessage::parse(r#"{"kind":"request","id":1,"op":"delete"}"#).is_none());
         assert!(PageMessage::parse(&" ".repeat(MAX_PAGE_MESSAGE_BYTES + 1)).is_none());
     }
@@ -371,11 +383,16 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_failing_command_becomes_a_not_allowed_reply_for_the_same_realm() {
-        let mut bridge = bridge(vec!["/bin/sh".into(), "-c".into(), "cat >/dev/null; echo nope".into()]).expect("bridge");
+        let mut bridge =
+            bridge(vec!["/bin/sh".into(), "-c".into(), "cat >/dev/null; echo nope".into()]).expect("bridge");
         let PageMessage::Request { id, op, options } = get_request() else {
             unreachable!("request");
         };
-        assert!(bridge.start(5, id, op, &options, CallerOrigin::parse("https://example.com"), None).is_none());
+        assert!(
+            bridge
+                .start(5, id, op, &options, CallerOrigin::parse("https://example.com"), None)
+                .is_none()
+        );
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let (target, reply) = loop {
             if let Some(done) = bridge.poll() {

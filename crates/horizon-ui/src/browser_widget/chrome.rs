@@ -841,7 +841,10 @@ mod tests {
     fn a_waiting_passkey_request_shows_before_the_owner_but_after_a_handoff() {
         let label = |handoff, passkey, owner| super::chip_label(handoff, passkey, owner).map(|(label, _)| label);
         assert_eq!(label(true, true, Some("codex")).as_deref(), Some("waiting"));
-        assert_eq!(label(false, true, Some("codex")).as_deref(), Some("passkey request waiting"));
+        assert_eq!(
+            label(false, true, Some("codex")).as_deref(),
+            Some("passkey request waiting")
+        );
         assert_eq!(label(false, false, Some("codex")).as_deref(), Some("agent: codex"));
         assert_eq!(label(false, false, None), None);
     }

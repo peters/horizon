@@ -132,7 +132,10 @@ fn serve(shared: &Shared, stream: TcpStream) {
     let path = request_line.split_whitespace().nth(1).unwrap_or("/");
     let (content_type, response) = match path {
         "/report" => ("text/plain", handle_report(shared, &body)),
-        "/abort-now" => ("text/plain", if shared.abort.load(Ordering::Acquire) { "1" } else { "0" }.to_string()),
+        "/abort-now" => (
+            "text/plain",
+            if shared.abort.load(Ordering::Acquire) { "1" } else { "0" }.to_string(),
+        ),
         "/favicon.ico" => ("text/plain", String::new()),
         page => ("text/html; charset=utf-8", page_html(shared, page)),
     };
@@ -230,7 +233,9 @@ outcome("abort", pending);"#
             .to_string(),
         _ => String::new(),
     };
-    format!("<!doctype html><title>passkey bridge test</title><body><p>{page}</p><script>{PRELUDE}\n{script}</script></body>")
+    format!(
+        "<!doctype html><title>passkey bridge test</title><body><p>{page}</p><script>{PRELUDE}\n{script}</script></body>"
+    )
 }
 
 fn handle_report(shared: &Shared, body: &[u8]) -> String {
@@ -239,7 +244,9 @@ fn handle_report(shared: &Shared, body: &[u8]) -> String {
     };
     let scenario = report["scenario"].as_str().unwrap_or_default().to_string();
     let verdict = match scenario.as_str() {
-        "create" => verify_create(shared, &report).map_or_else(|reason| format!("failed: {reason}"), |()| "verified".into()),
+        "create" => {
+            verify_create(shared, &report).map_or_else(|reason| format!("failed: {reason}"), |()| "verified".into())
+        }
         "get" => verify_get(shared, &report).map_or_else(|reason| format!("failed: {reason}"), |()| "verified".into()),
         _ => report["verdict"].as_str().unwrap_or_default().to_string(),
     };
@@ -259,19 +266,40 @@ fn verify_create(shared: &Shared, report: &Value) -> Result<(), String> {
     let client_data = client_data(shared, report, "webauthn.create")?;
     let auth_data = decode(&report["authenticatorData"])?;
     check_rp_hash(&auth_data)?;
-    expect(auth_data[32] & 0x41 == 0x41, "user presence or attested data flag missing")?;
+    expect(
+        auth_data[32] & 0x41 == 0x41,
+        "user presence or attested data flag missing",
+    )?;
     let id_length = usize::from(u16::from_be_bytes([auth_data[53], auth_data[54]]));
     let credential_id = auth_data.get(55..55 + id_length).ok_or("short attested data")?;
-    expect(URL_SAFE_NO_PAD.encode(credential_id) == report["rawId"].as_str().unwrap_or_default(), "credential id")?;
+    expect(
+        URL_SAFE_NO_PAD.encode(credential_id) == report["rawId"].as_str().unwrap_or_default(),
+        "credential id",
+    )?;
     let spki = decode(&report["publicKey"])?;
-    expect(spki.len() == 91 && spki[..26] == SPKI_P256_PREFIX, "public key is not a P-256 SPKI")?;
-    expect(decode(&report["attestationObject"])?.first() == Some(&0xa3), "attestation object is not a CBOR map")?;
+    expect(
+        spki.len() == 91 && spki[..26] == SPKI_P256_PREFIX,
+        "public key is not a P-256 SPKI",
+    )?;
+    expect(
+        decode(&report["attestationObject"])?.first() == Some(&0xa3),
+        "attestation object is not a CBOR map",
+    )?;
     let json = &report["json"];
-    expect(json["id"] == report["id"] && json["type"] == "public-key", "toJSON identity")?;
-    expect(json["response"]["clientDataJSON"] == report["clientDataJSON"], "toJSON client data")?;
+    expect(
+        json["id"] == report["id"] && json["type"] == "public-key",
+        "toJSON identity",
+    )?;
+    expect(
+        json["response"]["clientDataJSON"] == report["clientDataJSON"],
+        "toJSON client data",
+    )?;
     expect(json["response"]["publicKeyAlgorithm"] == -7, "toJSON algorithm")?;
     expect(!client_data.is_empty(), "client data")?;
-    lock(shared).credential = Some((report["id"].as_str().unwrap_or_default().to_string(), spki[26..].to_vec()));
+    lock(shared).credential = Some((
+        report["id"].as_str().unwrap_or_default().to_string(),
+        spki[26..].to_vec(),
+    ));
     Ok(())
 }
 
@@ -293,7 +321,10 @@ fn verify_get(shared: &Shared, report: &Value) -> Result<(), String> {
     ring::signature::UnparsedPublicKey::new(&ring::signature::ECDSA_P256_SHA256_ASN1, public_key)
         .verify(&signed, &signature)
         .map_err(|_| "signature does not verify".to_string())?;
-    expect(report["json"]["response"]["signature"] == report["signature"], "toJSON signature")
+    expect(
+        report["json"]["response"]["signature"] == report["signature"],
+        "toJSON signature",
+    )
 }
 
 fn client_data(shared: &Shared, report: &Value, kind: &str) -> Result<Vec<u8>, String> {
@@ -327,7 +358,9 @@ fn expect(condition: bool, what: &str) -> Result<(), String> {
 
 fn new_challenge(shared: &Shared) -> String {
     let mut bytes = [0_u8; 32];
-    ring::rand::SystemRandom::new().fill(&mut bytes).expect("random challenge");
+    ring::rand::SystemRandom::new()
+        .fill(&mut bytes)
+        .expect("random challenge");
     let challenge = URL_SAFE_NO_PAD.encode(bytes);
     lock(shared).challenge.clone_from(&challenge);
     challenge

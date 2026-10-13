@@ -43,7 +43,10 @@ pub(crate) fn run(state: &Path) -> i32 {
         }
         "slow" => std::thread::sleep(std::time::Duration::from_secs(3)),
         "deny" => {
-            println!("{}", json!({ "version": 1, "status": "denied", "message": "denied by the test" }));
+            println!(
+                "{}",
+                json!({ "version": 1, "status": "denied", "message": "denied by the test" })
+            );
             return 0;
         }
         _ => {}
@@ -75,7 +78,11 @@ fn create(state: &Path, request: &Value) -> Result<Value, String> {
     auth_data.push(0x45);
     auth_data.extend([0, 0, 0, 0]);
     auth_data.extend([0; 16]);
-    auth_data.extend(u16::try_from(credential_id.len()).map_err(|_| "id length")?.to_be_bytes());
+    auth_data.extend(
+        u16::try_from(credential_id.len())
+            .map_err(|_| "id length")?
+            .to_be_bytes(),
+    );
     auth_data.extend(credential_id);
     auth_data.extend([0xa5, 0x01, 0x02, 0x03, 0x26, 0x20, 0x01, 0x21, 0x58, 0x20]);
     auth_data.extend(&point[1..33]);
@@ -91,7 +98,11 @@ fn create(state: &Path, request: &Value) -> Result<Value, String> {
     attestation.extend([0xa0, 0x68]);
     attestation.extend(b"authData");
     attestation.extend([0x59]);
-    attestation.extend(u16::try_from(auth_data.len()).map_err(|_| "authData length")?.to_be_bytes());
+    attestation.extend(
+        u16::try_from(auth_data.len())
+            .map_err(|_| "authData length")?
+            .to_be_bytes(),
+    );
     attestation.extend(&auth_data);
 
     let mut spki = SPKI_P256_PREFIX.to_vec();

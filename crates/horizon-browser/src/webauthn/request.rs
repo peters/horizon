@@ -174,7 +174,8 @@ pub(crate) fn credential_from_output(prepared: &Prepared, stdout: &[u8]) -> Resu
     match prepared.operation {
         Operation::Get => {
             credential["signature"] = Value::String(required_b64u(&output, "signature", MAX_SIGNATURE_BYTES)?);
-            credential["user_handle"] = optional_b64u(&output, "user_handle", MAX_USER_ID_BYTES)?.map_or(Value::Null, Value::String);
+            credential["user_handle"] =
+                optional_b64u(&output, "user_handle", MAX_USER_ID_BYTES)?.map_or(Value::Null, Value::String);
         }
         Operation::Create => {
             credential["attestation_object"] =
@@ -270,7 +271,10 @@ fn one_of<'a>(value: Option<&'a str>, allowed: &[&'static str], default: &'stati
 }
 
 fn bounded_text(text: &str) -> String {
-    text.chars().filter(|character| !character.is_control()).take(MAX_NAME_CHARS).collect()
+    text.chars()
+        .filter(|character| !character.is_control())
+        .take(MAX_NAME_CHARS)
+        .collect()
 }
 
 fn refused(reason: &str) -> PageError {
@@ -303,8 +307,13 @@ mod tests {
 
     #[test]
     fn get_input_follows_the_command_contract() {
-        let prepared = prepare(Operation::Get, &get_options("AAECAwQFBgcICQoLDA0ODw=="), &origin(), Some("agent"))
-            .expect("prepared");
+        let prepared = prepare(
+            Operation::Get,
+            &get_options("AAECAwQFBgcICQoLDA0ODw=="),
+            &origin(),
+            Some("agent"),
+        )
+        .expect("prepared");
         let input: Value = serde_json::from_slice(&prepared.input).expect("json");
         assert_eq!(input["version"], 1);
         assert_eq!(input["op"], "get");
@@ -344,7 +353,10 @@ mod tests {
         let input: Value = serde_json::from_slice(&prepared.input).expect("json");
         assert_eq!(input["rp_id"], "example.com");
         assert_eq!(input["rp_name"], "Example");
-        assert_eq!(input["user"], json!({"id": "dXNlcg", "name": "user@example.com", "display_name": "User"}));
+        assert_eq!(
+            input["user"],
+            json!({"id": "dXNlcg", "name": "user@example.com", "display_name": "User"})
+        );
         assert_eq!(input["algorithms"], json!([-7, -257]));
         assert_eq!(input["exclude_credentials"], json!([]));
         assert_eq!(input["resident_key"], "required");
@@ -364,10 +376,20 @@ mod tests {
                 ..get_options("AAEC")
             },
         ] {
-            assert_eq!(prepare(Operation::Get, &options, &origin(), None).expect_err("refused").name, "TypeError");
+            assert_eq!(
+                prepare(Operation::Get, &options, &origin(), None)
+                    .expect_err("refused")
+                    .name,
+                "TypeError"
+            );
         }
         let no_user = get_options("AAEC");
-        assert_eq!(prepare(Operation::Create, &no_user, &origin(), None).expect_err("user").name, "TypeError");
+        assert_eq!(
+            prepare(Operation::Create, &no_user, &origin(), None)
+                .expect_err("user")
+                .name,
+            "TypeError"
+        );
     }
 
     #[test]
@@ -380,7 +402,10 @@ mod tests {
             "client_data_json": "ignored-from-command"
         });
         let credential = credential_from_output(&prepared, ok.to_string().as_bytes()).expect("credential");
-        assert_eq!(credential["client_data_json"], Value::String(prepared.client_data_json.clone()));
+        assert_eq!(
+            credential["client_data_json"],
+            Value::String(prepared.client_data_json.clone())
+        );
         assert_eq!(credential["user_handle"], "dXNlcg");
 
         let mut other_rp = ok.clone();
@@ -389,11 +414,19 @@ mod tests {
         not_allowed["credential_id"] = Value::String("BAUG".into());
         let mut missing_signature = ok.clone();
         missing_signature.as_object_mut().expect("object").remove("signature");
-        for output in [other_rp, not_allowed, missing_signature, json!({"version": 2, "status": "ok"})] {
+        for output in [
+            other_rp,
+            not_allowed,
+            missing_signature,
+            json!({"version": 2, "status": "ok"}),
+        ] {
             let error = credential_from_output(&prepared, output.to_string().as_bytes()).expect_err("refused");
             assert_eq!(error.name, "NotAllowedError");
         }
-        assert_eq!(credential_from_output(&prepared, b"not json").expect_err("json").name, "NotAllowedError");
+        assert_eq!(
+            credential_from_output(&prepared, b"not json").expect_err("json").name,
+            "NotAllowedError"
+        );
     }
 
     #[test]
@@ -402,7 +435,10 @@ mod tests {
         for status in ["denied", "expired", "not_found", "error", "excluded"] {
             let output = json!({"version": 1, "status": status, "message": "detail"}).to_string();
             let error = credential_from_output(&get, output.as_bytes()).expect_err(status);
-            assert_eq!((error.name, error.message), (PageError::not_allowed().name, PageError::not_allowed().message));
+            assert_eq!(
+                (error.name, error.message),
+                (PageError::not_allowed().name, PageError::not_allowed().message)
+            );
         }
         let create_options = PageOptions {
             user: Some(PageUser {
@@ -413,7 +449,12 @@ mod tests {
         };
         let create = prepare(Operation::Create, &create_options, &origin(), None).expect("create");
         let excluded = json!({"version": 1, "status": "excluded"}).to_string();
-        assert_eq!(credential_from_output(&create, excluded.as_bytes()).expect_err("excluded").name, "InvalidStateError");
+        assert_eq!(
+            credential_from_output(&create, excluded.as_bytes())
+                .expect_err("excluded")
+                .name,
+            "InvalidStateError"
+        );
     }
 
     #[test]

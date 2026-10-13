@@ -50,7 +50,10 @@ fn main() {
         .map(String::as_str)
         .filter(|arg| matches!(*arg, "chromium" | "firefox"))
         .collect();
-    for (name, backend) in [("chromium", BackendKind::ChromiumCdp), ("firefox", BackendKind::FirefoxBidi)] {
+    for (name, backend) in [
+        ("chromium", BackendKind::ChromiumCdp),
+        ("firefox", BackendKind::FirefoxBidi),
+    ] {
         if only.is_empty() || only.contains(&name) {
             println!("webauthn_live: {name}");
             run_engine(backend);
@@ -63,8 +66,10 @@ fn run_engine(backend: BackendKind) {
     let temp = tempfile::tempdir().expect("temp");
     let state = temp.path().join("authenticator");
     std::fs::create_dir_all(&state).expect("state dir");
-    let profiles = std::env::var_os("HORIZON_LIVE_PROFILE_ROOT")
-        .map_or_else(|| temp.path().join("profiles"), |root| Path::new(&root).join(uuid_like()));
+    let profiles = std::env::var_os("HORIZON_LIVE_PROFILE_ROOT").map_or_else(
+        || temp.path().join("profiles"),
+        |root| Path::new(&root).join(uuid_like()),
+    );
     let rp = RelyingParty::start();
     let exe = std::env::current_exe().expect("current exe");
     let frame_slot = Arc::new(FrameSlot::new());
@@ -128,14 +133,21 @@ fn run_engine(backend: BackendKind) {
     let aborted = rp.wait_report("abort", REPORT_TIMEOUT, &session);
     assert_eq!(aborted.verdict, "AbortError", "abort: {aborted:?}");
     let pid = std::fs::read_to_string(&pid_file).expect("pid");
-    wait_for(&session, "the aborted command to be killed", || !process_alive(pid.trim()));
-    wait_for(&session, "the waiting indicator to clear", || !frame_slot.passkey_pending());
+    wait_for(&session, "the aborted command to be killed", || {
+        !process_alive(pid.trim())
+    });
+    wait_for(&session, "the waiting indicator to clear", || {
+        !frame_slot.passkey_pending()
+    });
     assert_eq!(calls(&state), 3);
 
     assert!(session.send(BrowserCommand::Stop));
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
-        if matches!(session.event_rx.recv_timeout(Duration::from_millis(100)), Ok(BrowserEvent::Stopped { .. })) {
+        if matches!(
+            session.event_rx.recv_timeout(Duration::from_millis(100)),
+            Ok(BrowserEvent::Stopped { .. })
+        ) {
             break;
         }
     }
@@ -158,7 +170,10 @@ fn wait_ready(session: &BrowserSession) {
 }
 
 fn navigate(session: &BrowserSession, url: &str) {
-    assert!(session.send(BrowserCommand::Navigate(url.to_string())), "navigate {url}");
+    assert!(
+        session.send(BrowserCommand::Navigate(url.to_string())),
+        "navigate {url}"
+    );
 }
 
 fn wait_for(session: &BrowserSession, what: &str, condition: impl Fn() -> bool) {

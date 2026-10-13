@@ -135,7 +135,10 @@ impl DriverState {
                 let Some(passkeys) = self.passkeys.as_mut() else {
                     return;
                 };
-                if let Some(reply) = passkeys.bridge.start(context, id, op, &options, origin, agent.as_deref()) {
+                if let Some(reply) = passkeys
+                    .bridge
+                    .start(context, id, op, &options, origin, agent.as_deref())
+                {
                     self.deliver_passkey_reply(link, context, &reply);
                 }
                 event_tx.wake_ui();
@@ -159,12 +162,20 @@ impl DriverState {
             .ok_or_else(PageError::not_allowed)?;
         let session = self.session_id.clone().ok_or_else(PageError::not_allowed)?;
         let tree = self
-            .call_and_ack(link, event_tx, frame_slot, "Page.getFrameTree", &json!({}), Some(&session))
+            .call_and_ack(
+                link,
+                event_tx,
+                frame_slot,
+                "Page.getFrameTree",
+                &json!({}),
+                Some(&session),
+            )
             .map_err(|error| {
                 tracing::warn!(target: "browser", "passkey request could not read the frame tree: {error}");
                 PageError::not_allowed()
             })?;
-        let origin = same_origin_chain(&tree, &frame, self.main_frame_id.as_deref()).ok_or_else(PageError::not_allowed)?;
+        let origin =
+            same_origin_chain(&tree, &frame, self.main_frame_id.as_deref()).ok_or_else(PageError::not_allowed)?;
         CallerOrigin::parse(&origin)
     }
 
