@@ -1,0 +1,458 @@
+#!/usr/bin/env python3
+"""Land approved pull requests in tested batches, without a rebase race.
+
+GitHub's merge queue needs an organization-owned repository. This script gives the
+same guarantee by hand: main plus the queued PRs is tested once on an `mq/*` branch,
+and only that tested result lands.
+
+- enqueue: the PR's agent queues one exact head after every merge gate in AGENTS.md
+  passed for it. The entry is a PR comment by a repository collaborator, plus the
+  `merge-queue` label.
+- build: applies each queued head to a fresh origin/main as one squash commit, in
+  queue order, and pushes the result as `mq/<UTC time>`. CI runs on that branch.
+- land: when CI on the batch tip passed, main has not moved and no head drifted,
+  squash-merges each PR with its head guard, then checks that main now has the
+  tested tree.
+
+Usage: merge-queue.py enqueue PR --head SHA --subject TEXT --body-file FILE
+       merge-queue.py dequeue PR --reason TEXT
+       merge-queue.py list | status
+       merge-queue.py build [--only N,M] [--dry-run]
+       merge-queue.py land [--dry-run]
+
+The batch plan is private state under $XDG_STATE_HOME/horizon-merge-queue (default
+~/.local/state/horizon-merge-queue), never in the repository.
+"""
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+LABEL = "merge-queue"
+MARKER = "<!-- merge-queue v1 -->"
+DEQUEUED = "<!-- merge-queue dequeued -->"
+TRUSTED = {"OWNER", "MEMBER", "COLLABORATOR"}
+GOOD_CONCLUSIONS = {"success", "skipped", "neutral"}
+SKIP_MARKER = "[" + "skip ci]"
+CLOSING = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b:?\s+(?:[\w.-]+/[\w.-]+)?#\d+",
+                     re.I)
+ENTRY_JSON = re.compile(r"^```json\n(\{[^\n]*\})\n```$", re.M)
+TIMEOUT = 120
+
+
+class QueueError(Exception):
+    pass
+
+
+def run(args, cwd=ROOT, timeout=TIMEOUT, check=True, stdin=None):
+    try:
+        out = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=timeout,
+                             input=stdin, check=False)
+    except subprocess.TimeoutExpired:
+        raise QueueError(f"{' '.join(args[:3])}: timed out after {timeout} s")
+    if check and out.returncode != 0:
+        raise QueueError(f"{' '.join(args[:4])}: {out.stderr.strip() or out.stdout.strip()}")
+    return out
+
+
+def git(*args, cwd=ROOT, timeout=TIMEOUT, check=True):
+    return run(["git", *args], cwd=cwd, timeout=timeout, check=check)
+
+
+def gh_json(*args):
+    out = run(["gh", *args]).stdout
+    return json.loads(out) if out.strip() else None
+
+
+def gh_pages(path):
+    """Every item of a paginated REST list."""
+    out = run(["gh", "api", "--paginate", "--slurp", path]).stdout
+    return [item for page in json.loads(out) for item in page]
+
+
+def repo_name():
+    return os.environ.get("MERGE_QUEUE_REPO") or run(
+        ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]).stdout.strip()
+
+
+# Pure logic. Each part below takes plain data so the tests need no network.
+
+def message_problems(subject, body):
+    """Why a squash subject or body may not land, or [] when it may."""
+    problems = []
+    text = f"{subject}\n{body}"
+    if not subject.strip():
+        problems.append("the subject is empty")
+    if "\n" in subject:
+        problems.append("the subject has more than one line")
+    if SKIP_MARKER in text:
+        problems.append(f"it contains {SKIP_MARKER}: main would skip CI for the squash commit")
+    if re.search(r"co-authored-by", text, re.I):
+        problems.append("it contains a Co-authored-by trailer")
+    match = CLOSING.search(text)
+    if match:
+        problems.append(f"it contains the closing keyword {match.group(0)!r}")
+    return problems
+
+
+def entry_comment(head, subject, body):
+    payload = json.dumps({"head": head, "subject": subject, "body": body}, ensure_ascii=False)
+    return (f"{MARKER}\nQueued for the merge queue at head `{head}`. A later push drops "
+            f"this entry.\n\n```json\n{payload}\n```\n")
+
+
+def parse_entry(body):
+    """The head, subject and body of a queue entry comment, or None."""
+    if not body.startswith(MARKER):
+        return None
+    match = ENTRY_JSON.search(body)
+    if not match:
+        return None
+    try:
+        data = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return None
+    if not (isinstance(data, dict) and all(isinstance(data.get(k), str)
+                                           for k in ("head", "subject", "body"))):
+        return None
+    if not re.fullmatch(r"[0-9a-f]{40}", data["head"]):
+        return None
+    return {"head": data["head"], "subject": data["subject"], "body": data["body"]}
+
+
+def latest_entry(comments):
+    """The newest valid entry by a trusted author, unless a later dequeue note voids it.
+    Each comment is a REST issue comment: body, created_at, author_association."""
+    found = None
+    for comment in sorted(comments, key=lambda c: c["created_at"]):
+        if comment.get("author_association") not in TRUSTED:
+            continue
+        body = comment.get("body") or ""
+        if body.startswith(DEQUEUED):
+            found = None
+            continue
+        entry = parse_entry(body)
+        if entry:
+            found = {**entry, "queued_at": comment["created_at"]}
+    return found
+
+
+def queue_order(entries):
+    """Entries oldest first; the PR number breaks a tie."""
+    return sorted(entries, key=lambda e: (e["queued_at"], e["number"]))
+
+
+def ci_verdict(runs, check_runs):
+    """(passed, problems) for CI on one commit. Runs are workflow runs, check_runs the
+    jobs. Nothing passes before a run exists or while any job is still open."""
+    problems = []
+    if not runs:
+        problems.append("no workflow run for this commit yet")
+    for item in runs:
+        if item["status"] != "completed":
+            problems.append(f"workflow {item['name']} is {item['status']}")
+        elif item["conclusion"] not in GOOD_CONCLUSIONS:
+            problems.append(f"workflow {item['name']} concluded {item['conclusion']}")
+    for item in check_runs:
+        if item["status"] != "completed":
+            problems.append(f"job {item['name']} is {item['status']}")
+        elif item["conclusion"] not in GOOD_CONCLUSIONS:
+            problems.append(f"job {item['name']} concluded {item['conclusion']}")
+    return (not problems, problems)
+
+
+def drifted(entry, current_head):
+    return entry["head"] != current_head
+
+
+# Git work on a private detached worktree, so no checkout of the user's changes.
+
+def apply_batch(repo, base, entries, fetch_head):
+    """Squash each entry's head onto base in order. Returns (tip, applied, skipped).
+    fetch_head(entry) makes the head commit available in repo and returns nothing."""
+    state = state_dir()
+    work = Path(tempfile.mkdtemp(prefix="batch-", dir=state))
+    git("worktree", "add", "--detach", str(work), base, cwd=repo)
+    applied, skipped = [], []
+    try:
+        for entry in entries:
+            try:
+                fetch_head(entry)
+            except QueueError as error:
+                skipped.append((entry, f"cannot fetch head: {error}"))
+                continue
+            merged = git("merge", "--squash", "--no-commit", entry["head"], cwd=work,
+                         check=False)
+            if merged.returncode != 0:
+                git("reset", "--hard", "-q", "HEAD", cwd=work)
+                skipped.append((entry, "conflicts with main or an earlier PR in the batch; "
+                                       "rebase onto main to resolve"))
+                continue
+            if git("diff", "--cached", "--quiet", cwd=work, check=False).returncode == 0:
+                skipped.append((entry, "adds nothing to main"))
+                continue
+            message = entry["subject"] + (f"\n\n{entry['body']}" if entry["body"].strip() else "")
+            run(["git", "commit", "-q", "--no-verify", "-F", "-"], cwd=work, stdin=message)
+            applied.append(entry)
+        tip = git("rev-parse", "HEAD", cwd=work).stdout.strip()
+    finally:
+        git("worktree", "remove", "--force", str(work), cwd=repo, check=False)
+        shutil.rmtree(work, ignore_errors=True)
+    return tip, applied, skipped
+
+
+def trees_match(repo, left, right):
+    return git("diff", "--quiet", left, right, cwd=repo, check=False).returncode == 0
+
+
+# GitHub access.
+
+def state_dir():
+    base = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
+    path = base / "horizon-merge-queue"
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return path
+
+
+def plan_path():
+    return state_dir() / "batch.json"
+
+
+def load_plan():
+    path = plan_path()
+    if not path.exists():
+        raise QueueError("no batch: run build first")
+    return json.loads(path.read_text())
+
+
+def pull(repo, number):
+    return gh_json("pr", "view", str(number), "--repo", repo, "--json",
+                   "number,state,isDraft,headRefOid,title,labels")
+
+
+def queued(repo):
+    """Open labeled PRs with a valid entry, oldest entry first."""
+    prs = gh_json("pr", "list", "--repo", repo, "--label", LABEL, "--state", "open",
+                  "--limit", "100", "--json", "number,headRefOid,title,isDraft")
+    entries = []
+    for pr in prs:
+        entry = latest_entry(gh_pages(f"repos/{repo}/issues/{pr['number']}/comments"))
+        if entry is None:
+            print(f"#{pr['number']}: labeled but has no valid entry comment; ignored")
+            continue
+        entries.append({**entry, "number": pr["number"], "title": pr["title"],
+                        "current_head": pr["headRefOid"], "draft": pr["isDraft"]})
+    return queue_order(entries)
+
+
+def unresolved_threads(repo, number):
+    owner, name = repo.split("/")
+    query = ("query($owner:String!,$name:String!,$number:Int!,$after:String){repository("
+             "owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,"
+             "after:$after){nodes{isResolved}pageInfo{hasNextPage endCursor}}}}}")
+    count, after = 0, None
+    while True:
+        args = ["gh", "api", "graphql", "-f", f"query={query}", "-F", f"owner={owner}",
+                "-F", f"name={name}", "-F", f"number={number}"]
+        if after:
+            args += ["-F", f"after={after}"]
+        threads = json.loads(run(args).stdout)["data"]["repository"]["pullRequest"][
+            "reviewThreads"]
+        count += sum(1 for node in threads["nodes"] if not node["isResolved"])
+        if not threads["pageInfo"]["hasNextPage"]:
+            return count
+        after = threads["pageInfo"]["endCursor"]
+
+
+def ci_on(repo, sha):
+    runs = gh_json("api", f"repos/{repo}/actions/runs?head_sha={sha}&per_page=100",
+                   "--jq", "[.workflow_runs[] | {name, status, conclusion}]") or []
+    checks = [{"name": c["name"], "status": c["status"], "conclusion": c["conclusion"]}
+              for page in json.loads(run(["gh", "api", "--paginate", "--slurp",
+                                          f"repos/{repo}/commits/{sha}/check-runs?per_page=100"]
+                                         ).stdout)
+              for c in page["check_runs"]]
+    return ci_verdict(runs, checks)
+
+
+# Commands.
+
+def cmd_enqueue(args):
+    repo = repo_name()
+    body = Path(args.body_file).read_text()
+    problems = message_problems(args.subject, body)
+    if problems:
+        raise QueueError("squash message refused: " + "; ".join(problems))
+    pr = pull(repo, args.pr)
+    if pr["state"] != "OPEN" or pr["isDraft"]:
+        raise QueueError(f"#{args.pr} is not an open, ready PR")
+    if pr["headRefOid"] != args.head:
+        raise QueueError(f"#{args.pr} head is {pr['headRefOid']}, not {args.head}")
+    created = run(["gh", "label", "create", LABEL, "--repo", repo, "--color", "0e8a16",
+                   "--description", "Approved head waiting for a merge-queue batch"],
+                  check=False)
+    if created.returncode != 0 and "already exists" not in created.stderr:
+        raise QueueError(f"cannot create label {LABEL}: {created.stderr.strip()}")
+    run(["gh", "pr", "comment", str(args.pr), "--repo", repo, "--body-file", "-"],
+        stdin=entry_comment(args.head, args.subject, body))
+    run(["gh", "pr", "edit", str(args.pr), "--repo", repo, "--add-label", LABEL])
+    print(f"#{args.pr} queued at {args.head}")
+
+
+def cmd_dequeue(args):
+    repo = repo_name()
+    run(["gh", "pr", "comment", str(args.pr), "--repo", repo, "--body-file", "-"],
+        stdin=f"{DEQUEUED}\nRemoved from the merge queue: {args.reason}\n")
+    run(["gh", "pr", "edit", str(args.pr), "--repo", repo, "--remove-label", LABEL])
+    print(f"#{args.pr} dequeued")
+
+
+def cmd_list(_args):
+    entries = queued(repo_name())
+    if not entries:
+        print("The merge queue is empty.")
+    for entry in entries:
+        note = "head drifted: requeue the new head" if drifted(entry, entry["current_head"]) \
+            else ("draft" if entry["draft"] else "ready")
+        print(f"#{entry['number']} {entry['head'][:9]} {entry['queued_at']} {note}: "
+              f"{entry['subject']}")
+
+
+def cmd_build(args):
+    repo = repo_name()
+    entries = [e for e in queued(repo) if not e["draft"]]
+    if args.only:
+        wanted = {int(n) for n in args.only.split(",")}
+        entries = [e for e in entries if e["number"] in wanted]
+    drift = [e for e in entries if drifted(e, e["current_head"])]
+    for entry in drift:
+        print(f"#{entry['number']}: head drifted to {entry['current_head'][:9]}; skipped")
+    entries = [e for e in entries if e not in drift]
+    if not entries:
+        print("Nothing to build: the merge queue has no ready entry.")
+        return
+    git("fetch", "-q", "origin", "main", timeout=300)
+    base = git("rev-parse", "origin/main").stdout.strip()
+
+    def fetch_head(entry):
+        git("fetch", "-q", "origin", f"pull/{entry['number']}/head", timeout=300)
+        if git("rev-parse", "FETCH_HEAD").stdout.strip() != entry["head"]:
+            raise QueueError("the PR head moved while building")
+
+    tip, applied, skipped = apply_batch(ROOT, base, entries, fetch_head)
+    for entry, reason in skipped:
+        print(f"#{entry['number']}: skipped, {reason}")
+    if not applied:
+        print("Nothing to push: every entry was skipped.")
+        return
+    branch = "mq/" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    print(f"batch {branch}: base {base[:9]}, tip {tip[:9]}, PRs "
+          + ", ".join(f"#{e['number']}" for e in applied))
+    if args.dry_run:
+        print("dry run: nothing pushed")
+        return
+    git("push", "-q", "origin", f"{tip}:refs/heads/{branch}", timeout=300)
+    plan = {"branch": branch, "base": base, "tip": tip,
+            "prs": [{k: e[k] for k in ("number", "head", "subject", "body")} for e in applied]}
+    plan_path().write_text(json.dumps(plan, indent=2) + "\n")
+    print(f"pushed {branch}; CI runs on {tip}")
+
+
+def blockers(repo, plan):
+    """Every reason the batch may not land now."""
+    found = []
+    _passed, problems = ci_on(repo, plan["tip"])
+    found += [f"CI on the batch tip: {p}" for p in problems]
+    git("fetch", "-q", "origin", "main", timeout=300)
+    main = git("rev-parse", "origin/main").stdout.strip()
+    if main != plan["base"]:
+        found.append(f"main moved from {plan['base'][:9]} to {main[:9]}: build again")
+    for entry in plan["prs"]:
+        pr = pull(repo, entry["number"])
+        if pr["state"] != "OPEN" or pr["isDraft"]:
+            found.append(f"#{entry['number']} is not open and ready")
+        if drifted(entry, pr["headRefOid"]):
+            found.append(f"#{entry['number']} head drifted to {pr['headRefOid'][:9]}")
+        if LABEL not in {label["name"] for label in pr["labels"]}:
+            found.append(f"#{entry['number']} left the queue")
+        threads = unresolved_threads(repo, entry["number"])
+        if threads:
+            found.append(f"#{entry['number']} has {threads} unresolved review threads")
+    return found
+
+
+def cmd_status(_args):
+    repo = repo_name()
+    plan = load_plan()
+    print(f"batch {plan['branch']}: base {plan['base'][:9]}, tip {plan['tip'][:9]}, PRs "
+          + ", ".join(f"#{e['number']}" for e in plan["prs"]))
+    found = blockers(repo, plan)
+    print("ready to land" if not found else "\n".join(f"- {item}" for item in found))
+
+
+def cmd_land(args):
+    repo = repo_name()
+    plan = load_plan()
+    found = blockers(repo, plan)
+    if found:
+        raise QueueError("the batch cannot land:\n" + "\n".join(f"- {i}" for i in found))
+    if args.dry_run:
+        print("dry run: would land " + ", ".join(f"#{e['number']}" for e in plan["prs"]))
+        return
+    for entry in plan["prs"]:
+        run(["gh", "pr", "merge", str(entry["number"]), "--repo", repo, "--squash",
+             "--match-head-commit", entry["head"], "--subject", entry["subject"],
+             "--body", entry["body"]], timeout=300)
+        merged = gh_json("pr", "view", str(entry["number"]), "--repo", repo, "--json",
+                         "state,mergeCommit")
+        if merged["state"] != "MERGED":
+            raise QueueError(f"#{entry['number']} did not merge; later PRs were not merged")
+        print(f"#{entry['number']} merged as {merged['mergeCommit']['oid']}")
+    git("fetch", "-q", "origin", "main", timeout=300)
+    if not trees_match(ROOT, "origin/main", plan["tip"]):
+        raise QueueError("MISMATCH: main does not have the tested tree. Another merge may "
+                         "have landed during the batch. Check main CI now.")
+    git("push", "-q", "origin", "--delete", plan["branch"], timeout=300, check=False)
+    plan_path().rename(state_dir() / f"landed-{plan['branch'][3:]}.json")
+    print("main has the tested tree; batch landed")
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    sub = parser.add_subparsers(dest="command", required=True)
+    enqueue = sub.add_parser("enqueue", help="queue one approved head")
+    enqueue.add_argument("pr", type=int)
+    enqueue.add_argument("--head", required=True)
+    enqueue.add_argument("--subject", required=True)
+    enqueue.add_argument("--body-file", required=True)
+    dequeue = sub.add_parser("dequeue", help="remove a PR from the queue")
+    dequeue.add_argument("pr", type=int)
+    dequeue.add_argument("--reason", required=True)
+    sub.add_parser("list", help="show the queue")
+    sub.add_parser("status", help="show the current batch and what blocks it")
+    build = sub.add_parser("build", help="build and push a batch branch")
+    build.add_argument("--only", help="comma-separated PR numbers")
+    build.add_argument("--dry-run", action="store_true")
+    land = sub.add_parser("land", help="merge the tested batch")
+    land.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args(argv)
+    commands = {"enqueue": cmd_enqueue, "dequeue": cmd_dequeue, "list": cmd_list,
+                "status": cmd_status, "build": cmd_build, "land": cmd_land}
+    try:
+        commands[args.command](args)
+    except QueueError as error:
+        print(f"merge-queue: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
