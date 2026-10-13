@@ -115,8 +115,9 @@ impl HorizonApp {
             return;
         };
         let recipient = self.cloud_file_drop_recipient(&drop);
+        // The drop focused the panel; keys typed elsewhere since must stay where they go.
         if let Some(panel_id) = recipient
-            && self.paste_native_text_into_terminal(panel_id, &cloud_terminal_text(&outcome.remote_paths), true)
+            && self.paste_native_text_into_terminal(panel_id, &cloud_terminal_text(&outcome.remote_paths), false)
         {
             self.ssh_upload_flow = None;
             return;
