@@ -41,7 +41,15 @@ pub(in crate::app) fn row(
     } else {
         response
     };
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, title));
+    // A screen reader reads the whole row, as it is painted.
+    response.widget_info(|| {
+        let mut label = format!("{title}. {detail}");
+        for extra in [note, shortcut].into_iter().flatten() {
+            label.push_str(". ");
+            label.push_str(extra);
+        }
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label)
+    });
     let hot = enabled && (response.hovered() || response.has_focus());
     if hot {
         ui.painter().rect_filled(

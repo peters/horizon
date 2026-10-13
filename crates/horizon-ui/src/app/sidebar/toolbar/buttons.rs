@@ -116,73 +116,25 @@ impl HorizonApp {
         } else {
             NewWorkspace::ThisPc
         };
-        let create = create.on_hover_text(format!("New workspace: {}", default.detail()));
-        create.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "New workspace"));
-        choose.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Choose where it runs"));
+        let create = create.on_hover_ui(|ui| {
+            ui.label(format!("New workspace: {}", default.detail()));
+        });
+        create.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                true,
+                format!("New workspace on {}", default.label()),
+            )
+        });
+        choose.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                true,
+                format!("Choose where it runs, now {}", default.label()),
+            )
+        });
 
-        let painter = ui.painter();
-        let radius = CornerRadius::same(10);
-        painter.rect_filled(rect, radius, theme::ACCENT());
-        // The hovered part lightens; the other keeps the solid accent.
-        let lift = |response: &egui::Response| {
-            if response.is_pointer_button_down_on() {
-                Some(theme::blend(theme::ACCENT(), theme::BG(), 0.14))
-            } else if response.hovered() {
-                Some(theme::blend(theme::ACCENT(), theme::FG(), 0.16))
-            } else {
-                None
-            }
-        };
-        if let Some(fill) = lift(&create) {
-            let corners = CornerRadius {
-                nw: 10,
-                sw: 10,
-                ne: 0,
-                se: 0,
-            };
-            painter.rect_filled(create_rect, corners, fill);
-        }
-        if let Some(fill) = lift(&choose) {
-            let corners = CornerRadius {
-                nw: 0,
-                sw: 0,
-                ne: 10,
-                se: 10,
-            };
-            painter.rect_filled(choose_rect, corners, fill);
-        }
-        let ink = theme::BG();
-        painter.line_segment(
-            [Pos2::new(split, rect.min.y + 7.0), Pos2::new(split, rect.max.y - 7.0)],
-            Stroke::new(1.0, theme::alpha(ink, 90)),
-        );
-        let label = if compact { "+  New" } else { "+  New workspace" };
-        painter.text(
-            Pos2::new(create_rect.min.x + 14.0, rect.center().y),
-            Align2::LEFT_CENTER,
-            label,
-            FontId::proportional(12.5),
-            ink,
-        );
-        let icon_center = Pos2::new(choose_rect.min.x + 17.0, rect.center().y);
-        let glyph = if default == NewWorkspace::ThisPc {
-            rich_menu::Glyph::Screen
-        } else {
-            rich_menu::Glyph::Cloud
-        };
-        rich_menu::paint(painter, glyph, icon_center, ink);
-        let place = if default == NewWorkspace::ThisPc { "PC" } else { "Cloud" };
-        painter.text(
-            Pos2::new(icon_center.x + 12.0, rect.center().y),
-            Align2::LEFT_CENTER,
-            place,
-            FontId::proportional(12.0),
-            ink,
-        );
-        paint_chevron(painter, Pos2::new(choose_rect.max.x - 13.0, rect.center().y), ink);
-        if create.has_focus() || choose.has_focus() {
-            painter.rect_stroke(rect.expand(2.0), 12, Stroke::new(2.0, theme::FG()), StrokeKind::Outside);
-        }
+        paint_new_workspace(ui.painter(), [&create, &choose], compact, default);
 
         if create.clicked() {
             self.create_new_workspace(ui.ctx(), default, None);
@@ -272,6 +224,84 @@ impl HorizonApp {
             ToolbarAction::Cloud => return None,
         };
         (!text.is_empty()).then_some(text)
+    }
+}
+
+/// Paints the split button: the accent pill, the hovered or pressed part, the label, the
+/// place of `default` with its glyph, and a focus ring around the focused part.
+fn paint_new_workspace(
+    painter: &egui::Painter,
+    [create, choose]: [&egui::Response; 2],
+    compact: bool,
+    default: NewWorkspace,
+) {
+    let rect = create.rect.union(choose.rect);
+    let split = choose.rect.min.x;
+    let (create_rect, choose_rect) = (create.rect, choose.rect);
+    let radius = CornerRadius::same(10);
+    painter.rect_filled(rect, radius, theme::ACCENT());
+    // The hovered part lightens; the other keeps the solid accent.
+    let lift = |response: &egui::Response| {
+        if response.is_pointer_button_down_on() {
+            Some(theme::blend(theme::ACCENT(), theme::BG(), 0.14))
+        } else if response.hovered() {
+            Some(theme::blend(theme::ACCENT(), theme::FG(), 0.16))
+        } else {
+            None
+        }
+    };
+    if let Some(fill) = lift(create) {
+        let corners = CornerRadius {
+            nw: 10,
+            sw: 10,
+            ne: 0,
+            se: 0,
+        };
+        painter.rect_filled(create_rect, corners, fill);
+    }
+    if let Some(fill) = lift(choose) {
+        let corners = CornerRadius {
+            nw: 0,
+            sw: 0,
+            ne: 10,
+            se: 10,
+        };
+        painter.rect_filled(choose_rect, corners, fill);
+    }
+    let ink = theme::BG();
+    painter.line_segment(
+        [Pos2::new(split, rect.min.y + 7.0), Pos2::new(split, rect.max.y - 7.0)],
+        Stroke::new(1.0, theme::alpha(ink, 90)),
+    );
+    let label = if compact { "+  New" } else { "+  New workspace" };
+    painter.text(
+        Pos2::new(create_rect.min.x + 14.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        label,
+        FontId::proportional(12.5),
+        ink,
+    );
+    let icon_center = Pos2::new(choose_rect.min.x + 17.0, rect.center().y);
+    let glyph = if default == NewWorkspace::ThisPc {
+        rich_menu::Glyph::Screen
+    } else {
+        rich_menu::Glyph::Cloud
+    };
+    rich_menu::paint(painter, glyph, icon_center, ink);
+    let place = if default == NewWorkspace::ThisPc { "PC" } else { "Cloud" };
+    painter.text(
+        Pos2::new(icon_center.x + 12.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        place,
+        FontId::proportional(12.0),
+        ink,
+    );
+    paint_chevron(painter, Pos2::new(choose_rect.max.x - 13.0, rect.center().y), ink);
+    // The ring marks the focused part only, so the keyboard shows which one Enter takes.
+    for (part, response) in [(create_rect, create), (choose_rect, choose)] {
+        if response.has_focus() {
+            painter.rect_stroke(part.expand(2.0), 12, Stroke::new(2.0, theme::FG()), StrokeKind::Outside);
+        }
     }
 }
 
