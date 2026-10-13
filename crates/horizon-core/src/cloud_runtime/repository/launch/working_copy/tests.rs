@@ -335,3 +335,25 @@ fn the_fingerprint_reads_a_checkout_whose_folder_name_holds_a_newline() {
         "the file of that folder is read"
     );
 }
+
+#[cfg(windows)]
+#[test]
+fn a_junction_in_place_of_the_folder_is_not_followed() {
+    let temp = tempfile::tempdir().unwrap();
+    repository(temp.path());
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("cloud.yml"), CONFIG.replace("cpu: 4", "cpu: 32")).unwrap();
+    std::fs::remove_dir_all(temp.path().join(".horizon")).unwrap();
+    assert!(
+        std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(temp.path().join(".horizon"))
+            .arg(outside.path())
+            .status()
+            .unwrap()
+            .success()
+    );
+    let prepared = load(temp.path()).unwrap();
+    assert_eq!(prepared.config.profiles["dev"].cpu, 4);
+    assert_eq!(prepared.notes, [INVALID]);
+}
