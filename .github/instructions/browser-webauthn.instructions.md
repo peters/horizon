@@ -23,8 +23,10 @@ gives the design, the command contract and the full boundary.
 - Only `https://<domain>` and `http://localhost` origins are served.
 - The `rp_id` is the host or a parent domain with two labels or more.
 - Conditional mediation never starts the command.
-- An abort from the page, a navigation of the calling frame, the time limit
-  and the end of the session kill the command process.
+- An abort from the page, the start of a cross-document navigation of the
+  calling frame, the time limit and the end of the session kill the command
+  process. A navigation that stops before it commits still settles the page
+  promise. A same-document navigation keeps the request.
 - The bridge is off unless `browser.webauthn_command` names a command. When it
   is off, no page script and no extra CDP domain is installed.
 - The page gets the same `NotAllowedError` for a denial, a missing credential,

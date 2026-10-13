@@ -220,7 +220,11 @@ applies the origin rules, and that the panel shows a waiting request.
    - A cross-origin iframe gets `NotAllowedError`.
    - `http://127.0.0.1` gets `SecurityError`.
    - A foreign `rpId` gets `SecurityError`.
-   - Conditional mediation stays pending until an abort.
+   - Conditional mediation on `get` and `create` stays pending until an abort.
+   - An options getter that aborts the signal gets `AbortError`.
+   - A navigation that stops before it commits (a `204` answer) kills the
+     command, and the page gets `NotAllowedError`.
+   - A fragment or `pushState` navigation keeps the request.
    - An abort kills the command process and clears the chip.
    - No refused request starts the command.
 
