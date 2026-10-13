@@ -79,16 +79,22 @@ cause, and **Try again**.
    the dialog, but the start continues. When the start fails, the dialog shows
    again with the cause.
 2. It saves the choice in `~/.horizon/upkeep/<cloud>/upkeep.json`, and the marker
-   `first-run` next to it.
+   `first-run` next to it. The marker holds the token of the first **Run now**.
 3. It makes the workspace **Upkeep** with the cloud card and the board.
 4. It starts a quick-start cloud on Hetzner. The cloud has no idle stop, because
    the loop must run while this computer sleeps. The first exchange with the
    worker sends **Run now**, so the first run starts when the loop is installed.
    The exchange removes the `first-run` marker. Thus a restart of Horizon before
-   that exchange does not lose the first run.
+   that exchange does not lose the first run. When Horizon cannot remove the
+   marker, each later exchange tries again. A restart sends the same token, so it
+   does not start a second run.
 
 **Start Upkeep** is unavailable until Codex has a login to give to the worker: the
-ChatGPT sign-in or an OpenAI API key in Cloud settings.
+ChatGPT sign-in or an OpenAI API key in Cloud settings. Deployment uses a bound API key
+file before the sign-in and refuses one that it cannot read, so such a file blocks
+**Start Upkeep** also when a sign-in exists. It is also unavailable while
+the dialog searches for repositories and after a search failed, so a choice is always
+checked against the latest list of GitHub.
 
 Upkeep needs a saved session, a Hetzner project in Cloud settings and a GitHub
 sign-in. The dialog shows the cause when a step fails, and keeps the choice.
@@ -193,6 +199,11 @@ started also starts agents for the repositories that did not change.
 - The pause signal stops the schedule. The runs that the pause covers do not
   occur. **Run now** has no effect while the schedule stops or while a run
   continues.
+- Each **Run now** from Horizon has a token of 32 hexadecimal characters. The
+  exchange applies a token one time and records it in `run-now-token`. When an
+  exchange fails and Horizon does not know whether the worker got **Run now**, it
+  sends the same token again. Thus the worker starts one run only. A value that
+  is not a token asks for a run each time, as before.
 - When the schedule changes, the loop calculates the next run again.
 - Before an exchange writes a new loop, it writes an installing signal. After
   all other files, it replaces that signal with the restart signal. When an

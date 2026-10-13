@@ -113,6 +113,22 @@ class ExchangeTests(unittest.TestCase):
         self.assertFalse(self.worker.exchange(payload(paused=False))['paused'])
         self.assertEqual((upkeep / 'config.json').stat().st_ino, before)
 
+    def test_a_run_now_sent_again_with_its_token_starts_one_run(self):
+        upkeep = self.worker.upkeep
+        token = 'b' * 32
+        self.worker.exchange(payload(run_now=token))
+        self.assertTrue((upkeep / 'run-now').is_file())
+        # The loop took it; a retry of the same Run now must not ask for another run.
+        (upkeep / 'run-now').unlink()
+        self.worker.exchange(payload(run_now=token))
+        self.assertFalse((upkeep / 'run-now').exists())
+        self.worker.exchange(payload(run_now='c' * 32))
+        self.assertTrue((upkeep / 'run-now').is_file())
+        # A value that is not a token still asks for a run, as before.
+        (upkeep / 'run-now').unlink()
+        self.worker.exchange(payload(run_now='../x'))
+        self.assertTrue((upkeep / 'run-now').is_file())
+
     def test_a_planted_link_is_replaced_and_never_written_through(self):
         self.worker.upkeep.mkdir()
         for name in ('config.json', 'run.sh', 'run-now', 'paused'):

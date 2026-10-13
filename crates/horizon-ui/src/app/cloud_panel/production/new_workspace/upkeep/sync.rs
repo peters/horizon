@@ -107,7 +107,7 @@ impl HorizonApp {
                 self.cloud_prototype.root.clone(),
             ) {
                 sync.next = Some(now + if sync.last.running { POLL_RUNNING } else { POLL });
-                let signals = std::mem::take(&mut sync.signals);
+                let signals = std::mem::take(&mut sync.signals).with_run_token();
                 sync.sent = signals;
                 let (tx, rx) = channel();
                 let repaint = ctx.clone();
@@ -140,8 +140,7 @@ impl HorizonApp {
                 let saved = worker::saved();
                 let first_runs = saved
                     .iter()
-                    .filter(|(cloud, _)| worker::first_run_pending(cloud))
-                    .map(|(cloud, _)| cloud.clone())
+                    .filter_map(|(cloud, _)| Some((cloud.clone(), worker::first_run_pending(cloud)?)))
                     .collect();
                 let _ = tx.send((Saved::new(saved), first_runs));
                 repaint.request_repaint();
@@ -154,9 +153,11 @@ impl HorizonApp {
                 self.upkeep.saved = Some(saved.clone());
                 // Only for a cloud this run of Horizon has not exchanged with yet: a marker
                 // that is still there may belong to an exchange under way.
-                for cloud in first_runs {
+                for (cloud, token) in first_runs {
                     if let std::collections::hash_map::Entry::Vacant(entry) = self.upkeep.syncs.entry(cloud) {
-                        entry.insert(crate::app::upkeep::Sync::default()).signals.run_now = true;
+                        let signals = &mut entry.insert(crate::app::upkeep::Sync::default()).signals;
+                        signals.run_now = true;
+                        signals.run_token = Some(token);
                     }
                 }
                 Some(saved)
@@ -243,8 +244,12 @@ fn exchange(
 /// What Horizon keeps of an exchange that reached the worker: it forgets the first-run
 /// marker the exchange delivered and writes the board's status document.
 fn learned(cloud_id: &str, config: &Config, signals: Signals, answer: &worker::Exchange) -> Answer {
-    if signals.run_now {
-        worker::first_run_sent(cloud_id);
+    // A marker left behind would ask for the first run again after a restart: each later
+    // exchange tries again to remove it, without sending Run now again.
+    if (signals.run_now || worker::first_run_pending(cloud_id).is_some())
+        && let Err(error) = worker::first_run_sent(cloud_id)
+    {
+        tracing::warn!(cloud = %cloud_id, %error, "could not remove the Upkeep first-run marker");
     }
     // The worker has the signals now: a status that cannot be written is only logged, so
     // they are not sent again. The next exchange writes it again.
@@ -296,6 +301,10 @@ fn allow_chosen(connection: &Connection, runner: &Runner<'_>, cloud_id: &str, co
 fn requeue(pending: &mut Signals, sent: Signals) {
     pending.run_now |= sent.run_now;
     pending.paused = pending.paused.or(sent.paused);
+    // The same token, so a worker that applied it already does not run twice.
+    if sent.run_now {
+        pending.run_token = sent.run_token;
+    }
 }
 
 /// Whether Upkeep allows `request` without the person: from the loop's own session, for a
@@ -329,29 +338,26 @@ mod tests {
     #[test]
     fn a_failed_exchange_sends_its_signals_again_unless_newer_ones_came() {
         let mut pending = Signals::default();
-        requeue(
-            &mut pending,
-            Signals {
-                run_now: true,
-                paused: Some(true),
-            },
-        );
-        assert_eq!(
-            pending,
-            Signals {
-                run_now: true,
-                paused: Some(true)
-            }
-        );
+        let sent = Signals {
+            run_now: true,
+            paused: Some(true),
+            ..Signals::default()
+        }
+        .with_run_token();
+        requeue(&mut pending, sent);
+        assert_eq!(pending, sent, "the same Run now, with its token, goes again");
+        assert!(pending.run_token.is_some());
         let mut pending = Signals {
             run_now: false,
             paused: Some(false),
+            ..Signals::default()
         };
         requeue(
             &mut pending,
             Signals {
                 run_now: false,
                 paused: Some(true),
+                ..Signals::default()
             },
         );
         assert_eq!(pending.paused, Some(false), "the later choice of the board wins");

@@ -234,29 +234,43 @@ pub fn save(cloud_id: &str, config: &Config) -> std::io::Result<PathBuf> {
 const FIRST_RUN: &str = "first-run";
 
 /// Records that the first exchange with the worker of `cloud_id` must start a run, so a
-/// restart of Horizon before it happens does not lose it.
+/// restart of Horizon before it happens does not lose it. Returns the token of that Run now:
+/// sent again after a restart, the worker still starts one run only.
 /// # Errors
 /// A cloud id that is not one folder name, or a file that cannot be written.
-pub fn mark_first_run(cloud_id: &str) -> std::io::Result<()> {
+pub fn mark_first_run(cloud_id: &str) -> std::io::Result<u128> {
     if !valid_cloud_id(cloud_id) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "Invalid cloud for Upkeep",
         ));
     }
-    write_atomically(&directory(cloud_id).join(FIRST_RUN), "")
+    let token = uuid::Uuid::new_v4().as_u128();
+    write_atomically(&directory(cloud_id).join(FIRST_RUN), &format!("{token:032x}"))?;
+    Ok(token)
 }
 
-/// Whether the first run of `cloud_id` was not sent yet. Reads the disk.
+/// The token of the first run of `cloud_id` when it was not sent yet. Reads the disk.
 #[must_use]
-pub fn first_run_pending(cloud_id: &str) -> bool {
-    valid_cloud_id(cloud_id) && directory(cloud_id).join(FIRST_RUN).is_file()
+pub fn first_run_pending(cloud_id: &str) -> Option<u128> {
+    if !valid_cloud_id(cloud_id) {
+        return None;
+    }
+    let text = std::fs::read_to_string(directory(cloud_id).join(FIRST_RUN)).ok()?;
+    u128::from_str_radix(text.trim(), 16).ok()
 }
 
-/// Forgets the marker once an exchange carried the first run to the worker.
-pub fn first_run_sent(cloud_id: &str) {
-    if valid_cloud_id(cloud_id) {
-        let _ = std::fs::remove_file(directory(cloud_id).join(FIRST_RUN));
+/// Forgets the marker once an exchange carried the first run to the worker. Blocks on the
+/// disk.
+/// # Errors
+/// The marker is there but cannot be removed.
+pub fn first_run_sent(cloud_id: &str) -> std::io::Result<()> {
+    if !valid_cloud_id(cloud_id) {
+        return Ok(());
+    }
+    match std::fs::remove_file(directory(cloud_id).join(FIRST_RUN)) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
     }
 }
 
@@ -282,6 +296,19 @@ pub fn saved() -> Vec<(String, Config)> {
 pub struct Signals {
     pub run_now: bool,
     pub paused: Option<bool>,
+    /// Identifies one Run now, so the worker applies it once however often it is sent.
+    pub run_token: Option<u128>,
+}
+
+impl Signals {
+    /// These signals with a token for their Run now, when it has none yet.
+    #[must_use]
+    pub fn with_run_token(mut self) -> Self {
+        if self.run_now && self.run_token.is_none() {
+            self.run_token = Some(uuid::Uuid::new_v4().as_u128());
+        }
+        self
+    }
 }
 
 /// The instructions of one repository's agent in a run. The scheduler on the worker fills in
@@ -337,7 +364,11 @@ pub fn command(cloud_id: &str, revision: &str, config: &Config, signals: Signals
         "prompt": prompt(config),
         "run": RUN,
         "scheduler": SCHEDULER,
-        "run_now": signals.run_now,
+        "run_now": match (signals.run_now, signals.run_token) {
+            (false, _) => serde_json::Value::Bool(false),
+            (true, None) => serde_json::Value::Bool(true),
+            (true, Some(token)) => serde_json::Value::String(format!("{token:032x}")),
+        },
         "paused": signals.paused,
     });
     let engine = base64::engine::general_purpose::STANDARD;

@@ -160,6 +160,13 @@ impl Form {
         if self.bots.is_empty() {
             return Some("Choose at least one bot.".into());
         }
+        // The choice is checked against a list GitHub just gave, never an older one.
+        if self.finding.is_some() {
+            return Some("Finding your repositories...".into());
+        }
+        if self.find_error.is_some() {
+            return Some("Search GitHub again before starting.".into());
+        }
         if self.codex_login == Some(false) {
             return Some("Sign in with ChatGPT in Cloud settings first.".into());
         }
@@ -223,15 +230,14 @@ impl Form {
 
 /// Whether Cloud settings hold a login that Codex on a worker can use.
 fn codex_login(root: &std::path::Path) -> bool {
-    use horizon_core::cloud_runtime::{codex_login, settings::Settings};
-    let signed_in = codex_login::account(&codex_login::home(root)).is_ok_and(|account| account.is_some());
-    // A key binding counts only when deployment would accept its file.
-    signed_in
-        || Settings::load(&root.join("settings.json")).is_ok_and(|settings| {
-            settings
-                .openai_api_key_file
-                .is_some_and(|path| horizon_core::cloud_runtime::settings::validate_private_key_file(&path).is_ok())
-        })
+    use horizon_core::cloud_runtime::{codex_login, settings, settings::Settings};
+    let signed_in = || codex_login::account(&codex_login::home(root)).is_ok_and(|account| account.is_some());
+    // Deployment refuses a bound key file it cannot use, also when a sign-in exists, and
+    // prefers a usable one to the sign-in.
+    match Settings::load(&root.join("settings.json")).map(|settings| settings.openai_api_key_file) {
+        Ok(Some(path)) => settings::validate_private_key_file(&path).is_ok(),
+        _ => signed_in(),
+    }
 }
 
 #[cfg(test)]

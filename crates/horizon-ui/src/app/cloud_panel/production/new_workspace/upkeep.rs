@@ -135,7 +135,7 @@ impl HorizonApp {
         let launch = CloudLaunch {
             deployment_started: false,
             id: cloud_id.to_owned(),
-            revision: prepared.revision,
+            revision: prepared.revision.clone(),
             profile_name: repository::launch::quick_start::PROFILE.into(),
             profile,
             placement: Placement::default(),
@@ -172,14 +172,12 @@ impl HorizonApp {
         self.start_production_deployment(id, ctx);
         // The first run starts once the loop is installed, not at the next full period; the
         // marker saved with the choice keeps it across a restart until it is sent.
-        self.upkeep
-            .syncs
-            .entry(cloud_id.to_owned())
-            .or_default()
-            .signals
-            .run_now = true;
-        // The saved choices are read again, with the new one.
+        let signals = &mut self.upkeep.syncs.entry(cloud_id.to_owned()).or_default().signals;
+        signals.run_now = true;
+        signals.run_token = Some(prepared.run_token);
+        // The saved choices are read again, with the new one; a read under way may be older.
         self.upkeep.saved = None;
+        self.upkeep.reading = None;
         self.fit_workspace_visible(ctx, workspace);
         self.mark_runtime_dirty();
         Ok(())
@@ -196,10 +194,14 @@ fn prepare(root: &Path, cloud_id: &str, config: &Config) -> Result<Prepared, Str
     let primary = config.primary().ok_or("Choose at least one repository.")?;
     let path = checkout(root, &settings, primary)?;
     let revision = repository::resolve(&path, "HEAD").map_err(|error| format!("{error}."))?;
-    worker::save(cloud_id, config)
+    let run_token = worker::save(cloud_id, config)
         .and_then(|_| worker::mark_first_run(cloud_id))
         .map_err(|error| format!("Upkeep could not save its settings: {error}."))?;
-    Ok(Prepared { path, revision })
+    Ok(Prepared {
+        path,
+        revision,
+        run_token,
+    })
 }
 
 /// The checkout of `name` in `~/github/<owner>/<name>`, cloned with the GitHub sign-in

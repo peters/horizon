@@ -13,8 +13,8 @@ use super::form::Form;
 /// The saved Upkeeps: cloud id and choice. Shared, so a frame reads them without a copy.
 pub(in crate::app) type Saved = Arc<Vec<(String, Config)>>;
 
-/// A read of the saved Upkeeps, with the clouds whose first run was not sent yet.
-pub(in crate::app) type Read = (Saved, Vec<String>);
+/// A read of the saved Upkeeps, with the clouds whose first run was not sent yet and its token.
+pub(in crate::app) type Read = (Saved, Vec<(String, u128)>);
 
 /// The Upkeeps of this computer: the dialog, a start under way, and the exchange with
 /// each Upkeep cloud's worker.
@@ -43,6 +43,8 @@ pub(in crate::app) struct Preparing {
 pub(in crate::app) struct Prepared {
     pub(in crate::app) path: PathBuf,
     pub(in crate::app) revision: String,
+    /// The token of the first Run now, which the first-run marker keeps too.
+    pub(in crate::app) run_token: u128,
 }
 
 /// What one exchange with an Upkeep worker learned.

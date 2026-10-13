@@ -164,18 +164,27 @@ def remove(parent, name):
         raise Refused(f'{name} is a folder') from error
 
 
+RUN_TOKEN = re.compile(r'[0-9a-f]{32}')
+
+
 def signal(payload, upkeep):
     """Pause and resume first: Run now while paused is dropped, so a resume never starts a
-    run that was asked for long before."""
+    run that was asked for long before. A Run now with a token is applied once: Horizon sends
+    the same token again when it did not learn whether an earlier exchange applied it."""
     paused = payload.get('paused')
     if paused is True:
         write(upkeep, 'paused', '')
     elif paused is False:
         remove(upkeep, 'paused')
+    run_now = payload.get('run_now')
     if read(upkeep, 'paused', 0) is not None:
         remove(upkeep, 'run-now')
-    elif payload.get('run_now'):
-        write(upkeep, 'run-now', '')
+    elif run_now:
+        token = run_now if isinstance(run_now, str) and RUN_TOKEN.fullmatch(run_now) else None
+        if token is None or read(upkeep, 'run-now-token', 64) != token.encode():
+            write(upkeep, 'run-now', '')
+            if token is not None:
+                write(upkeep, 'run-now-token', token)
 
 
 def tmux(*args):

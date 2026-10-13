@@ -45,21 +45,21 @@ impl Catalog {
     /// Owners in the order they first appear.
     #[must_use]
     pub fn owners(&self) -> Vec<&str> {
-        let mut owners: Vec<&str> = Vec::new();
-        for repository in &self.repositories {
-            if !owners.contains(&repository.owner()) {
-                owners.push(repository.owner());
-            }
-        }
-        owners
+        let mut seen = std::collections::HashSet::new();
+        self.repositories
+            .iter()
+            .map(CatalogRepository::owner)
+            .filter(|owner| seen.insert(*owner))
+            .collect()
     }
 
-    /// Open pull requests in the repositories named in `chosen`.
+    /// Open pull requests in the repositories named in `chosen`, in one pass over the
+    /// catalog.
     #[must_use]
-    pub fn open_in<'a>(&self, chosen: impl IntoIterator<Item = &'a String>) -> u32 {
-        chosen
-            .into_iter()
-            .filter_map(|name| self.repositories.iter().find(|repository| repository.name == *name))
+    pub fn open_in(&self, chosen: &std::collections::BTreeSet<String>) -> u32 {
+        self.repositories
+            .iter()
+            .filter(|repository| chosen.contains(&repository.name))
             .map(|repository| repository.open)
             .sum()
     }
@@ -154,7 +154,7 @@ mod tests {
         let reachable = ["acme/api", "acme/web"].map(String::from);
         let open = [("acme/web".to_string(), 2), ("acme/api".to_string(), 5)].into();
         let catalog = catalog(&reachable, &open);
-        let chosen = ["acme/web".to_string(), "other/repo".to_string()];
+        let chosen = ["acme/web".to_string(), "other/repo".to_string()].into();
         assert_eq!(catalog.open_in(&chosen), 2);
     }
 }

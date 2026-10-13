@@ -85,16 +85,20 @@ fn tabs(ui: &mut Ui, form: &mut Form, owners: &[String], current: &str) {
                 .hint_text("Filter repositories"),
         );
     });
+    // One pass over the chosen names, not one over the catalog for each owner.
+    let mut chosen_by_owner = std::collections::HashMap::<&str, usize>::new();
+    for name in &form.selected {
+        let owner = name.split_once('/').map_or(name.as_str(), |(owner, _)| owner);
+        *chosen_by_owner.entry(owner).or_default() += 1;
+    }
+    let chosen_by_owner: Vec<usize> = owners
+        .iter()
+        .map(|owner| chosen_by_owner.get(owner.as_str()).copied().unwrap_or(0))
+        .collect();
     // Many or long owner names wrap to more rows rather than leave the dialog.
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
-        for owner in owners {
-            let chosen = form
-                .catalog
-                .repositories
-                .iter()
-                .filter(|repository| repository.owner() == owner && form.selected.contains(&repository.name))
-                .count();
+        for (owner, chosen) in owners.iter().zip(chosen_by_owner) {
             let label = if chosen == 0 {
                 owner.clone()
             } else {

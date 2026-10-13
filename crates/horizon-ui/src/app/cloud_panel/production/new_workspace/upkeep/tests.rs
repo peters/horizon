@@ -99,6 +99,7 @@ fn a_start_from_another_session_adds_no_cloud() {
     tx.send(Ok(crate::app::upkeep::Prepared {
         path: "/nowhere".into(),
         revision: "0".repeat(40),
+        run_token: 1,
     }))
     .unwrap();
     app.upkeep.preparing = Some(crate::app::upkeep::Preparing {
