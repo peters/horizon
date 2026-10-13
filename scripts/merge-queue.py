@@ -408,6 +408,8 @@ def cmd_build(args):
         print("dry run: nothing pushed")
         return
     git("push", "-q", "origin", f"{tip}:refs/heads/{branch}", timeout=300)
+    # A local ref keeps the batch commits from garbage collection until land compares them.
+    git("update-ref", f"refs/merge-queue/{branch}", tip)
     plan = {"branch": branch, "base": base, "tip": tip,
             "prs": [{k: e[k] for k in ("number", "head", "subject", "body", "commit")}
                     for e in applied]}
@@ -415,6 +417,7 @@ def cmd_build(args):
         # The earlier batch is replaced; its branch would otherwise stay on origin.
         old = json.loads(plan_path().read_text())["branch"]
         git("push", "-q", "origin", "--delete", old, timeout=300, check=False)
+        git("update-ref", "-d", f"refs/merge-queue/{old}", check=False)
     plan_path().write_text(json.dumps(plan, indent=2) + "\n")
     print(f"pushed {branch}; CI runs on {tip}")
 
@@ -481,11 +484,17 @@ def cmd_land(args):
             if main_now != expected:
                 raise QueueError(f"main moved to {main_now[:9]} outside the batch before "
                                  f"#{entry['number']}; it and later PRs were not merged")
-            result = run(["gh", "pr", "merge", str(entry["number"]), "--repo", repo,
-                          "--squash", "--match-head-commit", entry["head"],
-                          "--subject", entry["subject"], "--body", entry["body"]],
-                         timeout=300, check=False)
-            if result.returncode == 0 or not transient_merge_refusal(result.stderr):
+            try:
+                result = run(["gh", "pr", "merge", str(entry["number"]), "--repo", repo,
+                              "--squash", "--match-head-commit", entry["head"],
+                              "--subject", entry["subject"], "--body", entry["body"]],
+                             timeout=300, check=False)
+                error = result.stderr if result.returncode else ""
+            except QueueError as timeout:
+                # The merge may still have gone through: the state poll below decides.
+                error = str(timeout)
+                break
+            if not error or not transient_merge_refusal(error):
                 break
             time.sleep(5 * (attempt + 1))
         for _attempt in range(10):
@@ -497,7 +506,7 @@ def cmd_land(args):
                 break
             time.sleep(2)
         if merged["state"] != "MERGED" or not commit:
-            reason = result.stderr.strip() or "GitHub did not merge it"
+            reason = error.strip() or "GitHub did not merge it"
             raise QueueError(f"#{entry['number']} did not merge ({reason}); later PRs were not "
                              "merged. Run land again to resume.")
         git("fetch", "-q", "origin", BASE_BRANCH, timeout=300)
@@ -510,6 +519,7 @@ def cmd_land(args):
         plan_path().write_text(json.dumps(plan, indent=2) + "\n")
         expected = commit
     git("push", "-q", "origin", "--delete", plan["branch"], timeout=300, check=False)
+    git("update-ref", "-d", f"refs/merge-queue/{plan['branch']}", check=False)
     plan_path().rename(state_dir() / f"landed-{plan['branch'][3:]}.json")
     print("each merge has its tested tree; batch landed")
 
