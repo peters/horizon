@@ -33,7 +33,8 @@ impl HorizonHome {
 
     /// Resolve the home of a process that keeps its state there. A `HORIZON_HOME` override
     /// must be an absolute path. Horizon creates it with owner-only permissions when it is
-    /// missing; an existing one must be a directory that only its owner can open.
+    /// missing; an existing one must be a directory whose permission bits admit only its
+    /// owner. ACLs are not examined: on macOS an ACL can still grant other users access.
     ///
     /// # Errors
     ///
@@ -42,13 +43,7 @@ impl HorizonHome {
         Self::prepare_with(Self::override_root()?)
     }
 
-    /// The absolute root that `HORIZON_HOME` names, or `None` when it is unset or empty.
-    /// Nothing is created.
-    ///
-    /// # Errors
-    ///
-    /// Rejects a value that is not an absolute path.
-    pub fn override_root() -> Result<Option<PathBuf>, HorizonHomeError> {
+    fn override_root() -> Result<Option<PathBuf>, HorizonHomeError> {
         Ok(horizon_browser_control::paths::home_override()?)
     }
 

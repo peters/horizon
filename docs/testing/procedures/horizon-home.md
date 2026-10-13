@@ -27,6 +27,7 @@ private state, and that `HOME` does not change for the terminals.
     give their MCP servers their whole environment, so `HORIZON_HOME` arrives
     without a registration change.
   - The folder permissions on Windows. Windows has no owner-only mode check.
+  - ACLs. Horizon examines only the owner and the permission bits.
 
 ## 3. Safety
 
