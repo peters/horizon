@@ -165,6 +165,29 @@ fn a_new_server_rebuild_releases_the_server_and_commits_the_image_with_the_fence
 }
 
 #[test]
+fn a_hetzner_cloud_whose_committed_profile_names_runpod_rebuilds_on_hetzner_at_the_same_commit() {
+    let fixture = hetzner();
+    let before = fixture.state();
+    let mut head = before.profile.clone();
+    head.provider = "runpod".into();
+    let mut script = Script::new(&fixture);
+    script.head.revision.clone_from(&before.revision);
+    script.head.config = Some(config(&head));
+    let steps = NewServer {
+        script: &script,
+        hosting: Hosting::default(),
+    };
+    assert_eq!(rebuild_new(&fixture, &steps).unwrap(), Driven::Committed);
+    assert_committed(&fixture, &steps);
+    // Hetzner's own rebuild: the server is released, never switched in place.
+    assert_eq!(*steps.hosting.calls.borrow(), ["release", "reopen"]);
+    let after = fixture.state();
+    assert_eq!(after.profile, before.profile, "the cloud stays on Hetzner");
+    assert_eq!(after.spec.as_ref().unwrap().profile, before.profile);
+    assert_eq!(after.cloud_id, before.cloud_id);
+}
+
+#[test]
 fn an_interrupted_new_server_rebuild_continues_to_the_new_image_and_never_builds_twice() {
     for boundary in [Boundary::Built, Boundary::Requested, Boundary::Released] {
         let fixture = hetzner();

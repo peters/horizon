@@ -1384,12 +1384,21 @@ an integration harness, not an installed user command.
 A ready dedicated cloud can rebuild its worker image and restart on it, for
 example to pick up newer agent CLIs or a committed change to its `.horizon`
 recipe. Horizon resolves the repository's latest committed `HEAD` (uncommitted
-changes are not used) and reads `.horizon/cloud.yml` there. It refuses when the
-cloud's profile is missing there or differs from the one the cloud was created
-with, naming the change: a running worker's size, capabilities, image repository
-and build section are fixed. A CPU cloud's vCPU and memory are chosen when the
-cloud is created, so different committed values for them are not a change. For a
-profile with a build section, Horizon builds the recipe with the newest agent CLIs
+changes are not used) and reads `.horizon/cloud.yml` there.
+
+Horizon refuses the rebuild when the cloud's profile is missing in that file. It
+also refuses when the profile is different from the profile of the cloud's worker.
+The refusal names the different field, for example `gpu`, `storage.container_gb`,
+`capabilities`, `image`, the `build` section or `bootstrap`. A rebuild cannot
+change these fields on a running worker.
+
+Some differences are not a change. You choose the provider, and the vCPU and memory
+of a CPU cloud, when you create the cloud. Their committed values are only defaults
+for new clouds, so the rebuild keeps the cloud on its provider and size. The
+committed `storage.volume_gb` is a minimum, so a workspace that grew after creation
+is not a change.
+
+For a profile with a build section, Horizon builds the recipe with the newest agent CLIs
 under a new tag. It then validates the worker contract, pushes the image and verifies
 the worker's pull binding. An unchanged image digest is reported, and nothing restarts.
 A profile without a build section has no recipe to rebuild. The next paragraph tells

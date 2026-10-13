@@ -19,7 +19,7 @@ check, the image rebuild, resize, idle stop, deletion and redeploy.
 ## 2. Applicability
 
 - Candidate: the frozen candidate from area S.
-- Platforms: Linux. Clouds: `smoke-a`, `smoke-r`, `smoke-sib` and `smoke-x`.
+- Platforms: Linux. Clouds: `smoke-a`, `smoke-r`, `smoke-sib`, `smoke-x` and `smoke-hb`.
 - This area does not test: a lost worker or an uncertain provider answer. The
   [cloud workspaces smoke guide](../../cloud-workspaces-mvp-smoke.md#disconnect-restart-and-failure-recovery)
   covers those cases with a provider simulator.
@@ -43,6 +43,10 @@ check, the image rebuild, resize, idle stop, deletion and redeploy.
   `provider: hetzner` and sets `idle_stop_minutes: 10`.
 - The profile of `smoke-sib` has a `build` section. The registry push credential
   is in Cloud settings.
+- The committed profile `runpod-build` sets `provider: runpod`. Cloud settings
+  contain the RunPod key and the Hetzner token, so New cloud offers both providers.
+- If `<build-repository>` is private, the Hetzner `registry_pull` login can read it
+  ([Hetzner Cloud workers](../../../cloud-hetzner.md)).
 - The facts in [Cloud workspaces](../../../cloud-workspaces.md#sessions-and-lifecycle)
   and [Hetzner Cloud workers](../../../cloud-hetzner.md#stop-resume-check-and-delete).
 
@@ -568,6 +572,106 @@ Use `smoke-r`.
 
    Result: The marker value and the commit are the same as before the stop.
 
+### 6.11 L11: Rebuild a Hetzner cloud from a profile that names RunPod
+
+Use the profile `runpod-build`. It sets `provider: runpod`. This task makes the
+cloud `smoke-hb` on Hetzner, then rebuilds it at the same commit
+([issue #1507](https://github.com/peters/horizon/issues/1507)).
+
+1. Record the commit of `<repo>`.
+
+   ```sh
+   git -C <repo> rev-parse HEAD
+   ```
+
+   Result: The evidence has the commit.
+
+2. Open **Cloud › New cloud…** in the workspace of `smoke-a`.
+
+   Result: The New cloud dialog opens.
+
+3. Type the path `<repo>` as the repository and `smoke-hb` as the title. Click
+   **Read .horizon/cloud.yml**.
+
+   Result: The dialog shows the worker catalog.
+
+4. Select `runpod-build` in **Profile**. Do not select the sibling `sib`.
+
+   Result: The summary shows a RunPod worker.
+
+5. Click **Hetzner**. Select a Hetzner row with 4 vCPU and 8 GB that is in stock.
+
+   Result: The summary shows a Hetzner worker.
+
+   > **CAUTION:** THIS STEP RENTS COMPUTE AND PUSHES AN IMAGE TO THE REGISTRY.
+   > Record the server and the volume in the resource ledger.
+
+6. Click **Start cloud**. Wait until the card of `smoke-hb` shows **Ready**.
+
+   Result: The **Machine** tab shows a Hetzner server.
+
+7. Write the server and the volume in the resource ledger. Record the server ID.
+
+   Result: The ledger contains the resources of `smoke-hb`.
+
+8. In a Shell panel of `smoke-hb`, write a marker file on the workspace volume.
+
+   ```sh
+   head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n' > ~/provider-marker; cat ~/provider-marker
+   ```
+
+   Result: The evidence has the marker value.
+
+9. Do step 1 again.
+
+   Result: The commit is the same as in step 1.
+
+   > **CAUTION:** THIS STEP PUSHES AN IMAGE AND CAN START A NEW SERVER. The
+   > container disk is reset.
+
+10. On the card, click **Rebuild image & restart…**, then **Rebuild and restart**.
+
+    Result: The card does not show **Rebuild refused**. It shows the build and the push.
+
+11. Wait until the card shows **Ready**.
+
+    Result: The card names the new image, or it says that the image did not change.
+    The **Machine** tab shows a Hetzner server.
+
+12. If the card names a new image, examine the server ID on the **Machine** tab.
+
+    Result: The server ID is not the ID from step 7.
+
+13. If the server ID changed, mark the old server as deleted and write the new
+    server in the resource ledger.
+
+    Result: The ledger shows the old server as deleted.
+
+14. Show the marker file.
+
+    ```sh
+    cat ~/provider-marker
+    ```
+
+    Result: The value is the same as in step 8.
+
+15. In `<repo>`, add `idle_stop_minutes: 30` to the profile `runpod-build`. Commit the change.
+
+    Result: `git -C <repo> log -1` shows the new commit.
+
+16. On the card, click **Rebuild image & restart…**, then **Rebuild and restart**.
+
+    Result: The card shows **Rebuild refused:** with the field `idle_stop_minutes`.
+    The worker does not restart.
+
+17. Revert the commit of step 15.
+
+    ```sh
+    git -C <repo> revert --no-edit HEAD
+    ```
+
+    Result: The profile `runpod-build` has no `idle_stop_minutes`.
+
 ## 7. Pass criteria
 
 - The marker files survive stop, resume, resize and the Hetzner resume.
@@ -575,6 +679,8 @@ Use `smoke-r`.
 - The restarted candidate child has the frozen SHA-256.
 - **Check provider** and `cloud_deploy reconcile` show the same worker ID.
 - After **Cancel rebuild**, no rebuild step waits. A full rebuild reaches **Ready**.
+- `smoke-hb` rebuilds on Hetzner at the same commit, although its profile names
+  RunPod. A changed `idle_stop_minutes` gives a refusal that names the field.
 - Idle stop stops `smoke-x` after the profile limit.
 - Deletion removes the resources, and redeploy makes new resources.
 - A Hetzner resume makes a new server. The host key from `/workspace` stays, and
@@ -592,7 +698,7 @@ Use `smoke-r`.
 
    Result: Each active line in the ledger belongs to a cloud on the board.
 
-L05 is the last task that uses the `<build-repository>` entry of A08. Steps 3
+L11 is the last task that uses the `<build-repository>` entry of A08. Steps 3
 to 12 revoke it while the fixture runs.
 
 3. Open **Cloud › Cloud settings…**.
