@@ -69,9 +69,17 @@ pub(super) struct Finder {
     stale: bool,
 }
 
-/// The query, the checkout and repository counts, and whether the folders listed answer
-/// the query, with their count: what the rows were made from.
-type Made = (String, usize, usize, bool, usize);
+/// The query, the checkout count, a digest of the repository names, and whether the
+/// folders listed answer the query, with their count: what the rows were made from.
+type Made = (String, usize, u64, bool, usize);
+
+/// A digest of `names`, so a fresh list of as many names still makes the rows again.
+fn digest(names: &[String]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    names.hash(&mut hasher);
+    hasher.finish()
+}
 
 /// Lists the folders of a typed path on a thread, with whether each holds a repository,
 /// so no folder is read while a frame is drawn.
@@ -161,7 +169,7 @@ impl Finder {
         let key: Made = (
             typed.trim().to_owned(),
             self.local_count(),
-            repositories.len(),
+            digest(repositories),
             self.folders_for == typed.trim(),
             self.folders.len(),
         );
@@ -214,6 +222,15 @@ impl Finder {
     pub fn settled(&self) -> bool {
         !self.stale
     }
+}
+
+/// Whether the text starts with a host name, as `gitlab.com/group/repo` does: a link to
+/// clone, not a name to search for.
+fn names_a_host(text: &str) -> bool {
+    text.trim()
+        .split('/')
+        .next()
+        .is_some_and(|first| first.contains('.') && !first.starts_with('.'))
 }
 
 /// What choosing `row` does; `open` (Tab) goes into a folder instead of using it.
@@ -297,8 +314,10 @@ fn search_rows(query: &str, checkouts: &[Checkout], repositories: &[String]) -> 
         } else if let Some(found) = fuzzy::score(query, &title) {
             // Being on this computer already is worth a little.
             (found.score + 8, found.positions)
-        } else if let Some(found) = fuzzy::score(query, &detail) {
-            (found.score - 40, Vec::new())
+        } else if detail.to_lowercase().contains(&query.to_lowercase()) {
+            // Typed letters that only appear scattered over a path are noise; a run of them
+            // in the path, such as `projects/tool`, is not.
+            (-40, Vec::new())
         } else {
             continue;
         };
@@ -410,9 +429,9 @@ impl super::State {
 
     /// Whether the field is a search: nothing is being cloned, and it holds neither a
     /// pasted link, a folder with a repository, nor the repository already chosen.
-    fn searching(&self) -> bool {
+    pub(super) fn searching(&self) -> bool {
         let shows_chosen = !self.input.trim().is_empty() && !self.editing();
-        let link = self.remote.is_some() && super::github::names_a_link(&self.input);
+        let link = self.remote.is_some() && (super::github::names_a_link(&self.input) || names_a_host(&self.input));
         self.job.is_none() && self.folder.is_none() && !shows_chosen && !link
     }
 

@@ -1,4 +1,4 @@
-use super::{Kind, Pick, folder_rows, is_path, pick, search_rows};
+use super::{Kind, Pick, folder_rows, is_path, names_a_host, pick, search_rows};
 use horizon_core::dir_search::Checkout;
 use std::path::PathBuf;
 
@@ -69,4 +69,24 @@ fn choosing_a_result_uses_a_checkout_clones_a_repository_or_opens_a_folder() {
     assert!(matches!(pick(&rows[0], true), Pick::Text(text) if text.ends_with(std::path::MAIN_SEPARATOR)));
     assert!(matches!(pick(&rows[1], false), Pick::Text(text) if text.ends_with(std::path::MAIN_SEPARATOR)));
     assert_eq!(folder_rows("/x/.h", &[(hidden, false)]).len(), 1);
+}
+
+#[test]
+fn a_link_with_a_host_is_no_search() {
+    assert!(names_a_host("gitlab.com/acme/api"));
+    assert!(names_a_host("git.example.org/team/tool"));
+    assert!(!names_a_host("acme/api"), "an owner/name is still a search");
+    assert!(!names_a_host("web"));
+    assert!(!names_a_host("./here"));
+}
+
+#[test]
+fn letters_scattered_over_a_path_find_nothing() {
+    let checkouts = [checkout("/home/x/projects/tool", None)];
+    assert!(search_rows("wxyz", &checkouts, &[]).is_empty());
+    assert_eq!(
+        search_rows("projects/to", &checkouts, &[]).len(),
+        1,
+        "a run in the path still finds it"
+    );
 }

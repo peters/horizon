@@ -39,7 +39,8 @@ pub(in super::super) fn step(ui: &mut Ui, form: &mut Production, refocus: bool) 
     // The results answer the arrow keys, Enter and Tab before the field sees them.
     let focused = ui.memory(|memory| memory.has_focus(id));
     let keyed = form.source.finder_keys(ui, focused);
-    let tab = form.source.finder.takes_tab();
+    // Only while results show: a hidden list never keeps Tab in the field.
+    let tab = form.source.searching() && form.source.finder.takes_tab();
     // While a clone runs the field is not a request for something else.
     let response = ui
         .add_enabled_ui(form.source.job.is_none(), |ui| {

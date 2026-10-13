@@ -43,6 +43,7 @@ pub fn spawn_checkouts() -> mpsc::Receiver<Vec<Checkout>> {
 pub fn checkouts(root: &Path) -> Vec<Checkout> {
     let mut found = Vec::new();
     let mut queue = VecDeque::from([(root.to_owned(), 0)]);
+    let mut seen = std::collections::HashSet::new();
     let mut visits = 0;
     while let Some((folder, depth)) = queue.pop_front() {
         visits += 1;
@@ -52,9 +53,18 @@ pub fn checkouts(root: &Path) -> Vec<Checkout> {
         let Ok(entries) = std::fs::read_dir(&folder) else {
             continue;
         };
+        // A linked folder, such as `~/github` on another disk, is followed once: its real
+        // place is remembered, so two links to one folder, or a loop, are read one time.
         let mut children: Vec<PathBuf> = entries
             .flatten()
-            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .filter(|entry| match entry.file_type() {
+                Ok(kind) if kind.is_dir() => true,
+                Ok(kind) if kind.is_symlink() => {
+                    entry.path().is_dir()
+                        && seen.insert(std::fs::canonicalize(entry.path()).unwrap_or_else(|_| entry.path()))
+                }
+                _ => false,
+            })
             .map(|entry| entry.path())
             .filter(|path| {
                 path.file_name()
@@ -71,6 +81,11 @@ pub fn checkouts(root: &Path) -> Vec<Checkout> {
             }
         }
     }
+    // A checkout reached both directly and through a link shows one time.
+    let mut places = std::collections::HashSet::new();
+    found.retain(|checkout| {
+        places.insert(std::fs::canonicalize(&checkout.path).unwrap_or_else(|_| checkout.path.clone()))
+    });
     found.sort_by(|a, b| b.touched.cmp(&a.touched).then_with(|| a.path.cmp(&b.path)));
     found
 }
@@ -158,5 +173,22 @@ mod tests {
         assert_eq!(web.origin.as_deref(), Some("https://github.com/acme/web"));
         let tool = found.iter().find(|c| c.path.ends_with("code/tool")).unwrap();
         assert_eq!(tool.branch, None, "a detached head has no branch");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_folder_is_followed_once() {
+        let home = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let git = elsewhere.path().join("acme/web/.git");
+        fs::create_dir_all(&git).unwrap();
+        fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), home.path().join("github")).unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), home.path().join("code")).unwrap();
+        // A loop back to the home folder ends.
+        std::os::unix::fs::symlink(home.path(), home.path().join("loop")).unwrap();
+        let found = checkouts(home.path());
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].path.ends_with("acme/web"));
     }
 }
