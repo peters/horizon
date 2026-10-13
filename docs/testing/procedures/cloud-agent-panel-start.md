@@ -127,7 +127,8 @@ Give each task an ID. A report uses the ID to give a result.
 
 2. Click **Claude Code**.
 
-   Result: A Claude Code panel opens and the agent starts.
+   Result: A Claude Code panel opens and the agent starts. It does not ask if you
+   trust the folder.
 
 3. Examine the first lines of the panel.
 

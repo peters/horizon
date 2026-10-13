@@ -190,12 +190,78 @@ if sys.argv[1:] == ['--help']:
         self.launch()
         config = self.claude_config()
         self.assertTrue(config['hasCompletedOnboarding'])
-        self.assertEqual(config['theme'], 'dark')
+        self.assertNotIn('theme', config, "Claude's default theme applies")
         self.assertEqual(config['customApiKeyResponses'], {'approved': [key[-20:]], 'rejected': []})
-        self.assertEqual(config['projects'][str(self.workspace)],
-                         {'hasTrustDialogAccepted': True, 'hasCompletedProjectOnboarding': True})
+        trusted = {'hasTrustDialogAccepted': True}
+        self.assertEqual(config['projects'], {str(self.workspace): trusted,
+                                              str(self.workspace / 'repository.git'): trusted})
         self.assertEqual((self.workspace / 'home/.claude.json').stat().st_mode & 0o777, 0o600)
         self.assertNotIn(key, (self.workspace / 'home/.claude.json').read_text(), 'only the key tail is kept')
+
+    def repository(self, repository, *worktrees):
+        """A bare repository with worktrees, as horizon-worker-import and -session make them."""
+        def git(*arguments, text=''):
+            return subprocess.run(['git', '-c', 'user.name=test', '-c', 'user.email=test@example.invalid',
+                                   *arguments], input=text, capture_output=True, text=True, timeout=20,
+                                  check=True).stdout.strip()
+        git('init', '-q', '--bare', str(repository))
+        tree = git(f'--git-dir={repository}', 'hash-object', '-t', 'tree', '-w', '--stdin')
+        commit = git(f'--git-dir={repository}', 'commit-tree', tree, '-m', 'base')
+        for worktree in worktrees:
+            git(f'--git-dir={repository}', 'worktree', 'add', '-q', '--detach', str(worktree), commit)
+        # Claude Code 2.1.296 reads a worktree's trust from its repository, which for a bare
+        # repository is the common Git folder itself. A person's answer is saved there too.
+        return {worktree: git('-C', str(worktree), 'rev-parse', '--path-format=absolute', '--git-common-dir')
+                for worktree in worktrees}
+
+    def trusted_folders(self):
+        return {folder for folder, entry in self.claude_config()['projects'].items()
+                if entry.get('hasTrustDialogAccepted') is True}
+
+    def test_claude_trusts_the_repository_of_every_worktree_a_panel_opens(self):
+        primary = self.workspace / 'repository.git'
+        sibling = self.workspace / 'siblings/lib/repository.git'
+        (self.workspace / 'siblings/notes').mkdir(parents=True)
+        lookups = {**self.repository(primary, self.workspace / 'checkout', self.workspace / 'agents/one',
+                                     self.workspace / 'agents/two/app'),
+                   **self.repository(sibling, self.workspace / 'agents/two/lib')}
+        self.assertEqual(set(lookups.values()), {str(primary), str(sibling)})
+        for agent in ['claude', 'shell']:
+            with self.subTest(agent=agent):
+                (self.workspace / 'home/.claude.json').unlink(missing_ok=True)
+                self.launch(agent, commands='claude\n', cwd=self.workspace / 'checkout')
+                # /workspace stays for folders outside a repository.
+                self.assertEqual(self.trusted_folders(), {str(self.workspace), str(primary), str(sibling)})
+
+    def claude_saves(self):
+        """Save the file as Claude Code 2.1.296 does after a run."""
+        path = self.workspace / 'home/.claude.json'
+        config = json.loads(path.read_text())
+        # Only the settings that differ from its defaults, without project keys it no longer reads.
+        if config.get('theme') == 'dark':
+            del config['theme']
+        for entry in config['projects'].values():
+            for legacy in ['hasCompletedProjectOnboarding', 'projectOnboardingSeenCount', 'history']:
+                entry.pop(legacy, None)
+        config['numStartups'] = config.get('numStartups', 0) + 1
+        config['projects'].setdefault(str(self.workspace / 'repository.git'), {})['lastCost'] = 0.25
+        path.write_text(json.dumps(config, indent=2))
+        return path.read_bytes(), path.stat().st_mtime_ns
+
+    def test_seeded_settings_survive_claude_saving_the_file(self):
+        # As an earlier launcher left it, with keys that Claude drops at its next save.
+        (self.workspace / 'home/.claude.json').write_text(json.dumps({
+            'hasCompletedOnboarding': True, 'theme': 'dark', 'projects': {
+                str(self.workspace): {'hasTrustDialogAccepted': True, 'hasCompletedProjectOnboarding': True}}}))
+        self.launch()
+        saved, mtime = self.claude_saves()
+        for agent in ['claude', 'shell', 'claude']:
+            self.launch(agent, commands='claude\n')
+            config = self.workspace / 'home/.claude.json'
+            self.assertEqual((config.read_bytes(), config.stat().st_mtime_ns), (saved, mtime),
+                             'a launch writes nothing back that Claude removed')
+        self.assertEqual(self.trusted_folders(), {str(self.workspace), str(self.workspace / 'repository.git')})
+        self.assertEqual(self.claude_config()['projects'][str(self.workspace / 'repository.git')]['lastCost'], 0.25)
 
     def test_seeding_keeps_what_claude_saved_and_is_repeatable(self):
         key = 'sk-ant-api03-' + 'y' * 40
@@ -445,7 +511,7 @@ if sys.argv[1:] == ['--help']:
         self.select()
         folder = self.checkout()
         marker = self.root / 'imported'
-        for name in ['json', 'tomllib', 'fcntl', 'os']:
+        for name in ['json', 'tomllib', 'fcntl', 'glob', 'os']:
             (folder / f'{name}.py').write_text(f'open({str(marker)!r}, "a").write("{name}\\n")\n')
         self.launch('codex', cwd=folder)
         self.launch('claude', cwd=folder)

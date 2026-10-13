@@ -158,7 +158,8 @@ real request.
    claude
    ```
 
-   Result: Claude Code starts. It shows no login prompt and no question about the API key.
+   Result: Claude Code starts. It shows no login prompt, no question about the API key
+   and no question about the trust of the folder.
 
 7. Type the request of step 5 of H01. Then type `/exit`.
 
@@ -169,6 +170,20 @@ real request.
 
    Result: The agent replies `ready`. A Shell panel that opens after a Claude Code
    panel also uses the saved key.
+
+9. In the same Shell panel, show the folders that Claude Code trusts.
+
+   ```sh
+   python3 -c 'import json, os; projects = json.load(open(os.path.expanduser("~/.claude.json")))["projects"]; print(sorted(folder for folder, entry in projects.items() if entry.get("hasTrustDialogAccepted")))'
+   ```
+
+   Result: The list has `/workspace` and `/workspace/repository.git`. It also has
+   `/workspace/siblings/<alias>/repository.git` for each sibling of the cloud.
+   Claude Code ran and saved the file in steps 1 to 8, and the trust stays.
+
+10. Open a new Claude Code panel.
+
+    Result: The agent starts. It does not ask if you trust the folder.
 
 ### 6.3 E03 — Start a Codex panel
 

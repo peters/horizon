@@ -637,12 +637,26 @@ under `/workspace/agents/SESSION`.
 
 A worker is a disposable container whose person has already chosen to run Claude Code in
 it, so a new Claude session does not stop at the first-run dialogs. Before it launches,
-`horizon-worker-run` records in `~/.claude.json` (under the worker's `HOME`) that onboarding
-is complete, a theme (`dark`, unless one is already saved), trust for `/workspace` (which
-covers the checkout, the worktrees an agent adds below it and sibling checkouts), and, when
-an Anthropic API key is bound, approval of that key by its last 20 characters, never the
-whole key. Existing entries are kept, the update is atomic and locked, and a failure to
-write it only brings the dialogs back. Subscription workers keep Claude's own sign-in.
+`horizon-worker-run` records these items in `~/.claude.json` (under the worker's `HOME`):
+
+- Onboarding is complete. Claude Code then uses its default theme, `dark`, unless the file
+  has a different theme.
+- Each repository on the worker is trusted: `/workspace/repository.git` and each
+  `/workspace/siblings/ALIAS/repository.git`. Claude Code keeps the trust of a Git worktree
+  under its repository. Thus this trust covers all worktrees of the repository: the shared
+  checkout, the worktree of each session and the worktrees that an agent adds. When a person
+  accepts the trust question, Claude Code records the answer at the same location.
+- `/workspace` is trusted. Claude Code does not use the trust of a parent folder in a
+  repository, so this trust covers only the folders that are not in a repository.
+- When an Anthropic API key is bound, the approval of that key by its last 20 characters,
+  never the whole key.
+
+Claude Code saves only the settings that are different from its defaults, and it removes the
+old project onboarding flag. Thus the launcher records no theme and no onboarding flag.
+Claude Code keeps all of the items above when it saves the file, so the next launch finds
+them and does not write the file again. These statements are true for Claude Code 2.1.296.
+Existing entries are kept, the update is atomic and locked, and a failure to write it only
+brings the dialogs back. Subscription workers keep Claude's own sign-in.
 
 A Shell panel gets the same setup, because a person can start `claude` in it by hand. The
 shell receives the bound Anthropic API key as `ANTHROPIC_API_KEY` and the bound workspace as
