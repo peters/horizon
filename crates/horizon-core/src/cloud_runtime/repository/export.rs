@@ -114,34 +114,43 @@ fn name_refs(repository: &Path, neutral: &Path, borrowed: &Path, scratch: &Path,
 }
 
 fn copy_refs(repository: &Path, neutral: &Path, borrowed: &Path, scratch: &Path, runner: &Runner<'_>) -> Result<()> {
-    let empty = scratch.join("no-input");
-    std::fs::File::create_new(&empty)?;
-    // Each ref as one `<object> <ref>` line, which is the pre-1.6 `packed-refs` format
-    // (no traits), so git peels an annotated tag by reading its object on demand and
-    // ignores a line whose object the alternates do not hold. Writing the file rather than
-    // `update-ref`, which verifies every object in one transaction, keeps a single dangling
-    // ref from dropping them all. `for-each-ref` skips a malformed ref, names no path, and
-    // a ref name holds no space, so the lines never need quoting. Read with the host's git
-    // configuration, as the revision resolution is, so a repository the run already trusts
-    // stays trusted; `for-each-ref` reports stored object names and runs no configured
-    // program.
     let listing = scratch.join("packed-refs");
-    runner.to_file(
-        "List repository refs",
+    list_refs(repository, &listing, runner, REF_LISTING_LIMIT)?;
+    // Only a complete listing becomes the private repository's refs; a partial one from a
+    // timeout, a crash or the size limit stays in the scratch directory, so `git archive`
+    // runs with no packed refs rather than failing on a truncated file.
+    std::fs::rename(&listing, borrowed.join("packed-refs"))?;
+    mirror_head(repository, neutral, borrowed, runner)
+}
+
+/// The most the ref listing may hold: about 200,000 refs of ordinary length. A repository
+/// with more, which the setup agent could make, gets no copied refs instead of filling
+/// this computer's disk.
+const REF_LISTING_LIMIT: u64 = 16 * 1024 * 1024;
+
+/// Writes `repository`'s refs to `listing`, at most `limit` bytes, each as one
+/// `<object> <ref>` line: the pre-1.6 `packed-refs` format (no traits), so git peels an
+/// annotated tag by reading its object on demand and ignores a line whose object the
+/// alternates do not hold. Writing the file rather than `update-ref`, which verifies every
+/// object in one transaction, keeps a single dangling ref from dropping them all.
+/// `for-each-ref` skips a malformed ref, names no path, and a ref name holds no space, so
+/// the lines never need quoting. Read with the host's git configuration, as the revision
+/// resolution is, so a repository the run already trusts stays trusted; `for-each-ref`
+/// reports stored object names and runs no configured program.
+fn list_refs(repository: &Path, listing: &Path, runner: &Runner<'_>, limit: u64) -> Result<()> {
+    let mut file = std::fs::File::create_new(listing)?;
+    runner.bounded_file(
         Command::new("git")
             .arg("--no-replace-objects")
             .arg("-C")
             .arg(repository)
-            .args(["for-each-ref", "--format=%(objectname) %(refname)"]),
-        &empty,
-        &listing,
+            .args(["for-each-ref", "--format=%(objectname) %(refname)"])
+            .stdin(std::process::Stdio::null()),
+        &mut file,
+        limit,
         Duration::from_secs(60),
     )?;
-    // Only a complete listing becomes the private repository's refs; a partial one from a
-    // timeout or crash stays in the scratch directory, so `git archive` runs with no packed
-    // refs rather than failing on a truncated file.
-    std::fs::rename(&listing, borrowed.join("packed-refs"))?;
-    mirror_head(repository, neutral, borrowed, runner)
+    Ok(())
 }
 
 /// Makes the private HEAD the source's, so `%D` names it as the source does. The source on
@@ -247,7 +256,7 @@ fn isolated<'c>(neutral: &Path, command: &'c mut Command) -> &'c mut Command {
 
 #[cfg(test)]
 mod tests {
-    use super::{alternate_line, isolated};
+    use super::{alternate_line, isolated, list_refs};
     use std::process::Command;
 
     #[test]
@@ -295,5 +304,42 @@ mod tests {
     fn an_alternates_line_keeps_every_byte_of_its_path() {
         let path = std::path::Path::new("/a \"b\\c\nd");
         assert_eq!(alternate_line(path), b"\"/a \\\"b\\\\c\\012d\"\n");
+    }
+
+    #[test]
+    fn a_ref_listing_past_its_limit_is_refused() {
+        let scratch = tempfile::tempdir().unwrap();
+        let repository = scratch.path().join("repository");
+        std::fs::create_dir(&repository).unwrap();
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(&repository)
+                .args(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "one"]);
+        for tag in ["one", "two", "three"] {
+            git(&["tag", tag]);
+        }
+        let cancel = horizon_cloud::Cancellation::default();
+        let runner = super::Runner {
+            cancel: &cancel,
+            emit: &|_| {},
+            secrets: Vec::new(),
+        };
+        let small = scratch.path().join("small");
+        assert!(
+            list_refs(&repository, &small, &runner, 64).is_err(),
+            "a listing past the limit is refused"
+        );
+        let whole = scratch.path().join("whole");
+        list_refs(&repository, &whole, &runner, 1024 * 1024).unwrap();
+        let listed = std::fs::read_to_string(&whole).unwrap();
+        assert_eq!(listed.lines().count(), 4, "{listed}");
     }
 }
