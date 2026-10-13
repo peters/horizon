@@ -598,9 +598,9 @@ Codex stops before it shows its interface.
 
 Thus `horizon-worker-run` starts Codex with `--no-daemon` when `codex --help` shows that
 option. tmux keeps the session when the SSH connection stops, so the session does not need
-the background server. An older Codex has no background server and no `--no-daemon` option,
-so it starts with no option. If you start `codex` yourself in a Shell panel on such a
-volume, add `--no-daemon`.
+the background server. An older Codex has no background server, so the launcher omits
+`--no-daemon` but still applies the selected approval mode. If you start `codex` yourself
+in a Shell panel on such a volume, add `--no-daemon`.
 
 ## Agent approvals
 
