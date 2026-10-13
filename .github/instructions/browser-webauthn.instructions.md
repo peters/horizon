@@ -20,6 +20,9 @@ gives the design, the command contract and the full boundary.
 ## Rules that must hold
 
 - A frame that does not have the same origin as each ancestor is refused.
+- In Chromium, the caller origin is the origin of the calling document (from
+  `Runtime.executionContextCreated`), and the frame tree must show the same
+  origin. An old document must not get the origin of the next document.
 - Only `https://<domain>[:port]` and `http://localhost[:port]` origins are
   served.
 - An empty challenge is a `TypeError` and never starts the command.

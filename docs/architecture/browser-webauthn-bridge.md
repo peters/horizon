@@ -71,6 +71,9 @@ The `browser_panel` and `browser_list` MCP results report
 - The host decides the origin. In Chromium, the driver maps the execution
   context of the binding call to its frame. Then it reads the
   `securityOrigin` of that frame and of each ancestor from `Page.getFrameTree`.
+  The frame origin must be equal to the origin that
+  `Runtime.executionContextCreated` gave for the calling document. Thus an
+  old document cannot use the origin of the next document in its frame.
   In Firefox, the driver reads the origin of the source realm of
   `script.message` from `script.getRealms`. Then it reads the origin of each
   ancestor context of `browsingContext.getTree`.

@@ -21,11 +21,21 @@ use super::{BrowserEventSender, DriverState};
 const MESSAGES_PER_TICK: usize = 4;
 const FRAME_TREE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// What `Runtime.executionContextCreated` reported for one document.
+#[derive(Clone, Debug)]
+struct ContextInfo {
+    frame: String,
+    /// The origin of the document that owns the context. The frame tree
+    /// shows the frame's current document, which can already be the next
+    /// one while the old document still runs.
+    origin: String,
+}
+
 #[derive(Debug)]
 pub(super) struct CdpPasskeys {
     bridge: Bridge<u64>,
-    /// Main-world execution contexts of the page session, by id: frame id.
-    contexts: HashMap<u64, String>,
+    /// Main-world execution contexts of the page session, by id.
+    contexts: HashMap<u64, ContextInfo>,
 }
 
 impl CdpPasskeys {
@@ -238,7 +248,7 @@ impl DriverState {
         frame_slot: &Arc<FrameSlot>,
         context: u64,
     ) -> Result<CallerOrigin, PageError> {
-        let frame = self
+        let caller = self
             .passkeys
             .as_ref()
             .and_then(|passkeys| passkeys.contexts.get(&context).cloned())
@@ -258,8 +268,13 @@ impl DriverState {
                 tracing::warn!(target: "browser", "passkey request could not read the frame tree: {error}");
                 PageError::not_allowed()
             })?;
-        let origin =
-            same_origin_chain(&tree, &frame, self.main_frame_id.as_deref()).ok_or_else(PageError::not_allowed)?;
+        let origin = same_origin_chain(&tree, &caller.frame, self.main_frame_id.as_deref())
+            .ok_or_else(PageError::not_allowed)?;
+        // The frame must still show the calling document's origin, so an old
+        // document cannot borrow the origin of the page that replaces it.
+        if origin != caller.origin {
+            return Err(PageError::not_allowed());
+        }
         CallerOrigin::parse(&origin)
     }
 
@@ -294,12 +309,19 @@ impl DriverState {
             return;
         };
         let main_world = context.pointer("/auxData/isDefault").and_then(Value::as_bool) == Some(true);
-        if let (true, Some(id), Some(frame)) = (
+        if let (true, Some(id), Some(frame), Some(origin)) = (
             main_world,
             context.get("id").and_then(Value::as_u64),
             context.pointer("/auxData/frameId").and_then(Value::as_str),
+            context.get("origin").and_then(Value::as_str),
         ) {
-            passkeys.contexts.insert(id, frame.to_string());
+            passkeys.contexts.insert(
+                id,
+                ContextInfo {
+                    frame: frame.to_string(),
+                    origin: origin.to_string(),
+                },
+            );
         }
     }
 
@@ -312,7 +334,7 @@ impl DriverState {
         let contexts = &passkeys.contexts;
         let replies = passkeys
             .bridge
-            .cancel_for(|context| contexts.get(context).is_some_and(|owner| owner == frame));
+            .cancel_for(|context| contexts.get(context).is_some_and(|info| info.frame == frame));
         for (context, reply) in &replies {
             self.deliver_passkey_reply(link, *context, reply);
         }
