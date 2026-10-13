@@ -260,6 +260,30 @@ fn install_command() -> String {
     )
 }
 
+/// The fields of a stored login that Horizon reads. Tokens are base64url text without
+/// escapes, so they borrow from the input; a login whose tokens do not is no login.
+#[derive(serde::Deserialize)]
+struct Stored<'a> {
+    #[serde(borrow, default)]
+    auth_mode: Option<&'a str>,
+    #[serde(borrow, default)]
+    tokens: Option<StoredTokens<'a>>,
+    #[serde(borrow, default)]
+    last_refresh: Option<&'a str>,
+}
+
+#[derive(serde::Deserialize)]
+struct StoredTokens<'a> {
+    #[serde(borrow, default)]
+    id_token: Option<&'a str>,
+    #[serde(borrow, default)]
+    access_token: Option<&'a str>,
+    #[serde(borrow, default)]
+    refresh_token: Option<&'a str>,
+    #[serde(borrow, default)]
+    account_id: Option<&'a str>,
+}
+
 /// A `ChatGPT` login as Codex stores it: its bytes and what decides which one is newer.
 struct Login {
     bytes: Zeroizing<Vec<u8>>,
@@ -270,23 +294,22 @@ struct Login {
 
 impl Login {
     fn parse(bytes: &[u8]) -> Option<Self> {
-        let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
-        if value.get("auth_mode")?.as_str()? != "chatgpt" {
+        // Borrowed from `bytes`, which is wiped, so no unwiped copy of a token is made.
+        let stored: Stored<'_> = serde_json::from_slice(bytes).ok()?;
+        if stored.auth_mode? != "chatgpt" {
             return None;
         }
-        let tokens = value.get("tokens")?;
-        let text = |name: &str| tokens.get(name)?.as_str().filter(|text| !text.is_empty());
-        text("access_token")?;
-        text("refresh_token")?;
-        let account_id = text("account_id")?.to_owned();
-        let refreshed = value
-            .get("last_refresh")
-            .and_then(serde_json::Value::as_str)
+        let tokens = stored.tokens?;
+        present(tokens.access_token)?;
+        present(tokens.refresh_token)?;
+        let account_id = present(tokens.account_id)?.to_owned();
+        let refreshed = stored
+            .last_refresh
             .and_then(|text| OffsetDateTime::parse(text, &Rfc3339).ok());
         Some(Self {
             account: Account {
                 id: account_id.clone(),
-                ..text("id_token").map(claims).unwrap_or_default()
+                ..present(tokens.id_token).map(claims).unwrap_or_default()
             },
             bytes: Zeroizing::new(bytes.to_vec()),
             account_id,
@@ -305,6 +328,11 @@ impl Login {
     }
 }
 
+/// `value` when it holds text.
+fn present(value: Option<&str>) -> Option<&str> {
+    value.filter(|text| !text.is_empty())
+}
+
 /// The account an ID token names, for display only. Codex checked the token when it
 /// signed in; nothing here relies on these claims for access.
 fn claims(token: &str) -> Account {
@@ -313,6 +341,7 @@ fn claims(token: &str) -> Account {
         .split('.')
         .nth(1)
         .and_then(|part| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(part).ok())
+        .map(Zeroizing::new)
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
     let Some(payload) = payload else {
         return Account::default();
