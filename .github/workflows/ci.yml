@@ -6,8 +6,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Each push to main gets its own group. With a shared group, GitHub keeps only one
+# pending run, so when merges land close together the run of a middle merge is
+# dropped, and the next run diffs only its own push and can skip that merge's
+# Snap and release builds.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || (github.ref == 'refs/heads/main' && github.sha) || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
