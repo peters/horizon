@@ -28,6 +28,7 @@ pub mod progress;
 pub mod project_reservations;
 pub mod project_setup;
 mod providers;
+pub mod publishing;
 pub mod registry;
 pub mod repository;
 pub mod repository_choice;

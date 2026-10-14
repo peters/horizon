@@ -28,6 +28,39 @@ It does not supply an account-switch UI or per-account storage. The launch integ
 provide an explicit sign-in path for a recorded account before activation.
 This helper has no launch caller yet. The launch integration follows separately.
 
+## Machine-local destination preferences
+
+The host can store one destination preference for each canonical checkout and named profile.
+The preference stays in machine-local cloud settings. It does not enter repository YAML.
+A personal preference contains the immutable account ID, account name and its own GHCR namespace.
+A registry preference retains the exact configured publication grant identity across reloads.
+The grant identity contains a hash of its username and immutable credential-file reference.
+Pull-credential rotation does not change the publication grant identity.
+Configured preferences use metadata only and never serialize token values.
+An automatic preview uses the existing private sign-in chain reader to get its cached account name.
+This cached name does not prove authentication. The caller runs this read on a worker thread.
+These metadata helpers do not authenticate an account or prove registry permission.
+
+The source adapter reads the origin with bounded, cancellable Git commands on a worker thread.
+It removes URL credentials before package naming and sends no remote text to output events.
+Without a supported remote, it uses the canonical local checkout path.
+The source host, path and explicit service port distinguish source identities.
+The source text cannot choose the publishing account.
+
+A save holds the shared cloud-settings transaction lock and reads the current settings again.
+It compares the complete previous preference, including the immutable account ID.
+It also checks that the selected registry publication grant still matches its shown identity.
+A stale window cannot replace another window's choice, including another account at the same URI.
+The save preserves unrelated settings and preferences. Cancellation prevents the commit.
+The save refuses settings inside the canonical source repository before it creates a lock.
+Malformed scopes and duplicate checkout/profile pairs are rejected when settings load.
+A removed registry grant does not prevent unrelated clouds from loading settings.
+Selection of that removed grant fails when the host tries to use it.
+
+These helpers have no launch or UI caller yet. They do not change profile parsing or enable image omission.
+The launch integration must authenticate the account and retain the destination before a build.
+It must compare the shown selection again before it uses credentials or paid resources.
+
 ## Destination identity
 
 A destination contains an explicit registry repository and a non-secret publisher identity.
