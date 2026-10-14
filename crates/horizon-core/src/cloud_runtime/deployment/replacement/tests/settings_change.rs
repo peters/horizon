@@ -220,9 +220,14 @@ fn sessions_of_an_agent_the_rebuild_removed_end_and_the_rest_relaunch() {
     }
 }
 
+/// The report of the fixture's Codex session once the profile no longer has Codex.
+const ENDED: &str =
+    "Session agent1 (codex): this cloud's profile no longer has agent codex, so its process was not relaunched";
+
 /// Relaunches the sessions of `state` as a reconnect does, with each relaunch reporting
-/// `status`; returns the output lines and the relaunched panels.
-fn reconnect(store: &Store, state: &mut Deployment, status: i32) -> (Vec<String>, Vec<String>) {
+/// `status`; returns the output lines and the panels it tried to relaunch. A status that
+/// is not a number fails the relaunch.
+fn reconnect(store: &Store, state: &mut Deployment, status: &str) -> (Vec<String>, Vec<String>) {
     state.session_restart = Some(OperationId::generate());
     let contract = WorkerContract {
         session_restart: true,
@@ -231,7 +236,7 @@ fn reconnect(store: &Store, state: &mut Deployment, status: i32) -> (Vec<String>
     };
     let output = RefCell::new(Vec::new());
     let mut commands = Vec::new();
-    relaunch_sessions(
+    let relaunched = relaunch_sessions(
         store,
         state,
         &contract,
@@ -244,15 +249,13 @@ fn reconnect(store: &Store, state: &mut Deployment, status: i32) -> (Vec<String>
             commands.push(command.split(' ').nth(3).unwrap().to_owned());
             Ok(format!("{RELAUNCH_STATUS}{status}\n"))
         },
-    )
-    .unwrap();
+    );
+    assert_eq!(relaunched.is_ok(), status.parse::<i32>().is_ok(), "{relaunched:?}");
     (output.into_inner(), commands)
 }
 
 #[test]
 fn a_removed_agents_session_is_reported_once_and_relaunches_when_the_agent_returns() {
-    const ENDED: &str =
-        "Session agent1 (codex): this cloud's profile no longer has agent codex, so its process was not relaunched";
     const LOST: &str = "Session agent1 (codex) lost its process in the container reset and was not relaunched";
     let fixture = Fixture::with(&json!({"agents":["claude"]}));
     // The mark as the record on disk holds it.
@@ -267,29 +270,54 @@ fn a_removed_agents_session_is_reported_once_and_relaunches_when_the_agent_retur
     {
         let store = fixture.store();
         let mut state = store.load().unwrap().unwrap();
-        assert_eq!(reconnect(&store, &mut state, 0), (vec![ENDED.to_owned()], vec![]));
+        assert_eq!(reconnect(&store, &mut state, "0"), (vec![ENDED.to_owned()], vec![]));
         assert_eq!(mark(), Some(json!(true)));
         // A second reconnect stays quiet.
-        assert_eq!(reconnect(&store, &mut state, 0), (vec![], vec![]));
+        assert_eq!(reconnect(&store, &mut state, "0"), (vec![], vec![]));
     }
     // So does a reconnect after Horizon restarts and reads the record again.
     let store = fixture.store();
     let mut state = store.load().unwrap().unwrap();
     assert!(state.sessions[0].removed_agent_reported);
-    assert_eq!(reconnect(&store, &mut state, 0), (vec![], vec![]));
+    assert_eq!(reconnect(&store, &mut state, "0"), (vec![], vec![]));
     // A rebuild that adds the agent again relaunches the session and clears the mark.
     state.profile.capabilities.agents.insert(Agent::Codex);
-    assert_eq!(reconnect(&store, &mut state, 0), (vec![], vec!["agent1".to_owned()]));
+    assert_eq!(reconnect(&store, &mut state, "0"), (vec![], vec!["agent1".to_owned()]));
     assert_eq!(mark(), None);
     // The mark never hides a session that ends for another reason.
     assert_eq!(
-        reconnect(&store, &mut state, 3),
+        reconnect(&store, &mut state, "3"),
         (vec![LOST.to_owned()], vec!["agent1".to_owned()])
     );
     // Removed again, the session is reported again, once.
     state.profile.capabilities.agents.remove(&Agent::Codex);
-    assert_eq!(reconnect(&store, &mut state, 0), (vec![ENDED.to_owned()], vec![]));
-    assert_eq!(reconnect(&store, &mut state, 0), (vec![], vec![]));
+    assert_eq!(reconnect(&store, &mut state, "0"), (vec![ENDED.to_owned()], vec![]));
+    assert_eq!(reconnect(&store, &mut state, "0"), (vec![], vec![]));
+}
+
+#[test]
+fn a_relaunch_that_fails_keeps_the_report_of_a_removed_agents_session() {
+    let fixture = Fixture::with(&json!({"agents":["claude"]}));
+    fixture.edit(|state| {
+        state.sessions.push(Session {
+            panel_id: "agent2".into(),
+            agent: "claude".into(),
+            tmux: "agent2".into(),
+            branch: "agent/agent2".into(),
+            worktree: "/workspace/agents/agent2".into(),
+            removed_agent_reported: false,
+        });
+    });
+    let store = fixture.store();
+    let mut state = store.load().unwrap().unwrap();
+    assert_eq!(
+        reconnect(&store, &mut state, "unconfirmed"),
+        (vec![ENDED.to_owned()], vec!["agent2".to_owned()])
+    );
+    // The retry relaunches the other session and does not report the removed one again.
+    let mut state = store.load().unwrap().unwrap();
+    assert!(state.session_restart.is_some() && state.sessions[0].removed_agent_reported);
+    assert_eq!(reconnect(&store, &mut state, "0"), (vec![], vec!["agent2".to_owned()]));
 }
 
 fn git(path: &Path, args: &[&str]) {
