@@ -4,6 +4,7 @@
 
 mod capabilities;
 pub mod companions;
+pub mod docker_host;
 pub mod github;
 pub mod hetzner;
 pub mod host;

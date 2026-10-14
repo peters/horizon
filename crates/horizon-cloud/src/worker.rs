@@ -84,6 +84,25 @@ impl WorkerSpec {
             .flatten()
             .map(|minutes| minutes.to_string())
     }
+    /// The environment a provider that runs the worker image itself gives its
+    /// container. Nothing in it is secret.
+    /// # Errors
+    /// Fails only if the capabilities cannot be serialized.
+    pub fn container_environment(&self) -> Result<BTreeMap<String, String>, CloudError> {
+        let mut environment = BTreeMap::from([
+            ("PUBLIC_KEY".to_owned(), self.public_key.clone()),
+            ("HORIZON_CLOUD_OPERATION".to_owned(), self.operation_id.clone()),
+            (
+                "HORIZON_WORKER_CAPABILITIES".to_owned(),
+                serde_json::to_string(&self.profile.capabilities)
+                    .map_err(|_| CloudError::Invalid("Worker capabilities cannot be described"))?,
+            ),
+        ]);
+        if let Some(minutes) = self.idle_stop_environment() {
+            environment.insert(crate::IDLE_STOP_ENVIRONMENT_KEY.to_owned(), minutes);
+        }
+        Ok(environment)
+    }
     /// # Errors
     /// Requires immutable images, supported profiles and explicit GPU selection.
     pub fn validate(&self) -> Result<(), CloudError> {
@@ -300,6 +319,11 @@ pub struct Worker {
     pub network_zone: Option<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// The Docker host whose loopback publishes this worker's SSH, which is reached
+    /// through that host. Omitted for other providers, so their records re-encode byte
+    /// for byte.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docker_host: Option<Box<crate::docker_host::Host>>,
 }
 impl Worker {
     /// The data center the worker landed in, from the pod or its workspace volume.

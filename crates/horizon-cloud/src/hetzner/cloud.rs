@@ -9,7 +9,6 @@ use super::{
 };
 use crate::{CloudError, CreateState, Worker, WorkerSpec, WorkerStatus, host};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
 mod lifecycle;
 mod provision;
@@ -254,22 +253,10 @@ pub fn supported(spec: &WorkerSpec) -> Result<(), CloudError> {
 /// # Errors
 /// Fails only if the capabilities cannot be serialized.
 pub fn plan(spec: &WorkerSpec, device: &str, registry: Option<host::RegistryLogin>) -> Result<host::Plan, CloudError> {
-    let mut environment = BTreeMap::from([
-        ("PUBLIC_KEY".to_owned(), spec.public_key.clone()),
-        ("HORIZON_CLOUD_OPERATION".to_owned(), spec.operation_id.clone()),
-        (
-            "HORIZON_WORKER_CAPABILITIES".to_owned(),
-            serde_json::to_string(&spec.profile.capabilities)
-                .map_err(|_| CloudError::Invalid("Worker capabilities cannot be described"))?,
-        ),
-    ]);
     // The watcher only records idle time here; Horizon stops the server from that record.
-    if let Some(minutes) = spec.idle_stop_environment() {
-        environment.insert(crate::IDLE_STOP_ENVIRONMENT_KEY.to_owned(), minutes);
-    }
     Ok(host::Plan {
         image: spec.image_digest.clone(),
-        environment,
+        environment: spec.container_environment()?,
         registry,
         workspace_device: device.to_owned(),
         shm_gb: shared_memory_gb(spec.profile.memory_gb),
@@ -277,7 +264,7 @@ pub fn plan(spec: &WorkerSpec, device: &str, registry: Option<host::RegistryLogi
 }
 
 /// A quarter of the worker's memory for Chromium's shared memory, within the host's limits.
-fn shared_memory_gb(memory_gb: u16) -> u8 {
+pub(crate) fn shared_memory_gb(memory_gb: u16) -> u8 {
     u8::try_from((memory_gb / 4).clamp(1, 16)).unwrap_or(1)
 }
 
