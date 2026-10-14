@@ -62,6 +62,9 @@ pub(in crate::app::cloud_panel::production) struct State {
     repository: String,
     mirrored: String,
     parsed_for: String,
+    /// Whether the text was a search of the account's list when it was read, and that list.
+    parsed_filtering: bool,
+    parsed_list: (usize, usize),
     remote: Option<Remote>,
     folder: Option<PathBuf>,
     parent: Option<PathBuf>,
@@ -144,9 +147,32 @@ impl State {
         self.mirrored.clone_from(&self.input);
     }
 
+    /// Which list of the account's repositories is held, by place and length: a list fetched
+    /// again is another one.
+    fn list_key(&self) -> (usize, usize) {
+        self.account
+            .as_ref()
+            .and_then(|account| account.repositories.as_ref())
+            .map_or((0, 0), |list| (list.as_ptr() as usize, list.len()))
+    }
+
     /// The repository a pasted link names, unless the text is a folder that exists.
     fn remote(&mut self) -> Option<&Remote> {
+        // The account's list may arrive, change or go after the text was read, and with it
+        // whether the text is a search of it. Only that is read again then, once per list:
+        // a token or an answer that came with the text stays.
+        let list = self.list_key();
+        if self.parsed_for == self.input && self.parsed_list != list {
+            self.parsed_list = list;
+            let filtering = self.filters_the_list();
+            if filtering != self.parsed_filtering {
+                self.parsed_filtering = filtering;
+                let path = typed_path(&self.input);
+                self.remote = source::parse(&self.input).filter(|_| !filtering && !holds_repository(&path));
+            }
+        }
         if self.parsed_for != self.input {
+            self.parsed_list = list;
             let mut pasted = self.take_credentials();
             self.parsed_for.clone_from(&self.input);
             let path = typed_path(&self.input);
@@ -156,6 +182,7 @@ impl State {
             // folder that happens to have that name. Text that narrows the connected account's
             // list is not looked up until it names a listed repository in full.
             let filtering = self.filters_the_list();
+            self.parsed_filtering = filtering;
             self.remote = source::parse(&self.input).filter(|_| !filtering && !holds_repository(&path));
             // A token was pasted for one origin (scheme, host and port) and goes to no other.
             if before.as_deref() != self.remote.as_ref().map(|remote| origin(&remote.url)) {

@@ -32,48 +32,60 @@ fn lower(letter: char) -> char {
     letter.to_lowercase().next().unwrap_or(letter)
 }
 
+/// The best-scoring way to find `word` in order in `text`: over every place each letter
+/// occurs, not only the first that fits, so a later run or start of a word wins over
+/// scattered letters before it. Among equals the earliest places are kept.
 fn word_match(word: &[char], text: &[char]) -> Option<Match> {
-    let mut positions = Vec::with_capacity(word.len());
-    let mut from = 0;
-    for (index, wanted) in word.iter().enumerate() {
-        let rest = &word[index + 1..];
-        let candidates = (from..text.len()).filter(|&at| text[at] == *wanted);
-        let mut chosen = None;
-        for at in candidates {
-            // The first place that still leaves room for the rest of the word, unless a
-            // later one continues a run or starts a word.
-            if !fits(rest, &text[at + 1..]) {
-                break;
-            }
-            let follows = positions.last().is_some_and(|&last| last + 1 == at);
-            if chosen.is_none() {
-                chosen = Some(at);
-            }
-            if follows || boundary(text, at) {
-                chosen = Some(at);
-                break;
-            }
-        }
-        let at = chosen?;
-        positions.push(at);
-        from = at + 1;
+    if !fits(word, text) {
+        return None;
     }
-    let mut score = 0;
     let name_starts = text.iter().rposition(|&c| c == '/').map_or(0, |slash| slash + 1);
-    for (index, &at) in positions.iter().enumerate() {
-        score += 10;
-        if boundary(text, at) {
-            score += 25;
+    // What a letter found at `at` is worth by itself.
+    let gain = |at: usize| 10 + if boundary(text, at) { 25 } else { 0 } + if at >= name_starts { 5 } else { 0 };
+    // What following the letter at `previous` with one at `at` is worth: a run, or a gap.
+    let link = |previous: usize, at: usize| {
+        if previous + 1 == at {
+            15
+        } else {
+            -i32::try_from((at - previous - 1).min(10)).unwrap_or(10)
         }
-        if index > 0 && positions[index - 1] + 1 == at {
-            score += 15;
-        } else if index > 0 {
-            let gap = at - positions[index - 1] - 1;
-            score -= i32::try_from(gap.min(10)).unwrap_or(10);
+    };
+    // For each letter of the word, each place it occurs with the best score of the word up
+    // to it there, and the place in the layer before that score came from.
+    let mut layers: Vec<Vec<(usize, i32, usize)>> = Vec::with_capacity(word.len());
+    for (index, wanted) in word.iter().enumerate() {
+        let mut layer = Vec::new();
+        for at in (0..text.len()).filter(|&at| text[at] == *wanted) {
+            let Some(before) = index.checked_sub(1).map(|previous| &layers[previous]) else {
+                layer.push((at, gain(at), usize::MAX));
+                continue;
+            };
+            let best = before
+                .iter()
+                .enumerate()
+                .filter(|(_, (previous, _, _))| *previous < at)
+                .map(|(from, (previous, score, _))| (score + link(*previous, at), from))
+                .max_by_key(|&(score, from)| (score, std::cmp::Reverse(from)));
+            if let Some((score, from)) = best {
+                layer.push((at, score + gain(at), from));
+            }
         }
-        if at >= name_starts {
-            score += 5;
+        if layer.is_empty() {
+            return None;
         }
+        layers.push(layer);
+    }
+    let last = layers.last()?;
+    let (mut from, mut score) = last
+        .iter()
+        .enumerate()
+        .map(|(from, (_, score, _))| (from, *score))
+        .max_by_key(|&(from, score)| (score, std::cmp::Reverse(from)))?;
+    let mut positions = vec![0; word.len()];
+    for (index, layer) in layers.iter().enumerate().rev() {
+        let (at, _, back) = layer[from];
+        positions[index] = at;
+        from = back;
     }
     let name: String = text[name_starts..].iter().collect();
     let word: String = word.iter().collect();
@@ -106,6 +118,13 @@ mod tests {
         assert!(score("hzn", "horizon").is_some());
         assert!(score("nzh", "horizon").is_none());
         assert!(score("", "anything").is_some());
+    }
+
+    #[test]
+    fn a_later_run_wins_over_scattered_letters_before_it() {
+        let found = score("ab", "a-ab").unwrap();
+        assert_eq!(found.positions, [2, 3]);
+        assert!(found.score > score("ab", "axxb").unwrap().score);
     }
 
     #[test]

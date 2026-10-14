@@ -160,6 +160,26 @@ fn a_name_that_narrows_the_list_is_no_unknown_link() {
 }
 
 #[test]
+fn a_list_that_arrives_after_the_text_makes_it_a_search() {
+    let mut state = super::super::State::default();
+    state.input = "acme/we".into();
+    assert!(state.remote().is_some(), "without a list it is a repository to look up");
+    let mut account = account();
+    account.repositories = Some(vec!["acme/web".into()]);
+    state.account = Some(account);
+    assert!(state.remote().is_none(), "with the list it narrows, it is a search");
+    state.account = None;
+    assert!(state.remote().is_some(), "and a repository again once the list is gone");
+    // A token pasted for the link stays when a list arrives later and leaves it as it was.
+    state.token = "token".into();
+    let mut other = self::account();
+    other.repositories = Some(vec!["octo/other".into()]);
+    state.account = Some(other);
+    assert!(state.remote().is_some());
+    assert_eq!(state.token.as_str(), "token");
+}
+
+#[test]
 fn a_token_for_the_repository_in_the_field_is_used_once_and_never_kept() {
     let temp = tempfile::tempdir().unwrap();
     let remote = horizon_core::cloud_runtime::repository::source::parse("github.com/acme/private").unwrap();
