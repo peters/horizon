@@ -58,3 +58,11 @@ the card. See `docs/upkeep.md` for its limits and trust boundaries.
 
 Browser provider catalogs and browser sessions use `horizon-browser`.
 This skill does not install servers, start resources, or enable network access on load.
+
+Worker startup requires root-owned POSIX storage and agent privilege separation.
+The startup mount check can seal only an empty writable `/workspace` to 0755;
+safe retained roots are unchanged. Nonempty writable roots, another owner,
+symlinks or ineffective permission changes refuse startup. Fixed failure codes
+and numeric UID/GID/mode/capability diagnostics contain no credentials. This
+prerequisite applies with None too; it grants no workspace access or tailnet
+policy permission. See the worker workspace storage test procedure.

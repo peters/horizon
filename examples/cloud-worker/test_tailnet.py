@@ -426,7 +426,7 @@ class TailnetTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0, stdout=self.call(*command[2:]))
 
         for command, expected in [('resume', worker.TAG_ERROR),
-                                  ('isolate', 'Tailnet operation failed. Check key validity, worker storage permissions and restart privileged sessions.')]:
+                                  ('isolate', 'Worker storage/isolation prerequisite failed')]:
             with self.subTest(command=command), \
                     patch('pathlib.Path', side_effect=path), patch('os.stat', side_effect=stat), \
                     patch('subprocess.run', side_effect=run), \
@@ -436,7 +436,11 @@ class TailnetTests(unittest.TestCase):
                 with self.assertRaises(SystemExit) as stopped:
                     runpy.run_path(str(real_path(__file__).with_name('horizon-worker-tailnet')), run_name='__main__')
                 self.assertEqual(stopped.exception.code, 1)
-                self.assertEqual(errors.getvalue(), expected + '\n')
+                if command == 'isolate':
+                    self.assertTrue(errors.getvalue().startswith(expected))
+                    self.assertNotIn('tagOwners', errors.getvalue())
+                else:
+                    self.assertEqual(errors.getvalue(), expected + '\n')
                 self.assertEqual(output.getvalue(), '')
                 self.assertNotIn(KEY, errors.getvalue())
         self.assertIn(('logout',), self.calls)

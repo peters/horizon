@@ -150,9 +150,20 @@ agent identity. Private credential files must never enter source, images or logs
 
 The control service, `horizon-cloud-worker serve`, hosts the cloud browsers. On a
 worker with agent isolation, the supervisor starts it as UID 10001 through the
-isolation launcher, as it starts the desktop services. The stock image starts
-agent isolation (`horizon-worker-tailnet isolate`) before the supervisor. The
-browser tools of an agent and the control service then use one browser runtime
+isolation launcher, as it starts the desktop services. The stock image first runs
+`horizon-worker-tailnet prepare-workspace`, then starts agent isolation
+(`horizon-worker-tailnet isolate`) before the supervisor. Mount protection is
+metadata only: it can change an **empty**, root-owned, group/other-writable
+`/workspace` to 0755, using a no-follow directory descriptor and verifying the
+same named inode, actual mode and emptiness after the change. It creates no
+workspace content and changes no owner. Safe retained roots are unchanged;
+nonempty writable roots, other owners, symlinks and storage that ignores POSIX
+permission changes are refused before SSH. Initialization still owns repository
+and application content. Startup failures report a fixed prerequisite code,
+numeric workspace UID/GID/mode and capability masks, never exception contents,
+private input or environment values. See [the storage procedure](../../docs/testing/procedures/worker-workspace-storage.md).
+
+The browser tools of an agent and the control service then use one browser runtime
 root, `/workspace/home/.horizon`, with one owner. The cloud browsers also run as
 UID 10001. Root writes no browser state in that directory. At worker start, root
 can only change the owner of its entries, as the next paragraphs tell.

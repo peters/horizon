@@ -30,3 +30,12 @@ These limits are deliberate in this milestone:
 - An image's contract declaration does not prove that a malicious image is honest.
 
 Do not request these deferred features as fixes to the enrollment milestone.
+
+Startup storage prerequisite: read docs/testing/procedures/worker-workspace-storage.md.
+An empty writable root may be sealed only via a held no-follow root-owned directory
+FD, with FD/path/mode/empty checks afterward. Never adopt nonempty retained writable
+state or change another owner's directory. HORIZON_WORKER_STARTUP is not freshness
+proof. Protect metadata before either startup branch writes content; no SSH bypass
+on failure. Preserve strict isolate/private directory enforcement. Report raw
+exception/environment/key data in diagnostics or permission-check weakening.
+Actual RunPod failure cause/support remains unverified until real candidate proof.

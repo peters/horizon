@@ -2,7 +2,9 @@
 set -euo pipefail
 umask 077
 : "${PUBLIC_KEY:?SSH public key is required}"
-# New allocations start SSH only; initialization owns the first workspace write.
+# Seal only an empty writable mount root; no repository/application content is initialized.
+horizon-worker-tailnet prepare-workspace
+# New allocations start SSH only; authenticated initialization owns repository/application content.
 if [[ ${HORIZON_WORKER_STARTUP+x} ]]; then
     mkdir -p /run/sshd
     horizon-cloud-worker prepare-allocation-ssh

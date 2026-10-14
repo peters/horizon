@@ -38,14 +38,97 @@ class InvalidStatus(ValueError):
     """Malformed status cannot prove that enrollment is restricted."""
 
 
+class WorkerStorageRequired(ValueError):
+    """A fixed startup prerequisite, never a raw exception or private input."""
+    CODES = {'control-user', 'workspace-type', 'workspace-owner', 'workspace-changed',
+             'agent-account', 'privileged-agent', 'ownership-handoff', 'workspace-entry-type',
+             'retained-writable', 'mode-enforcement', 'concurrent-writer', 'storage-operation',
+             'workspace-mode', 'private-directory', 'private-directory-operation', 'private-runtime', 'agent-isolation', 'browser-handoff', 'privilege-drop'}
+
+    def __init__(self, code):
+        self.code = code if isinstance(code, str) and code in self.CODES else 'prerequisite'
+        super().__init__(self.code)
+
+    def diagnostic(self):
+        fields = ['code=' + self.code]
+        try:
+            info = Path('/workspace').lstat()
+            fields.extend(['workspace_uid=' + str(info.st_uid), 'workspace_gid=' + str(info.st_gid),
+                           'workspace_mode=' + oct(stat.S_IMODE(info.st_mode))])
+        except OSError:
+            pass
+        try:
+            for line in Path('/proc/self/status').read_text().splitlines():
+                name, _, value = line.partition(':')
+                if name in {'CapEff', 'CapBnd'} and re.fullmatch(r'[0-9a-fA-F]{1,32}', value.strip()):
+                    fields.append(name.lower() + '=' + value.strip().lower())
+        except (OSError, ValueError):
+            pass
+        return ('Worker storage/isolation prerequisite failed (' + ', '.join(fields) + '). '
+                'Use root-owned POSIX storage and a runtime that supports agent privilege separation. '
+                'Retained writable storage cannot be adopted. Worker isolation was refused.')
+
+
+def prepare_workspace():
+    # Metadata only, before startup's first content write. Never adopt retained unsafe data.
+    if os.geteuid() != 0:
+        raise WorkerStorageRequired('control-user')
+    workspace = Path('/workspace')
+    try:
+        descriptor = os.open(workspace, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as error:
+        raise WorkerStorageRequired('workspace-type') from error
+    try:
+        def snapshot():
+            held, named = os.fstat(descriptor), workspace.lstat()
+            if not stat.S_ISDIR(held.st_mode) or not stat.S_ISDIR(named.st_mode):
+                raise WorkerStorageRequired('workspace-type')
+            if held.st_uid != 0 or named.st_uid != 0:
+                raise WorkerStorageRequired('workspace-owner')
+            if (held.st_dev, held.st_ino, stat.S_IMODE(held.st_mode)) != (named.st_dev, named.st_ino, stat.S_IMODE(named.st_mode)):
+                raise WorkerStorageRequired('workspace-changed')
+            return held
+
+        info = snapshot()
+        if not info.st_mode & 0o022:
+            return
+        if os.listdir(descriptor):
+            raise WorkerStorageRequired('retained-writable')
+        os.fchmod(descriptor, 0o755)
+        if stat.S_IMODE(snapshot().st_mode) != 0o755:
+            raise WorkerStorageRequired('mode-enforcement')
+        if os.listdir(descriptor):
+            raise WorkerStorageRequired('concurrent-writer')
+        if stat.S_IMODE(snapshot().st_mode) != 0o755:
+            raise WorkerStorageRequired('mode-enforcement')
+    except WorkerStorageRequired:
+        raise
+    except OSError as error:
+        raise WorkerStorageRequired('storage-operation') from error
+    finally:
+        os.close(descriptor)
+
+
+def isolation_step(code, operation):
+    try:
+        operation()
+    except WorkerStorageRequired:
+        raise
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        raise WorkerStorageRequired(code) from error
+
+
 def private_directory(path):
-    if path.is_symlink():
-        raise ValueError()
-    path.mkdir(mode=0o700, exist_ok=True)
-    os.chmod(path, 0o700)
-    info = path.stat()
-    if info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o700:
-        raise ValueError()
+    try:
+        if path.is_symlink():
+            raise WorkerStorageRequired('private-directory')
+        path.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(path, 0o700)
+        info = path.stat()
+        if info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o700:
+            raise WorkerStorageRequired('private-directory')
+    except OSError as error:
+        raise WorkerStorageRequired('private-directory-operation') from error
 
 
 def call(*args, **kwargs):
@@ -178,13 +261,17 @@ def prepare_agents():
     # directory or install startup code. FUSE volumes synthesizing permissive modes fail.
     workspace = Path('/workspace')
     info = workspace.lstat()
-    if info.st_uid != 0 or info.st_mode & 0o022 or workspace.is_symlink():
-        raise ValueError()
+    if not stat.S_ISDIR(info.st_mode) or workspace.is_symlink():
+        raise WorkerStorageRequired('workspace-type')
+    if info.st_uid != 0:
+        raise WorkerStorageRequired('workspace-owner')
+    if info.st_mode & 0o022:
+        raise WorkerStorageRequired('workspace-mode')
     for flag in ['-u', '-g']:
         identity = subprocess.run(['/usr/bin/id', flag, 'horizon-agent'], check=True, timeout=20,
                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout
         if identity.strip() != str(USER).encode():
-            raise ValueError('Worker agent identity does not match the isolation launcher')
+            raise WorkerStorageRequired('agent-account')
     # Do not enroll alongside a pre-existing privileged agent. Stop and resume first.
     for process in Path('/proc').iterdir():
         if not process.name.isdecimal():
@@ -193,7 +280,7 @@ def prepare_agents():
             command = (process / 'cmdline').read_bytes().split(b'\0')
             if process.stat().st_uid == 0 and any(Path(os.fsdecode(arg)).name in
                     {'codex', 'claude', 'grok', 'horizon-worker-run'} for arg in command if arg):
-                raise ValueError()
+                raise WorkerStorageRequired('privileged-agent')
         except (FileNotFoundError, PermissionError):
             pass
     handoff()
@@ -358,11 +445,14 @@ def wait_socket():
 
 def own(path, recursive=False):
     if path.is_symlink():
-        raise ValueError()
+        raise WorkerStorageRequired('workspace-entry-type')
     if path.exists() and (recursive or path.stat().st_uid != USER):
-        subprocess.run(['/usr/bin/chown', *(['-R'] if recursive else []), '--no-dereference',
-                        f'{USER}:{USER}', str(path)], check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            subprocess.run(['/usr/bin/chown', *(['-R'] if recursive else []), '--no-dereference',
+                            f'{USER}:{USER}', str(path)], check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError) as error:
+            raise WorkerStorageRequired('ownership-handoff') from error
 
 
 def handoff():
@@ -529,11 +619,13 @@ def main():
         stage(sys.argv[2])
     elif len(sys.argv) == 3 and sys.argv[1] == 'copy-uploads':
         copy_uploads(json.loads(sys.argv[2]))
+    elif sys.argv[1:] == ['prepare-workspace']:
+        prepare_workspace()
     elif sys.argv[1:] == ['isolate']:
-        private_directory(RUNTIME)
-        prepare_agents()
-        handoff_browser_root()
-        agent(['/usr/bin/true'])
+        isolation_step('private-runtime', lambda: private_directory(RUNTIME))
+        isolation_step('agent-isolation', prepare_agents)
+        isolation_step('browser-handoff', handoff_browser_root)
+        isolation_step('privilege-drop', lambda: agent(['/usr/bin/true']))
     elif sys.argv[1:] == ['resume']:
         private_directory(RUNTIME)
         record_name()
@@ -568,6 +660,9 @@ if __name__ == '__main__':
         main()
     except WorkerTagRequired:
         print(TAG_ERROR, file=sys.stderr)
+        sys.exit(1)
+    except WorkerStorageRequired as error:
+        print(error.diagnostic(), file=sys.stderr)
         sys.exit(1)
     except Exception:
         print('Tailnet operation failed. Check key validity, worker storage permissions and restart privileged sessions.', file=sys.stderr)

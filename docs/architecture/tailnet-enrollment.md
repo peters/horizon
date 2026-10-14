@@ -53,3 +53,27 @@ The **None** choice remains compatible with older images.
 
 See [the cloud guide](../cloud-workspaces.md#tailnets-auth-key-mvp) and
 [the test procedure](../testing/procedures/tailnet-tagged-enrollment.md).
+
+## Startup storage prerequisite
+
+Before either startup branch writes workspace content, `prepare-workspace`
+protects the mount metadata. It opens existing `/workspace` as a directory with
+`O_NOFOLLOW`, verifies root ownership and FD/path identity, and seals only an
+empty writable root to 0755. It verifies real permissions, identity and emptiness
+again. This narrow pre-initialization metadata write removes untrusted write
+access; it is not repository initialization, owner approval or permission to
+adopt existing state. HORIZON_WORKER_STARTUP is not proof of a fresh volume.
+
+An already safe retained root is unchanged. Retained writable data, other owners,
+symlinks, races and ineffective chmod are refused. The strict isolate and private
+control-directory checks remain active, with both None and selected tailnets.
+Failure diagnostics contain only fixed codes, numeric workspace ownership/mode
+and kernel capability masks. Exception messages, environment and file contents
+never enter the diagnostic. A runtime that cannot chown/drop privileges or
+storage that cannot enforce root-only control permissions remains unsupported.
+
+The published FB image was observed to fail before SSH on one RunPod GPU fixture;
+no key had been sent. Offline POSIX/capability cases reproduce that generic failure,
+but the actual provider cause is still unverified. Do not infer provider support
+from these tests; qualify an image built with this source on first/final heads.
+See [the startup storage procedure](../testing/procedures/worker-workspace-storage.md).
