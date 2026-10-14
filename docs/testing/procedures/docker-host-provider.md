@@ -42,9 +42,17 @@ the cloud's own container and volume.
 ## 4. Equipment and preconditions
 
 - A Linux computer with Docker and Git, and the Horizon checkout.
+- On each Docker host: a stable Docker Engine 28 or later with Linux
+  containers. This computer needs 4 free CPUs and 8 GB of free memory, because
+  tasks D1 and D5 run two clouds at the same time; a remote host needs 2 CPUs
+  and 4 GB.
+  Horizon refuses older engines, because they let other hosts reach ports
+  published on the loopback.
 - For task D3: a remote host that `ssh <host> true` reaches without a
   password prompt. On that host, the SSH user has access to Docker, and
   `docker` is at a known absolute path.
+- For task D6: the isolated Horizon desktop of
+  [the device-smoke runbook](../../../scripts/device-smoke/README.md#horizon-inside-a-native-vnc-device-panel).
 - Network access to `ghcr.io` to pull the public worker base image.
 
 ## 5. Setup
@@ -54,12 +62,14 @@ the cloud's own container and volume.
 
    Result: The builds and the test files go to these directories.
 
-2. Run `cargo build -p horizon-core --example cloud_deploy`.
+2. Run `cargo build -p horizon-core --example cloud_deploy`, then set
+   `cloud_deploy="$CARGO_TARGET_DIR/debug/examples/cloud_deploy"`.
 
-   Result: The `cloud_deploy` example is built.
+   Result: The `cloud_deploy` example is built, and `"$cloud_deploy"` names it.
 
-3. Make a test directory `$T`. Make a Git repository in `$T/repo` with one
-   commit. Put this text in `$T/repo/.horizon/cloud.yml` before the commit:
+3. Make a test directory `$T` outside your home, for example under
+   `/var/tmp`, so that the fixture of task D6 can read it. Make a Git
+   repository in `$T/repo` with one commit. Put this text in `$T/repo/.horizon/cloud.yml` before the commit:
 
    ```yaml
    version: 1
@@ -84,7 +94,8 @@ the cloud's own container and volume.
 
 5. Write `$T/settings.json` with absolute paths in `$T` for
    `runpod_key_file`, `ssh_identity_file` (the new key) and `docker_config`,
-   `cpu_flavors: ["cpu3c"]`, `gpu_types: []`, and this host list:
+   `registry_pull_auth_id: null` (the image is public), `cpu_flavors: ["cpu3c"]`,
+   `gpu_types: []`, and this host list:
 
    ```json
    "docker_hosts": [{"name": "this-pc", "access": "this-pc"}]
@@ -99,7 +110,7 @@ the cloud's own container and volume.
 
 ## 6. Tasks
 
-In each command, `cloud_deploy` is the example from setup step 2.
+In each command, `cloud_deploy` stands for `"$cloud_deploy"` from setup step 2.
 
 ### 6.1 D1: Two clouds on this computer
 
@@ -141,12 +152,28 @@ In each command, `cloud_deploy` is the example from setup step 2.
 
    Result: The settings name the remote host.
 
-2. Run `cloud_deploy deploy $T/settings-remote.json $T/repo local $T/state/remote test-remote`.
+2. On the remote host, write down its baseline with a private Docker
+   configuration, so that no credential store is asked:
+   `d=$(mktemp -d); echo '{"auths":{"horizon.invalid":{}}}' > "$d/config.json"`,
+   then `DOCKER_CONFIG="$d" <docker path> -H unix:///var/run/docker.sock ps -aq | wc -l`
+   and the same with `volume ls -q`. Remove `$d` after task D4.
 
-   Result: The cloud is ready. An ARM host runs the arm64 build of the worker
-   image, and `uname -m` in the worker shows `aarch64`.
+   Result: You have the remote baseline counts.
 
-3. Run `cloud_deploy stop`, `reconcile`, `resume` and `reconcile` with
+3. Run `cloud_deploy deploy $T/settings-remote.json $T/repo local $T/state/remote test-remote`.
+
+   Result: The cloud is ready.
+
+4. Run `cloud_deploy endpoint $T/settings-remote.json $T/state/remote`. Then
+   run `ssh -F none -o StrictHostKeyChecking=yes -o HostKeyAlias=<host_key_alias>
+   -o UserKnownHostsFile=<known_hosts> -o "ProxyCommand=<proxy_command>"
+   -i <identity_file> -p <port> root@127.0.0.1 uname -m` with the printed values.
+
+   Result: SSH accepts the pinned worker host key through the host. On an ARM
+   host, `uname -m` shows `aarch64`: the host runs the arm64 build of the
+   worker image.
+
+5. Run `cloud_deploy stop`, `reconcile`, `resume` and `reconcile` with
    `$T/settings-remote.json` and `$T/state/remote`.
 
    Result: The reports show `inactive` after the stop and `found` after the
@@ -166,7 +193,8 @@ In each command, `cloud_deploy` is the example from setup step 2.
 
 2. Count the containers and volumes on each host again.
 
-   Result: The counts are the same as the baseline counts from setup step 6.
+   Result: The counts are the same as the baseline counts from setup step 6
+   and, for the remote host, from task D3 step 2.
    No container or volume with the label `io.horizon.cloud` remains for the
    test clouds.
 
@@ -182,18 +210,25 @@ In each command, `cloud_deploy` is the example from setup step 2.
 
 ### 6.6 D6: The Docker mark in New cloud
 
-1. Start the candidate in an isolated Horizon desktop that a native VNC Device
-   panel shows, with the settings of setup step 5 and `$T/repo` as the
-   repository.
+1. Run `cargo build -p horizon-ui --bin horizon`. Start that binary with
+   `python3 scripts/device-smoke/serve.py --horizon "$CARGO_TARGET_DIR/debug/horizon"
+   --native-view --state $S`, where `$S` is a new directory outside your home
+   (the fixture masks the home), and show it in a native VNC Device panel.
+   Inside the fixture, your home is `$S/data/home`. Run
+   `mkdir -p -m 700 $S/data/home/.horizon/cloud`, then make a key there with
+   `ssh-keygen -t ed25519 -N '' -f $S/data/home/.horizon/cloud/worker_ed25519`.
+   Write the settings of setup step 5 to
+   `$S/data/home/.horizon/cloud/settings.json`, with paths as the fixture sees
+   them: `$HOME/.horizon/cloud/...` with your real `$HOME` value.
 
-   Result: Horizon starts on the isolated desktop.
+   Result: Horizon starts on the isolated desktop and reads those settings.
 
 2. Open **New cloud** for `$T/repo` and select the profile `local`.
 
    Result: The provider mark is the blue Docker whale, sharp at the dialog's
    size, in the light and the dark theme. The checks show "Docker host saved;
    nothing is rented". **Start cloud** stays off with "New cloud cannot start a
-   cloud on a Docker host yet.", also when a rented provider's offer is chosen.
+   cloud on a Docker host yet."
 
 ## 7. Pass criteria
 
