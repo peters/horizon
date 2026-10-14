@@ -299,8 +299,8 @@ fn exchange(
         secrets: Vec::new(),
     };
     // The policy goes first: the loop that the exchange keeps running starts no agent on a
-    // worker without it. A Run now then waits for an exchange that set it, so it is not
-    // spent on a run that starts no agent; the rest of the exchange still goes.
+    // worker without it. A Run now then waits, with the whole exchange, for one that sets
+    // it, so it is not spent on a run that starts no agent; without one the exchange goes on.
     if let Err(error) = worker::policy::send(&connection, &runner, cloud_id, &config) {
         tracing::warn!(cloud = %cloud_id, %error, "the worker did not take the Upkeep policy of its GitHub access");
         if signals.run_now {

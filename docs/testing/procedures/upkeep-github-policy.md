@@ -80,8 +80,10 @@ changes that an Upkeep never needs, and that the board shows the refusals.
 
    Result: GitHub has the branch with the commit.
 
-2. Run `gh pr create --repo <repo> --head policy-check --title "Policy check" --body x`,
-   then `gh pr comment` and `gh pr edit --add-label` on it.
+2. Run `gh pr create --repo <repo> --head policy-check --title "Policy check" --body x`
+   and note its number `<number>`. Then run `gh label create policy-check --repo <repo>`,
+   `gh pr comment <number> --repo <repo> --body x` and
+   `gh pr edit <number> --repo <repo> --add-label policy-check`.
 
    Result: Each command works.
 
@@ -97,8 +99,8 @@ changes that an Upkeep never needs, and that the board shows the refusals.
 
 ### 6.4 GPO-04: Delete the cloud
 
-1. Close the pull request of GPO-02 and delete the branch `policy-check`. Remove the
-   Upkeep cloud from its card and confirm the deletion.
+1. Close the pull request of GPO-02, and delete the branch and the label `policy-check`.
+   Remove the Upkeep cloud from its card and confirm the deletion.
 
    Result: Hetzner shows no server or volume of the cloud.
 

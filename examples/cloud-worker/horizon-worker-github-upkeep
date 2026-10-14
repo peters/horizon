@@ -148,6 +148,8 @@ def install(store, common, source, marker=MARKER):
             except OSError:
                 raise ValueError('A storage kept an older Upkeep policy') from None
     if not saved:
+        # No copy is left. A marker from an earlier policy stays, so load() gives the
+        # strictest policy and agents that run keep every limit; without one, no agent starts.
         raise ValueError('No private storage accepted the Upkeep policy')
     mark(marker)
     return summary(policy)
@@ -166,9 +168,10 @@ def mark(marker=MARKER):
     os.replace(temporary, marker)
 
 
-def load(store, common):
+def load(store, common, marker=MARKER):
     """The Policy of the cloud, or None for a cloud that is not an Upkeep. A policy file that
-    cannot be read gives a policy without bots or workflows: the strictest one."""
+    cannot be read gives a policy without bots or workflows: the strictest one. So does a
+    marker without any copy: root set a policy that it then lost."""
     found, broken = [], False
     for directory in directories(store):
         try:
@@ -182,7 +185,7 @@ def load(store, common):
                 found.append(parse(value))
             except ValueError:
                 broken = True
-    if broken:
+    if broken or not found and os.path.lexists(marker):
         return Policy()
     return found[0] if found else None
 

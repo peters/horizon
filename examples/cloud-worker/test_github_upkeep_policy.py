@@ -65,6 +65,16 @@ class PolicyTests(ServiceTestCase):
                 mock.patch.object(common, 'remove_durably', side_effect=OSError('read-only')):
             with self.assertRaises(ValueError):
                 saved(self.store, changed)
+        # A policy that loses every copy fails closed: the marker stays, and with it the
+        # strictest policy; without a marker there is none and no agent starts.
+        marker = self.store.runtime.parent / 'marker'
+        with mock.patch.object(common, 'write_private', side_effect=OSError('disk full')):
+            with self.assertRaises(ValueError):
+                saved(self.store, changed)
+        self.assertTrue(marker.exists())
+        self.assertEqual(upkeep.load(self.store, common, marker).workflows, frozenset())
+        marker.unlink()
+        self.assertIsNone(upkeep.load(self.store, common, marker))
 
     def test_a_cloud_without_a_policy_has_none_and_a_broken_one_is_the_strictest(self):
         self.assertIsNone(upkeep.load(self.store, common))
