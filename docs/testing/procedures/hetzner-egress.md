@@ -55,8 +55,9 @@ resolver or the firewall rules stop.
 
    Result: `<work>/key` and `<work>/key.pub` exist.
 
-2. Write the header `Authorization: Bearer <token>` to `<work>/hdr` from the token
-   file, with mode 0600. Do not show the file.
+2. Write one HTTP header line to `<work>/hdr`, with mode 0600: the name
+   `Authorization` and the value `Bearer` followed by the content of the token file.
+   Do not show the file.
 
 3. Create a 10 GB volume with `format: ext4` in `hel1` (`POST /v1/volumes`) and
    register `<work>/key.pub` (`POST /v1/ssh_keys`). Give both the label
