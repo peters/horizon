@@ -322,9 +322,11 @@ A recipe on its own base, such as a project CUDA image with extra libraries, can
 copy the current helpers instead of compiling them in a build stage. A main commit
 that changes the worker scripts or helpers publishes
 `ghcr.io/peters/horizon-worker-helpers` tagged `sha-<commit>` and moves the `main`
-tag to it. Runs are queued, not cancelled, but when several such commits land while
-one run is publishing, only the newest of them is built, so not every commit gets
-its own tag. The image holds only `horizon-cloud-worker`, `horizon-browser`,
+tag to it. The image is an index for `linux/amd64` and `linux/arm64`, and
+`COPY --from` takes the helpers of the architecture that the recipe builds for (see
+[Architectures](#architectures)). Runs are queued, not cancelled, but when several
+such commits land while one run is publishing, only the newest of them is built, so
+not every commit gets its own tag. The image holds only `horizon-cloud-worker`, `horizon-browser`,
 `horizon-device`, every `horizon-worker-*` script and the `gh` link to
 `horizon-worker-git-auth` under `/usr/local/bin`, plus under
 `/usr/local/share/licenses/` the Horizon license, a `SOURCE` file naming the commit
@@ -335,7 +337,7 @@ Copy it pinned by digest:
 COPY --from=ghcr.io/peters/horizon-worker-helpers@sha256:<digest> / /
 ```
 
-The publishing run's summary prints this line with the digest, and
+The summary of the publishing run's index job prints this line with the digest, and
 `docker buildx imagetools inspect ghcr.io/peters/horizon-worker-helpers:main`
 shows the newest one. Keep tags out of recipes, so a rebuild copies the same
 helpers. The copy replaces older helpers and scripts in the base. The base still
@@ -360,8 +362,10 @@ It runs the image's own checker without networking and with an empty capability
 selection, then names every marker of this revision's checker that the image does
 not report. The remote browser and self-stop markers depend on the profile and a
 running worker, so the check does not require them. The publishing workflow runs
-the same check on a minimal Ubuntu base with the artifact copied in, and pushes
-nothing if a marker is missing.
+the same check on a minimal Ubuntu base with the artifact copied in, for each
+architecture, and pushes nothing if a marker is missing.
+`build-helpers-image.sh <commit> <tag>` does the same build and check locally and
+pushes nothing.
 
 ## No SSH host keys in an image
 
@@ -382,12 +386,15 @@ the check finds a key, remove the key in the layer that makes it.
 
 `ghcr.io/peters/horizon-worker-base` is a public CPU worker image for a repository
 that has no image of its own. Quick start in **New cloud** uses it. The image has
-Claude, Codex, Chromium and the desktop. After the helpers job of the Worker images
-workflow, the `base` job builds the image with `build-base-image.sh`. The script
-uses this recipe and the helper artifact that the job published. It then runs the
-full capability check, the marker check and the host key check. If a check fails,
-the job pushes nothing. The job tags the image `sha-<commit>-cpu` and moves the
-`cpu` tag to it.
+Claude, Codex, Chromium and the desktop. After the helper index of the Worker images
+workflow is published, a `base` job for each architecture builds the image with
+`build-base-image.sh`. The script uses this recipe and the helper artifact that the
+workflow published. It then runs the full capability check, the marker check and
+the host key check. If a check fails, the job pushes nothing. Each job pushes its
+image as `sha-<commit>-cpu-amd64` or `sha-<commit>-cpu-arm64`. When both jobs
+pushed, the `base-index` job makes sure that the two worker check reports are the
+same. It then joins the two images into one index, tags the index
+`sha-<commit>-cpu` and moves the `cpu` tag to it.
 
 To make the same image locally, do this command. It pushes nothing:
 
@@ -395,12 +402,51 @@ To make the same image locally, do this command. It pushes nothing:
 examples/cloud-worker/build-base-image.sh ghcr.io/peters/horizon-worker-helpers@sha256:<digest> horizon-worker-base:local
 ```
 
+The script builds the image for the architecture of the Docker engine. To build for
+the other architecture through emulation, set `PLATFORM`, for example
+`PLATFORM=linux/arm64`. An emulated build is slow.
+
 Horizon does not use the `cpu` tag. Quick start uses the image digest that is pinned
 in `crates/horizon-core/src/cloud_runtime/repository/launch/quick_start.rs`. The
 contract check result of that image is kept beside the pin, as `CONTRACT`. Thus quick
 start does no local check and needs no Docker. The
 [release flow](../../docs/release-flow.md#update-the-quick-start-image) tells how to
 update the pin and its result.
+
+## Architectures
+
+The helper artifact and the base image are indexes for `linux/amd64` and
+`linux/arm64`. A Docker engine pulls the image of its own architecture from the
+index, so an ARM host, such as Docker Desktop on Apple silicon or an ARM server,
+runs the worker without emulation. Quick start uses this only when its pin is the
+digest of an index (see the
+[release flow](../../docs/release-flow.md#update-the-quick-start-image)). A runner of
+each architecture builds and checks its image. A pull request that changes the
+recipes or their scripts builds and checks both architectures and pushes nothing.
+
+The recipe gets these components for each architecture:
+
+| Component | amd64 | arm64 |
+|---|---|---|
+| Chromium | `google-chrome-stable` from Google | `chromium` from the Debian 12 security archive |
+| Firefox | `packages.mozilla.org` | `packages.mozilla.org` |
+| geckodriver | `linux64` release, pinned checksum | `linux-aarch64` release, pinned checksum |
+| BrowserStackLocal | `linux-x64`, pinned checksum | `linux-arm64`, pinned checksum |
+| `gh` | release package, pinned checksum | release package, pinned checksum |
+
+Google does not publish Chrome for arm64, and the Ubuntu 24.04 `chromium` package
+installs a snap, which does not run in a container. An apt pin lets the recipe take
+only `chromium`, `chromium-common`, `libdav1d6` and `libjpeg62-turbo` from Debian.
+Other packages come from Ubuntu.
+
+> **CAUTION:** DO NOT RUN AN AMD64-ONLY WORKER IMAGE ON AN ARM HOST.
+> The container starts under emulation, but the worker does not become ready.
+> Under qemu-user, a process sees a different start time for itself than other
+> processes see. `horizon-worker-supervise --check` then refuses the changed service
+> identity, and the deployment stops at the readiness timeout.
+
+A repository profile with its own image builds `linux/amd64` only (`build.platform`).
+Thus such an image does not become ready on an ARM host.
 
 ## Running on a rented virtual machine
 

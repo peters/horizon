@@ -4,11 +4,14 @@
 #   build-base-image.sh HELPERS_IMAGE TAG
 # HELPERS_IMAGE is a helper artifact reference, such as
 # ghcr.io/peters/horizon-worker-helpers@sha256:<digest> or a local tag.
+# The image is for the architecture of the Docker engine. Set PLATFORM, such as
+# linux/arm64, to build for another architecture through emulation.
 set -euo pipefail
 
 helpers=${1:?helper artifact image}
 tag=${2:?image tag}
 here=$(cd "$(dirname "$0")" && pwd)
+platform=${PLATFORM:-$(docker version --format '{{.Server.Os}}/{{.Server.Arch}}')}
 # The capabilities of the built-in quick-start profile in
 # crates/horizon-core/src/cloud_runtime/repository/launch/quick_start.rs; a test
 # there keeps the two in step.
@@ -27,7 +30,7 @@ cleanup() {
 trap cleanup EXIT
 
 # The artifact is FROM scratch, so the container is only created to copy files out.
-container=$(docker create --platform linux/amd64 "$helpers" /usr/local/bin/horizon-cloud-worker)
+container=$(docker create --platform "$platform" "$helpers" /usr/local/bin/horizon-cloud-worker)
 mkdir "$work/bin"
 for helper in horizon-cloud-worker horizon-browser horizon-device; do
     docker cp "$container:/usr/local/bin/$helper" "$work/bin/$helper"
@@ -35,7 +38,7 @@ done
 revision=$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$helpers")
 python3 -B "$here/prepare-context.py" --bin-dir "$work/bin" --output "$work/context" > /dev/null
 
-docker build --pull --platform linux/amd64 \
+docker build --pull --platform "$platform" \
     --build-arg HORIZON_AGENTS="$agents" \
     --build-arg HORIZON_BROWSERS="$browsers" \
     --build-arg HORIZON_DESKTOP="$desktop" \
@@ -49,7 +52,7 @@ docker build --pull --platform linux/amd64 \
 # the report is printed with the image it belongs to.
 selection=$(python3 -c 'import json, sys; print(json.dumps({"agents": sys.argv[1].split(","), "browsers": sys.argv[2].split(","), "desktop": sys.argv[3] == "true"}, separators=(",", ":")))' "$agents" "$browsers" "$desktop")
 echo "Worker check report for the quick-start capabilities:"
-docker run --rm --network=none --entrypoint /usr/local/bin/horizon-worker-check \
+docker run --rm --platform "$platform" --network=none --entrypoint /usr/local/bin/horizon-worker-check \
     --env HORIZON_WORKER_CAPABILITIES="$selection" "$tag" --git-auth
 echo "End of the worker check report."
 python3 -B "$here/check-markers.py" "$tag"

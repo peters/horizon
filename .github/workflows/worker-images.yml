@@ -3,8 +3,11 @@ name: Worker images
 # Publishes ghcr.io/peters/horizon-worker-helpers: the worker helpers and scripts of
 # one main commit, for recipes to copy with COPY --from, pinned by digest, and
 # ghcr.io/peters/horizon-worker-base: the public CPU base worker built from those
-# helpers, which quick start runs a repository without its own image on. It runs
-# only for main, so no pull request or other branch can push an image.
+# helpers, which quick start runs a repository without its own image on. Each image
+# is an index for linux/amd64 and linux/arm64. A runner of each architecture builds
+# and checks its image without emulation and pushes it under its own tag; then one
+# job joins the two into the index. Only main publishes. A pull request that changes
+# the image recipes builds and checks both architectures and pushes nothing.
 on:
   push:
     branches: [main]
@@ -27,22 +30,136 @@ on:
       - LICENSE
       - .horizon/collect-helper-notices.py
       - .github/workflows/worker-images.yml
+  # Only the recipes and their scripts; the main CI tests the helper crates.
+  pull_request:
+    paths:
+      - examples/cloud-worker/**
+      - .horizon/collect-helper-notices.py
+      - .github/workflows/worker-images.yml
   workflow_dispatch:
 
 # A running publication always finishes; GitHub keeps only the newest waiting run.
+# A newer push to a pull request cancels the check of the earlier push.
 concurrency:
-  group: ${{ github.workflow }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'publish' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
-  helpers:
-    name: Publish worker helpers
-    if: github.repository == 'peters/horizon' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+  check:
+    name: Build and check (${{ matrix.arch }})
+    if: github.event_name == 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    # Each architecture sets only its own output.
+    outputs:
+      report_amd64: ${{ steps.base.outputs.report_amd64 }}
+      report_arm64: ${{ steps.base.outputs.report_arm64 }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      ARCH: ${{ matrix.arch }}
+      REVISION: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Build and check helpers
+        run: examples/cloud-worker/build-helpers-image.sh "$REVISION" horizon-worker-helpers:check
+      - name: Build and check CPU base worker
+        id: base
+        run: |
+          examples/cloud-worker/build-base-image.sh horizon-worker-helpers:check horizon-worker-base:check \
+            | tee "$RUNNER_TEMP/build.log"
+          {
+            echo "report_$ARCH<<report_end"
+            sed -n '/^Worker check report for the quick-start capabilities:$/,/^End of the worker check report\.$/p' \
+              "$RUNNER_TEMP/build.log" | sed '1d;$d'
+            echo report_end
+          } >> "$GITHUB_OUTPUT"
+
+  check-report:
+    name: Compare worker check reports
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    defaults:
+      run:
+        shell: bash
+    env:
+      AMD64: ${{ needs.check.outputs.report_amd64 }}
+      ARM64: ${{ needs.check.outputs.report_arm64 }}
+    steps:
+      # Quick start keeps one report beside the pin of the index, so both architectures
+      # must report the same markers.
+      - name: Compare
+        run: |
+          test -n "$AMD64"
+          diff <(printf '%s\n' "$AMD64") <(printf '%s\n' "$ARM64")
+
+  helpers:
+    name: Publish worker helpers (${{ matrix.arch }})
+    if: github.repository == 'peters/horizon' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    # Each architecture sets only its own output.
+    outputs:
+      digest_amd64: ${{ steps.publish.outputs.digest_amd64 }}
+      digest_arm64: ${{ steps.publish.outputs.digest_arm64 }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      ARCH: ${{ matrix.arch }}
+      IMAGE: ghcr.io/peters/horizon-worker-helpers
+      REVISION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Nothing is pushed unless every current marker is present.
+      - name: Build and check
+        run: examples/cloud-worker/build-helpers-image.sh "$REVISION" "$IMAGE:sha-$REVISION-$ARCH"
+      - name: Publish
+        id: publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s\n' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          trap 'docker logout ghcr.io' EXIT
+          docker push "$IMAGE:sha-$REVISION-$ARCH" | tee "$RUNNER_TEMP/push.log"
+          digest=$(grep -oE 'digest: sha256:[0-9a-f]{64}' "$RUNNER_TEMP/push.log" | tail -n 1 | cut -d' ' -f2)
+          test -n "$digest"
+          echo "digest_$ARCH=$digest" >> "$GITHUB_OUTPUT"
+
+  helpers-index:
+    name: Publish worker helpers index
+    needs: helpers
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       packages: write
@@ -54,37 +171,25 @@ jobs:
     env:
       IMAGE: ghcr.io/peters/horizon-worker-helpers
       REVISION: ${{ github.sha }}
+      AMD64: ${{ needs.helpers.outputs.digest_amd64 }}
+      ARM64: ${{ needs.helpers.outputs.digest_arm64 }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # The build fetches this public commit itself, so it needs no context.
-      - name: Build helpers
-        run: |
-          docker build --pull --build-arg HORIZON_REVISION="$REVISION" --target helpers \
-            --tag "$IMAGE:sha-$REVISION" - < examples/cloud-worker/Dockerfile.helpers
-      # The probe copies the artifact over a contract base exactly as a recipe does,
-      # then runs its checker; nothing is pushed unless every current marker is present.
-      - name: Check contract markers
-        run: |
-          docker build --build-arg HORIZON_REVISION="$REVISION" --target probe \
-            --tag horizon-worker-helpers-probe - < examples/cloud-worker/Dockerfile.helpers
-          python3 -B examples/cloud-worker/check-markers.py horizon-worker-helpers-probe
       - name: Publish
         id: publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          test -n "$AMD64"
+          test -n "$ARM64"
           printf '%s\n' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           trap 'docker logout ghcr.io' EXIT
-          docker tag "$IMAGE:sha-$REVISION" "$IMAGE:main"
-          docker push "$IMAGE:sha-$REVISION" | tee "$RUNNER_TEMP/push.log"
-          docker push "$IMAGE:main"
-          digest=$(grep -oE 'digest: sha256:[0-9a-f]{64}' "$RUNNER_TEMP/push.log" | tail -n 1 | cut -d' ' -f2)
-          test -n "$digest"
+          docker buildx imagetools create --tag "$IMAGE:sha-$REVISION" --tag "$IMAGE:main" \
+            "$IMAGE@$AMD64" "$IMAGE@$ARM64"
+          digest=$(docker buildx imagetools inspect "$IMAGE:sha-$REVISION" --format '{{json .Manifest}}' | jq -r .digest)
+          [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           {
-            echo "Published \`$IMAGE:sha-$REVISION\` and \`$IMAGE:main\`."
+            echo "Published \`$IMAGE:sha-$REVISION\` and \`$IMAGE:main\` for linux/amd64 and linux/arm64."
             echo
             echo "Copy it into a worker recipe with:"
             echo
@@ -92,11 +197,73 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   base:
-    name: Publish CPU base worker
-    needs: helpers
-    if: github.repository == 'peters/horizon' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    name: Publish CPU base worker (${{ matrix.arch }})
+    needs: helpers-index
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    # Each architecture sets only its own outputs.
+    outputs:
+      digest_amd64: ${{ steps.publish.outputs.digest_amd64 }}
+      digest_arm64: ${{ steps.publish.outputs.digest_arm64 }}
+      report_amd64: ${{ steps.build.outputs.report_amd64 }}
+      report_arm64: ${{ steps.build.outputs.report_arm64 }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      ARCH: ${{ matrix.arch }}
+      IMAGE: ghcr.io/peters/horizon-worker-base
+      HELPERS: ghcr.io/peters/horizon-worker-helpers@${{ needs.helpers-index.outputs.digest }}
+      REVISION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The pull takes the helpers of this runner's architecture from the index. The
+      # script builds the generic recipe over them, then checks the worker contract and
+      # that no layer has SSH host keys. Nothing is pushed if a check fails.
+      - name: Build and check
+        id: build
+        run: |
+          docker pull "$HELPERS"
+          examples/cloud-worker/build-base-image.sh "$HELPERS" "$IMAGE:sha-$REVISION-cpu-$ARCH" \
+            | tee "$RUNNER_TEMP/build.log"
+          {
+            echo "report_$ARCH<<report_end"
+            sed -n '/^Worker check report for the quick-start capabilities:$/,/^End of the worker check report\.$/p' \
+              "$RUNNER_TEMP/build.log" | sed '1d;$d'
+            echo report_end
+          } >> "$GITHUB_OUTPUT"
+      - name: Publish
+        id: publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s\n' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          trap 'docker logout ghcr.io' EXIT
+          docker push "$IMAGE:sha-$REVISION-cpu-$ARCH" | tee "$RUNNER_TEMP/push.log"
+          digest=$(grep -oE 'digest: sha256:[0-9a-f]{64}' "$RUNNER_TEMP/push.log" | tail -n 1 | cut -d' ' -f2)
+          test -n "$digest"
+          echo "digest_$ARCH=$digest" >> "$GITHUB_OUTPUT"
+
+  # The package is public, so workers pull it without a registry login. Quick start
+  # uses the index digest that a Horizon commit pins, never the moving cpu tag; each
+  # Docker engine takes the image of its own architecture from the index.
+  base-index:
+    name: Publish CPU base worker index
+    needs: base
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       packages: write
@@ -105,37 +272,39 @@ jobs:
         shell: bash
     env:
       IMAGE: ghcr.io/peters/horizon-worker-base
-      HELPERS: ghcr.io/peters/horizon-worker-helpers@${{ needs.helpers.outputs.digest }}
       REVISION: ${{ github.sha }}
+      AMD64: ${{ needs.base.outputs.digest_amd64 }}
+      ARM64: ${{ needs.base.outputs.digest_arm64 }}
+      REPORT_AMD64: ${{ needs.base.outputs.report_amd64 }}
+      REPORT_ARM64: ${{ needs.base.outputs.report_arm64 }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # The script builds the generic recipe over the helpers just published, then
-      # checks the worker contract and that no layer has SSH host keys. Nothing is
-      # pushed if a check fails.
-      - name: Build and check
-        run: |
-          docker pull "$HELPERS"
-          examples/cloud-worker/build-base-image.sh "$HELPERS" "$IMAGE:sha-$REVISION-cpu"
-      # The package is public, so workers pull it without a registry login. Quick start
-      # uses the digest that a Horizon commit pins, never the moving cpu tag.
       - name: Publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          test -n "$AMD64"
+          test -n "$ARM64"
+          # Quick start keeps one report beside the pin, so both architectures must
+          # report the same markers.
+          test -n "$REPORT_AMD64"
+          diff <(printf '%s\n' "$REPORT_AMD64") <(printf '%s\n' "$REPORT_ARM64")
           printf '%s\n' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           trap 'docker logout ghcr.io' EXIT
-          docker push "$IMAGE:sha-$REVISION-cpu" | tee "$RUNNER_TEMP/push.log"
-          digest=$(grep -oE 'digest: sha256:[0-9a-f]{64}' "$RUNNER_TEMP/push.log" | tail -n 1 | cut -d' ' -f2)
-          test -n "$digest"
-          docker tag "$IMAGE:sha-$REVISION-cpu" "$IMAGE:cpu"
-          docker push "$IMAGE:cpu"
+          docker buildx imagetools create --tag "$IMAGE:sha-$REVISION-cpu" --tag "$IMAGE:cpu" \
+            "$IMAGE@$AMD64" "$IMAGE@$ARM64"
+          digest=$(docker buildx imagetools inspect "$IMAGE:sha-$REVISION-cpu" --format '{{json .Manifest}}' | jq -r .digest)
+          [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]
           {
-            echo "Published \`$IMAGE:sha-$REVISION-cpu\` and \`$IMAGE:cpu\`."
+            echo "Published \`$IMAGE:sha-$REVISION-cpu\` and \`$IMAGE:cpu\` for linux/amd64 and linux/arm64."
             echo
             echo "To make quick start use this image, set the pin in"
             echo "\`crates/horizon-core/src/cloud_runtime/repository/launch/quick_start.rs\` to:"
             echo
             echo "\`$IMAGE@$digest\`"
+            echo
+            echo "Set \`CONTRACT\` there to the worker check report of both architectures:"
+            echo
+            echo '```'
+            printf '%s\n' "$REPORT_AMD64"
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
