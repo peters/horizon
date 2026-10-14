@@ -70,6 +70,58 @@ fn before_typing_recent_checkouts_lead_then_the_account_list() {
 }
 
 #[test]
+fn an_older_checkout_of_the_account_s_repository_keeps_its_place_in_the_account_list() {
+    let mut checkouts: Vec<Checkout> = (0..6)
+        .map(|n| checkout(&format!("/home/x/code/tool-{n}"), None))
+        .collect();
+    checkouts.push(checkout("/home/x/github/acme/api", Some("https://github.com/acme/api")));
+    let mut empty = checkout("/home/x/trees/web-fix", Some("https://github.com/acme/web"));
+    empty.complete = false;
+    checkouts.push(empty);
+    let rows = rows_for("", &checkouts, &names(&["acme/web", "acme/api", "acme/cli"]));
+    let found: Vec<String> = rows[6..]
+        .iter()
+        .map(|row| match &row.kind {
+            Kind::Local { path, github } => format!("{} {github}", path.display()),
+            Kind::GitHub { name } => name.clone(),
+            Kind::Folder { path, .. } => format!("folder {}", path.display()),
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            "acme/web",
+            "/home/x/trees/web-fix true",
+            "/home/x/github/acme/api true",
+            "acme/cli"
+        ],
+        "after the six recent checkouts, in the account's order"
+    );
+    // A repository a newer checkout already stands in for is not listed again.
+    checkouts.push(checkout("/home/x/trees/api-fix", Some("https://github.com/acme/api")));
+    let rows = rows_for("", &checkouts, &names(&["acme/web", "acme/api", "acme/cli"]));
+    assert_eq!(
+        rows.len(),
+        10,
+        "{:?}",
+        rows.iter().map(|row| &row.title).collect::<Vec<_>>()
+    );
+    checkouts[0] = checkout("/home/x/code/api", Some("https://github.com/acme/api"));
+    let rows = rows_for("", &checkouts, &names(&["acme/web", "acme/api", "acme/cli"]));
+    let api: Vec<&super::Row> = rows
+        .iter()
+        .filter(|row| row.repo.as_deref() == Some("acme/api"))
+        .collect();
+    assert_eq!(
+        api.len(),
+        1,
+        "{:?}",
+        rows.iter().map(|row| &row.title).collect::<Vec<_>>()
+    );
+    assert!(matches!(&api[0].kind, Kind::Local { path, .. } if path.ends_with("code/api")));
+}
+
+#[test]
 fn choosing_a_result_uses_a_checkout_clones_a_repository_or_opens_a_folder() {
     let rows = rows_for("api", &[], &names(&["acme/api"]));
     assert_eq!(pick(&rows[0], false), Pick::Text("https://github.com/acme/api".into()));

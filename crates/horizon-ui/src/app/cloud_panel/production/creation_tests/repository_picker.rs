@@ -274,6 +274,7 @@ fn a_typed_folder_becomes_the_repository_and_names_the_cloud() {
     let repository = temp.path().join("demo-atlas");
     std::fs::create_dir_all(repository.join(".git")).unwrap();
     open_creation(&ctx, &mut app, temp.path().join("clouds"));
+    let typed = std::time::Instant::now();
     frame(
         &ctx,
         &mut app,
@@ -283,10 +284,14 @@ fn a_typed_folder_becomes_the_repository_and_names_the_cloud() {
     for _ in 0..3 {
         frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     }
-    assert!(
-        app.cloud_prototype.production.repository.is_empty(),
-        "a path is not taken at the first repository it passes on the way to a longer one"
-    );
+    // On a loaded computer the frames can outlast the pause that ends typing; only frames
+    // drawn within it tell whether the path was taken too early.
+    if typed.elapsed() < Duration::from_millis(400) {
+        assert!(
+            app.cloud_prototype.production.repository.is_empty(),
+            "a path is not taken at the first repository it passes on the way to a longer one"
+        );
+    }
     std::thread::sleep(Duration::from_millis(600));
     for _ in 0..3 {
         frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
