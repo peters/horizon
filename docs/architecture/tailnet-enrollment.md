@@ -14,6 +14,11 @@ The host checks this contract before selected-tailnet allocation, reconnect and
 new sessions. Older markers do not qualify. A marker is a declaration by the
 image, not proof that a malicious image follows the contract.
 
+For quick start, the host trusts the published workflow report only for the pinned
+immutable digest and exact built-in capabilities. Other images or tool selections
+keep the local image check. Publication and marker checks do not prove that a
+provider mount enforces private modes or qualify an actual enrollment.
+
 ## Enrollment guarantee
 
 The saved key and status output are inputs to enrollment.
@@ -47,9 +52,15 @@ Cloud deletion does not remove that record in this milestone.
 
 Existing keys that cannot assign `tag:horizon-worker` fail enrollment with the new helper.
 Already-joined untagged clouds log out on resume.
-The current quick-start pin contains older markers and refuses a selected tailnet.
-Publishing marker 4 and updating the pin are a separate rollout step.
+The quick-start pin contains marker 4. New selected-tailnet clouds still require
+storage that preserves private root-owned modes. Existing clouds keep their
+recorded image until an explicit rebuild. The tested RunPod persistent storage
+does not enforce these modes and is unsupported; the helper refuses it rather
+than weakening isolation. CPU image qualification does not qualify GPU workloads.
 The **None** choice remains compatible with older images.
+
+See the [marker-4 rollout procedure](../testing/procedures/tailnet-marker4-rollout.md)
+for publication, provider evidence and unsupported-lane reporting.
 
 See [the cloud guide](../cloud-workspaces.md#tailnets-auth-key-mvp) and
 [the test procedure](../testing/procedures/tailnet-tagged-enrollment.md).

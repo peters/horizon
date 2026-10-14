@@ -299,8 +299,12 @@ The helper logs out an invalid enrollment and rejects the operation.
 It does not monitor tag changes between those checks. The tailnet policy
 controls network access; the tag alone does not isolate each workspace.
 Keys that cannot assign the worker tag fail enrollment. Untagged workers fail resume.
-Rebuild older images before tailnet use. The current quick-start image retains
-its earlier contract and cannot use a selected tailnet until its pin changes.
+Rebuild older images before tailnet use. The quick-start pin contains marker 4.
+Its isolated startup requires storage that enforces private root-owned modes.
+The tested RunPod persistent storage reports directories as `0777` and files as
+`0666` despite successful descriptor and path mode changes. It is unsupported;
+the worker refuses this runtime before enrollment. Selecting **None** does not
+disable isolation. See the [rollout procedure](../../docs/testing/procedures/tailnet-marker4-rollout.md).
 The device name comes from the cloud ID and stays the same for
 the life of the cloud. It is not the random container host name. A UUID cloud ID
 gives `horizon-cloud-<cloud ID>`. An ID that needs a change or a shorter form

@@ -171,8 +171,13 @@ Never pass an auth key to a tool.
 A selected tailnet requires an image with `horizon-tailnet-contract=4` before
 allocation. The actual worker must report this marker before reconnect or a new
 session. Markers 1, 2 and 3 do not qualify. **None** permits older images.
-The current quick-start pin predates marker 4 and refuses a selected tailnet.
-A later image publication and pin update enable that path.
+The quick-start pin contains marker 4 and permits a selected tailnet on compatible
+storage. Existing clouds keep their image until rebuilt. The tested RunPod
+persistent storage synthesizes `0777` directories and `0666` files despite
+successful mode changes; isolated startup is unsupported and refuses it.
+Do not relax root/private-state checks or treat **None** as a bypass. CPU image
+and Hetzner evidence do not qualify RunPod, GPU workloads or Mosh/UDP.
+See `docs/testing/procedures/tailnet-marker4-rollout.md` for the separate gates.
 
 Use a preauthorized, non-ephemeral auth key with only `tag:horizon-worker`.
 Reuse needs a reusable key. The tailnet policy must define the tag in `tagOwners`.

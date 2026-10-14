@@ -79,7 +79,9 @@ Do not change production keys, policy, nodes or the computer's Tailscale daemon.
    cargo test -p horizon-core quick_start
    ```
 
-   Result: The current pin remains unchanged. It refuses selected-tailnet use until the marker 4 image rollout.
+   Result: The pin reports marker 4 and qualifies selected-tailnet use on compatible
+   storage. Earlier pins remain refused. Image publication and real provider
+   qualification use the separate [rollout procedure](tailnet-marker4-rollout.md).
 
 ### 6.2 T02 — Check synthetic worker transitions
 
@@ -118,7 +120,7 @@ Do not change production keys, policy, nodes or the computer's Tailscale daemon.
    ```
 
    Result: Both bundles agree. They describe marker 4, `tagOwners`, one-time
-   checks and the quick-start rollout limit.
+   checks and the private-storage rollout limit.
 
 ### 6.4 R01 — Optional real-tailnet smoke
 
@@ -152,7 +154,7 @@ explicit authorization for its resources and access changes.
 ## 7. Pass criteria
 
 - T01, T02 and T03 pass on the candidate inputs.
-- The current quick-start pin does not claim marker 4.
+- The quick-start pin claims only the marker 4 report of its published image.
 - A local result does not claim real provider or tailnet qualification.
 - If R01 runs, its report records the authorization, image digest and observed tags.
 

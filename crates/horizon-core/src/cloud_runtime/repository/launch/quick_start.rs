@@ -9,7 +9,7 @@ use horizon_cloud::{Capabilities, Profile};
 // to put here; docs/release-flow.md describes the update, which also updates CONTRACT.
 macro_rules! image {
     () => {
-        "ghcr.io/peters/horizon-worker-base@sha256:d31efcb7b27db4d6953fc4ced93c9dba490ad94e5cca1a2abd61a5391f69b2f9"
+        "ghcr.io/peters/horizon-worker-base@sha256:7d337851edd33a790e01ed560f43dd61d83847552178f5a8540113ea3f07a07c"
     };
 }
 
@@ -37,8 +37,7 @@ horizon-session-env-contract=1
 horizon-gpu-lock-contract=1
 horizon-source-shallow-contract=1
 horizon-source-lfs-selection-contract=1
-horizon-tailnet-contract=1
-horizon-tailnet-contract=2
+horizon-tailnet-contract=4
 horizon-worker-contract=1
 horizon-source-contract=1
 horizon-capabilities-contract=1
@@ -242,18 +241,14 @@ mod tests {
     }
 
     #[test]
-    fn the_pinned_report_satisfies_the_builtin_profile_but_cannot_enroll_a_tailnet() {
+    fn the_pinned_report_satisfies_the_builtin_profile_and_tagged_enrollment() {
         let checker = include_str!("../../../../../../examples/cloud-worker/horizon-worker-check");
         let lines: Vec<_> = CONTRACT.lines().collect();
         assert!(!lines.is_empty());
         for line in &lines {
-            // The digest still names the older image; its tailnet markers must stay in its attestation.
             assert!(
-                line.starts_with("horizon-")
-                    && line.contains("-contract=")
-                    && (checker.contains(line)
-                        || matches!(*line, "horizon-tailnet-contract=1" | "horizon-tailnet-contract=2")),
-                "{line} is a current or pinned legacy checker marker"
+                line.starts_with("horizon-") && line.contains("-contract=") && checker.contains(line),
+                "{line} is a current checker marker"
             );
         }
         let unique: std::collections::BTreeSet<_> = lines.iter().collect();
@@ -263,7 +258,12 @@ mod tests {
         crate::cloud_runtime::worker_contract::validate(report, &profile.capabilities, true, true).unwrap();
         crate::cloud_runtime::worker_contract::validate_idle_report(report, true).unwrap();
         let contract = crate::cloud_runtime::WorkerContract::reported(report);
-        assert!(!contract.tailnet, "the pinned image predates tagged enrollment");
+        assert!(contract.tailnet, "the pinned image enforces tagged enrollment");
+        assert!(report.lines().any(|line| line == "horizon-tailnet-contract=4"));
+        assert!(!report.lines().any(|line| matches!(
+            line,
+            "horizon-tailnet-contract=1" | "horizon-tailnet-contract=2" | "horizon-tailnet-contract=3"
+        )));
         assert!(contract.tailnet_stable_name && contract.session_restart && contract.prepare_checkout);
         assert!(contract.pinned_submodules && contract.lfs_selection);
     }
@@ -326,9 +326,10 @@ mod tests {
         let report = std::str::from_utf8(&output.stdout).unwrap();
         // With --nocapture, the report to put in CONTRACT when the pin changes.
         println!("{report}");
-        let reported: std::collections::BTreeSet<_> = report.lines().map(str::to_owned).collect();
-        let trusted: std::collections::BTreeSet<_> = CONTRACT.lines().map(str::to_owned).collect();
-        assert_eq!(reported, trusted);
+        assert_eq!(
+            report, CONTRACT,
+            "the immutable pin must return the exact attested report"
+        );
     }
 
     #[test]
