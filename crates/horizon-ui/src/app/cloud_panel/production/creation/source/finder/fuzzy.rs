@@ -11,6 +11,16 @@ pub(super) struct Match {
 
 /// Matches every word of `query` in `text`, ignoring case. `None` when a word is missing.
 pub(super) fn score(query: &str, text: &str) -> Option<Match> {
+    // Most texts of a long list miss a letter: they are turned down before anything is made.
+    let has = |word: &str| {
+        let mut letters = text.chars().map(lower);
+        word.chars()
+            .map(lower)
+            .all(|wanted| letters.any(|letter| letter == wanted))
+    };
+    if !query.split_whitespace().all(has) {
+        return None;
+    }
     // One lowercase letter per letter, so a position lights the letter it came from.
     let text: Vec<char> = text.chars().map(lower).collect();
     let mut total = Match {

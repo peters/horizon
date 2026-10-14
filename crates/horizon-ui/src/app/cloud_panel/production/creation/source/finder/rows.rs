@@ -65,6 +65,17 @@ pub(super) fn search_rows(
         };
         scored.push((score, scored.len(), Candidate::Row(row)));
     }
+    // Only the best are kept as the account's repositories are ranked, so a very long list
+    // holds at most twice what is listed, costs no full sort, and makes no rows for
+    // repositories never shown.
+    let best = |(score, found, _): &(i32, usize, Candidate)| (std::cmp::Reverse(*score), *found);
+    let keep_best = |scored: &mut Vec<(i32, usize, Candidate)>| {
+        if scored.len() > LISTED {
+            scored.select_nth_unstable_by_key(LISTED - 1, best);
+            scored.truncate(LISTED);
+        }
+    };
+    let mut found = scored.len();
     for name in repositories.iter().filter(|name| !cloned.contains(name.as_str())) {
         let (score, marks) = if query.is_empty() {
             (-1000, Vec::new())
@@ -73,15 +84,13 @@ pub(super) fn search_rows(
         } else {
             continue;
         };
-        scored.push((score, scored.len(), Candidate::Repository(name, marks)));
+        scored.push((score, found, Candidate::Repository(name, marks)));
+        found += 1;
+        if scored.len() >= 2 * LISTED {
+            keep_best(&mut scored);
+        }
     }
-    // Only the best are kept before sorting, so a very long list costs no full sort and no
-    // rows for repositories never shown.
-    let best = |(score, found, _): &(i32, usize, Candidate)| (std::cmp::Reverse(*score), *found);
-    if scored.len() > LISTED {
-        scored.select_nth_unstable_by_key(LISTED - 1, best);
-        scored.truncate(LISTED);
-    }
+    keep_best(&mut scored);
     scored.sort_unstable_by_key(best);
     scored
         .into_iter()
