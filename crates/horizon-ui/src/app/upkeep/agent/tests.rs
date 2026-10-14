@@ -48,6 +48,29 @@ fn saved() -> Vec<(String, Config)> {
     ]
 }
 
+/// A workspace named `name` with a cloud `id` in it.
+fn cloud_workspace(app: &mut HorizonApp, name: &str, id: &str) -> WorkspaceId {
+    let profile = CloudConfig::parse(
+        "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker\n    cpu: 4\n    memory_gb: 8\n",
+    )
+    .unwrap()
+    .profiles["dev"]
+        .clone();
+    let workspace = app.board.create_workspace(name);
+    let local = app.board.workspace(workspace).unwrap().local_id.clone();
+    let mut group = CloudGroup::new(1, id.into(), local, std::env::temp_dir(), [0.0, 0.0]);
+    group.remote = Some(CloudLaunch {
+        deployment_started: true,
+        id: id.into(),
+        revision: "a".repeat(40),
+        profile_name: "dev".into(),
+        profile,
+        placement: horizon_core::cloud_panel::Placement::default(),
+    });
+    app.cloud_prototype.groups.0.push(group);
+    workspace
+}
+
 fn decided(upkeep: &Value, saved: Vec<(String, Config)>) -> Result<Next, String> {
     let (request, parsed) = ask(upkeep);
     decide(&request, &parsed, &caller(), saved)
@@ -83,6 +106,7 @@ fn create_only_proposes_and_never_replaces_an_upkeep() {
 #[test]
 fn add_proposes_only_the_new_repositories_and_keeps_the_limit() {
     let Ok(Next::ProposeRepositories {
+        workspace,
         cloud,
         saved: held,
         repositories,
@@ -94,6 +118,11 @@ fn add_proposes_only_the_new_repositories_and_keeps_the_limit() {
         panic!("add must propose");
     };
     assert_eq!((cloud.as_str(), repositories), ("mine", vec!["acme/docs".to_owned()]));
+    assert_eq!(
+        workspace,
+        WorkspaceId(7),
+        "the editor is bound to the caller's workspace"
+    );
     // The editor opens over the list as it was read, without the proposal.
     assert_eq!(held.repositories, ["acme/web", "acme/api"]);
     let Ok(Next::Answer(Ok(value))) = decided(&json!({"operation": "add", "repositories": ["acme/web"]}), saved())
@@ -356,17 +385,30 @@ fn a_repository_proposal_opens_the_editor_with_only_the_new_names_to_save() {
     let (_temp, mut app) = test_app();
     let ctx = egui::Context::default();
     let add = ["Acme/API".to_owned()];
+    let error = app
+        .propose_upkeep_repositories(&ctx, WorkspaceId(9_999), "mine", &config(&["acme/web"]), &add)
+        .unwrap_err();
+    assert!(error.contains("workspace is gone"), "{error}");
+    let workspace = cloud_workspace(&mut app, "Dependencies", "mine");
+    // A cloud that moved to another workspace while the request ran is not proposed there.
+    let elsewhere = app.board.create_workspace("elsewhere");
+    let error = app
+        .propose_upkeep_repositories(&ctx, elsewhere, "mine", &config(&["acme/web"]), &add)
+        .unwrap_err();
+    assert!(error.contains("no longer in this workspace"), "{error}");
     // The saved Upkeeps may be read again right after a save: the proposal does not wait.
     assert!(app.upkeep.saved.is_none());
-    app.propose_upkeep_repositories(&ctx, "mine", &config(&["acme/web"]), &add)
+    app.propose_upkeep_repositories(&ctx, workspace, "mine", &config(&["acme/web"]), &add)
         .unwrap();
     let editor = app.upkeep.editor.as_ref().unwrap();
     assert_eq!(editor.cloud, "mine");
     assert_eq!(editor.changes(), (vec!["acme/api".to_owned()], Vec::new()));
     // The editor lists the proposal on its own, as the catalog may not hold it.
     assert_eq!(editor.proposed, ["acme/api"]);
+    // It names the workspace, as the person may look at another one.
+    assert_eq!(editor.proposed_for, "Dependencies");
     let error = app
-        .propose_upkeep_repositories(&ctx, "mine", &config(&["acme/web"]), &add)
+        .propose_upkeep_repositories(&ctx, workspace, "mine", &config(&["acme/web"]), &add)
         .err()
         .unwrap();
     assert!(error.contains("already open"), "{error}");
@@ -379,24 +421,7 @@ fn a_repository_proposal_opens_the_editor_with_only_the_new_names_to_save() {
 #[test]
 fn a_new_upkeep_proposal_waits_for_the_saved_upkeeps_and_never_doubles_one() {
     let (_temp, mut app) = test_app();
-    let profile = CloudConfig::parse(
-        "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker\n    cpu: 4\n    memory_gb: 8\n",
-    )
-    .unwrap()
-    .profiles["dev"]
-        .clone();
-    let workspace = app.board.create_workspace("agents");
-    let local = app.board.workspace(workspace).unwrap().local_id.clone();
-    let mut group = CloudGroup::new(1, "mine".into(), local, std::env::temp_dir(), [0.0, 0.0]);
-    group.remote = Some(CloudLaunch {
-        deployment_started: true,
-        id: "mine".into(),
-        revision: "a".repeat(40),
-        profile_name: "dev".into(),
-        profile,
-        placement: horizon_core::cloud_panel::Placement::default(),
-    });
-    app.cloud_prototype.groups.0.push(group);
+    let workspace = cloud_workspace(&mut app, "agents", "mine");
     let error = app.still_without_upkeep(workspace).unwrap_err();
     assert!(error.starts_with("upkeep_unavailable"), "{error}");
     app.upkeep.saved = Some(std::sync::Arc::new(vec![("theirs".into(), config(&["acme/x"]))]));

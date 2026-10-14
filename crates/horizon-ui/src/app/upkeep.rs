@@ -114,7 +114,15 @@ impl HorizonApp {
             return Err("upkeep_unavailable: cloud workspaces are not ready on this computer".into());
         }
         // The dialog's first frame starts the search for repositories.
-        self.upkeep.form = Some(form::Form::proposed(workspace, config));
+        let proposal = self
+            .board
+            .workspace(workspace)
+            .map(|held| form::Proposal {
+                name: held.name.clone(),
+                local_id: held.local_id.clone(),
+            })
+            .ok_or("upkeep_unavailable: the workspace of the request is gone")?;
+        self.upkeep.form = Some(form::Form::proposed(workspace, proposal, config));
         Ok(())
     }
 }
@@ -158,10 +166,25 @@ impl HorizonApp {
             dialog::Outcome::Cancel if form.starting => form.hidden = true,
             dialog::Outcome::Cancel => self.upkeep.form = None,
             dialog::Outcome::Start => {
-                let (config, workspace) = (form.config(), form.workspace);
+                let config = form.config();
+                // A proposal names its workspace: it starts there or nowhere.
+                let proposed = form.proposed.as_ref().map(|proposal| proposal.local_id.clone());
+                let workspace = match proposed {
+                    Some(local_id) => self.board.workspace_id_by_local_id(&local_id).map(Some).ok_or(()),
+                    None => Ok(form.workspace),
+                };
+                let Some(form) = self.upkeep.form.as_mut() else {
+                    return;
+                };
                 form.error = None;
                 form.starting = true;
-                if let Err(error) = self.start_upkeep(ctx, workspace, config) {
+                let started = match workspace {
+                    Ok(workspace) => self.start_upkeep(ctx, workspace, config),
+                    Err(()) => {
+                        Err("The workspace of this proposal is gone. Cancel, and start New Upkeep again.".to_owned())
+                    }
+                };
+                if let Err(error) = started {
                     self.upkeep_started(Err(error));
                 }
             }

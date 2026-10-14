@@ -409,7 +409,8 @@ with the MCP tool `cloud_upkeep`. The code is in
 - `discover`: the repositories that the GitHub app reaches, with the number of open
   pull requests from the bots.
 - `create`: Horizon shows **New Upkeep** in the workspace of the agent, with the
-  settings of the agent filled in and a note that an agent proposed them.
+  settings of the agent filled in and a note that an agent proposed them for that
+  workspace, with its name.
 - `add`: Horizon shows the repository list of the Upkeep, with the repositories of
   the agent added.
 - `remove`: Horizon removes repositories from the Upkeep.
@@ -451,6 +452,11 @@ Horizon guarantees these items:
 - The repository list shows each repository of an `add` proposal in its own row with a
   tick, also when the list of the GitHub App does not hold it. Thus the person sees
   every repository that **Save** adds.
+- Both dialogs name the workspace of the proposal, because they can open while the
+  person looks at another workspace. **Start Upkeep** of a proposal refuses when that
+  workspace is gone, also when it goes while Horizon prepares the first repository; it
+  does not start the Upkeep in a new workspace. The repository
+  list opens only while the Upkeep's cloud is still in the workspace of the agent.
 - Horizon shows one proposal at a time. When **New Upkeep** or the repository list is
   open, Horizon refuses a new `create` or `add`.
 - `remove`, `pause`, `resume` and `run_now` do not give access to more repositories.

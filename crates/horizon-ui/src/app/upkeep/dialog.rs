@@ -47,8 +47,8 @@ pub(super) fn show(ctx: &Context, form: &mut Form) -> Outcome {
                 .color(theme::FG_SOFT()),
             );
             ui.add_space(16.0);
-            if form.proposed {
-                proposal(ui, form);
+            if let Some(proposed) = form.proposed.as_ref() {
+                proposal(ui, form, &proposed.name);
             }
             ui.add_enabled_ui(!form.starting, |ui| {
                 if width >= TWO_COLUMNS {
@@ -81,11 +81,16 @@ pub(super) fn show(ctx: &Context, form: &mut Form) -> Outcome {
 
 /// An agent filled the form in: the person checks it before Start, the instructions above
 /// all, because they become the prompt of an agent with push access.
-fn proposal(ui: &mut Ui, form: &Form) {
+/// The workspace is named, as the dialog can open while the person looks at another one.
+fn proposal(ui: &mut Ui, form: &Form, workspace: &str) {
     let text = if form.instructions == DEFAULT_INSTRUCTIONS {
-        "An agent proposed these settings. Check each repository before you start."
+        format!(
+            "An agent proposed these settings for the workspace \u{201c}{workspace}\u{201d}. Check each repository before you start."
+        )
     } else {
-        "An agent proposed these settings and its own instructions. Read the instructions in full before you start."
+        format!(
+            "An agent proposed these settings and its own instructions for the workspace \u{201c}{workspace}\u{201d}. Read the instructions in full before you start."
+        )
     };
     Frame::new()
         .fill(theme::alpha(theme::ACCENT(), 24))

@@ -75,6 +75,7 @@ enum Next {
     /// The editor of `cloud`, over its settings as `decide` read them, with `repositories`
     /// ticked.
     ProposeRepositories {
+        workspace: WorkspaceId,
         cloud: String,
         saved: Config,
         repositories: Vec<String>,
@@ -282,11 +283,12 @@ impl HorizonApp {
                 .and_then(|()| self.propose_new_upkeep(workspace, &config))
                 .map(|()| awaiting("New Upkeep")),
             Next::ProposeRepositories {
+                workspace,
                 cloud,
                 saved,
                 repositories,
             } => expired(&request)
-                .and_then(|()| self.propose_upkeep_repositories(ctx, &cloud, &saved, &repositories))
+                .and_then(|()| self.propose_upkeep_repositories(ctx, workspace, &cloud, &saved, &repositories))
                 .map(|()| awaiting("the Upkeep's repository list")),
         };
         complete(request, answer);
@@ -449,6 +451,7 @@ fn decide(
             config.validate().map_err(|error| invalid(&error))?;
             let repositories = config.repositories[config.repositories.len() - added..].to_vec();
             Ok(Next::ProposeRepositories {
+                workspace: caller.workspace,
                 cloud,
                 saved,
                 repositories,

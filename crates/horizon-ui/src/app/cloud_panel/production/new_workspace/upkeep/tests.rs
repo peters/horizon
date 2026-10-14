@@ -98,7 +98,12 @@ fn an_agent_proposal_opens_new_upkeep_filled_in_for_its_workspace() {
         (Checkouts::Partial, "Be careful.")
     );
     assert!(form.stale(), "its first frame searches for repositories");
-    assert!(form.proposed, "the dialog says that an agent filled it in");
+    let proposal = form.proposed.as_ref().unwrap();
+    assert_eq!(
+        proposal.name, "Agents",
+        "the dialog names the workspace an agent filled it in for"
+    );
+    assert_eq!(proposal.local_id, app.board.workspace(workspace).unwrap().local_id);
     assert!(
         app.propose_new_upkeep(workspace, &config).is_err(),
         "one New Upkeep at a time"

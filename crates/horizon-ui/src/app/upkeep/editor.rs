@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use egui::{Align, Context, Frame, Id, Layout, Order, RichText, Stroke, Vec2};
+use horizon_core::WorkspaceId;
 use horizon_core::upkeep::worker::{self, Config};
 
 use super::form::{Bot, Form};
@@ -19,6 +20,9 @@ pub(in crate::app) struct Editor {
     /// The repositories an agent proposed through `cloud_upkeep`, shown as their own rows:
     /// the list below may not hold them.
     pub(in crate::app) proposed: Vec<String>,
+    /// The workspace of the Upkeep the agent proposed them for, as the editor names it: it
+    /// can open while the person looks at another workspace.
+    pub(in crate::app) proposed_for: String,
     saving: Option<Receiver<Result<(), String>>>,
     error: Option<String>,
 }
@@ -42,6 +46,7 @@ impl Editor {
             original,
             form,
             proposed: Vec::new(),
+            proposed_for: String::new(),
             saving: None,
             error: None,
         }
@@ -125,6 +130,7 @@ impl HorizonApp {
     pub(super) fn propose_upkeep_repositories(
         &mut self,
         ctx: &Context,
+        workspace: WorkspaceId,
         cloud: &str,
         config: &Config,
         add: &[String],
@@ -132,7 +138,20 @@ impl HorizonApp {
         if self.upkeep.editor.is_some() || self.upkeep.form.is_some() {
             return Err("upkeep_unavailable: an Upkeep dialog is already open; try again later".into());
         }
+        // The cloud must still be in the caller's workspace, the one the editor names.
+        let held = self
+            .board
+            .workspace(workspace)
+            .ok_or("upkeep_unavailable: the Upkeep's workspace is gone")?;
+        let in_workspace = self.cloud_prototype.groups.0.iter().any(|group| {
+            group.workspace == held.local_id && group.remote.as_ref().is_some_and(|remote| remote.id == cloud)
+        });
+        if !in_workspace {
+            return Err("upkeep_unavailable: the Upkeep is no longer in this workspace".into());
+        }
+        let workspace = held.name.clone();
         let mut editor = Editor::new(cloud, config);
+        editor.proposed_for = workspace;
         editor.proposed = add.iter().map(|name| name.to_lowercase()).collect();
         editor.form.selected.extend(editor.proposed.iter().cloned());
         // Tests read the developer's real cloud settings: they never search GitHub.
@@ -299,9 +318,12 @@ fn proposed(ui: &mut egui::Ui, editor: &mut Editor) {
         .inner_margin(12)
         .show(ui, |ui| {
             ui.label(
-                RichText::new("An agent proposes these repositories. Untick any you do not want.")
-                    .size(13.0)
-                    .color(theme::FG()),
+                RichText::new(format!(
+                    "An agent proposes these repositories for the Upkeep of the workspace \u{201c}{}\u{201d}. Untick any you do not want.",
+                    editor.proposed_for
+                ))
+                .size(13.0)
+                .color(theme::FG()),
             );
             for name in &editor.proposed {
                 let mut on = editor.form.selected.contains(name);

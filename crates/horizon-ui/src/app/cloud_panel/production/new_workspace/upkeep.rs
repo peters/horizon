@@ -113,7 +113,8 @@ impl HorizonApp {
     }
 
     /// Adds the cloud's card and the board to `workspace`, or to a new Upkeep workspace when
-    /// it is `None` or was removed, and starts the cloud.
+    /// it is `None`, and starts the cloud. A chosen workspace that was removed meanwhile is
+    /// an error: the person, or an agent's proposal, named that one.
     fn add_upkeep_cloud(
         &mut self,
         ctx: &egui::Context,
@@ -140,8 +141,12 @@ impl HorizonApp {
             profile,
             placement: Placement::default(),
         };
-        let existing = workspace.filter(|id| self.board.workspace(*id).is_some());
-        let workspace = existing.unwrap_or_else(|| self.create_workspace_visible(ctx, NAME));
+        let made = workspace.is_none();
+        let workspace = match workspace {
+            Some(id) if self.board.workspace(id).is_some() => id,
+            Some(_) => return Err("The workspace for this Upkeep is gone. Start New Upkeep again.".into()),
+            None => self.create_workspace_visible(ctx, NAME),
+        };
         let local = self
             .board
             .workspace(workspace)
@@ -150,7 +155,7 @@ impl HorizonApp {
         let id = match self.add_cloud_group(NAME.into(), local, prepared.path, launch, Vec::new()) {
             Ok(id) => id,
             Err(error) => {
-                if existing.is_none() {
+                if made {
                     self.board.remove_empty_workspace(workspace);
                 }
                 return Err(format!("{error}."));

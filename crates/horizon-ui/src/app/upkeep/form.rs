@@ -90,6 +90,15 @@ pub(in crate::app) fn checkouts_label(checkouts: Checkouts) -> &'static str {
     }
 }
 
+/// The workspace an agent proposed an Upkeep for.
+pub(in crate::app) struct Proposal {
+    /// As the dialog shows it.
+    pub(in crate::app) name: String,
+    /// What Start looks the workspace up by: a session switch can give another workspace
+    /// the same `WorkspaceId`, never the same local id.
+    pub(in crate::app) local_id: String,
+}
+
 pub(in crate::app) struct Form {
     /// The workspace the cloud goes into; `None` makes a new workspace.
     pub(in crate::app) workspace: Option<WorkspaceId>,
@@ -121,8 +130,8 @@ pub(in crate::app) struct Form {
     pub(in crate::app) hidden: bool,
     /// Why the last start failed.
     pub(in crate::app) error: Option<String>,
-    /// An agent filled the form in through `cloud_upkeep`.
-    pub(in crate::app) proposed: bool,
+    /// An agent filled the form in through `cloud_upkeep` for this workspace.
+    pub(in crate::app) proposed: Option<Proposal>,
 }
 
 impl Default for Form {
@@ -147,7 +156,7 @@ impl Default for Form {
             starting: false,
             hidden: false,
             error: None,
-            proposed: false,
+            proposed: None,
         }
     }
 }
@@ -155,7 +164,7 @@ impl Default for Form {
 impl Form {
     /// New Upkeep filled in with what an agent proposed, for `workspace`. Bots other than
     /// those the dialog offers are left out.
-    pub(in crate::app) fn proposed(workspace: WorkspaceId, config: &Config) -> Self {
+    pub(in crate::app) fn proposed(workspace: WorkspaceId, proposal: Proposal, config: &Config) -> Self {
         Self {
             workspace: Some(workspace),
             selected: config.repositories.iter().map(|name| name.to_lowercase()).collect(),
@@ -167,7 +176,7 @@ impl Form {
             every: Every::from_minutes(config.every_minutes),
             checkouts: config.checkouts,
             instructions: config.instructions.clone(),
-            proposed: true,
+            proposed: Some(proposal),
             ..Self::default()
         }
     }

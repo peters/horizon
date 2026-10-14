@@ -448,8 +448,9 @@ script first in `PATH` that writes `HORIZON_BROWSER_ACTOR` and
 3. Call `add` with one repository from step 2 that the Upkeep does not have.
 
    Result: The answer shows `awaiting_person`. Horizon shows the repository list of
-   the Upkeep. Above the list, the box "An agent proposes these repositories" shows
-   the repository with a tick. The board shows the old number of repositories.
+   the Upkeep. Above the list, the box "An agent proposes these repositories for the
+   Upkeep of the workspace" names the workspace of the Upkeep and shows the repository
+   with a tick. The board shows the old number of repositories.
 
 4. Click **Save** in the repository list.
 
@@ -507,8 +508,9 @@ script first in `PATH` that writes `HORIZON_BROWSER_ACTOR` and
 
     Call `create` again with `instructions` that are not the default.
 
-    Result: The note says "An agent proposed these settings and its own instructions.
-    Read the instructions in full before you start." Click **Cancel**.
+    Result: The note says "An agent proposed these settings and its own instructions
+    for the workspace" with the name of the workspace of step 11, and "Read the
+    instructions in full before you start." Click **Cancel**.
 
 13. In the **Upkeep agent** panel on the worker, call `cloud_upkeep` `status` with
     `horizon-browser mcp`.
