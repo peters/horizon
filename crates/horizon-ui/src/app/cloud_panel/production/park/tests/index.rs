@@ -77,6 +77,7 @@ fn a_later_session_restore_in_a_parked_cloud_records_the_new_panel_as_parked() {
             tmux: "late".into(),
             branch: String::new(),
             worktree: "/workspace/checkout".into(),
+            removed_agent_reported: false,
         });
     cloud.pending_session_attachments.insert("late".into());
     cloud.next_attachment_attempt = None;

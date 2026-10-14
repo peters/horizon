@@ -914,13 +914,8 @@ impl HorizonApp {
                 if let Some(session) = saved.sessions.iter().find(|session| session.panel_id == id) {
                     return (session.clone(), false);
                 }
-                let session = Session {
-                    panel_id: id.clone(),
-                    agent: agent.into(),
-                    tmux: id.clone(),
-                    branch: String::new(),
-                    worktree: cloud_runtime::siblings::shared_worktree(saved.siblings.as_ref()),
-                };
+                let worktree = cloud_runtime::siblings::shared_worktree(saved.siblings.as_ref());
+                let session = Session::new(&id, agent, worktree);
                 saved.sessions.push(session.clone());
                 (session, true)
             })?;

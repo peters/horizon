@@ -766,7 +766,7 @@ must refuse the rebuild before it changes the worker
 
 ### 6.13 L13: Rebuild with changed settings
 
-Use `smoke-sib` on RunPod. Then do steps 1 to 12 again with `smoke-hb` on Hetzner
+Use `smoke-sib` on RunPod. Then do steps 1 to 13 again with `smoke-hb` on Hetzner
 and its profile `runpod-build`. The profile of the cloud must have `agents: [claude]`
 and no `idle_stop_minutes` at the start.
 
@@ -838,11 +838,22 @@ and no `idle_stop_minutes` at the start.
     longer has agent codex, so its process was not relaunched`. The Codex panel does
     not show a running Codex. The other sessions relaunch.
 
-12. Examine the **Machine** tab.
+12. On the card, click **Reconnect cloud**. Wait until the card shows **Ready**. Then
+    count the sessions that the record marks as reported. `<cloud-id>` is the folder
+    of the cloud below `<home>/.horizon/cloud`; find it as in E09 step 1.
+
+    ```sh
+    grep -c '"removed_agent_reported": true' <home>/.horizon/cloud/<cloud-id>/deployment.json
+    ```
+
+    Result: The command prints `1`: the reconnect did not report the Codex session
+    again. The Codex panel does not show a running Codex.
+
+13. Examine the **Machine** tab.
 
     Result: `Agents` shows `claude` only.
 
-13. Commit `gpu: true` in the profile of `smoke-sib`. On the card, click **Rebuild
+14. Commit `gpu: true` in the profile of `smoke-sib`. On the card, click **Rebuild
     image & restart…**.
 
     Result: The confirmation shows **Rebuild refused:** with the field `gpu`. Click
@@ -997,8 +1008,8 @@ Use `smoke-sib` on RunPod. Its profile has a `build` section. In the steps,
   field.
 - A rebuild adds and removes the agent `codex` and changes the idle stop on RunPod
   and on Hetzner. The confirmation lists each change before the rebuild starts. An
-  added agent has its credential. A session of a removed agent is reported and does
-  not relaunch.
+  added agent has its credential. A session of a removed agent is reported once and
+  does not relaunch. A later reconnect does not report it again.
 - A rebuild takes uncommitted settings and uncommitted recipe files. The confirmation
   lists each uncommitted file and never an ignored file. A secret file name and a file
   changed after the confirmation refuse the rebuild. The harness rebuild refuses a
