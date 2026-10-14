@@ -88,8 +88,10 @@ fn request(cloud_id: &str, config: &Config) -> Result<Vec<u8>> {
 /// Sets the policy on the worker as root. Fails on a worker image without the policy; the
 /// loop there starts no agent.
 /// # Errors
-/// The worker could not be reached or refused the policy.
+/// The saved choice is not valid, or the worker could not be reached or refused the policy.
 pub fn send(connection: &Connection, runner: &Runner<'_>, cloud_id: &str, config: &Config) -> Result<()> {
+    // A saved choice edited by hand says what is wrong with it here, not on the worker.
+    config.validate()?;
     let body = request(cloud_id, config)?;
     runner.private_exchange(&mut connection.command(COMMAND), &body, TIMEOUT)?;
     Ok(())

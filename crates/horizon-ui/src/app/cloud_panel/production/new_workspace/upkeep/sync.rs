@@ -64,6 +64,8 @@ impl HorizonApp {
                         sync.allowed.drain(..excess);
                         match answer {
                             Ok(answer) => {
+                                // A Run now that the exchange held back waits for the next one.
+                                requeue(&mut sync.signals, held_back(sync.sent, answer.run_held));
                                 sync.marker_left = answer.marker_left;
                                 sync.last = answer;
                             }
@@ -299,23 +301,33 @@ fn exchange(
         secrets: Vec::new(),
     };
     // The policy goes first: the loop that the exchange keeps running starts no agent on a
-    // worker without it. A Run now then waits, with the whole exchange, for one that sets
-    // it, so it is not spent on a run that starts no agent; without one the exchange goes on.
-    if let Err(error) = worker::policy::send(&connection, &runner, cloud_id, &config) {
-        tracing::warn!(cloud = %cloud_id, %error, "the worker did not take the Upkeep policy of its GitHub access");
-        if signals.run_now {
-            return (
-                Vec::new(),
-                Err(format!(
-                    "The worker did not take the Upkeep policy, so Run now waits: {error}"
-                )),
-            );
+    // worker without it. When the worker does not take it, the exchange still goes, so the
+    // worker gets the loop that checks for it, but a Run now waits for an exchange that sets
+    // it: it is not spent on a run that starts no agent.
+    let held = match worker::policy::send(&connection, &runner, cloud_id, &config) {
+        Ok(()) => None,
+        Err(error) => {
+            tracing::warn!(cloud = %cloud_id, %error, "the worker did not take the Upkeep policy of its GitHub access");
+            signals.run_now.then_some(())
         }
-    }
+    };
+    let delivered = if held.is_some() {
+        Signals {
+            run_now: false,
+            run_token: None,
+            ..signals
+        }
+    } else {
+        signals
+    };
     let allowed = allow_chosen(&connection, &runner, cloud_id, &config);
-    let answer = worker::exchange(&connection, &runner, cloud_id, revision, &config, signals)
-        .map(|answer| learned(cloud_id, &config, signals, marker_left, &answer))
+    let answer = worker::exchange(&connection, &runner, cloud_id, revision, &config, delivered)
+        .map(|answer| learned(cloud_id, &config, delivered, marker_left, &answer))
         .map_err(|error| error.to_string());
+    let answer = answer.map(|answer| Answer {
+        run_held: held.is_some(),
+        ..answer
+    });
     (allowed, answer)
 }
 
@@ -341,6 +353,7 @@ fn learned(cloud_id: &str, config: &Config, signals: Signals, marker_left: bool,
         settled: answer.loop_running && answer.settled,
         running: answer.running(),
         marker_left,
+        run_held: false,
     }
 }
 
@@ -376,6 +389,15 @@ fn allow_chosen(connection: &Connection, runner: &Runner<'_>, cloud_id: &str, co
         }
     }
     applied
+}
+
+/// The Run now of `sent` when an exchange held it back, else nothing.
+fn held_back(sent: Signals, held: bool) -> Signals {
+    if held {
+        Signals { paused: None, ..sent }
+    } else {
+        Signals::default()
+    }
 }
 
 /// Puts back the signals of a failed exchange: the worker may not have them. One the board
@@ -450,6 +472,25 @@ mod tests {
             },
         );
         assert_eq!(pending.paused, Some(false), "the later choice of the board wins");
+    }
+
+    #[test]
+    fn a_run_now_held_back_goes_again_and_a_delivered_pause_does_not() {
+        let sent = Signals {
+            run_now: true,
+            paused: Some(true),
+            ..Signals::default()
+        }
+        .with_run_token();
+        let mut pending = Signals::default();
+        requeue(&mut pending, held_back(sent, true));
+        assert_eq!(
+            (pending.run_now, pending.run_token, pending.paused),
+            (true, sent.run_token, None)
+        );
+        let mut pending = Signals::default();
+        requeue(&mut pending, held_back(sent, false));
+        assert_eq!(pending, Signals::default());
     }
 
     #[test]

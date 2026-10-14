@@ -67,6 +67,8 @@ pub(in crate::app) struct Answer {
     pub(in crate::app) running: bool,
     /// The first-run marker could not be removed after the worker got the first run.
     pub(in crate::app) marker_left: bool,
+    /// The worker did not take the Upkeep policy, so the exchange held Run now back.
+    pub(in crate::app) run_held: bool,
 }
 
 /// What an exchange hands back: the GitHub access requests it allowed, also when the rest
