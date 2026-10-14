@@ -211,7 +211,7 @@ fn deploy_with(
     }
     // Only after binding: the first deploy of a cloud with siblings sends their grants too.
     let git_auth = siblings::git_grants(&request.settings.git_credentials, &state)?;
-    validate_agent_auth(&request.settings, &state.profile.capabilities)?;
+    validate_agent_auth(&request.settings, &state.profile.capabilities, false)?;
     refresh_allocation(request, store, &mut state)?;
     let pack_root = tempfile::tempdir_in(store.root())?;
     let mut packed = source::pack(&state, pack_root.path(), &runner)?;

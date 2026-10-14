@@ -68,6 +68,19 @@ pub enum Error {
     Sibling(#[from] siblings::SiblingError),
     #[error(transparent)]
     Uncommitted(#[from] repository::uncommitted::Refusal),
+    /// The configured API-key file of an agent is unusable. A rebuild checks every agent
+    /// of the new profile, so its refusal says that a reconnect needs the file too.
+    #[error(
+        "Agent {agent} cannot use its API-key file {}: {problem}{}",
+        path.display(),
+        if *rebuild { ". A reconnect of this cloud needs this file too, so fix it before the rebuild" } else { "" }
+    )]
+    AgentCredential {
+        agent: &'static str,
+        path: std::path::PathBuf,
+        problem: String,
+        rebuild: bool,
+    },
 }
 pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Debug)]

@@ -1,18 +1,33 @@
 //! Agent API credentials validated before allocation and installed on the worker, and
 //! this computer's `ChatGPT` login for Codex given to it.
-use super::{Connection, Result, Runner, Settings};
+use super::{Connection, Error, Result, Runner, Settings};
 use std::time::Duration;
 
-pub(super) fn validate_agent_auth(settings: &Settings, capabilities: &horizon_cloud::Capabilities) -> Result<()> {
-    for path in [
+/// Refuses the first agent of `capabilities` whose configured API-key file is unusable,
+/// naming the agent and the file; for a `rebuild`, the refusal says a reconnect needs it too.
+pub(super) fn validate_agent_auth(
+    settings: &Settings,
+    capabilities: &horizon_cloud::Capabilities,
+    rebuild: bool,
+) -> Result<()> {
+    for (agent, path) in [
         ("claude", &settings.anthropic_api_key_file),
         ("codex", &settings.openai_api_key_file),
     ]
     .into_iter()
     .filter(|(agent, _)| capabilities.permits_agent(agent))
-    .filter_map(|(_, path)| path.as_ref())
+    .filter_map(|(agent, path)| Some((agent, path.as_ref()?)))
     {
-        crate::cloud_runtime::settings::validate_private_key_file(path)?;
+        crate::cloud_runtime::settings::validate_private_key_file(path).map_err(|error| Error::AgentCredential {
+            agent,
+            path: path.clone(),
+            problem: match error {
+                Error::Io(error) if error.kind() == std::io::ErrorKind::NotFound => "the file is missing".into(),
+                Error::Io(error) => error.to_string(),
+                error => error.to_string(),
+            },
+            rebuild,
+        })?;
     }
     Ok(())
 }
@@ -109,11 +124,25 @@ mod tests {
             for content in ["", " \n\t\r", "fixture-credential\n"] {
                 std::fs::write(file.path(), content).unwrap();
                 assert_eq!(
-                    validate_agent_auth(&settings, &selected).is_ok(),
+                    validate_agent_auth(&settings, &selected, false).is_ok(),
                     !content.trim().is_empty()
                 );
-                assert!(validate_agent_auth(&settings, &disabled).is_ok());
+                assert!(validate_agent_auth(&settings, &disabled, false).is_ok());
             }
+            // A deployment names the agent and the file; only a rebuild adds the reconnect.
+            std::fs::write(file.path(), "").unwrap();
+            let name = serde_json::to_value(agent).unwrap();
+            let error = validate_agent_auth(&settings, &selected, false)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.starts_with(&format!(
+                    "Agent {} cannot use its API-key file {}: ",
+                    name.as_str().unwrap(),
+                    file.path().display()
+                )) && !error.contains("reconnect"),
+                "{error}"
+            );
         }
     }
 }

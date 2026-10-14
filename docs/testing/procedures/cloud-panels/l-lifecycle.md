@@ -859,6 +859,36 @@ and no `idle_stop_minutes` at the start.
     Result: The confirmation shows **Rebuild refused:** with the field `gpu`. Click
     **Keep current image**, then revert the commit.
 
+Do steps 14 to 16 with `smoke-sib` only, and only if Cloud settings has an Anthropic
+API-key file. `<anthropic-key>` is that file.
+
+14. Move `<anthropic-key>` to a backup. In `<repo>`, add `codex` to
+    `capabilities.agents` of the profile of the cloud. Do not commit the change.
+
+    ```sh
+    mv <anthropic-key> <anthropic-key>.l13-backup
+    ```
+
+    Result: `<anthropic-key>` does not exist. The cloud already has the agent `claude`.
+
+15. On the card, click **Rebuild image & restart…**, then **Rebuild and restart**.
+
+    Result: Nothing is built. The card shows `Rebuild refused: Agent claude cannot use
+    its API-key file <anthropic-key>: the file is missing. A reconnect of this cloud
+    needs this file too, so fix it before the rebuild`. The reconnect after the
+    refusal fails with `Agent claude cannot use its API-key file <anthropic-key>: the
+    file is missing`.
+
+16. Put the file back. Discard the change of step 14. On the card, click
+    **Reconnect**.
+
+    ```sh
+    mv <anthropic-key>.l13-backup <anthropic-key>; git -C <repo> checkout -- .horizon/cloud.yml
+    ```
+
+    Result: `git -C <repo> status --short` shows nothing. The card shows **Ready**,
+    and the **Machine** tab shows `Agents` with `claude` only.
+
 ### 6.14 L14: Rebuild from an uncommitted recipe
 
 Use `smoke-sib` on RunPod. Its profile has a `build` section. In the steps,
@@ -1010,6 +1040,8 @@ Use `smoke-sib` on RunPod. Its profile has a `build` section. In the steps,
   and on Hetzner. The confirmation lists each change before the rebuild starts. An
   added agent has its credential. A session of a removed agent is reported once and
   does not relaunch. A later reconnect does not report it again.
+- A rebuild that adds `codex` while the file of `claude` is missing is refused before
+  the build. The refusal names `claude`, the file, and that a reconnect needs it too.
 - A rebuild takes uncommitted settings and uncommitted recipe files. The confirmation
   lists each uncommitted file and never an ignored file. A secret file name and a file
   changed after the confirmation refuse the rebuild. The harness rebuild refuses a

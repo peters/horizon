@@ -137,8 +137,8 @@ enum Driven {
 /// # Errors
 /// Refuses unless the cloud is ready with nothing pending and the committed profile named
 /// `profile_name` matches the bound one apart from its rebuild settings and the choices
-/// bound at creation, such as the provider and the storage, and an added agent whose
-/// configured credential is unusable. Refuses a built image that the worker's container
+/// bound at creation, such as the provider and the storage, and any agent of that profile
+/// whose configured credential is unusable. Refuses a built image that the worker's container
 /// disk cannot hold before anything changes on the worker, and drops its unsent journal,
 /// so nothing stays pending. After any other failure once the replacement is journaled,
 /// the journal stays, so the replacement can be continued or cancelled.
@@ -333,13 +333,14 @@ fn ready(state: &Deployment) -> Result<()> {
     Ok(())
 }
 
-/// Refuses to bind `next` when a person `confirmed` another profile, or when an agent it
-/// adds has a configured credential that is unusable, as a new cloud's would be.
+/// Refuses to bind `next` when a person `confirmed` another profile, or when any of its
+/// agents, not only an added one, has a configured credential that is unusable: a
+/// reconnect needs each one, so the refusal comes before a long build.
 fn accept(next: &Profile, confirmed: Option<&Profile>, settings: &Settings) -> Result<()> {
     if confirmed.is_some_and(|confirmed| confirmed != next) {
         return Err(Error::Invalid(CONFIRMED_OTHER));
     }
-    super::validate_agent_auth(settings, &next.capabilities)
+    super::validate_agent_auth(settings, &next.capabilities, true)
 }
 
 /// Refuses uncommitted files that are not exactly the ones a person `confirmed`: an image

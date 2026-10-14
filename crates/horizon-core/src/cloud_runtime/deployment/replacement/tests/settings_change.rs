@@ -155,12 +155,43 @@ fn an_unconfirmed_profile_or_an_unusable_credential_of_an_added_agent_is_refused
     .unwrap();
     // Codex's key file is checked only once a rebuild adds Codex.
     assert!(accept(&bound, None, &settings).is_ok());
-    assert!(accept(&committed, None, &settings).is_err());
+    let error = accept(&committed, None, &settings).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "Agent codex cannot use its API-key file {}: the file is missing. A reconnect of this cloud needs this file too, so fix it before the rebuild",
+            key.display()
+        )
+    );
     std::fs::write(&key, "synthetic-openai-key").unwrap();
     std::fs::set_permissions(&key, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
     accept(&committed, Some(&committed), &settings).unwrap();
     let error = accept(&committed, Some(&bound), &settings).unwrap_err();
     assert_eq!(error.to_string(), CONFIRMED_OTHER);
+}
+
+#[test]
+fn a_rebuild_that_adds_an_agent_names_the_unusable_file_of_an_agent_the_cloud_already_has() {
+    let (fixture, bound, committed) = settings_change();
+    let (claude, codex) = (fixture.root.join("anthropic-key"), fixture.root.join("openai-key"));
+    std::fs::write(&codex, "synthetic-openai-key").unwrap();
+    std::fs::set_permissions(&codex, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+    let settings: Settings = serde_json::from_value(json!({
+        "runpod_key_file": "/absent", "ssh_identity_file": "/absent", "docker_config": "/absent",
+        "cpu_flavors": [], "gpu_types": [], "anthropic_api_key_file": claude, "openai_api_key_file": codex
+    }))
+    .unwrap();
+    // Claude's file is missing although the cloud already has Claude: the refusal says so.
+    for profile in [&bound, &committed] {
+        let error = accept(profile, None, &settings).unwrap_err().to_string();
+        assert_eq!(
+            error,
+            format!(
+                "Agent claude cannot use its API-key file {}: the file is missing. A reconnect of this cloud needs this file too, so fix it before the rebuild",
+                claude.display()
+            )
+        );
+    }
 }
 
 #[test]
@@ -456,7 +487,13 @@ fn continuing_an_unsent_settings_change_checks_the_added_agent_credential_again(
         settings,
     );
     let error = continue_replacement(&request, &Cancellation::default(), &|_| {}).unwrap_err();
-    assert_eq!(error.to_string(), "API-key file must be private (0600)");
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "Agent codex cannot use its API-key file {}: API-key file must be private (0600). A reconnect of this cloud needs this file too, so fix it before the rebuild",
+            key.display()
+        )
+    );
     assert!(fixture.state().image_replacement.is_some(), "the journal stays");
 }
 
