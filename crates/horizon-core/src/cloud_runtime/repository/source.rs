@@ -260,15 +260,22 @@ pub fn destination(parent: &Path, remote: &Remote) -> PathBuf {
 /// owner's folder, each asked about its origin only if it exists.
 #[must_use]
 pub fn existing(parent: &Path, remote: &Remote) -> Option<PathBuf> {
+    existing_checkout(parent, remote).map(|(path, _)| path)
+}
+
+/// As [`existing`], with whether the checkout is a linked worktree, told by the same reads
+/// that find its origin.
+#[must_use]
+pub fn existing_checkout(parent: &Path, remote: &Remote) -> Option<(PathBuf, bool)> {
     candidates(parent, remote)
         .chain(earlier(parent, remote))
         .filter(|path| path.is_dir())
-        .find(|path| {
-            origin_url(path)
+        .find_map(|path| {
+            let (git, linked) = git_dirs(&path)?;
+            let same = origin_in(&git)
                 .and_then(|origin| parse(&origin))
-                .is_some_and(|origin| origin.url == remote.url)
-                && is_checkout(path)
-                && !transport::unfinished(path)
+                .is_some_and(|origin| origin.url == remote.url);
+            (same && is_checkout(&path) && !transport::unfinished(&path)).then_some((path, linked))
         })
 }
 
@@ -294,20 +301,29 @@ pub fn clone_stopped_in(folder: &Path) -> bool {
 /// `limit` bytes. A pipe or device in a checkout's place is never opened, since opening it
 /// could wait for ever, and a large file is not read into memory.
 fn small_text(path: &Path, limit: u64) -> Option<String> {
+    use std::io::Read as _;
     let meta = std::fs::metadata(path).ok()?;
     if !meta.is_file() || meta.len() > limit {
         return None;
     }
-    std::fs::read_to_string(path).ok()
+    // A file that grew since it was measured is still read no further than the limit.
+    let mut text = String::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(limit.saturating_add(1))
+        .read_to_string(&mut text)
+        .ok()?;
+    (u64::try_from(text.len()).ok()? <= limit).then_some(text)
 }
 
 /// The most bytes of a checkout's config read to find its origin.
 const CONFIG_LIMIT: u64 = 1024 * 1024;
 
-/// The address a checkout's `origin` was cloned from, read from its config file: a folder is
-/// looked at without starting a process, so a search can run while a dialog is drawn.
-fn origin_url(checkout: &Path) -> Option<String> {
-    let config = small_text(&common_git_dir(checkout)?.join("config"), CONFIG_LIMIT)?;
+/// The address a checkout's `origin` was cloned from, read from the config file of its
+/// common Git directory `git`: a folder is looked at without starting a process, so a
+/// search can run while a dialog is drawn.
+fn origin_in(git: &Path) -> Option<String> {
+    let config = small_text(&git.join("config"), CONFIG_LIMIT)?;
     let mut in_origin = false;
     for line in config.lines() {
         let line = line.trim();
@@ -323,18 +339,19 @@ fn origin_url(checkout: &Path) -> Option<String> {
     None
 }
 
-/// The Git directory that holds a checkout's configuration. A linked worktree has a `.git` file
-/// that points at its own directory, which in turn names the common one.
-fn common_git_dir(checkout: &Path) -> Option<PathBuf> {
+/// The Git directory that holds a checkout's configuration, and whether the checkout is a
+/// linked worktree: its `.git` file points at its own directory, which names the common one
+/// in `commondir`. Read from files only.
+fn git_dirs(checkout: &Path) -> Option<(PathBuf, bool)> {
     let dot_git = checkout.join(".git");
     if dot_git.is_dir() {
-        return Some(dot_git);
+        return Some((dot_git, false));
     }
     let pointer = small_text(&dot_git, 4096)?;
     let own = checkout.join(pointer.lines().find_map(|line| line.strip_prefix("gitdir:"))?.trim());
     match small_text(&own.join("commondir"), 4096) {
-        Some(common) => Some(own.join(common.trim())),
-        None => Some(own),
+        Some(common) => Some((own.join(common.trim()), true)),
+        None => Some((own, false)),
     }
 }
 

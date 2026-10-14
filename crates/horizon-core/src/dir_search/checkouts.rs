@@ -112,11 +112,26 @@ fn own_home() -> Option<PathBuf> {
 }
 
 /// The checkout in `path`, read as the search reads one, or `None` when it holds no
-/// repository. On macOS nothing is read in the folders macOS guards below the home folder.
+/// repository. On macOS nothing is read in the folders macOS guards below the home folder:
+/// such a folder itself, as when `~/` is listed, is no checkout, and below one only the
+/// path and its `.git` entry are looked at.
 #[must_use]
 pub fn checkout_in(path: &Path) -> Option<Checkout> {
     let guarded = own_home().map(|home| guarded_below(&home)).unwrap_or_default();
-    read(path, &guarded)
+    checkout_outside(path, &guarded)
+}
+
+/// As [`checkout_in`], with the guarded folders given.
+fn checkout_outside(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
+    if guarded.is_empty() {
+        return read(path, guarded);
+    }
+    let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+    let same = |place: &Path, folder: &Path| below(place, folder) && below(folder, place);
+    if guarded.iter().any(|folder| same(path, folder) || same(&real, folder)) {
+        return None;
+    }
+    read(path, guarded)
 }
 
 /// Where the folders that macOS guards below `root` are, by name and for real, so no link
@@ -296,13 +311,15 @@ fn small_file(path: &Path, guarded: &[PathBuf]) -> Option<String> {
     if !meta.is_file() || meta.len() > SMALL_FILE {
         return None;
     }
+    // A file that grew since it was measured is still read no further than the limit, and
+    // is not taken cut short.
     let mut text = String::new();
     std::fs::File::open(&place)
         .ok()?
-        .take(SMALL_FILE)
+        .take(SMALL_FILE + 1)
         .read_to_string(&mut text)
         .ok()?;
-    Some(text)
+    (u64::try_from(text.len()).ok()? <= SMALL_FILE).then_some(text)
 }
 
 /// `path` with its `.` and `..` worked out from the text alone, without reading the disk:
@@ -585,6 +602,22 @@ mod tests {
     fn a_link_target_is_worked_out_without_the_disk() {
         let joined = std::path::Path::new("/home/x/github/../../x/Documents/code");
         assert_eq!(super::lexical(joined), std::path::Path::new("/home/x/Documents/code"));
+    }
+
+    #[test]
+    fn a_guarded_folder_itself_is_no_checkout() {
+        let home = tempfile::tempdir().unwrap();
+        let documents = home.path().join("Documents");
+        fs::create_dir_all(documents.join(".git")).unwrap();
+        let guarded = [documents.clone()];
+        assert_eq!(super::checkout_outside(&documents, &guarded), None);
+        let spelled = home.path().join("documents");
+        assert_eq!(
+            super::checkout_outside(&spelled, &guarded),
+            None,
+            "names compare without case"
+        );
+        assert!(super::checkout_outside(&documents, &[]).is_some());
     }
 
     #[test]

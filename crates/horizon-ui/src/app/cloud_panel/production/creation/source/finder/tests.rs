@@ -39,9 +39,11 @@ fn paths_links_and_words_are_told_apart() {
         ".github",
         "https://github.com/acme/web",
         "git@github.com:acme/web.git",
+        "~alice",
     ] {
         assert!(!is_path(words), "{words}");
     }
+    assert_eq!(is_path("\\\\server\\share"), cfg!(windows));
 }
 
 #[test]

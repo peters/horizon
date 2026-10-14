@@ -116,7 +116,12 @@ pub(super) fn is_path(text: &str) -> bool {
     let text = text.trim_start();
     // `.github` is a name to search for; `./`, `../`, `.` and `..` are places.
     let relative = matches!(text, "." | "..") || text.starts_with("./") || text.starts_with("../");
-    relative || text.starts_with(['/', '~', '\\']) || (cfg!(windows) && text.len() >= 2 && text.as_bytes()[1] == b':')
+    // `~` and `~/...` are the home folder; `~alice` is a word to search for, as in the lookup.
+    let home = text
+        .strip_prefix('~')
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/') || (cfg!(windows) && rest.starts_with('\\')));
+    let windows = cfg!(windows) && (text.starts_with('\\') || (text.len() >= 2 && text.as_bytes()[1] == b':'));
+    relative || home || text.starts_with('/') || windows
 }
 
 impl Finder {

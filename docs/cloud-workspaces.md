@@ -518,7 +518,8 @@ hidden folders, or inside build folders such as `vendor` or `node_modules`; a
 build folder that is itself a checkout is listed. On macOS it does not look in
 the folders that macOS guards with a privacy prompt, such as Documents. Before
 this computer signs in to your GitHub App, **Show your GitHub repositories**
-signs it in and lists them.
+signs it in and lists them. What the search reads and its limits are in
+[the checkout search boundary](architecture/checkout-search.md).
 
 For a private repository on github.com, the token card becomes **Clone
 with GitHub**, which clones with your connected account; **Use a token instead**

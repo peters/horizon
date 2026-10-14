@@ -1,5 +1,10 @@
 use super::*;
 
+/// The origin of the checkout in `checkout`, as [`existing_checkout`] reads it.
+fn origin_of(checkout: &Path) -> Option<String> {
+    origin_in(&git_dirs(checkout)?.0)
+}
+
 fn remote(input: &str) -> Option<(String, String, String)> {
     parse(input).map(|remote| (remote.url, remote.host, remote.name))
 }
@@ -198,16 +203,16 @@ fn a_linked_worktree_reads_the_origin_of_the_checkout_it_belongs_to() {
     let pointer = main.join(".git").join("worktrees").join("wt");
     std::fs::write(linked.join(".git"), format!("gitdir: {}\n", pointer.display())).unwrap();
     assert_eq!(
-        origin_url(&linked).as_deref(),
+        origin_of(&linked).as_deref(),
         Some("https://github.com/demo-org/demo.git")
     );
-    assert_eq!(origin_url(temp.path()), None);
+    assert_eq!(origin_of(temp.path()), None);
 }
 
 #[test]
 fn an_origin_is_read_from_the_config_file() {
     let temp = tempfile::tempdir().unwrap();
-    assert_eq!(origin_url(temp.path()), None);
+    assert_eq!(origin_of(temp.path()), None);
     std::fs::create_dir(temp.path().join(".git")).unwrap();
     std::fs::write(
         temp.path().join(".git").join("config"),
@@ -215,7 +220,7 @@ fn an_origin_is_read_from_the_config_file() {
     )
     .unwrap();
     assert_eq!(
-        origin_url(temp.path()).as_deref(),
+        origin_of(temp.path()).as_deref(),
         Some("https://github.com/demo-org/demo.git")
     );
 }

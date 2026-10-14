@@ -29,6 +29,9 @@ struct Plan {
     worktree: bool,
     /// The checkout at the clone's own place, looked up on the disk once per link and folder.
     at_destination: Option<PathBuf>,
+    /// `at_destination` is a linked worktree: the repository's own checkout found elsewhere
+    /// comes before it.
+    destination_worktree: bool,
     /// What the search had found when `existing` was worked out: one found later
     /// may be this repository.
     found: Option<(usize, usize)>,
@@ -265,12 +268,14 @@ impl State {
         let found = self.finder.found_version();
         let finder = &self.finder;
         let plan = self.plan.get_or_insert_with(|| {
-            let at_destination = source::existing(&parent, remote);
+            let (at_destination, destination_worktree) =
+                source::existing_checkout(&parent, remote).map_or((None, false), |(path, linked)| (Some(path), linked));
             Plan {
                 url: remote.url.clone(),
                 existing: at_destination.clone(),
-                worktree: false,
+                worktree: destination_worktree,
                 at_destination,
+                destination_worktree,
                 found: None,
                 resumable: source::resumable(&parent, remote),
                 destination: source::destination(&parent, remote),
@@ -278,19 +283,20 @@ impl State {
             }
         });
         // Checkouts the search found since are looked at in memory only; the work on the disk
-        // above runs once per link and folder. One found anywhere is used rather than cloned.
+        // above runs once per link and folder. One found anywhere is used rather than cloned,
+        // and the repository's own checkout comes before a worktree at the clone's place.
         if plan.found != Some(found) {
             plan.found = Some(found);
-            let found = plan
-                .at_destination
-                .is_none()
-                .then(|| finder.found_checkout(remote))
-                .flatten();
-            plan.worktree = found.is_some_and(|checkout| checkout.worktree);
-            plan.existing = plan
-                .at_destination
-                .clone()
-                .or_else(|| found.map(|checkout| checkout.path.clone()));
+            let found = finder.found_checkout(remote);
+            let own = found.filter(|checkout| !checkout.worktree);
+            (plan.existing, plan.worktree) = match &plan.at_destination {
+                Some(path) if !plan.destination_worktree => (Some(path.clone()), false),
+                Some(path) => own.map_or((Some(path.clone()), true), |own| (Some(own.path.clone()), false)),
+                None => (
+                    found.map(|checkout| checkout.path.clone()),
+                    found.is_some_and(|checkout| checkout.worktree),
+                ),
+            };
         }
         plan
     }
@@ -634,6 +640,54 @@ mod tests {
             temp.path().join("demo-org/demo-atlas"),
             "a fresh clone would go in its owner's folder"
         );
+    }
+
+    #[test]
+    fn the_repository_s_own_checkout_comes_before_a_worktree_at_the_clone_s_place() {
+        let temp = tempfile::tempdir().unwrap();
+        let remote = source::parse("github.com/demo-org/demo-atlas").unwrap();
+        let main = temp.path().join("elsewhere/atlas");
+        std::fs::create_dir_all(&main).unwrap();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&main)
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args(args)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success(), "{args:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "first"]);
+        git(&["remote", "add", "origin", &remote.url]);
+        let worktree = temp.path().join("demo-atlas");
+        git(&["worktree", "add", "-q", "-b", "fix", &worktree.to_string_lossy()]);
+        let mut state = State::default();
+        state.set_parent(temp.path());
+        state.finder.found_for_test(Vec::new(), false);
+        assert_eq!(state.plan(&remote).existing.as_deref(), Some(worktree.as_path()));
+        assert!(
+            state.plan(&remote).worktree,
+            "the repository's own checkout may still turn up"
+        );
+        let found = |path: &Path, worktree: bool| horizon_core::dir_search::Checkout {
+            path: path.to_owned(),
+            origin: Some(remote.url.clone()),
+            branch: Some("main".into()),
+            touched: None,
+            complete: true,
+            stopped: false,
+            worktree,
+        };
+        state
+            .finder
+            .found_for_test(vec![found(&worktree, true), found(&main, false)], true);
+        let plan = state.plan(&remote);
+        assert_eq!(plan.existing.as_deref(), Some(main.as_path()));
+        assert!(!plan.worktree);
     }
 
     #[test]
