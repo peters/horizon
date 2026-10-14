@@ -137,9 +137,11 @@ pub(super) fn prepare_image(
     } else {
         state.repository.clone()
     };
+    // Recorded on the card only once the image is built.
+    let uncommitted = confirmed_image(state);
     let context = Context {
         source: &source,
-        uncommitted: state.uncommitted_image.as_ref(),
+        uncommitted: uncommitted.as_ref(),
     };
     let images = Images {
         docker_host: request.settings.docker_host.as_deref(),
@@ -191,7 +193,7 @@ pub(super) fn prepare_image(
             .placement
             .as_ref()
             .is_some_and(|placement| !placement.cpu_types.is_empty());
-    state.spec = Some(WorkerSpec {
+    let spec = WorkerSpec {
         exact_placement,
         operation_id: state.cloud_id.clone(),
         image_digest: digest,
@@ -202,8 +204,25 @@ pub(super) fn prepare_image(
         cpu_flavors,
         data_centers,
         startup_metadata: None,
-    });
+    };
+    built(state, spec, uncommitted);
     store.save(state)
+}
+
+/// Records the built image: its worker spec and, only now, the uncommitted files it
+/// was built from, so the card never names an image that did not complete.
+fn built(state: &mut Deployment, spec: WorkerSpec, uncommitted: Option<crate::cloud_runtime::state::UncommittedImage>) {
+    state.uncommitted_image = uncommitted;
+    state.spec = Some(spec);
+}
+
+/// The uncommitted files that the first image of `state` builds from, as New cloud
+/// confirmed them; `None` for an image from the commit alone.
+fn confirmed_image(state: &Deployment) -> Option<crate::cloud_runtime::state::UncommittedImage> {
+    Some(crate::cloud_runtime::state::UncommittedImage {
+        revision: state.revision.clone(),
+        hash: state.working_copy.as_ref()?.hash.clone()?,
+    })
 }
 
 /// Lays the uncommitted files that a person confirmed in New cloud, as the record holds
@@ -299,7 +318,7 @@ mod tests {
         }
 
         /// Lays the working copy over a fresh snapshot of `.horizon` and returns its Dockerfile.
-        fn built(request: &Request) -> Result<String> {
+        fn laid_over(request: &Request) -> Result<String> {
             let store = Store::lock(&request.state_root)?;
             let state = store.load()?.unwrap();
             let snapshot = tempfile::tempdir().unwrap();
@@ -333,17 +352,18 @@ mod tests {
             crate::cloud_runtime::deployment::prepare(&request).unwrap();
             let recorded = Store::lock(&request.state_root).unwrap().load().unwrap().unwrap();
             assert_eq!(recorded.working_copy, request.working_copy);
-            let image = recorded.uncommitted_image.unwrap();
+            assert_eq!(recorded.uncommitted_image, None, "recorded once the image is built");
+            let image = confirmed_image(&recorded).unwrap();
             assert_eq!(
                 (image.revision.as_str(), image.hash.as_str()),
                 (request.revision.as_str(), hash.as_str())
             );
-            assert_eq!(built(&request).unwrap(), "FROM scratch\nCOPY tool /\n");
+            assert_eq!(laid_over(&request).unwrap(), "FROM scratch\nCOPY tool /\n");
             // A reconnect names no confirmation; the record keeps building the same files.
             let mut reconnect = request.clone();
             reconnect.working_copy = None;
             crate::cloud_runtime::deployment::prepare(&reconnect).unwrap();
-            assert_eq!(built(&reconnect).unwrap(), "FROM scratch\nCOPY tool /\n");
+            assert_eq!(laid_over(&reconnect).unwrap(), "FROM scratch\nCOPY tool /\n");
             // A retry that confirmed other files is refused.
             let mut other = request.clone();
             other.working_copy = Some(Confirmed {
@@ -352,7 +372,7 @@ mod tests {
             assert!(crate::cloud_runtime::deployment::prepare(&other).is_err());
             // A file that changed after the confirmation refuses the build.
             write(&repository, ".horizon/Dockerfile", "FROM scratch\nCOPY other /\n");
-            let changed = built(&request).unwrap_err().to_string();
+            let changed = laid_over(&request).unwrap_err().to_string();
             assert!(
                 changed.contains("not the ones confirmed when this cloud was created"),
                 "{changed}"
@@ -380,6 +400,54 @@ mod tests {
         }
 
         #[test]
+        fn the_uncommitted_image_is_recorded_only_with_the_built_image() {
+            let root = tempfile::tempdir().unwrap();
+            let mut request = request(root.path());
+            let repository = request.repository.clone();
+            write(&repository, ".horizon/Dockerfile", "FROM scratch\nCOPY tool /\n");
+            let files = collect(&repository, &request.revision, request.profile.build.as_ref().unwrap()).unwrap();
+            request.working_copy = Some(Confirmed { hash: files.hash() });
+            // No Docker answers, so the build fails after the files are laid over. Its client
+            // writes its configuration below the test's own folder.
+            request.settings.docker_host = Some(format!("unix://{}", root.path().join("absent.sock").display()));
+            request.settings.docker_config = root.path().join("docker-config");
+            crate::cloud_runtime::deployment::prepare(&request).unwrap();
+            let store = Store::lock(&request.state_root).unwrap();
+            let mut state = store.load().unwrap().unwrap();
+            let cancel = Cancellation::default();
+            let runner = Runner {
+                cancel: &cancel,
+                emit: &|_| {},
+                secrets: Vec::new(),
+            };
+            // The build fails, or Docker is not installed, as on a macOS runner.
+            assert!(matches!(
+                prepare_image(&request, &store, &runner, &mut state, None),
+                Err(Error::Command("image build") | Error::Io(_))
+            ));
+            assert_eq!(state.uncommitted_image, None, "no image completed");
+            assert_eq!(store.load().unwrap().unwrap().uncommitted_image, None);
+            // A built image records its spec and the confirmed files together.
+            let image = confirmed_image(&state);
+            let spec = WorkerSpec {
+                exact_placement: false,
+                operation_id: state.cloud_id.clone(),
+                image_digest: format!("registry.example.com/worker@sha256:{}", "b".repeat(64)),
+                profile: state.profile.clone(),
+                public_key: "fixture".into(),
+                registry_auth_id: None,
+                gpu_types: Vec::new(),
+                cpu_flavors: Vec::new(),
+                data_centers: Vec::new(),
+                startup_metadata: None,
+            };
+            built(&mut state, spec, image.clone());
+            assert!(state.spec.is_some());
+            assert_eq!(state.uncommitted_image, image);
+            assert!(image.is_some());
+        }
+
+        #[test]
         fn new_cloud_with_nothing_uncommitted_refuses_a_file_added_later_and_a_commit_build_ignores_it() {
             let root = tempfile::tempdir().unwrap();
             let mut request = request(root.path());
@@ -387,22 +455,23 @@ mod tests {
             crate::cloud_runtime::deployment::prepare(&request).unwrap();
             let recorded = Store::lock(&request.state_root).unwrap().load().unwrap().unwrap();
             assert_eq!(
-                recorded.uncommitted_image, None,
+                confirmed_image(&recorded),
+                None,
                 "the image builds from the commit alone"
             );
-            assert_eq!(built(&request).unwrap(), "FROM scratch\n");
+            assert_eq!(laid_over(&request).unwrap(), "FROM scratch\n");
             write(&request.repository, ".horizon/added.sh", "echo added\n");
-            assert!(matches!(built(&request), Err(Error::Invalid(message)) if message == CHANGED));
+            assert!(matches!(laid_over(&request), Err(Error::Invalid(message)) if message == CHANGED));
             // A retry that names no confirmation, such as a reconnect, refuses it too.
             let mut retry = request.clone();
             retry.working_copy = None;
             crate::cloud_runtime::deployment::prepare(&retry).unwrap();
-            assert!(matches!(built(&retry), Err(Error::Invalid(message)) if message == CHANGED));
+            assert!(matches!(laid_over(&retry), Err(Error::Invalid(message)) if message == CHANGED));
             // A cloud from a typed revision builds its commit and never reads the working copy.
             let mut typed = retry.clone();
             typed.state_root = typed.state_root.with_file_name("typed");
             crate::cloud_runtime::deployment::prepare(&typed).unwrap();
-            assert_eq!(built(&typed).unwrap(), "FROM scratch\n");
+            assert_eq!(laid_over(&typed).unwrap(), "FROM scratch\n");
         }
     }
 

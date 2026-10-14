@@ -470,10 +470,7 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             last_self_stop: None,
             tailnet_device: None,
             siblings: None,
-            uncommitted_image: request
-                .working_copy
-                .as_ref()
-                .and_then(|confirmed| uncommitted_image(request, confirmed)),
+            uncommitted_image: None,
             working_copy: request.working_copy.clone(),
         }
     };
@@ -485,17 +482,6 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
     )?;
     store.save(&state)?;
     Ok(state)
-}
-
-/// The record of an image that `request` builds with the `confirmed` uncommitted files.
-fn uncommitted_image(
-    request: &Request,
-    confirmed: &repository::uncommitted::Confirmed,
-) -> Option<super::state::UncommittedImage> {
-    Some(super::state::UncommittedImage {
-        revision: request.revision.clone(),
-        hash: confirmed.hash.clone()?,
-    })
 }
 
 fn current_public_key(identity: &std::path::Path) -> Result<String> {

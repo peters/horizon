@@ -593,12 +593,40 @@ registry of `runpod-build`. Use only synthetic file contents. In the steps,
    Result: Below **Profile**, the dialog shows the warning about a public registry
    and lists `modified <dockerfile>` and `new <context>/smoke-new.txt`.
 
-3. Add a line to `<context>/smoke-new.txt`. Click **Start cloud**.
+3. Write a new file `<context>/.env` with the text `TOKEN=synthetic`. Do not
+   commit it.
+
+   Result: `git -C <repo> status --short` shows `<context>/.env`. The dialog
+   still lists the two files of step 2, because the file changes neither
+   `.horizon/cloud.yml` nor `HEAD`.
+
+4. Click **Start cloud**.
+
+   Result: The dialog shows an error that names `<context>/.env`. Below
+   **Profile**, the dialog names `<context>/.env` as a refused file and shows
+   **Check again**. **Start cloud** is not available. No cloud card appears. The
+   dialog does not show the text `TOKEN=synthetic`.
+
+5. Remove `<context>/.env`.
+
+   Result: `git -C <repo> status --short` does not show `<context>/.env`. The
+   dialog still shows the refusal.
+
+6. Click **Check again**.
+
+   Result: The refusal goes. Below **Profile**, the dialog lists the two files of
+   step 2 again.
+
+7. Add a line to `<context>/smoke-new.txt`.
+
+   Result: The dialog still lists the two files of step 2.
+
+8. Click **Start cloud**.
 
    Result: The dialog shows that the uncommitted files changed since they were
    listed, and lists them again. No cloud card appears.
 
-4. Run the harness plan for the same profile.
+9. Run the harness plan for the same profile.
 
    ```sh
    <run>/bin/cloud_deploy plan-deploy <home>/.horizon/cloud/settings.json <repo> runpod-build <home>/.horizon/cloud/d08-plan d08-plan
@@ -609,32 +637,59 @@ registry of `runpod-build`. Use only synthetic file contents. In the steps,
 
    > **CAUTION:** THE NEXT STEP RENTS COMPUTE AND PUSHES AN IMAGE.
 
-5. In **New cloud**, click **Start cloud**. Wait until the card shows **Ready**.
+10. In **New cloud**, click **Start cloud**. Wait until the card shows **Ready**.
 
-   Result: The card shows the build, the push and the worker.
+    Result: The card shows the build, the push and the worker.
 
-6. Examine the card.
+11. Examine the card.
 
-   Result: The card shows `Image: built from <commit> plus uncommitted changes`,
-   where `<commit>` is the first 12 characters of `git -C <repo> rev-parse HEAD`.
+    Result: The card shows `Image: built from <commit> plus uncommitted changes`,
+    where `<commit>` is the first 12 characters of `git -C <repo> rev-parse HEAD`.
 
-7. In a Shell panel of `smoke-dirty`, show the marker.
+12. In a Shell panel of `smoke-dirty`, show the marker.
 
-   ```sh
-   cat /etc/horizon-smoke-new-cloud
-   ```
+    ```sh
+    cat /etc/horizon-smoke-new-cloud
+    ```
 
-   Result: The panel shows `synthetic-new-cloud-marker`. The worker's checkout has
-   no `<context>/smoke-new.txt`, because the source is the committed archive.
+    Result: The panel shows `synthetic-new-cloud-marker`. The worker's checkout has
+    no `<context>/smoke-new.txt`, because the source is the committed archive.
 
-8. Close the card of `smoke-dirty`, and discard the changes of step 1.
+13. Write the pod and volume of `smoke-dirty` in the resource ledger.
 
-   ```sh
-   git -C <repo> checkout -- <dockerfile>; rm <repo>/<context>/smoke-new.txt
-   ```
+    Result: The ledger shows the pod and the volume of `smoke-dirty` as active.
 
-   Result: The provider shows no pod for `smoke-dirty`. `git -C <repo> status
-   --short` shows nothing.
+14. On the card of `smoke-dirty`, click **Delete cloud resources…**.
+
+    Result: The card asks for confirmation and shows **Delete resources
+    permanently**.
+
+    > **CAUTION:** THE NEXT STEP DELETES THE VOLUME OF `smoke-dirty`. Its files
+    > cannot come back.
+
+15. Click **Delete resources permanently**.
+
+    Result: The card shows **Deleted** and **Workspace storage cleaned up**. The
+    provider shows no pod and no volume for `smoke-dirty`.
+
+16. Mark the resources of `smoke-dirty` as deleted in the resource ledger.
+
+    Result: The ledger shows no active resource for `smoke-dirty`.
+
+    > **CAUTION:** REMOVE ONLY `smoke-dirty`. Horizon removes the cloud and its
+    > panels from the board.
+
+17. Click **Remove cloud**.
+
+    Result: The cloud `smoke-dirty` is not on the board.
+
+18. Discard the changes of step 1.
+
+    ```sh
+    git -C <repo> checkout -- <dockerfile>; rm <repo>/<context>/smoke-new.txt
+    ```
+
+    Result: `git -C <repo> status --short` shows nothing.
 
 ## 7. Pass criteria
 

@@ -593,7 +593,9 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
     } else if form.profiles.is_some() {
         profiles::field(ui, form);
         profiles::notes(ui, form);
-        uncommitted::section(ui, form);
+        if uncommitted::section(ui, form) {
+            action = RepositoryAction::Load;
+        }
         match super::repository_setup::quick_start_note(ui, form) {
             super::repository_setup::Note::None => {}
             super::repository_setup::Note::UpdateFromCi => action = RepositoryAction::Setup,

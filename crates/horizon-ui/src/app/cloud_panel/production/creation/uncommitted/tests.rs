@@ -65,16 +65,85 @@ fn built(form: &Production) -> Option<&Build> {
 
 fn painted(form: &Production) -> String {
     let ctx = egui::Context::default();
-    ctx.run_ui(egui::RawInput::default(), |ui| section(ui, form))
-        .discard_textures()
-        .shapes
-        .iter()
-        .filter_map(|shape| match &shape.shape {
-            egui::epaint::Shape::Text(text) => Some(text.galley.job.text.clone()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    ctx.run_ui(egui::RawInput::default(), |ui| {
+        section(ui, form);
+    })
+    .discard_textures()
+    .shapes
+    .iter()
+    .filter_map(|shape| match &shape.shape {
+        egui::epaint::Shape::Text(text) => Some(text.galley.job.text.clone()),
+        _ => None,
+    })
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+/// Whether a click on **Check again**, where the refusal paints it, asks for a reread.
+fn check_again(form: &Production) -> bool {
+    let ctx = egui::Context::default();
+    let mut at = None;
+    let mut clicked = false;
+    let events = [
+        Vec::new(),
+        vec![egui::Event::PointerMoved(egui::Pos2::ZERO)],
+        vec![egui::Event::PointerButton {
+            pos: egui::Pos2::ZERO,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        }],
+        vec![egui::Event::PointerButton {
+            pos: egui::Pos2::ZERO,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    ];
+    for events in events {
+        let events = events
+            .into_iter()
+            .map(|event| match (event, at) {
+                (egui::Event::PointerMoved(_), Some(pos)) => egui::Event::PointerMoved(pos),
+                (
+                    egui::Event::PointerButton {
+                        button,
+                        pressed,
+                        modifiers,
+                        ..
+                    },
+                    Some(pos),
+                ) => egui::Event::PointerButton {
+                    pos,
+                    button,
+                    pressed,
+                    modifiers,
+                },
+                (event, _) => event,
+            })
+            .collect();
+        let output = ctx
+            .run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    clicked |= section(ui, form);
+                },
+            )
+            .discard_textures();
+        at = at.or_else(|| {
+            output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.job.text == "Check again" => {
+                    Some(text.pos + text.galley.rect.center().to_vec2())
+                }
+                _ => None,
+            })
+        });
+    }
+    assert!(at.is_some(), "Check again is painted");
+    clicked
 }
 
 #[test]
@@ -88,6 +157,7 @@ fn the_dialog_lists_the_uncommitted_files_of_the_chosen_build_and_refuses_a_secr
         "only a build reads files"
     );
     assert!(painted(&form).contains("No uncommitted file goes into the image"));
+    assert!(!painted(&form).contains("Check again"), "only a refusal offers it");
     write(path, ".horizon/Dockerfile", "FROM scratch\nCOPY tool.sh /\n");
     write(path, ".horizon/tool.sh", "echo uncommitted\n");
     let form = dialog(path, "");
@@ -116,6 +186,8 @@ fn the_dialog_lists_the_uncommitted_files_of_the_chosen_build_and_refuses_a_secr
         "{shown}"
     );
     assert!(!shown.contains("synthetic"), "{shown}");
+    // Removing the file changes neither cloud.yml nor HEAD, so the refusal offers a reread.
+    assert!(check_again(&form), "Check again asks for a reread");
     assert_eq!(super::super::storage::launch_reason(&form), Some(REFUSED));
     assert!(confirmed(&form, built(&form)).is_err());
     // A typed revision that is not checked out builds that commit alone.

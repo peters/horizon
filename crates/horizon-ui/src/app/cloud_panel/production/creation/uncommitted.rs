@@ -46,15 +46,19 @@ pub(in crate::app::cloud_panel::production) fn read(prepared: &Prepared, cancel:
         .collect()
 }
 
-/// The selected profile's uncommitted files, or the refusal that names one.
-pub(super) fn section(ui: &mut Ui, form: &Production) {
+/// The selected profile's uncommitted files, or the refusal that names one. Returns
+/// whether **Check again** was clicked: fixing a refused file changes neither
+/// `.horizon/cloud.yml` nor `HEAD`, so no automatic reread follows.
+pub(super) fn section(ui: &mut Ui, form: &Production) -> bool {
     match form.launch.uncommitted.get(&form.selected_profile) {
-        None => {}
+        None => false,
         Some(Ok(files)) => {
             super::super::cards::rebuild::uncommitted(ui, "new-cloud-uncommitted-files", files.files());
+            false
         }
         Some(Err(refusal)) => {
             ui.label(RichText::new(refusal).size(12.5).color(theme::PALETTE_RED()));
+            ui.button("Check again").clicked()
         }
     }
 }

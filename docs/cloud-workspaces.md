@@ -867,7 +867,8 @@ These rules apply:
   `build`.
 - For a profile with `build`, the dialog lists below **Profile** each uncommitted
   file that goes into the image, or the reason that Horizon refuses a file. A
-  refused file stops **Start cloud**. The dialog reads the list with the
+  refused file stops **Start cloud**. After you remove or rename the refused
+  file, click **Check again** below the reason. The dialog reads the list with the
   settings. **Start cloud** reads the files again; if they changed since,
   Horizon refuses the start and shows the new list.
 - When the working copy changes `source` or `companions`, a note below
