@@ -40,6 +40,8 @@ to examine the keyboard focus order and the focus ring of a page.
 
 2. From the MCP client, start the candidate MCP server:
    `env -u HORIZON -u HORIZON_BROWSER_ACTOR HOME=<empty folder> horizon-browser mcp --standalone --backend chromium`.
+   On Windows, start it from PowerShell:
+   `Remove-Item Env:HORIZON, Env:HORIZON_BROWSER_ACTOR -ErrorAction SilentlyContinue; $env:HOME = '<empty folder>'; horizon-browser mcp --standalone --backend chromium`.
    Remove all `CLAUDE_CODE_*` variables from its environment too.
 
    Result: After `initialize`, `browser_list` shows one `standalone-` panel.
