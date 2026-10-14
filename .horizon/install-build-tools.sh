@@ -74,6 +74,10 @@ rm /tmp/gh.deb
 mkdir -p /usr/local/share/licenses/gh
 curl -fsSL https://raw.githubusercontent.com/cli/cli/v2.102.0/LICENSE -o /usr/local/share/licenses/gh/LICENSE
 CARGO_HOME=/usr/local/cargo rustup component add rustfmt clippy
+# The worker helpers run agents of an isolated cloud as this account, and their check
+# requires its fixed IDs.
+groupadd --gid 10001 horizon-agent
+useradd --uid 10001 --gid 10001 --no-create-home --shell /bin/bash horizon-agent
 mkdir -p /etc/horizon-worker /run/sshd /workspace
 printf '%s\n' '{"agents":["codex","claude"],"browsers":["chromium","firefox"],"desktop":true}' > /etc/horizon-worker/capabilities.json
 ln -s /usr/local/bin/horizon-worker-git-auth /usr/local/bin/gh
