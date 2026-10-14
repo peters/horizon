@@ -585,3 +585,56 @@ fn a_stopped_clone_resumes_from_the_owners_folder_before_the_earlier_place() {
         temp.path().join("acme/demo")
     );
 }
+
+#[test]
+#[cfg(unix)] // The rewrite runs a shell command.
+fn a_commit_fetch_runs_no_program_that_the_checkout_configures() {
+    let temp = tempfile::tempdir().unwrap();
+    let origin = origin(temp.path());
+    let checkout = temp.path().join("checkout");
+    let status = Command::new("git")
+        .args(["clone", "-q", &origin.url])
+        .arg(&checkout)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    // A commit the checkout does not have yet, so each fetch has to reach the remote.
+    let origin_folder = temp.path().join("origin");
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(&origin_folder)
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+        .args(["commit", "-q", "--allow-empty", "-m", "new"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let head = count(&origin_folder, &["rev-parse", "HEAD"]);
+    let marker = temp.path().join("ran");
+    let config = |key: &str, value: &str| {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(&checkout)
+            .args(["config", key, value])
+            .status()
+            .unwrap();
+        assert!(status.success(), "{key}");
+    };
+    config("protocol.file.allow", "always");
+    config("protocol.ext.allow", "always");
+    config(
+        &format!("url.ext::sh -c touch% {}.insteadOf", marker.display()),
+        "https://example.invalid/acme/web.git",
+    );
+    let rewritten = Remote {
+        url: "https://example.invalid/acme/web.git".into(),
+        ..origin.clone()
+    };
+    let cancel = Cancellation::default();
+    assert!(fetch_commits(&rewritten, &checkout, &[&head], None, &cancel).is_err());
+    assert!(!marker.exists(), "the remote helper of a rewrite never runs");
+    assert!(
+        fetch_commits(&origin, &checkout, &[&head], None, &cancel).is_err(),
+        "only HTTPS, whatever the checkout allows"
+    );
+    assert!(git_output(&checkout, &["cat-file", "-e", &head]).is_none());
+}

@@ -121,3 +121,22 @@ fn only_a_board_with_the_upkeep_or_its_test_cloud_follows_the_tests() {
         "a test whose Upkeep was closed still ends"
     );
 }
+
+#[test]
+fn the_task_counts_as_given_only_when_the_enter_reaches_the_agent_panel() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let mut ledger = native::Ledger::default();
+    ledger.take(vec![request()]);
+    assert!(ledger.start_next().is_some());
+    let now = Instant::now();
+    let mut native = Native {
+        // A panel that a session switch or a close took away.
+        agent: Some((horizon_core::PanelId(u64::MAX), now)),
+        submit_at: Some(now),
+        ..Native::default()
+    };
+    assert!(!app.submit_task("upkeep", &mut ledger, &mut native, now));
+    assert!(!ledger.current.as_ref().unwrap().prompted, "the task is given again");
+    assert!(native.submit_at.is_none());
+    assert_eq!(ledger.reports[0].state, Test::Starting);
+}

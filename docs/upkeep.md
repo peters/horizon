@@ -533,8 +533,11 @@ its desktop show next to the board.
    in their order. Horizon tests each head of a pull request one time. When a test
    ended without `passed` or `failed` (refused, blocked or expired), the same
    request starts a new test after one hour, at most two tests for each head.
+   Horizon remembers the last 256 tested heads; a refused request, which rented no
+   cloud, is the first to be forgotten.
 3. Horizon gets the head commit into the checkout of the repository on this
-   computer, as **Start Upkeep** does for its first repository. It starts the test
+   computer, as **Start Upkeep** does for its first repository. This fetch uses
+   only HTTPS and starts no program that the checkout's Git configuration names. It starts the test
    cloud **Test NAME #NUMBER** on Hetzner with the default profile of the repository
    at that commit.
 4. When the cloud is ready, Horizon opens the panel **Native test agent** (Codex, or
@@ -544,7 +547,9 @@ its desktop show next to the board.
    desktop `:99`, and write the evidence to `/workspace/home/native-test`. The
    image must start the agent past its first-run dialogs; for Claude Code, the
    worker tools of Horizon do this since #1230. In an older image the task goes
-   into a dialog, and the test ends at the time limit as expired.
+   into a dialog, and the test ends at the time limit as expired. The task counts
+   as given when the Enter after it reaches the panel; when a session switch or a
+   restart comes first, Horizon gives it again.
 5. Every 30 seconds, Horizon reads `result.json` in that folder. When the agent wrote
    it, or when the time limit of 120 minutes from the start ends, Horizon copies the
    evidence to `~/.horizon/upkeep/<cloud>/native/` on this computer and closes the

@@ -159,7 +159,9 @@ section "Trust boundary of the test cloud", describes the boundary. Check that:
   checks names, kinds, counts and sizes again and strips control characters.
 - The fetch of the head (`repository::source::fetch_commits`) changes no ref, no
   working tree and no `FETCH_HEAD` of the person's checkout, and never removes a lock
-  there.
+  there. It allows only HTTPS through `GIT_ALLOW_PROTOCOL` and clears the credential
+  helpers, the file system monitor and the hooks, so the checkout's configuration
+  starts no program.
 - Every network, Git and SSH step of a test, the check of the request and every read
   or write of the ledger run on their own threads; the UI thread polls their channels.
   The card paths that a test shares with a person (add the cloud, open its panels,

@@ -222,7 +222,7 @@ impl HorizonApp {
             return;
         }
         // Before anything waits on a look at the cloud, so the task never sits unsent.
-        self.submit_task(native, now);
+        let prompted = current.prompted || self.submit_task(upkeep, ledger, native, now);
         if let Some(rx) = &native.probing {
             match rx.try_recv() {
                 Ok(probed) => {
@@ -271,11 +271,13 @@ impl HorizonApp {
             }
             return;
         };
-        if !current.prompted && !expired {
-            self.prompt_test_agent(ctx, index, upkeep, ledger, native, now);
+        // Until the Enter reaches the panel, the task counts as not given: a session switch
+        // or a restart before it gives the task again.
+        if !prompted && native.submit_at.is_none() && !expired {
+            self.prompt_test_agent(ctx, index, ledger, native, now);
         }
         let due = expired || native.next_probe.is_none_or(|next| now >= next);
-        if (current.prompted || expired) && due {
+        if (prompted || expired) && due {
             native.next_probe = Some(now + PROBE_EVERY);
             let evidence = native::evidence_directory(upkeep, &current.request);
             native.last_look = expired;
@@ -291,7 +293,6 @@ impl HorizonApp {
         &mut self,
         ctx: &egui::Context,
         index: usize,
-        upkeep: &str,
         ledger: &mut native::Ledger,
         native: &mut Native,
         now: Instant,
@@ -316,7 +317,7 @@ impl HorizonApp {
             ctx.request_repaint_after(PROMPT_SETTLE);
             return;
         };
-        let Some(current) = ledger.current.as_mut() else { return };
+        let Some(current) = ledger.current.as_ref() else { return };
         let Some(terminal) = self.board.panel_mut(panel) else {
             return;
         };
@@ -326,15 +327,6 @@ impl HorizonApp {
         }
         terminal.write_input(&repository_setup::pasted(&native::task(&current.request)));
         native.submit_at = Some(now + repository_setup::SUBMIT_DELAY);
-        current.prompted = true;
-        let request = current.request.clone();
-        native.dirty = true;
-        ledger.report(Report::new(
-            &request,
-            Test::Running,
-            "The agent on the test cloud runs the repository's native qualification. Watch it in the Upkeep workspace.",
-        ));
-        tracing::info!(upkeep, test = %request.label(), "gave the native test its task");
     }
 
     /// The agent panel of the test cloud on card `index`, with the agent [`native::agent`] names.
@@ -360,17 +352,33 @@ impl HorizonApp {
             .ok()
     }
 
-    /// Sends the Enter that follows the pasted task.
-    fn submit_task(&mut self, native: &mut Native, now: Instant) {
+    /// Sends the Enter that follows the pasted task. Returns whether it reached the agent
+    /// panel now; only then the ledger records the task as given.
+    fn submit_task(&mut self, upkeep: &str, ledger: &mut native::Ledger, native: &mut Native, now: Instant) -> bool {
         let (Some(at), Some((panel, _))) = (native.submit_at, native.agent) else {
-            return;
+            return false;
         };
-        if now >= at {
-            native.submit_at = None;
-            if let Some(terminal) = self.board.panel_mut(panel) {
-                terminal.write_input(b"\r");
-            }
+        if now < at {
+            return false;
         }
+        native.submit_at = None;
+        let Some(terminal) = self.board.panel_mut(panel) else {
+            return false;
+        };
+        terminal.write_input(b"\r");
+        let Some(current) = ledger.current.as_mut() else {
+            return false;
+        };
+        current.prompted = true;
+        let request = current.request.clone();
+        native.dirty = true;
+        ledger.report(Report::new(
+            &request,
+            Test::Running,
+            "The agent on the test cloud runs the repository's native qualification. Watch it in the Upkeep workspace.",
+        ));
+        tracing::info!(upkeep, test = %request.label(), "gave the native test its task");
+        true
     }
 
     /// Ends the test with `report` and closes the test cloud on card `card` as soon as it can.

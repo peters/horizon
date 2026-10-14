@@ -32,7 +32,9 @@ pub const QUEUE_LIMIT: usize = 8;
 /// wait and run, so their reports always stay.
 pub const REPORT_LIMIT: usize = QUEUE_LIMIT + 4;
 /// The most ended tests remembered, so a request for a head that was tested is never taken
-/// again, also after its report made way for newer ones.
+/// again, also after its report made way for newer ones. A refused test, which rented no
+/// cloud, makes way first: so only newer tests that rented clouds can push out a test that
+/// rented one.
 const TESTED_LIMIT: usize = 256;
 const REASON_LIMIT: usize = 300;
 /// The longest message of a report, in characters.
@@ -380,7 +382,14 @@ impl Ledger {
                 attempts: attempts.saturating_add(1),
             },
         );
-        self.tested.truncate(TESTED_LIMIT);
+        while self.tested.len() > TESTED_LIMIT {
+            let oldest = self
+                .tested
+                .iter()
+                .rposition(|tested| tested.state == State::Refused)
+                .unwrap_or(self.tested.len() - 1);
+            self.tested.remove(oldest);
+        }
         self.report(report);
     }
 

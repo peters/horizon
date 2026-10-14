@@ -633,7 +633,17 @@ pub fn fetch_commits(
     cancel: &Cancellation,
 ) -> Result<(), Failure> {
     let mut command = git(token);
-    command.args([
+    // The checkout's own configuration starts no program: no credential helper, no transport
+    // but HTTPS, which `GIT_ALLOW_PROTOCOL` enforces over any `protocol.*` setting (so neither
+    // SSH with its command nor the remote helper of a URL rewrite), no file system monitor
+    // and no hooks. A rewrite to another host gets no token: its header is for GitHub only.
+    command.env("GIT_ALLOW_PROTOCOL", "https").args([
+        "-c",
+        "credential.helper=",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.hooksPath=/dev/null",
         "fetch",
         "--quiet",
         "--no-tags",

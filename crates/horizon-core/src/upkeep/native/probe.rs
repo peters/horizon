@@ -182,14 +182,23 @@ pub fn collect(
         let Ok(data) = base64::engine::general_purpose::STANDARD.decode(output.trim()) else {
             continue;
         };
-        if data.len() as u64 > FILE_LIMIT {
+        // The file may have grown since the status listed it: the bytes read count.
+        if !admit(&mut total, data.len() as u64) {
             continue;
         }
-        total += data.len() as u64;
         std::fs::write(file(destination, name), &data)?;
         kept_files.push(name.clone());
     }
     Ok(kept_files)
+}
+
+/// Whether a file of `size` bytes fits the limits after `total` bytes kept; adds it when so.
+fn admit(total: &mut u64, size: u64) -> bool {
+    if size > FILE_LIMIT || total.saturating_add(size) > TOTAL_LIMIT {
+        return false;
+    }
+    *total += size;
+    true
 }
 
 fn file(destination: &Path, name: &str) -> PathBuf {
@@ -260,6 +269,15 @@ mod tests {
             FILES + TEXTS.len(),
             "the result and the report come on top"
         );
+    }
+
+    #[test]
+    fn the_bytes_read_count_against_the_limits() {
+        let mut total = TOTAL_LIMIT - FILE_LIMIT;
+        assert!(admit(&mut total, FILE_LIMIT));
+        assert!(!admit(&mut total, 1), "a file listed as empty that grew does not fit");
+        assert_eq!(total, TOTAL_LIMIT);
+        assert!(!admit(&mut 0, FILE_LIMIT + 1));
     }
 
     #[test]

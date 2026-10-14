@@ -250,3 +250,22 @@ fn a_head_gets_at_most_two_tests() {
     assert_eq!(ledger.tested[0].attempts, 2);
     assert!(!ledger.take(vec![request]), "never a third");
 }
+
+#[test]
+fn refused_tests_make_way_before_a_test_that_rented_a_cloud() {
+    let mut ledger = Ledger::default();
+    let rented = requests(&[raw("acme/web", 1, &head('a'))], &config()).remove(0);
+    ledger.finish(Report::new(&rented, State::Expired, "time limit"));
+    for number in 2..(2 + 2 * TESTED_LIMIT as u64) {
+        let refused = Request {
+            number,
+            ..rented.clone()
+        };
+        ledger.finish(Report::new(&refused, State::Refused, "not open"));
+    }
+    assert_eq!(ledger.tested.len(), TESTED_LIMIT);
+    assert!(
+        ledger.tested.iter().any(|tested| tested.pull_request == 1),
+        "refused requests cannot push out a head that rented a cloud"
+    );
+}
