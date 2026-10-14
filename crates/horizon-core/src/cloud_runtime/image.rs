@@ -16,6 +16,16 @@ use std::{
 };
 const TIMEOUT: Duration = Duration::from_mins(30);
 const SETTINGS_LABEL: &str = "io.horizon.worker.settings";
+const UNCOMMITTED_LABEL: &str = "io.horizon.worker.uncommitted";
+
+/// A recipe's build context: the extracted snapshot that its context folder and Dockerfile
+/// lie in and, when uncommitted files were laid over it (`repository::uncommitted`), the
+/// commit they change and their hash, which the image's labels record.
+#[derive(Clone, Copy)]
+pub struct Context<'a> {
+    pub source: &'a Path,
+    pub uncommitted: Option<&'a super::state::UncommittedImage>,
+}
 
 /// The deployment stages that preparing `profile` never runs: an image-only profile has
 /// nothing to build or push, so [`Images::prepare_layered`] reports neither stage.
@@ -61,7 +71,11 @@ impl Images<'_> {
     /// As `prepare`, publishing a built image under `tag`. The contract check keeps
     /// its container named by `operation_id`, which recovers an interrupted check.
     pub fn prepare_tagged(&self, profile: &Profile, source: &Path, operation_id: &str, tag: &str) -> Result<String> {
-        self.prepare_layered(profile, source, &[], operation_id, tag, false)
+        let context = Context {
+            source,
+            uncommitted: None,
+        };
+        self.prepare_layered(profile, context, &[], operation_id, tag, false)
     }
     /// # Errors
     /// As `prepare_tagged`, building each sibling layer on the image before it. The primary
@@ -73,7 +87,7 @@ impl Images<'_> {
     pub fn prepare_layered(
         &self,
         profile: &Profile,
-        source: &Path,
+        context: Context<'_>,
         layers: &[Layer<'_>],
         operation_id: &str,
         tag: &str,
@@ -105,7 +119,7 @@ impl Images<'_> {
         let mut validated_id = None;
         if let Some(build) = &profile.build {
             (self.runner.emit)(Event::stage(Stage::Build));
-            let primary = Recipe::new(source, build)?;
+            let primary = Recipe::new(context.source, build)?;
             let layers = layers
                 .iter()
                 .map(|layer| {
@@ -127,6 +141,7 @@ impl Images<'_> {
             (self.runner.emit)(Event::Output(format!("Agent CLI releases: {}", releases.summary())));
             let mut arguments = build_arguments(&profile.capabilities, &releases);
             arguments.extend(settings_label(profile));
+            arguments.extend(context.uncommitted.map(uncommitted_label).into_iter().flatten());
             let builder = Builder {
                 docker: || self.docker(),
                 runner: self.runner,
@@ -308,6 +323,12 @@ fn settings_label(profile: &Profile) -> [String; 2] {
     });
     ["--label".to_owned(), format!("{SETTINGS_LABEL}={settings}")]
 }
+/// The label that records the uncommitted files an image was built from. It holds only
+/// their commit and content hash, so a cached build of the same files keeps its digest.
+fn uncommitted_label(uncommitted: &super::state::UncommittedImage) -> [String; 2] {
+    let value = serde_json::json!({"revision": uncommitted.revision, "files_sha256": uncommitted.hash});
+    ["--label".to_owned(), format!("{UNCOMMITTED_LABEL}={value}")]
+}
 fn uploaded_image_matches(local_id: &str, reference: &str, manifest: &serde_json::Value) -> bool {
     // Classic Docker identifies the config; containerd-backed Docker identifies the manifest.
     manifest["config"]["digest"].as_str() == Some(local_id)
@@ -441,6 +462,28 @@ mod tests {
             edit(&mut changed);
             assert_ne!(settings_label(&changed), label, "{changed:?}");
         }
+    }
+
+    #[test]
+    fn the_uncommitted_label_names_the_commit_and_the_files_hash_only() {
+        let uncommitted = super::super::state::UncommittedImage {
+            revision: "c".repeat(40),
+            hash: "e".repeat(64),
+        };
+        let label = uncommitted_label(&uncommitted);
+        assert_eq!(label[0], "--label");
+        let (name, value) = label[1].split_once('=').unwrap();
+        assert_eq!(name, "io.horizon.worker.uncommitted");
+        let value: serde_json::Value = serde_json::from_str(value).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"revision": "c".repeat(40), "files_sha256": "e".repeat(64)})
+        );
+        assert_eq!(
+            uncommitted_label(&uncommitted.clone()),
+            label,
+            "a cached build keeps its digest"
+        );
     }
 
     #[test]

@@ -69,7 +69,7 @@ fn rebuild_reporting(fixture: &Fixture, script: &Script) -> (Result<Driven>, Vec
     };
     let store = fixture.store();
     let mut state = store.load().unwrap().unwrap();
-    let recipes = committed_recipes(script, &state, "dev", &emit).unwrap();
+    let recipes = latest_recipes(script, &state, "dev", &emit).unwrap();
     begin(script, &store, &mut state, recipes).unwrap();
     let driven = drive(script, &store, &mut state, &emit);
     (driven, output.into_inner())

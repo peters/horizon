@@ -1,29 +1,29 @@
-//! Which committed profile a rebuild can bind a cloud's running worker to, what that
-//! changes, and whether the built image fits that worker. The choices a cloud binds
-//! when it is created, its provider, a CPU cloud's vCPU and memory, and its storage,
-//! stay the worker's: committed values for them are defaults for new clouds, never a
-//! request to move, resize or reformat this one. The settings a rebuild may change
-//! (`Profile::with_rebuild_settings`) come from the commit; any other difference is refused.
+//! Which profile of the checkout's `.horizon/cloud.yml` a rebuild can bind a cloud's
+//! running worker to, what that changes, and whether the built image fits that worker.
+//! The choices a cloud binds when it is created, its provider, a CPU cloud's vCPU and
+//! memory, and its storage, stay the worker's: values for them in the file are defaults
+//! for new clouds, never a request to move, resize or reformat this one. The settings a
+//! rebuild may change (`Profile::with_rebuild_settings`) come from the file, the working
+//! copy's when it is valid (`launch::for_rebuild`); any other difference is refused.
 use super::{Error, Result};
 use horizon_cloud::{AgentApprovals, Bootstrap, Capabilities, CloudConfig, Profile, ProfileError, Storage};
 
-pub(super) const NO_CONFIG: &str =
-    "The latest commit has no readable .horizon/cloud.yml; commit the cloud configuration to rebuild";
-pub(super) const NO_PROFILE: &str = "The latest commit's .horizon/cloud.yml no longer defines this cloud's profile";
-const GPU: &str = "This cloud's profile in the latest commit's .horizon/cloud.yml differs from its worker in gpu. A running worker cannot add or remove a GPU; create a new cloud to use it.";
-const GPU_HOST: &str = "This cloud's profile in the latest commit's .horizon/cloud.yml differs from its GPU worker in cpu or memory_gb. A running worker cannot be resized; create a new cloud to use them.";
-const GPU_REQUIREMENTS: &str = "This cloud's profile in the latest commit's .horizon/cloud.yml differs from its worker in min_cuda_version or min_gpu_memory_gb. A rebuild keeps the worker's GPU host; create a new cloud to use them.";
-const IMAGE: &str = "This cloud's profile in the latest commit's .horizon/cloud.yml differs from its worker in image. A rebuild pushes to the worker's image repository; create a new cloud to use another one.";
-const HOSTED_DEVICES: &str = "This cloud's profile in the latest commit's .horizon/cloud.yml differs from its worker in capabilities.browserstack. Hosted devices are fixed when the worker is created; create a new cloud to change them.";
-const CONTRACT: &str = "This cloud's profile in the latest commit's .horizon/cloud.yml differs from its worker in bootstrap.contract_version. A rebuild keeps the worker's bootstrap contract; create a new cloud to use another one.";
-const NO_BUILD: &str = "This cloud's profile in the latest commit's .horizon/cloud.yml has no build section, so there is no recipe to rebuild this cloud's image from";
-const INVALID: &str = "This cloud's profile in the latest commit's .horizon/cloud.yml is not valid";
+pub(super) const NO_CONFIG: &str = "Neither the working copy nor the latest commit has a readable .horizon/cloud.yml; add the cloud configuration to rebuild";
+pub(super) const NO_PROFILE: &str = ".horizon/cloud.yml no longer defines this cloud's profile";
+const GPU: &str = "This cloud's profile in .horizon/cloud.yml differs from its worker in gpu. A running worker cannot add or remove a GPU; create a new cloud to use it.";
+const GPU_HOST: &str = "This cloud's profile in .horizon/cloud.yml differs from its GPU worker in cpu or memory_gb. A running worker cannot be resized; create a new cloud to use them.";
+const GPU_REQUIREMENTS: &str = "This cloud's profile in .horizon/cloud.yml differs from its worker in min_cuda_version or min_gpu_memory_gb. A rebuild keeps the worker's GPU host; create a new cloud to use them.";
+const IMAGE: &str = "This cloud's profile in .horizon/cloud.yml differs from its worker in image. A rebuild pushes to the worker's image repository; create a new cloud to use another one.";
+const HOSTED_DEVICES: &str = "This cloud's profile in .horizon/cloud.yml differs from its worker in capabilities.browserstack. Hosted devices are fixed when the worker is created; create a new cloud to change them.";
+const CONTRACT: &str = "This cloud's profile in .horizon/cloud.yml differs from its worker in bootstrap.contract_version. A rebuild keeps the worker's bootstrap contract; create a new cloud to use another one.";
+const NO_BUILD: &str = "This cloud's profile in .horizon/cloud.yml has no build section, so there is no recipe to rebuild this cloud's image from";
+const INVALID: &str = "This cloud's profile in .horizon/cloud.yml is not valid";
 pub(super) const IMAGE_TOO_LARGE: &str = "The rebuilt image is larger than this cloud's container disk (storage.container_gb), so its worker cannot hold it. A rebuild keeps the worker's container disk; make the image smaller, or create a new cloud with a larger container disk.";
 pub(super) const BUILT_IMAGE_TOO_LARGE: &str = "The built image is larger than this cloud's container disk (storage.container_gb), so its worker cannot hold it. Cancel the rebuild; then make the image smaller, or create a new cloud with a larger container disk.";
 pub(super) const BYTES_PER_GB: u64 = 1_000_000_000;
 
-/// The profile the cloud binds once a rebuild to the profile `name` of the latest
-/// commit's `config` commits: the `bound` profile with the commit's rebuild settings.
+/// The profile the cloud binds once a rebuild to the profile `name` of `config`, the
+/// settings a rebuild reads, commits: the `bound` profile with its rebuild settings.
 /// Refuses, naming the field, any other difference but the choices bound at creation,
 /// and a combination of settings that no profile may have.
 pub(super) fn next_profile(bound: &Profile, config: Option<&CloudConfig>, name: &str) -> Result<Profile> {

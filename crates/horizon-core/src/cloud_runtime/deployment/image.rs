@@ -3,7 +3,7 @@ use super::{Deployment, Request, Result, Runner, Store, repository};
 use crate::cloud_runtime::{
     WorkerContract, git_auth,
     github::publish::Publisher,
-    image::{Images, Layer, default_tag},
+    image::{Context, Images, Layer, default_tag},
     siblings,
 };
 use horizon_cloud::{Build, CreateState, WorkerSpec};
@@ -56,15 +56,15 @@ pub(super) fn sibling_grants(request: &Request, state: &Deployment, set: &siblin
     Ok(!git_auth::select(&request.settings.git_credentials, &state.repository, &siblings)?.is_empty())
 }
 
-/// Builds the primary snapshot `source` with each of the deployment's siblings' committed
-/// snapshot and recipe at `revisions`, in layering order, layered on it under `tag`,
-/// extracting the snapshots below `root`.
+/// Builds the primary snapshot of `context` with each of the deployment's siblings'
+/// committed snapshot and recipe at `revisions`, in layering order, layered on it under
+/// `tag`, extracting the snapshots below `root`.
 pub(super) fn build_layered(
     request: &Request,
     images: &Images<'_>,
     state: &Deployment,
     revisions: &[String],
-    source: &Path,
+    context: Context<'_>,
     root: &Path,
     tag: &str,
 ) -> Result<String> {
@@ -107,7 +107,7 @@ pub(super) fn build_layered(
         .collect();
     images.prepare_layered(
         &state.profile,
-        source,
+        context,
         &layers,
         &state.cloud_id,
         tag,
@@ -153,7 +153,10 @@ pub(super) fn prepare_image(
             &images,
             state,
             &revisions,
-            &source,
+            Context {
+                source: &source,
+                uncommitted: None,
+            },
             &root,
             &default_tag(&state.cloud_id),
         )?

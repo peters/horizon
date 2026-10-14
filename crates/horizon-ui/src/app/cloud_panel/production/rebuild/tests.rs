@@ -97,7 +97,7 @@ fn only_the_replacement_outcomes_become_notes() {
         "Image unchanged; nothing to restart",
         "Image replacement cancelled; the worker keeps its image",
         "Transport error; checking which image the provider records",
-        "Rebuild refused: The latest commit has no readable .horizon/cloud.yml",
+        "Rebuild refused: Neither the working copy nor the latest commit has a readable .horizon/cloud.yml",
     ] {
         runtime.observe_rebuild(&Event::Output(line.into()));
     }
@@ -121,7 +121,7 @@ fn only_the_replacement_outcomes_become_notes() {
             ("Image unchanged; nothing to restart", false),
             ("Image replacement cancelled; the worker keeps its image", false),
             (
-                "Rebuild refused: The latest commit has no readable .horizon/cloud.yml",
+                "Rebuild refused: Neither the working copy nor the latest commit has a readable .horizon/cloud.yml",
                 true
             ),
         ]
@@ -178,6 +178,8 @@ fn run_action<'a>(app: &'a mut HorizonApp, ctx: &egui::Context, action: Action) 
     runtime.confirmation = Confirmation::Rebuild(Preview::of(Ok(Plan {
         profile,
         changes: Vec::new(),
+        notes: Vec::new(),
+        uncommitted: horizon_core::cloud_runtime::repository::uncommitted::Uncommitted::default(),
     })));
     runtime.error = Some("Earlier failure".into());
     app.change_production_worker(1, action, ctx);

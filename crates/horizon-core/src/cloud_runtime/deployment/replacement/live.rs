@@ -1,21 +1,26 @@
-//! Production steps: Git, Docker and the registry build the image, the provider API
-//! switches the worker or releases its server, and SSH releases hosted devices. A cloud
-//! on the public base image takes the pinned base image instead of a build.
+//! Production steps: Git, Docker and the registry build the image from the committed
+//! snapshot with the confirmed uncommitted files laid over it, the provider API switches
+//! the worker or releases its server, and SSH releases hosted devices. A cloud on the
+//! public base image takes the pinned base image instead of a build.
 use super::{Head, Provider, Recipe, Server, Steps, pair};
 use crate::cloud_runtime::{
     Error, Event, Result, browser_auth,
     command::Runner,
     deployment::{Request, hetzner, image, storage},
-    image::Images,
+    image::{Context, Images},
     registry,
-    repository::{self, launch::quick_start},
+    repository::{
+        self,
+        launch::quick_start,
+        uncommitted::{self, Uncommitted},
+    },
     settings::Settings,
     siblings,
     ssh::Connection,
-    state::{Deployment, ReplacementImage, Store},
+    state::{Deployment, ReplacementImage, Store, UncommittedImage},
 };
 use horizon_cloud::{
-    Cancellation, CloudConfig, CloudError, CreateState, Profile, WorkerSpec,
+    Build, Cancellation, CloudConfig, CloudError, CreateState, Profile, WorkerSpec,
     provider::{Description, Rebuild},
     runpod::{RunPod, replacement::Observed},
 };
@@ -189,19 +194,19 @@ impl<'a> Live<'a> {
         }
     }
 
-    /// A single-repository image of `profile` from `source`, checked for Git grants when
+    /// A single-repository image of `profile` from `context`, checked for Git grants when
     /// they are sent.
     fn single(
         &self,
         registry: Option<&registry::Prepared>,
         state: &Deployment,
         profile: &Profile,
-        source: &Path,
+        context: Context<'_>,
         tag: &str,
     ) -> Result<String> {
         let digest = self
             .images(registry, true)
-            .prepare_tagged(profile, source, &state.cloud_id, tag)?;
+            .prepare_layered(profile, context, &[], &state.cloud_id, tag, false)?;
         if self.git_auth {
             self.images(registry, false)
                 .validate_contract(&digest, &state.cloud_id, profile, true)?;
@@ -217,7 +222,11 @@ impl<'a> Live<'a> {
             image: quick_start::IMAGE.to_owned(),
             ..state.profile.clone()
         };
-        let digest = self.single(self.registry.borrow().as_ref(), state, &profile, &state.repository, tag)?;
+        let context = Context {
+            source: &state.repository,
+            uncommitted: None,
+        };
+        let digest = self.single(self.registry.borrow().as_ref(), state, &profile, context, tag)?;
         self.register(state, digest)
     }
 
@@ -298,6 +307,21 @@ impl Steps for Live<'_> {
         let source = repository::snapshot(&state.repository, revision, root.path(), &self.runner)?;
         // Built and checked for the profile the cloud binds once the worker switches.
         let profile = state.replacement_profile();
+        let uncommitted = uncommitted_image(state, revision);
+        if let Some(build) = &profile.build {
+            if uncommitted.is_some() {
+                (self.runner.emit)(Event::Progress(crate::cloud_runtime::progress::Progress::activity(
+                    "Adding the confirmed uncommitted files to the build context",
+                )));
+            }
+            // Also without confirmed files, so a file added since the confirmation is refused.
+            let confirmed = uncommitted.as_ref().map(|image| image.hash.as_str());
+            uncommitted::overlay(&state.repository, revision, build, confirmed, &source)?;
+        }
+        let context = Context {
+            source: &source,
+            uncommitted: uncommitted.as_ref(),
+        };
         let digest = {
             let registry = self.registry.borrow();
             if state.siblings.is_some() {
@@ -309,9 +333,9 @@ impl Steps for Live<'_> {
                     profile: profile.clone(),
                     ..state.clone()
                 };
-                image::build_layered(self.request, &images, &bound, siblings, &source, &layers, tag)?
+                image::build_layered(self.request, &images, &bound, siblings, context, &layers, tag)?
             } else {
-                self.single(registry.as_ref(), state, profile, &source, tag)?
+                self.single(registry.as_ref(), state, profile, context, tag)?
             }
         };
         self.register(state, digest)
@@ -357,11 +381,32 @@ impl Steps for Live<'_> {
     }
 }
 
+/// The uncommitted files the pending replacement of `state` builds from at `revision`, as
+/// its journal records their confirmed hash.
+fn uncommitted_image(state: &Deployment, revision: &str) -> Option<UncommittedImage> {
+    let hash = state.image_replacement.as_ref()?.uncommitted.clone()?;
+    Some(UncommittedImage {
+        revision: revision.to_owned(),
+        hash,
+    })
+}
+
 impl Recipe for Runner<'_> {
     fn head(&self, repository: &Path) -> Result<Head> {
         let revision = repository::resolve_with_runner(repository, "HEAD", self)?;
-        let config = repository::launch::committed_config(repository, &revision, self)?;
-        Ok(Head { revision, config })
+        let committed = repository::launch::committed_config(repository, &revision, self)?;
+        let (config, notes) = repository::launch::for_rebuild(repository, committed.clone(), self)?;
+        Ok(Head {
+            revision,
+            committed,
+            config,
+            notes,
+        })
+    }
+
+    fn uncommitted(&self, repository: &Path, revision: &str, build: &Build) -> Result<Uncommitted> {
+        self.cancel.check()?;
+        uncommitted::collect(repository, revision, build)
     }
 
     fn siblings(&self, state: &Deployment, config: &CloudConfig, profile: &Profile) -> Result<Vec<String>> {

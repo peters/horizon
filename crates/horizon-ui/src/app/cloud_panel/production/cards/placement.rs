@@ -1,6 +1,6 @@
 //! Where a cloud lives, named on its card: the data center its worker landed in with
-//! its region, or the placement chosen for it until a worker exists, and the same-worker
-//! siblings pinned to live beside it.
+//! its region, or the placement chosen for it until a worker exists, the same-worker
+//! siblings pinned to live beside it, and an image rebuilt from uncommitted changes.
 use super::super::HorizonApp;
 use horizon_core::cloud_panel::CloudLaunch;
 use horizon_core::cloud_runtime::state::Deployment;
@@ -62,6 +62,7 @@ pub(super) fn facts(
         .into_iter()
         .chain(gpu_choice(launch))
         .chain(siblings)
+        .chain(state.and_then(uncommitted_image))
         .map(|line| match line.split_once(": ") {
             // Each line reads `Label: value`.
             Some((label, value)) => (label.to_owned(), value.to_owned()),
@@ -79,6 +80,13 @@ fn sibling_line(sibling: &horizon_core::cloud_runtime::siblings::Sibling) -> Str
         Some(image) => format!("Sibling: {} @ {checkout} · image {}", sibling.repository, short(image)),
         None => format!("Sibling: {} @ {checkout}", sibling.repository),
     }
+}
+
+/// An image a rebuild built from uncommitted changes, which no commit reproduces.
+fn uncommitted_image(state: &Deployment) -> Option<String> {
+    let image = state.uncommitted_image.as_ref()?;
+    let commit = image.revision.get(..12).unwrap_or(&image.revision);
+    Some(format!("Image: built from {commit} plus uncommitted changes"))
 }
 
 /// The GPU types chosen for this cloud in New cloud, when they replace the preferences.
@@ -258,6 +266,22 @@ mod tests {
             sibling_line(&rebuilt),
             "Sibling: example/consumer @ abc · image fedcba987654"
         );
+    }
+
+    #[test]
+    fn the_card_names_an_image_built_from_uncommitted_changes() {
+        let mut state =
+            deployment(r#"{"id":"w","name":"w","imageName":"i","desiredStatus":"RUNNING","dataCenterId":"EU-SE-1"}"#);
+        let rows = |state: &Deployment| facts(&launch(Placement::default()), Some(state), &|_| None);
+        assert!(!rows(&state).iter().any(|(label, _)| label == "Image"));
+        state.uncommitted_image = Some(horizon_core::cloud_runtime::state::UncommittedImage {
+            revision: "0123456789abcdef".repeat(2) + "01234567",
+            hash: "e".repeat(64),
+        });
+        assert!(rows(&state).contains(&(
+            "Image".to_owned(),
+            "built from 0123456789ab plus uncommitted changes".to_owned()
+        )));
     }
 
     #[test]

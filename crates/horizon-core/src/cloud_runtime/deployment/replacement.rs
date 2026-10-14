@@ -1,8 +1,8 @@
-//! Rebuilds a dedicated cloud's image from its latest committed recipe and switches the
-//! bound worker to it, binding the committed profile's rebuild settings with it
-//! (`Profile::with_rebuild_settings`). A cloud on the public base image without a
-//! recipe, such as a quick-start cloud, switches to the base image this Horizon version
-//! pins instead.
+//! Rebuilds a dedicated cloud's image from its recipe in the checkout, the latest commit
+//! with its uncommitted changes, and switches the bound worker to it, binding the rebuild
+//! settings of the checkout's profile with it (`Profile::with_rebuild_settings`). A cloud
+//! on the public base image without a recipe, such as a quick-start cloud, switches to
+//! the base image this Horizon version pins instead.
 //! Each provider mutation is journaled first (`ImageReplacement`), and
 //! the steps outside the record sit behind `Steps` so every persistence boundary is
 //! tested offline. Only dedicated clouds have a `deployment.json` record; a migrated
@@ -34,7 +34,7 @@ use horizon_cloud::{
 };
 use std::time::{Duration, Instant};
 
-use recipes::{Head, Recipe, Recipes, committed_recipes, report_changes};
+use recipes::{Head, Recipe, Recipes, latest_recipes, report_changes};
 pub use recipes::{PROFILE_CHANGE, Plan, plan};
 pub(super) use sessions::relaunch_sessions;
 
@@ -44,7 +44,8 @@ const NO_RECIPE: &str = "This cloud's profile has no build section and does not 
 const UNSETTLED: &str =
     "The provider has not reported the switched image yet; the replacement stays pending. Continue or cancel it.";
 const ADDS_CREDENTIAL: &str = "The rebuilt image needs a registry credential that this worker was created without, and a switch that adds one cannot be undone. Create a new cloud to use it.";
-const CONFIRMED_OTHER: &str = "The latest commit changes this cloud's settings differently from what was confirmed; review the changes and rebuild again";
+const CONFIRMED_OTHER: &str = "The checkout changes this cloud's settings differently from what was confirmed; review the changes and rebuild again";
+const UNCONFIRMED_FILES: &str = "The uncommitted files in the image's build context are not the ones that were confirmed; review them and rebuild again";
 const SAME_IMAGE: &str = "The rebuilt image is the worker's current image, so the changed settings cannot reach the worker. Nothing changed on the worker and nothing is pending; rebuild again";
 
 /// Durable writes of a replacement, where tests inject crashes.
@@ -119,12 +120,14 @@ enum Driven {
     Unchanged,
 }
 
-/// Rebuilds the image from the repository's latest committed `.horizon` recipe with the
-/// newest agent CLIs, moves the worker onto it and relaunches its sessions. The cloud
-/// binds the committed profile's rebuild settings, which [`plan`] lists, once the worker
-/// runs the new image; sessions of an agent the profile no longer has are reported and
-/// not relaunched. With `confirmed`, the profile a person confirmed from [`plan`], a commit that
-/// binds another one is refused. A provider
+/// Rebuilds the image from the repository's `.horizon` recipe, its latest commit with the
+/// uncommitted files of the build context, with the newest agent CLIs, moves the worker
+/// onto it and relaunches its sessions. The cloud binds the rebuild settings of the
+/// working copy's profile, which [`plan`] lists, once the worker runs the new image;
+/// sessions of an agent the profile no longer has are reported and not relaunched. With
+/// `confirmed`, the plan a person confirmed, a checkout that binds another profile or
+/// builds from other uncommitted files is refused; without it, any uncommitted file in the
+/// build context is refused, as no person saw it. A provider
 /// that rebuilds in place keeps the worker ID; one that rebuilds on a new server
 /// (`provider::Rebuild::NewServer`) releases its server and starts a new one with a new
 /// ID on the same workspace volume. `/workspace` is kept either way; the container is reset.
@@ -142,7 +145,7 @@ enum Driven {
 pub fn rebuild(
     request: &Request,
     profile_name: &str,
-    confirmed: Option<&Profile>,
+    confirmed: Option<&Plan>,
     cancel: &Cancellation,
     emit: &dyn Fn(Event),
 ) -> Result<Deployment> {
@@ -155,8 +158,9 @@ pub fn rebuild(
         emit,
         secrets: Vec::new(),
     };
-    let recipes = committed_recipes(&checkout, &state, profile_name, emit)?;
-    accept(&recipes.profile, confirmed, &request.settings)?;
+    let recipes = latest_recipes(&checkout, &state, profile_name, emit)?;
+    accept(&recipes.profile, confirmed.map(|plan| &plan.profile), &request.settings)?;
+    confirm_files(&recipes.uncommitted, confirmed)?;
     report_changes(&state.profile, &recipes.profile, emit);
     let steps = live::Live::new(request, &store, &state, true, cancel, emit)?;
     begin(&steps, &store, &mut state, recipes)?;
@@ -329,9 +333,22 @@ fn accept(next: &Profile, confirmed: Option<&Profile>, settings: &Settings) -> R
     super::validate_agent_auth(settings, &next.capabilities)
 }
 
+/// Refuses uncommitted files that are not exactly the ones a person `confirmed`: an image
+/// can go to a public registry.
+fn confirm_files(
+    uncommitted: &crate::cloud_runtime::repository::uncommitted::Uncommitted,
+    confirmed: Option<&Plan>,
+) -> Result<()> {
+    if confirmed.map_or(!uncommitted.is_empty(), |plan| plan.uncommitted != *uncommitted) {
+        return Err(Error::Invalid(UNCONFIRMED_FILES));
+    }
+    Ok(())
+}
+
 fn begin(steps: &impl Steps, store: &Store, state: &mut Deployment, recipes: Recipes) -> Result<()> {
     state.begin_layered_replacement(OperationId::generate(), recipes.revision, recipes.siblings)?;
     state.replacement_changes_profile(recipes.profile)?;
+    state.replacement_takes_uncommitted(recipes.uncommitted.hash())?;
     store.save(state)?;
     steps.checkpoint(Boundary::Begun)
 }

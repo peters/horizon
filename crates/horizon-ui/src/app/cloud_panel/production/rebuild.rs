@@ -5,10 +5,7 @@ use super::{
     Confirmation, Event, HorizonApp, Request, Runtime, Settings, Stage, Store, cloud_runtime, lifecycle::Action,
     presentation,
 };
-use horizon_core::{
-    cloud_panel::Profile,
-    cloud_runtime::deployment::replacement::{self, Plan},
-};
+use horizon_core::cloud_runtime::deployment::replacement::{self, Plan};
 use std::{
     cell::Cell,
     path::PathBuf,
@@ -23,10 +20,11 @@ pub(super) mod tests;
 const NOTE_LIMIT: usize = 20;
 /// Starts the note for a rebuild refused before anything was journaled.
 const REFUSED: &str = "Rebuild refused:";
-const UNREAD: &str = "The latest commit could not be read; close this and try again";
+const UNREAD: &str = "The checkout could not be read; close this and try again";
 
-/// What the latest commit changes in a cloud's settings, read off the UI thread while
-/// the rebuild's confirmation is open, so the person confirms exactly that.
+/// What a rebuild changes in a cloud's settings and which uncommitted files it builds
+/// from, read off the UI thread while the rebuild's confirmation is open, so the person
+/// confirms exactly that.
 #[derive(Default)]
 pub(super) struct Preview {
     reading: Option<Receiver<Result<Plan, String>>>,
@@ -47,9 +45,9 @@ impl Preview {
         self.read.as_ref()
     }
 
-    /// The profile the person confirms by starting the rebuild.
-    fn confirmed(&self) -> Option<Profile> {
-        Some(self.read.as_ref()?.as_ref().ok()?.profile.clone())
+    /// The plan the person confirms by starting the rebuild.
+    fn confirmed(&self) -> Option<Plan> {
+        self.read.as_ref()?.as_ref().ok().cloned()
     }
 
     #[cfg(test)]
@@ -151,7 +149,7 @@ impl Runtime {
         request: Request,
         kind: Kind,
         profile_name: String,
-        confirmed: Option<Profile>,
+        confirmed: Option<Plan>,
         ctx: &egui::Context,
     ) {
         if let Some(cancel) = self.cancel.take() {
@@ -197,7 +195,8 @@ impl HorizonApp {
         true
     }
 
-    /// Reads, for the open confirmation of cloud `id`, what a rebuild would change. The
+    /// Reads, for the open confirmation of cloud `id`, what a rebuild would change and
+    /// which uncommitted files it would build from. The
     /// cloud's record names its repository and its bound profile.
     fn preview_production_rebuild(&mut self, id: u32, ctx: &egui::Context) {
         let Some(group) = self.cloud_prototype.groups.0.iter().find(|group| group.issue == id) else {
@@ -278,8 +277,8 @@ fn request(
 struct Operation<'a> {
     kind: Kind,
     profile_name: &'a str,
-    /// For a rebuild, the profile the person confirmed.
-    confirmed: Option<&'a Profile>,
+    /// For a rebuild, the plan the person confirmed.
+    confirmed: Option<&'a Plan>,
 }
 
 fn run(

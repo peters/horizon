@@ -1,5 +1,5 @@
 use super::{sessions::RELAUNCH_STATUS, *};
-use crate::cloud_runtime::{siblings::SiblingError, state::REPLACEMENT_PENDING};
+use crate::cloud_runtime::{repository::uncommitted::Uncommitted, siblings::SiblingError, state::REPLACEMENT_PENDING};
 use horizon_cloud::{CloudConfig, Reason};
 use serde_json::json;
 use std::{
@@ -136,6 +136,8 @@ struct Script {
     /// Outcome of each update: whether it applies, and the error it returns.
     updates: RefCell<VecDeque<(bool, Option<CloudError>)>>,
     head: Head,
+    /// The uncommitted files of the build context.
+    uncommitted: Uncommitted,
     /// Each sibling's latest committed revision, or a resolution refusal when `None`.
     sibling_heads: Option<Vec<String>>,
     /// The sibling revisions each build layered.
@@ -158,8 +160,11 @@ impl Script {
             updates: RefCell::default(),
             head: Head {
                 revision: "c".repeat(40),
+                committed: Some(config(&fixture.state().profile)),
                 config: Some(config(&fixture.state().profile)),
+                notes: Vec::new(),
             },
+            uncommitted: Uncommitted::default(),
             sibling_heads: Some(Vec::new()),
             built_siblings: RefCell::default(),
             built: digest('b'),
@@ -233,6 +238,14 @@ impl Recipe for Script {
         self.log("siblings");
         self.sibling_heads.clone().ok_or_else(|| SiblingError::Changed.into())
     }
+
+    fn uncommitted(&self, repository: &Path, revision: &str, _build: &horizon_cloud::Build) -> Result<Uncommitted> {
+        assert_eq!(
+            (repository, revision),
+            (Path::new("/synthetic"), self.head.revision.as_str())
+        );
+        Ok(self.uncommitted.clone())
+    }
 }
 
 impl Steps for Script {
@@ -272,7 +285,7 @@ fn rebuild_with(fixture: &Fixture, script: &Script) -> Result<Driven> {
     let store = fixture.store();
     let mut state = store.load().unwrap().unwrap();
     ready(&state)?;
-    let recipes = committed_recipes(script, &state, "dev", &|_| {})?;
+    let recipes = latest_recipes(script, &state, "dev", &|_| {})?;
     begin(script, &store, &mut state, recipes)?;
     drive(script, &store, &mut state, &|_| {})
 }
@@ -319,7 +332,7 @@ fn rebuild_switches_the_worker_once_and_asks_its_sessions_to_relaunch() {
     let store = fixture.store();
     let mut state = store.load().unwrap().unwrap();
     let events = RefCell::new(Vec::new());
-    let recipes = committed_recipes(&script, &state, "dev", &stages(&events)).unwrap();
+    let recipes = latest_recipes(&script, &state, "dev", &stages(&events)).unwrap();
     begin(&script, &store, &mut state, recipes).unwrap();
     let journal = state.image_replacement.clone().unwrap();
     assert_eq!(journal.recipe_revision, "c".repeat(40));
@@ -726,7 +739,7 @@ fn a_cloud_with_siblings_rebuilds_every_recipe_and_records_what_its_image_layers
     let output = RefCell::new(Vec::new());
     let store = fixture.store();
     let mut state = store.load().unwrap().unwrap();
-    let recipes = committed_recipes(&script, &state, "dev", &|event| {
+    let recipes = latest_recipes(&script, &state, "dev", &|event| {
         if let Event::Output(line) = event {
             output.borrow_mut().push(line);
         }
@@ -843,7 +856,7 @@ fn an_image_back_at_the_imported_revision_records_no_separate_image_revision() {
     let output = RefCell::new(Vec::new());
     let store = fixture.store();
     let mut state = store.load().unwrap().unwrap();
-    let recipes = committed_recipes(&script, &state, "dev", &|event| {
+    let recipes = latest_recipes(&script, &state, "dev", &|event| {
         if let Event::Output(line) = event {
             output.borrow_mut().push(line);
         }
@@ -854,7 +867,7 @@ fn an_image_back_at_the_imported_revision_records_no_separate_image_revision() {
     drive(&script, &store, &mut state, &|_| {}).unwrap();
     let saved = store.load().unwrap().unwrap();
     assert_eq!(saved.siblings.as_ref().unwrap().members[0].image_revision, None);
-    let unmoved = committed_recipes(&script, &saved, "dev", &|event| {
+    let unmoved = latest_recipes(&script, &saved, "dev", &|event| {
         assert!(!matches!(event, Event::Output(_)), "nothing moved: {event:?}");
     })
     .unwrap();

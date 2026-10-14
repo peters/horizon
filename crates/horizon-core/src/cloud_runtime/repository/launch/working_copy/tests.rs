@@ -357,3 +357,41 @@ fn a_junction_in_place_of_the_folder_is_not_followed() {
     assert_eq!(prepared.config.profiles["dev"].cpu, 4);
     assert_eq!(prepared.notes, [INVALID]);
 }
+
+#[test]
+fn a_rebuild_reads_the_working_copy_whole_but_source_and_companions_from_the_commit() {
+    let temp = tempfile::tempdir().unwrap();
+    repository(temp.path());
+    let cancel = Cancellation::default();
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &|_| {},
+        secrets: Vec::new(),
+    };
+    let committed = || committed(temp.path()).unwrap().config;
+    // The recipe and the capabilities of a profile with a build apply too, unlike for New cloud.
+    write(
+        temp.path(),
+        &format!(
+            "{CONFIG}{BUILD}    capabilities:\n      agents: [codex]\ncompanions:\n  extra:\n    repository: example/service\n    profile: dev\n"
+        ),
+    );
+    let (config, notes) = for_rebuild(temp.path(), Some(committed()), &runner).unwrap();
+    let profile = &config.unwrap().profiles["dev"];
+    assert_eq!(profile.build.as_ref().unwrap().dockerfile, "Dockerfile");
+    assert!(profile.capabilities.agents.contains(&horizon_cloud::Agent::Codex));
+    assert_eq!(
+        notes,
+        ["Uncommitted changes to companions are not used until you commit them."]
+    );
+    write(temp.path(), "not: yaml: [");
+    let (config, notes) = for_rebuild(temp.path(), Some(committed()), &runner).unwrap();
+    assert_eq!(config.unwrap().profiles["dev"].build, None, "the commit's file");
+    assert_eq!(notes, [INVALID]);
+    std::fs::remove_file(temp.path().join(PATH)).unwrap();
+    assert_eq!(
+        for_rebuild(temp.path(), Some(committed()), &runner).unwrap().1,
+        [MISSING]
+    );
+    assert!(for_rebuild(temp.path(), None, &runner).unwrap().0.is_none());
+}

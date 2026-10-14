@@ -25,13 +25,17 @@ const STAGES: [Stage; 7] = [
     Stage::Ready,
 ];
 
-const CONFIRMATION: &str = "Rebuild the image from the latest committed .horizon recipe with the newest agent CLIs, then restart the worker on it? Running agent processes restart. Files under /workspace, including worktrees and agent logins, are kept. Uncommitted changes are not used. The cloud takes the committed agents, browsers, desktop, readiness timeout, idle stop and build settings; its size, storage, GPU and image repository stay.";
-const READING: &str = "Reading the latest committed .horizon/cloud.yml…";
-const CHANGES: &str = "The latest commit changes this cloud's settings:";
+const CONFIRMATION: &str = "Rebuild the image from the .horizon recipe in this checkout, uncommitted changes included, with the newest agent CLIs, then restart the worker on it? Running agent processes restart. Files under /workspace, including worktrees and agent logins, are kept. The cloud takes the agents, browsers, desktop, readiness timeout, idle stop and build settings of .horizon/cloud.yml in the working copy; its size, storage, GPU and image repository stay.";
+const READING: &str = "Reading .horizon/cloud.yml and the uncommitted changes…";
+const CHANGES: &str = "This rebuild changes the cloud's settings:";
 const SAME_SETTINGS: &str = "The cloud's settings stay as they are.";
+const UNCOMMITTED: &str = "These uncommitted files go into the image's build context. The image can be pushed to a public registry, so check that none of them holds a secret:";
+/// The most height the list of uncommitted files takes before it scrolls.
+const LIST_HEIGHT: f32 = 160.0;
+const NO_UNCOMMITTED: &str = "No uncommitted file goes into the image; it builds from the latest commit.";
 /// For a cloud on the public base image, such as a quick-start cloud: no recipe, no build.
 const CONFIRMATION_BASE: &str = "Restart the worker on the base image that this Horizon version pins? Nothing is built, and an image that is already the pin restarts nothing. Running agent processes restart. Files under /workspace, including worktrees and agent logins, are kept, and this cannot change the cloud's size or capabilities.";
-const OFFER: &str = "Rebuild this cloud's image from its committed recipe and restart the worker on it.";
+const OFFER: &str = "Rebuild this cloud's image from its recipe in the checkout, uncommitted changes included, and restart the worker on it.";
 const OFFER_BASE: &str = "Restart the worker on the base image that this Horizon version pins.";
 const PREPARED_BASE: &str = "A switch to the pinned base image was being prepared and did not finish; the worker keeps its current image. Continue to restart the worker on the pinned base image, or cancel the rebuild.";
 const BUILT_BASE: &str = "The pinned base image is ready, but the worker has not switched to it. Continue to restart the worker on it, or cancel to keep the current image.";
@@ -130,7 +134,7 @@ fn cancel_before_switch(ui: &mut egui::Ui, runtime: &Runtime) {
         } else if ui
             .add(danger_button("Cancel rebuild"))
             .on_hover_text(
-                "Stops before the worker's image is switched. Cancelled while the committed recipe is read, the rebuild leaves nothing pending and the card offers Reconnect; later, it stays pending to be continued or discarded.",
+                "Stops before the worker's image is switched. Cancelled while the recipe is read, the rebuild leaves nothing pending and the card offers Reconnect; later, it stays pending to be continued or discarded.",
             )
             .clicked()
         {
@@ -230,11 +234,12 @@ pub(super) fn offer(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> 
         (OFFER, CONFIRMATION)
     };
     let new_server = new_server(runtime);
+    let base = on_public_base(runtime);
     let Confirmation::Rebuild(preview) = &mut runtime.confirmation else {
-        let detail = if on_public_base(runtime) {
+        let detail = if base {
             "Move to the current base image and restart; the workspace stays."
         } else {
-            "Build the committed recipe and restart; the workspace stays."
+            "Build the recipe in the checkout and restart; the workspace stays."
         };
         if super::section::row(ui, "Image", detail, |ui| {
             ui.add(super::section::row_button(
@@ -244,7 +249,7 @@ pub(super) fn offer(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> 
             .on_hover_text(offer)
             .clicked()
         }) {
-            // The confirmation shows what the latest commit changes once it is read.
+            // The confirmation shows what the checkout changes once it is read.
             runtime.confirmation = Confirmation::Rebuild(Box::default());
             return Some(Action::PreviewRebuild);
         }
@@ -266,7 +271,13 @@ pub(super) fn offer(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> 
             } else {
                 ui.label(confirmation);
             }
+            for note in &plan.notes {
+                ui.label(RichText::new(note).color(theme::PALETTE_YELLOW()));
+            }
             changes(ui, &plan.changes);
+            if !base {
+                uncommitted(ui, plan.uncommitted.files());
+            }
             if ui.add(danger_button("Rebuild and restart")).clicked() {
                 return Some(Action::Rebuild);
             }
@@ -288,6 +299,45 @@ fn changes(ui: &mut egui::Ui, changes: &[String]) {
     for change in changes {
         ui.label(format!("• {change}"));
     }
+}
+
+/// Each uncommitted file the rebuild builds from, with how it differs from the commit; a
+/// long list scrolls.
+fn uncommitted(ui: &mut egui::Ui, files: &[cloud_runtime::repository::uncommitted::File]) {
+    if files.is_empty() {
+        ui.label(RichText::new(NO_UNCOMMITTED).color(theme::FG_DIM()));
+        return;
+    }
+    ui.label(RichText::new(UNCOMMITTED).strong().color(theme::PALETTE_YELLOW()));
+    // Only the visible rows are laid out, so a long list costs little per frame. Each row
+    // is one line, as high as a label of one line here: a long path scrolls sideways
+    // rather than wrapping, so no row is taller than the rows are counted and every
+    // file stays reachable.
+    let row = egui::WidgetText::from("•")
+        .into_galley(
+            ui,
+            Some(egui::TextWrapMode::Extend),
+            f32::INFINITY,
+            egui::TextStyle::Body,
+        )
+        .size()
+        .y;
+    // The drawer scrolls too, so the list keeps its own height near the drawer's end
+    // instead of shrinking to the space left there.
+    let count = f32::from(u16::try_from(files.len()).unwrap_or(u16::MAX));
+    let height = (count * (row + ui.spacing().item_spacing.y)).min(LIST_HEIGHT);
+    egui::ScrollArea::both()
+        .id_salt("rebuild-uncommitted-files")
+        .max_height(LIST_HEIGHT)
+        .min_scrolled_height(height)
+        .show_rows(ui, row, files.len(), |ui, rows| {
+            for file in &files[rows] {
+                ui.add(
+                    egui::Label::new(format!("• {} {}", file.change.label(), file.path))
+                        .wrap_mode(egui::TextWrapMode::Extend),
+                );
+            }
+        });
 }
 
 /// Stop acts on the worker as recorded, so it waits for a pending replacement.

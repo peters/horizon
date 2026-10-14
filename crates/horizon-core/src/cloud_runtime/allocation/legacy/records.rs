@@ -1,7 +1,7 @@
 use super::{AllocationId, ControllerId, Deployment, ProjectIdentity, Records, SharingMode};
 use crate::cloud_runtime::{
     Stage,
-    state::{ImageReplacement, ReadyHistory, Session},
+    state::{ImageReplacement, ReadyHistory, Session, UncommittedImage},
 };
 use horizon_cloud::{CreateState, Profile, Worker, WorkerSpec};
 use horizon_cloud_protocol::OperationId;
@@ -57,6 +57,8 @@ pub(super) struct Project {
     pub session_restart: Option<OperationId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tailnet_device: Option<crate::cloud_runtime::tailnet::DeviceName>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncommitted_image: Option<UncommittedImage>,
 }
 
 impl Project {
@@ -95,6 +97,7 @@ impl Records {
             tailnet_device,
             // Records with siblings are the sibling record version, which `from_legacy` refuses.
             siblings: _,
+            uncommitted_image,
         } = legacy;
         Self {
             allocation: Allocation {
@@ -127,6 +130,7 @@ impl Records {
                 browserstack_targets,
                 session_restart,
                 tailnet_device,
+                uncommitted_image,
             },
         }
     }
@@ -160,6 +164,7 @@ impl Records {
             last_self_stop: None,
             tailnet_device: self.project.tailnet_device.clone(),
             siblings: None,
+            uncommitted_image: self.project.uncommitted_image.clone(),
         }
     }
 }
