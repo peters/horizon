@@ -29,11 +29,27 @@ pub(super) fn show(ui: &mut Ui, state: &mut State) -> Option<Pick> {
         .and_then(|account| account.repositories.as_deref())
         .unwrap_or_default();
     let github_count = repositories.len();
-    let rows = state.finder.rows(&typed, repositories).to_vec();
-    let path = is_path(&typed);
+    let _ = state.finder.rows(&typed, repositories);
+    // Lent for drawing, not copied, and put back right after.
+    let rows = std::mem::take(&mut state.finder.rows);
+    let clicked = draw(ui, state, &rows, &typed, github_count, refreshing);
+    state.finder.rows = rows;
+    clicked
+}
+
+/// The caption, the results and the hint for `rows`. Returns a result clicked.
+fn draw(
+    ui: &mut Ui,
+    state: &mut State,
+    rows: &[Row],
+    typed: &str,
+    github_count: usize,
+    refreshing: bool,
+) -> Option<Pick> {
+    let path = is_path(typed);
     let busy = refreshing || state.finder.scanning() || state.finder.looking();
     ui.add_space(2.0);
-    caption_row(ui, state, &rows, &typed, github_count, busy);
+    caption_row(ui, state, rows, typed, github_count, busy);
     if rows.is_empty() {
         let text = if path && state.finder.looking() {
             "Looking for folders…"
@@ -51,7 +67,7 @@ pub(super) fn show(ui: &mut Ui, state: &mut State) -> Option<Pick> {
         hint_row(ui, state, path);
         return None;
     }
-    let clicked = list(ui, state, &rows);
+    let clicked = list(ui, state, rows);
     hint_row(ui, state, path);
     clicked
 }

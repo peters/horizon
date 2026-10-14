@@ -122,7 +122,7 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
                 let is_folder = match entry.file_type() {
                     Ok(kind) if kind.is_dir() => true,
                     Ok(kind) if kind.is_symlink() => {
-                        let target = std::fs::read_link(&path).map(|target| folder.join(target));
+                        let target = std::fs::read_link(&path).map(|target| lexical(&folder.join(target)));
                         !target.is_ok_and(|target| into_guarded(&target)) && path.is_dir()
                     }
                     _ => false,
@@ -170,6 +170,22 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
         }
     }
     settled(found)
+}
+
+/// `path` with its `.` and `..` worked out from the text alone, without reading the disk:
+/// a link's target is judged before anything is looked up through it.
+fn lexical(path: &Path) -> PathBuf {
+    let mut clean = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                clean.pop();
+            }
+            other => clean.push(other),
+        }
+    }
+    clean
 }
 
 /// Whether `folder` lies below one of the usual places in `root`, such as `~/github`.
@@ -312,5 +328,11 @@ mod tests {
         assert!(super::preferred_root(root, &root.join("github/acme")));
         assert!(super::preferred_root(root, &root.join("code")));
         assert!(!super::preferred_root(root, &root.join("Videos/github")));
+    }
+
+    #[test]
+    fn a_link_target_is_worked_out_without_the_disk() {
+        let joined = std::path::Path::new("/home/x/github/../../x/Documents/code");
+        assert_eq!(super::lexical(joined), std::path::Path::new("/home/x/Documents/code"));
     }
 }
