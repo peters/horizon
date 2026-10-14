@@ -15,9 +15,9 @@ use horizon_core::upkeep::{AgentChange, AgentChangeKind, DEFAULT_INSTRUCTIONS};
 use serde_json::{Value, json};
 
 use super::super::HorizonApp;
-use crate::app::browser_requests::actor_panel;
 use status::status;
 
+mod caller;
 mod status;
 
 /// Agent requests on their way: queued for this frame, or at work on their own thread.
@@ -45,6 +45,8 @@ impl Default for Requests {
 struct Step {
     request: UsageRequest,
     next: Next,
+    /// The local id of the caller's workspace when the request arrived.
+    home: String,
 }
 
 enum Next {
@@ -55,7 +57,8 @@ enum Next {
         config: Config,
         running: Option<bool>,
     },
-    /// Remove these repositories; only `decide` gives it, and `work` saves the change.
+    /// Remove these repositories; only `decide` gives it, and the UI thread starts the save
+    /// once the caller still stands where it asked from.
     Remove {
         cloud: String,
         names: Vec<String>,
@@ -71,11 +74,10 @@ enum Next {
         run_now: bool,
         paused: Option<bool>,
     },
-    ProposeNew(WorkspaceId, Config),
+    ProposeNew(Config),
     /// The editor of `cloud`, over its settings as `decide` read them, with `repositories`
     /// ticked.
     ProposeRepositories {
-        workspace: WorkspaceId,
         cloud: String,
         saved: Config,
         repositories: Vec<String>,
@@ -84,7 +86,9 @@ enum Next {
 
 /// What the UI thread knows of the caller's workspace when the request arrives.
 struct Caller {
-    workspace: WorkspaceId,
+    /// The local id of the workspace: a session switch can give another workspace the same
+    /// `WorkspaceId`, never the same local id.
+    home: String,
     /// The clouds in the workspace; the Upkeep is the one with saved settings.
     clouds: Vec<String>,
     /// Whether the worker loop of each cloud runs, as the last exchange found.
@@ -162,71 +166,6 @@ impl HorizonApp {
         Ok(())
     }
 
-    /// Who asks: an agent panel of this Horizon, and the clouds of its workspace.
-    fn caller(&self, request: &UsageRequest) -> Result<(UpkeepRequest, Caller), String> {
-        let upkeep = request
-            .upkeep
-            .clone()
-            .filter(UpkeepRequest::valid)
-            .ok_or("upkeep_invalid_request")?;
-        let (workspace, local_id) = (request.host_instance == manifest::host_instance())
-            .then(|| actor_panel(&self.board, &request.actor))
-            .flatten()
-            // A cloud's panel shows an agent that runs on its worker, such as the Upkeep
-            // agent: only an agent on this computer may ask.
-            .filter(|panel| {
-                self.board.panel(panel.panel_id).is_some_and(|held| {
-                    !self
-                        .cloud_prototype
-                        .groups
-                        .0
-                        .iter()
-                        .any(|group| group.panels.contains(&held.local_id))
-                })
-            })
-            .and_then(|panel| {
-                let workspace = self.board.workspace(panel.workspace_id)?;
-                Some((panel.workspace_id, workspace.local_id.clone()))
-            })
-            .ok_or("upkeep_unavailable: requires a Horizon agent panel on this computer")?;
-        let clouds: Vec<String> = self
-            .cloud_prototype
-            .groups
-            .0
-            .iter()
-            .filter(|group| group.workspace == local_id)
-            .filter_map(|group| Some(group.remote.as_ref()?.id.clone()))
-            .collect();
-        let loops = clouds
-            .iter()
-            .map(|cloud| {
-                let running = self.upkeep.syncs.get(cloud).and_then(super::state::Sync::loop_running);
-                (cloud.clone(), running)
-            })
-            .collect();
-        let ambiguous = clouds
-            .iter()
-            .filter(|cloud| {
-                let groups = &self.cloud_prototype.groups.0;
-                groups
-                    .iter()
-                    .filter(|group| group.remote.as_ref().is_some_and(|remote| remote.id == **cloud))
-                    .count()
-                    != 1
-            })
-            .cloned()
-            .collect();
-        Ok((
-            upkeep,
-            Caller {
-                workspace,
-                clouds,
-                loops,
-                ambiguous,
-            },
-        ))
-    }
-
     fn start(&mut self, request: UsageRequest, upkeep: UpkeepRequest, caller: Caller, ctx: &egui::Context) {
         let root = (upkeep.operation == UpkeepOperation::Discover)
             .then(|| self.upkeep_root())
@@ -238,7 +177,8 @@ impl HorizonApp {
             .name("upkeep-agent-request".into())
             .spawn(move || {
                 let next = work(&request, &upkeep, &caller, root.as_deref());
-                let _ = steps.send(Step { request, next });
+                let home = caller.home;
+                let _ = steps.send(Step { request, next, home });
                 repaint.request_repaint();
             });
         if let Err(error) = spawned {
@@ -250,48 +190,98 @@ impl HorizonApp {
         }
     }
 
-    /// Makes the change a request's thread asked for, then answers.
+    /// Makes the change a request's thread asked for, then answers. A change happens only
+    /// while the caller still is an agent panel in the workspace it asked from: a session
+    /// switch or a closed panel ends the request.
     fn finish(&mut self, ctx: &egui::Context, step: Step) {
-        let Step { request, next } = step;
+        let Step { request, next, home } = step;
         let answer = match next {
             Next::Answer(answer) => answer,
-            Next::Status { .. } | Next::Remove { .. } => Err("upkeep_unavailable: the request stopped".into()),
+            Next::Status { .. } => Err("upkeep_unavailable: the request stopped".into()),
+            Next::Remove { cloud, names } => {
+                match self
+                    .still_caller(&request, &home)
+                    .and_then(|_| self.cloud_in(&home, &cloud))
+                {
+                    Ok(()) => {
+                        self.save_removal(ctx, request, home, cloud, names);
+                        return;
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            // The save is done: the board shows it whatever happened meanwhile.
             Next::Saved { cloud, value, removed } => {
                 self.upkeep_settings_saved(&cloud);
                 self.record_agent_change(&cloud, AgentChangeKind::Removed(removed));
                 Ok(value)
             }
-            Next::Signal { cloud, run_now, paused } => expired(&request).map(|()| {
-                self.record_agent_change(
-                    &cloud,
+            Next::Signal { cloud, run_now, paused } => self
+                .still_caller(&request, &home)
+                .and_then(|_| self.cloud_in(&home, &cloud))
+                .and_then(|()| expired(&request))
+                .map(|()| {
+                    self.record_agent_change(
+                        &cloud,
+                        match paused {
+                            Some(true) => AgentChangeKind::Paused,
+                            Some(false) => AgentChangeKind::Resumed,
+                            None => AgentChangeKind::RunRequested,
+                        },
+                    );
+                    self.signal_upkeep(&cloud, run_now, paused);
+                    // The worker gets the signal with the next exchange; `status` shows when.
                     match paused {
-                        Some(true) => AgentChangeKind::Paused,
-                        Some(false) => AgentChangeKind::Resumed,
-                        None => AgentChangeKind::RunRequested,
-                    },
-                );
-                self.signal_upkeep(&cloud, run_now, paused);
-                // The worker gets the signal with the next exchange; `status` shows when.
-                match paused {
-                    Some(true) => json!({ "pause": "requested" }),
-                    Some(false) => json!({ "resume": "requested" }),
-                    None => json!({ "run": "requested" }),
-                }
+                        Some(true) => json!({ "pause": "requested" }),
+                        Some(false) => json!({ "resume": "requested" }),
+                        None => json!({ "run": "requested" }),
+                    }
+                }),
+            Next::ProposeNew(config) => self.still_caller(&request, &home).and_then(|workspace| {
+                expired(&request)?;
+                self.still_without_upkeep(workspace)?;
+                self.propose_new_upkeep(workspace, &config)?;
+                Ok(awaiting("New Upkeep"))
             }),
-            Next::ProposeNew(workspace, config) => expired(&request)
-                .and_then(|()| self.still_without_upkeep(workspace))
-                .and_then(|()| self.propose_new_upkeep(workspace, &config))
-                .map(|()| awaiting("New Upkeep")),
             Next::ProposeRepositories {
-                workspace,
                 cloud,
                 saved,
                 repositories,
-            } => expired(&request)
-                .and_then(|()| self.propose_upkeep_repositories(ctx, workspace, &cloud, &saved, &repositories))
-                .map(|()| awaiting("the Upkeep's repository list")),
+            } => self.still_caller(&request, &home).and_then(|workspace| {
+                expired(&request)?;
+                self.propose_upkeep_repositories(ctx, workspace, &cloud, &saved, &repositories)?;
+                Ok(awaiting("the Upkeep's repository list"))
+            }),
         };
         complete(request, answer);
+    }
+
+    /// Saves a removal on its own thread; its answer comes back as a step.
+    fn save_removal(
+        &mut self,
+        ctx: &egui::Context,
+        request: UsageRequest,
+        home: String,
+        cloud: String,
+        names: Vec<String>,
+    ) {
+        let steps = self.upkeep.agent.steps.clone();
+        let repaint = ctx.clone();
+        let unanswered = request.clone();
+        let spawned = std::thread::Builder::new()
+            .name("upkeep-agent-remove".into())
+            .spawn(move || {
+                let next = remove(&request, cloud, &names);
+                let _ = steps.send(Step { request, next, home });
+                repaint.request_repaint();
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(%error, "could not save an Upkeep removal");
+            complete(
+                unanswered,
+                Err("upkeep_unavailable: Horizon could not start the request".into()),
+            );
+        }
     }
 }
 
@@ -325,7 +315,6 @@ fn work(request: &UsageRequest, upkeep: &UpkeepRequest, caller: &Caller, root: O
     }
     match decide(request, upkeep, caller, saved) {
         Ok(Next::Status { cloud, config, running }) => Next::Answer(Ok(status(&cloud, &config, running))),
-        Ok(Next::Remove { cloud, names }) => remove(request, cloud, &names),
         Ok(next) => next,
         Err(error) => Next::Answer(Err(error)),
     }
@@ -424,7 +413,7 @@ fn decide(
             order: Vec::new(),
         };
         config.validate().map_err(|error| invalid(&error))?;
-        return Ok(Next::ProposeNew(caller.workspace, config));
+        return Ok(Next::ProposeNew(config));
     }
     let (cloud, mut config) =
         found.ok_or("upkeep_not_found: this workspace has no Upkeep; use create to propose one")?;
@@ -451,7 +440,6 @@ fn decide(
             config.validate().map_err(|error| invalid(&error))?;
             let repositories = config.repositories[config.repositories.len() - added..].to_vec();
             Ok(Next::ProposeRepositories {
-                workspace: caller.workspace,
                 cloud,
                 saved,
                 repositories,

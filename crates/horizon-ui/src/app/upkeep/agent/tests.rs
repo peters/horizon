@@ -22,7 +22,7 @@ fn ask(upkeep: &Value) -> (UsageRequest, UpkeepRequest) {
 
 fn caller() -> Caller {
     Caller {
-        workspace: WorkspaceId(7),
+        home: "workspace-mine".into(),
         clouds: vec!["mine".into()],
         loops: vec![("mine".into(), Some(true))],
         ambiguous: Vec::new(),
@@ -78,13 +78,12 @@ fn decided(upkeep: &Value, saved: Vec<(String, Config)>) -> Result<Next, String>
 
 #[test]
 fn create_only_proposes_and_never_replaces_an_upkeep() {
-    let Ok(Next::ProposeNew(workspace, proposed)) = decided(
+    let Ok(Next::ProposeNew(proposed)) = decided(
         &json!({"operation": "create", "repositories": ["acme/web"]}),
         Vec::new(),
     ) else {
         panic!("create must propose");
     };
-    assert_eq!(workspace, WorkspaceId(7));
     assert_eq!(proposed.authors, ["app/dependabot"]);
     assert_eq!((proposed.agent.as_str(), proposed.every_minutes), (worker::AGENT, 60));
     assert_eq!(proposed.instructions, DEFAULT_INSTRUCTIONS);
@@ -106,7 +105,6 @@ fn create_only_proposes_and_never_replaces_an_upkeep() {
 #[test]
 fn add_proposes_only_the_new_repositories_and_keeps_the_limit() {
     let Ok(Next::ProposeRepositories {
-        workspace,
         cloud,
         saved: held,
         repositories,
@@ -118,11 +116,6 @@ fn add_proposes_only_the_new_repositories_and_keeps_the_limit() {
         panic!("add must propose");
     };
     assert_eq!((cloud.as_str(), repositories), ("mine", vec!["acme/docs".to_owned()]));
-    assert_eq!(
-        workspace,
-        WorkspaceId(7),
-        "the editor is bound to the caller's workspace"
-    );
     // The editor opens over the list as it was read, without the proposal.
     assert_eq!(held.repositories, ["acme/web", "acme/api"]);
     let Ok(Next::Answer(Ok(value))) = decided(&json!({"operation": "add", "repositories": ["acme/web"]}), saved())
@@ -311,7 +304,18 @@ fn only_an_agent_panel_of_this_horizon_is_a_caller_and_it_sees_its_own_clouds() 
     let (_, found) = app
         .caller(&request(&agent, &json!({"operation": "status"}), i64::MAX))
         .unwrap();
-    assert_eq!((found.workspace, found.clouds), (mine, vec!["mine".to_owned()]));
+    let home = app.board.workspace(mine).unwrap().local_id.clone();
+    assert_eq!(
+        (found.home.as_str(), found.clouds),
+        (home.as_str(), vec!["mine".to_owned()])
+    );
+    // Before it changes anything, the request checks that its caller still stands there.
+    let asked = request(&agent, &json!({"operation": "pause"}), i64::MAX);
+    assert_eq!(app.still_caller(&asked, &home), Ok(mine));
+    assert!(app.cloud_in(&home, "mine").is_ok());
+    assert!(app.cloud_in(&home, "theirs").is_err(), "a cloud of another workspace");
+    let error = app.still_caller(&asked, "a-workspace-of-another-session").unwrap_err();
+    assert!(error.starts_with("upkeep_unavailable"), "{error}");
     let error = app
         .caller(&request(&shell, &json!({"operation": "status"}), i64::MAX))
         .err()

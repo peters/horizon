@@ -489,7 +489,8 @@ script first in `PATH` that writes `HORIZON_BROWSER_ACTOR` and
    Result: The answer starts with `upkeep_invalid_request`. The Upkeep does not
    change.
 
-10. Call `create` with `authors` `["app/github-actions"]`.
+10. Call `create` with one repository from step 2 and `authors`
+    `["app/github-actions"]`.
 
     Result: The answer starts with `upkeep_invalid_request`.
 

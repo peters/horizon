@@ -67,9 +67,10 @@ impl Editor {
             return Vec::new();
         }
         let listed = &self.form.catalog.repositories;
+        // Only saved ones: an agent's proposal shows in its own box and is not saved yet.
         self.form
             .selected
-            .iter()
+            .intersection(&self.original)
             .filter(|name| !listed.iter().any(|repository| repository.name == **name))
             .map(String::as_str)
             .collect()
@@ -399,6 +400,10 @@ mod tests {
         assert_eq!(editor.blocked(), Some("Finding repositories..."));
         editor.form.receive();
         assert_eq!(editor.changes(), (Vec::new(), Vec::new()), "acme/web stays");
+        assert_eq!(editor.unlisted(), ["acme/web"]);
+        // An agent's proposal that the list does not hold is not called saved.
+        editor.proposed = vec!["acme/new".into()];
+        editor.form.selected.insert("acme/new".into());
         assert_eq!(editor.unlisted(), ["acme/web"]);
     }
 

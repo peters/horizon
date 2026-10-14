@@ -117,7 +117,11 @@ requests"). Check that:
   open the person's dialog prefilled, and refuse while a dialog is open.
 - `remove` never leaves an Upkeep without repositories, and every saved settings change
   passes `Config::validate`.
-- Mutations past the request deadline change nothing.
+- Mutations past the request deadline change nothing, and every side effect (a signal, a
+  dialog, the start of the `remove` save) happens only after `still_caller` and
+  `cloud_in` confirm that the caller and the cloud still stand in the workspace the
+  request came from. A `remove` save that started and waits for the Upkeep's settings
+  lock finishes (accepted, see `docs/upkeep.md`).
 - Every change that `remove`, `pause`, `resume` or `run_now` makes adds a line that
   Horizon writes under the board title (`AgentChange`), never text from the request or
   the worker, and no number of other changes hides a removal.

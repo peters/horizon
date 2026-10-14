@@ -442,6 +442,11 @@ Horizon guarantees these items:
   Horizon refuses a request with its identity.
 - A request acts only on the Upkeep whose cloud is in the workspace of the agent
   panel. A request has no field for a workspace or a cloud.
+- Before a request changes something, Horizon examines again that the agent panel is
+  in the workspace that it asked from and that the cloud of the Upkeep is in that
+  workspace. Thus a session switch or a closed panel stops the request. A `remove`
+  save that started before the change finishes: it can wait some seconds for the lock
+  of the settings while an exchange with the worker runs.
 - An agent on a cloud worker cannot use `cloud_upkeep`. The worker refuses the
   request. Thus the Upkeep agent, which reads pull requests that other people write,
   cannot change its own repositories, its schedule or its pause state.
