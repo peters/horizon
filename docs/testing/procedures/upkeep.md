@@ -239,14 +239,14 @@ made-up repositories and one public pull request.
    `test_a_run_now_sent_again_with_its_token_starts_one_run`: a **Run now** that is
    sent again with its token starts one run only.
 
-### 6.8 UPK-08 — Upkeep in the New workspace menu
+### 6.8 UPK-08 — New Upkeep in the toolbar Menu
 
-1. Start the candidate in the fixture. Click the arrow of **New workspace**.
+1. Start the candidate in the fixture. Click **Menu** in the toolbar.
 
-   Result: The menu shows **Cloud** and **This PC** under **New workspace**, a
-   divider, and **Upkeep** under **Templates**.
+   Result: The menu shows **New Upkeep** under **CLOUD**, after
+   **Add cloud here**.
 
-2. Click **Upkeep**.
+2. Click **New Upkeep**.
 
    Result: The dialog **New Upkeep** opens. No new workspace shows.
 

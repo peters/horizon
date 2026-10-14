@@ -48,8 +48,8 @@ workspaces:
 
 ## New Upkeep
 
-**New workspace** in the toolbar shows **Upkeep** under **Templates**. The row is
-available when cloud workspaces are ready. It opens the **New Upkeep** dialog:
+The toolbar **Menu** shows **New Upkeep** under **CLOUD**. The row is available
+when cloud workspaces are ready. It opens the **New Upkeep** dialog:
 
 - **Repositories**: one tab for each owner, a filter, and one row for each
   repository. Each row shows the open pull requests of the selected bots. By

@@ -222,3 +222,40 @@ fn a_dimmed_new_cloud_takes_no_focus_and_says_why_on_hover() {
         "the hover explains the dimmed button"
     );
 }
+
+#[test]
+fn new_upkeep_in_the_menu_opens_its_dialog_only_with_cloud_workspaces() {
+    let (_temp, ctx, mut app, workspaces) = ready_app();
+    ctx.enable_accesskit();
+    let open_menu = |ctx: &egui::Context, app: &mut HorizonApp| {
+        let output = run_app_frame_with_input(ctx, app, raw_input([1400.0, 900.0], None));
+        click(ctx, app, label_position(&output, "Menu"));
+        run_app_frame_with_input(ctx, app, raw_input([1400.0, 900.0], None))
+    };
+    let upkeep_disabled = |output: &egui::FullOutput| {
+        spoken(output)
+            .into_iter()
+            .find(|(label, _)| label.starts_with("New Upkeep. "))
+            .expect("a New Upkeep row")
+            .1
+    };
+
+    // Startup makes cloud workspaces ready; without them the row is dimmed.
+    app.cloud_prototype.ready = false;
+    let output = open_menu(&ctx, &mut app);
+    assert!(upkeep_disabled(&output), "dimmed without cloud workspaces");
+    click(&ctx, &mut app, label_position(&output, "New Upkeep"));
+    assert!(app.upkeep.form.is_none(), "a dimmed row does nothing");
+    key(&ctx, &mut app, Key::Escape, Modifiers::NONE);
+
+    app.cloud_prototype.ready = true;
+    let output = open_menu(&ctx, &mut app);
+    assert!(!upkeep_disabled(&output));
+    click(&ctx, &mut app, label_position(&output, "New Upkeep"));
+    assert!(app.upkeep.form.is_some(), "New Upkeep opens its dialog");
+    assert_eq!(
+        app.board.workspaces.len(),
+        workspaces,
+        "New Upkeep makes no workspace yet"
+    );
+}

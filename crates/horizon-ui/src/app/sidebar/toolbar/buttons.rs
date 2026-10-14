@@ -1,5 +1,5 @@
 //! The toolbar's controls: the primary New cloud button, the New workspace button and the
-//! Menu that holds Quick Nav, Remote Hosts, Cloud, Sessions and Settings.
+//! Menu that holds Quick Nav, Remote Hosts, Cloud, Upkeep, Sessions and Settings.
 use egui::{Align2, CursorIcon, FontId, Popup, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::app::HorizonApp;
@@ -18,6 +18,8 @@ enum MenuChoice {
     Action(ToolbarAction),
     #[cfg(feature = "cloud-workspaces")]
     NewCloud,
+    #[cfg(feature = "cloud-workspaces")]
+    NewUpkeep,
     #[cfg(feature = "cloud-workspaces")]
     FitClouds,
 }
@@ -61,6 +63,14 @@ const MENU: &[MenuEntry] = &[
         detail: "Start a cloud worker in the current workspace",
         action: None,
         choice: MenuChoice::NewCloud,
+    },
+    #[cfg(feature = "cloud-workspaces")]
+    MenuEntry {
+        group: None,
+        title: "New Upkeep",
+        detail: "An agent fixes and merges dependency updates on a schedule",
+        action: None,
+        choice: MenuChoice::NewUpkeep,
     },
     #[cfg(feature = "cloud-workspaces")]
     MenuEntry {
@@ -197,7 +207,7 @@ impl HorizonApp {
     fn menu_entry_enabled(&self, choice: MenuChoice) -> bool {
         match choice {
             #[cfg(feature = "cloud-workspaces")]
-            MenuChoice::NewCloud => self.cloud_launch_ready(),
+            MenuChoice::NewCloud | MenuChoice::NewUpkeep => self.cloud_launch_ready(),
             #[cfg(feature = "cloud-workspaces")]
             MenuChoice::FitClouds => !self.cloud_prototype.groups.0.is_empty(),
             _ => true,
@@ -212,6 +222,9 @@ impl HorizonApp {
                 let workspace = self.board.ensure_workspace();
                 self.open_cloud_for_workspace(ctx, workspace);
             }
+            // New Upkeep makes its workspace once its cloud starts.
+            #[cfg(feature = "cloud-workspaces")]
+            MenuChoice::NewUpkeep => self.open_upkeep_dialog(ctx),
             #[cfg(feature = "cloud-workspaces")]
             MenuChoice::FitClouds => self.cloud_overview(ctx),
         }

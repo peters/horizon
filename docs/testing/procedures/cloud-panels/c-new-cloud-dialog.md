@@ -112,7 +112,7 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 4. Click **Menu** in the toolbar.
 
    Result: The Menu opens. Under the caption **CLOUD**, it shows
-   **Add cloud here**, **Cloud settings** and **Fit all clouds**.
+   **Add cloud here**, **New Upkeep**, **Cloud settings** and **Fit all clouds**.
 
 5. Click **Add cloud here**.
 

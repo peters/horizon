@@ -105,12 +105,14 @@ Give each result to the report with the task ID.
    Result: A menu opens under the button. It shows these captions and rows, each
    row with a one-line description:
    - **GO TO**: **Quick Nav**, **Sessions** and **Remote Hosts**.
-   - **CLOUD**: **Add cloud here**, **Cloud settings** and **Fit all clouds**.
+   - **CLOUD**: **Add cloud here**, **New Upkeep**, **Cloud settings** and
+     **Fit all clouds**.
    - **HORIZON**: **Settings**.
 
    The rows of Quick Nav, Sessions, Remote Hosts and Settings show their
    keyboard shortcut at the right. **Fit all clouds** is dimmed when the board
-   has no cloud.
+   has no cloud. Task UPK-08 of the [Upkeep procedure](upkeep.md) tests
+   **New Upkeep**.
 
 2. Click **Quick Nav**.
 
