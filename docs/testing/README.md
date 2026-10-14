@@ -49,6 +49,8 @@ documents that are not yet STE.
 | [new-cloud-catalog-refresh](procedures/new-cloud-catalog-refresh.md) | New cloud dialog, background price refresh and layout height | none |
 | [native-app-automate](procedures/native-app-automate.md) | Native app matrix, MCP, CLI and exact cleanup | paid device |
 | [new-cloud-picker](procedures/new-cloud-picker.md) | New cloud dialog, worker list, filters, picks and data centers | none |
+| [tailnet-enrollment-ledger](procedures/tailnet-enrollment-ledger.md) | Saved enrollment receipts, allocation identity and capture attempts | none |
+| [tailnet-receipt-capture](procedures/tailnet-receipt-capture.md) | Device ID capture before Ready and after stop/resume | rents compute (LIVE only) |
 | [tailnet-stable-device-name](procedures/tailnet-stable-device-name.md) | Cloud tailnet device name after stop and resume | rents compute |
 | [tailnet-tagged-enrollment](procedures/tailnet-tagged-enrollment.md) | Marker 4 and one-time enrollment/resume tag checks; optional real-tailnet lane needs separate authorization | rents compute (optional R01 only) |
 | [tailnet-marker4-rollout](procedures/tailnet-marker4-rollout.md) | Immutable CPU pin, strict private storage, provider scope and unsupported RunPod modes | rents compute |
@@ -62,7 +64,4 @@ documents that are not yet STE.
 | Report | Procedure | Date |
 |---|---|---|
 | [2026-10-05-cloud-panels](reports/2026-10-05-cloud-panels.md) | [cloud-panels](procedures/cloud-panels.md) | 2026-10-05 |
-
-- [Tailnet enrollment ledger](procedures/tailnet-enrollment-ledger.md): retained device IDs, allocation identity and uncertain captures.
-
-- [Tailnet receipt capture](procedures/tailnet-receipt-capture.md): bounded own-Self projection and durable capture ordering.
+| [2026-10-14-tailnet-receipt-capture](reports/2026-10-14-tailnet-receipt-capture.md) | [ledger](procedures/tailnet-enrollment-ledger.md), [capture](procedures/tailnet-receipt-capture.md) | 2026-10-14 |

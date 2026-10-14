@@ -67,29 +67,156 @@ This procedure does not qualify API node removal.
 
 Run this task on both the first reviewable and final source heads. Offline results do not replace it.
 
-1. Record the exact controller source/binary and immutable marker-4 worker image.
+1. Record the exact controller source, binary and immutable marker-4 worker image.
 
-   Result: The running controller contains this capture path and the worker meets its private path/ownership requirements.
+   Result: The controller contains this capture path.
+   The worker meets its private path and ownership requirements.
 
-2. Use an authorized dedicated tailnet and one task-owned cloud. Select that saved tailnet through the existing controller before allocation. Keep its short-lived tagged auth key in Horizon's desktop OS store. Record baseline device IDs and exact task resource IDs.
+> **CAUTION:** SELECT ONLY THE AUTHORIZED TASK TAILNET.
+> A wrong selection can give the worker access to other devices.
 
-   Result: No existing user cloud or daemon changes. No API credential reaches the worker.
+2. Select the authorized saved tailnet for one task-owned cloud before allocation.
 
-3. Deploy through the existing UI, CLI or MCP lifecycle and wait for Ready.
+   Result: No existing user cloud or daemon changes.
+   API credentials stay on the desktop.
 
-   Result: The shared core saves an attempt before enrollment, then a receipt before readiness. A storage/isolation failure refuses Ready; record the fixed stage and stop without a workaround.
+> **CAUTION:** USE ONLY THE APPROVED DESKTOP API CREDENTIAL.
+> Keep its value in the desktop store and private authenticated channel.
 
-4. Read the task-owned cloud's record through the public core Store API and compare its receipt with the actual worker Self.ID and the owned node in the authorized tailnet.
+3. Record the protected baseline device IDs and the task allocation request.
 
-   Result: Saved tailnet, provider, worker, allocation request and device IDs match the actual allocation. Record only nonsecret identities. A displayed name or peer ID cannot qualify this check.
+   Result: The baseline identifies the devices that this task must not change.
 
-5. Stop and resume through the existing controller. Read the task record again.
+> **CAUTION:** CREATE ONLY THE APPROVED TASK KEY.
+> The key grants access to the dedicated tailnet.
 
-   Result: The stateful daemon retains its actual Self.ID and no key is retransferred for an already logged-in daemon. Hetzner resume creates a new server on the retained volume. Its new worker-bound receipt coexists with the previous receipt even when Self.ID stays the same. Deduplication applies only when the complete receipt matches. If the actual node changes, retain both device IDs and report the change.
+4. Create a short-lived tagged auth key for only the task.
 
-6. Delete only the task-owned compute, storage and credential binding through their owning controllers. Revoke only the task key and remove only the proven task node through the separately authorized admin cleanup path. Reconcile exact IDs and baseline devices.
+   Result: Only the task uses this key.
+   The original auth key remains unchanged.
 
-   Result: Task resources are absent and baseline devices remain. This is test cleanup, not a production automatic node-delete claim. The cloud's saved ledger remains intact after provider deletion.
+> **CAUTION:** STORE THE TASK KEY ONLY IN ITS EXACT DESKTOP BINDING.
+> Never put its value in command arguments, logs or a different worker.
+
+5. Store the task key in Horizon's exact desktop binding.
+
+   Result: Only the task binding changes.
+   No API credential reaches the worker.
+
+> **CAUTION:** DEPLOY ONLY THE ONE APPROVED TASK WORKER.
+> Deployment rents compute and sends the task auth key.
+> Keep the run within its approved budget.
+
+6. Deploy the task worker through the existing UI, CLI or MCP lifecycle.
+
+   Result: The shared core saves an attempt before enrollment.
+
+7. Wait for Ready.
+
+   Result: The core saves a receipt before readiness.
+   A storage or isolation failure refuses Ready.
+   Preserve the fixed failure stage for exact reconciliation; do not bypass the checks.
+
+8. Record the exact task resource IDs from the owning controller.
+
+   Result: The record identifies the task compute, storage and provider SSH key.
+
+> **CAUTION:** USE ONLY THE APPROVED TASK READ CHANNELS.
+> The node lookup uses an API credential.
+> Do not expose credential values or raw daemon output.
+
+9. Compare the public core Store receipt with the actual worker Self.ID and its proven task node.
+
+   Result: Saved tailnet, provider, worker, allocation request and device IDs match the actual allocation.
+   Record only nonsecret identities.
+   A displayed name or peer ID cannot qualify this check.
+
+> **CAUTION:** STOP ONLY THE RECORDED TASK WORKER.
+> Stop interrupts task sessions; retained storage can still cost money.
+> The controller uses the provider credential.
+
+10. Stop the task worker through the owning controller.
+
+    Result: The retained volume stays owned.
+    Hetzner removes the original server.
+
+> **CAUTION:** RESUME ONLY THE APPROVED TASK CLOUD.
+> UI Resume automatically starts reconnect, which rents compute and changes access.
+> The controller can transfer an auth key if enrollment is necessary.
+
+11. Resume the task cloud through the owning controller.
+
+    Result: The controller records resume intent.
+    CLI Resume returns before reconnect allocates compute.
+    UI Resume automatically starts reconnect.
+
+> **CAUTION:** RECONNECT ONLY THE APPROVED TASK CLOUD.
+> Reconnect rents compute, changes worker access and uses the provider credential.
+> The controller can transfer an auth key if enrollment is necessary.
+
+12. If reconnect has not started, connect again through UI **Reconnect** or `cloud_deploy reconnect SETTINGS STATE_ROOT`.
+
+    Result: Hetzner creates a new server on the retained volume.
+    An automatic UI reconnect needs no second request.
+
+13. Wait for Ready.
+
+    Result: Reconnect completes readiness and saves the worker-bound receipt.
+
+> **CAUTION:** USE ONLY THE APPROVED TASK READ CHANNELS.
+> The node lookup uses an API credential.
+> Keep all secret values private.
+
+14. Repeat the receipt and actual-ID comparison after resume.
+
+    Result: A logged-in daemon keeps Self.ID without another key transfer.
+    Both worker-bound receipts remain when Self.ID stays the same.
+    Only identical complete receipts count as a retry.
+    If the actual node changes, retain both device IDs and report the change.
+
+> **CAUTION:** DELETE ONLY THE RECORDED TASK COMPUTE AND STORAGE.
+> Deletion removes task data and uses the provider credential.
+
+15. Delete the task compute and storage through their owning controllers.
+
+    Result: Exact resource checks report absence.
+    The cloud's saved ledger remains intact after provider deletion.
+
+> **CAUTION:** REVOKE ONLY THE RECORDED TASK KEY.
+> Revocation stops new enrollment with that key.
+> Preserve the original user binding.
+
+16. Revoke the task auth key through the separately authorized admin cleanup path.
+
+    Result: The key is invalid.
+    Record the revocation time even if the API retains revoked metadata.
+
+> **CAUTION:** REMOVE ONLY THE TASK KEY FROM ITS DESKTOP BINDING.
+> Removal deletes its saved value.
+> Keep original credential bindings and unrelated catalog entries.
+
+17. Remove the task key from its desktop binding through the owning controller.
+
+    Result: The exact OS item is absent.
+    The original user binding stays unchanged.
+
+> **CAUTION:** DELETE ONLY THE NODE PROVEN BY THIS TASK.
+> Node deletion changes tailnet access.
+> Never delete a protected baseline device.
+
+18. Delete the proven task node through the separately authorized admin cleanup path.
+
+    Result: Its exact API read reports absence.
+    This is test cleanup, not automatic product node deletion.
+
+> **CAUTION:** USE ONLY THE APPROVED CLEANUP READ CHECKS.
+> These checks use API credentials.
+> Keep all secret values private.
+
+19. Examine exact resource absence and the protected baseline device IDs.
+
+    Result: Task resources are absent and baseline devices remain.
+    The original user credential binding stays unchanged.
 
 ## 4. Pass criteria
 
