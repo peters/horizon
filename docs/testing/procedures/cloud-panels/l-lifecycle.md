@@ -868,14 +868,23 @@ Use `smoke-sib` on RunPod. Its profile has a `build` section. In the steps,
    Result: `git -C <repo> status --short` shows `smoke-new.txt` and `.gitignore`, and
    not `smoke-ignored.log`.
 
-3. Write a file `<context>/.env` with the text `SYNTHETIC=1`. On the card, click
-   **Rebuild image & restart…**.
+3. Write a file `<context>/.env` with the text `SYNTHETIC=1`. Add it to the index, so
+   that a global Git exclude file that ignores `.env` cannot hide it. Then, on the
+   card, click **Rebuild image & restart…**.
+
+   ```sh
+   git -C <repo> add -f <context>/.env
+   ```
 
    Result: The confirmation shows **Rebuild refused:** and names a common secret
    file. It does not show **Rebuild and restart**.
 
-4. Click **Keep current image**. Delete `<context>/.env`. On the card, click
-   **Rebuild image & restart…** again.
+4. Click **Keep current image**. Remove `<context>/.env` from the index and delete it.
+   On the card, click **Rebuild image & restart…** again.
+
+   ```sh
+   git -C <repo> rm -q --cached <context>/.env; rm <repo>/<context>/.env
+   ```
 
    Result: The confirmation lists `modified <dockerfile>`, `new
    <context>/smoke-new.txt` and `modified <context>/.gitignore` (or `new` when the file

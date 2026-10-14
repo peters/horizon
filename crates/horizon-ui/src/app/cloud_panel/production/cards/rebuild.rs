@@ -309,8 +309,10 @@ fn uncommitted(ui: &mut egui::Ui, files: &[cloud_runtime::repository::uncommitte
         return;
     }
     ui.label(RichText::new(UNCOMMITTED).strong().color(theme::PALETTE_YELLOW()));
-    // Only the visible rows are laid out, so a long list costs little per frame; each row
-    // is as high as a label of one line here.
+    // Only the visible rows are laid out, so a long list costs little per frame. Each row
+    // is one line, as high as a label of one line here: a long path scrolls sideways
+    // rather than wrapping, so no row is taller than the rows are counted and every
+    // file stays reachable.
     let row = egui::WidgetText::from("•")
         .into_galley(
             ui,
@@ -324,13 +326,16 @@ fn uncommitted(ui: &mut egui::Ui, files: &[cloud_runtime::repository::uncommitte
     // instead of shrinking to the space left there.
     let count = f32::from(u16::try_from(files.len()).unwrap_or(u16::MAX));
     let height = (count * (row + ui.spacing().item_spacing.y)).min(LIST_HEIGHT);
-    egui::ScrollArea::vertical()
+    egui::ScrollArea::both()
         .id_salt("rebuild-uncommitted-files")
         .max_height(LIST_HEIGHT)
         .min_scrolled_height(height)
         .show_rows(ui, row, files.len(), |ui, rows| {
             for file in &files[rows] {
-                ui.label(format!("• {} {}", file.change.label(), file.path));
+                ui.add(
+                    egui::Label::new(format!("• {} {}", file.change.label(), file.path))
+                        .wrap_mode(egui::TextWrapMode::Extend),
+                );
             }
         });
 }
