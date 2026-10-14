@@ -155,3 +155,34 @@ fn multiple_origin_values_are_refused_even_when_one_is_empty() {
         Err(Error::Invalid(ORIGIN_INVALID))
     ));
 }
+
+#[test]
+fn ssh_uri_home_paths_keep_their_user_scope() {
+    let alice = remote("ssh://alice@git.example/~/project.git").unwrap().unwrap();
+    let bob = remote("ssh://bob@git.example/~/project.git").unwrap().unwrap();
+    assert_ne!(alice, bob);
+    assert!(!alice.contains("alice"));
+    assert_eq!(Some(alice.clone()), remote("alice@git.example:project.git").unwrap());
+    for equivalent in [
+        "ssh://alice:synthetic-password@git.example/~/project.git",
+        "ssh://%61lice@git.example/%7e/project.git",
+        "ssh://bob@git.example/~alice/project.git",
+        "bob@git.example:~alice/project.git",
+    ] {
+        assert_eq!(Some(alice.clone()), remote(equivalent).unwrap());
+    }
+    assert_ne!(Some(alice), remote("alice@git.example:/~alice/project.git").unwrap());
+    assert!(remote("ssh://git.example/~/project.git").unwrap().is_none());
+    let root = tempfile::tempdir().unwrap();
+    assert_ne!(
+        target(&root.path().join("one"), Some("ssh://git.example/~/project.git")),
+        target(&root.path().join("two"), Some("ssh://git.example/~/project.git"))
+    );
+    for invalid in [
+        "ssh://alice@git.example/%ff/project.git",
+        "ssh://alice@git.example/%00/project.git",
+        "ssh://alice@git.example/%zz/project.git",
+    ] {
+        assert!(remote(invalid).is_err());
+    }
+}

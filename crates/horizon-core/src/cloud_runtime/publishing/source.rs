@@ -56,7 +56,7 @@ fn remote(origin: &str) -> Result<Option<String>> {
     if origin.starts_with(['/', '\\', '.', '~']) || origin.is_empty() {
         return Ok(None);
     }
-    let (scheme, authority, path, home) = if let Some((scheme, rest)) = origin.split_once("://") {
+    let (scheme, authority, path, relative) = if let Some((scheme, rest)) = origin.split_once("://") {
         let scheme = scheme.to_ascii_lowercase();
         if !matches!(scheme.as_str(), "http" | "https" | "ssh" | "git") {
             return Ok(None);
@@ -92,16 +92,30 @@ fn remote(origin: &str) -> Result<Option<String>> {
     {
         return Err(Error::Invalid(ORIGIN_INVALID));
     }
+    let decoded;
+    let path = if scheme == "ssh" && origin.contains("://") {
+        decoded = decode_ssh(path)?;
+        decoded.as_str()
+    } else {
+        path
+    };
+    let decoded_user = if scheme == "ssh" && origin.contains("://") {
+        user.map(|user| decode_ssh(user.split_once(':').map_or(user, |(user, _)| user)))
+            .transpose()?
+    } else {
+        user.map(str::to_owned)
+    };
+    let (home, path) = ssh_home(&scheme, path, relative, origin.contains("://"), decoded_user.as_deref())?;
+    if matches!(home, Home::Unknown) {
+        return Ok(None);
+    }
     let path = path.strip_suffix(".git").unwrap_or(path);
     if path.is_empty() {
         return Err(Error::Invalid(ORIGIN_INVALID));
     }
     let server = server.to_ascii_lowercase();
-    if home {
-        let Some(user) = user.filter(|user| !user.is_empty()) else {
-            return Ok(None);
-        };
-        // SCP paths are relative to the SSH user's home. Keep that scope without retaining userinfo.
+    if let Home::User(user) = home {
+        // Home-relative paths retain their SSH user scope without retaining userinfo.
         let hash = ring::digest::digest(&ring::digest::SHA256, user.as_bytes());
         let scope = hash.as_ref().iter().fold(String::with_capacity(64), |mut scope, byte| {
             let _ = write!(scope, "{byte:02x}");
@@ -110,6 +124,51 @@ fn remote(origin: &str) -> Result<Option<String>> {
         return Ok(Some(format!("ssh-home://{server}/{scope}/{path}")));
     }
     Ok(Some(format!("{scheme}://{server}/{path}")))
+}
+
+enum Home {
+    Absolute,
+    User(String),
+    Unknown,
+}
+
+fn ssh_home<'a>(scheme: &str, path: &'a str, relative: bool, uri: bool, user: Option<&str>) -> Result<(Home, &'a str)> {
+    if scheme != "ssh" {
+        return Ok((Home::Absolute, path));
+    }
+    if let Some(home) = path.strip_prefix('~').filter(|_| relative || uri) {
+        let (name, path) = home.split_once('/').ok_or(Error::Invalid(ORIGIN_INVALID))?;
+        let user = if name.is_empty() { user } else { Some(name) };
+        return Ok((home_user(user), path));
+    }
+    Ok((if relative { home_user(user) } else { Home::Absolute }, path))
+}
+
+fn home_user(user: Option<&str>) -> Home {
+    user.filter(|user| !user.is_empty())
+        .map_or(Home::Unknown, |user| Home::User(user.to_owned()))
+}
+
+fn decode_ssh(value: &str) -> Result<String> {
+    let mut bytes = Vec::with_capacity(value.len());
+    let mut input = value.bytes();
+    while let Some(byte) = input.next() {
+        if byte == b'%' {
+            let high = input.next().and_then(|byte| char::from(byte).to_digit(16));
+            let low = input.next().and_then(|byte| char::from(byte).to_digit(16));
+            let (Some(high), Some(low)) = (high, low) else {
+                return Err(Error::Invalid(ORIGIN_INVALID));
+            };
+            bytes.push(u8::try_from(high * 16 + low).map_err(|_| Error::Invalid(ORIGIN_INVALID))?);
+        } else {
+            bytes.push(byte);
+        }
+    }
+    let decoded = String::from_utf8(bytes).map_err(|_| Error::Invalid(ORIGIN_INVALID))?;
+    if decoded.contains(char::is_control) || decoded.contains(['?', '#', '\\']) {
+        return Err(Error::Invalid(ORIGIN_INVALID));
+    }
+    Ok(decoded)
 }
 
 fn scp(origin: &str) -> Option<(&str, &str)> {

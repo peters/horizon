@@ -47,7 +47,9 @@ Without a supported remote, it uses the canonical local checkout path.
 The source transport, host, complete path and explicit port distinguish source identities.
 Origin normalization removes at most one final `.git` suffix and does not interpret browser routes.
 Relative local origins use the canonical checkout path. Non-UTF-8 fallback paths are refused.
-Home-relative SCP origins retain an opaque SSH-user scope; an implicit user uses the local fallback.
+Home-relative SCP and SSH URI origins retain an opaque SSH-user scope; an implicit user uses the local fallback.
+SSH URI paths and usernames decode percent escapes before home-scope selection. Named homes
+retain the named user; an absolute SCP path remains absolute.
 Automatic naming refuses query parameters, fragments and multiple origin URLs.
 The source text cannot choose the publishing account.
 
