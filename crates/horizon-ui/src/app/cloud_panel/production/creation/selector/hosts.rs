@@ -148,9 +148,9 @@ pub(in crate::app::cloud_panel::production) fn summary(ui: &mut Ui, form: &Produ
             .color(theme::FG_SOFT()),
     );
     widgets::line(ui, "Compute", "No rent", true);
-    widgets::line(ui, "Stopped cloud", "Container and volume kept on the host", false);
+    widgets::line(ui, "Stopped cloud", "Volume kept", false);
     widgets::note(
         ui,
-        "Runs on a machine you already have. Its CPUs and memory are shared with what else runs there and are not reserved; the workspace volume uses the host's disk.",
+        "Runs on a machine you already have. Stopped, its container and volume stay on the host. Its CPUs and memory are shared and not reserved; the volume uses the host's disk.",
     );
 }
