@@ -53,3 +53,96 @@ fn local_sources_are_distinct_and_cancelled_lookups_do_not_run_git() {
     };
     assert!(automatic("builder", &root.path().join("absent"), "cpu", &runner).is_err());
 }
+
+#[test]
+fn git_origins_preserve_paths_suffixes_transports_and_local_scopes() {
+    let root = tempfile::tempdir().unwrap();
+    let a = root.path().join("a/project");
+    let b = root.path().join("b/project");
+    assert_ne!(
+        target(&a, Some("team/project.git")),
+        target(&b, Some("team/project.git"))
+    );
+    for (first, second) in [
+        (
+            "https://git.example/team/base/-/one/project.git",
+            "https://git.example/team/base/-/two/project.git",
+        ),
+        (
+            "https://git.example/team/project.git",
+            "https://git.example/team/project.git.git",
+        ),
+        (
+            "https://git.example/team/project.git",
+            "ssh://git.example/team/project.git",
+        ),
+        ("alice@git.example:project.git", "bob@git.example:project.git"),
+    ] {
+        assert_ne!(
+            target(&a, Some(first)),
+            target(&a, Some(second)),
+            "distinct Git origins retain separate identities"
+        );
+    }
+    let scoped = remote("synthetic-ssh-user@git.example:project.git").unwrap().unwrap();
+    assert!(!scoped.contains("synthetic-ssh-user"));
+    assert_eq!(
+        remote("https://u:password@git.example/team/project.git").unwrap(),
+        remote("https://git.example/team/project.git").unwrap()
+    );
+    for ambiguous in [
+        "https://git.example/repo.git?token=synthetic",
+        "https://git.example/repo.git#other",
+        "https://git.example/a.git\nhttps://git.example/b.git",
+    ] {
+        assert!(remote(ambiguous).is_err());
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn non_utf8_local_paths_are_refused_without_lossy_package_identity() {
+    use std::os::unix::ffi::OsStringExt;
+    let root = tempfile::tempdir().unwrap();
+    let cancel = Cancellation::default();
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &|_| {},
+        secrets: Vec::new(),
+    };
+    for byte in [0xff, 0xfe] {
+        let repo = root
+            .path()
+            .join(std::ffi::OsString::from_vec(vec![b'r', byte]))
+            .join("project");
+        std::fs::create_dir_all(&repo).unwrap();
+        assert!(matches!(
+            automatic("builder", &repo.canonicalize().unwrap(), "cpu", &runner),
+            Err(Error::Invalid(
+                "Automatic images need a UTF-8 checkout path or an explicit image destination"
+            ))
+        ));
+    }
+}
+
+#[test]
+fn multiple_origin_values_are_refused_even_when_one_is_empty() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = root.path().join("repo");
+    target(&repo, None);
+    std::fs::write(
+        repo.join(".git/config"),
+        "[remote \"origin\"]\nurl = https://git.example/team/project.git\nurl =\n",
+    )
+    .unwrap();
+    let cancel = Cancellation::default();
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &|_| {},
+        secrets: Vec::new(),
+    };
+    assert!(matches!(
+        automatic("builder", &repo, "cpu", &runner),
+        Err(Error::Invalid(ORIGIN_INVALID))
+    ));
+}

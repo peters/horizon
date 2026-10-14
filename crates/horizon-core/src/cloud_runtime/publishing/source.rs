@@ -1,16 +1,20 @@
-//! Credential-free source identity used only for package naming.
+//! Credential-free Git origin identity used only for package naming.
 use super::{Destination, Error, Result};
 use crate::cloud_runtime::command::Runner;
-use std::{path::Path, process::Command, time::Duration};
+use std::{fmt::Write as _, path::Path, process::Command, time::Duration};
+
+const ORIGIN_INVALID: &str =
+    "Use an unambiguous Git origin without query parameters, or choose an explicit image destination";
 
 pub(super) fn automatic(login: &str, repository: &Path, name: &str, runner: &Runner<'_>) -> Result<Destination> {
     runner.cancel.check()?;
+    let repository = repository.canonicalize()?;
     let mut command = Command::new("git");
     command
-        .args(["-C"])
-        .arg(repository)
-        .args(["config", "--get", "remote.origin.url"]);
-    // A remote can contain credentials. Never send this command's output to a card or log.
+        .arg("-C")
+        .arg(&repository)
+        .args(["config", "--local", "--get-all", "remote.origin.url"]);
+    // A remote can contain credentials. Never send its output to a card or log.
     let quiet = Runner {
         cancel: runner.cancel,
         emit: &|_| {},
@@ -22,23 +26,90 @@ pub(super) fn automatic(login: &str, repository: &Path, name: &str, runner: &Run
         Err(error) => return Err(error),
     };
     let source = origin
-        .and_then(|origin| crate::cloud_runtime::repository::source::parse(origin.trim()))
-        .map_or_else(
-            || repository.to_string_lossy().into_owned(),
-            |remote| {
-                // A self-hosted service on another port is another source identity.
-                let authority = remote
-                    .url
-                    .split_once("://")
-                    .and_then(|(_, rest)| rest.split('/').next())
-                    .map_or(remote.host.as_str(), |authority| {
-                        authority.rsplit('@').next().unwrap_or(authority)
-                    });
-                format!("{authority}/{}/{}", remote.owner, remote.name)
-            },
-        );
+        .as_deref()
+        .map(|origin| {
+            origin
+                .strip_suffix("\r\n")
+                .or_else(|| origin.strip_suffix('\n'))
+                .unwrap_or(origin)
+        })
+        .map(remote)
+        .transpose()?
+        .flatten();
+    let source = match source {
+        Some(source) => source,
+        None => repository
+            .to_str()
+            .ok_or(Error::Invalid(
+                "Automatic images need a UTF-8 checkout path or an explicit image destination",
+            ))?
+            .to_owned(),
+    };
     Destination::automatic_github(login, &source, name)
         .map_err(|_| Error::Invalid("Could not select a personal image destination"))
+}
+
+fn remote(origin: &str) -> Result<Option<String>> {
+    if origin.len() > 4096 || origin.contains(char::is_control) || origin.contains('\u{fffd}') {
+        return Err(Error::Invalid(ORIGIN_INVALID));
+    }
+    if origin.starts_with(['/', '\\', '.', '~']) || origin.is_empty() {
+        return Ok(None);
+    }
+    let (scheme, authority, path, home) = if let Some((scheme, rest)) = origin.split_once("://") {
+        let scheme = scheme.to_ascii_lowercase();
+        if !matches!(scheme.as_str(), "http" | "https" | "ssh" | "git") {
+            return Ok(None);
+        }
+        let (authority, path) = rest.split_once('/').ok_or(Error::Invalid(ORIGIN_INVALID))?;
+        (scheme, authority, path, false)
+    } else if let Some((authority, path)) = origin.split_once(':') {
+        if authority.len() == 1 && authority.bytes().all(|b| b.is_ascii_alphabetic()) && path.starts_with(['/', '\\']) {
+            return Ok(None);
+        }
+        (
+            "ssh".into(),
+            authority,
+            path.trim_start_matches('/'),
+            !path.starts_with('/'),
+        )
+    } else {
+        // A relative local origin is scoped to this checkout, never expanded as a browser shorthand.
+        return Ok(None);
+    };
+    let (user, server) = authority
+        .rsplit_once('@')
+        .map_or((None, authority), |(user, host)| (Some(user), host));
+    let host = url::Url::parse(&format!("https://{server}/")).map_err(|_| Error::Invalid(ORIGIN_INVALID))?;
+    if host.host_str().is_none()
+        || !host.username().is_empty()
+        || host.password().is_some()
+        || host.query().is_some()
+        || host.fragment().is_some()
+        || host.path() != "/"
+        || path.is_empty()
+        || path.contains(['?', '#', '\\'])
+    {
+        return Err(Error::Invalid(ORIGIN_INVALID));
+    }
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    if path.is_empty() {
+        return Err(Error::Invalid(ORIGIN_INVALID));
+    }
+    let server = server.to_ascii_lowercase();
+    if home {
+        let Some(user) = user.filter(|user| !user.is_empty()) else {
+            return Ok(None);
+        };
+        // SCP paths are relative to the SSH user's home. Keep that scope without retaining userinfo.
+        let hash = ring::digest::digest(&ring::digest::SHA256, user.as_bytes());
+        let scope = hash.as_ref().iter().fold(String::with_capacity(64), |mut scope, byte| {
+            let _ = write!(scope, "{byte:02x}");
+            scope
+        });
+        return Ok(Some(format!("ssh-home://{server}/{scope}/{path}")));
+    }
+    Ok(Some(format!("{scheme}://{server}/{path}")))
 }
 
 #[cfg(test)]
