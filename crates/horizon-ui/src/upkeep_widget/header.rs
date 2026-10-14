@@ -12,54 +12,79 @@ pub(super) struct Actions {
     pub(super) busy: bool,
 }
 
-/// Draws the header; with `actions`, also its buttons. Returns what the person pressed.
+/// The width the three buttons take side by side, with their spacing.
+const ACTIONS_WIDTH: f32 = 92.0 + 104.0 + 78.0 + 2.0 * 8.0;
+/// The least width the title and its summary keep beside the buttons.
+const TITLE_MIN_WIDTH: f32 = 220.0;
+
+/// Draws the header; with `actions`, also its buttons: beside the title when both fit, under
+/// it on a narrow board, where they wrap rather than leave it. Returns what the person
+/// pressed.
 pub(super) fn show(ui: &mut Ui, status: &Status, actions: Option<Actions>) -> Option<Request> {
     let mut request = None;
+    let beside = ui.available_width() >= TITLE_MIN_WIDTH + ACTIONS_WIDTH;
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.label(RichText::new("Upkeep").size(18.0).strong().color(theme::FG()));
             ui.add(egui::Label::new(RichText::new(summary(status)).size(12.0).color(theme::FG_SOFT())).truncate());
         });
-        let Some(actions) = actions else { return };
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let paused = status.schedule.paused;
-            let (pause, hint) = if paused {
-                ("Resume", "Start the planned runs again.")
-            } else {
-                ("Pause", "Stop the planned runs. A run in progress finishes.")
-            };
-            if ui
-                .add(chrome(pause).min_size(Vec2::new(78.0, 30.0)))
-                .on_hover_text(hint)
-                .clicked()
-            {
-                request = Some(Request::Pause(!paused));
-            }
-            if ui
-                .add(chrome("Repositories").min_size(Vec2::new(104.0, 30.0)))
-                .on_hover_text("Add or remove repositories. The next run uses the new list.")
-                .clicked()
-            {
-                request = Some(Request::Repositories);
-            }
-            let reason = if paused {
-                "Resume first: a paused Upkeep does not run."
-            } else {
-                "A run is in progress. Only one runs at a time."
-            };
-            let run = ui
-                .add_enabled(
+        if beside && let Some(actions) = actions {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                request = buttons(ui, status, actions, true);
+            });
+        }
+    });
+    if !beside && let Some(actions) = actions {
+        ui.horizontal_wrapped(|ui| request = buttons(ui, status, actions, false));
+    }
+    request
+}
+
+/// Run now, Repositories and Pause in that order, added from the right when `from_right`.
+fn buttons(ui: &mut Ui, status: &Status, actions: Actions, from_right: bool) -> Option<Request> {
+    let paused = status.schedule.paused;
+    let mut request = None;
+    let mut order = [Request::RunNow, Request::Repositories, Request::Pause(!paused)];
+    if from_right {
+        order.reverse();
+    }
+    for button in order {
+        let clicked = match button {
+            Request::RunNow => {
+                let reason = if paused {
+                    "Resume first: a paused Upkeep does not run."
+                } else {
+                    "A run is in progress. Only one runs at a time."
+                };
+                ui.add_enabled(
                     !actions.busy && !paused,
                     primary("Run now").min_size(Vec2::new(92.0, 30.0)),
                 )
                 .on_hover_text("Start a run now instead of at the next planned time.")
-                .on_disabled_hover_text(reason);
-            if run.clicked() {
-                request = Some(Request::RunNow);
+                .on_disabled_hover_text(reason)
+                .clicked()
             }
-        });
-    });
+            Request::Repositories => ui
+                .add(chrome("Repositories").min_size(Vec2::new(104.0, 30.0)))
+                .on_hover_text("Add or remove repositories. The next run uses the new list.")
+                .clicked(),
+            Request::Pause(_) => {
+                let (label, hint) = if paused {
+                    ("Resume", "Start the planned runs again.")
+                } else {
+                    ("Pause", "Stop the planned runs. A run in progress finishes.")
+                };
+                ui.add(chrome(label).min_size(Vec2::new(78.0, 30.0)))
+                    .on_hover_text(hint)
+                    .clicked()
+            }
+            Request::Open(_) => false,
+        };
+        if clicked {
+            request = Some(button);
+        }
+    }
     request
 }
 
@@ -105,4 +130,67 @@ fn summary(status: &Status) -> String {
         if count == 1 { "repository" } else { "repositories" }
     ));
     parts.join("  ·  ")
+}
+
+#[cfg(test)]
+mod tests {
+    use egui::accesskit::Rect as Bounds;
+
+    use super::*;
+    use crate::test_egui::DiscardTextures as _;
+
+    /// The bounds of the title and of each button the header drew in a column `width` wide.
+    fn drawn(width: f32) -> Vec<(String, Bounds)> {
+        let status: Status = serde_json::from_str(r#"{"agent":"codex","repositories":["acme/api"]}"#).unwrap();
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let output = ctx
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 400.0))),
+                    ..egui::RawInput::default()
+                },
+                |ui| {
+                    ui.allocate_ui(egui::vec2(width, 300.0), |ui| {
+                        ui.set_max_width(width);
+                        let _ = show(ui, &status, Some(Actions { busy: false }));
+                    });
+                },
+            )
+            .discard_textures();
+        let update = output.platform_output.accesskit_update.expect("accesskit tree");
+        let mut found: Vec<(String, Bounds)> = Vec::new();
+        for (_, node) in update.nodes {
+            let (Some(name), Some(bounds)) = (node.label().or_else(|| node.value()), node.bounds()) else {
+                continue;
+            };
+            // A label can name its text twice: once as a label, once as a value.
+            if ["Upkeep", "Run now", "Repositories", "Pause"].contains(&name)
+                && !found.iter().any(|(held, _)| held == name)
+            {
+                found.push((name.to_owned(), bounds));
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn the_buttons_stay_inside_a_narrow_board_and_off_the_title() {
+        for width in [240.0, 300.0, 480.0, 520.0, 900.0] {
+            let drawn = drawn(width);
+            assert_eq!(drawn.len(), 4, "{width} px wide: {drawn:?}");
+            for (name, bounds) in &drawn {
+                assert!(
+                    bounds.x0 >= -0.5 && bounds.x1 <= f64::from(width) + 0.5,
+                    "{width} px wide: {name} at {bounds:?}"
+                );
+            }
+            let title = drawn.iter().find(|(name, _)| name == "Upkeep").unwrap().1;
+            for (name, bounds) in drawn.iter().filter(|(name, _)| name != "Upkeep") {
+                let apart =
+                    bounds.x1 <= title.x0 || bounds.x0 >= title.x1 || bounds.y1 <= title.y0 || bounds.y0 >= title.y1;
+                assert!(apart, "{width} px wide: {name} covers the title");
+            }
+        }
+    }
 }
