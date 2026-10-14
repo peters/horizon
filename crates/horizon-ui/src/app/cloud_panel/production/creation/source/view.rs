@@ -10,7 +10,6 @@ use std::path::PathBuf;
 /// What the step asks the app to do once drawing is over.
 #[derive(Default)]
 pub(in super::super) struct Step {
-    pub browse: bool,
     pub choose_folder: bool,
     pub adopt: Option<PathBuf>,
 }
@@ -37,32 +36,37 @@ pub(in super::super) fn step(ui: &mut Ui, form: &mut Production, refocus: bool) 
         ui.memory_mut(|memory| memory.request_focus(id));
         form.focus_title_on_open = false;
     }
-    let browse = 96.0;
+    // The results answer the arrow keys, Enter and Tab before the field sees them.
+    let focused = ui.memory(|memory| memory.has_focus(id));
+    form.source.update_rows(ui.ctx());
+    let keyed = form.source.finder_keys(ui, focused);
+    // Only while results show: a hidden list never keeps Tab in the field.
+    let tab = form.source.searching() && form.source.finder.takes_tab() && ui.input(|input| input.modifiers.is_none());
     // While a clone runs the field is not a request for something else.
     let response = ui
         .add_enabled_ui(form.source.job.is_none(), |ui| {
-            ui.horizontal(|ui| {
-                let edit = ui.add_sized(
-                    [ui.available_width() - browse - ui.spacing().item_spacing.x, 38.0],
-                    TextEdit::singleline(&mut form.source.input)
-                        .id(id)
-                        .font(egui::FontId::proportional(15.0))
-                        .margin(Vec2::new(12.0, 10.0))
-                        .hint_text("github.com/owner/repo  ·  gitlab.com/group/repo  ·  ~/code/project"),
-                );
-                step.browse = ui
-                    .add_sized(
-                        [browse, 38.0],
-                        Button::new(RichText::new("Browse…").size(13.0)).corner_radius(8),
-                    )
-                    .clicked();
-                edit
-            })
-            .inner
+            ui.add_sized(
+                [ui.available_width(), 38.0],
+                TextEdit::singleline(&mut form.source.input)
+                    .id(id)
+                    .lock_focus(tab)
+                    .font(egui::FontId::proportional(15.0))
+                    .margin(Vec2::new(12.0, 10.0))
+                    .hint_text("Search your repositories, type a path like ~/code, or paste a link"),
+            )
         })
         .inner;
     // A link may carry a token; what was typed is not kept for undoing.
     super::super::forget_undo(ui.ctx(), response.id);
+    if std::mem::take(&mut form.source.refocus) {
+        // Text a result put in the field is typed on from its end.
+        if let Some(mut state) = TextEdit::load_state(ui.ctx(), response.id) {
+            let end = egui::text::CCursor::new(form.source.input.chars().count());
+            state.cursor.set_char_range(Some(egui::text::CCursorRange::one(end)));
+            state.store(ui.ctx(), response.id);
+        }
+        response.request_focus();
+    }
     if refocus {
         response.request_focus();
     }
@@ -79,7 +83,9 @@ pub(in super::super) fn step(ui: &mut Ui, form: &mut Production, refocus: bool) 
     }
     let enter = ui.input(|input| input.key_pressed(Key::Enter));
     step.choose_folder = form.source.status(ui, enter);
-    form.source.github_section(ui);
+    if let Some(path) = keyed.or_else(|| form.source.finder(ui)) {
+        step.adopt = Some(path);
+    }
     step
 }
 
@@ -104,7 +110,8 @@ impl State {
         }
         let Some(remote) = self.remote().cloned() else {
             // A name that narrows the connected account's list is no unknown link.
-            if self.unrecognised() && !self.filters_the_list() {
+            // While the finder shows, it says itself when nothing matches.
+            if !self.searching() && self.unrecognised() && !self.filters_the_list() {
                 ui.label(
                     RichText::new("That is neither a repository link nor a folder that exists.")
                         .size(13.0)
@@ -248,7 +255,8 @@ impl State {
                         .hint_text("Access token"),
                 );
                 super::super::forget_undo(ui.ctx(), field.id);
-                if !std::mem::replace(&mut self.token_focused, true) {
+                // Never while the field is a search: typing goes on there.
+                if !self.searching() && !std::mem::replace(&mut self.token_focused, true) {
                     field.request_focus();
                 }
                 ui.horizontal(|ui| {

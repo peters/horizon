@@ -1,5 +1,10 @@
 use super::*;
 
+/// The origin of the checkout in `checkout`, as [`existing_checkout`] reads it.
+fn origin_of(checkout: &Path) -> Option<String> {
+    origin_in(&git_dirs(checkout)?.0)
+}
+
 fn remote(input: &str) -> Option<(String, String, String)> {
     parse(input).map(|remote| (remote.url, remote.host, remote.name))
 }
@@ -198,16 +203,16 @@ fn a_linked_worktree_reads_the_origin_of_the_checkout_it_belongs_to() {
     let pointer = main.join(".git").join("worktrees").join("wt");
     std::fs::write(linked.join(".git"), format!("gitdir: {}\n", pointer.display())).unwrap();
     assert_eq!(
-        origin_url(&linked).as_deref(),
+        origin_of(&linked).as_deref(),
         Some("https://github.com/demo-org/demo.git")
     );
-    assert_eq!(origin_url(temp.path()), None);
+    assert_eq!(origin_of(temp.path()), None);
 }
 
 #[test]
 fn an_origin_is_read_from_the_config_file() {
     let temp = tempfile::tempdir().unwrap();
-    assert_eq!(origin_url(temp.path()), None);
+    assert_eq!(origin_of(temp.path()), None);
     std::fs::create_dir(temp.path().join(".git")).unwrap();
     std::fs::write(
         temp.path().join(".git").join("config"),
@@ -215,7 +220,7 @@ fn an_origin_is_read_from_the_config_file() {
     )
     .unwrap();
     assert_eq!(
-        origin_url(temp.path()).as_deref(),
+        origin_of(temp.path()).as_deref(),
         Some("https://github.com/demo-org/demo.git")
     );
 }
@@ -477,5 +482,71 @@ fn a_checkout_already_under_the_parent_is_recognised_for_its_own_link_only() {
         &["clone", "-q", origin.to_str().unwrap(), "demo"],
     );
     git(&kept, &["remote", "set-url", "origin", &remote.url]);
+    assert_eq!(existing(temp.path(), &remote), Some(kept.clone()));
+    // Cloned over SSH with the owner's own spelling, it is still the repository of the link.
+    git(
+        &kept,
+        &["remote", "set-url", "origin", "git@github.com:Demo-Org/demo.git"],
+    );
     assert_eq!(existing(temp.path(), &remote), Some(kept));
+}
+
+#[test]
+fn one_repository_is_one_server_and_path_whatever_the_transport() {
+    let same = |a: &str, b: &str| same_repository(&parse(a).unwrap(), &parse(b).unwrap());
+    assert!(same("git@github.com:Acme/web.git", "https://github.com/acme/web"));
+    assert!(same(
+        "ssh://git@git.example.com:22/team/tool",
+        "https://git.example.com:443/team/tool"
+    ));
+    assert!(!same(
+        "https://git.example.com:8443/team/tool.git",
+        "https://git.example.com/team/tool"
+    ));
+    assert!(!same(
+        "ssh://git@git.example.com:2222/team/tool",
+        "git@git.example.com:team/tool"
+    ));
+    assert!(
+        same(
+            "ssh://git@git.example.com:2222/team/tool",
+            "https://git.example.com/team/tool"
+        ),
+        "SSH on its own port beside HTTPS"
+    );
+    assert!(!same("https://github.com/acme/web", "https://github.com/acme/api"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_pipe_in_place_of_the_clone_marker_is_never_opened() {
+    let temp = tempfile::tempdir().unwrap();
+    let git = temp.path().join(".git");
+    std::fs::create_dir_all(&git).unwrap();
+    let made = std::process::Command::new("mkfifo")
+        .arg(git.join(CLONE_MARKER))
+        .status()
+        .is_ok_and(|status| status.success());
+    if !made {
+        return;
+    }
+    // Opening a pipe with no writer would wait for ever: it is not opened, and a marker that
+    // cannot be read is no finished clone.
+    assert!(clone_stopped_in(temp.path()));
+}
+
+#[test]
+fn a_clone_marker_too_long_to_read_is_a_stopped_clone() {
+    let temp = tempfile::tempdir().unwrap();
+    let git = temp.path().join(".git");
+    std::fs::create_dir_all(&git).unwrap();
+    assert!(!clone_stopped_in(temp.path()), "no marker, no stopped clone");
+    let long = format!("https://example.com/{}\nmain\n0\n", "a".repeat(8192));
+    std::fs::write(git.join(CLONE_MARKER), long).unwrap();
+    assert!(clone_stopped_in(temp.path()));
+    assert!(transport::maybe_unfinished(temp.path()));
+    assert!(
+        !transport::unfinished(temp.path()),
+        "never a reason to remove the folder"
+    );
 }

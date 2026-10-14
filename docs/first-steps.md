@@ -352,8 +352,15 @@ from `origin` before deploy. Commit and update the branch before you start.
    Result: The **Where is your code?** step opens.
 
 4. If the code is on a Git server, paste the repository link.
-5. If the code is on this computer, click **Browse…**.
-6. If you clicked **Browse…**, select the folder.
+5. If the code is on this computer, type its name or its path.
+
+   Result: The results list the checkouts on this computer and, with GitHub
+   connected, your GitHub repositories.
+
+6. If you typed a name or a path, press **Enter** on the result.
+
+   Result: The results go away and the dialog reads the repository.
+
 7. If the dialog shows **No cloud setup yet**, click **Start on the base image**
    in the **Quick start** card.
 

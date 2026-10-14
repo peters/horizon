@@ -61,7 +61,6 @@ struct Actions {
 enum RepositoryAction {
     #[default]
     None,
-    Choose,
     Load,
     Setup,
     /// Something in the running setup agent's progress view.
@@ -159,7 +158,6 @@ impl HorizonApp {
             return;
         }
         match actions.repository {
-            RepositoryAction::Choose => self.choose_cloud_repository(ctx),
             RepositoryAction::Load => self.read_cloud_profiles(ctx),
             RepositoryAction::Setup => self.start_cloud_repository_setup(ctx),
             RepositoryAction::SetupRun(action) => self.cloud_repository_setup_action(ctx, action),
@@ -264,17 +262,10 @@ impl HorizonApp {
     /// checks it keeps current, and a clone that finished. True when focus returns to the field.
     fn prepare_cloud_creation(&mut self, ctx: &Context, picking: bool) -> bool {
         // Focus returns to the field when its picker closes, whether or not a directory was chosen.
-        let refocus_repository = !picking && std::mem::take(&mut self.cloud_prototype.production.choosing_repository);
+        let refocus_repository = !picking && std::mem::take(&mut self.cloud_prototype.production.picking_for_source);
         if !picking {
             self.cloud_prototype.production.launch.siblings.stop_browsing();
             self.cloud_prototype.production.source.take_choosing_parent();
-        }
-        // A picker closed without a repository has nothing to read.
-        if refocus_repository
-            && self.cloud_prototype.production.profiles.is_none()
-            && !self.cloud_prototype.production.repository.trim().is_empty()
-        {
-            self.read_cloud_profiles(ctx);
         }
         self.request_cloud_prices(ctx);
         // Start needs the tailnet settings, and their picker now waits in More options.
@@ -399,14 +390,6 @@ impl HorizonApp {
         false
     }
 
-    fn choose_cloud_repository(&mut self, ctx: &Context) {
-        self.consume_picker_activation(ctx);
-        let form = &mut self.cloud_prototype.production;
-        form.choosing_repository = true;
-        let current = (!form.repository.trim().is_empty()).then(|| Path::new(&form.repository));
-        self.dir_picker = Some(DirPicker::with_seed(DirPickerPurpose::CloudRepository, current));
-    }
-
     /// Makes `path` the repository and reads its profiles: a folder that was typed, or a fresh clone.
     fn adopt_cloud_source(&mut self, ctx: &Context, path: &Path) {
         self.set_cloud_repository(path);
@@ -416,6 +399,7 @@ impl HorizonApp {
     /// Lets the person pick the folder clones go into, starting from the nearest one that exists.
     fn choose_clone_folder(&mut self, ctx: &Context) {
         self.consume_picker_activation(ctx);
+        self.cloud_prototype.production.picking_for_source = true;
         let mut parent = self.cloud_prototype.production.source.clone_parent();
         while !parent.is_dir() && parent.pop() {}
         self.dir_picker = Some(DirPicker::with_seed(DirPickerPurpose::CloudRepository, Some(&parent)));
@@ -573,7 +557,6 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
     let step = source::step(ui, form, refocus_repository);
     let mut action = match step {
         source::Step { adopt: Some(path), .. } => RepositoryAction::Adopt(path),
-        source::Step { browse: true, .. } => RepositoryAction::Choose,
         source::Step {
             choose_folder: true, ..
         } => RepositoryAction::CloneFolder,

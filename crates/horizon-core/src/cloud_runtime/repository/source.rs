@@ -93,6 +93,45 @@ pub fn parse(input: &str) -> Option<Remote> {
     })
 }
 
+/// Whether `a` and `b` name one repository on one server: the same host, the same path
+/// whatever its case, and over one transport the same port. A transport's usual port counts
+/// as none, so `git@github.com:acme/web` and `https://github.com/acme/web` are one
+/// repository, while `https://git.example.com:8443/team/tool` is another server's than
+/// `https://git.example.com/team/tool`. Ports of two transports are two services of one
+/// server, such as SSH on 2222 beside HTTPS, so they are not compared.
+#[must_use]
+pub fn same_repository(a: &Remote, b: &Remote) -> bool {
+    let (a_transport, a_port) = transport_and_port(&a.url);
+    let (b_transport, b_port) = transport_and_port(&b.url);
+    a.host == b.host
+        && (a_transport != b_transport || a_port == b_port)
+        && a.owner.eq_ignore_ascii_case(&b.owner)
+        && a.name.eq_ignore_ascii_case(&b.name)
+}
+
+/// The transport of an address (`http` for both `http` and `https`, `ssh` for
+/// `user@host:path` too) and the port it names, unless that is the scheme's usual one.
+fn transport_and_port(url: &str) -> (&str, Option<&str>) {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return ("ssh", None);
+    };
+    let (transport, usual) = match scheme {
+        "https" => ("http", "443"),
+        "http" => ("http", "80"),
+        "ssh" => ("ssh", "22"),
+        "git" => ("git", "9418"),
+        _ => (scheme, ""),
+    };
+    let port = rest
+        .split('/')
+        .next()
+        .and_then(|authority| authority.rsplit('@').next())
+        .and_then(|host| host.rsplit_once(':'))
+        .map(|(_, port)| port)
+        .filter(|port| *port != usual);
+    (transport, port)
+}
+
 /// A host name Git can be handed safely: dotted, and never something it would read as an option.
 fn valid_host(host: &str) -> bool {
     host.contains('.') && valid_name(host)
@@ -221,22 +260,72 @@ pub fn destination(parent: &Path, remote: &Remote) -> PathBuf {
 /// owner's folder, each asked about its origin only if it exists.
 #[must_use]
 pub fn existing(parent: &Path, remote: &Remote) -> Option<PathBuf> {
+    existing_checkout(parent, remote).map(|(path, _)| path)
+}
+
+/// As [`existing`], with whether the checkout is a linked worktree, told by the same reads
+/// that find its origin.
+#[must_use]
+pub fn existing_checkout(parent: &Path, remote: &Remote) -> Option<(PathBuf, bool)> {
     candidates(parent, remote)
         .chain(earlier(parent, remote))
         .filter(|path| path.is_dir())
-        .find(|path| {
-            origin_url(path)
+        .find_map(|path| {
+            let (git, linked) = git_dirs(&path)?;
+            let same = origin_in(&git)
                 .and_then(|origin| parse(&origin))
-                .is_some_and(|origin| origin.url == remote.url)
-                && is_checkout(path)
-                && !transport::unfinished(path)
+                .is_some_and(|origin| same_repository(&origin, remote));
+            (same && is_checkout(&path) && !transport::maybe_unfinished(&path)).then_some((path, linked))
         })
 }
 
-/// The address a checkout's `origin` was cloned from, read from its config file: a folder is
-/// looked at without starting a process, so a search can run while a dialog is drawn.
-fn origin_url(checkout: &Path) -> Option<String> {
-    let config = std::fs::read_to_string(common_git_dir(checkout)?.join("config")).ok()?;
+/// The name of the marker a clone keeps in a checkout's `.git` folder while it runs.
+pub const CLONE_MARKER: &str = transport::MARKER_NAME;
+
+/// Whether `marker`, the text of a [`CLONE_MARKER`] file, says the clone into its folder
+/// was started and not finished. The caller reads the file however it must.
+#[must_use]
+pub fn clone_stopped(marker: &str) -> bool {
+    transport::stopped(marker)
+}
+
+/// Whether a clone into `folder` was started and not finished, from at most a few kilobytes
+/// of its marker file and without starting a process. Only a regular file is opened: a pipe
+/// in its place would wait for a writer. A marker that is there but cannot be read, or is
+/// too long, counts as a stopped clone, so a partial checkout is never taken for a finished one.
+#[must_use]
+pub fn clone_stopped_in(folder: &Path) -> bool {
+    let marker = folder.join(".git").join(CLONE_MARKER);
+    std::fs::symlink_metadata(&marker).is_ok() && clone_stopped(&small_text(&marker, 4096).unwrap_or_default())
+}
+
+/// The text of the regular file at `path`, links followed, read only when it is at most
+/// `limit` bytes. A pipe or device in a checkout's place is never opened, since opening it
+/// could wait for ever, and a large file is not read into memory.
+fn small_text(path: &Path, limit: u64) -> Option<String> {
+    use std::io::Read as _;
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > limit {
+        return None;
+    }
+    // A file that grew since it was measured is still read no further than the limit.
+    let mut text = String::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(limit.saturating_add(1))
+        .read_to_string(&mut text)
+        .ok()?;
+    (u64::try_from(text.len()).ok()? <= limit).then_some(text)
+}
+
+/// The most bytes of a checkout's config read to find its origin.
+const CONFIG_LIMIT: u64 = 1024 * 1024;
+
+/// The address a checkout's `origin` was cloned from, read from the config file of its
+/// common Git directory `git`: a folder is looked at without starting a process, so a
+/// search can run while a dialog is drawn.
+fn origin_in(git: &Path) -> Option<String> {
+    let config = small_text(&git.join("config"), CONFIG_LIMIT)?;
     let mut in_origin = false;
     for line in config.lines() {
         let line = line.trim();
@@ -252,18 +341,19 @@ fn origin_url(checkout: &Path) -> Option<String> {
     None
 }
 
-/// The Git directory that holds a checkout's configuration. A linked worktree has a `.git` file
-/// that points at its own directory, which in turn names the common one.
-fn common_git_dir(checkout: &Path) -> Option<PathBuf> {
+/// The Git directory that holds a checkout's configuration, and whether the checkout is a
+/// linked worktree: its `.git` file points at its own directory, which names the common one
+/// in `commondir`. Read from files only.
+fn git_dirs(checkout: &Path) -> Option<(PathBuf, bool)> {
     let dot_git = checkout.join(".git");
     if dot_git.is_dir() {
-        return Some(dot_git);
+        return Some((dot_git, false));
     }
-    let pointer = std::fs::read_to_string(&dot_git).ok()?;
+    let pointer = small_text(&dot_git, 4096)?;
     let own = checkout.join(pointer.lines().find_map(|line| line.strip_prefix("gitdir:"))?.trim());
-    match std::fs::read_to_string(own.join("commondir")) {
-        Ok(common) => Some(own.join(common.trim())),
-        Err(_) => Some(own),
+    match small_text(&own.join("commondir"), 4096) {
+        Some(common) => Some((own.join(common.trim()), true)),
+        None => Some((own, false)),
     }
 }
 

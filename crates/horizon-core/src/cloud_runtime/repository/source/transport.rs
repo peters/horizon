@@ -365,7 +365,11 @@ struct Marker {
 }
 
 fn marker(folder: &Path) -> Option<Marker> {
-    let text = std::fs::read_to_string(folder.join(".git").join(MARKER)).ok()?;
+    parse_marker(&super::small_text(&folder.join(".git").join(MARKER), 4096)?)
+}
+
+/// The marker a clone keeps in its `.git` folder, under [`MARKER`], read from its text.
+fn parse_marker(text: &str) -> Option<Marker> {
     let mut lines = text.lines();
     Some(Marker {
         url: lines.next()?.to_owned(),
@@ -430,6 +434,24 @@ impl Claim {
             "Another Horizon window is cloning into that folder. Wait for it, or choose another folder.".into(),
         ))
     }
+}
+
+/// Whether the text of a clone marker that is there says the clone was started and not
+/// finished: anything but a finished clone's marker, an unreadable one too, is no finished
+/// checkout to use.
+pub(super) fn stopped(marker: &str) -> bool {
+    !parse_marker(marker).is_some_and(|marker| marker.complete())
+}
+
+/// The name of the clone marker in a checkout's `.git` folder.
+pub(super) const MARKER_NAME: &str = MARKER;
+
+/// Whether `folder` may be a clone that was started and not finished, so it is not used as a
+/// checkout: its marker is there and is not a finished clone's, also when it cannot be read.
+/// Never a reason to remove the folder; [`unfinished`] is.
+pub(super) fn maybe_unfinished(folder: &Path) -> bool {
+    let path = folder.join(".git").join(MARKER);
+    std::fs::symlink_metadata(&path).is_ok() && !marker(folder).is_some_and(|marker| marker.complete())
 }
 
 /// Whether `folder` is a clone that was started and not finished.

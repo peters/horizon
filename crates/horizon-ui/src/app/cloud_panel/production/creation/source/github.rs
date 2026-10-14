@@ -17,9 +17,6 @@ use std::{
 };
 use zeroize::Zeroize as _;
 
-/// At most this many repositories show at once; typing narrows them.
-const SHOWN: usize = 8;
-
 /// How long an out-of-date list waits before a quiet refresh tries again.
 const RETRY: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -141,6 +138,11 @@ impl Account {
     /// Whether a request the person made is under way; a quiet refresh or check is not one.
     pub(super) fn busy(&self) -> bool {
         self.job.as_ref().is_some_and(|job| !job.purpose.quiet())
+    }
+
+    /// Whether a fresh list is on its way behind the one shown, for the finder's spinner.
+    pub(super) fn refreshing(&self) -> bool {
+        self.job.as_ref().is_some_and(|job| job.purpose == Purpose::Refresh)
     }
 
     /// Asks for a fresh list when the dialog opens, when this computer is already signed in,
@@ -377,33 +379,6 @@ impl Account {
             self.finish();
         }
     }
-
-    /// The repositories to pick from, narrowed by `filter`. Returns the one clicked.
-    pub(super) fn picker(&mut self, ui: &mut Ui, filter: &str) -> Option<String> {
-        let repositories = self.repositories.as_ref()?;
-        let matching = matching(repositories, filter);
-        let mut chosen = None;
-        if repositories.is_empty() {
-            ui.label(
-                RichText::new("The GitHub App is on no repository of yours yet.")
-                    .size(13.0)
-                    .color(theme::FG_DIM()),
-            );
-        }
-        for name in matching {
-            if ui
-                .add(
-                    egui::Button::new(RichText::new(name).size(13.5).color(theme::FG()))
-                        .frame(false)
-                        .min_size(vec2(ui.available_width(), 24.0)),
-                )
-                .clicked()
-            {
-                chosen = Some(name.clone());
-            }
-        }
-        chosen
-    }
 }
 
 /// Shows `prompt`, or a spinner while `busy` without one. Returns whether the person
@@ -474,20 +449,8 @@ fn prompt(ui: &mut Ui, prompt: Option<&Prompt>, busy: bool) -> bool {
     cancelled
 }
 
-/// The repositories whose name holds the typed `filter`, at most [`SHOWN`]. A whole link
-/// in the field is looked up as it is, so the list steps aside for it.
-fn matching<'a>(repositories: &'a [String], filter: &str) -> Vec<&'a String> {
-    let filter = filter.trim().to_ascii_lowercase();
-    let filter = filter.as_str();
-    repositories
-        .iter()
-        .filter(|name| filter.is_empty() || name.contains(filter))
-        .take(SHOWN)
-        .collect()
-}
-
 /// Whether the field holds a link rather than a name to narrow the list by.
-fn names_a_link(input: &str) -> bool {
+pub(super) fn names_a_link(input: &str) -> bool {
     let input = input.trim();
     input.contains(':') || input.to_ascii_lowercase().contains("github.com")
 }
@@ -586,7 +549,7 @@ impl super::State {
             .and_then(|account| account.repositories.as_ref())
             .is_some_and(|repositories| {
                 !names_a_link(text)
-                    && !matching(repositories, text).is_empty()
+                    && repositories.iter().any(|name| super::finder::narrows(text, name))
                     && !repositories.iter().any(|name| name.eq_ignore_ascii_case(text))
             })
     }
@@ -658,76 +621,6 @@ impl super::State {
         }
         if instead {
             self.token_instead = true;
-        }
-    }
-
-    /// The repositories of the connected app to pick from, while no folder or other host is
-    /// in the field. Picking one puts its link in the field, which the dialog then looks up.
-    pub(super) fn github_section(&mut self, ui: &mut Ui) {
-        if self.job.is_some() || self.folder.is_some() {
-            return;
-        }
-        let elsewhere = self.remote.as_ref().is_some_and(|remote| remote.host != "github.com");
-        // A typed `owner/name` narrows the list; a link in the field, pasted or picked, is
-        // the choice.
-        let picked = self.remote.is_some() && names_a_link(&self.input);
-        let Some(account) = self.account.as_mut() else {
-            return;
-        };
-        // Once a link is in the field the list steps aside; a sign-in for a clone shows in
-        // the private repository's card.
-        if elsewhere || (picked && account.repositories.is_some()) {
-            return;
-        }
-        let mut chosen = None;
-        ui.add_space(4.0);
-        // The list kept from last time shows at once, and a fresh one replaces it.
-        account.refresh_once(ui.ctx());
-        if account.repositories.is_none() {
-            // A quiet refresh shows nothing until it has a list: the button stays, and a
-            // click on it takes over.
-            if account.busy() {
-                if !picked {
-                    account.sign_in_box(ui);
-                }
-            } else if !picked && ui.add(chrome_button("Pick from your GitHub repositories")).clicked() {
-                account.request(Purpose::List, ui.ctx());
-            }
-        } else {
-            super::super::selector::widgets::caption(ui, "YOUR GITHUB REPOSITORIES");
-            let filter = self.input.trim().to_owned();
-            chosen = account.picker(ui, &filter);
-            // A list that could not be refreshed says so, with a way to sign in again.
-            if let Some(stale) = account.stale.clone() {
-                ui.label(
-                    RichText::new(format!("This list may be out of date: {stale}"))
-                        .size(12.5)
-                        .color(theme::PALETTE_YELLOW()),
-                );
-                if ui.add(chrome_button("Refresh from GitHub")).clicked() {
-                    account.request(Purpose::List, ui.ctx());
-                }
-            }
-            // A refresh the person asked for may need a sign-in, shown here.
-            if account.busy() {
-                account.sign_in_box(ui);
-            }
-            if ui
-                .add(chrome_button("Add repositories on GitHub"))
-                .on_hover_text("Choose which repositories your GitHub App can reach.")
-                .clicked()
-                && let Err(error) = horizon_core::open_url(&account.installation_url())
-            {
-                tracing::warn!(%error, "could not open the GitHub App installation page");
-            }
-        }
-        if let Some(failed) = &account.failed
-            && !picked
-        {
-            ui.label(RichText::new(failed).size(13.0).color(theme::PALETTE_RED()));
-        }
-        if let Some(name) = chosen {
-            self.input = format!("https://github.com/{name}");
         }
     }
 }

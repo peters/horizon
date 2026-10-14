@@ -25,19 +25,6 @@ fn account() -> Account {
 }
 
 #[test]
-fn typing_narrows_the_repositories_by_name() {
-    let names: Vec<String> = ["acme/api", "acme/web", "acme/web-docs", "octo/web"]
-        .iter()
-        .map(|name| (*name).to_owned())
-        .collect();
-    assert_eq!(matching(&names, "").len(), 4);
-    assert_eq!(matching(&names, "WEB"), [&names[1], &names[2], &names[3]]);
-    assert_eq!(matching(&names, "acme/web"), [&names[1], &names[2]]);
-    let many: Vec<String> = (0..20).map(|n| format!("acme/repo-{n}")).collect();
-    assert_eq!(matching(&many, "repo").len(), SHOWN);
-}
-
-#[test]
 fn a_private_github_link_offers_the_connected_account_unless_a_token_was_chosen() {
     let github = horizon_core::cloud_runtime::repository::source::parse("github.com/acme/private").unwrap();
     let gitlab = horizon_core::cloud_runtime::repository::source::parse("gitlab.com/acme/private").unwrap();
@@ -48,26 +35,6 @@ fn a_private_github_link_offers_the_connected_account_unless_a_token_was_chosen(
     assert!(!state.offers_account(&gitlab));
     state.token_instead = true;
     assert!(!state.offers_account(&github));
-}
-
-#[test]
-fn the_list_shows_the_connected_repositories() {
-    let mut account = account();
-    account.repositories = Some(vec!["acme/web".into(), "acme/api".into()]);
-    let texts: Vec<String> = egui::Context::default()
-        .run_ui(egui::RawInput::default(), |ui| {
-            assert!(account.picker(ui, "web").is_none(), "nothing is chosen without a click");
-        })
-        .discard_textures()
-        .shapes
-        .iter()
-        .filter_map(|shape| match &shape.shape {
-            egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
-            _ => None,
-        })
-        .collect();
-    assert!(texts.iter().any(|text| text == "acme/web"));
-    assert!(!texts.iter().any(|text| text == "acme/api"));
 }
 
 #[test]
@@ -141,7 +108,9 @@ fn a_typed_name_narrows_the_list_and_a_link_sets_it_aside() {
     state.account = Some(account);
     let texts = |state: &mut super::super::State| -> Vec<String> {
         egui::Context::default()
-            .run_ui(egui::RawInput::default(), |ui| state.github_section(ui))
+            .run_ui(egui::RawInput::default(), |ui| {
+                let _ = state.finder(ui);
+            })
             .discard_textures()
             .shapes
             .iter()
@@ -178,11 +147,36 @@ fn a_name_that_narrows_the_list_is_no_unknown_link() {
     state.input = "acme/we".into();
     assert!(state.filters_the_list());
     assert!(state.remote().is_none(), "a partial name is not looked up");
+    state.input = "acme/wb".into();
+    assert!(
+        !state.filters_the_list(),
+        "letters apart are a repository to look up, though the results show the listed one"
+    );
     state.input = "ACME/web".into();
     assert!(!state.filters_the_list(), "a listed repository in full is the choice");
     assert!(state.remote().is_some());
     state.input = "https://example.org/web".into();
     assert!(!state.filters_the_list(), "a link is never a filter");
+}
+
+#[test]
+fn a_list_that_arrives_after_the_text_makes_it_a_search() {
+    let mut state = super::super::State::default();
+    state.input = "acme/we".into();
+    assert!(state.remote().is_some(), "without a list it is a repository to look up");
+    let mut account = account();
+    account.repositories = Some(vec!["acme/web".into()]);
+    state.account = Some(account);
+    assert!(state.remote().is_none(), "with the list it narrows, it is a search");
+    state.account = None;
+    assert!(state.remote().is_some(), "and a repository again once the list is gone");
+    // A token pasted for the link stays when a list arrives later and leaves it as it was.
+    state.token = "token".into();
+    let mut other = self::account();
+    other.repositories = Some(vec!["octo/other".into()]);
+    state.account = Some(other);
+    assert!(state.remote().is_some());
+    assert_eq!(state.token.as_str(), "token");
 }
 
 #[test]
