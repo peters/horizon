@@ -57,6 +57,28 @@ pub struct Plan {
     pub uncommitted: Uncommitted,
 }
 
+impl Plan {
+    /// A SHA-256 over the profile the rebuild binds and the hash of its uncommitted files,
+    /// as 64 lowercase hexadecimal digits: a person who saw a printed plan confirms
+    /// exactly that plan by giving it back (`cloud_deploy rebuild`).
+    #[must_use]
+    pub fn token(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(serde_json::to_vec(&self.profile).unwrap_or_default());
+        hasher.update([0]);
+        hasher.update(self.uncommitted.hash().unwrap_or_default());
+        hasher
+            .finalize()
+            .iter()
+            .fold(String::with_capacity(64), |mut text, byte| {
+                use std::fmt::Write as _;
+                let _ = write!(text, "{byte:02x}");
+                text
+            })
+    }
+}
+
 /// What a rebuild of a cloud bound to `bound` in `repository` would bind and build from
 /// its latest commit and working copy, for a person to confirm. Reads the checkout only,
 /// so the cloud's record is not locked.

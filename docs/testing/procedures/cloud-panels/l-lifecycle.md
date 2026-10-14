@@ -889,7 +889,7 @@ Use `smoke-sib` on RunPod. Its profile has a `build` section. In the steps,
    ```
 
    Result: The output has one `Uncommitted file:` line for each file of step 4 and a
-   line with the hash.
+   line with the plan token.
 
 6. Add a line to `<context>/smoke-new.txt`. Click **Rebuild and restart**.
 

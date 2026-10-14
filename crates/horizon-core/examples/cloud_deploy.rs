@@ -37,7 +37,7 @@ fn run() -> cloud_runtime::Result<()> {
     }
     if args.len() < 3 {
         return Err(cloud_runtime::Error::Invalid(
-            "Usage: cloud_deploy offers SETTINGS [REQUIREMENTS_JSON] | deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--quick-start] [--worker-choice OFFER_JSON_FILE] [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|resume|reconnect|endpoint|delete|idle-check|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | plan-rebuild|rebuild SETTINGS STATE_ROOT PROFILE [UNCOMMITTED_HASH] (rebuild only) | reconcile SETTINGS STATE_ROOT [WORKER_ID]. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume. --quick-start uses the built-in quick-start profile on the public base image for a commit without .horizon/cloud.yml.",
+            "Usage: cloud_deploy offers SETTINGS [REQUIREMENTS_JSON] | deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--quick-start] [--worker-choice OFFER_JSON_FILE] [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|resume|reconnect|endpoint|delete|idle-check|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | plan-rebuild|rebuild SETTINGS STATE_ROOT PROFILE [PLAN_TOKEN] (rebuild only) | reconcile SETTINGS STATE_ROOT [WORKER_ID]. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume. --quick-start uses the built-in quick-start profile on the public base image for a commit without .horizon/cloud.yml.",
         ));
     }
     let settings = Settings::load(&PathBuf::from(&args[1]))?;
@@ -304,13 +304,14 @@ fn rebuild(args: &[String], settings: Settings, cancel: &Cancellation) -> cloud_
             println!("{}{change}", replacement::PROFILE_CHANGE);
         }
         // An image can be pushed to a public registry, so each file is listed before a
-        // person confirms it with the hash.
+        // person confirms the whole plan with its token.
         for file in plan.uncommitted.files() {
             println!("Uncommitted file: {} {}", file.change.label(), file.path);
         }
-        if let Some(hash) = plan.uncommitted.hash() {
-            println!("To build these uncommitted files into the image, pass {hash} to rebuild");
-        }
+        println!(
+            "To rebuild with exactly these settings and files, pass {} to rebuild",
+            plan.token()
+        );
         return Ok(());
     }
     let request = deployment::Request::new(
@@ -323,12 +324,15 @@ fn rebuild(args: &[String], settings: Settings, cancel: &Cancellation) -> cloud_
     );
     match (args[0].as_str(), args.get(3)) {
         ("rebuild", Some(profile)) if matches!(args.len(), 4 | 5) => {
-            // Confirms what plan-rebuild listed: the settings, and the uncommitted files by
-            // their hash.
+            // The token confirms what plan-rebuild printed: the settings and the uncommitted
+            // files. Without one, only a plan without uncommitted files may run.
             let plan = replacement::plan(&request.repository, &request.profile, profile, cancel)?;
-            if plan.uncommitted.hash().as_ref() != args.get(4) {
+            let confirmed = args
+                .get(4)
+                .map_or(plan.uncommitted.is_empty(), |token| *token == plan.token());
+            if !confirmed {
                 return Err(cloud_runtime::Error::Invalid(
-                    "Run plan-rebuild, check the uncommitted files it lists, and pass the hash it prints; without uncommitted files, pass none",
+                    "The checkout differs from the printed plan, or has uncommitted files and no token was given. Run plan-rebuild, check what it prints, and pass the token it prints",
                 ));
             }
             replacement::rebuild(&request, profile, Some(&plan), cancel, &print_event)

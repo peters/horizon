@@ -1511,7 +1511,7 @@ profile, as **New cloud** does. Then the profile argument must be `quick-start`.
 These commands do not use Docker. A `rebuild` of a quick start cloud does not use
 Docker either, if the cloud has the capabilities of the current `quick-start` profile.
 It supports image preparation without allocation, deployment, stop, resume,
-reconnect, endpoint, deletion, `rebuild SETTINGS STATE_ROOT PROFILE [UNCOMMITTED_HASH]` with `continue-rebuild` and
+reconnect, endpoint, deletion, `rebuild SETTINGS STATE_ROOT PROFILE [PLAN_TOKEN]` with `continue-rebuild` and
 `cancel-rebuild`, and `reconcile SETTINGS STATE_ROOT [WORKER_ID]`. Reconciliation prints a
 structured outcome without worker environment or credentials and an explanation;
 the UI and this harness use the same locked coordinator and provider policy.
@@ -1769,9 +1769,11 @@ commit only, the card shows `Image: built from <commit> plus uncommitted changes
 Commit the changes to make the image reproducible.
 
 `cloud_deploy plan-rebuild SETTINGS STATE_ROOT PROFILE` prints each file as
-`Uncommitted file: modified <path>` and then the hash. To confirm these files, give
-the hash to `cloud_deploy rebuild SETTINGS STATE_ROOT PROFILE <hash>`. Without
-uncommitted files, give no hash.
+`Uncommitted file: modified <path>` and then a plan token. The token covers the
+settings and the files. To confirm the plan, give the token to
+`cloud_deploy rebuild SETTINGS STATE_ROOT PROFILE <token>`. If the settings or the
+files changed after `plan-rebuild`, the rebuild is refused. Without uncommitted files
+you can give no token; then the rebuild takes the settings as it reads them.
 
 **New cloud** builds from the commit only. It does not use the uncommitted files.
 

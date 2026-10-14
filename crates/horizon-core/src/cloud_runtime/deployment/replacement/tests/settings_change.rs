@@ -313,6 +313,15 @@ fn uncommitted_files_must_be_the_confirmed_ones() {
         assert_eq!(error.to_string(), UNCONFIRMED_FILES);
     }
     confirm_files(&dirty.uncommitted, Some(&dirty)).unwrap();
+    // The token of a printed plan binds the settings and the files.
+    assert_ne!(clean.token(), dirty.token());
+    assert_eq!(
+        dirty.token(),
+        plan(repository.path(), &bound, "dev", &cancel).unwrap().token()
+    );
+    let mut other = dirty.clone();
+    other.profile.idle_stop_minutes = Some(45);
+    assert_ne!(other.token(), dirty.token());
     std::fs::write(repository.path().join("Dockerfile"), "FROM scratch\nRUN true\n").unwrap();
     let changed = plan(repository.path(), &bound, "dev", &cancel).unwrap();
     assert!(

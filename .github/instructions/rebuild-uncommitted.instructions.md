@@ -31,7 +31,8 @@ context can go into the image, so a person must see each one first.
   before a person confirms. A rebuild starts only with a confirmed plan
   (`replacement::rebuild` with `confirmed`); without one, any uncommitted
   file refuses it. The rebuild journals the hash, so **Continue rebuild**
-  checks the same files. `cloud_deploy rebuild` takes the printed hash.
+  checks the same files. `cloud_deploy rebuild` takes the printed plan token, which covers the
+  settings and the files (`Plan::token`).
 
 ## What never goes out
 
