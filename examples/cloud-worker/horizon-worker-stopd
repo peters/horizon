@@ -262,11 +262,13 @@ def append(log, record):
     """Adds `record` to the stop log on the workspace volume. Returns the log's earlier size.
     A line that could not be written whole leaves the log as it was, so no later line is
     glued onto a part of it."""
-    descriptor = open_log(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
+    descriptor = open_log(log, os.O_RDWR | os.O_APPEND | os.O_CREAT)
     before = os.fstat(descriptor).st_size
     try:
+        # A line cut short by a crash ends here, so this record starts on a line of its own.
+        cut = before > 0 and os.pread(descriptor, 1, before - 1) != b'\n'
         with os.fdopen(descriptor, 'a') as file:
-            file.write(json.dumps(record) + '\n')
+            file.write(('\n' if cut else '') + json.dumps(record) + '\n')
     except OSError:
         descriptor = open_log(log, os.O_WRONLY)
         try:
@@ -350,7 +352,7 @@ def refuse_over_taken(path, log, now):
     if not lapsed(record, now):
         raise Refused('Horizon is already stopping this worker at the request of session '
                       + str(record.get('session')) + '.')
-    remove_newest(log, record['at'])
+    remove_stop(log, record['at'])
 
 
 def lapsed(record, now):
@@ -391,8 +393,8 @@ def take(path=REQUEST, lock=REQUEST_LOCK, log=STOP_LOG, now=time.time, output=ot
             return {'refused': 'The stop request was malformed.'}
         stop = {key: record[key] for key in ('at', 'reason', 'session', 'agent')}
         if lapsed(record, now):
-            if record.get('taken') is True:
-                remove_newest(log, record['at'])
+            # A take may have logged the stop and ended before it saved the taken state.
+            remove_stop(log, record['at'])
             path.unlink(missing_ok=True)
             return {'refused': 'The stop request lapsed before the worker stopped.'}
         if record.get('taken') is True:
@@ -428,7 +430,7 @@ def take(path=REQUEST, lock=REQUEST_LOCK, log=STOP_LOG, now=time.time, output=ot
         except OSError as error:
             # Untaken, the request would be logged again by the next take: the stop
             # leaves the log, and the next take decides again.
-            remove_newest(log, stop['at'])
+            remove_stop(log, stop['at'])
             return {'waiting': 'The stop could not be recorded on the worker: ' + type(error).__name__}
         return stop
 
@@ -441,37 +443,59 @@ def write_request(path, record):
     pending.replace(path)
 
 
-def newest_line(file):
-    """The lines of the open stop log, and its newest record or None."""
-    lines = file.read().splitlines(keepends=True)
-    try:
-        newest = json.loads(lines[-1]) if lines else None
-    except ValueError:
-        newest = None
-    return lines, newest if isinstance(newest, dict) else None
+# The end of the stop log that Horizon's stops are looked for in; the log is on the agent's
+# volume, so root never reads it whole.
+LOG_TAIL = 65536
+
+
+def tail(file):
+    """The records at the end of the open stop log, as (offset, record) with None for a line
+    that is no record; a line cut by the start of the tail is left out."""
+    size = os.fstat(file.fileno()).st_size
+    start = max(0, size - LOG_TAIL)
+    file.seek(start)
+    data = file.read(size - start)
+    records = []
+    offset = start
+    for line in data.splitlines(keepends=True):
+        if offset > start or start == 0:
+            try:
+                record = json.loads(line)
+            # Any line an agent wrote, however odd, is no record.
+            except (ValueError, RecursionError):
+                record = None
+            records.append((offset, record if isinstance(record, dict) else None))
+        offset += len(line)
+    return records
 
 
 def logged(log, at):
-    """Whether the stop at `at` is the newest line of the stop log."""
+    """Whether the stop at `at` is on the stop log."""
     try:
         descriptor = open_log(log, os.O_RDONLY)
     except FileNotFoundError:
         return False
     with os.fdopen(descriptor, 'rb') as file:
-        _, newest = newest_line(file)
-    return newest is not None and newest.get('at') == at
+        return any(record is not None and record.get('at') == at for _, record in tail(file))
 
 
-def remove_newest(log, at):
-    """Removes the stop at `at` from the stop log when it is the newest line there.
-    Returns whether it was removed; a log that cannot be read or changed keeps it."""
+def remove_stop(log, at):
+    """Removes the newest record of the stop at `at` from the stop log and keeps every other
+    line. Returns whether it was removed; a log that cannot be read or changed keeps it."""
     try:
         descriptor = open_log(log, os.O_RDWR)
         with os.fdopen(descriptor, 'r+b') as file:
-            lines, newest = newest_line(file)
-            if newest is None or newest.get('at') != at:
+            records = tail(file)
+            found = [index for index, (_, record) in enumerate(records)
+                     if record is not None and record.get('at') == at]
+            if not found:
                 return False
-            file.truncate(len(b''.join(lines[:-1])))
+            index = found[-1]
+            file.seek(records[index + 1][0] if index + 1 < len(records) else os.fstat(file.fileno()).st_size)
+            rest = file.read()
+            file.seek(records[index][0])
+            file.write(rest)
+            file.truncate()
         os.sync()
     # Missing, a link an agent placed, or a failed write: nothing taken back.
     except OSError:
@@ -484,7 +508,7 @@ def untake(at, path=REQUEST, log=STOP_LOG, lock=REQUEST_LOCK):
     the stop log and then drops its request. Returns whether the log held it. A stop that
     stays on the log keeps its request, so the next take gives it again."""
     with locked(lock):
-        removed = remove_newest(log, at)
+        removed = remove_stop(log, at)
         try:
             record = json.loads(path.read_text())
         except (OSError, ValueError):

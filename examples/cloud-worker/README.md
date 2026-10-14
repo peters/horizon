@@ -74,7 +74,10 @@ right before the stop, while the container averages half a core, or when tmux or
 container's CPU accounting (cgroup v2 `cpu.stat`, or `cpuacct.usage` on cgroup v1 hosts)
 cannot be read. Stops are recorded with the requesting session and agent in
 `/workspace/.horizon/self-stops.jsonl`; `--ready` reports `horizon-self-stop-contract=1`
-and the newest as `horizon-last-self-stop=`. Device control/ownership works without a browser executable or
+and the newest as `horizon-last-self-stop=`. The log is on the agents' volume, so an agent
+can change what it says, and with it what the cloud card shows of a stop; it cannot make
+the worker stop. Root opens it without following a link or waiting on a pipe, and looks
+for Horizon's stops only in its last 64 KB. Device control/ownership works without a browser executable or
 browser MCP registration. Agent configuration contains only enabled tool servers.
 Disabled agent requests are rejected before writing session or worktree state.
 

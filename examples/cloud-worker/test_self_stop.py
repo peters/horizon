@@ -357,15 +357,44 @@ class HorizonStopTests(unittest.TestCase):
         self.assertEqual(self.take(), stop)
         self.assertEqual(len(self.log.read_text().splitlines()), 1)
         # An untake that cannot change the log keeps the request, so the stop is given again.
-        with mock.patch.dict(STOPD['untake'].__globals__, remove_newest=mock.Mock(return_value=False)):
+        with mock.patch.dict(STOPD['untake'].__globals__, remove_stop=mock.Mock(return_value=False)):
             self.assertFalse(STOPD['untake'](stop['at'], path=self.request, log=self.log, lock=self.lock))
         self.assertEqual(self.take(), stop)
         # An untake that ended after it emptied the log: the next take logs the stop again.
-        STOPD['remove_newest'](self.log, stop['at'])
+        STOPD['remove_stop'](self.log, stop['at'])
         self.assertEqual(self.take(), stop)
         self.assertEqual(len(self.log.read_text().splitlines()), 1)
         self.assertTrue(STOPD['untake'](stop['at'], path=self.request, log=self.log, lock=self.lock))
         self.assertFalse(self.request.exists())
+        self.assertEqual(self.log.read_text(), '')
+
+    def test_lines_an_agent_adds_to_the_log_neither_double_nor_keep_a_stop(self):
+        self.record()
+        self.clock += 130
+        stop = self.take()
+        # Lines after the stop, one of them no record at all.
+        with open(self.log, 'a') as log:
+            log.write('x\n' + '[' * 20_000 + '\n{"at": 5}\n')
+        self.assertEqual(self.take(), stop)
+        self.assertEqual(sum('"PR 12 merged"' in line for line in self.log.read_text().splitlines()), 1)
+        self.assertTrue(STOPD['untake'](stop['at'], path=self.request, log=self.log, lock=self.lock))
+        self.assertNotIn('PR 12 merged', self.log.read_text())
+        self.assertTrue(self.log.read_text().endswith('{"at": 5}\n'), 'the other lines stay')
+        self.assertFalse(self.request.exists())
+
+    def test_a_record_after_a_line_cut_by_a_crash_starts_its_own_line(self):
+        self.log.parent.mkdir(parents=True)
+        self.log.write_text('{"at": 1}\n{"at": 9')
+        STOPD['append'](self.log, {'at': 2})
+        self.assertTrue(STOPD['logged'](self.log, 2))
+        self.assertEqual(self.log.read_text().splitlines()[-1], '{"at": 2}')
+
+    def test_a_request_logged_by_a_take_cut_short_leaves_the_log_when_it_lapses(self):
+        self.record()
+        record = json.loads(self.request.read_text())
+        STOPD['append'](self.log, {key: record[key] for key in ('at', 'reason', 'session', 'agent')})
+        self.clock += STOPD['REQUEST_SECONDS'] + 1
+        self.assertIn('lapsed', self.take()['refused'])
         self.assertEqual(self.log.read_text(), '')
 
     def test_a_line_that_cannot_be_written_whole_leaves_the_log_as_it_was(self):
