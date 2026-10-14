@@ -49,6 +49,13 @@ Get explicit authorization for the exact resource before starting or stopping a 
 Keep credentials in Horizon. Do not send keys, tokens, endpoints, or raw provider
 capabilities as tool arguments. Preserve an uncertain operation's identity.
 
+Failed cloud cards diagnose output from the failed step's current visit only.
+A Hetzner image rebuild replaces the server and keeps its workspace volume.
+`error during placement` reports a provider placement refusal after the image
+steps. A prior `invoke-rc.d: policy-rc.d denied execution of start.` notice
+reports a skipped service action during package installation, not that refusal.
+Retrying the live worker can allocate a server and needs lifecycle authorization.
+
 The cloud header's × asks to delete provider resources before removing the cloud.
 A current empty record offers Remove cloud, even after a prior failure. After
 deletion fails, or when a deployed cloud's resource record is missing or unreadable, Remove from Horizon anyway leaves provider

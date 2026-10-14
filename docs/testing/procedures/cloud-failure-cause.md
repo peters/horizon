@@ -24,7 +24,6 @@ some lines.
   build.
 - Platforms: Linux with the isolated device smoke fixture.
 - This procedure does not test these functions:
-  - The diagnosis that selects the cause line.
   - A real deployment. The synthetic clouds use no provider and no worker.
 
 ## 3. Safety
@@ -63,6 +62,36 @@ some lines.
    arrangement. Each cloud shows "Readiness check failed" in its header.
 
 ## 6. Tasks
+
+### 6.0 F00: Placement failure after an image build
+
+1. Start a separate fixture as in section 5 with
+   `HORIZON_CLOUD_FAILURE_PREVIEW=placement` instead of `1`.
+
+   Result: Two synthetic clouds show **Provisioning failed**. The build and
+   push steps finished. **Replace image** shows the failure because
+   this step includes replacement server creation. No provider request occurs.
+
+2. Open **Synthetic failed clouds**. Read the header and failure box of each
+   cloud.
+
+   Result: Each shows "Provider rejected the request or capacity is unavailable:
+   error during placement". Neither shows the earlier service notice or build
+   warning as its cause. No registry credential remedy shows.
+
+3. Click **Copy error** on each cloud. Paste into a disposable local terminal.
+
+   Result: The copied text contains the placement failure only.
+
+4. Read the output for **Build locally**.
+
+   Result: The service notice and recovered build warning remain in the output.
+   The service notice does not use the failure color.
+
+5. Close this fixture and its owned Device panel. Continue F01 and F02 with
+   `HORIZON_CLOUD_FAILURE_PREVIEW=1`.
+
+   Result: The long readiness cause still comes from the failed readiness step.
 
 ### 6.1 F01: Failure cause in the Status tab
 
