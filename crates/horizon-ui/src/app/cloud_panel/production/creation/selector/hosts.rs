@@ -57,6 +57,7 @@ pub(super) fn card(ui: &mut Ui, card: &Card) -> bool {
         (_, Some(_)) => ("Cannot run this profile", theme::PALETTE_YELLOW()),
         (Err(_), None) => ("Not reachable", theme::PALETTE_RED()),
         (Ok(_), None) if card.fits() => ("Fits", theme::PALETTE_GREEN()),
+        (Ok(capacity), None) if !capacity.native() => ("Architecture not supported", theme::PALETTE_RED()),
         (Ok(_), None) => ("Too little free now", theme::PALETTE_YELLOW()),
     };
     let free = match &card.capacity {

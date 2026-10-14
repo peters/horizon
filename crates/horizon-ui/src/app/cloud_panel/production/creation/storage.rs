@@ -31,6 +31,9 @@ pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
         };
         let (cpu, memory_gb) = form.size.unwrap_or((profile.cpu, profile.memory_gb));
         return match host.map(|reading| &reading.capacity) {
+            Some(Ok(capacity)) if !capacity.native() => {
+                Some("The worker image has no build for this Docker host's architecture.")
+            }
             Some(Ok(capacity)) if !capacity.fits(cpu, memory_gb) => {
                 Some("The Docker host has too little CPU or memory free for this cloud now.")
             }
