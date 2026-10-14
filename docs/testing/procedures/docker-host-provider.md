@@ -257,7 +257,17 @@ In each command, `cloud_deploy` stands for `"$cloud_deploy"` from setup step 2.
    Result: No host card shows. New cloud says that Docker hosts run CPU clouds
    only.
 
-3. Remove `gpu-test`, select `local` and click **Start cloud**.
+3. Remove `gpu-test`. Set `cpu: 512` in the profile `local` and select it.
+
+   Result: The host card shows **Too little free now** and you cannot click
+   it. **Start cloud** stays off.
+
+4. Add `build: {dockerfile: Dockerfile}` to the profile `local` and select it.
+
+   Result: The host card shows **Cannot run this profile**. Its hover text
+   says that a Docker host runs public images only.
+
+5. Restore the profile `local`, select it and click **Start cloud**.
 
    Result: The cloud card shows the Docker whale in place of the cloud mark,
    and the cloud becomes ready.

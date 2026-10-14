@@ -75,8 +75,11 @@ rented starting points. The card shows the profile's size, the Docker whale,
 - **Too little free now**: the host cannot take a cloud of this size until a
   cloud on it stops.
 - **Not reachable**: the last read failed. Check the host in Cloud settings.
-- **Cannot run this profile**: the profile builds its image. A host pulls public
-  images only.
+- **Architecture not supported**: the worker image has no build for the
+  architecture of the host. Use an amd64 or arm64 host.
+- **Cannot run this profile**: the profile builds its image, has hosted devices
+  or has an idle stop. A host pulls public images only and has no hosted
+  devices or idle stop.
 
 A GPU profile shows no host card: a Docker host runs CPU clouds only. A profile
 with `provider: docker-host` shows only the host cards. When one host fits,
