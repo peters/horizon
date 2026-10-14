@@ -48,7 +48,7 @@ pub(super) fn hosts(settings: &Settings) -> Result<Vec<String>> {
         .collect();
     match names.len() {
         0 => Err(Error::Invalid(
-            "Add the Docker host to docker_hosts in the cloud settings file first",
+            "Add the Docker host in the Docker host card of Cloud settings first",
         )),
         1 => Ok(names),
         _ => Err(Error::Invalid(AMBIGUOUS)),

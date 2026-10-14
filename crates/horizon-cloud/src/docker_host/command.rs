@@ -17,6 +17,9 @@ const ERROR_LIMIT: u64 = 64 * 1024;
 const DRAIN: Duration = Duration::from_secs(2);
 const TIMED_OUT: &str = "The Docker host did not answer in time; check the host and try again";
 
+/// The error of a docker or ssh that this computer could not start.
+pub const NOT_STARTED: &str = "docker or ssh could not be started on this computer";
+
 /// Why a docker call failed.
 #[derive(Debug)]
 pub enum Failure {
@@ -91,9 +94,7 @@ impl Docker for Engine<'_> {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = command
-            .spawn()
-            .map_err(|_| CloudError::Invalid("docker or ssh could not be started on this computer"))?;
+        let mut child = command.spawn().map_err(|_| CloudError::Invalid(NOT_STARTED))?;
         let stdout = drain(child.stdout.take(), OUTPUT_LIMIT);
         let stderr = drain(child.stderr.take(), ERROR_LIMIT);
         let deadline = Instant::now() + timeout;

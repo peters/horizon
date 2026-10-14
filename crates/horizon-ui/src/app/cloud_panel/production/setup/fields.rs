@@ -242,14 +242,24 @@ pub(super) fn workspace(ui: &mut Ui, draft: &mut Draft, ssh_ready: Option<bool>,
             tone => (tone, "Incomplete"),
         };
         header(ui, "Your workspace", "Defaults for every new cloud", Some(status));
-        let compute = match (
+        let rented = match (
             dashboard::runpod_key(draft) != Key::Missing,
             dashboard::hetzner_key(draft) != Key::Missing,
         ) {
             (true, true) => "RunPod and Hetzner",
             (true, false) => "RunPod",
             (false, true) => "Hetzner",
-            (false, false) => "None yet",
+            (false, false) => "",
+        };
+        let hosts = match draft.settings.docker_hosts.len() {
+            _ if !draft.settings.docker_hosts_on() => String::new(),
+            1 => "1 Docker host".to_owned(),
+            count => format!("{count} Docker hosts"),
+        };
+        let compute = match (rented.is_empty(), hosts.is_empty()) {
+            (true, true) => "None yet".to_owned(),
+            (false, false) => format!("{rented} · {hosts}"),
+            _ => format!("{rented}{hosts}"),
         };
         let agents = draft
             .selected_agents()
@@ -264,7 +274,7 @@ pub(super) fn workspace(ui: &mut Ui, draft: &mut Draft, ssh_ready: Option<bool>,
             None => "Checking…",
         };
         let rows = [
-            ("Compute", compute.to_owned()),
+            ("Compute", compute),
             (
                 "Agents",
                 if agents.is_empty() {

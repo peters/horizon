@@ -48,7 +48,7 @@ impl HorizonApp {
             // A key added since is found once the failed fetch's pause has passed.
             prices.recheck_runpod();
             prices.request_fresh_list(&root, ctx);
-            let other_providers = prices.hetzner.sections(requirements, deadline_in)?;
+            let other_providers = other_providers(prices, requirements, deadline_in)?;
             let answer = serde_json::json!({
                 "provider": "RunPod",
                 "unavailable": horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING,
@@ -63,7 +63,7 @@ impl HorizonApp {
                 return Some(Err(format!("cloud_offers_unavailable: {error}")));
             }
             prices.request_fresh_list(&root, ctx);
-            let other_providers = prices.hetzner.sections(requirements, deadline_in)?;
+            let other_providers = other_providers(prices, requirements, deadline_in)?;
             if !prices.hetzner.bound() && other_providers.is_empty() {
                 return Some(Err(format!("cloud_offers_unavailable: {error}")));
             }
@@ -74,7 +74,7 @@ impl HorizonApp {
         prices.request_fresh_list(&root, ctx);
         // Other providers are ranked on their own, in their own currency, and a failed
         // Hetzner fetch is reported there without taking RunPod's offers down.
-        let other_providers = prices.hetzner.sections(requirements, deadline_in)?;
+        let other_providers = other_providers(prices, requirements, deadline_in)?;
         let Some(fetched) = prices.fresh_list() else {
             if deadline_in > super::prices::ANSWER_MARGIN_MILLIS || other_providers.is_empty() {
                 return None;
@@ -101,6 +101,18 @@ impl HorizonApp {
         });
         compared(answer, prices, deadline_in)
     }
+}
+
+/// Hetzner's sections and the saved Docker hosts', each in its own currency, or `None`
+/// while either may still answer before `deadline_in`.
+fn other_providers(
+    prices: &super::prices::State,
+    requirements: &horizon_core::cloud_runtime::offers::Requirements,
+    deadline_in: i64,
+) -> Option<Vec<serde_json::Value>> {
+    let mut sections = prices.hetzner.sections(requirements, deadline_in)?;
+    sections.extend(prices.hosts.sections(requirements, deadline_in)?);
+    Some(sections)
 }
 
 fn compared(
@@ -371,5 +383,40 @@ mod tests {
             horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING
         );
         assert_eq!(answer["other_providers"][0]["offers"][0]["id"], "cx43");
+    }
+
+    #[test]
+    fn saved_docker_hosts_are_offered_at_no_rent_beside_rented_workers() {
+        use horizon_core::cloud_runtime::docker_host::{Capacity, Host, hosts::Reading};
+        let (temp, mut app) = crate::app::test_support::test_app();
+        let ctx = egui::Context::default();
+        app.cloud_prototype.root = Some(temp.path().to_path_buf());
+        let prices = &mut app.cloud_prototype.production.prices;
+        prices.runpod_key_missing();
+        prices.hosts.answered(vec![Reading {
+            host: serde_json::from_value::<Host>(serde_json::json!({"name": "build-box", "access": "this-pc"}))
+                .unwrap(),
+            capacity: Ok(Capacity {
+                cpus: 16,
+                memory_bytes: 64 << 30,
+                free_nano_cpus: 12_000_000_000,
+                free_memory_bytes: 48 << 30,
+                architecture: "aarch64".into(),
+                version: "28.5.1".into(),
+            }),
+        }]);
+        let mut answer = |min_vcpu: u16| {
+            let requirements = serde_json::json!({"min_vcpu": min_vcpu});
+            app.cloud_offers_answer(&request(&requirements), &ctx).unwrap().unwrap()
+        };
+        let fits = answer(8);
+        let host = &fits["other_providers"][0];
+        assert_eq!(host["provider"], "docker-host");
+        assert_eq!(
+            (host["offers"][0]["id"].as_str(), host["offers"][0]["vcpu"].as_u64()),
+            (Some("build-box"), Some(12))
+        );
+        assert_eq!(fits["comparison"]["offers"][0]["estimated_total_usd"], 0.0);
+        assert_eq!(answer(16)["other_providers"][0]["offers"], serde_json::json!([]));
     }
 }

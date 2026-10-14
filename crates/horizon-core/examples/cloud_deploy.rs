@@ -49,7 +49,7 @@ fn run_args(args: &[String]) -> cloud_runtime::Result<()> {
     if args.len() < 3 {
         return Err(cloud_runtime::Error::Invalid(USAGE));
     }
-    let mut settings = Settings::load(&PathBuf::from(&args[1]))?;
+    let mut settings = recorded_host(Settings::load(&PathBuf::from(&args[1]))?, args);
     let cancel = Cancellation::default();
     if args[0] == "reconcile" && (3..=4).contains(&args.len()) {
         return reconcile(args, &settings, &cancel);
@@ -550,12 +550,12 @@ fn prepare_image(
 /// Ranks offers the way agents' `cloud_offers` does, from prices fetched now: `RunPod`'s
 /// in `offers`, and each other configured provider in `other_providers`, in its own
 /// currency.
-fn offers(settings: &std::path::Path, requirements: Option<&str>) -> cloud_runtime::Result<()> {
+fn offers(path: &std::path::Path, requirements: Option<&str>) -> cloud_runtime::Result<()> {
     use horizon_cloud::offers::{Requirements, hetzner_section, offers};
     let requirements: Requirements = serde_json::from_str(requirements.unwrap_or("{}"))
         .map_err(|_| cloud_runtime::Error::Invalid("Invalid offer requirements"))?;
     requirements.validate().map_err(cloud_runtime::Error::Invalid)?;
-    let settings = Settings::load(settings)?;
+    let settings = Settings::load(path)?;
     let cancel = Cancellation::default();
     // A machine set up for Hetzner alone has no RunPod offers, and says why.
     let runpod = settings
@@ -573,6 +573,16 @@ fn offers(settings: &std::path::Path, requirements: Option<&str>) -> cloud_runti
             .collect(),
         Err(error) => vec![serde_json::json!({"provider": "Hetzner", "error": error.to_string()})],
     };
+    let root = path.parent().unwrap_or(std::path::Path::new("."));
+    let hosts = if cloud_runtime::docker_host::hosts::wanted(&requirements) {
+        cloud_runtime::docker_host::hosts::readings(&settings, root, &cancel)
+    } else {
+        Vec::new()
+    };
+    let other_providers: Vec<_> = other_providers
+        .into_iter()
+        .chain(cloud_runtime::docker_host::hosts::section(&hosts, &requirements))
+        .collect();
     let mut answer = match &runpod {
         Some(Ok((list, preferences))) => serde_json::json!({
             "provider": list.provider,
@@ -595,6 +605,35 @@ fn offers(settings: &std::path::Path, requirements: Option<&str>) -> cloud_runti
         serde_json::to_string_pretty(&answer).map_err(|_| cloud_runtime::Error::Json)?
     );
     Ok(())
+}
+
+/// Narrows `settings` to the Docker host that the cloud recorded under its state root
+/// runs on, as a cloud card's placement does, so a machine with several saved hosts
+/// reaches it. A command that creates a cloud names no state root. The record is only
+/// read: the command takes the lock itself.
+fn recorded_host(mut settings: Settings, args: &[String]) -> Settings {
+    if matches!(args[0].as_str(), "plan-deploy" | "deploy" | "prepare-image") {
+        return settings;
+    }
+    let Ok(bytes) = std::fs::read(PathBuf::from(&args[2]).join("deployment.json")) else {
+        return settings;
+    };
+    // A record that cannot be read is left to the command itself to report.
+    let Ok(record) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return settings;
+    };
+    let spec = &record["spec"];
+    if spec["profile"]["provider"] != horizon_cloud::docker_host::PROVIDER {
+        return settings;
+    }
+    let data_centers: Vec<String> = serde_json::from_value(spec["data_centers"].clone()).unwrap_or_default();
+    if !data_centers.is_empty() {
+        settings.placement = Some(horizon_core::cloud_panel::Placement {
+            data_centers,
+            ..Default::default()
+        });
+    }
+    settings
 }
 
 /// Prints the running worker's SSH endpoint as the provider reports it now, with the

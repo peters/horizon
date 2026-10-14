@@ -15,6 +15,7 @@ use std::{
 
 mod exchange;
 pub(super) mod hetzner;
+pub(super) mod hosts;
 
 /// Prices and stock older than this are fetched again while the dialog is open.
 pub(super) const FRESH: Duration = Duration::from_secs(15);
@@ -57,6 +58,8 @@ pub(super) struct State {
     regions: HashMap<String, String>,
     /// Hetzner's catalog, fetched beside the list when this machine has a binding.
     pub hetzner: hetzner::State,
+    /// The saved Docker hosts' free capacity, read beside Hetzner's catalog.
+    pub hosts: hosts::State,
     pub exchange: exchange::State,
     /// A fetch found no `RunPod` API key. Kept through refreshes and expired errors,
     /// and cleared only by a list `RunPod` answered, so a retry never offers `RunPod`
@@ -123,6 +126,7 @@ impl State {
             self.fetch_list(root, ctx);
         }
         self.hetzner.request(root, ctx);
+        self.hosts.request(root, ctx);
     }
 
     /// The failed price fetch agents' requests report, the same one for every request
@@ -149,6 +153,7 @@ impl State {
         self.list_job = None;
         self.size_jobs.clear();
         self.hetzner.restart();
+        self.hosts.restart();
     }
 
     /// The price list while the dialog may compare with it: current, or gone stale
@@ -261,6 +266,7 @@ impl State {
     /// Collects finished fetches.
     pub fn poll(&mut self) {
         self.hetzner.poll();
+        self.hosts.poll();
         self.exchange.poll();
         if let Some(result) = finished(&mut self.list_job) {
             match result {

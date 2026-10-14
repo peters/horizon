@@ -120,7 +120,8 @@ impl Docker for Fake {
             ["info", "--format", "{{.ID}}"] => return Ok(format!("{}\n", self.engine.unwrap_or("ENGINE-ONE"))),
             ["info", ..] => {
                 let version = self.version.unwrap_or("29.0.1");
-                let info = json!({"OSType": "linux", "NCPU": self.cpus, "MemTotal": self.memory_gb << 30, "ServerVersion": version});
+                let info = json!({"OSType": "linux", "NCPU": self.cpus, "MemTotal": self.memory_gb << 30,
+                    "ServerVersion": version, "Architecture": "aarch64"});
                 return Ok(info.to_string());
             }
             ["container", "ls", .., "--filter", filter, "--format", _] => {
@@ -346,6 +347,39 @@ fn a_port_another_program_holds_is_skipped_and_a_created_worker_is_adopted() {
     worker::create(&docker, retry.spec.as_ref().unwrap(), 31_999).unwrap();
     assert_eq!(port(&retry.provision(&docker).unwrap()), 31_999);
     assert_eq!(docker.containers.borrow().len(), 2);
+}
+
+#[test]
+fn capacity_is_what_running_horizon_workers_leave_and_offers_it_at_no_rent() {
+    let docker = Fake::host(16, 64);
+    docker.add("busy", "horizon-cloud-busy", Some("busy"), 31_500, true);
+    docker.add("idle", "horizon-cloud-idle", Some("idle"), 31_501, false);
+    let capacity = capacity(&docker).unwrap();
+    assert_eq!(capacity.free(), "14.0 of 16 CPUs and 60.0 of 64.0 GB free");
+    assert!(capacity.fits(14, 60) && !capacity.fits(15, 1) && capacity.native());
+    let requirements = |value: Value| serde_json::from_value::<crate::offers::Requirements>(value).unwrap();
+    let offered = offer("build-box", &capacity, &requirements(json!({"min_vcpu": 4}))).unwrap();
+    assert_eq!(
+        (
+            offered.provider,
+            offered.id.as_str(),
+            offered.vcpu,
+            offered.memory_gb,
+            offered.estimated_total
+        ),
+        ("docker-host", "build-box", Some(14), Some(60), 0.0)
+    );
+    for refused in [
+        json!({"min_vcpu": 15}),
+        json!({"min_memory_gb": 61}),
+        json!({"gpu": true}),
+        json!({"region": "EUROPE"}),
+    ] {
+        assert!(
+            offer("build-box", &capacity, &requirements(refused.clone())).is_none(),
+            "{refused}"
+        );
+    }
 }
 
 #[test]

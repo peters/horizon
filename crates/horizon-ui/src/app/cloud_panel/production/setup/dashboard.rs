@@ -152,8 +152,12 @@ impl Readiness {
             cause,
         };
         let (runpod, hetzner) = (runpod_key(draft), hetzner_key(draft));
-        if runpod == Key::Missing && hetzner == Key::Missing {
-            return attention("Paste a RunPod or Hetzner key so clouds have somewhere to run.".into());
+        if runpod == Key::Missing && hetzner == Key::Missing && !draft.settings.docker_hosts_on() {
+            return attention(if draft.settings.docker_hosts.is_empty() {
+                "Paste a RunPod or Hetzner key, or add a Docker host, so clouds have somewhere to run.".into()
+            } else {
+                "Your Docker hosts are switched off, so new clouds have nowhere to run.".into()
+            });
         }
         if hetzner == Key::Missing && draft.hetzner.enabled {
             return attention("Paste the Hetzner token, or switch Hetzner off.".into());
@@ -351,7 +355,7 @@ pub(super) fn readiness_banner(ui: &mut Ui, state: &State) {
 }
 
 /// Every card, in two columns when there is room. Returns a registry action a button asked for.
-pub(super) fn page(ui: &mut Ui, state: &mut State) -> Option<Action> {
+pub(super) fn page(ui: &mut Ui, state: &mut State, hosts: &mut super::super::prices::hosts::State) -> Option<Action> {
     let State {
         draft,
         edits,
@@ -360,6 +364,7 @@ pub(super) fn page(ui: &mut Ui, state: &mut State) -> Option<Action> {
         required_agents,
         github,
         chatgpt,
+        docker_hosts,
         needed,
         ..
     } = state;
@@ -370,6 +375,7 @@ pub(super) fn page(ui: &mut Ui, state: &mut State) -> Option<Action> {
     ui.spacing_mut().item_spacing = vec2(GAP, GAP);
     if ui.available_width() < STACKED_BELOW {
         fields::providers(ui, draft, edits);
+        super::docker_hosts::card(ui, draft, docker_hosts, hosts);
         fields::agents(ui, draft, edits, chatgpt, fixed_agents);
         super::github::card(ui, draft, github);
         action = registry::card(ui, draft, verified, needed);
@@ -379,6 +385,7 @@ pub(super) fn page(ui: &mut Ui, state: &mut State) -> Option<Action> {
             columns[0].spacing_mut().item_spacing.y = GAP;
             columns[1].spacing_mut().item_spacing.y = GAP;
             fields::providers(&mut columns[0], draft, edits);
+            super::docker_hosts::card(&mut columns[0], draft, docker_hosts, hosts);
             fields::agents(&mut columns[0], draft, edits, chatgpt, fixed_agents);
             super::github::card(&mut columns[1], draft, github);
             action = registry::card(&mut columns[1], draft, verified, needed);

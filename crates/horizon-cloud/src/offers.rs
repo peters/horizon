@@ -67,6 +67,12 @@ pub struct Requirements {
 }
 
 impl Requirements {
+    /// How many offers an answer lists at most: the requested limit, else 10.
+    #[must_use]
+    pub fn effective_limit(&self) -> usize {
+        self.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT)
+    }
+
     /// # Errors
     /// Rejects negative or non-finite amounts, more than a year of hours, requirements for
     /// the other kind of worker, an empty GPU type or region, storage Horizon could not
@@ -109,12 +115,14 @@ impl Requirements {
 pub struct Offer {
     pub provider: &'static str,
     /// The currency of every amount in this offer, as the provider bills it: `USD` for
-    /// `RunPod` and `EUR` (net of VAT) for Hetzner. Amounts are never converted.
+    /// `RunPod` and `EUR` (net of VAT) for Hetzner. Amounts are never converted. A Docker
+    /// host's amounts are all zero.
     pub currency: &'static str,
     /// `cpu` or `gpu`.
     pub kind: &'static str,
     /// What to request: for `RunPod`, the CPU size as `cpu-<vCPU>-<GB>` or the GPU type
-    /// ID; for Hetzner, the server type, such as `cx43`, in `location`.
+    /// ID; for Hetzner, the server type, such as `cx43`, in `location`; for a Docker
+    /// host, its saved name.
     pub id: String,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -143,12 +151,14 @@ pub struct Offer {
     /// `high`, `medium`, `low` or `none` for GPU types, and `checked_at_creation` for
     /// `RunPod` CPU sizes, whose exact stock is confirmed when a cloud is created. Hetzner
     /// offers report `listed` or `unlisted`: Hetzner's own flag, which is advisory, so an
-    /// unlisted type can still be created and creation confirms either way.
+    /// unlisted type can still be created and creation confirms either way. A Docker
+    /// host reports `host_capacity`: its free CPU and memory now, which nothing reserves.
     pub availability: &'static str,
     /// Regions with this GPU type in stock.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub regions_in_stock: Vec<String>,
-    /// Provider-operated hosts only; third-party hosts are not offered.
+    /// Provider-operated hosts only; third-party hosts are not offered. `own` for a
+    /// Docker host the person saved.
     pub host: &'static str,
     pub interruptible: bool,
     /// Horizon can deploy this now: false for a GPU type out of stock wherever the worker
@@ -164,7 +174,7 @@ pub struct Offer {
 pub fn offers(list: &PriceList, preferences: &Preferences, requirements: &Requirements) -> Vec<Offer> {
     let container_gb = crate::Storage::default().container_gb;
     let mut offers = catalog(list, preferences, requirements, (Tier::Standard, container_gb));
-    offers.truncate(requirements.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT));
+    offers.truncate(requirements.effective_limit());
     offers
 }
 

@@ -183,7 +183,7 @@ pub fn ready_profiles(root: &Path, config: &CloudConfig, cancel: &super::super::
             &super::super::provider::HETZNER,
         ),
         // A saved Docker host needs no credential.
-        (!settings.docker_hosts.is_empty(), &super::super::provider::DOCKER_HOST),
+        (settings.docker_hosts_on(), &super::super::provider::DOCKER_HOST),
     ]
     .into_iter()
     .filter_map(|(bound, provider)| bound.then_some(provider))
