@@ -42,7 +42,17 @@ pub(in crate::cloud_runtime::deployment) fn provision(
             .flatten()
             .is_some();
         match compute.verified_pull.borrow_mut().take() {
-            Some(verified) if verified.image == spec.image_digest => Some(verified.login),
+            Some(verified) if verified.image == spec.image_digest => {
+                if verified
+                    .expires_at
+                    .is_some_and(|expiry| expiry <= time::OffsetDateTime::now_utc().unix_timestamp())
+                {
+                    return Err(Error::Invalid(
+                        "Registry credential has expired; replace it before deploying",
+                    ));
+                }
+                Some(verified.login)
+            }
             Some(_) => {
                 return Err(Error::Invalid(
                     "The verified pull grant belongs to another immutable image",

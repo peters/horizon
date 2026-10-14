@@ -6,7 +6,10 @@ use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
 fn a_host_login_requires_verification_and_keeps_the_verified_pull_material() {
     let (root, mut settings) = fixture();
+    binding(&mut settings).pull.expires_at = Some("2999-01-01T00:00:00Z".into());
     let mut prepared = Prepared::for_image(&settings, &image(), None, false).unwrap().unwrap();
+    let expiry = prepared.pull_expires_at().unwrap();
+    assert_eq!(expiry, Some(parse_expiry("2999-01-01T00:00:00Z").unwrap()));
     assert!(
         prepared.host_login().is_err(),
         "unverified material cannot reach a host"
@@ -34,6 +37,12 @@ fn a_host_login_requires_verification_and_keeps_the_verified_pull_material() {
         .unwrap();
     let path = binding(&mut settings).pull.secret_file.clone();
     std::fs::write(&path, "another-account-pull").unwrap();
+    binding(&mut settings).pull.expires_at = Some("2000-01-01T00:00:00Z".into());
+    assert_eq!(
+        prepared.pull_expires_at().unwrap(),
+        expiry,
+        "expiry stays with the verified operation material"
+    );
     let login = prepared.host_login().unwrap();
     assert_eq!(login.server, "registry.example");
     assert_eq!(login.username, "reader");

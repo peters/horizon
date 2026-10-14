@@ -334,8 +334,8 @@ mod failure_points {
     }
 
     #[test]
-    fn an_exact_binding_refuses_missing_or_wrong_image_verification_before_provider_contact() {
-        for wrong_image in [false, true] {
+    fn an_exact_binding_refuses_missing_wrong_or_expired_verification_before_provider_contact() {
+        for case in ["missing", "wrong", "expired"] {
             let root = tempfile::tempdir().unwrap();
             let store = Store::lock(root.path()).unwrap();
             let spec = spec();
@@ -350,8 +350,13 @@ mod failure_points {
                 .unwrap()
                 .local_addr()
                 .unwrap();
-            let verified = wrong_image.then(|| super::super::VerifiedPull {
-                image: format!("registry.example/worker@sha256:{}", "b".repeat(64)),
+            let verified = (case != "missing").then(|| super::super::VerifiedPull {
+                image: if case == "wrong" {
+                    format!("registry.example/worker@sha256:{}", "b".repeat(64))
+                } else {
+                    spec.image_digest.clone()
+                },
+                expires_at: (case == "expired").then(|| time::OffsetDateTime::now_utc().unix_timestamp() - 1),
                 login: horizon_cloud::host::RegistryLogin {
                     server: "registry.example".into(),
                     username: "reader".into(),
@@ -380,8 +385,10 @@ mod failure_points {
             .unwrap_err()
             .to_string();
             assert!(
-                if wrong_image {
+                if case == "wrong" {
                     error.contains("another immutable image")
+                } else if case == "expired" {
+                    error.contains("expired")
                 } else {
                     error.contains("Verify this cloud's read-only")
                 },

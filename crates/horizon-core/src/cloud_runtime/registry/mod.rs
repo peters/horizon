@@ -234,6 +234,11 @@ impl Prepared {
         self.binding.host_login_with(&self.pull.secret)
     }
 
+    /// Known expiry of the pull material retained by this operation, in Unix seconds.
+    pub(in crate::cloud_runtime) fn pull_expires_at(&self) -> Result<Option<i64>> {
+        self.binding.pull.expires_at.as_deref().map(parse_expiry).transpose()
+    }
+
     /// # Errors
     /// Validates explicit grants, expiry, secret separation and source isolation before a build.
     pub fn for_image(settings: &Settings, image: &str, source: Option<&Path>, building: bool) -> Result<Option<Self>> {

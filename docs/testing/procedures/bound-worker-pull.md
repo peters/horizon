@@ -45,7 +45,7 @@ It checks that host user data receives the read-only material that verified the 
    ```
 
    Result: An exact registry binding takes precedence over the legacy provider login.
-   Missing verification or another immutable image stops the request before provider contact.
+   Missing verification, another immutable image or an elapsed known expiry stops before provider contact.
    Existing unbound and reconnect paths pass their regressions.
 
 ### 6.2 BP-02 — Check verified read-only material
@@ -58,6 +58,7 @@ It checks that host user data receives the read-only material that verified the 
 
    Result: The probe verifies an immutable digest with a synthetic read-only login.
    A later credential-file change does not replace that login in host user data.
+   The operation also retains its original declared expiry when local settings change.
    The user data contains no publishing credential.
    Expired or unconfirmed grants fail.
    Explicit default and zero-padded ports retain the image-facing Docker login key.

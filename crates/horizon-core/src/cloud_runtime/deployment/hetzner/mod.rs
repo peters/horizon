@@ -102,6 +102,7 @@ pub(in crate::cloud_runtime) struct Compute {
 pub(in crate::cloud_runtime::deployment) struct VerifiedPull {
     pub image: String,
     pub login: horizon_cloud::host::RegistryLogin,
+    pub expires_at: Option<i64>,
 }
 
 impl Compute {

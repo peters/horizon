@@ -123,6 +123,7 @@ impl Compute for hetzner::Compute {
         self.verified_pull.replace(Some(hetzner::VerifiedPull {
             image,
             login: registry.host_login()?,
+            expires_at: registry.pull_expires_at()?,
         }));
         Ok(())
     }
