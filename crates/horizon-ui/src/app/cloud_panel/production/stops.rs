@@ -62,6 +62,20 @@ pub(super) fn stopped_while_busy(state: Deployment) -> Result<Vec<cloud_runtime:
 }
 
 impl Runtime {
+    /// Shows the stop an operation of this card finished.
+    pub(super) fn show_finished_stop(&mut self, state: Deployment) {
+        self.progress.stage(Stage::Stopped, Instant::now());
+        self.stage = Some(Stage::Stopped);
+        self.state = Some(state);
+        self.desktop = None;
+        self.error = None;
+        self.receiver = None;
+        self.cancel = None;
+        // A stop can end a rebuild that met it; its steps no longer apply.
+        self.rebuild = None;
+        self.stopped_outside = false;
+    }
+
     /// Shows a stop the provider confirmed and Horizon did not make. A record that
     /// was already stopped before the check, as by an earlier Stop, shows as that stop.
     pub(super) fn show_stopped_outside(&mut self, state: Deployment) {

@@ -53,7 +53,8 @@ pub(super) fn watch(
             if !cloud_runtime::lifecycle::may_stop_outside(state) {
                 return Ok(());
             }
-            return keep_checking(cancel, WORKER_CHECK, WORKER_CHECK_FAILURES, || {
+            let listening = || tx.send(Event::Watching).is_ok();
+            return keep_checking(cancel, WORKER_CHECK, WORKER_CHECK_FAILURES, listening, || {
                 runner
                     .run(
                         "Cloud worker check",
@@ -94,12 +95,13 @@ pub(super) fn watch(
         ctx.request_repaint();
     }
 }
-/// Runs `check` every `interval` until `cancel`, and returns the failure that makes
-/// `failures` failed checks in a row.
+/// Runs `check` every `interval` until `cancel`, or until `listening` finds that the card
+/// no longer listens, and returns the failure that makes `failures` failed checks in a row.
 fn keep_checking(
     cancel: &cloud_runtime::Cancellation,
     interval: Duration,
     failures: u32,
+    listening: impl Fn() -> bool,
     check: impl Fn() -> cloud_runtime::Result<()>,
 ) -> cloud_runtime::Result<()> {
     let step = Duration::from_millis(100).min(interval);
@@ -113,7 +115,7 @@ fn keep_checking(
             std::thread::sleep(step);
             waited += step;
         }
-        if cancel.is_cancelled() {
+        if cancel.is_cancelled() || !listening() {
             return Ok(());
         }
         match check() {

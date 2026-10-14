@@ -104,6 +104,9 @@ pub enum Event {
         active: Option<String>,
         last: Option<String>,
     },
+    /// A watch of a ready worker is about to check it. Sent only to learn whether the
+    /// card still listens, so a watch whose card is gone, as after a session switch, ends.
+    Watching,
 }
 impl Event {
     #[must_use]

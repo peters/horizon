@@ -560,18 +560,7 @@ impl HorizonApp {
                 runtime.observe(&event);
                 match event {
                     Event::Snapshot(state) => runtime.adopt_snapshot(*state),
-                    Event::Stopped(state) => {
-                        runtime.progress.stage(Stage::Stopped, std::time::Instant::now());
-                        runtime.stage = Some(Stage::Stopped);
-                        runtime.state = Some(*state);
-                        runtime.desktop = None;
-                        runtime.error = None;
-                        runtime.receiver = None;
-                        runtime.cancel = None;
-                        // A stop can end a rebuild that met it; its steps no longer apply.
-                        runtime.rebuild = None;
-                        runtime.stopped_outside = false;
-                    }
+                    Event::Stopped(state) => runtime.show_finished_stop(*state),
                     Event::Resumed => {
                         runtime.receiver = None;
                         resumed.push(id);
@@ -587,6 +576,7 @@ impl HorizonApp {
                         runtime.desktop_controller = active;
                         runtime.desktop_last_input = last;
                     }
+                    Event::Watching => {}
                     Event::Desktop(tunnel) => {
                         runtime.desktop = Some(tunnel);
                         runtime.needs_desktop = true;

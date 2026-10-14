@@ -35,8 +35,9 @@ omitted desktop support is disabled. `agent_approvals` is `auto` (the default) o
 
 The base always includes SSH, Git/LFS, tmux, the source/worktree helpers and worker
 control service. When the worker is created with `HORIZON_IDLE_STOP_MINUTES`, the
-supervisor also owns `horizon-worker-idle`, which stops this worker through the
-provider after that period without agent terminal output and without the container
+supervisor also owns `horizon-worker-idle`, which, where the provider gave the worker a
+credential to stop itself, stops this worker after that period without agent terminal
+output and without the container
 averaging at least half a CPU core (cgroup v2 `cpu.stat`, or `cpuacct.usage` on cgroup v1
 hosts); lighter background work does not keep it running.
 `horizon-worker-check` reports `horizon-idle-stop-contract=1` for images that support
@@ -44,9 +45,11 @@ this, and Horizon refuses to deploy a profile with `idle_stop_minutes` on a prov
 where the worker stops itself (RunPod) to other images.
 On a provider that gives the worker no credential to stop itself, such as Hetzner,
 nothing stops an idle worker: the watcher only rewrites `/run/horizon-worker/idle.json`
-every minute with how long the worker has been idle, and `horizon-worker-idle --report`
-prints that record, refusing one older than three minutes. Images whose watcher keeps
-this record also report `horizon-idle-report-contract=1`; Horizon no longer reads it.
+every minute with how long the worker has been idle, for information only, and
+`horizon-worker-idle --report` prints that record, refusing one older than three minutes.
+Images whose watcher keeps this record also report `horizon-idle-report-contract=1`;
+Horizon no longer reads it, and its log line that the record is for Horizon to stop the
+worker is out of date.
 The watcher also answers stop requests from agents on `/run/horizon-worker/stop.sock`:
 `horizon-worker-stop --reason TEXT`, or its `mcp` mode registered as the
 `stop_this_worker` tool on opted-in workers that hold a stop credential (not on Hetzner), asks it to stop the worker when a task is
