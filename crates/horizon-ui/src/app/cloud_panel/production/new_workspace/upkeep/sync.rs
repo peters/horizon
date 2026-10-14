@@ -323,6 +323,7 @@ fn learned(cloud_id: &str, config: &Config, signals: Signals, marker_left: bool,
         tracing::warn!(cloud = %cloud_id, %error, "could not write the Upkeep status");
     }
     Answer {
+        loop_running: Some(answer.loop_running),
         settled: answer.loop_running && answer.settled,
         running: answer.running(),
         marker_left,

@@ -2,7 +2,7 @@
 procedure: upkeep
 feature: Upkeep board, worker loop and New Upkeep (the dependency pull request agent)
 platforms: [linux]
-cost: rents compute (UPK-10 only)
+cost: rents compute (UPK-10 and UPK-13)
 destructive: yes (UPK-12 deletes the cloud that UPK-10 made)
 secrets: [GitHub sign-in, Hetzner API token, ChatGPT login of Codex]
 owner: peters
@@ -22,7 +22,7 @@ board, and that **New Upkeep** starts a real Upkeep on a Hetzner cloud.
 - Candidate: a Horizon build with the `upkeep` panel kind.
 - Platforms: Linux host.
 - UPK-01 to UPK-06 read a synthetic status document. UPK-07 runs the worker
-  exchange in a local container. UPK-08 to UPK-12 use real GitHub data and a real
+  exchange in a local container. UPK-08 to UPK-13 use real GitHub data and a real
   Hetzner cloud.
 - This procedure does not test: the quality of the work of the agent, Renovate
   pull requests, or a schedule longer than one hour.
@@ -43,6 +43,10 @@ made-up repositories and one public pull request.
 > Upkeep shows every repository that the GitHub App can reach. Blur or crop them in
 > a recording that you publish.
 
+> **CAUTION:** TASK UPK-13 USES A RUNNING UPKEEP CLOUD AND CHANGES ITS REPOSITORIES,
+> ITS PAUSE STATE AND ITS RUNS. A run can merge real bot pull requests. Use an Upkeep
+> whose repositories you are permitted to change.
+
 ## 4. Equipment and preconditions
 
 - An isolated test desktop that a native VNC Device panel shows (see the AGENTS.md
@@ -50,7 +54,7 @@ made-up repositories and one public pull request.
 - Network access to github.com for task UPK-03.
 - For task UPK-07: Docker, a Rust toolchain for this repository, and a Horizon
   worker image (`ghcr.io/peters/horizon-worker-base`) on this computer.
-- For tasks UPK-08 to UPK-12: the
+- For tasks UPK-08 to UPK-13: the
   [local device smoke fixture](../../../scripts/device-smoke/README.md) with
   `--native-view`, a persistent session, and Cloud settings with a GitHub sign-in,
   a Hetzner project with free capacity for one `cx23` server, and the ChatGPT login
@@ -419,9 +423,104 @@ Do this task before UPK-12, on the cloud of UPK-10.
    Result: The card shows that the cloud is deleted. In the Hetzner console, the
    server, the volume and the SSH key of the cloud do not exist.
 
+### 6.13 UPK-13 — An agent reads and changes the Upkeep through MCP
+
+> **CAUTION:** THIS TASK USES A RUNNING UPKEEP CLOUD. THE WORKER COSTS MONEY WHILE IT
+> RUNS. A RUN CAN MERGE REAL BOT PULL REQUESTS IN THE REPOSITORIES OF THE UPKEEP.
+
+Use the Upkeep cloud of UPK-10 before UPK-12, or another running Upkeep on a current
+worker image. Use a stand-in agent panel: a `claude`
+script first in `PATH` that writes `HORIZON_BROWSER_ACTOR` and
+`HORIZON_BROWSER_HOST_INSTANCE` to a file. Call each operation with
+`horizon-browser mcp --connect` and these two values.
+
+1. In the workspace of the Upkeep, open the stand-in agent panel. Call
+   `cloud_upkeep` with no operation.
+
+   Result: The answer shows the cloud, the repositories, the bots, `every_minutes`,
+   `paused`, the runs and the pull requests that the board shows.
+
+2. Call `cloud_upkeep` `discover`.
+
+   Result: The answer lists repositories with `open_pull_requests`. The Upkeep does
+   not change.
+
+3. Call `add` with one repository from step 2 that the Upkeep does not have.
+
+   Result: The answer shows `awaiting_person`. Horizon shows the repository list of
+   the Upkeep. Above the list, the box "An agent proposes these repositories for the
+   Upkeep of the workspace" names the workspace of the Upkeep and shows the repository
+   with a tick. The board shows the old number of repositories.
+
+4. Click **Save** in the repository list.
+
+   Result: The board shows the new number of repositories. `status` lists the
+   repository.
+
+5. Call `add` with a different repository. Close the repository list without
+   **Save**.
+
+   Result: The Upkeep does not change.
+
+6. Call `remove` with the repository from step 3.
+
+   Result: The answer shows `removed: 1`. The board shows the line "An agent removed
+   <repository>, <time> UTC" below its title at once. After the next exchange (some
+   seconds), the board shows the number of repositories from before step 4.
+
+7. Call `pause`. Wait for the next exchange (at most one minute), then call `status`.
+
+   Result: The answer to `pause` shows `"pause": "requested"`. The board shows the
+   line "An agent paused the Upkeep" at once, and **Paused** after the next exchange.
+   `status` shows `paused: true`.
+
+8. Call `resume`, then `run_now`.
+
+   Result: The board shows a run in progress after the next exchange. The board
+   shows the lines "An agent asked for a run now" and "An agent resumed the
+   Upkeep", newest first.
+
+9. Call `create` with one repository.
+
+   Result: The answer starts with `upkeep_exists`. No dialog opens.
+
+   Call `remove` with every repository of the Upkeep.
+
+   Result: The answer starts with `upkeep_invalid_request`. The Upkeep does not
+   change.
+
+10. Call `create` with one repository from step 2 and `authors`
+    `["app/github-actions"]`.
+
+    Result: The answer starts with `upkeep_invalid_request`.
+
+11. In a workspace without an Upkeep, open the stand-in agent panel. Call `status`
+    and `pause`.
+
+    Result: Both answers start with `upkeep_not_found`. The Upkeep in the other
+    workspace does not change.
+
+12. In the workspace of step 11, call `create` with one repository from step 2 (a repository that the GitHub App
+    reaches; New Upkeep leaves out a repository that it cannot reach).
+
+    Result: The answer shows `awaiting_person`. **New Upkeep** shows the repository,
+    the default settings and the note "An agent proposed these settings". Click
+    **Cancel**. No cloud starts.
+
+    Call `create` again with `instructions` that are not the default.
+
+    Result: The note says "An agent proposed these settings and its own instructions
+    for the workspace" with the name of the workspace of step 11, and "Read the
+    instructions in full before you start." Click **Cancel**.
+
+13. In the **Upkeep agent** panel on the worker, call `cloud_upkeep` `status` with
+    `horizon-browser mcp`.
+
+    Result: The answer starts with `upkeep_unavailable`.
+
 ## 7. Pass criteria
 
-- UPK-01 to UPK-12 give the results above.
+- UPK-01 to UPK-13 give the results above.
 
 ## 8. Cleanup
 

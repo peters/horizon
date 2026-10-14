@@ -34,6 +34,8 @@ pub(in crate::app) struct State {
     /// rather than holding back every Upkeep.
     pub(in crate::app) read_failures: u32,
     pub(in crate::app) syncs: HashMap<String, Sync>,
+    /// The `cloud_upkeep` requests of agents.
+    pub(in crate::app) agent: super::agent::Requests,
 }
 
 /// A start waiting for its first repository on this computer.
@@ -57,6 +59,8 @@ pub(in crate::app) struct Prepared {
 /// What one exchange with an Upkeep worker learned.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(in crate::app) struct Answer {
+    /// The loop's session runs: `None` until an exchange answered, and after one failed.
+    pub(in crate::app) loop_running: Option<bool>,
     /// The loop runs and ran before this exchange, so a panel can attach to it.
     pub(in crate::app) settled: bool,
     /// A run is in progress.
@@ -85,4 +89,11 @@ pub(in crate::app) struct Sync {
     pub(in crate::app) last: Answer,
     /// The live panel was opened in this run of Horizon: one the person closes stays closed.
     pub(in crate::app) agent_shown: bool,
+}
+
+impl Sync {
+    /// Whether the last exchange found the loop running; `None` when no exchange answered.
+    pub(in crate::app) fn loop_running(&self) -> Option<bool> {
+        self.last.loop_running
+    }
 }

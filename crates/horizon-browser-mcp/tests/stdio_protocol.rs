@@ -415,7 +415,7 @@ fn assert_resize_contract(tools: &Value) {
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(33));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(34));
     assert_output_schemas_describe_objects(tools);
     assert_catalog_contract(tools);
     assert_device_panel_contract(tools);

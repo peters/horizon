@@ -1,11 +1,17 @@
 //! Upkeep in the app: the New Upkeep dialog, and what Upkeep boards ask for while they
 //! are drawn.
 use egui::Context;
+#[cfg(feature = "cloud-workspaces")]
+use horizon_core::WorkspaceId;
 use horizon_core::upkeep::Request;
+#[cfg(feature = "cloud-workspaces")]
+use horizon_core::upkeep::worker::Config;
 use horizon_core::{PanelId, PanelKind, PanelOptions};
 
 use super::HorizonApp;
 
+#[cfg(feature = "cloud-workspaces")]
+mod agent;
 #[cfg(feature = "cloud-workspaces")]
 mod dialog;
 #[cfg(feature = "cloud-workspaces")]
@@ -28,7 +34,8 @@ pub(super) struct State;
 /// The title of the browser panel that shows pull requests beside a board.
 const PULL_REQUEST_PANEL: &str = "Pull request";
 
-/// What other parts of the app call. They live here so they stay in one place.
+/// What other parts of the app, such as the agent tool, call. They live here so they stay
+/// in one place.
 #[cfg(feature = "cloud-workspaces")]
 impl HorizonApp {
     /// The folder of this computer's cloud settings, once cloud workspaces are ready.
@@ -94,6 +101,30 @@ impl HorizonApp {
         }
         sync.next = None;
     }
+
+    /// Opens New Upkeep filled in with `config`, for a cloud in `workspace`. Nothing starts
+    /// until the person presses Start Upkeep.
+    /// # Errors
+    /// Cloud workspaces are not ready, an Upkeep dialog is open, or a start is under way.
+    pub(super) fn propose_new_upkeep(&mut self, workspace: WorkspaceId, config: &Config) -> Result<(), String> {
+        if self.upkeep.form.is_some() || self.upkeep.preparing.is_some() || self.upkeep.editor.is_some() {
+            return Err("upkeep_unavailable: an Upkeep dialog is already open or a start is under way".into());
+        }
+        if !self.cloud_launch_ready() {
+            return Err("upkeep_unavailable: cloud workspaces are not ready on this computer".into());
+        }
+        // The dialog's first frame starts the search for repositories.
+        let proposal = self
+            .board
+            .workspace(workspace)
+            .map(|held| form::Proposal {
+                name: held.name.clone(),
+                local_id: held.local_id.clone(),
+            })
+            .ok_or("upkeep_unavailable: the workspace of the request is gone")?;
+        self.upkeep.form = Some(form::Form::proposed(workspace, proposal, config));
+        Ok(())
+    }
 }
 
 #[cfg(feature = "cloud-workspaces")]
@@ -135,10 +166,25 @@ impl HorizonApp {
             dialog::Outcome::Cancel if form.starting => form.hidden = true,
             dialog::Outcome::Cancel => self.upkeep.form = None,
             dialog::Outcome::Start => {
-                let (config, workspace) = (form.config(), form.workspace);
+                let config = form.config();
+                // A proposal names its workspace: it starts there or nowhere.
+                let proposed = form.proposed.as_ref().map(|proposal| proposal.local_id.clone());
+                let workspace = match proposed {
+                    Some(local_id) => self.board.workspace_id_by_local_id(&local_id).map(Some).ok_or(()),
+                    None => Ok(form.workspace),
+                };
+                let Some(form) = self.upkeep.form.as_mut() else {
+                    return;
+                };
                 form.error = None;
                 form.starting = true;
-                if let Err(error) = self.start_upkeep(ctx, workspace, config) {
+                let started = match workspace {
+                    Ok(workspace) => self.start_upkeep(ctx, workspace, config),
+                    Err(()) => {
+                        Err("The workspace of this proposal is gone. Cancel, and start New Upkeep again.".to_owned())
+                    }
+                };
+                if let Err(error) = started {
                     self.upkeep_started(Err(error));
                 }
             }

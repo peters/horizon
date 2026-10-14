@@ -8,16 +8,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+mod agent_change;
 #[cfg(feature = "cloud-workspaces")]
 mod discover;
 mod reader;
 #[cfg(feature = "cloud-workspaces")]
 pub mod worker;
 
+pub use agent_change::{AgentChange, AgentChangeKind, record as record_agent_change};
 #[cfg(feature = "cloud-workspaces")]
 pub use discover::{Catalog, CatalogRepository, discover};
 
@@ -64,7 +66,7 @@ pub struct Schedule {
     pub paused: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunOutcome {
     Done,
@@ -90,7 +92,7 @@ pub struct Run {
 }
 
 /// Where a pull request stands, as the agent sees it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PrState {
     /// The agent cannot move it and a person must look.
@@ -141,7 +143,7 @@ impl PrState {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Checks {
     Passed,
@@ -243,6 +245,14 @@ pub fn default_status_path() -> PathBuf {
     crate::HorizonHome::resolve().root().join("upkeep").join("status.json")
 }
 
+/// Reads the status document at `path` once, with the board's limits. It blocks: call it
+/// off the UI thread.
+/// # Errors
+/// A document that cannot be read or is not valid.
+pub fn read_status(path: &Path) -> Result<Status, String> {
+    reader::read_status(path)
+}
+
 /// What the person asked the board for; the app carries it out after drawing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -272,6 +282,8 @@ pub struct UpkeepBoard {
     /// Run now was pressed: the start of the newest run the status showed then, and when it
     /// was pressed by the monotonic clock, until the status shows a newer run.
     pub run_requested: Option<(Option<OffsetDateTime>, std::time::Instant)>,
+    /// What agents changed through `cloud_upkeep`, newest first; the app fills it in.
+    pub agent_changes: Vec<AgentChange>,
     latest: Option<reader::Latest>,
     /// The reader thread could not start; the board does not try again.
     reader_failed: bool,
@@ -289,6 +301,7 @@ impl UpkeepBoard {
             browser: None,
             cloud: None,
             run_requested: None,
+            agent_changes: Vec::new(),
             latest: None,
             reader_failed: false,
             alive: Arc::new(AtomicBool::new(true)),

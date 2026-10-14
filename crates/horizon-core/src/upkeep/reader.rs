@@ -189,8 +189,7 @@ fn parse_status(bytes: &[u8]) -> Reading {
     Ok(status)
 }
 
-#[cfg(test)]
-fn read_status(path: &Path) -> Reading {
+pub(super) fn read_status(path: &Path) -> Reading {
     parse_status(&read_bytes(path)?)
 }
 

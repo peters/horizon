@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use egui::{Align, Context, Frame, Id, Layout, Order, RichText, Stroke, Vec2};
+use horizon_core::WorkspaceId;
 use horizon_core::upkeep::worker::{self, Config};
 
 use super::form::{Bot, Form};
@@ -16,6 +17,12 @@ pub(in crate::app) struct Editor {
     /// The list when the editor opened; Save sends the difference to it.
     original: BTreeSet<String>,
     pub(in crate::app) form: Form,
+    /// The repositories an agent proposed through `cloud_upkeep`, shown as their own rows:
+    /// the list below may not hold them.
+    pub(in crate::app) proposed: Vec<String>,
+    /// The workspace of the Upkeep the agent proposed them for, as the editor names it: it
+    /// can open while the person looks at another workspace.
+    pub(in crate::app) proposed_for: String,
     saving: Option<Receiver<Result<(), String>>>,
     error: Option<String>,
 }
@@ -38,6 +45,8 @@ impl Editor {
             cloud: cloud.to_owned(),
             original,
             form,
+            proposed: Vec::new(),
+            proposed_for: String::new(),
             saving: None,
             error: None,
         }
@@ -58,9 +67,10 @@ impl Editor {
             return Vec::new();
         }
         let listed = &self.form.catalog.repositories;
+        // Only saved ones: an agent's proposal shows in its own box and is not saved yet.
         self.form
             .selected
-            .iter()
+            .intersection(&self.original)
             .filter(|name| !listed.iter().any(|repository| repository.name == **name))
             .map(String::as_str)
             .collect()
@@ -110,6 +120,49 @@ impl HorizonApp {
         }
         self.upkeep.editor = Some(editor);
         true
+    }
+
+    /// Opens the Repositories editor of the Upkeep of `cloud`, whose saved settings are
+    /// `config`, with `add` ticked: an agent's proposal through `cloud_upkeep`, which
+    /// changes nothing until the person saves it. Save sends only the person's changes, so
+    /// a change saved meanwhile stays.
+    /// # Errors
+    /// An Upkeep dialog is already open.
+    pub(super) fn propose_upkeep_repositories(
+        &mut self,
+        ctx: &Context,
+        workspace: WorkspaceId,
+        cloud: &str,
+        config: &Config,
+        add: &[String],
+    ) -> Result<(), String> {
+        if self.upkeep.editor.is_some() || self.upkeep.form.is_some() {
+            return Err("upkeep_unavailable: an Upkeep dialog is already open; try again later".into());
+        }
+        // The cloud must still be in the caller's workspace, the one the editor names.
+        let held = self
+            .board
+            .workspace(workspace)
+            .ok_or("upkeep_unavailable: the Upkeep's workspace is gone")?;
+        let in_workspace = self.cloud_prototype.groups.0.iter().any(|group| {
+            group.workspace == held.local_id && group.remote.as_ref().is_some_and(|remote| remote.id == cloud)
+        });
+        if !in_workspace {
+            return Err("upkeep_unavailable: the Upkeep is no longer in this workspace".into());
+        }
+        let workspace = held.name.clone();
+        let mut editor = Editor::new(cloud, config);
+        editor.proposed_for = workspace;
+        editor.proposed = add.iter().map(|name| name.to_lowercase()).collect();
+        editor.form.selected.extend(editor.proposed.iter().cloned());
+        // Tests read the developer's real cloud settings: they never search GitHub.
+        if !cfg!(test)
+            && let Some(root) = self.upkeep_root()
+        {
+            editor.form.find(root, ctx);
+        }
+        self.upkeep.editor = Some(editor);
+        Ok(())
     }
 
     pub(in crate::app) fn render_upkeep_editor(&mut self, ctx: &Context) {
@@ -196,6 +249,7 @@ fn show(ctx: &Context, editor: &mut Editor) -> Outcome {
             );
             ui.add_space(8.0);
             ui.add_enabled_ui(editor.saving.is_none(), |ui| {
+                proposed(ui, editor);
                 super::repositories::show(ui, &mut editor.form);
             });
             let unlisted = editor.unlisted();
@@ -251,6 +305,39 @@ fn show(ctx: &Context, editor: &mut Editor) -> Outcome {
         outcome = Outcome::Cancel;
     }
     outcome
+}
+
+/// The repositories an agent proposed, each with its own tick, so the person sees every
+/// name that Save would add even when the list below does not show it.
+fn proposed(ui: &mut egui::Ui, editor: &mut Editor) {
+    if editor.proposed.is_empty() {
+        return;
+    }
+    Frame::new()
+        .fill(theme::alpha(theme::ACCENT(), 24))
+        .corner_radius(10)
+        .inner_margin(12)
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(format!(
+                    "An agent proposes these repositories for the Upkeep of the workspace \u{201c}{}\u{201d}. Untick any you do not want.",
+                    editor.proposed_for
+                ))
+                .size(13.0)
+                .color(theme::FG()),
+            );
+            for name in &editor.proposed {
+                let mut on = editor.form.selected.contains(name);
+                if ui.checkbox(&mut on, RichText::new(name).size(13.0)).changed() {
+                    if on {
+                        editor.form.selected.insert(name.clone());
+                    } else {
+                        editor.form.selected.remove(name);
+                    }
+                }
+            }
+        });
+    ui.add_space(6.0);
 }
 
 /// "2 added, 1 removed · 17 repositories"
@@ -313,6 +400,10 @@ mod tests {
         assert_eq!(editor.blocked(), Some("Finding repositories..."));
         editor.form.receive();
         assert_eq!(editor.changes(), (Vec::new(), Vec::new()), "acme/web stays");
+        assert_eq!(editor.unlisted(), ["acme/web"]);
+        // An agent's proposal that the list does not hold is not called saved.
+        editor.proposed = vec!["acme/new".into()];
+        editor.form.selected.insert("acme/new".into());
         assert_eq!(editor.unlisted(), ["acme/web"]);
     }
 

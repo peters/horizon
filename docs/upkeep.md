@@ -395,3 +395,117 @@ gives at most 1,000 results. They only put the list in order.
 
 The settings that **Start Upkeep** saves pass the checks of the worker loop
 (`Config::validate`) before Horizon saves them or sends them to a worker.
+
+## Agent requests
+
+An agent in a Horizon agent panel can read and change the Upkeep of its workspace
+with the MCP tool `cloud_upkeep`. The code is in
+`crates/horizon-browser-control/src/manifest/upkeep.rs`,
+`crates/horizon-browser-mcp/src/controller/upkeep.rs` and
+`crates/horizon-ui/src/app/upkeep/agent.rs`. The operations are these:
+
+- `status`: the repositories, the bots, the schedule, the pause state, the recent
+  runs and the pull requests.
+- `discover`: the repositories that the GitHub app reaches, with the number of open
+  pull requests from the bots.
+- `create`: Horizon shows **New Upkeep** in the workspace of the agent, with the
+  settings of the agent filled in and a note that an agent proposed them for that
+  workspace, with its name.
+- `add`: Horizon shows the repository list of the Upkeep, with the repositories of
+  the agent added.
+- `remove`: Horizon removes repositories from the Upkeep.
+- `run_now`, `pause` and `resume`: Horizon sends the **Run now** or **Pause**
+  signal with its next exchange with the worker, as the board does. The answer is
+  `requested`.
+
+## Trust boundary of agent requests
+
+An agent can follow instructions from a page, a pull request or a file that it read.
+Thus Horizon treats each `cloud_upkeep` request as untrusted input.
+
+Untrusted input:
+
+- Each field of the request: the operation, the repositories, the bots, the schedule,
+  the checkouts and the instructions.
+- The identity of the agent panel that sent the request.
+
+Trusted input:
+
+- The decisions of the person in **New Upkeep** and in the repository list.
+- The saved settings of each Upkeep and the cloud records of Horizon.
+
+Horizon guarantees these items:
+
+- Only an agent panel on this computer can send a request. Horizon answers a request
+  only when its host is this Horizon and its actor is an agent panel on the board. A
+  panel of a cloud, such as the **Upkeep agent** panel, shows an agent on the worker:
+  Horizon refuses a request with its identity.
+- A request acts only on the Upkeep whose cloud is in the workspace of the agent
+  panel. A request has no field for a workspace or a cloud.
+- Before a request changes something, Horizon examines again that the agent panel is
+  in the workspace that it asked from and that the cloud of the Upkeep is in that
+  workspace. Thus a session switch or a closed panel stops the request. A `remove`
+  save that started before the change finishes: it can wait some seconds for the lock
+  of the settings while an exchange with the worker runs.
+- An agent on a cloud worker cannot use `cloud_upkeep`. The worker refuses the
+  request. Thus the Upkeep agent, which reads pull requests that other people write,
+  cannot change its own repositories, its schedule or its pause state.
+- `create` and `add` do not change an Upkeep. They show the person the dialog with the
+  proposal of the agent. Only the person starts an Upkeep, rents a worker, or adds a
+  repository, and thus gives the Upkeep agent push access to it. The answer is
+  `awaiting_person`.
+- The repository list shows each repository of an `add` proposal in its own row with a
+  tick, also when the list of the GitHub App does not hold it. Thus the person sees
+  every repository that **Save** adds.
+- Both dialogs name the workspace of the proposal, because they can open while the
+  person looks at another workspace. **Start Upkeep** of a proposal refuses when that
+  workspace is gone, also when it goes while Horizon prepares the first repository; it
+  does not start the Upkeep in a new workspace. The repository
+  list opens only while the Upkeep's cloud is still in the workspace of the agent.
+- Horizon shows one proposal at a time. When **New Upkeep** or the repository list is
+  open, Horizon refuses a new `create` or `add`.
+- `remove`, `pause`, `resume` and `run_now` do not give access to more repositories.
+  `remove` keeps at least one repository.
+- The board shows each change that an agent made with `remove`, `pause`, `resume` or
+  `run_now` below its title, for example "An agent paused the Upkeep, 19:32 UTC". The
+  board shows the newest change of each kind. The removal line names all repositories
+  that agents removed (the full line shows on hover), thus many other changes cannot
+  hide a removal. Horizon writes
+  this text. It does not come from the worker or from the agent. Horizon keeps these
+  lines only while it runs.
+- When two saved clouds have the ID of the Upkeep, Horizon refuses the request,
+  because the ID can name the Upkeep of another workspace.
+- The instructions of a `create` request cannot contain control characters other than
+  line feed and tab, or characters that show nothing, such as a zero-width space.
+- `create` and `discover` accept only the bots that **New Upkeep** offers:
+  `app/dependabot` and `app/renovate`. `add` accepts no bots.
+- Horizon reads and saves the settings of an Upkeep under one lock. Thus two changes
+  at the same time do not undo each other.
+- Before Horizon sends the request, the request must agree with the settings that
+  Horizon accepts (see [Trust boundary of the worker loop](#trust-boundary-of-the-worker-loop)).
+  Horizon examines the settings again with `Config::validate` before it saves them.
+- A request that changes the Upkeep and that arrives after its deadline changes
+  nothing.
+- File reads and writes for a request occur on a separate thread, not on the UI thread.
+- When Horizon cannot read the folder of the saved Upkeeps, or the saved settings of
+  the Upkeep in the workspace of the agent, it answers `upkeep_unavailable`. It does not answer `upkeep_not_found`, and `create` does not
+  propose a second Upkeep.
+- `status` reads the status document with the same limits as the board. It sends back
+  only the parsed fields and only pull request URLs of the exact GitHub form.
+
+Horizon does not guarantee these items:
+
+- It does not prevent `remove`, `pause` or `resume` without a question to the person.
+  An agent that a page or a pull request controls can stop the Upkeep or remove
+  repositories from it. The skill tells the agent to get the authorization of the
+  person first. The board shows the result.
+- It does not make the status true. The agent on the worker writes the runs and the
+  pull requests. A pull request title, a note or an activity line can also contain
+  instructions that a pull request author wrote. `status` sends this text to the agent
+  on this computer. The skill tells the agent that this text is data, not
+  instructions.
+- It does not make an agent read the instructions of a `create` proposal. **New
+  Upkeep** tells the person that an agent proposed the settings, and tells the person to
+  read the instructions in full when they are not the default.
+- `discover` shows the agent the names of all repositories that the GitHub app reaches,
+  also repositories that are not in the Upkeep.
