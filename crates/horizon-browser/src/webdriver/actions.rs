@@ -101,6 +101,27 @@ impl ActionState {
         json!({ "actions": sources })
     }
 
+    /// One key source holding every key event of `inputs`, in order, with
+    /// the modifier transitions between them.
+    pub(super) fn key_sequence_payload(&mut self, inputs: impl IntoIterator<Item = BrowserInput>) -> Value {
+        let mut actions = Vec::new();
+        for input in inputs {
+            debug_assert!(matches!(
+                input,
+                BrowserInput::KeyDown { .. } | BrowserInput::KeyUp { .. }
+            ));
+            let mut payload = self.payload(input);
+            if let Value::Array(sources) = payload["actions"].take() {
+                for mut source in sources {
+                    if let Value::Array(events) = source["actions"].take() {
+                        actions.extend(events);
+                    }
+                }
+            }
+        }
+        json!({ "actions": [key_source(actions)] })
+    }
+
     pub(super) fn click_payload(
         &mut self,
         x: f64,

@@ -142,6 +142,12 @@ pub enum BrowserAuditAction {
         target: String,
         characters: usize,
     },
+    /// Key press: a printable key is recorded as `printable`, never as text.
+    Press {
+        key: String,
+        modifiers: BrowserModifiers,
+        count: u32,
+    },
     Scroll {
         target: Option<String>,
         delta_x: f64,
@@ -273,6 +279,11 @@ impl BrowserAuditAction {
             BrowserControlAction::Fill { target, value } => Self::Fill {
                 target: audit_target(target),
                 characters: value.chars().count(),
+            },
+            BrowserControlAction::Press { key, modifiers, count } => Self::Press {
+                key: press_audit_key(*key),
+                modifiers: *modifiers,
+                count: *count,
             },
             BrowserControlAction::Scroll {
                 target,
@@ -501,6 +512,15 @@ fn audit_key(key: BrowserKey) -> String {
     }
 }
 
+/// Space commits text like a character key, so a press never names it.
+fn press_audit_key(key: BrowserKey) -> String {
+    if key == BrowserKey::Space {
+        "printable".to_string()
+    } else {
+        audit_key(key)
+    }
+}
+
 fn audit_target(target: &crate::BrowserTarget) -> String {
     match target {
         crate::BrowserTarget::Ref { reference } => reference.clone(),
@@ -683,6 +703,40 @@ mod tests {
         assert!(!json.contains("password"));
         assert!(!json.contains("correct horse"));
         assert!(!json.contains("document.cookie"));
+    }
+
+    #[test]
+    fn press_audits_name_navigation_keys_but_never_typed_characters() {
+        let typed = BrowserAuditAction::from_control(&BrowserControlAction::Press {
+            key: crate::BrowserKey::Char('q'),
+            modifiers: BrowserModifiers {
+                shift: true,
+                ..BrowserModifiers::none()
+            },
+            count: 3,
+        });
+        let json = serde_json::to_string(&typed).expect("encode");
+        assert!(json.contains("printable"));
+        assert!(!json.contains("\"q\"") && !json.contains("\"Q\""));
+        let space = BrowserAuditAction::from_control(&BrowserControlAction::Press {
+            key: crate::BrowserKey::Space,
+            modifiers: BrowserModifiers::none(),
+            count: 1,
+        });
+        assert!(matches!(space, BrowserAuditAction::Press { ref key, .. } if key == "printable"));
+        let tab = BrowserAuditAction::from_control(&BrowserControlAction::Press {
+            key: crate::BrowserKey::Tab,
+            modifiers: BrowserModifiers::none(),
+            count: 2,
+        });
+        assert_eq!(
+            tab,
+            BrowserAuditAction::Press {
+                key: "Tab".to_string(),
+                modifiers: BrowserModifiers::none(),
+                count: 2,
+            }
+        );
     }
 
     #[test]

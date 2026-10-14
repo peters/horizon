@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keyboard fixture</title>
+<style>
+  :root { font: 16px/1.4 system-ui, sans-serif; color: #1b1f24; background: #f6f8fa; }
+  body { margin: 0; }
+  .skip { position: absolute; left: 8px; top: -48px; padding: 8px 12px; background: #0b57d0; color: #fff; }
+  .skip:focus { top: 8px; }
+  :focus-visible { outline: 3px solid #d93025; outline-offset: 2px; }
+  header { display: flex; gap: 16px; padding: 16px; background: #fff; border-bottom: 1px solid #d0d7de; }
+  main { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding: 16px; }
+  .card { padding: 16px; background: #fff; border: 1px solid #d0d7de; border-radius: 8px; }
+  #status { padding: 0 16px; font-family: ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header>
+  <a href="#one">Section one</a>
+  <a href="#two">Section two</a>
+  <button type="button" id="menu">Menu</button>
+</header>
+<p id="status">focus: none</p>
+<main id="content" tabindex="-1">
+  <section class="card" id="one"><h2>One</h2><label>Name <input id="name"></label></section>
+  <section class="card" id="two"><h2>Two</h2><button type="button" id="save">Save</button></section>
+  <section class="card"><h2>Three</h2><a href="#content">Back to top</a></section>
+</main>
+<script>
+  const status = document.getElementById('status');
+  document.addEventListener('focusin', (event) => {
+    const element = event.target;
+    status.textContent = 'focus: ' + (element.id || element.textContent.trim());
+  });
+</script>
+</body>
+</html>

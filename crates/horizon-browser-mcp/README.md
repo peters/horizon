@@ -149,8 +149,15 @@ shell commands, files, or other MCP servers.
   the top-level document. Child refs return `unsupported_frame_action` for
   `scroll` and `set_files`. Safari and remote sessions scan only the top-level
   document.
-- `browser_act` clicks, fills, scrolls, reloads, or traverses history. Set
-  `count: 2` on a click for a backend-native trusted double-click.
+- `browser_act` clicks, fills, presses keys, scrolls, reloads, or traverses
+  history. Set `count: 2` on a click for a backend-native trusted double-click.
+  `press` takes a `key` such as `Tab`, `Shift+Tab`, `Enter`, `Escape`,
+  `ArrowDown` or `Control+a` and an optional `count` (1-100), and sends trusted
+  key events to the focused element: CDP `Input.dispatchKeyEvent` on local
+  Chromium, and one key-action sequence per call through `input.performActions`
+  on local Firefox or classic Perform Actions on Safari and remote targets. A
+  failed WebDriver call releases the held keys. It takes no target. Printable
+  keys and `Space` are audited as `printable`, never as text.
   Remote `fill` uses native Element Clear/Send Keys and reads the live field
   back before reporting completion. An empty, reverted, missing, or otherwise
   unequal value returns `input_failed`, even when the driver accepted the
