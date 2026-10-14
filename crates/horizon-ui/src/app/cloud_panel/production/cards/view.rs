@@ -84,7 +84,6 @@ fn teasers(group: &CloudGroup, runtime: &Runtime, status: &Status, occupancy: Oc
     ]
 }
 
-/// Provider and profile, then where the cloud lives and its size.
 /// How wide the title and the subtitle are without truncation, as the header paints them.
 fn title_width(ui: &egui::Ui, title: &str, subtitle: &str) -> f32 {
     use crate::app::cloud_panel::render::{SUBTITLE_SIZE, TITLE_SIZE};
@@ -98,6 +97,7 @@ fn title_width(ui: &egui::Ui, title: &str, subtitle: &str) -> f32 {
     width(title, TITLE_SIZE).max(width(subtitle, SUBTITLE_SIZE))
 }
 
+/// Provider and profile, then where the cloud lives and its size.
 fn subtitle(group: &CloudGroup, runtime: &Runtime) -> String {
     let provider = group.environment.provider.as_deref().unwrap_or("Local");
     let provider = horizon_core::cloud_runtime::provider::by_id(provider).map_or(provider, |described| described.label);
