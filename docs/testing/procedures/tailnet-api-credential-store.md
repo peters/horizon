@@ -22,7 +22,10 @@ It proves the staged-entry contract and recovery at interrupted mutation boundar
 - Platform-specific OS-store adapters need their separate real-keychain qualification.
 - This procedure does not test a new UI editor, remote API validity, OAuth
   exchange, enrollment receipts, device deletion or provider cleanup.
-- F05 qualifies a task-owned real Linux OS-store adapter with synthetic inputs.
+- F05 is mandatory. It qualifies the real Linux OS-store adapter with synthetic inputs.
+- F05 uses the checked-in fixture runner and ignored Linux test.
+  A normal workspace test run skips that test. A skip is not an F05 pass.
+- F05 supports Linux x86_64. Other real OS-store adapters need separate qualification.
 - R01 is optional and requires the operator's explicit authorization for the
   exact existing desktop staged binding. It reads stored kind only; it does not
   expose the value or test API access. The required synthetic lane cannot qualify R01.
@@ -42,6 +45,18 @@ R01 belongs to the authorized desktop lane and must stay separate in the evidenc
 - A checkout of the candidate commit.
 - The repository Rust toolchain.
 - A private evidence directory outside the repository.
+
+F05 also needs:
+
+- Python 3 and a healthy local Docker daemon.
+- A Linux x86_64 host with the repository Rust toolchain.
+- A hydrated checkout with its required Git LFS assets.
+- `/usr/bin/dbus-daemon`, `/usr/bin/gnome-keyring-daemon` and `/usr/bin/gdbus`.
+- The host runtime libraries at `/usr/lib/x86_64-linux-gnu`.
+- The fixed runtime image from the command below.
+
+The runtime image supplies OS packages only. It is not the candidate worker image.
+Its use does not qualify a worker image, marker, enrollment or provider lane.
 
 ## 5. Setup
 
@@ -120,33 +135,88 @@ R01 belongs to the authorized desktop lane and must stay separate in the evidenc
 
 ### 6.5 F05 — Isolated real OS-store adapter
 
-1. Prepare a task-owned Secret Service with its own home, data directories,
-   control directory, bus and unlocked collection. Use no host home, runtime,
-   desktop socket or bus mount. Disable bus service activation for this lane.
+> **CAUTION:** USE A NEW PRIVATE EVIDENCE DIRECTORY.
+> Do not reuse another task's state, credentials or build output.
 
-   Result: The real adapter can use only this run's synthetic collection.
+The commands below show example paths. Each run needs its own new private evidence path.
 
-2. Compile a private helper against the exact candidate's shared store. Save
-   synthetic enrollment keys and personal/OAuth API bindings. Read only stored
-   kind through `api_credential_status`. Compare only the owned synthetic auth
-   bytes in zeroizing storage to check their independence. Print no value.
+1. Get the fixed OS runtime image.
 
-   Result: Personal save, OAuth replacement and API removal preserve the auth
-   binding. A second tailnet's kind remains unchanged. JSON contains no secret.
+   ```sh
+   docker pull ghcr.io/peters/horizon-worker-base@sha256:6550aacb6c60187cd346a795beb3c8bffd998fe9b95ec74f5fb844cf78870bdc
+   ```
 
-3. Stop only the retained fixture keyring process. Read an active stored entry.
-   Restore the same fixture daemon and password, then read again.
+   Result: Docker has the fixture runtime. This is not worker image qualification.
 
-   Result: Active storage reports unavailable while the service is absent.
-   It reports its stored kind after restart. An explicitly disabled entry remains
-   known missing without an OS-store read. No desktop prompt occurs.
+2. Run the checked-in fixture from the candidate checkout root.
 
-4. Delete only the declared synthetic saved bindings. Check the owned Secret
-   Service for remaining items. Stop the owned daemons and container, then remove
-   the private fixture credentials and password.
+   ```sh
+   python3 scripts/tailnet-api-store-fixture/run.py --evidence-dir /tmp/horizon-tailnet-api-f05-first
+   ```
 
-   Result: The owned service is empty. No fixture process or credential remains.
-   The operator's OS store stays unchanged.
+   Result: The runner builds and freezes the candidate's Linux library test executable.
+   It uses this command automatically:
+
+   ```sh
+   cargo test -p horizon-cloud --lib --no-run --locked --message-format=json
+   ```
+
+   The runner records source and artifact identities in private evidence.
+   It runs the ignored `qualified_synthetic_store` test explicitly for each phase.
+   Ordinary tests that ignore this test do not satisfy F05.
+
+   The optional `--target-dir` argument selects a task-owned build cache:
+
+   ```sh
+   python3 scripts/tailnet-api-store-fixture/run.py --evidence-dir /tmp/horizon-tailnet-api-f05-first --target-dir /tmp/horizon-tailnet-api-f05-target
+   ```
+
+   The fixture uses `--network none`, a read-only container, dropped capabilities
+   and `no-new-privileges`. Its state, home, bus, control directory and unlocked
+   collection belong only to this run. It mounts no host home, desktop bus,
+   runtime socket or graphical session. Bus service activation stays disabled.
+   Read-only mounts supply the frozen executable, fixture script and OS runtime tools.
+
+3. Examine `result.json` in the run directory printed by the runner.
+
+   Result: The phases run in this order:
+
+   | Phase | Expected result |
+   |---|---|
+   | `exercise` | Missing, personal save, OAuth replacement, API removal and another binding's stored kind pass. Synthetic auth bytes remain equal in zeroizing storage. Metadata contains no secret. |
+   | `probe` | The first persisted kind check passes. |
+   | `unavailable` | The retained fixture keyring stops. An active stored entry reports unavailable; a disabled entry stays known missing. |
+   | `probe` | The owned keyring restarts with the same password and restores the persisted stored kind. |
+   | `cleanup` | Only the declared synthetic bindings are deleted. The saved catalog is empty. |
+
+   Values do not appear in status output. No desktop prompt or real credential is used.
+   The runner creates no provider resource or tailnet node and sends no Tailscale API request.
+
+4. Examine `ownership.json` and `result.json` in that run directory.
+
+   Result: The owned Secret Service is empty and its retained processes stop.
+   A healthy Docker daemon reports that the exact fixture container is absent.
+   The runner removes only its owned synthetic state and password after that proof.
+   Logs, source identities and frozen artifact identities remain in private evidence.
+   An unavailable Docker daemon is not proof that the container is absent.
+
+5. If a phase or cleanup fails, keep the evidence and ownership record.
+
+   Result: Logs and ownership records remain private.
+   A failed phase does not qualify F05, even if container cleanup succeeds.
+   Remaining state stays private when container absence is uncertain.
+   Remove only the recorded fixture container and its owned state after its absence is proved.
+   Do not use a broad Docker prune or stop another keyring daemon.
+   Do not replace the fixture bus with the operator's desktop bus.
+
+6. Repeat F05 for the first reviewable and final candidate inputs.
+
+   Result: Each result identifies its exact source and frozen executable.
+   Reuse is permitted only after the repository's input comparison rules are satisfied.
+   A private helper from another checkout does not qualify this fixture.
+
+See [the fixture README](../../../scripts/tailnet-api-store-fixture/README.md)
+for the runner scope and dependencies. F05 does not qualify R01 or native UI status.
 
 ### 6.6 R01 — Optional authorized desktop staged resolver
 
@@ -177,6 +247,8 @@ R01 belongs to the authorized desktop lane and must stay separate in the evidenc
 ## 7. Pass criteria
 
 - F01 through F05 pass on the exact candidate inputs.
+- F05's explicit runner completes all five phases and proves exact owned cleanup.
+- An ignored test or ordinary matrix result cannot substitute for F05.
 - R01 is recorded as passed, deferred or not applicable, separately from synthetic proof.
 - Stored presence does not claim credential validity, scopes or network access.
 - No synthetic test reads a real credential. R01 reads only the authorized staged

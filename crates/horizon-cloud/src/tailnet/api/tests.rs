@@ -393,3 +393,6 @@ fn tombstone_pruning_preserves_saved_active_or_pending_bindings() {
         assert_eq!(keys.count(), count);
     }
 }
+
+#[cfg(target_os = "linux")]
+mod real_os_store;
