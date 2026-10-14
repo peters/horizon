@@ -411,6 +411,23 @@ mod unix {
     }
 
     #[test]
+    fn a_build_path_through_a_link_counts_the_whole_checkout() {
+        let (repository, _) = checkout();
+        let path = repository.path();
+        symlink("../src", path.join(".horizon/context")).unwrap();
+        let revision = commit(path, "Context link");
+        write(path, "src/main.rs", "fn main() { changed(); }\n");
+        let build = Build {
+            context: ".horizon/context".into(),
+            ..recipe()
+        };
+        assert_eq!(
+            listed(&collect(path, &revision, &build).unwrap()),
+            [("src/main.rs", Change::Modified)]
+        );
+    }
+
+    #[test]
     fn a_folder_replaced_by_a_link_is_never_followed() {
         let (repository, _) = checkout();
         let path = repository.path();

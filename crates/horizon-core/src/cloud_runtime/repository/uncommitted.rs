@@ -25,6 +25,7 @@ use horizon_cloud::Build;
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
+    fs,
     path::{Component, Path},
 };
 
@@ -157,7 +158,7 @@ pub fn valid_hash(hash: &str) -> bool {
 /// file, a file reached through a folder that is a link, a hard link and an entry that is
 /// not a file or a link; reports a working copy git2 cannot read.
 pub fn collect(repository: &Path, revision: &str, build: &Build) -> Result<Uncommitted> {
-    let scope = Scope::new(build);
+    let scope = Scope::new(repository, build);
     let mut changes = BTreeMap::new();
     let opened = Repository::open(repository).map_err(|_| Error::Invalid(UNREADABLE))?;
     // The configuration can name another working folder (`core.worktree`); then Git's view
@@ -262,11 +263,28 @@ struct Scope {
 }
 
 impl Scope {
-    fn new(build: &Build) -> Self {
-        Self {
-            context: parts(&build.context),
-            dockerfile: parts(&build.dockerfile),
+    /// The build resolves its paths through links (`image::contained`), so a build path
+    /// that passes a link in the working copy, or a Dockerfile path outside the checkout,
+    /// counts the whole checkout: a narrower scope could leave out a file the build reads.
+    fn new(repository: &Path, build: &Build) -> Self {
+        let context = parts(&build.context);
+        let dockerfile = parts(&build.dockerfile);
+        let linked = |parts: &Option<Vec<String>>| {
+            parts.as_ref().is_none_or(|parts| {
+                let mut path = repository.to_path_buf();
+                parts.iter().any(|part| {
+                    path.push(part);
+                    fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink())
+                })
+            })
+        };
+        if linked(&context) || linked(&dockerfile) {
+            return Self {
+                context: None,
+                dockerfile,
+            };
         }
+        Self { context, dockerfile }
     }
 
     /// Whether `path` lies in the context or is the Dockerfile. Names compare without

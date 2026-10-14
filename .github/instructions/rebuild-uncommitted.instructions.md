@@ -17,7 +17,8 @@ context can go into the image, so a person must see each one first.
 
 - Build paths resolve `.` and `..` as the build does, and names compare
   without case, so a build path that a case-insensitive checkout accepts
-  still matches; a path that leaves the checkout counts all of it.
+  still matches. A build path that leaves the checkout, or that passes a link
+  in the working copy (the build follows it), counts all of the checkout.
 - `collect` lists every uncommitted file of the build context with
   `modified`, `new` or `deleted`: tracked files with their working-tree
   content, untracked files that Git does not ignore, and deletions, inside
