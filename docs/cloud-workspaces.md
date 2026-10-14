@@ -1331,10 +1331,10 @@ The sidebar groups the workspaces by what they need from you:
 | **This PC** | A workspace without a cloud. |
 
 Each group header shows how many workspaces it has. At the right of the header
-line, a summary in secondary text shows the hourly rate of the running workers of
-the group, **no local cost** for **Parked**, and **live** for **This PC**. The rate
-has one sum for each currency, for example `€0.0240/h + $0.690/h`: Hetzner bills in
-euros net of VAT and RunPod in US dollars. The
+line, a summary in secondary text shows what the running workers of the group
+cost a day, **no local cost** for **Parked**, and **live** for **This PC**. The
+cost has one sum for each currency, for example `€0.58/day + $16.56/day`: Hetzner
+bills in euros net of VAT and RunPod in US dollars. The
 summary never wraps. When the sidebar is narrow, it shows fewer parts, and then a
 shortened first part. Hover over it to see all of it. If no part fits on the
 narrowest sidebar, the header does not show the summary. A screen reader still
@@ -1813,6 +1813,22 @@ the same arguments and `--plan-token <token>`. The token also covers the worker 
 `--worker-choice` selects, so a plan for one offer does not start another. Without
 uncommitted files you can give no token. A typed `REVISION` that is not the checked-out commit builds that commit
 only.
+
+### What a cloud costs
+
+While a worker bills, the header of its card shows the cost of the current run
+and the cost a day, for example `€0.06 run · €0.58/day`. When the header has room,
+a second line shows the cost a week and a month, and what the worker adds by the
+end of the month if it keeps running:
+`€4.03/wk · €17.52/mo · +€9.89 by Oct 31 if left running`. A narrow card keeps
+only the first line. Hover over the cost to see the hourly rate, the cost a year
+and what the worker adds by the end of the year.
+
+A day is 24 hours, a week 168, a month 730 and a year 8,760, as Hetzner counts
+them. The end of a month and of a year is midnight UTC. The amounts are compute
+only: storage, a primary IPv4 address, traffic and VAT are not in them. Hetzner
+caps a month at the monthly price of the server type, so a full month can cost
+less than 730 hours. A stopped or deleted worker shows no daily cost.
 
 ### Deployment progress
 

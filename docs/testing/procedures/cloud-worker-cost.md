@@ -1,6 +1,6 @@
 ---
 procedure: cloud-worker-cost
-feature: The hourly rate and run cost of a cloud worker
+feature: The hourly rate, the daily cost and the run cost of a cloud worker
 platforms: [linux]
 cost: rents compute
 destructive: yes
@@ -12,8 +12,9 @@ owner: peters
 
 ## 1. Purpose
 
-This procedure makes sure that a cloud card shows the hourly rate and the cost
-of the current run of its worker in the currency of the provider. It also makes
+This procedure makes sure that a cloud card shows the hourly rate, the cost a
+day, a week and a month, and the cost of the current run of its worker in the
+currency of the provider. It also makes
 sure that the run starts at the correct time, and that a reconnect, a restart,
 a stop and a resume keep that start correct. It also makes sure that a figure
 that Horizon cannot know says why, and that a Ready worker never shows
@@ -73,13 +74,15 @@ that Horizon cannot know says why, and that a Ready worker never shows
 1. Look at the sidebar.
 
    Result: The group **Cloud** shows the workspace **Synthetic Hetzner cost**
-   with `Ready`. The header of the group shows `€0.0240/h`.
+   with `Ready`. The header of the group shows `€0.58/day`.
 
 2. Click the row **Synthetic Hetzner cost**.
 
    Result: The canvas moves to the card **Synthetic Hetzner cost**. The card
    shows **Ready** and `Hetzner / cpu`. The header shows
-   `€0.0240/h · €0.01 run`. No amount on the card shows `$`.
+   `€0.01 run · €0.58/day`. Under it, the header shows
+   `€4.03/wk · €17.52/mo · +€<amount> by <month> <last day> if left running`,
+   with the current month in UTC. No amount on the card shows `$`.
 
 3. Wait 3 minutes. Look at the status line of the card.
 
@@ -107,9 +110,12 @@ that Horizon cannot know says why, and that a Ready worker never shows
    Result: It shows `Not available` and the note `no billing per worker`.
    It does not show an amount, `billing not read yet` or `Awaiting billing`.
 
-8. Hold the pointer on the hourly rate in the header of the card.
+8. Hold the pointer on the cost in the header of the card.
 
-   Result: A tooltip says that Hetzner reports no billing per worker. It says
+   Result: The tooltip starts with
+   `€0.0240/h · €0.58/day · €4.03/week · €17.52/month · €210.24/year`. It
+   shows what the worker adds by the end of the month and by `Dec 31` (UTC).
+   The tooltip also says that Hetzner reports no billing per worker. It says
    that the run estimate covers only the current run, and that earlier runs,
    stopped periods and kept storage are not in it.
 
@@ -117,6 +123,14 @@ that Horizon cannot know says why, and that a Ready worker never shows
 
    Result: The line `This run · <time> · €<amount> · €0.0240/h` shows, and
    under it `Since creation · not reported by Hetzner`.
+
+10. Close the drawer. Drag the bottom-right corner of the card to the left
+    until the card is about half as wide.
+
+    Result: The header first drops the line
+    `€4.03/wk · €17.52/mo · … if left running`. The line
+    `€0.01 run · €0.58/day` stays until the header has no room for the
+    connection indicators. The title stays readable at each width.
 
 ### 6.2 LIVE: A Ready Hetzner worker
 
@@ -126,8 +140,8 @@ that Horizon cannot know says why, and that a Ready worker never shows
    CPU cloud from the synthetic repository with **Quick start** and the
    cheapest server type. Wait for **Ready**.
 
-   Result: The header of the group of the cloud in the sidebar shows the hourly
-   rate in euros with four decimals.
+   Result: The header of the group of the cloud in the sidebar shows the cost a
+   day in euros, which is 24 times the hourly price of the server type.
 
 2. Open the drawer of the card. Scroll the tab **Machine** to the section
    **Cost**.
@@ -171,7 +185,8 @@ that Horizon cannot know says why, and that a Ready worker never shows
 1. On the card, click **Stop worker…** and accept.
 
    Result: The card shows that the worker stopped. The header shows
-   `compute stopped`. The sidebar shows no hourly rate for the cloud.
+   `compute stopped` and no second line. The sidebar shows no daily cost for
+   the cloud.
 
 2. On the card, click **Resume worker**. Wait for **Ready**.
 
@@ -193,13 +208,13 @@ that Horizon cannot know says why, and that a Ready worker never shows
 
 1. Deploy a RunPod CPU cloud in a second workspace. Wait for **Ready**.
 
-   Result: The card shows the rate and the run in US dollars, for example
-   `$0.060/h · $0.01 run`.
+   Result: The card shows the run and the daily cost in US dollars, for example
+   `$0.01 run · $1.44/day`.
 
 2. Put both clouds in the same group of the sidebar, for example **Cloud**.
 
-   Result: The header of the group shows one sum for each currency, for example
-   `€0.0240/h + $0.060/h`. Horizon does not add euros to dollars.
+   Result: The header of the group shows one daily sum for each currency, for
+   example `€0.58/day + $1.44/day`. Horizon does not add euros to dollars.
 
 ## 7. Pass criteria
 
@@ -207,7 +222,8 @@ that Horizon cannot know says why, and that a Ready worker never shows
   and in the sidebar shows euros.
 - The run of a Hetzner worker starts at the creation time of its server.
   A reconnect and a restart do not change that start.
-- A stopped cloud shows no hourly rate. A resumed cloud starts a new run.
+- A stopped cloud shows no daily cost. A resumed cloud starts a new run.
+- A narrow card keeps the run and the daily cost when it drops the second line.
 - `cloud_list` gives the currency of each hourly rate.
 - A Hetzner cloud shows its total since creation as not available. No Ready
   worker shows `estimate pending until ready`.

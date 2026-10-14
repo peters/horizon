@@ -5,6 +5,10 @@ use super::status::{Primary, Status, Tone, Track};
 use crate::theme;
 use egui::{Align2, Color32, CornerRadius, FontId, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Vec2, pos2, vec2};
 
+mod spend;
+
+pub(in crate::app::cloud_panel) use spend::Spend;
+
 /// Height of the stage track along the header's bottom edge.
 const TRACK_HEIGHT: f32 = 5.0;
 /// Vertical centre of the title-row controls, level with the close button.
@@ -34,12 +38,6 @@ pub(in crate::app::cloud_panel) struct Indicators {
     pub desktop: Option<bool>,
     pub sharing: Sharing,
     pub companions: usize,
-}
-
-pub(in crate::app::cloud_panel) struct Spend {
-    /// "$0.320/h · $1.02 run · $8.86 total", or what is known instead.
-    pub line: String,
-    pub explanation: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,21 +144,7 @@ pub(super) fn show(
         paint_indicators(ui, pos2(left - width, y), placed);
         left -= width + 22.0;
     }
-    let spend_galley = ui
-        .painter()
-        .layout_no_wrap(spend.line.clone(), FontId::proportional(14.0), theme::FG_SOFT());
-    if indicators_fit && room(left, spend_galley.size().x) {
-        let rect = Rect::from_min_size(
-            pos2(left - spend_galley.size().x, y - spend_galley.size().y / 2.0),
-            spend_galley.size(),
-        );
-        ui.painter().galley(rect.min, spend_galley, theme::FG_SOFT());
-        let spoken = format!("{}. {}", spend.line, spend.explanation);
-        ui.interact(rect, ui.id().with("spend"), Sense::hover())
-            .on_hover_text(&spend.explanation)
-            .widget_info(|| {
-                egui::WidgetInfo::labeled(egui::WidgetType::Label, true, spoken.trim_end_matches(['.', ' ']))
-            });
+    if indicators_fit && let Some(rect) = spend::paint(ui, left, y, spend, |width| room(left, width)) {
         left = rect.left() - 24.0;
     }
     let mut reserved_row = 0.0;

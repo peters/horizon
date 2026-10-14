@@ -4,6 +4,9 @@ use crate::test_egui::DiscardTextures;
 use egui::{Id, Order, Pos2};
 use horizon_core::{cloud_panel::CloudLaunch, cloud_runtime::state::Deployment};
 
+const LINE: &str = "$1.02 run · $8.86 total · $7.68/day";
+const OUTLOOK: &str = "$53.76/wk · $233.60/mo · +$130.12 by Oct 31 if left running";
+
 /// Every text and control the header strip draws for `status`, at `width`.
 fn strip_frame(width: f32, status: &status::Status) -> (strip::Strip, Vec<(String, egui::Rect)>, egui::Rect) {
     let ctx = egui::Context::default();
@@ -19,7 +22,8 @@ fn strip_frame(width: f32, status: &status::Status) -> (strip::Strip, Vec<(Strin
                 companions: 2,
             };
             let spend = strip::Spend {
-                line: "$0.320/h · $1.02 run · $8.86 total".into(),
+                line: LINE.into(),
+                outlook: Some(OUTLOOK.into()),
                 explanation: String::new(),
             };
             result = Some(strip::show(ui, header, status, &indicators, &spend, false, None));
@@ -83,16 +87,29 @@ fn the_header_strip_fits_the_narrowest_cloud_with_long_errors() {
             let has = |label: &str| texts.iter().any(|(text, _)| text == label);
             assert!(has(status.primary.unwrap().label()), "the main action survives {width}");
             assert_eq!(
-                has("$0.320/h · $1.02 run · $8.86 total"),
+                has(LINE),
                 width >= 1100.0,
                 "spend is the first thing a narrow header drops ({width})"
             );
-            if has("$0.320/h · $1.02 run · $8.86 total") {
+            if has(LINE) {
                 assert!(
                     has("2/3"),
                     "spend never shows without the connection indicators ({width})"
                 );
             }
+            let rect = |label: &str| texts.iter().find(|(text, _)| text == label).map(|(_, rect)| *rect);
+            if let Some(outlook) = rect(OUTLOOK) {
+                let line = rect(LINE).expect("the outlook shows only under the spend line");
+                assert!(
+                    outlook.top() >= line.bottom(),
+                    "the outlook sits under the line at {width}"
+                );
+            }
+            assert_eq!(
+                has(OUTLOOK),
+                width >= 1760.0,
+                "the outlook drops before the line ({width})"
+            );
         }
     }
 }

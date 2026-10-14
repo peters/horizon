@@ -183,8 +183,19 @@ impl Row {
     }
 }
 
+/// Costs a day, one sum per currency: `€0.58/day + $16.56/day`.
+#[must_use]
+pub fn daily_text(rates: &[Rate]) -> String {
+    rates
+        .iter()
+        .map(|rate| cost::outlook::per(rate.hourly, rate.currency, cost::outlook::Period::Day))
+        .collect::<Vec<_>>()
+        .join(" + ")
+}
+
 /// The summary on the header of `group` with the rows `rows`, as parts from the most
-/// to the least important. A narrow sidebar shows only the first parts.
+/// to the least important: what the workers bill a day, then notes. A narrow sidebar
+/// shows only the first parts.
 #[must_use]
 pub fn group_summary<'a>(group: Group, rows: impl IntoIterator<Item = &'a Row>) -> Vec<String> {
     let rates = cost::sum_by_currency(
@@ -194,7 +205,7 @@ pub fn group_summary<'a>(group: Group, rows: impl IntoIterator<Item = &'a Row>) 
             .copied(),
     );
     let rates: Vec<Rate> = rates.into_iter().filter(|rate| rate.hourly > 0.0).collect();
-    let rate = (!rates.is_empty()).then(|| rates_text(&rates));
+    let rate = (!rates.is_empty()).then(|| daily_text(&rates));
     match group {
         Group::NeedsYou | Group::Cloud => rate.into_iter().collect(),
         Group::Parked => rate.into_iter().chain(["no local cost".to_owned()]).collect(),
@@ -378,7 +389,7 @@ mod tests {
         let row = Row::of(&[hetzner.clone(), runpod.clone(), other], false, None);
         assert_eq!(rates_text(row.hourly_rate.as_deref().unwrap()), "€0.0363/h + $0.690/h");
         let rows = [row, Row::of(&[runpod], false, None)];
-        assert_eq!(group_summary(Group::Cloud, &rows), ["€0.0363/h + $1.380/h"]);
+        assert_eq!(group_summary(Group::Cloud, &rows), ["€0.87/day + $33.12/day"]);
     }
 
     #[test]
@@ -428,14 +439,14 @@ mod tests {
     }
 
     #[test]
-    fn a_group_summary_adds_up_the_rates_of_its_rows() {
+    fn a_group_summary_adds_up_the_daily_costs_of_its_rows() {
         let rows = [
             Row::of(&[cloud(Condition::Ready, false, Some(0.25))], false, None),
             Row::of(&[cloud(Condition::Ready, false, Some(0.0042))], false, None),
             Row::of(&[cloud(Condition::Ready, false, None)], false, None),
         ];
-        assert_eq!(group_summary(Group::Cloud, &rows), ["$0.254/h"]);
-        assert_eq!(group_summary(Group::Parked, &rows), ["$0.254/h", "no local cost"]);
+        assert_eq!(group_summary(Group::Cloud, &rows), ["$6.10/day"]);
+        assert_eq!(group_summary(Group::Parked, &rows), ["$6.10/day", "no local cost"]);
         assert!(group_summary(Group::NeedsYou, &rows[2..]).is_empty());
         assert_eq!(group_summary(Group::Parked, &rows[2..]), ["no local cost"]);
         assert_eq!(group_summary(Group::ThisPc, &[]), ["live"]);

@@ -40,6 +40,7 @@ fn frame(
             |ui| {
                 let spend = strip::Spend {
                     line: String::new(),
+                    outlook: None,
                     explanation: String::new(),
                 };
                 let layout = strip::LayoutControls {

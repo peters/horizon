@@ -40,6 +40,7 @@ fn the_header_status_and_every_step_reach_a_screen_reader() {
         };
         let spend = strip::Spend {
             line: "$0.320/h · $1.02 run".into(),
+            outlook: None,
             explanation: "Estimated from the worker's rate.".into(),
         };
         strip::show(ui, header, &failed, &indicators, &spend, false, None);
