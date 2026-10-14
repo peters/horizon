@@ -66,6 +66,8 @@ pub enum Error {
     Cleanup { primary: Box<Self>, cleanup: Box<Self> },
     #[error(transparent)]
     Sibling(#[from] siblings::SiblingError),
+    #[error(transparent)]
+    Uncommitted(#[from] repository::uncommitted::Refusal),
 }
 pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Debug)]

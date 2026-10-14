@@ -5,6 +5,7 @@ mod export;
 pub mod launch;
 mod material;
 pub mod source;
+pub mod uncommitted;
 use super::{Error, Result, command::Runner};
 use horizon_cloud::Source;
 use std::{
