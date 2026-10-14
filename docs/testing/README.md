@@ -62,3 +62,7 @@ documents that are not yet STE.
 | Report | Procedure | Date |
 |---|---|---|
 | [2026-10-05-cloud-panels](reports/2026-10-05-cloud-panels.md) | [cloud-panels](procedures/cloud-panels.md) | 2026-10-05 |
+
+- [Tailnet enrollment ledger](procedures/tailnet-enrollment-ledger.md): retained device IDs, allocation identity and uncertain captures.
+
+- [Tailnet receipt capture](procedures/tailnet-receipt-capture.md): bounded own-Self projection and durable capture ordering.

@@ -1,5 +1,7 @@
 //! Thin deployment adapter for cloud-only tailnet enrollment.
+mod capture;
 mod keychain;
+pub mod receipt;
 use super::{Error, Result, WorkerContract, command::Runner, ssh::Connection, state};
 pub use horizon_cloud::tailnet::{
     ApiCredential, ApiCredentialKind, ApiCredentialStatus, Catalog, Selection, Store, Tailnet, valid_key,
@@ -255,10 +257,10 @@ while time.monotonic() < deadline:
 sys.exit(1)
 "#;
 
-/// Read only the public device snapshot, without copying its peers into logs or state.
-/// The read follows enrollment; every deployment/reconnection refreshes the observation.
+/// Persist the enrolled device identity before reading its separate public display name.
+/// Every selected deployment/reconnection captures Self.ID before later readiness work.
 /// # Errors
-/// Propagates selection corruption or cancellation; an unavailable snapshot is optional.
+/// Refuses unrecorded enrollment or cancellation; only the display-name snapshot is optional.
 pub(super) fn configure_and_record(
     connection: &Connection,
     store: &state::Store,
@@ -266,7 +268,9 @@ pub(super) fn configure_and_record(
     contract: &super::worker_contract::WorkerContract,
     runner: &Runner<'_>,
 ) -> Result<()> {
-    configure(connection, store.root(), runner, contract)?;
+    capture::configure_and_record(connection, store, state, contract, runner, || {
+        configure(connection, store.root(), runner, contract)
+    })?;
     state.tailnet_device = device_name(connection, store.root(), &state.cloud_id, contract, runner)?;
     store.save(state)
 }

@@ -238,6 +238,7 @@ fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
         timeline: None,
         last_self_stop: None,
         tailnet_device: None,
+        tailnet_enrollment: cloud_runtime::tailnet::receipt::EnrollmentLedger::default(),
         siblings: None,
         uncommitted_image: None,
         working_copy: None,

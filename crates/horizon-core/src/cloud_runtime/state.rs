@@ -8,6 +8,7 @@ pub use horizon_cloud_protocol::OperationId;
 #[cfg(all(test, unix))]
 pub(super) use replacement::REPLACEMENT_PENDING;
 pub use replacement::{ImageReplacement, ReplacementImage, ReplacementPhase};
+pub(in crate::cloud_runtime) const ENROLLMENT_RECORD_VERSION: u32 = 4;
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{File, OpenOptions},
@@ -75,6 +76,9 @@ pub struct Deployment {
     /// Device identity observed after tailnet enrollment; reconnect refreshes it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tailnet_device: Option<super::tailnet::DeviceName>,
+    /// Recorded device IDs and unresolved capture attempts survive worker replacement.
+    #[serde(default, skip_serializing_if = "super::tailnet::receipt::EnrollmentLedger::is_empty")]
+    pub tailnet_enrollment: super::tailnet::receipt::EnrollmentLedger,
     /// Same-worker siblings pinned before the image was built. Omitted when none, so
     /// single-repository records keep their encoding; a set without members is none.
     #[serde(
@@ -118,11 +122,31 @@ impl Deployment {
         })
     }
 
-    /// Version 1 records have no siblings; only the sibling record version carries them.
-    fn supported_version(&self) -> bool {
+    pub(in crate::cloud_runtime) fn record_version(&self) -> u32 {
+        if !self.tailnet_enrollment.is_empty() {
+            ENROLLMENT_RECORD_VERSION
+        } else if self.siblings.is_some() {
+            super::siblings::RECORD_VERSION
+        } else {
+            1
+        }
+    }
+
+    /// Nonempty enrollment evidence fences readers that would ignore and erase it.
+    pub(in crate::cloud_runtime) fn supported_version(&self) -> bool {
+        self.version == self.record_version() && self.known_version_shape()
+    }
+
+    fn known_version_shape(&self) -> bool {
         match &self.siblings {
-            None => self.version == 1,
-            Some(set) => self.version == super::siblings::RECORD_VERSION && set.fits(),
+            None => {
+                self.version == 1 || (self.version == ENROLLMENT_RECORD_VERSION && !self.tailnet_enrollment.is_empty())
+            }
+            Some(set) => {
+                (self.version == super::siblings::RECORD_VERSION
+                    || (self.version == ENROLLMENT_RECORD_VERSION && !self.tailnet_enrollment.is_empty()))
+                    && set.fits()
+            }
         }
     }
 
@@ -238,12 +262,14 @@ impl Store {
     /// # Errors
     /// Syncs file contents and parent directory before returning to the provider.
     pub fn save(&self, state: &Deployment) -> Result<()> {
-        if !state.supported_version() {
+        if !state.known_version_shape() {
             return Err(Error::Invalid(
-                "Cloud state version does not match its same-worker siblings",
+                "Cloud state version does not match its enrollment evidence or siblings",
             ));
         }
-        let bytes = serde_json::to_vec_pretty(state).map_err(|_| Error::Json)?;
+        let mut record = state.clone();
+        record.version = record.record_version();
+        let bytes = serde_json::to_vec_pretty(&record).map_err(|_| Error::Json)?;
         let mut file = tempfile::NamedTempFile::new_in(&self.root)?;
         file.write_all(&bytes)?;
         file.as_file().sync_all()?;
@@ -492,6 +518,94 @@ mod tests {
             store.load().unwrap().unwrap().siblings,
             None,
             "a set without members is no siblings"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn enrollment_evidence_automatically_fences_old_readers_with_or_without_siblings() {
+        use super::super::tailnet::receipt::{EnrollmentLedger, tests::populated};
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        let sibling = super::super::siblings::Set {
+            primary_directory: "app".into(),
+            members: vec![super::super::siblings::Sibling {
+                alias: "native".into(),
+                repository: "example/native-lib".into(),
+                directory: "native-lib".into(),
+                revision: "b".repeat(40),
+                image_revision: None,
+                local_repository: "/synthetic/native-lib".into(),
+                profile: "gpu".into(),
+            }],
+        };
+        let mut pending = EnrollmentLedger::default();
+        pending.arm(populated().attempts()[0].clone()).unwrap();
+        for siblings in [None, Some(sibling)] {
+            for ledger in [populated(), pending.clone()] {
+                let mut state: Deployment = serde_json::from_str(LEGACY_ENCODING).unwrap();
+                state.siblings = siblings.clone();
+                state.version = state.record_version();
+                let previous_version = state.version;
+                state.tailnet_enrollment = ledger.clone();
+                store.save(&state).unwrap();
+                let loaded = store.load().unwrap().unwrap();
+                assert_eq!(loaded.version, ENROLLMENT_RECORD_VERSION);
+                assert_eq!(loaded.tailnet_enrollment, ledger);
+                assert_eq!(loaded.siblings, siblings);
+                // The exact pre-ledger acceptance rule rejects the new saved encoding.
+                let previous_reader_accepts = match loaded.siblings {
+                    None => loaded.version == 1,
+                    Some(ref set) => loaded.version == super::super::siblings::RECORD_VERSION && set.fits(),
+                };
+                assert!(!previous_reader_accepts);
+                state.version = previous_version;
+                std::fs::write(root.path().join("deployment.json"), serde_json::to_vec(&state).unwrap()).unwrap();
+                assert!(store.load().is_err(), "old versions cannot contain enrollment evidence");
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn empty_or_unknown_enrollment_versions_are_refused_without_resetting_state() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        let mut state: Deployment = serde_json::from_str(LEGACY_ENCODING).unwrap();
+        store.save(&state).unwrap();
+        assert_eq!(store.load().unwrap().unwrap().version, 1);
+        for version in [0, 2, ENROLLMENT_RECORD_VERSION, 99] {
+            state.version = version;
+            let bytes = serde_json::to_vec(&state).unwrap();
+            std::fs::write(root.path().join("deployment.json"), &bytes).unwrap();
+            assert!(store.load().is_err());
+            assert!(store.save(&state).is_err());
+            assert_eq!(std::fs::read(root.path().join("deployment.json")).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn enrollment_evidence_survives_actual_paired_migration_and_reopen() {
+        use super::super::{allocation::ControllerId, tailnet::receipt::tests::populated};
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("golden");
+        let mut state: Deployment = serde_json::from_str(LEGACY_ENCODING).unwrap();
+        state.tailnet_enrollment = populated();
+        Store::lock(&root).unwrap().save(&state).unwrap();
+        let controller = ControllerId::generate();
+        {
+            let mut migrated =
+                migration::MigratedStore::migrate(&root, "saved-session", "workspace", controller).unwrap();
+            let records = migrated.load().unwrap();
+            assert_eq!(records.deployment().tailnet_enrollment, state.tailnet_enrollment);
+            assert_eq!(records.deployment().version, ENROLLMENT_RECORD_VERSION);
+            migrated.save(&records).unwrap();
+        }
+        let mut reopened = migration::MigratedStore::migrate(&root, "saved-session", "workspace", controller).unwrap();
+        assert_eq!(
+            reopened.load().unwrap().deployment().tailnet_enrollment,
+            state.tailnet_enrollment
         );
     }
 }

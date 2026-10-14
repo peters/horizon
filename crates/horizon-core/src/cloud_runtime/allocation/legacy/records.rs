@@ -25,10 +25,24 @@ pub(super) struct Allocation {
     pub stop_requested: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_replacement: Option<ImageReplacement>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::cloud_runtime::tailnet::receipt::EnrollmentLedger::is_empty"
+    )]
+    pub tailnet_enrollment: crate::cloud_runtime::tailnet::receipt::EnrollmentLedger,
 }
 
 impl Allocation {
     pub const VERSION: u32 = 1;
+    const ENROLLMENT_VERSION: u32 = 2;
+
+    pub(super) fn record_version(&self) -> u32 {
+        if self.tailnet_enrollment.is_empty() {
+            Self::VERSION
+        } else {
+            Self::ENROLLMENT_VERSION
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -97,14 +111,19 @@ impl Records {
             timeline: _,
             last_self_stop: _,
             tailnet_device,
-            // Records with siblings are the sibling record version, which `from_legacy` refuses.
+            tailnet_enrollment,
+            // `from_legacy` refuses sibling records, including those with enrollment evidence.
             siblings: _,
             uncommitted_image,
             working_copy,
         } = legacy;
         Self {
             allocation: Allocation {
-                version: Allocation::VERSION,
+                version: if tailnet_enrollment.is_empty() {
+                    Allocation::VERSION
+                } else {
+                    Allocation::ENROLLMENT_VERSION
+                },
                 id: allocation,
                 controller,
                 member: identity.clone(),
@@ -116,6 +135,7 @@ impl Records {
                 worker,
                 stop_requested,
                 image_replacement,
+                tailnet_enrollment,
             },
             project: Project {
                 version: Project::VERSION,
@@ -143,7 +163,11 @@ impl Records {
     #[must_use]
     pub fn deployment(&self) -> Deployment {
         Deployment {
-            version: 1,
+            version: if self.allocation.tailnet_enrollment.is_empty() {
+                1
+            } else {
+                crate::cloud_runtime::state::ENROLLMENT_RECORD_VERSION
+            },
             cloud_id: self.project.identity.cloud_id().into(),
             repository: self.project.repository.clone(),
             revision: self.project.revision.clone(),
@@ -167,6 +191,7 @@ impl Records {
             timeline: None,
             last_self_stop: None,
             tailnet_device: self.project.tailnet_device.clone(),
+            tailnet_enrollment: self.allocation.tailnet_enrollment.clone(),
             siblings: None,
             uncommitted_image: self.project.uncommitted_image.clone(),
             working_copy: self.project.working_copy.clone(),

@@ -469,6 +469,7 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             timeline: None,
             last_self_stop: None,
             tailnet_device: None,
+            tailnet_enrollment: super::tailnet::receipt::EnrollmentLedger::default(),
             siblings: None,
             uncommitted_image: None,
             working_copy: request.working_copy.clone(),

@@ -47,6 +47,99 @@ fn convert(value: &Value) -> Result<Records, Error> {
 }
 
 #[test]
+fn enrollment_ledger_is_allocation_owned_and_retained_after_worker_identity_clears() {
+    use crate::cloud_runtime::tailnet::receipt::tests::populated;
+    let ledger = populated();
+    for stage in ["Provision", "Ready", "Stopping", "Stopped", "Deleted"] {
+        for operation in [
+            json!({"state":"prepared"}),
+            json!({"state":"terminated","worker_id":"worker1"}),
+        ] {
+            let mut original = legacy();
+            original["stage"] = json!(stage);
+            original["operation"] = operation;
+            original["worker"] = Value::Null;
+            original["tailnet_enrollment"] = serde_json::to_value(&ledger).unwrap();
+            original["version"] = json!(crate::cloud_runtime::state::ENROLLMENT_RECORD_VERSION);
+            let pair = convert(&original).unwrap();
+            let allocation: Value = serde_json::from_slice(&pair.allocation_bytes().unwrap()).unwrap();
+            let project: Value = serde_json::from_slice(&pair.project_bytes().unwrap()).unwrap();
+            assert_eq!(allocation["tailnet_enrollment"], original["tailnet_enrollment"]);
+            assert_eq!(allocation["version"], 2);
+            assert!(project.get("tailnet_enrollment").is_none());
+            let restored = Records::decode(&pair.allocation_bytes().unwrap(), &pair.project_bytes().unwrap()).unwrap();
+            assert_eq!(restored.deployment().tailnet_enrollment, ledger);
+            assert_eq!(serde_json::to_value(restored.deployment()).unwrap(), original);
+        }
+    }
+}
+
+#[test]
+fn legacy_enrollment_defaults_and_explicit_empty_ledger_supply_no_device_authority() {
+    for empty in [None, Some(json!({})), Some(json!({"receipts":[],"attempts":[]}))] {
+        let mut original = legacy();
+        if let Some(empty) = empty {
+            original["tailnet_enrollment"] = empty;
+        }
+        let pair = convert(&original).unwrap();
+        assert!(pair.deployment().tailnet_enrollment.is_empty());
+        assert!(
+            serde_json::to_value(pair.deployment())
+                .unwrap()
+                .get("tailnet_enrollment")
+                .is_none()
+        );
+    }
+    let mut invalid = legacy();
+    invalid["tailnet_enrollment"] = json!({"receipts":[],"attempts":[],"device_name":"display-only"});
+    assert!(convert(&invalid).is_err());
+}
+
+#[test]
+fn enrollment_versions_require_evidence_and_survive_paired_record_conversion() {
+    use crate::cloud_runtime::{state::ENROLLMENT_RECORD_VERSION, tailnet::receipt::tests::populated};
+    let mut original = legacy();
+    original["tailnet_enrollment"] = serde_json::to_value(populated()).unwrap();
+    assert!(
+        convert(&original).is_err(),
+        "version 1 cannot lose evidence in an old reader"
+    );
+    original["version"] = json!(ENROLLMENT_RECORD_VERSION);
+    let pair = convert(&original).unwrap();
+    let mut wrong_project: Value = serde_json::from_slice(&pair.project_bytes().unwrap()).unwrap();
+    wrong_project["allocation"] = json!(AllocationId::generate());
+    assert!(
+        Records::decode(
+            &pair.allocation_bytes().unwrap(),
+            &serde_json::to_vec(&wrong_project).unwrap()
+        )
+        .is_err()
+    );
+    let mut allocation: Value = serde_json::from_slice(&pair.allocation_bytes().unwrap()).unwrap();
+    allocation["version"] = json!(1);
+    assert!(
+        Records::decode(
+            &serde_json::to_vec(&allocation).unwrap(),
+            &pair.project_bytes().unwrap()
+        )
+        .is_err()
+    );
+    allocation["version"] = json!(2);
+    allocation.as_object_mut().unwrap().remove("tailnet_enrollment");
+    assert!(
+        Records::decode(
+            &serde_json::to_vec(&allocation).unwrap(),
+            &pair.project_bytes().unwrap()
+        )
+        .is_err()
+    );
+    original.as_object_mut().unwrap().remove("tailnet_enrollment");
+    assert!(convert(&original).is_err(), "version 4 needs nonempty evidence");
+    original["version"] = json!(99);
+    assert!(convert(&original).is_err());
+}
+
+#[test]
 fn complete_payload_survives_every_provider_state_without_new_session_identity() {
     for operation in [
         json!({"state":"prepared"}),
