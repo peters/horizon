@@ -227,6 +227,7 @@ fn exercise_protocol(requested_version: &str, negotiated_version: &str) {
                 && instructions.contains("browser_visibility")
                 && instructions.contains("browser_close")
                 && instructions.contains("allow_additional=true")
+                && instructions.contains("one panel per engine")
                 && instructions.contains("original panel")),
         "server instructions must teach creation and network capture workflows"
     );
@@ -443,7 +444,8 @@ fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
             .as_str()
             .is_some_and(|description| description.contains("browser_list is empty")
                 && description.contains("never create a helper panel")
-                && description.contains("allow_additional=true"))
+                && description.contains("allow_additional=true")
+                && description.contains("one panel per browser engine"))
     );
     assert!(create["inputSchema"].to_string().contains("allow_additional"));
     let network = listed_tool(tools, "browser_network");

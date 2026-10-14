@@ -24,9 +24,14 @@ failed to load (`navigation_error` says why) and you must navigate again or
 fix the URL; `navigation: superseded` means the user navigated the panel
 first, so read `panel.url` before acting. If `browser_list` returns a usable panel, reuse
 that panel for iframe, popup, dialog, and consent interactions. Never create or
-reveal a helper panel as a workaround. Only when the user explicitly requests
-another independent browser session may you call `browser_create` with
-`allow_additional: true`. Omit `backend` to use Horizon's
+reveal a helper panel as a workaround. You may hold one panel per browser
+engine: to run the same check in another engine, call `browser_create` with an
+explicit `backend` (`chromium`, `firefox` or `safari`) beside your open panel.
+Only when the user explicitly requests another independent browser session may
+you call `browser_create` with `allow_additional: true`; a second panel of the
+same engine, a create without `backend` while you own a panel, and a remote
+`target` while you own a panel need it. A create that is still pending counts
+as a panel of its engine. Omit `backend` to use Horizon's
 configured browser, or select `chromium`, `firefox`, or `safari` when the
 platform supports it. Read `automation_disclosure` on `browser_list` and
 `browser_panel`. In the UI, hover the local backend picker or the remote identity
