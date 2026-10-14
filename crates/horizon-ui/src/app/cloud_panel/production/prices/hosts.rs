@@ -99,8 +99,9 @@ impl State {
         Some(hosts::section(self.readings(), requirements).into_iter().collect())
     }
 
-    /// As if the hosts had just been read, for the dialog tests, which never reach one.
-    #[cfg(test)]
+    /// As if the hosts had just been read, for the dialog tests, which never reach one
+    /// and run on Unix only.
+    #[cfg(all(test, unix))]
     pub fn answered(&mut self, readings: Vec<Reading>) {
         self.fetched = Some(Fetched {
             value: readings,

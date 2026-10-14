@@ -153,9 +153,11 @@ impl Readiness {
         };
         let (runpod, hetzner) = (runpod_key(draft), hetzner_key(draft));
         if runpod == Key::Missing && hetzner == Key::Missing && !draft.settings.docker_hosts_on() {
-            return attention(
-                "Paste a RunPod or Hetzner key, or add a Docker host, so clouds have somewhere to run.".into(),
-            );
+            return attention(if draft.settings.docker_hosts.is_empty() {
+                "Paste a RunPod or Hetzner key, or add a Docker host, so clouds have somewhere to run.".into()
+            } else {
+                "Your Docker hosts are switched off, so new clouds have nowhere to run.".into()
+            });
         }
         if hetzner == Key::Missing && draft.hetzner.enabled {
             return attention("Paste the Hetzner token, or switch Hetzner off.".into());

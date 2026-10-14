@@ -4,6 +4,10 @@ use horizon_cloud::Credential;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+
+/// How many Docker hosts a machine may save; each reading asks all of them at once.
+pub const MAX_DOCKER_HOSTS: usize = 16;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
@@ -149,6 +153,9 @@ impl Settings {
         }
         for binding in &self.git_credentials {
             binding.validate()?;
+        }
+        if self.docker_hosts.len() > MAX_DOCKER_HOSTS {
+            return Err(Error::Invalid("Save at most 16 Docker hosts"));
         }
         let mut names = std::collections::BTreeSet::new();
         for host in &self.docker_hosts {

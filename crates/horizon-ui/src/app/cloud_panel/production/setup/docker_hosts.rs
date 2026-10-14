@@ -76,6 +76,9 @@ impl Editor {
         if let Err(error) = host.validate() {
             return Some(error.to_string());
         }
+        if self.original.is_none() && saved.len() >= horizon_core::cloud_runtime::settings::MAX_DOCKER_HOSTS {
+            return Some("Horizon keeps at most 16 Docker hosts. Remove one first.".into());
+        }
         let taken = saved
             .iter()
             .any(|other| other.name == host.name && self.original.as_ref() != Some(&other.name));
@@ -493,13 +496,29 @@ mod tests {
             text.contains("deploy@build-box · SSH") && text.contains("Not checked yet"),
             "{text}"
         );
-        // Switched off, the host stays saved and is not offered.
+        // Switched off, the host stays saved and is not offered, and the switch saves.
         draft.settings.docker_hosts_off = true;
-        assert!(!draft.settings.docker_hosts_on() && draft.validate().is_err());
+        assert!(!draft.settings.docker_hosts_on() && draft.validate().is_ok());
         assert!(painted(&mut draft, &mut card, &mut hosts).contains("Off"));
         draft.settings.docker_hosts_off = false;
         let saved = Editor::new(Some(&draft.settings.docker_hosts[0]));
         apply(&mut draft, &saved, Done::Remove);
         assert!(draft.settings.docker_hosts.is_empty());
+        // Each reading asks every saved host at once, so a machine keeps at most 16.
+        let full: Vec<Host> = (0..16)
+            .map(|index| Host {
+                name: format!("host-{index}"),
+                access: Access::ThisPc,
+                address: None,
+                docker: None,
+            })
+            .collect();
+        let mut extra = Editor::new(None);
+        extra.name = "one-more".into();
+        extra.access = Access::ThisPc;
+        assert!(extra.problem(&full).unwrap().contains("at most 16"));
+        draft.settings.docker_hosts = full;
+        draft.settings.docker_hosts.push(extra.host());
+        assert!(draft.validate().is_err());
     }
 }

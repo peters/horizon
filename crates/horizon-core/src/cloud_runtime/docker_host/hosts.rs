@@ -29,6 +29,17 @@ pub fn readings(settings: &Settings, root: &Path, cancel: &Cancellation) -> Vec<
     if !settings.docker_hosts_on() {
         return Vec::new();
     }
+    // Settings built in code skip validation; one thread per host must stay few.
+    if settings.docker_hosts.len() > super::super::settings::MAX_DOCKER_HOSTS {
+        return settings
+            .docker_hosts
+            .iter()
+            .map(|host| Reading {
+                host: host.clone(),
+                capacity: Err("Save at most 16 Docker hosts".into()),
+            })
+            .collect();
+    }
     let stop = Cancellation::default();
     let (sender, receiver) = mpsc::channel();
     for (index, host) in settings.docker_hosts.iter().enumerate() {

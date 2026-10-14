@@ -122,7 +122,8 @@ impl Draft {
             registry.validate()?;
         }
         let runpod = !self.runpod_key.is_empty() || self.settings.runpod_configured();
-        if !runpod && !self.hetzner.enabled && !self.settings.docker_hosts_on() {
+        // Saved hosts count while they are switched off, so the switch itself can be saved.
+        if !runpod && !self.hetzner.enabled && self.settings.docker_hosts.is_empty() {
             return Err(Error::Invalid(
                 "Enter your RunPod API key, turn on Hetzner and enter its token, or add a Docker host",
             ));
