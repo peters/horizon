@@ -48,7 +48,7 @@ resources and saved records in place; they can still cost money. While a local
 or another controller's operation runs, the dialog offers only Cancel.
 This UI close dialog does not grant lifecycle authorization through MCP.
 
-An Upkeep is a cloud that New workspace > Upkeep starts for the person: an always-on
+An Upkeep is a cloud that Menu > New Upkeep starts for the person: an always-on
 Hetzner worker on which one Codex loop reviews, fixes and merges the pull requests of
 chosen bots in chosen repositories, with a board beside its card. It costs money while
 its worker runs and needs a GitHub sign-in, a Hetzner project and a Codex login in Cloud
