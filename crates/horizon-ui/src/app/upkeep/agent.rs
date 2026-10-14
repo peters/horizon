@@ -11,16 +11,14 @@ use horizon_core::browser::manifest::{
     provider_usage::{UpkeepOperation, UpkeepRequest, UsageRequest},
 };
 use horizon_core::upkeep::worker::{self, Checkouts, Config};
-use horizon_core::upkeep::{AgentChange, AgentChangeKind, DEFAULT_INSTRUCTIONS, Status};
+use horizon_core::upkeep::{AgentChange, AgentChangeKind, DEFAULT_INSTRUCTIONS};
 use serde_json::{Value, json};
 
 use super::super::HorizonApp;
 use crate::app::browser_requests::actor_panel;
+use status::status;
 
-/// The most pull requests, runs and activity lines a `status` answer carries.
-const STATUS_PULL_REQUESTS: usize = 200;
-const STATUS_RUNS: usize = 48;
-const STATUS_ACTIVITY: usize = 20;
+mod status;
 
 /// Agent requests on their way: queued for this frame, or at work on their own thread.
 pub(in crate::app) struct Requests {
@@ -135,6 +133,32 @@ impl HorizonApp {
                 board.agent_changes.clone_from(latest);
             }
         }
+    }
+
+    /// An Upkeep may have started in `workspace` while the request read the files: ask the
+    /// saved Upkeeps as the app knows them now.
+    fn still_without_upkeep(&self, workspace: WorkspaceId) -> Result<(), String> {
+        let saved = self
+            .upkeep
+            .saved
+            .as_ref()
+            .ok_or("upkeep_unavailable: Horizon is reading the saved Upkeeps; try again")?;
+        let local_id = self
+            .board
+            .workspace(workspace)
+            .map(|held| held.local_id.as_str())
+            .ok_or("upkeep_unavailable: the workspace of the request is gone")?;
+        let started = self.cloud_prototype.groups.0.iter().any(|group| {
+            group.workspace == local_id
+                && group
+                    .remote
+                    .as_ref()
+                    .is_some_and(|remote| saved.iter().any(|(cloud, _)| *cloud == remote.id))
+        });
+        if started {
+            return Err("upkeep_exists: this workspace has an Upkeep; use add to change its repositories".into());
+        }
+        Ok(())
     }
 
     /// Who asks: an agent panel of this Horizon, and the clouds of its workspace.
@@ -254,6 +278,7 @@ impl HorizonApp {
                 }
             }),
             Next::ProposeNew(workspace, config) => expired(&request)
+                .and_then(|()| self.still_without_upkeep(workspace))
                 .and_then(|()| self.propose_new_upkeep(workspace, &config))
                 .map(|()| awaiting("New Upkeep")),
             Next::ProposeRepositories {
@@ -284,7 +309,12 @@ fn work(request: &UsageRequest, upkeep: &UpkeepRequest, caller: &Caller, root: O
     };
     // The reader leaves out a choice it cannot parse: that Upkeep still exists.
     let unreadable = caller.clouds.iter().any(|cloud| {
-        !saved.iter().any(|(held, _)| held == cloud) && worker::directory(cloud).join("upkeep.json").exists()
+        // A file that cannot even be looked at may be there too.
+        !saved.iter().any(|(held, _)| held == cloud)
+            && worker::directory(cloud)
+                .join("upkeep.json")
+                .try_exists()
+                .unwrap_or(true)
     });
     if unreadable {
         return Next::Answer(Err(
@@ -478,83 +508,6 @@ fn authors(upkeep: &UpkeepRequest) -> Vec<String> {
     } else {
         upkeep.authors.clone()
     }
-}
-
-/// The settings, and what the board shows, with the board's limits. The agent on the worker
-/// writes the status document, so only its parsed, bounded fields go back.
-fn status(cloud: &str, config: &Config, loop_running: Option<bool>) -> Value {
-    let mut answer = json!({
-        "cloud": cloud,
-        "repositories": config.repositories,
-        "authors": config.authors,
-        "every_minutes": config.every_minutes,
-        "checkouts": config.checkouts.name(),
-        "loop_running": loop_running,
-    });
-    match horizon_core::upkeep::read_status(&worker::directory(cloud).join("status.json")) {
-        Ok(board) => {
-            if let Some(object) = answer.as_object_mut() {
-                object.extend(board_json(&board).as_object().cloned().unwrap_or_default());
-            }
-        }
-        // The parser's message can quote the document, which the worker wrote.
-        Err(_) => answer["status_error"] = Value::from("The Upkeep status is missing or not valid."),
-    }
-    answer
-}
-
-fn board_json(board: &Status) -> Value {
-    let time = |at: Option<horizon_core::upkeep::time::OffsetDateTime>| {
-        at.and_then(|at| {
-            at.format(&horizon_core::upkeep::time::format_description::well_known::Rfc3339)
-                .ok()
-        })
-    };
-    let pull_requests: Vec<Value> = board
-        .pull_requests
-        .iter()
-        .take(STATUS_PULL_REQUESTS)
-        .map(|pr| {
-            json!({
-                "repository": pr.repository,
-                "number": pr.number,
-                "title": pr.title,
-                "url": pr.github_url(),
-                "state": pr.state,
-                "checks": pr.checks,
-                "note": pr.note,
-                "updated_at": time(pr.updated_at),
-            })
-        })
-        .collect();
-    let runs: Vec<Value> = board
-        .runs
-        .iter()
-        .rev()
-        .take(STATUS_RUNS)
-        .map(|run| {
-            json!({
-                "started_at": time(Some(run.started_at)),
-                "finished_at": time(run.finished_at),
-                "outcome": run.outcome,
-                "merged": run.merged,
-            })
-        })
-        .collect();
-    let activity: Vec<Value> = board
-        .activity
-        .iter()
-        .rev()
-        .take(STATUS_ACTIVITY)
-        .map(|line| json!({ "at": time(Some(line.at)), "text": line.text }))
-        .collect();
-    json!({
-        "paused": board.schedule.paused,
-        "next_run_at": time(board.schedule.next_run_at),
-        "runs": runs,
-        "pull_requests": pull_requests,
-        "activity": activity,
-    })
 }
 
 /// Writes the answer off the UI thread.

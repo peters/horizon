@@ -1,6 +1,8 @@
+use super::status::board_json;
 use super::*;
 use crate::app::test_support::test_app;
 use horizon_core::cloud_panel::{CloudConfig, CloudGroup, CloudLaunch};
+use horizon_core::upkeep::Status;
 use horizon_core::{PanelKind, PanelOptions, browser_actor};
 
 fn request(actor: &str, upkeep: &Value, deadline: i64) -> UsageRequest {
@@ -372,4 +374,38 @@ fn a_repository_proposal_opens_the_editor_with_only_the_new_names_to_save() {
     let other = app.board.create_workspace("other");
     let error = app.propose_new_upkeep(other, &config(&["acme/x"])).err().unwrap();
     assert!(error.contains("already open"), "{error}");
+}
+
+#[test]
+fn a_new_upkeep_proposal_waits_for_the_saved_upkeeps_and_never_doubles_one() {
+    let (_temp, mut app) = test_app();
+    let profile = CloudConfig::parse(
+        "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker\n    cpu: 4\n    memory_gb: 8\n",
+    )
+    .unwrap()
+    .profiles["dev"]
+        .clone();
+    let workspace = app.board.create_workspace("agents");
+    let local = app.board.workspace(workspace).unwrap().local_id.clone();
+    let mut group = CloudGroup::new(1, "mine".into(), local, std::env::temp_dir(), [0.0, 0.0]);
+    group.remote = Some(CloudLaunch {
+        deployment_started: true,
+        id: "mine".into(),
+        revision: "a".repeat(40),
+        profile_name: "dev".into(),
+        profile,
+        placement: horizon_core::cloud_panel::Placement::default(),
+    });
+    app.cloud_prototype.groups.0.push(group);
+    let error = app.still_without_upkeep(workspace).unwrap_err();
+    assert!(error.starts_with("upkeep_unavailable"), "{error}");
+    app.upkeep.saved = Some(std::sync::Arc::new(vec![("theirs".into(), config(&["acme/x"]))]));
+    assert!(app.still_without_upkeep(workspace).is_ok());
+    // The Upkeep started while the request read the files.
+    app.upkeep.saved = Some(std::sync::Arc::new(vec![("mine".into(), config(&["acme/x"]))]));
+    let error = app.still_without_upkeep(workspace).unwrap_err();
+    assert!(error.starts_with("upkeep_exists"), "{error}");
+    // A workspace that closed while the request ran gets no dialog.
+    let error = app.still_without_upkeep(WorkspaceId(9_999)).unwrap_err();
+    assert!(error.starts_with("upkeep_unavailable"), "{error}");
 }
