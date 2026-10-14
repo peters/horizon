@@ -60,6 +60,8 @@ It checks that host user data receives the read-only material that verified the 
    A later credential-file change does not replace that login in host user data.
    The user data contains no publishing credential.
    Expired or unconfirmed grants fail.
+   Explicit default and zero-padded ports retain the image-facing Docker login key.
+   Unsupported host spelling fails before provisioning.
    The temporary Docker directory has mode 0700 on Unix.
 
 ## 7. Pass criteria

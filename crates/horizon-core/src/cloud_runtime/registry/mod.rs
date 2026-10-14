@@ -133,8 +133,14 @@ impl Binding {
     }
 
     fn host_login_with(&self, secret: &str) -> Result<horizon_cloud::host::RegistryLogin> {
+        let server = self.repository.split('/').next().unwrap_or_default();
+        if !horizon_cloud::host::RegistryLogin::valid_identity(server, &self.pull.username) {
+            return Err(Error::Invalid(
+                "Use a lowercase registry hostname without a trailing dot for a CPU host login",
+            ));
+        }
         Ok(horizon_cloud::host::RegistryLogin {
-            server: credentials::registry_authority(&self.repository),
+            server: server.to_owned(),
             username: self.pull.username.clone(),
             password: horizon_cloud::Credential::new(secret.to_owned())?,
         })

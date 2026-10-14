@@ -73,3 +73,54 @@ fn an_unconfirmed_or_expired_binding_cannot_supply_a_host_login() {
     binding(&mut settings).pull.expires_at = Some("2000-01-01T00:00:00Z".into());
     assert!(binding(&mut settings).host_login().is_err());
 }
+
+#[test]
+fn host_logins_preserve_explicit_default_and_zero_padded_ports() {
+    use base64::Engine as _;
+    for authority in [
+        "registry.example:443",
+        "registry.example:0443",
+        "registry.example:05000",
+        "registry.example:5000",
+        "localhost:05000",
+    ] {
+        let (_root, mut settings) = fixture();
+        let repository = format!("{authority}/team/worker");
+        binding(&mut settings).repository.clone_from(&repository);
+        let image = format!("{repository}@sha256:{}", "a".repeat(64));
+        let login = binding(&mut settings).host_login().unwrap();
+        assert_eq!(login.server, authority);
+        horizon_cloud::hetzner::cloud::check_login(Some(&login), true, &image).unwrap();
+        let plan = horizon_cloud::host::Plan {
+            image,
+            environment: std::collections::BTreeMap::new(),
+            registry: Some(login),
+            workspace_device: "/dev/disk/by-id/scsi-synthetic".into(),
+            shm_gb: 1,
+        };
+        let document: serde_yaml::Value = serde_yaml::from_str(&plan.cloud_config().unwrap()).unwrap();
+        let entry = document["write_files"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["path"].as_str() == Some("/root/.docker/config.json"))
+            .unwrap();
+        let json = base64::engine::general_purpose::STANDARD
+            .decode(entry["content"].as_str().unwrap())
+            .unwrap();
+        let config: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert!(
+            config["auths"].get(authority).is_some(),
+            "the image's authority is the Docker login key"
+        );
+    }
+}
+
+#[test]
+fn unsupported_host_authority_spellings_fail_before_provisioning() {
+    let (_root, mut settings) = fixture();
+    for repository in ["REGISTRY.EXAMPLE/team/worker", "registry.example./team/worker"] {
+        binding(&mut settings).repository = repository.into();
+        assert!(binding(&mut settings).host_login().is_err());
+    }
+}
