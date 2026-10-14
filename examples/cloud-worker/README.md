@@ -46,9 +46,10 @@ worker could not release the devices it holds.
 
 Where the provider gives the worker a credential to stop itself (RunPod), the service
 checks the request and stops the worker at once. Where it does not (Hetzner, a Docker
-host), Horizon starts the worker with `HORIZON_WORKER_STOP=horizon`: the service checks
-the request and records it in the root-only `/run/horizon-worker/stop-request.json`, and
-Horizon runs `horizon-worker-stopd --take` when it next reads the worker. `--take`
+host), a worker started with `HORIZON_WORKER_STOP=horizon` has the service check the
+request and record it in the root-only `/run/horizon-worker/stop-request.json`, for
+Horizon to run `horizon-worker-stopd --take` when it next reads the worker. Horizon does
+not give that setting yet, so these workers offer no stop for now. `--take`
 checks the request again, now counting the output of every agent session, the
 requester's too, adds the stop to the stop log and prints it. Later takes print the same
 stop until the worker stops, so an answer lost on the way to Horizon loses no stop. It

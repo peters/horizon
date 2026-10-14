@@ -627,11 +627,12 @@ CPU availability is queried for the requested vCPU count and Pod product; a posi
 catalog answer is not a reservation. Configured compute preferences are tried in
 order only after a definite rejection. Ambiguous creation responses remain fenced.
 
-The optional worker-local idle-stop watcher retains its separate GraphQL stop call.
-It uses the provider-injected Pod-scoped credential, which the live qualification
-for #966 found was refused by REST and accepted by GraphQL. This migration changes
-the shared account-credential adapter; it does not put account credentials inside
-workers or remove that independently qualified idle-stop path.
+The worker's stop service, which stops a worker at an agent's request, keeps its
+separate GraphQL stop call. It uses the provider-injected Pod-scoped credential,
+which the live qualification for #966 found was refused by REST and accepted by
+GraphQL. This migration changes the shared account-credential adapter; it does not
+put account credentials inside workers or remove that independently qualified stop
+path.
 
 CPU workspaces use network storage and require an account with no Serverless
 endpoints. Profiles select `storage.volume_tier: STANDARD` (the default) or
@@ -1420,8 +1421,11 @@ panel eligibility for a cached Ready record when an earlier preflight fails. Thi
 survive a provider restart; persistence still needs a live recovery test.
 
 Stop ends the processes on the worker. The storage can stay billable. Idle stop
-is off by default. To use it, set `idle_stop_minutes` (10 to 1440) in a profile.
-A dedicated worker then stops after that time without agent activity. The worker
+is off by default. With a worker image from before the agent stop (one that does
+not report `horizon-agent-stop-contract=1`), set `idle_stop_minutes` (10 to 1440)
+in a profile to use it. A dedicated worker then stops after that time without
+agent activity. A current image has no idle stop: it accepts the setting and
+ignores it, and its agents stop the worker when their task is done. The worker
 is active while an agent terminal prints output. The worker is also active while
 its container uses half a CPU core or more, so a quiet build keeps it on.
 
@@ -1459,8 +1463,10 @@ is merged. A worker image built from the current worker bootstrap offers this on
 every dedicated RunPod worker, with no idle period, and has no idle stop of its
 own; it reports `horizon-agent-stop-contract=1`. Older images offer it only with
 `idle_stop_minutes`. On RunPod the worker stops itself, without this computer.
-On Hetzner and Docker host clouds the worker records the request for Horizon to
-carry out; Horizon does not take such requests yet. Shared workers and profiles
+A worker on Hetzner or a Docker host has no credential that can stop it. Started
+with `HORIZON_WORKER_STOP=horizon`, it records the request for Horizon to carry
+out; Horizon does not give that setting or take such requests yet, so these
+workers offer no agent stop. Shared workers and profiles
 with hosted devices offer no agent stop. Agents get a
 `stop_this_worker` MCP tool (or run `horizon-worker-stop --reason "..."`) with a
 one-line reason. The worker identifies the requesting agent session itself,

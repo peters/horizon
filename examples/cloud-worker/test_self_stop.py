@@ -108,6 +108,39 @@ class ServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(Refused, 'Only an agent session'):
             caller(200, query=query, parent_of=lambda pid: parents.get(pid, 0), sessions=sessions)
 
+    def test_a_binding_that_is_a_pipe_or_a_link_is_no_agent_and_holds_nothing(self):
+        panes = '100 @1 agent-a\n'
+        sessions = self.root / 'sessions'
+        (sessions / 'agent-a').mkdir(parents=True)
+        target = self.root / 'claude-binding'
+        target.write_text('claude\n')
+        binding = sessions / 'agent-a' / 'agent'
+        for place in (lambda: os.mkfifo(binding), lambda: binding.symlink_to(target)):
+            place()
+            # A pipe nobody writes would hold a plain read for good.
+            with self.assertRaisesRegex(Refused, 'Only an agent session'):
+                STOPD['caller'](100, query=lambda *args: panes, parent_of=lambda pid: 0, sessions=sessions)
+            binding.unlink()
+
+    def test_a_client_that_trickles_its_request_is_cut_off(self):
+        class Trickle:
+            def __init__(self, data):
+                self.data = data
+            def settimeout(self, seconds):
+                self.timeout = seconds
+            def recv(self, size):
+                clock[0] += 10
+                chunk, self.data = self.data[:1], self.data[1:]
+                return chunk
+        clock = [0.0]
+        tick = lambda: clock[0]
+        self.assertEqual(STOPD['request_line'](Trickle(b'{"a"}\nrest'), clock=tick, seconds=1000), '{"a"}')
+        clock[0] = 0.0
+        with self.assertRaises(TimeoutError):
+            STOPD['request_line'](Trickle(b'{"reason": "done"}\n'), clock=tick)
+        # A client that closes early gives what it sent.
+        self.assertEqual(STOPD['request_line'](Trickle(b'{}'), clock=tick, seconds=1000), '{}')
+
     def test_windows_other_than_the_callers_count_and_tmux_failures_refuse(self):
         listing = lambda *args: '@1 9990\n@2 9000\n'
         self.assertEqual(STOPD['other_output']('@1', query=listing), 9000)
@@ -226,7 +259,7 @@ class HorizonStopTests(unittest.TestCase):
 
     def record(self, reason='PR 12 merged', output=None, cores=0.1):
         return STOPD['record_request'](reason, REQUESTER, path=self.request, lock=self.lock, now=lambda: self.clock,
-                                       output=lambda own: output, cores=lambda: cores)
+                                       output=lambda own: output, cores=lambda: cores, log=self.log)
 
     def take(self, output=None, cores=0.1, windows='@1 agent-a\n@2 agent-b\n'):
         def newest(own):
@@ -299,6 +332,18 @@ class HorizonStopTests(unittest.TestCase):
         held.close()
         recorded.join(5)
         self.assertEqual(json.loads(self.request.read_text())['reason'], 'second')
+
+    def test_a_request_while_horizon_carries_out_a_taken_one_is_refused(self):
+        self.record(reason='first')
+        self.assertEqual(self.take()['reason'], 'first')
+        with self.assertRaisesRegex(Refused, 'already stopping this worker at the request of session agent-a'):
+            self.record(reason='second')
+        self.assertEqual(json.loads(self.request.read_text())['reason'], 'first')
+        # A taken stop that lapsed leaves the log and no longer holds new requests.
+        self.clock += STOPD['REQUEST_SECONDS'] + 1
+        self.record(reason='second')
+        self.assertEqual(json.loads(self.request.read_text())['reason'], 'second')
+        self.assertEqual(self.log.read_text(), '')
 
     def test_the_stop_log_is_never_written_through_a_link_on_the_volume(self):
         self.log.parent.mkdir(parents=True)

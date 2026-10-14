@@ -174,16 +174,30 @@ def pane(pid, query=tmux, parent_of=parent, sessions=Path('/workspace/sessions')
             window, session = panes[pid]
             # A pane is an agent session only with the binding horizon-worker-session
             # wrote for it; a plain shell or an ad-hoc tmux session is not one.
-            try:
-                agent = (sessions / session / 'agent').read_text().strip()
-            except OSError:
-                agent = ''
+            agent = binding(sessions / session / 'agent')
             if agent not in AGENTS:
                 break
             return pid, window, session, agent
         seen.add(pid)
         pid = parent_of(pid)
     raise Refused('Only an agent session on this worker can stop it.')
+
+
+def binding(path):
+    """The agent that a session binding names, or '' when the binding is not one plain file.
+    The sessions folder is the agent's to write: root reads it without following a link and
+    without waiting on a pipe placed there, which would hold the service."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        return ''
+    with os.fdopen(descriptor, 'rb') as file:
+        try:
+            if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+                return ''
+            return file.read(64).decode(errors='replace').strip()
+        except OSError:
+            return ''
 
 
 def other_output(own, query=tmux):
@@ -290,7 +304,7 @@ def locked(lock):
 
 
 def record_request(reason, requester, path=REQUEST, lock=REQUEST_LOCK, now=time.time, output=other_output,
-                   cores=busy_cores):
+                   cores=busy_cores, log=STOP_LOG):
     """Checks a stop that the agent session `requester` asked for and records it for Horizon
     to carry out, replacing an earlier request. Returns the agent's message."""
     text = reason_text(reason)
@@ -300,6 +314,7 @@ def record_request(reason, requester, path=REQUEST, lock=REQUEST_LOCK, now=time.
     # Held so that a take never removes a request that arrived after it read the file.
     try:
         with locked(lock):
+            refuse_over_taken(path, log, now)
             write_request(path, record)
     except OSError as error:
         raise Refused('The stop request could not be recorded (' + type(error).__name__ + '); '
@@ -308,6 +323,22 @@ def record_request(reason, requester, path=REQUEST, lock=REQUEST_LOCK, now=time.
     return ('Stop requested. Horizon on the person\'s computer stops this worker the next time it checks, '
             'within about a minute, and keeps the workspace volume. It works only while Horizon runs; '
             'a request Horizon does not take within ten minutes lapses.')
+
+
+def refuse_over_taken(path, log, now):
+    """Refuses a request while Horizon carries out one it took. A taken stop that lapsed
+    leaves the log first, as a take would remove it, so no stop that did not happen stays
+    on record."""
+    try:
+        record = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return
+    if not isinstance(record, dict) or record.get('taken') is not True or not isinstance(record.get('at'), int):
+        return
+    if 0 <= now() * 1000 - record['at'] <= REQUEST_SECONDS * 1000:
+        raise Refused('Horizon is already stopping this worker at the request of session '
+                      + str(record.get('session')) + '.')
+    remove_newest(log, record['at'])
 
 
 def sessions(query=tmux):
@@ -434,6 +465,23 @@ def answer(line, pid, stop, identify=caller):
                 + type(error).__name__ + '); the worker keeps running.'}
 
 
+def request_line(connection, limit=4096, seconds=30, clock=time.monotonic):
+    """The first line a client sends, within `seconds` in all: the service answers one
+    request at a time, so a client that sends a byte now and then must not hold it."""
+    deadline = clock() + seconds
+    data = b''
+    while b'\n' not in data and len(data) < limit:
+        left = deadline - clock()
+        if left <= 0:
+            raise TimeoutError('The stop request did not arrive in time')
+        connection.settimeout(left)
+        chunk = connection.recv(limit - len(data))
+        if not chunk:
+            break
+        data += chunk
+    return data.split(b'\n', 1)[0].decode(errors='replace')
+
+
 def serve_stop_requests(stop, path=STOP_SOCKET, identify=caller):
     """Answers stop requests one at a time on a socket only this machine can reach."""
     try:
@@ -459,8 +507,7 @@ def serve_stop_requests(stop, path=STOP_SOCKET, identify=caller):
             continue
         with connection:
             try:
-                connection.settimeout(30)
-                line = connection.makefile('r').readline(4096)
+                line = request_line(connection)
                 reply = answer(line, peer_pid(connection), stop, identify)
                 connection.sendall((json.dumps(reply) + '\n').encode())
             # One bad client must not end the service.
