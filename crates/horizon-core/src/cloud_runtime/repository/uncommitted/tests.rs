@@ -145,11 +145,13 @@ fn a_dockerfile_outside_the_context_and_staged_or_unstaged_files_count() {
 }
 
 #[test]
-fn build_paths_match_with_dots_resolved_and_without_case() {
+fn build_paths_with_dots_count_everything_and_names_match_without_case() {
     let (repository, revision) = checkout();
     let path = repository.path();
     write(path, ".horizon/Dockerfile", "FROM scratch\nRUN true\n");
     write(path, ".horizon/setup.sh", "echo changed\n");
+    write(path, "src/main.rs", "fn main() { changed(); }\n");
+    // A `..` counts the whole checkout, as the build may resolve it through a link.
     let dotted = Build {
         context: ".horizon/tool".into(),
         dockerfile: ".horizon/tool/../Dockerfile".into(),
@@ -157,10 +159,15 @@ fn build_paths_match_with_dots_resolved_and_without_case() {
     };
     assert_eq!(
         listed(&collect(path, &revision, &dotted).unwrap()),
-        [(".horizon/Dockerfile", Change::Modified)]
+        [
+            (".horizon/Dockerfile", Change::Modified),
+            (".horizon/setup.sh", Change::Modified),
+            ("src/main.rs", Change::Modified),
+        ]
     );
     let other_case = Build {
         context: ".HORIZON".into(),
+        dockerfile: ".HORIZON/DOCKERFILE".into(),
         ..dotted
     };
     assert_eq!(

@@ -264,8 +264,8 @@ struct Scope {
 
 impl Scope {
     /// The build resolves its paths through links (`image::contained`), so a build path
-    /// that passes a link in the working copy, or a Dockerfile path outside the checkout,
-    /// counts the whole checkout: a narrower scope could leave out a file the build reads.
+    /// that passes a link in the working copy, or one that is not plain, counts the whole
+    /// checkout: a narrower scope could leave out a file the build reads.
     fn new(repository: &Path, build: &Build) -> Self {
         let context = parts(&build.context);
         let dockerfile = parts(&build.dockerfile);
@@ -307,22 +307,18 @@ impl Scope {
     }
 }
 
-/// The parts of the build path `value` from the repository root, with `.` and `..`
-/// resolved as the build resolves them; `None` when it is not a plain relative path that
-/// stays in the checkout.
+/// The parts of the build path `value` from the repository root; `None` when it is not a
+/// plain relative path. A `..` counts as not plain: the build follows a link before it
+/// applies `..` (`image::contained`), so no lexical reading can say where it lands.
 fn parts(value: &str) -> Option<Vec<String>> {
-    let mut parts = Vec::new();
-    for component in Path::new(value).components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                parts.pop()?;
-            }
-            Component::Normal(part) => parts.push(part.to_str()?.to_owned()),
-            Component::RootDir | Component::Prefix(_) => return None,
-        }
-    }
-    Some(parts)
+    Path::new(value)
+        .components()
+        .filter(|component| *component != Component::CurDir)
+        .map(|component| match component {
+            Component::Normal(part) => part.to_str().map(str::to_owned),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Refuses a name that a list could show as something else.
