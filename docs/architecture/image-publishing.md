@@ -10,7 +10,10 @@ The launch pipeline does not use automatic destinations yet.
 A destination contains an explicit registry repository and a non-secret publisher identity.
 An automatic GHCR destination uses the host's image-publishing account.
 The source repository cannot select that account.
+Personal destinations retain a lowercase account name and that account's own namespace.
+An observed login with different letter case still names the same account.
 A machine-local registry destination names the exact credential reference that permits publication.
+Organization destinations use a machine-local registry binding.
 
 The package name contains the repository name, profile name and a short hash of the source identity.
 The hash separates equal names from different source hosts and owners.

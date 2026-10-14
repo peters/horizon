@@ -93,7 +93,10 @@ impl Destination {
         }
         match &self.publisher {
             Publisher::GitHub { login } => {
-                if !valid_login(login) || !self.repository.starts_with("ghcr.io/") {
+                if !valid_login(login)
+                    || login.bytes().any(|byte| byte.is_ascii_uppercase())
+                    || !self.repository.starts_with(&format!("ghcr.io/{login}/"))
+                {
                     return Err(DestinationError::Account);
                 }
             }
@@ -110,7 +113,14 @@ impl Destination {
     /// Refuses a different account or credential reference on an existing destination.
     pub fn check_publisher(&self, publisher: &Publisher) -> Result<(), DestinationError> {
         self.validate()?;
-        if &self.publisher != publisher {
+        let matches = match (&self.publisher, publisher) {
+            (Publisher::GitHub { login: expected }, Publisher::GitHub { login }) => {
+                valid_login(login) && expected.eq_ignore_ascii_case(login)
+            }
+            (Publisher::Registry { binding: expected }, Publisher::Registry { binding }) => expected == binding,
+            _ => false,
+        };
+        if !matches {
             return Err(match self.publisher {
                 Publisher::GitHub { .. } => DestinationError::Account,
                 Publisher::Registry { .. } => DestinationError::Binding,

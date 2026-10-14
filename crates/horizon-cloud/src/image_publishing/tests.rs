@@ -133,6 +133,11 @@ fn destinations_never_contain_tags_digests_userinfo_or_implicit_registries() {
 fn stored_account_identity_cannot_be_replaced_by_an_unrelated_account() {
     let original = Destination::automatic_github("alice", "github.com/team/app", "cpu").unwrap();
     assert!(original.check_publisher(&original.publisher).is_ok());
+    assert!(
+        original
+            .check_publisher(&Publisher::GitHub { login: "Alice".into() })
+            .is_ok()
+    );
     assert_eq!(
         original.check_publisher(&Publisher::GitHub { login: "bob".into() }),
         Err(DestinationError::Account)
@@ -140,6 +145,20 @@ fn stored_account_identity_cannot_be_replaced_by_an_unrelated_account() {
     let json = serde_json::to_string(&original).unwrap();
     assert_eq!(serde_json::from_str::<Destination>(&json).unwrap(), original);
     assert!(!json.contains("token"));
+}
+
+#[test]
+fn a_personal_destination_cannot_name_another_namespace_or_noncanonical_stored_account() {
+    let mut target = Destination::automatic_github("alice", "project", "cpu").unwrap();
+    target.repository = "ghcr.io/organization/app".into();
+    assert_eq!(target.validate(), Err(DestinationError::Account));
+    assert_eq!(
+        target.check_publisher(&Publisher::GitHub { login: "alice".into() }),
+        Err(DestinationError::Account)
+    );
+    target.repository = "ghcr.io/alice/app".into();
+    target.publisher = Publisher::GitHub { login: "Alice".into() };
+    assert_eq!(target.validate(), Err(DestinationError::Account));
 }
 
 #[test]
