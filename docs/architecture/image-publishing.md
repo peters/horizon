@@ -14,6 +14,8 @@ Personal destinations retain a lowercase account name and that account's own nam
 An observed login with different letter case still names the same account.
 A machine-local registry destination names the exact credential reference that permits publication.
 Organization destinations use a machine-local registry binding.
+Enterprise Managed Users require an organization destination because GitHub does not provide personal package storage for those accounts.
+See [the GitHub registry documentation](https://docs.github.com/en/enterprise-cloud@latest/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
 
 The package name contains the repository name, profile name and a short hash of the source identity.
 The hash separates equal names from different source hosts and owners.
