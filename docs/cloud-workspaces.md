@@ -514,8 +514,13 @@ token at once.
 
 The arrow keys move through the results. Horizon looks for checkouts up to four
 folders below your home folder, on a background thread. It does not look in
-hidden folders or build folders. Before this computer signs in to your GitHub
-App, **Show your GitHub repositories** signs it in and lists them. For a private repository on github.com, the token card becomes **Clone
+hidden folders, or inside build folders such as `vendor` or `node_modules`; a
+build folder that is itself a checkout is listed. On macOS it does not look in
+the folders that macOS guards with a privacy prompt, such as Documents. Before
+this computer signs in to your GitHub App, **Show your GitHub repositories**
+signs it in and lists them.
+
+For a private repository on github.com, the token card becomes **Clone
 with GitHub**, which clones with your connected account; **Use a token instead**
 keeps the old way.
 

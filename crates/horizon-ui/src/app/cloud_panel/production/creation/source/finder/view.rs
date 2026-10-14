@@ -11,7 +11,7 @@ use crate::{
 use std::fmt::Write as _;
 
 use egui::{
-    Align2, Color32, FontId, Painter, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Ui, Vec2,
+    Color32, FontId, Painter, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Ui, Vec2,
     text::{LayoutJob, TextFormat},
 };
 
@@ -226,15 +226,6 @@ fn row_widget(ui: &mut Ui, row: &Row, highlighted: bool) -> egui::Response {
         Kind::Folder { .. } => folder_mark(&painter, mark, mark_color),
     }
     let text_left = rect.left() + 44.0;
-    let title = ui.fonts_mut(|fonts| fonts.layout_job(title_job(row)));
-    painter.galley(Pos2::new(text_left, rect.top() + 6.0), title, theme::FG());
-    painter.text(
-        Pos2::new(text_left, rect.bottom() - 7.0),
-        Align2::LEFT_BOTTOM,
-        &row.detail,
-        FontId::proportional(11.5),
-        theme::FG_DIM(),
-    );
     let mut right = rect.right() - 10.0;
     let badges: &[(&str, Color32)] = match &row.kind {
         Kind::Local { github: true, .. } => &[
@@ -248,7 +239,31 @@ fn row_widget(ui: &mut Ui, row: &Row, highlighted: bool) -> egui::Response {
     for (text, color) in badges.iter().rev() {
         right = badge(ui, &painter, Pos2::new(right, rect.center().y), text, *color) - 6.0;
     }
+    // The name and the place get what the badges leave, cut short with an ellipsis.
+    let room = (right - text_left - 6.0).max(24.0);
+    let mut title = title_job(row);
+    title.wrap = one_line(room);
+    let title = ui.fonts_mut(|fonts| fonts.layout_job(title));
+    painter.galley(Pos2::new(text_left, rect.top() + 6.0), title, theme::FG());
+    let mut detail = LayoutJob::simple_singleline(row.detail.clone(), FontId::proportional(11.5), theme::FG_DIM());
+    detail.wrap = one_line(room);
+    let detail = ui.fonts_mut(|fonts| fonts.layout_job(detail));
+    painter.galley(
+        Pos2::new(text_left, rect.bottom() - 7.0 - detail.size().y),
+        detail,
+        theme::FG_DIM(),
+    );
     response
+}
+
+/// One line at most `width` wide, cut short with an ellipsis.
+fn one_line(width: f32) -> egui::text::TextWrapping {
+    egui::text::TextWrapping {
+        max_width: width,
+        max_rows: 1,
+        break_anywhere: true,
+        overflow_character: Some('…'),
+    }
 }
 
 fn title_job(row: &Row) -> LayoutJob {

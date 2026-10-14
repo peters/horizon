@@ -138,7 +138,7 @@ impl State {
         if self.parsed_for != self.input {
             let mut pasted = self.take_credentials();
             self.parsed_for.clone_from(&self.input);
-            let path = horizon_core::dir_search::expand_tilde(self.input.trim());
+            let path = typed_path(&self.input);
             let before = self.remote.as_ref().map(|remote| origin(&remote.url).to_owned());
             let before_url = self.remote.as_ref().map(|remote| remote.url.clone());
             // Only a repository that is really there shadows a link: `owner/repo` may also be a plain
@@ -206,10 +206,7 @@ impl State {
     /// Text that is neither a link nor a folder, once it is long enough to be judged.
     fn unrecognised(&mut self) -> bool {
         let text = self.input.trim();
-        text.len() > 3
-            && self.remote().is_none()
-            && self.folder.is_none()
-            && !horizon_core::dir_search::expand_tilde(self.input.trim()).is_dir()
+        text.len() > 3 && self.remote().is_none() && self.folder.is_none() && !typed_path(&self.input).is_dir()
     }
 
     fn parent(&mut self) -> &Path {
@@ -414,6 +411,24 @@ impl State {
             return Ok("Continue resumes the clone, then you choose where it runs.");
         }
         Ok("Continue clones the repository, then you choose where it runs.")
+    }
+}
+
+/// The folder the typed text names, read as the finder lists it: `./x`, `../x` and `~/x`
+/// from the home folder, an absolute path as it is. Other text, such as `owner/name`, is
+/// read as before.
+fn typed_path(text: &str) -> PathBuf {
+    let text = text.trim();
+    let text = if matches!(text, "." | "..") {
+        format!("{text}/")
+    } else {
+        text.to_owned()
+    };
+    if finder::is_path(&text) {
+        horizon_core::dir_search::resolve_query_path(&text)
+            .unwrap_or_else(|| horizon_core::dir_search::expand_tilde(&text))
+    } else {
+        horizon_core::dir_search::expand_tilde(&text)
     }
 }
 

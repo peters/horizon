@@ -77,6 +77,15 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
     let mut queue = VecDeque::from([(root.to_owned(), 0)]);
     // The home folder itself counts as read, so a link back to it is not followed.
     let mut seen = std::collections::HashSet::from([std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned())]);
+    // Where the folders that macOS guards really are, so no link leads into them either.
+    let guarded: Vec<PathBuf> = if cfg!(target_os = "macos") {
+        GUARDED
+            .iter()
+            .map(|name| std::fs::canonicalize(root.join(name)).unwrap_or_else(|_| root.join(name)))
+            .collect()
+    } else {
+        Vec::new()
+    };
     let mut visits = 0;
     while let Some((folder, depth)) = queue.pop_front() {
         visits += 1;
@@ -86,8 +95,8 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
         let Ok(entries) = std::fs::read_dir(&folder) else {
             continue;
         };
-        // A linked folder, such as `~/github` on another disk, is followed once: its real
-        // place is remembered, so two links to one folder, or a loop, are read one time.
+        // Every folder's real place is remembered, so a folder reached both directly and
+        // through a link, such as `~/github` on another disk, or a loop, is read one time.
         let mut children: Vec<PathBuf> = entries
             .flatten()
             // Hidden folders, and on macOS the folders it guards with a privacy prompt, are
@@ -98,15 +107,20 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
                 let guarded = depth == 0 && cfg!(target_os = "macos") && GUARDED.contains(&name.as_ref());
                 !name.starts_with('.') && !guarded
             })
-            .filter(|entry| match entry.file_type() {
-                Ok(kind) if kind.is_dir() => true,
-                Ok(kind) if kind.is_symlink() => {
-                    entry.path().is_dir()
-                        && seen.insert(std::fs::canonicalize(entry.path()).unwrap_or_else(|_| entry.path()))
+            .filter_map(|entry| {
+                let path = entry.path();
+                let folder = match entry.file_type() {
+                    Ok(kind) if kind.is_dir() => true,
+                    Ok(kind) if kind.is_symlink() => path.is_dir(),
+                    _ => false,
+                };
+                if !folder {
+                    return None;
                 }
-                _ => false,
+                let place = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+                let inside_guarded = guarded.iter().any(|guarded| place.starts_with(guarded));
+                (!inside_guarded && seen.insert(place)).then_some(path)
             })
-            .map(|entry| entry.path())
             .collect();
         children.sort_by_key(|path| {
             let name = path

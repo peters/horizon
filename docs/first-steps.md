@@ -352,24 +352,27 @@ from `origin` before deploy. Commit and update the branch before you start.
    Result: The **Where is your code?** step opens.
 
 4. If the code is on a Git server, paste the repository link.
-5. If the code is on this computer, type its name or its path. Then press
-   **Enter** on the result.
+5. If the code is on this computer, type its name or its path.
 
    Result: The results list the checkouts on this computer and, with GitHub
    connected, your GitHub repositories.
 
-6. If the dialog shows **No cloud setup yet**, click **Start on the base image**
+6. Press **Enter** on the result.
+
+   Result: The results go away and the dialog reads the repository.
+
+7. If the dialog shows **No cloud setup yet**, click **Start on the base image**
    in the **Quick start** card.
 
    Result: The dialog shows the profile `quick-start`. See
    [Quick start](cloud-workspaces.md#quick-start).
 
-7. Select a worker in the catalog.
+8. Select a worker in the catalog.
 
    Result: The summary shows the compute price for each hour and an estimated
    cost for the run. The default run time is one hour.
 
-8. Click **Start cloud**.
+9. Click **Start cloud**.
 
    Result: The cloud card shows each stage with its time.
 
