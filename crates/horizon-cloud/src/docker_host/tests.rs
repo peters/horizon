@@ -334,16 +334,21 @@ fn a_port_another_program_holds_is_skipped_and_a_created_worker_is_adopted() {
     // A crash between the create and the record: the next attempt adopts the container.
     let mut retry = Cloud::new("again", 2);
     retry.operation = Some(CreateState::Requested);
-    retry.journal.port = Some(47_999);
-    worker::create(&docker, retry.spec.as_ref().unwrap(), 47_999).unwrap();
-    assert_eq!(port(&retry.provision(&docker).unwrap()), 47_999);
+    retry.journal.port = Some(31_999);
+    let workspace = Some("again".to_owned());
+    docker
+        .volumes
+        .borrow_mut()
+        .insert("horizon-cloud-again-workspace".into(), workspace);
+    worker::create(&docker, retry.spec.as_ref().unwrap(), 31_999).unwrap();
+    assert_eq!(port(&retry.provision(&docker).unwrap()), 31_999);
     assert_eq!(docker.containers.borrow().len(), 2);
 }
 
 #[test]
 fn a_full_host_refuses_before_anything_is_created() {
     let docker = Fake::host(4, 8);
-    docker.add("busy", "horizon-cloud-busy", Some("busy"), 47_500, true);
+    docker.add("busy", "horizon-cloud-busy", Some("busy"), 31_500, true);
     let mut cloud = Cloud::new("big", 4);
     let error = cloud.provision(&docker).unwrap_err();
     assert!(matches!(error, CloudError::Capacity(_)), "{error}");
@@ -375,6 +380,21 @@ fn an_engine_that_publishes_loopback_ports_openly_is_refused() {
     // A request recorded before the engine changed is not created on an older one.
     let mut retry = Cloud::new("recorded", 2);
     retry.operation = Some(CreateState::Requested);
+    // A recorded request whose volume is gone is not created on a new, unlabelled one.
+    let error = retry.provision(&docker).unwrap_err();
+    assert!(error.to_string().contains("volume is gone"), "{error}");
+    assert!(
+        docker
+            .volumes
+            .borrow()
+            .get("horizon-cloud-recorded-workspace")
+            .is_none()
+    );
+    let workspace = Some("recorded".to_owned());
+    docker
+        .volumes
+        .borrow_mut()
+        .insert("horizon-cloud-recorded-workspace".into(), workspace);
     docker.version = Some("27.5.1");
     assert!(retry.provision(&docker).is_err());
     assert!(find(&docker, "recorded").unwrap().is_none());
@@ -430,6 +450,7 @@ fn a_worker_request_needs_an_immutable_image_and_a_valid_key() {
     let mut cloud = Cloud::new("loose", 2);
     cloud.spec.as_mut().unwrap().image_digest = "ghcr.io/example/worker:latest".into();
     assert!(cloud.provision(&docker).is_err());
+    assert!(Cloud::new("idle", 0).provision(&docker).is_err(), "no CPU limit");
     let mut keyless = Cloud::new("keyless", 2);
     keyless.spec.as_mut().unwrap().public_key = "ssh-ed25519 short".into();
     assert!(keyless.provision(&docker).is_err());

@@ -11,9 +11,10 @@ use std::{
     time::Duration,
 };
 
-/// Host loopback ports for worker SSH, below the usual ephemeral ranges so that the
-/// host's own outgoing connections do not take them.
-const PORTS: std::ops::Range<u16> = 47_000..48_000;
+/// Host loopback ports for worker SSH, below the ephemeral ranges of Linux
+/// (32768-60999) and macOS (49152-65535), so the host's own outgoing connections do
+/// not take them.
+const PORTS: std::ops::Range<u16> = 31_000..32_000;
 /// Containers a create may try when another program takes the chosen port first.
 const PORT_ATTEMPTS: usize = 4;
 const QUICK: Duration = Duration::from_secs(30);
@@ -356,9 +357,12 @@ pub fn provision(
         || !crate::valid_image(&spec.image_digest)
         || !spec.image_digest.contains("@sha256:")
         || !crate::valid_public_key(&spec.public_key)
+        // Docker reads a zero limit as no limit at all.
+        || spec.profile.cpu == 0
+        || spec.profile.memory_gb == 0
     {
         return Err(CloudError::Invalid(
-            "Worker requires a stable operation ID, an immutable image digest and an Ed25519 public key",
+            "Worker requires a stable operation ID, an immutable image digest, an Ed25519 public key, CPU and memory",
         ));
     }
     let id = spec.operation_id.as_str();
@@ -428,6 +432,13 @@ fn bind(
                 record(journal, records, |next| next.port = Some(port))?;
                 port
             };
+            // A named mount would silently make a new, unlabelled volume if the
+            // cloud's own one were gone, and delete would then leave it behind.
+            if !volume(docker, id)? {
+                return Err(CloudError::Invalid(
+                    "This cloud's workspace volume is gone from the host; delete the cloud and create it again",
+                ));
+            }
             create(docker, spec, port)?;
             find(docker, id)?.ok_or(CloudError::InvalidResponse)?
         };
