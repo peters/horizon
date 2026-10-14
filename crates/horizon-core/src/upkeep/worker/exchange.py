@@ -31,7 +31,9 @@ TIME_LIMIT = 2 ** 62
 REFUSALS = (('/workspace/.horizon-gate', 'refused.jsonl'),)
 REFUSALS_OWNER = 0
 REFUSED_KINDS = {'dispatch': 'a workflow start', 'merge': 'a merge'}
-REFUSALS_LIMIT = 16 * 1024
+# Enough for the last REFUSALS_KEPT lines at their longest: a reason of 300 characters that
+# JSON escapes to six bytes each, and the other fields.
+REFUSALS_LIMIT = 64 * 1024
 REFUSALS_KEPT = 20
 SESSION = re.compile(r'upkeep-[A-Za-z0-9_-]{1,90}')
 REVISION = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')

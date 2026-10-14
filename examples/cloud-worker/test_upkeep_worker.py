@@ -248,6 +248,12 @@ class ExchangeTests(unittest.TestCase):
             {'at': 150, 'text': 'The worker refused a GitHub change: odd'},
             {'at': 200, 'text': 'The worker refused a merge on acme/web: no merge.[2J'},
             {'at': 300, 'text': 'The worker refused a GitHub change: later'}])
+        # The last 20 lines come back also at their longest.
+        longest = [json.dumps({'at': 1000 + n, 'kind': 'merge', 'repository': 'a' * 39 + '/' + 'b' * 100,
+                               'reason': '\u00e9' * 300}) for n in range(25)]
+        (gate / 'refused.jsonl').write_text('\n'.join(longest) + '\n')
+        with mock.patch.dict(names, REFUSALS=logs, REFUSALS_OWNER=os.getuid()):
+            self.assertEqual([entry['at'] for entry in self.worker.exchange()['refused']], list(range(1005, 1025)))
         # A folder of another account, a link or a pipe gives nothing.
         with mock.patch.dict(names, REFUSALS=logs, REFUSALS_OWNER=0):
             self.assertEqual(self.worker.exchange()['refused'], [])

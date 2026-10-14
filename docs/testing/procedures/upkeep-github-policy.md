@@ -46,16 +46,21 @@ changes that an Upkeep never needs, and that the board shows the refusals.
 
    Result: The card shows **Ready** and the board of the Upkeep.
 
-2. Open a shell panel on the worker. Type `ls -l /run/horizon-worker/github-upkeep-policy`.
+2. Wait one minute for the first exchange. Open a shell panel on the worker and type
+   `ls -l /run/horizon-worker/github-upkeep-policy`.
 
    Result: The file exists and belongs to root.
 
-3. Ask the agent for push access to `<repo>` with the `github_access` tool from the
-   **Upkeep agent** panel, and clone `<repo>` to `/tmp/check` there.
+3. Open a Codex panel on the worker and ask it to call the `github_access` tool for
+   `<repo>` with push access. On the cloud card, allow the request for the cloud. In the
+   shell panel, clone `<repo>` to `/tmp/check`.
 
-   Result: Horizon allows the request without a prompt.
+   Result: The clone works. Every agent and shell panel of the cloud now reaches
+   `<repo>`, under the policy.
 
 ## 6. Tasks
+
+Run the commands of the tasks in the shell panel of setup step 2, in `/tmp/check`.
 
 ### 6.1 GPO-01: The refused API changes
 
@@ -92,9 +97,11 @@ changes that an Upkeep never needs, and that the board shows the refusals.
 
 ### 6.3 GPO-03: The refusals are logged and shown
 
-1. Type `cat /workspace/.horizon-gate/refused.jsonl` in the shell panel.
+1. Type `ls -ld /workspace/.horizon-gate /workspace/.horizon-gate/refused.jsonl` and
+   `cat /workspace/.horizon-gate/refused.jsonl` in the shell panel.
 
-   Result: The file belongs to root and has one line for each refusal of GPO-01.
+   Result: `ls` shows root as the owner of the folder (`drwxr-xr-x`) and of the file
+   (`-rw-r--r--`). The file has one line for each refusal of GPO-01.
 
 2. Wait for the next exchange and look at **Latest run** on the board.
 
