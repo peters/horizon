@@ -425,6 +425,25 @@ The source example `cloud_deploy registry-mcp <registry-path>` exposes
 `cloud_registry`. It is not a shipped Horizon agent capability. Do not teach
 an agent to construct or change a private registry through it as a lifecycle fallback.
 
+## Docker host provider
+
+A profile with `provider: docker-host` runs its cloud on a Docker engine that
+the person already has: this computer's engine, or a host that Horizon reaches
+with `ssh` or `tailscale ssh`. The person adds each host to `docker_hosts` in
+the cloud settings file with a unique `name`, an `access` (`this-pc`, `ssh` or
+`tailscale-ssh`), an SSH `address` and an optional absolute `docker` path. No
+secret is stored. A cloud placement names the host when more than one is saved.
+
+The worker publishes its SSH only on the host's loopback, on a port that stays
+the same after a stop. Horizon reaches it through the host. Stop, resume and
+delete work as for rented workers; delete removes only the cloud's own container
+and volume. The host pulls public images only: a profile with a build or a
+private registry login is refused. There is no rent, GPU, hosted device, idle stop or Rebuild. The
+public worker image has amd64 and arm64 builds, and Docker takes the host's own,
+so an ARM host such as an Apple silicon Mac runs it natively.
+
+There is no Cloud settings card or MCP operation for Docker hosts yet.
+
 ## Existing Docker engine probe
 
 The core library provides a read-only Docker engine probe for local, SSH key

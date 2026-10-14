@@ -14,7 +14,18 @@ fn stopped(runtime: &Runtime) -> StoppedCost {
         .map_or(StoppedCost::WorkerKept, |provider| provider.stopped)
 }
 
+/// Whether the cloud runs on a saved Docker host, where nothing is billed.
+pub(in crate::app::cloud_panel::production) fn on_docker_host(runtime: &Runtime) -> bool {
+    runtime
+        .state
+        .as_ref()
+        .is_some_and(|state| state.profile.provider == provider::DOCKER_HOST.id)
+}
+
 pub(super) fn stop_confirmation(runtime: &Runtime) -> &'static str {
+    if on_docker_host(runtime) {
+        return "Stop this worker? Running processes will end. Its container and volume stay on the Docker host.";
+    }
     match stopped(runtime) {
         StoppedCost::WorkerKept => "Stop this worker? Running processes will end. Storage remains billable.",
         StoppedCost::ServerDeleted => {
@@ -24,6 +35,9 @@ pub(super) fn stop_confirmation(runtime: &Runtime) -> &'static str {
 }
 
 pub(super) fn stopped_note(runtime: &Runtime) -> &'static str {
+    if on_docker_host(runtime) {
+        return "Stopped. The container and its volume stay on the Docker host; previous processes may be lost.";
+    }
     match stopped(runtime) {
         StoppedCost::WorkerKept => "Stopped. Storage can remain billable; previous processes may be lost.",
         StoppedCost::ServerDeleted => {
@@ -33,6 +47,9 @@ pub(super) fn stopped_note(runtime: &Runtime) -> &'static str {
 }
 
 pub(in crate::app::cloud_panel::production) fn delete_confirmation(runtime: &Runtime) -> &'static str {
+    if on_docker_host(runtime) {
+        return "Delete this worker's container and workspace volume on the Docker host? Running sessions and files in the volume cannot be recovered.";
+    }
     match stopped(runtime) {
         StoppedCost::WorkerKept => {
             "Delete this worker and its managed workspace storage? Running sessions and files in that storage cannot be recovered. Any separately attached network volumes retain their files and credentials and remain billable until deleted."
@@ -79,5 +96,18 @@ mod tests {
         assert!(delete_confirmation(&runpod).contains("network volumes"));
         // A card without a record yet reads as RunPod, as before.
         assert_eq!(stop_confirmation(&Runtime::default()), stop_confirmation(&runpod));
+        // Nothing on a saved Docker host is billed.
+        let docker = on("docker-host");
+        for text in [
+            stop_confirmation(&docker),
+            stopped_note(&docker),
+            delete_confirmation(&docker),
+        ] {
+            assert!(text.contains("Docker host") && !text.contains("billable"), "{text}");
+        }
+        assert_eq!(
+            super::super::cost::spend(&docker, std::time::SystemTime::now()).line,
+            "No rent"
+        );
     }
 }

@@ -52,6 +52,11 @@ fn reported_stopped(runtime: &Runtime) -> bool {
             .is_some_and(|worker| cloud_runtime::cost::run_gap(worker) == Some(RunGap::Stopped))
 }
 
+/// Whether the cloud runs where nothing is rented, such as a saved Docker host.
+fn no_rent(runtime: &Runtime) -> bool {
+    runtime.state.is_some() && provider(runtime).pricing == provider::Pricing::NoRent
+}
+
 /// The provider of the cloud's deployment; a cloud without one has no worker to price.
 pub(super) fn provider(runtime: &Runtime) -> &'static Description {
     runtime
@@ -148,6 +153,9 @@ pub(super) fn teaser(runtime: &Runtime) -> String {
     if worker_deleted(runtime).is_some() {
         return "deleted".into();
     }
+    if no_rent(runtime) {
+        return "no rent".into();
+    }
     if compute_idle(runtime) {
         return "stopped".into();
     }
@@ -160,6 +168,12 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
             line: "Costs unknown".into(),
             explanation: "The deployment record could not be read, so Horizon cannot tell whether a worker is billing."
                 .into(),
+        };
+    }
+    if no_rent(runtime) {
+        return Spend {
+            line: "No rent".into(),
+            explanation: "The worker runs on a saved Docker host, so no provider bills it.".into(),
         };
     }
     let currency = provider(runtime).currency;
@@ -265,6 +279,9 @@ fn run_note(runtime: &Runtime, estimated: bool) -> &'static str {
 
 /// The Cost tab's rate: a stopped or deleted worker's last rate is history, not what bills now.
 fn rate_metric(runtime: &Runtime, rate: Option<f64>) -> (String, &'static str) {
+    if no_rent(runtime) {
+        return ("—".into(), "no rent on a Docker host");
+    }
     // The worker's state comes first: a stopped worker is stopped with or without a rate.
     match worker_deleted(runtime) {
         Some(Deleted::Fully) => return ("—".into(), "worker deleted; nothing billing"),
@@ -371,6 +388,9 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) {
 
 /// What still bills, for the state the worker is in.
 fn billing_note(runtime: &Runtime) -> &'static str {
+    if no_rent(runtime) {
+        return "Nothing is billed: the worker runs on a saved Docker host.";
+    }
     match worker_deleted(runtime) {
         Some(Deleted::Fully) => return "The worker is deleted; it bills no compute. Past periods stay listed above.",
         Some(Deleted::StorageLeft) => {

@@ -21,8 +21,6 @@ const QUICK: Duration = Duration::from_secs(30);
 /// Starting, and stopping, which waits 30 seconds for the worker to exit.
 const POWER: Duration = Duration::from_secs(90);
 const PULL: Duration = Duration::from_mins(30);
-/// Worker images are built for this platform only; an ARM host emulates it.
-const PLATFORM: &str = "linux/amd64";
 const NANO_CPUS: u64 = 1_000_000_000;
 const GIB: u64 = 1 << 30;
 
@@ -33,6 +31,14 @@ pub struct Journal {
     /// The saved host the cloud lives on, fixed by its first request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
+    /// How that host was reached then, so a saved host that now names another engine
+    /// is refused rather than asked about this cloud's resources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<Route>,
+    /// The engine's own ID from `docker info`, which a route cannot prove: an SSH alias
+    /// or a name can come to point at another machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_id: Option<String>,
     /// The host loopback port of the worker's SSH, pinned for the container's life.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
@@ -43,6 +49,68 @@ pub struct Journal {
     /// Set when a delete starts; nothing starts the cloud again until it finished.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub deleting: bool,
+}
+
+/// The access and address of a saved host, which name its engine; its name and docker
+/// path may change without moving the cloud.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Route {
+    pub access: super::Access,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+}
+
+impl Route {
+    fn of(host: &Host) -> Self {
+        Self {
+            access: host.access,
+            address: host.address.clone(),
+        }
+    }
+}
+
+impl Journal {
+    /// Refuses `host` unless it is the saved host, reaching the engine, that the cloud
+    /// recorded.
+    /// # Errors
+    /// Another saved host, or the same name pointing at another engine.
+    pub fn admits(&self, host: &Host) -> Result<(), CloudError> {
+        if self.host.as_ref().is_some_and(|recorded| *recorded != host.name) {
+            return Err(CloudError::Invalid("This cloud lives on another Docker host"));
+        }
+        if self.engine.as_ref().is_some_and(|engine| *engine != Route::of(host)) {
+            return Err(CloudError::Invalid(
+                "This cloud's saved Docker host now reaches another engine; restore its access and address",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Journal {
+    /// Refuses an engine other than the one the cloud recorded, before its answers,
+    /// such as a container that is not there, may count for this cloud.
+    /// # Errors
+    /// Another engine, or Docker failures.
+    pub fn confirms(&self, docker: &impl Docker) -> Result<(), CloudError> {
+        match &self.engine_id {
+            Some(recorded) if *recorded != engine_id(docker)? => Err(CloudError::Invalid(ANOTHER_ENGINE)),
+            _ => Ok(()),
+        }
+    }
+}
+
+pub(super) const ANOTHER_ENGINE: &str =
+    "This cloud's saved Docker host now reaches another Docker engine than the one the cloud runs on";
+
+fn engine_id(docker: &impl Docker) -> Result<String, CloudError> {
+    let id = docker.docker(&["info".into(), "--format".into(), "{{.ID}}".into()], QUICK)?;
+    let id = id.trim();
+    if id.is_empty() || id.len() > 256 || id.chars().any(char::is_control) {
+        return Err(CloudError::InvalidResponse);
+    }
+    Ok(id.to_owned())
 }
 
 /// Where a provisioning or delete step persists what it is about to do.
@@ -366,17 +434,27 @@ pub fn provision(
         ));
     }
     let id = spec.operation_id.as_str();
-    if journal.host.as_ref().is_some_and(|recorded| *recorded != host.name) {
-        return Err(CloudError::Invalid("This cloud lives on another Docker host"));
-    }
+    journal.admits(host)?;
+    journal.confirms(docker)?;
     if *operation == CreateState::Prepared {
         check_capacity(docker, spec)?;
-        let pull = format!("pull --quiet --platform {PLATFORM} {}", spec.image_digest);
+        // No platform is named: Docker takes the host's own from a multi-platform image, and
+        // runs an amd64-only image under emulation on an ARM host.
+        let pull = format!("pull --quiet {}", spec.image_digest);
         call(docker, &pull, PULL)?;
     }
     // Recorded once nothing refused the cloud, before anything is created for it.
-    if journal.host.is_none() {
-        record(journal, records, |next| next.host = Some(host.name.clone()))?;
+    if journal.host.is_none() || journal.engine.is_none() || journal.engine_id.is_none() {
+        let engine = engine_id(docker)?;
+        record(journal, records, |next| {
+            next.host = Some(host.name.clone());
+            next.engine = Some(Route::of(host));
+            next.engine_id = Some(engine);
+        })?;
+    }
+    // Every later call checks, in its own session, that it still reaches this engine.
+    if let Some(engine) = &journal.engine_id {
+        docker.pin_engine(engine);
     }
     if *operation == CreateState::Prepared {
         if !volume(docker, id)? {
@@ -477,7 +555,7 @@ pub(super) fn create(docker: &impl Docker, spec: &WorkerSpec, port: u16) -> Resu
     let (id, cpu, memory_gb) = (&spec.operation_id, spec.profile.cpu, spec.profile.memory_gb);
     let shm_gb = crate::hetzner::cloud::shared_memory_gb(memory_gb);
     let command = format!(
-        "container create --name {} --platform {PLATFORM} --label {} --cpus {cpu} --memory {memory_gb}g \
+        "container create --name {} --label {} --cpus {cpu} --memory {memory_gb}g \
          --shm-size {shm_gb}g --publish 127.0.0.1:{port}:22 --mount type=volume,src={},dst=/workspace",
         container_name(id),
         owner(id),
@@ -537,8 +615,10 @@ pub fn delete(
     records: &mut impl Records,
 ) -> Result<(), CloudError> {
     // Another host's engine would find nothing and report the cloud deleted.
-    if journal.host.as_ref().is_some_and(|recorded| *recorded != host.name) || !crate::valid_id(operation_id) {
-        return Err(CloudError::Invalid("This cloud lives on another Docker host"));
+    journal.admits(host)?;
+    journal.confirms(docker)?;
+    if !crate::valid_id(operation_id) {
+        return Err(CloudError::Invalid("Invalid cloud identity"));
     }
     if !journal.deleting {
         record(journal, records, |next| next.deleting = true)?;

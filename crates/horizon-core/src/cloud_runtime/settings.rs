@@ -37,6 +37,10 @@ pub struct Settings {
     /// Omitted unless Hetzner is configured, so existing settings keep their encoding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hetzner: Option<Hetzner>,
+    /// Docker engines this machine may run clouds on, each under a unique name. Omitted
+    /// until one is saved, so existing settings keep their encoding.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub docker_hosts: Vec<horizon_cloud::docker_host::Host>,
     /// The GitHub App of Connect GitHub. Omitted until it is connected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub github: Option<super::github::Settings>,
@@ -135,6 +139,13 @@ impl Settings {
         }
         for binding in &self.git_credentials {
             binding.validate()?;
+        }
+        let mut names = std::collections::BTreeSet::new();
+        for host in &self.docker_hosts {
+            host.validate()?;
+            if !names.insert(&host.name) {
+                return Err(Error::Invalid("Give each saved Docker host its own name"));
+            }
         }
         if let Some(hetzner) = &self.hetzner {
             hetzner.validate()?;

@@ -3,6 +3,7 @@
 //! deployment record, its lock and what a found or terminated worker means for it.
 //! Adding a provider means one implementation here and its description in
 //! `horizon_cloud::provider`.
+mod docker_host;
 mod hetzner;
 mod runpod;
 
@@ -50,6 +51,7 @@ fn kind(profile: &Profile) -> Kind {
 pub(super) fn preflight(cloud_id: &str, profile: &Profile, settings: &Settings) -> Result<()> {
     match kind(profile) {
         Kind::Hetzner => super::deployment::hetzner::preflight(cloud_id, profile, settings),
+        Kind::DockerHost => docker_host::preflight(profile, settings),
         Kind::RunPod => Ok(()),
     }
 }
@@ -59,23 +61,26 @@ pub(super) fn preflight(cloud_id: &str, profile: &Profile, settings: &Settings) 
 pub(super) fn admit(settings: &Settings, profile: &Profile, image: &str, operation: &CreateState) -> Result<()> {
     match kind(profile) {
         Kind::Hetzner => super::deployment::hetzner::admit(settings, image, operation),
-        Kind::RunPod => Ok(()),
+        Kind::DockerHost | Kind::RunPod => Ok(()),
     }
 }
 
 /// The machine types a worker may run on, in the order they are tried: `RunPod` CPU
-/// flavors, or a Hetzner cloud's server types.
+/// flavors, a Hetzner cloud's server types, or a Docker host cloud's saved hosts.
 pub(super) fn cpu_flavors(profile: &Profile, settings: &Settings) -> Result<Vec<String>> {
     match kind(profile) {
         Kind::Hetzner => hetzner::cpu_flavors(settings),
+        Kind::DockerHost => docker_host::hosts(settings),
         Kind::RunPod => runpod::cpu_flavors(profile, settings),
     }
 }
 
-/// Where a worker may run: `RunPod` data centers, or a Hetzner cloud's locations.
+/// Where a worker may run: `RunPod` data centers, a Hetzner cloud's locations, or a
+/// Docker host cloud's saved hosts.
 pub(super) fn data_centers(profile: &Profile, settings: &Settings) -> Result<Vec<String>> {
     match kind(profile) {
         Kind::Hetzner => hetzner::data_centers(settings),
+        Kind::DockerHost => docker_host::hosts(settings),
         Kind::RunPod => Ok(settings.data_centers.clone()),
     }
 }
@@ -83,9 +88,12 @@ pub(super) fn data_centers(profile: &Profile, settings: &Settings) -> Result<Vec
 /// The provider a cloud of `request` deploys on, with its client.
 /// # Errors
 /// Refuses missing credentials and settings the provider needs.
-pub(super) fn compute(request: &super::deployment::Request) -> Result<Box<dyn super::deployment::Compute>> {
+pub(super) fn compute(request: &super::deployment::Request) -> Result<Box<dyn super::deployment::Compute + '_>> {
     Ok(match kind(&request.profile) {
         Kind::Hetzner => Box::new(super::deployment::hetzner::Compute::new(&request.settings)?),
+        Kind::DockerHost => Box::new(docker_host::DockerHost {
+            settings: &request.settings,
+        }),
         Kind::RunPod => Box::new(horizon_cloud::runpod::RunPod::new(request.settings.credential()?)),
     })
 }
@@ -95,6 +103,7 @@ pub(super) fn compute(request: &super::deployment::Request) -> Result<Box<dyn su
 pub(super) fn retained(store: &Store, state: &Deployment) -> Result<bool> {
     match kind(&state.profile) {
         Kind::Hetzner => hetzner::retained(store),
+        Kind::DockerHost => docker_host::retained(store),
         Kind::RunPod => runpod::retained(store, state),
     }
 }
@@ -103,6 +112,7 @@ pub(super) fn retained(store: &Store, state: &Deployment) -> Result<bool> {
 pub(super) fn lifecycle<'a>(state: &Deployment, settings: &'a Settings) -> Box<dyn Lifecycle + 'a> {
     match kind(&state.profile) {
         Kind::Hetzner => Box::new(hetzner::Hetzner { settings }),
+        Kind::DockerHost => Box::new(docker_host::DockerHost { settings }),
         Kind::RunPod => Box::new(runpod::RunPod { settings }),
     }
 }

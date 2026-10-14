@@ -298,7 +298,8 @@ impl Transport for Live<'_> {
         Ok(Some(Worker {
             id: worker.id.clone(),
             revision: state.revision.clone(),
-            address: worker.ssh_endpoint(),
+            // A Docker host publishes the worker on its own loopback, which no peer reaches.
+            address: worker.ssh_endpoint().filter(|_| worker.docker_host.is_none()),
             private: worker.private_ssh_endpoint().zip(worker.network_zone.clone()),
             status,
         }))

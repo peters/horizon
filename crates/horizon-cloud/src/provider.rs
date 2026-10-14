@@ -10,6 +10,8 @@ pub enum Placement {
     DataCenters,
     /// Named locations, each with its own server types and prices.
     Locations,
+    /// Docker engines the person saved, each with its own free capacity.
+    Hosts,
 }
 
 /// What happens to the worker when a cloud stops. Either way only the workspace
@@ -32,6 +34,8 @@ pub enum Pricing {
     Flavors,
     /// Per server type and location, with a monthly cap.
     ServerTypes,
+    /// Nothing: the person's own machine runs the worker.
+    NoRent,
 }
 
 /// A choice a provider supports beyond size and placement.
@@ -95,6 +99,8 @@ pub enum Rebuild {
     /// The provider cannot report a server's image, so the server is released as a
     /// stop releases it and a new one runs the new image on the same workspace volume.
     NewServer,
+    /// Not offered: a cloud there keeps the image it was created with.
+    Unsupported,
 }
 
 /// Who stops an idle worker on a provider.
@@ -154,6 +160,29 @@ pub const HETZNER: Description = Description {
     ),
 };
 
+/// A Docker engine the person already runs: this computer's, or one reached over SSH
+/// or Tailscale SSH. Nothing is rented, and a stop keeps the container and its volume.
+pub const DOCKER_HOST: Description = Description {
+    kind: Kind::DockerHost,
+    id: crate::docker_host::PROVIDER,
+    label: "Docker host",
+    currency: "USD",
+    net_of_vat: false,
+    gpu: false,
+    placement: Placement::Hosts,
+    pricing: Pricing::NoRent,
+    stopped: StoppedCost::WorkerKept,
+    choices: &[],
+    creatable: true,
+    // Horizon stops nobody's own machine; the worker itself cannot stop its container.
+    idle_stop: IdleStop::Unsupported,
+    registry_auth: false,
+    rebuild: Rebuild::Unsupported,
+    site: "your own machine",
+    // A Docker volume has no size of its own; it shares the host's disk.
+    cpu_volume_gb: (1, 65_535),
+};
+
 /// Which provider a description is, for code that must handle every provider: a
 /// match on it is exhaustive, so adding a provider fails to compile until each such
 /// place handles it.
@@ -161,10 +190,11 @@ pub const HETZNER: Description = Description {
 pub enum Kind {
     RunPod,
     Hetzner,
+    DockerHost,
 }
 
 /// Every provider a cloud can run on, in the order they are offered.
-pub const ALL: [&Description; 2] = [&RUNPOD, &HETZNER];
+pub const ALL: [&Description; 3] = [&RUNPOD, &HETZNER, &DOCKER_HOST];
 
 /// The provider a profile names.
 #[must_use]
@@ -279,7 +309,7 @@ mod tests {
 
     #[test]
     fn every_provider_a_profile_accepts_is_described() {
-        for id in ["runpod", crate::hetzner::PROVIDER] {
+        for id in ["runpod", crate::hetzner::PROVIDER, crate::docker_host::PROVIDER] {
             assert!(by_id(id).is_some(), "{id}");
         }
     }
@@ -319,5 +349,25 @@ mod tests {
         );
         assert!(RUNPOD.supports(&profile) && HETZNER.supports(&profile));
         assert!(!unsupported.supports(&profile));
+        assert!(!DOCKER_HOST.supports(&profile));
+    }
+
+    #[test]
+    fn a_docker_host_offers_cpu_clouds_without_rent_rebuild_or_idle_stop() {
+        let (cpu, gpu) = (profile(false), profile(true));
+        assert_eq!(by_id("docker-host"), Some(&DOCKER_HOST));
+        assert!(DOCKER_HOST.supports(&cpu) && !DOCKER_HOST.supports(&gpu));
+        let mut devices = profile(false);
+        devices.capabilities.browserstack = Some(crate::BrowserStack::default());
+        assert!(!DOCKER_HOST.supports(&devices));
+        assert_eq!(
+            (DOCKER_HOST.pricing, DOCKER_HOST.rebuild, DOCKER_HOST.stopped),
+            (Pricing::NoRent, Rebuild::Unsupported, StoppedCost::WorkerKept)
+        );
+        assert!(DOCKER_HOST.choices.is_empty() && DOCKER_HOST.creatable);
+        assert_eq!(
+            Description::choices(&cpu, &[&DOCKER_HOST, &RUNPOD]),
+            [&RUNPOD, &DOCKER_HOST]
+        );
     }
 }

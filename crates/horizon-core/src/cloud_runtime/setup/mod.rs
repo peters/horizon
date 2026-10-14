@@ -334,6 +334,7 @@ fn defaults(root: &Path) -> Settings {
         ssh_identity_file: default_identity(root),
         docker_config: root.join("docker"),
         docker_host: None,
+        docker_hosts: Vec::new(),
         registry_pull_auth_id: None,
         registries: None,
         cpu_flavors: vec!["cpu3c".into()],

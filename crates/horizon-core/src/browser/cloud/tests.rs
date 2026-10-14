@@ -29,6 +29,7 @@ fn orientation_fixture() -> OrientationFixture {
             identity: "/unused".into(),
             known_hosts: "/unused".into(),
             host_key_alias: "cloud-fixture".into(),
+            proxy_command: None,
         },
         id: "fixture".into(),
         initial_url: None,
@@ -213,6 +214,7 @@ fn orientation_requires_a_provider_target_on_cloud_presentations() {
                     identity: "/unused".into(),
                     known_hosts: "/unused".into(),
                     host_key_alias: "cloud-fixture".into(),
+                    proxy_command: None,
                 },
                 id: "fixture".into(),
                 initial_url: None,
@@ -333,6 +335,7 @@ fn stopped_cloud_keeps_its_environment_and_refuses_local_backend_switch() {
             identity: "/unused".into(),
             known_hosts: "/unused".into(),
             host_key_alias: "cloud-fixture".into(),
+            proxy_command: None,
         },
         id: "fixture".into(),
         initial_url: None,
@@ -426,6 +429,7 @@ fn failed_firefox_transport_preserves_engine_for_persistence_and_retry() {
         identity: "/unused".into(),
         known_hosts: "/unused".into(),
         host_key_alias: "cloud-fixture".into(),
+        proxy_command: None,
     };
     let config = super::super::BrowserConfig {
         backend: super::super::BackendKind::FirefoxBidi,

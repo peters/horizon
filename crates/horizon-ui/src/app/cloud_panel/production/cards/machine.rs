@@ -10,7 +10,8 @@ pub(super) fn facts(runtime: &Runtime) -> Vec<(&'static str, String)> {
         "Worker",
         format!("{} · {} (last observed)", worker.id, worker.desired_status),
     )];
-    if let Some(endpoint) = worker.ssh_endpoint() {
+    // A Docker host publishes the worker on its own loopback, which no one reaches directly.
+    if let Some(endpoint) = worker.ssh_endpoint().filter(|_| worker.docker_host.is_none()) {
         rows.push(("SSH", host_port(endpoint.host().as_str(), endpoint.port())));
     }
     let disks = [

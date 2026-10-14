@@ -364,6 +364,30 @@ fn unsupported_providers_do_not_block_gpu_comparisons() {
 }
 
 #[test]
+fn a_docker_host_profile_is_shown_but_never_started_on_a_rented_worker() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    hetzner_binding(&mut app);
+    tall_frame(&ctx, &mut app);
+    assert!(crate::app::cloud_panel::production::creation::can_submit(
+        &app.cloud_prototype.production
+    ));
+    let form = &mut app.cloud_prototype.production;
+    let profile = form.profiles.as_mut().unwrap().profiles.get_mut("development").unwrap();
+    profile.provider = "docker-host".into();
+    tall_frame(&ctx, &mut app);
+    tall_frame(&ctx, &mut app);
+    // Even with a rented provider's offer chosen, New cloud starts nothing yet.
+    assert!(!crate::app::cloud_panel::production::creation::can_submit(
+        &app.cloud_prototype.production
+    ));
+    let output = tall_frame(&ctx, &mut app);
+    assert!(painted(&output).contains("Docker host"), "the provider chip names it");
+}
+
+#[test]
 fn container_disk_minimums_disable_an_incompatible_chosen_server() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),

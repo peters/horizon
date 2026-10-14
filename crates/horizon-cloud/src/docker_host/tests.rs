@@ -18,6 +18,8 @@ struct Fake {
     memory_gb: u64,
     /// The engine's version; a current one when unset.
     version: Option<&'static str>,
+    /// The engine's ID; one fixed ID when unset.
+    engine: Option<&'static str>,
 }
 
 fn flag<'a>(args: &'a [String], name: &str) -> &'a str {
@@ -115,6 +117,7 @@ impl Docker for Fake {
         let words: Vec<&str> = args.iter().map(String::as_str).collect();
         let (mut containers, mut volumes) = (self.containers.borrow_mut(), self.volumes.borrow_mut());
         match words.as_slice() {
+            ["info", "--format", "{{.ID}}"] => return Ok(format!("{}\n", self.engine.unwrap_or("ENGINE-ONE"))),
             ["info", ..] => {
                 let version = self.version.unwrap_or("29.0.1");
                 let info = json!({"OSType": "linux", "NCPU": self.cpus, "MemTotal": self.memory_gb << 30, "ServerVersion": version});
@@ -404,7 +407,7 @@ fn an_engine_that_publishes_loopback_ports_openly_is_refused() {
 
 #[test]
 fn delete_removes_only_the_clouds_own_container_and_volume() {
-    let docker = Fake::host(16, 64);
+    let mut docker = Fake::host(16, 64);
     let (mut cloud, mut neighbour) = (Cloud::new("mine", 2), Cloud::new("neighbour", 2));
     cloud.provision(&docker).unwrap();
     neighbour.provision(&docker).unwrap();
@@ -428,6 +431,28 @@ fn delete_removes_only_the_clouds_own_container_and_volume() {
         )
         .is_err()
     );
+    // Nor is the same name saved again for another engine, which would find nothing.
+    let moved = Host {
+        address: Some("builder@other-server".into()),
+        ..host()
+    };
+    let (mut operation, mut journal) = (cloud.operation.clone().unwrap(), cloud.journal.clone());
+    let error = delete(
+        &docker,
+        &moved,
+        "mine",
+        &mut operation,
+        &mut journal,
+        &mut Cloud::default(),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("another engine"), "{error}");
+    // Nor another engine behind the same route, such as an SSH alias moved to a new machine.
+    docker.engine = Some("ENGINE-TWO");
+    let error = cloud.delete(&docker).unwrap_err();
+    assert!(error.to_string().contains("another Docker engine"), "{error}");
+    assert!(cloud.provision(&docker).is_err());
+    docker.engine = None;
     cloud.delete(&docker).unwrap();
     let containers: Vec<String> = docker.containers.borrow().keys().cloned().collect();
     assert_eq!(containers, [neighbour.worker_id(), "foreign".into()]);
@@ -559,7 +584,8 @@ fn remote_arguments_reach_docker_unchanged() {
     use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().unwrap();
     let docker = root.path().join("docker");
-    std::fs::write(&docker, "#!/bin/sh\nprintf '%s\\0' \"$@\"\n").unwrap();
+    let script = "#!/bin/sh\n[ \"$3\" = info ] && { echo ENGINE-A; exit 0; }\nprintf '%s\\0' \"$@\"\n";
+    std::fs::write(&docker, script).unwrap();
     std::fs::set_permissions(&docker, std::fs::Permissions::from_mode(0o755)).unwrap();
     let host = Host {
         docker: Some(docker.to_string_lossy().into_owned()),
@@ -592,6 +618,30 @@ fn remote_arguments_reach_docker_unchanged() {
         .collect();
     assert_eq!(received[..2], ["-H", "unix:///var/run/docker.sock"]);
     assert_eq!(received[2..], hostile);
+    // The same session checks the engine's own ID before it runs anything.
+    let run = |engine: &str| {
+        let command = host
+            .command_on(&args, std::path::Path::new("/unused"), Some(engine))
+            .unwrap();
+        let script = command.get_args().last().unwrap().to_owned();
+        let shell = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .env("HOME", root.path())
+            .output();
+        shell.unwrap()
+    };
+    assert!(run("ENGINE-A").status.success());
+    assert_eq!(run("ENGINE-B").status.code(), Some(OTHER_ENGINE));
+    // A docker that cannot answer reports its own failure, not another engine.
+    std::fs::write(
+        &docker,
+        "#!/bin/sh\necho 'Cannot connect to the Docker daemon' >&2; exit 1\n",
+    )
+    .unwrap();
+    let failed = run("ENGINE-A");
+    assert_eq!(failed.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("Cannot connect"));
     assert!(!root.path().join("pwned").exists());
     let config = std::fs::read_to_string(root.path().join(".horizon/docker-config/config.json")).unwrap();
     assert_eq!(config, PRIVATE_CONFIG, "no credential helper is ever detected");
@@ -612,6 +662,7 @@ fn a_command_that_outlives_its_time_is_stopped() {
         host: &host,
         local_config: config.path().join("docker"),
         cancel: &cancel,
+        engine_id: std::sync::Mutex::new(None),
     };
     let started = std::time::Instant::now();
     let error = CloudError::from(engine.docker(&["5".into()], Duration::from_millis(200)).unwrap_err());

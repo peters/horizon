@@ -335,7 +335,12 @@ fn exceptional(runtime: &Runtime) -> Option<Status> {
         return Some(Status {
             tone: Tone::Attention,
             verb: "Worker deleted".into(),
-            numbers: "Storage cleanup unfinished · still billable".into(),
+            numbers: if super::wording::on_docker_host(runtime) {
+                "Volume cleanup unfinished on the host"
+            } else {
+                "Storage cleanup unfinished · still billable"
+            }
+            .into(),
             tail: "Open Manage to finish it".into(),
             // The earlier steps are done; cleanup waits for the owner, it is not running.
             track: Track {
@@ -428,7 +433,12 @@ fn unmarked(runtime: &Runtime, occupancy: Occupancy, now: SystemTime) -> Status 
             Status {
                 tone: Tone::Attention,
                 verb,
-                numbers: "Storage kept · billable".into(),
+                numbers: if super::wording::on_docker_host(runtime) {
+                    "Container and volume kept on the host"
+                } else {
+                    "Storage kept · billable"
+                }
+                .into(),
                 tail,
                 right: panels(occupancy.panels),
                 track: Track::complete(&Stage::ALL, true),

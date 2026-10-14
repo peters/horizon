@@ -57,6 +57,7 @@ impl Snapshot {
                 identity: key.path().to_owned(),
                 known_hosts: hosts.path().to_owned(),
                 host_key_alias: format!("horizon-cloud-{}", target.worker_id),
+                proxy_command: target.connection.proxy_command.clone(),
             },
             _key: key,
             _hosts: hosts,

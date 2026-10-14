@@ -76,6 +76,7 @@ pub fn sum_by_currency(rates: impl IntoIterator<Item = Rate>) -> Vec<Rate> {
 pub fn rate_coverage(provider: &Description) -> &'static str {
     match provider.kind {
         Kind::RunPod => "Last reported worker hourly rate. Storage and other provider charges may be additional.",
+        Kind::DockerHost => "No rent: the worker runs on a Docker host you already have.",
         Kind::Hetzner => {
             "Hetzner's hourly price for the server type, in euros net of VAT: compute only. Not included: the \
              workspace volume, which a stop keeps, the primary IPv4 address, traffic over the included amount and \

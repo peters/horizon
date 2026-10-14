@@ -12,7 +12,12 @@ pub(super) fn plan(store: &Store, binding: &Binding, intent: &Intent, state: Opt
         Some(state) if deletion_pending(store, state)? => Observation::DeletionPending,
         Some(state) => Observation::Existing(state),
         None => {
-            for file in ["hetzner.json", "workspace-volume.json", "workspace-volume.required"] {
+            for file in [
+                "hetzner.json",
+                "docker-host.json",
+                "workspace-volume.json",
+                "workspace-volume.required",
+            ] {
                 if store.root().join(file).try_exists()? {
                     return Err(Error::Invalid(
                         "Provider journal exists without its deployment; reconcile it first",
@@ -71,6 +76,16 @@ fn resumed_on_a_new_server(store: &Store, state: &Deployment) -> Result<bool> {
 fn deletion_pending(store: &Store, state: &Deployment) -> Result<bool> {
     if intent::refuses_deployment(state) {
         return Ok(true);
+    }
+    if state.profile.provider == horizon_cloud::docker_host::PROVIDER {
+        let journal = match std::fs::read(store.root().join("docker-host.json")) {
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| Error::Json)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                horizon_cloud::docker_host::Journal::default()
+            }
+            Err(error) => return Err(error.into()),
+        };
+        return Ok(journal.deleting);
     }
     if state.profile.provider != horizon_cloud::hetzner::PROVIDER {
         return deployment::storage::deletion_pending(store, state);
@@ -135,14 +150,19 @@ impl Backend for Live<'_> {
             let state = store
                 .load()?
                 .ok_or(Error::Invalid("Companion deployment disappeared"))?;
-            if state.profile.provider == horizon_cloud::hetzner::PROVIDER {
-                self.settings
-                    .hetzner
-                    .as_ref()
-                    .ok_or(Error::Invalid("Configure this cloud provider before executing"))?
-                    .credential()?;
-            } else {
-                self.settings.credential()?;
+            match horizon_cloud::provider::Description::of(&state.profile).kind {
+                horizon_cloud::provider::Kind::Hetzner => {
+                    self.settings
+                        .hetzner
+                        .as_ref()
+                        .ok_or(Error::Invalid("Configure this cloud provider before executing"))?
+                        .credential()?;
+                }
+                // A Docker host needs no credential; SSH uses the person's own keys.
+                horizon_cloud::provider::Kind::DockerHost => {}
+                horizon_cloud::provider::Kind::RunPod => {
+                    self.settings.credential()?;
+                }
             }
             if matches!(
                 decision,

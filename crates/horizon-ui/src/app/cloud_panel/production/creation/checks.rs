@@ -78,6 +78,13 @@ impl State {
                         format!("{error}. Open Cloud settings to repair them."),
                     )],
                 }
+            } else if profile.provider == horizon_core::cloud_runtime::provider::DOCKER_HOST.id {
+                // Not a key a rented provider asks for, so no key form either.
+                vec![problem(
+                    "Docker host",
+                    "No Docker host is saved on this computer yet. Add it to docker_hosts in the cloud settings file."
+                        .into(),
+                )]
             } else {
                 vec![problem(
                     "Cloud settings",
@@ -150,7 +157,7 @@ fn rows(form: &Production) -> Vec<Row> {
     ))];
     let found = form.checks.problems.as_deref();
     let problem = |what: &str| found.and_then(|found| found.iter().find(|problem| problem.what == what));
-    if let Some(problem) = problem("Cloud settings") {
+    if let Some(problem) = problem("Cloud settings").or_else(|| problem("Docker host")) {
         rows.push(Row::Fail(problem.reason.clone()));
         return rows;
     }
@@ -174,6 +181,8 @@ fn rows(form: &Production) -> Vec<Row> {
                 .is_some_and(|fetched| fetched.value.is_some()),
             form.prices.hetzner.error(),
         ),
+        // Nothing is rented: there is no account to check and no price to fetch.
+        Kind::DockerHost => (true, None),
     };
     rows.push(if let Some(problem) = problem("Provider profile") {
         // What no key can fix: the profile asks for something this provider cannot give.
@@ -182,6 +191,8 @@ fn rows(form: &Production) -> Vec<Row> {
         Row::Fail(problem.reason.clone())
     } else if let Some(error) = error {
         Row::Fail(error.to_owned())
+    } else if live && found.is_some() && provider.kind == Kind::DockerHost {
+        Row::Pass("Docker host saved; nothing is rented".into())
     } else if live && found.is_some() {
         Row::Pass(format!("{} account accepted, prices are current", provider.label))
     } else {
@@ -227,6 +238,7 @@ fn provider_error(form: &Production) -> Option<&str> {
     match provider::current(form.provider, profile).kind {
         Kind::RunPod => form.prices.list_error.as_deref(),
         Kind::Hetzner => form.prices.hetzner.error(),
+        Kind::DockerHost => None,
     }
 }
 
@@ -389,6 +401,14 @@ mod tests {
         let rows = rows(&form_with(Vec::new()));
         assert_eq!(rows.len(), 1);
         assert!(matches!(&rows[0], Row::Pass(text) if text.contains("demo-atlas")));
+    }
+
+    #[test]
+    fn a_missing_docker_host_asks_for_no_rented_provider_key() {
+        let form = form_with(vec![problem("Docker host", "No Docker host is saved.".into())]);
+        let rows = rows(&form);
+        assert_eq!(rows.last(), Some(&Row::Fail("No Docker host is saved.".into())));
+        assert!(unfinished(&rows) && !needs_account(&form));
     }
 
     #[test]

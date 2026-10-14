@@ -47,6 +47,10 @@ pub trait Docker {
     /// # Errors
     /// [`Failure::Refused`] when docker ran and failed, else [`Failure::Error`].
     fn docker(&self, args: &[String], timeout: Duration) -> Result<String, Failure>;
+
+    /// Makes every later call check that the engine's own ID is `engine_id`, once the
+    /// cloud recorded it.
+    fn pin_engine(&self, _engine_id: &str) {}
 }
 
 /// A saved host's engine, reached as the host's access says.
@@ -55,9 +59,15 @@ pub struct Engine<'a> {
     /// The private Docker configuration directory for this computer's engine.
     pub local_config: PathBuf,
     pub cancel: &'a Cancellation,
+    /// The engine ID the cloud recorded; a remote call checks it in its own session.
+    pub engine_id: std::sync::Mutex<Option<String>>,
 }
 
 impl Docker for Engine<'_> {
+    fn pin_engine(&self, engine_id: &str) {
+        *self.engine_id.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(engine_id.to_owned());
+    }
+
     fn docker(&self, args: &[String], timeout: Duration) -> Result<String, Failure> {
         // A cancelled operation sends nothing more, also between its calls.
         self.cancel.check()?;
@@ -71,7 +81,12 @@ impl Docker for Engine<'_> {
             private_config(&self.local_config)
                 .map_err(|_| CloudError::Invalid("The private Docker configuration could not be written"))?;
         }
-        let mut command = self.host.command(args, &self.local_config)?;
+        let engine_id = self
+            .engine_id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let mut command = self.host.command_on(args, &self.local_config, engine_id.as_deref())?;
         command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -102,6 +117,9 @@ impl Docker for Engine<'_> {
             // OpenSSH exits with 255 when it cannot reach or log in to the host.
             if self.host.access != Access::ThisPc && status.code() == Some(255) {
                 return Err(Failure::Error(CloudError::Transport));
+            }
+            if self.host.access != Access::ThisPc && status.code() == Some(super::OTHER_ENGINE) {
+                return Err(Failure::Error(CloudError::Invalid(super::worker::ANOTHER_ENGINE)));
             }
             return Err(Failure::Refused(errors));
         }

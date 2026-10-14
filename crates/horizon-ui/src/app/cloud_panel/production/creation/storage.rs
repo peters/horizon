@@ -13,6 +13,11 @@ pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
         return Some(reason);
     }
     let profile = form.profiles.as_ref()?.profiles.get(&form.selected_profile)?;
+    // Until New cloud offers a Docker host as a provider choice, it must not start such a
+    // profile at all, least of all on a rented provider whose offer it picked.
+    if profile.provider == horizon_core::cloud_runtime::provider::DOCKER_HOST.id {
+        return Some("New cloud cannot start a cloud on a Docker host yet.");
+    }
     if super::provider::current(form.provider, profile).kind == Kind::Hetzner && form.prices.hetzner.too_old() {
         return Some("Hetzner prices are over an hour old. Refresh them before starting.");
     }

@@ -36,6 +36,7 @@ fn target(owner: &Owner, root: &Path) -> Target {
             identity: key,
             known_hosts: hosts,
             host_key_alias: "horizon-cloud-worker1".into(),
+            proxy_command: None,
         },
     }
 }
@@ -353,6 +354,7 @@ fn native_ssh_worker_recovery() {
             identity: root.join("id_ed25519"),
             known_hosts: root.join("known_hosts"),
             host_key_alias: "horizon-cloud-worker1".into(),
+            proxy_command: None,
         },
     };
     let allocation = root.join("workspace/.horizon-allocation");

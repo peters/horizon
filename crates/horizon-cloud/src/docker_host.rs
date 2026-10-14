@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::{path::Path, process::Command};
 
 pub use command::{Docker, Engine, Failure};
-pub use worker::{Container, Journal, Records, delete, describe, find, power, provision};
+pub use worker::{Container, Journal, Records, Route, delete, describe, find, power, provision};
 
 /// The profile's `provider` value.
 pub const PROVIDER: &str = "docker-host";
@@ -26,12 +26,14 @@ const REMOTE_SOCKET: &str = "unix:///var/run/docker.sock";
 /// keychain, which over SSH can wait for a person at the host; one placeholder login
 /// for a registry that does not exist keeps it to plain files.
 const PRIVATE_CONFIG: &str = r#"{"auths":{"horizon.invalid":{}}}"#;
-/// Writes the private configuration on a remote host once, then runs docker. A
-/// non-interactive SSH session often lacks the directories where Docker Desktop and
-/// Homebrew install docker.
-const REMOTE_PREFIX: &str = "c=\"$HOME/.horizon/docker-config\"; [ -f \"$c/config.json\" ] || \
+/// Writes the private configuration ($1) on a remote host once and sets up the
+/// environment for docker. A non-interactive SSH session often lacks the directories
+/// where Docker Desktop and Homebrew install docker.
+const REMOTE_SETUP: &str = "c=\"$HOME/.horizon/docker-config\"; [ -f \"$c/config.json\" ] || \
     { mkdir -p \"$c\" && printf %s \"$1\" > \"$c/config.$$\" && mv -f \"$c/config.$$\" \"$c/config.json\"; } || exit 125; \
-    PATH=\"$PATH:/usr/local/bin:/opt/homebrew/bin\" DOCKER_CONFIG=\"$c\" exec";
+    PATH=\"$PATH:/usr/local/bin:/opt/homebrew/bin\" DOCKER_CONFIG=\"$c\"; export PATH DOCKER_CONFIG;";
+/// The exit status of a remote command that found another engine than the expected one.
+pub(crate) const OTHER_ENGINE: i32 = 124;
 /// Options for every SSH connection to a host. The person's configuration still
 /// applies; a shared master connection does not, because it could outlive the call
 /// while it holds the call's output open.
@@ -123,22 +125,40 @@ impl Host {
     /// # Errors
     /// As [`Host::validate`].
     pub fn command(&self, args: &[String], local_config: &Path) -> Result<Command, CloudError> {
+        self.command_on(args, local_config, None)
+    }
+
+    /// As [`Host::command`]; on a remote host, the same SSH session first makes sure
+    /// that the engine's own ID is `engine_id`, and exits with [`OTHER_ENGINE`] if not,
+    /// so a name that moved to another machine between two calls cannot act there.
+    /// # Errors
+    /// As [`Host::validate`].
+    pub fn command_on(
+        &self,
+        args: &[String],
+        local_config: &Path,
+        engine_id: Option<&str>,
+    ) -> Result<Command, CloudError> {
         self.validate()?;
         let docker = self.docker.as_deref().unwrap_or("docker");
         let address = self.address.as_deref().unwrap_or_default();
         let script = || {
             let quoted: Vec<String> = args.iter().map(|arg| quote(arg)).collect();
+            let (docker, id) = (quote(docker), quote("{{.ID}}"));
             let script = format!(
-                "{REMOTE_PREFIX} {} -H {REMOTE_SOCKET} {}",
-                quote(docker),
+                "{REMOTE_SETUP} [ -z \"$2\" ] || {{ e=$({docker} -H {REMOTE_SOCKET} info --format {id}) || exit $?; \
+                 [ \"$e\" = \"$2\" ] || exit {OTHER_ENGINE}; }}; exec {docker} -H {REMOTE_SOCKET} {}",
                 quoted.join(" ")
             );
-            format!("sh -c {} sh {}", quote(&script), quote(PRIVATE_CONFIG))
+            let expected = quote(engine_id.unwrap_or_default());
+            format!("sh -c {} sh {} {expected}", quote(&script), quote(PRIVATE_CONFIG))
         };
         Ok(match self.access {
             Access::ThisPc => {
                 let mut command = Command::new(self.docker.as_deref().map_or_else(|| local_docker(), Path::new));
-                // A context could name another computer's engine; only a local `DOCKER_HOST` is kept.
+                // A context could name another computer's engine. `Engine` refuses a
+                // `DOCKER_HOST` that is not a local socket, and the journal's engine ID
+                // tells one local engine from another.
                 command
                     .env("DOCKER_CONFIG", local_config)
                     .env_remove("DOCKER_CONTEXT")

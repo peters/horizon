@@ -115,12 +115,17 @@ pub fn bind(request: &Request<'_>, binding: Binding) -> Result<()> {
             .any(|target| target.cloud_id == binding.target().cloud_id)
             || target.load()?.is_some()
             || receipt::load(target.root())?.is_some()
-            || ["hetzner.json", "workspace-volume.json", "workspace-volume.required"]
-                .iter()
-                .map(|file| target.root().join(file).try_exists())
-                .collect::<std::io::Result<Vec<_>>>()?
-                .into_iter()
-                .any(|exists| exists)
+            || [
+                "hetzner.json",
+                "docker-host.json",
+                "workspace-volume.json",
+                "workspace-volume.required",
+            ]
+            .iter()
+            .map(|file| target.root().join(file).try_exists())
+            .collect::<std::io::Result<Vec<_>>>()?
+            .into_iter()
+            .any(|exists| exists)
         {
             return Err(Error::Invalid(
                 "Reserve a fresh cloud identity; an existing target requires selection",

@@ -11,6 +11,8 @@ pub struct Connection {
     pub identity: std::path::PathBuf,
     pub known_hosts: std::path::PathBuf,
     pub host_key_alias: String,
+    /// How SSH reaches a worker that is published only on a Docker host's loopback.
+    pub proxy_command: Option<String>,
 }
 impl Connection {
     /// # Errors
@@ -28,6 +30,12 @@ impl Connection {
             identity: settings.ssh_identity_file.clone(),
             known_hosts: root.join(format!("known-hosts-{}", worker.id)),
             host_key_alias: format!("horizon-cloud-{}", worker.id),
+            proxy_command: worker
+                .docker_host
+                .as_ref()
+                .map(|host| host.proxy_command())
+                .transpose()?
+                .flatten(),
         })
     }
     #[must_use]
@@ -35,7 +43,11 @@ impl Connection {
         self.arguments("accept-new")
     }
     fn arguments(&self, host_check: &str) -> Vec<String> {
-        vec![
+        let proxy = self
+            .proxy_command
+            .iter()
+            .flat_map(|command| ["-o".to_owned(), format!("ProxyCommand={command}")]);
+        let mut arguments: Vec<String> = vec![
             "-F".into(),
             "none".into(),
             "-o".into(),
@@ -68,8 +80,10 @@ impl Connection {
             self.identity.to_string_lossy().into_owned(),
             "-p".into(),
             self.port.to_string(),
-            format!("{USER}@{}", self.host),
-        ]
+        ];
+        arguments.extend(proxy);
+        arguments.push(format!("{USER}@{}", self.host));
+        arguments
     }
     #[must_use]
     pub fn command(&self, remote: &str) -> Command {
@@ -378,6 +392,7 @@ mod tests {
             identity: root.path().join("key"),
             known_hosts: root.path().join("known-hosts"),
             host_key_alias: "fixture".into(),
+            proxy_command: None,
         };
         let session = Session {
             panel_id: "panel".into(),
@@ -504,6 +519,7 @@ mod tests {
             identity: root.path().join("missing-test-key"),
             known_hosts: root.path().join("known-hosts"),
             host_key_alias: "readiness-budget-fixture".into(),
+            proxy_command: None,
         };
         let (accepted, connected) = mpsc::channel();
         let (release, wait) = mpsc::channel();

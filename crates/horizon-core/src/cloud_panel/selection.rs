@@ -80,6 +80,7 @@ impl WorkerChoice {
                     return Err(Error::Invalid("CPU worker identity does not match its size"));
                 }
             }
+            provider::Kind::DockerHost => placement.data_centers = vec![self.id.clone()],
             provider::Kind::Hetzner => {
                 let location = self
                     .location
