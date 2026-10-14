@@ -231,15 +231,18 @@ fn git(path: &Path, args: &[&str]) {
 }
 
 #[test]
-fn a_plan_reads_the_latest_commit_and_lists_its_changes() {
+fn a_plan_reads_the_working_copy_and_lists_its_changes_and_uncommitted_files() {
     let (_fixture, bound, committed) = settings_change();
     let repository = tempfile::tempdir().unwrap();
     git(repository.path(), &["init", "--quiet"]);
-    let commit = |profile: &Profile| {
+    let settings = repository.path().join(".horizon/cloud.yml");
+    // JSON is YAML too.
+    let save = |profile: &Profile| {
         std::fs::create_dir_all(repository.path().join(".horizon")).unwrap();
-        // JSON is YAML too.
-        let yaml = serde_json::to_string(&config(profile)).unwrap();
-        std::fs::write(repository.path().join(".horizon/cloud.yml"), yaml).unwrap();
+        std::fs::write(&settings, serde_json::to_string(&config(profile)).unwrap()).unwrap();
+    };
+    let commit = |profile: &Profile| {
+        save(profile);
         git(repository.path(), &["add", "."]);
         git(repository.path(), &["commit", "--quiet", "-m", "Cloud settings"]);
     };
@@ -248,14 +251,74 @@ fn a_plan_reads_the_latest_commit_and_lists_its_changes() {
     let planned = plan(repository.path(), &bound, "dev", &cancel).unwrap();
     assert_eq!(planned.profile, committed);
     assert_eq!(planned.changes, CHANGES);
-    // Uncommitted settings are not read.
-    std::fs::write(repository.path().join(".horizon/cloud.yml"), "not: yaml: [").unwrap();
-    assert_eq!(plan(repository.path(), &bound, "dev", &cancel).unwrap(), planned);
+    assert!(planned.notes.is_empty() && planned.uncommitted.is_empty());
+
+    // The checkout moved past the cloud's commit and has uncommitted settings: the plan
+    // reads the latest commit with the working copy, and lists the file, which is in the
+    // build context.
+    let mut later = committed.clone();
+    later.idle_stop_minutes = Some(45);
+    commit(&later);
+    let mut working = later.clone();
+    working.capabilities.desktop = false;
+    save(&working);
+    let uncommitted = plan(repository.path(), &bound, "dev", &cancel).unwrap();
+    assert_eq!(uncommitted.profile, working);
+    assert!(uncommitted.changes.contains(&"Idle stop off → 45 min".to_owned()));
+    assert!(!uncommitted.changes.contains(&"Adds the desktop".to_owned()));
+    let files: Vec<_> = uncommitted
+        .uncommitted
+        .files()
+        .iter()
+        .map(|file| (file.path.as_str(), file.change.label()))
+        .collect();
+    assert_eq!(files, [(".horizon/cloud.yml", "modified")]);
+
+    // A working copy that does not parse leaves the committed settings, and says so.
+    std::fs::write(&settings, "not: yaml: [").unwrap();
+    let invalid = plan(repository.path(), &bound, "dev", &cancel).unwrap();
+    assert_eq!(invalid.profile, later);
+    assert_eq!(
+        invalid.notes,
+        ["The working copy of .horizon/cloud.yml is not valid, so the committed settings apply."]
+    );
     let mut gpu = committed;
     gpu.gpu = true;
-    commit(&gpu);
+    save(&gpu);
     let error = plan(repository.path(), &bound, "dev", &cancel).unwrap_err();
     assert!(error.to_string().contains("in gpu."), "{error}");
+}
+
+#[test]
+fn uncommitted_files_must_be_the_confirmed_ones() {
+    let (_fixture, bound, _) = settings_change();
+    let repository = tempfile::tempdir().unwrap();
+    git(repository.path(), &["init", "--quiet"]);
+    std::fs::create_dir_all(repository.path().join(".horizon")).unwrap();
+    std::fs::write(
+        repository.path().join(".horizon/cloud.yml"),
+        serde_json::to_string(&config(&bound)).unwrap(),
+    )
+    .unwrap();
+    git(repository.path(), &["add", "."]);
+    git(repository.path(), &["commit", "--quiet", "-m", "Cloud settings"]);
+    let cancel = Cancellation::default();
+    let clean = plan(repository.path(), &bound, "dev", &cancel).unwrap();
+    confirm_files(&clean.uncommitted, None).unwrap();
+    confirm_files(&clean.uncommitted, Some(&clean)).unwrap();
+    std::fs::write(repository.path().join("Dockerfile"), "FROM scratch\n").unwrap();
+    let dirty = plan(repository.path(), &bound, "dev", &cancel).unwrap();
+    for confirmed in [None, Some(&clean)] {
+        let error = confirm_files(&dirty.uncommitted, confirmed).unwrap_err();
+        assert_eq!(error.to_string(), UNCONFIRMED_FILES);
+    }
+    confirm_files(&dirty.uncommitted, Some(&dirty)).unwrap();
+    std::fs::write(repository.path().join("Dockerfile"), "FROM scratch\nRUN true\n").unwrap();
+    let changed = plan(repository.path(), &bound, "dev", &cancel).unwrap();
+    assert!(
+        confirm_files(&changed.uncommitted, Some(&dirty)).is_err(),
+        "same name, other content"
+    );
 }
 
 #[test]
@@ -285,4 +348,83 @@ fn continuing_an_unsent_settings_change_checks_the_added_agent_credential_again(
     let error = continue_replacement(&request, &Cancellation::default(), &|_| {}).unwrap_err();
     assert_eq!(error.to_string(), "API-key file must be private (0600)");
     assert!(fixture.state().image_replacement.is_some(), "the journal stays");
+}
+
+/// The uncommitted files of a synthetic checkout whose Dockerfile changed.
+fn dirty_recipe() -> (tempfile::TempDir, Uncommitted) {
+    let repository = tempfile::tempdir().unwrap();
+    git(repository.path(), &["init", "--quiet"]);
+    std::fs::write(repository.path().join("Dockerfile"), "FROM scratch\n").unwrap();
+    git(repository.path(), &["add", "."]);
+    git(repository.path(), &["commit", "--quiet", "-m", "Recipe"]);
+    std::fs::write(repository.path().join("Dockerfile"), "FROM scratch\nRUN true\n").unwrap();
+    let revision = String::from_utf8(
+        Command::new("git")
+            .arg("-C")
+            .arg(repository.path())
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let build = horizon_cloud::Build {
+        context: ".".into(),
+        dockerfile: "Dockerfile".into(),
+        platform: "linux/amd64".into(),
+    };
+    let files =
+        crate::cloud_runtime::repository::uncommitted::collect(repository.path(), revision.trim(), &build).unwrap();
+    assert!(!files.is_empty());
+    (repository, files)
+}
+
+#[test]
+fn a_rebuild_from_uncommitted_files_journals_their_hash_and_the_card_names_it() {
+    let fixture = Fixture::new();
+    let mut script = Script::new(&fixture);
+    let (_repository, files) = dirty_recipe();
+    let hash = files.hash().unwrap();
+    script.uncommitted = files;
+    let store = fixture.store();
+    let mut state = store.load().unwrap().unwrap();
+    let recipes = latest_recipes(&script, &state, "dev", &|_| {}).unwrap();
+    begin(&script, &store, &mut state, recipes).unwrap();
+    let journaled = store.load().unwrap().unwrap().image_replacement.unwrap().uncommitted;
+    assert_eq!(journaled.as_deref(), Some(hash.as_str()), "saved before the build");
+    drive(&script, &store, &mut state, &|_| {}).unwrap();
+    drop(store);
+    let built = crate::cloud_runtime::state::UncommittedImage {
+        revision: "c".repeat(40),
+        hash,
+    };
+    assert_eq!(fixture.state().uncommitted_image, Some(built));
+
+    // A later rebuild from the commit alone names no uncommitted changes.
+    fixture.edit(|state| {
+        state.stage = Stage::Ready;
+        state.session_restart = None;
+    });
+    script.uncommitted = Uncommitted::default();
+    script.built = digest('d');
+    assert_eq!(rebuild_with(&fixture, &script).unwrap(), Driven::Committed);
+    assert!(fixture.state().uncommitted_image.is_none());
+}
+
+#[test]
+fn a_journal_with_a_malformed_uncommitted_hash_is_refused() {
+    let fixture = Fixture::new();
+    let mut state = fixture.state();
+    state
+        .begin_replacement(OperationId::generate(), "c".repeat(40))
+        .unwrap();
+    let before = state.image_replacement.clone();
+    for hash in ["", "short", &"G".repeat(64)] {
+        assert!(
+            state.replacement_takes_uncommitted(Some(hash.into())).is_err(),
+            "{hash:?}"
+        );
+        assert_eq!(state.image_replacement, before);
+    }
+    state.replacement_takes_uncommitted(Some("e".repeat(64))).unwrap();
 }

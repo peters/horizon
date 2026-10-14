@@ -890,12 +890,10 @@ allocates compute. Horizon then pins the image by its registry digest.
 The new cloud keeps the profile that it was started with in the machine-local
 state of the cloud. A later edit of the file does not change that cloud or its
 reconnect settings. **Rebuild image & restart** compares the bound profile with
-the latest committed profile. The cloud takes the committed values of the rebuild
-settings, and Horizon refuses a difference in another field. Thus commit the
-settings that you started the cloud with before you rebuild it. If you do not, the
-rebuild changes the agents, the idle stop and the other rebuild settings back to the
-committed values, and the confirmation lists these changes. See
-[Rebuilding a cloud's image](#rebuilding-a-clouds-image).
+the profile in the working copy of the file. The cloud takes the rebuild settings of
+the working copy, and Horizon refuses a difference in another field. Thus a rebuild
+keeps the uncommitted settings that you started the cloud with, while they stay in
+the working copy. See [Rebuilding a cloud's image](#rebuilding-a-clouds-image).
 Credentials always stay in machine-local bindings.
 
 Image-only profiles omit `build`. Repository Dockerfiles build from the selected
@@ -1513,7 +1511,7 @@ profile, as **New cloud** does. Then the profile argument must be `quick-start`.
 These commands do not use Docker. A `rebuild` of a quick start cloud does not use
 Docker either, if the cloud has the capabilities of the current `quick-start` profile.
 It supports image preparation without allocation, deployment, stop, resume,
-reconnect, endpoint, deletion, `rebuild SETTINGS STATE_ROOT PROFILE` with `continue-rebuild` and
+reconnect, endpoint, deletion, `rebuild SETTINGS STATE_ROOT PROFILE [UNCOMMITTED_HASH]` with `continue-rebuild` and
 `cancel-rebuild`, and `reconcile SETTINGS STATE_ROOT [WORKER_ID]`. Reconciliation prints a
 structured outcome without worker environment or credentials and an explanation;
 the UI and this harness use the same locked coordinator and provider policy.
@@ -1564,14 +1562,18 @@ an integration harness, not an installed user command.
 ### Rebuilding a cloud's image
 
 A ready dedicated cloud can rebuild its worker image and restart on it, for
-example to pick up newer agent CLIs or a committed change to its `.horizon`
-recipe. Horizon resolves the repository's latest committed `HEAD` (uncommitted
-changes are not used) and reads `.horizon/cloud.yml` there.
+example to pick up newer agent CLIs or a change to its `.horizon` recipe. You do
+not have to commit the change first. Horizon resolves the repository's latest commit
+(`HEAD`) and reads the working copy of `.horizon/cloud.yml`. The `source` and
+`companions` fields come from the commit. If the working copy has no
+`.horizon/cloud.yml`, or the file is not valid, Horizon uses the file of the commit,
+and the confirmation says so. A cloud on the public base image without a `build`
+section reads only the commit.
 
 Horizon refuses the rebuild when the cloud's profile is missing in that file.
 
-A rebuild can change these settings of the cloud. The cloud gets the committed
-values:
+A rebuild can change these settings of the cloud. The cloud gets the values of the
+file:
 
 - `capabilities`: the agents, the browsers, the desktop and `agent_approvals`. For
   example, you can add the agent `codex` to a cloud that has only `claude`.
@@ -1608,12 +1610,13 @@ values in **New cloud**:
   requirement** on Hetzner), the workspace size (`storage.volume_gb`) and the
   workspace type (`storage.volume_tier`, on a RunPod CPU cloud only).
 
-Their committed values are only defaults for new clouds. Thus the rebuild keeps the
+Their values in the file are only defaults for new clouds. Thus the rebuild keeps the
 cloud on its provider, its size and its storage. A workspace that grew after
 creation is not a change either.
 
 For a profile with a build section, Horizon builds the recipe with the newest agent CLIs
-under a new tag. The build uses the new capabilities, and the worker contract check
+under a new tag. The build context is the working copy, as
+[Uncommitted files in the image](#uncommitted-files-in-the-image) tells. The build uses the new capabilities, and the worker contract check
 uses them too, so the image must contain each added agent. The image gets the label
 `io.horizon.worker.settings` with the rebuild settings. Thus a change of the settings
 always gives a new image. Horizon then pushes the image and verifies the worker's pull
@@ -1674,23 +1677,103 @@ stays available throughout.
 
 On the runtime card of a Ready cloud, **Rebuild image & restart…** asks for
 confirmation and names these consequences first. The card shows it if the profile
-has a build section or runs the base image. The confirmation reads the latest commit
+has a build section or runs the base image. The confirmation reads the checkout
 first. Then it lists each change of the cloud's settings, for example `Adds agent
 codex`, `Removes browser firefox` or `Readiness timeout 1800 s → 3600 s`, or it tells
-that the settings stay. If Horizon refuses the commit, the confirmation shows the
-reason and does not start the rebuild. If the latest commit changes the settings again
-after you confirm, Horizon refuses the rebuild, and you must confirm again. The
+that the settings stay. It also lists each uncommitted file that goes into the image.
+If Horizon refuses the settings or a file, the confirmation shows the reason and does
+not start the rebuild. If the settings or the uncommitted files change after you
+confirm, Horizon refuses the rebuild, and you must confirm again. The
 `cloud_deploy plan-rebuild SETTINGS STATE_ROOT PROFILE` harness command prints the
-same list. For a cloud on the base image, **Build
+same lists. For a cloud on the base image, **Build
 locally** and **Push image** show as skipped. While it runs, the card lists the rebuild's steps with their durations and
 offers **Cancel rebuild** only until the image switch is requested. A rebuild
-cancelled while its committed recipe is read leaves nothing pending, and the card
+cancelled while its recipe is read leaves nothing pending, and the card
 offers **Reconnect cloud**; cancelled later, it stays pending. A pending replacement shows a notice with **Continue
 rebuild** and **Cancel rebuild**, and Stop waits until it is resolved. Cancelling
 a switch that may have been sent asks for confirmation, because switching back
 restarts the worker again, and Horizon does not reconnect such a cloud on its own
 at startup. The card keeps the outcome, such as an unchanged image or a session
 that could not be relaunched, until the next deployment.
+
+### Uncommitted files in the image
+
+A rebuild builds the image from the working copy, so that you can change the recipe
+and rebuild without a commit. Horizon extracts the latest commit, as for each build,
+and then copies these files over it:
+
+- each tracked file that you changed, with its content in the working copy;
+- each untracked file that Git does not ignore;
+- the removal of each tracked file that you deleted.
+
+Only the files in the `build.context` folder, the `build.dockerfile` file and its own
+`<Dockerfile>.dockerignore` count, because the build reads only them. Names compare
+without case. When a build path has `..` or passes a symbolic link in the working copy,
+all of the checkout counts, because the build follows the link. Horizon reads the
+working copy with libgit2. Thus no program that the repository's Git configuration
+names runs, for example a content filter or a file system monitor. Horizon refuses a
+configuration that names another working folder (`core.worktree`).
+
+> **WARNING:** THE IMAGE CAN GO TO A PUBLIC REGISTRY. For example, the package
+> `ghcr.io/peters/horizon-development` is public. Each uncommitted file in the build
+> context can go into the image. Examine the list in the confirmation before you
+> click **Rebuild and restart**.
+
+These rules keep files out of the image:
+
+- Horizon never copies a file that Git ignores: `.gitignore`, `.git/info/exclude`
+  and the global exclude file apply. This includes a file that you removed from the
+  index with `git rm --cached` and then ignored: the image does not get it. A tracked
+  file stays tracked, also when it matches `.gitignore`, so its changes are listed.
+  Put local files, logs and secrets in `.gitignore`.
+- `.dockerignore` applies when Docker reads the context, also a changed or new
+  `.dockerignore`. The confirmation can list a file that `.dockerignore` excludes.
+  Docker does not put that file in the image.
+- Horizon refuses the rebuild when an uncommitted file in the build context has the
+  name of a common secret file: `.env`, `.env.<name>`, `<name>.env` (but not an
+  `.example`, `.sample`, `.template` or `.dist` file) and `.envrc`; a file that ends
+  in `.pem`, `.key`, `.p8`, `.p12`, `.pfx`, `.jks`, `.keystore`, `.kdbx`, `.tfvars` or
+  `.tfstate`; an SSH private key (`id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519` and
+  copies such as `id_rsa.bak`, but not a `.pub` file); `.netrc`, `.npmrc`, `.pypirc`,
+  `.pgpass`, `.htpasswd`, `.git-credentials`, `.aws/credentials` and
+  `.docker/config.json`. The refusal names the file. This also
+  applies to a tracked file that you changed. Add the file to `.gitignore`, or
+  commit or remove the change.
+- Horizon copies a symbolic link as a link. It never reads the target of the link.
+  It refuses a file that it can only reach through a folder that is a link. On Linux
+  and macOS it refuses a hard link, because a hard link can share its content with a
+  file outside the repository. It also refuses a file name with a control character
+  or a text-direction character, because the list could show such a name incorrectly.
+- On Windows, Horizon refuses an uncommitted symbolic link or junction in the build
+  context, because it cannot copy it there. It does not detect a hard link there.
+- Submodules and same-worker siblings come from their commits. An untracked nested
+  Git repository is not part of the build.
+- The source that the worker gets is the committed archive. Only the image recipe
+  uses the working copy.
+
+Horizon does not examine the content of a file. A secret in a file with an ordinary
+name goes into the image. You must examine the list.
+
+The confirmation lists each file with `modified`, `new` or `deleted`. Horizon
+calculates a SHA-256 hash of the paths and the contents of the files. It records this
+hash with the rebuild. Before the build, Horizon reads the files again. If a file is
+different from the confirmed file, Horizon refuses the build. **Continue rebuild**
+does the same check. **Cancel rebuild** and a new rebuild let you confirm the files
+again. Without uncommitted files, the confirmation says that the image builds from the
+latest commit.
+
+An image built from uncommitted files gets the label
+`io.horizon.worker.uncommitted` with the commit and the hash. Thus a build of the same
+files can use the build cache and give the same image digest. Until a rebuild from a
+commit only, the card shows `Image: built from <commit> plus uncommitted changes`.
+Commit the changes to make the image reproducible.
+
+`cloud_deploy plan-rebuild SETTINGS STATE_ROOT PROFILE` prints each file as
+`Uncommitted file: modified <path>` and then the hash. To confirm these files, give
+the hash to `cloud_deploy rebuild SETTINGS STATE_ROOT PROFILE <hash>`. Without
+uncommitted files, give no hash.
+
+**New cloud** builds from the commit only. It does not use the uncommitted files.
 
 ### Deployment progress
 

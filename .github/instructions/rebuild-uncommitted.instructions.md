@@ -1,13 +1,13 @@
 ---
-applyTo: "crates/horizon-core/src/cloud_runtime/repository/uncommitted.rs,crates/horizon-core/src/cloud_runtime/repository/uncommitted/**"
+applyTo: "crates/horizon-core/src/cloud_runtime/repository/uncommitted.rs,crates/horizon-core/src/cloud_runtime/repository/uncommitted/**,crates/horizon-core/src/cloud_runtime/deployment/replacement.rs,crates/horizon-core/src/cloud_runtime/deployment/replacement/**,crates/horizon-core/examples/cloud_deploy.rs,crates/horizon-ui/src/app/cloud_panel/production/cards/rebuild.rs,crates/horizon-ui/src/app/cloud_panel/production/rebuild.rs"
 ---
 
 # Trust boundary of the uncommitted build context
 
 `repository::uncommitted` lists, hashes and copies the uncommitted files of an
-image recipe's build context, so that **Rebuild image & restart** can build
-the image from the working copy. The rebuild wiring that calls it, and its
-user documentation, come in a follow-up PR.
+image recipe's build context, so that **Rebuild image & restart** builds the
+image from the working copy. The user rules are in the section "Uncommitted
+files in the image" of `docs/cloud-workspaces.md`.
 
 ## What goes out
 
@@ -27,6 +27,11 @@ context can go into the image, so a person must see each one first.
 - `Uncommitted::hash` covers each path, change, kind and content digest.
 - `overlay` collects the files again, refuses another hash than the
   confirmed one, and checks each copied file against its digest.
+- The confirmation (UI and `cloud_deploy plan-rebuild`) lists every file
+  before a person confirms. A rebuild starts only with a confirmed plan
+  (`replacement::rebuild` with `confirmed`); without one, any uncommitted
+  file refuses it. The rebuild journals the hash, so **Continue rebuild**
+  checks the same files. `cloud_deploy rebuild` takes the printed hash.
 
 ## What never goes out
 

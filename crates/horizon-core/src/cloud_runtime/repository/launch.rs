@@ -6,6 +6,7 @@ use std::{path::Path, process::Command, time::Duration};
 pub mod quick_start;
 mod working_copy;
 
+pub(in crate::cloud_runtime) use working_copy::for_rebuild;
 pub use working_copy::{Fingerprint, fingerprint};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -1,5 +1,5 @@
 //! Journaled switch of a dedicated cloud's bound worker to a rebuilt image.
-use super::{Deployment, Error, OperationId, Result, Stage};
+use super::{Deployment, Error, OperationId, Result, Stage, UncommittedImage};
 use crate::cloud_runtime::repository;
 use horizon_cloud::{CreateState, Profile, WorkerSpec};
 use serde::{Deserialize, Serialize};
@@ -40,6 +40,12 @@ pub struct ImageReplacement {
     /// encoding; an earlier Horizon version refuses a journal that carries it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<Box<Profile>>,
+    /// The hash of the uncommitted files a person confirmed for the image's build context
+    /// (`repository::uncommitted`), when the build takes any. Omitted otherwise, so other
+    /// journals keep their encoding; an earlier Horizon version refuses a journal that
+    /// carries it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncommitted: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -121,6 +127,10 @@ impl Deployment {
                 .iter()
                 .all(|revision| repository::is_commit_id(revision))
             || replacement_tag(&self.cloud_id, replacement.operation).as_ref() != Some(&replacement.tag)
+            || replacement
+                .uncommitted
+                .as_ref()
+                .is_some_and(|hash| !repository::uncommitted::valid_hash(hash))
         {
             return Err(Error::Invalid(REPLACEMENT_MISMATCH));
         }
@@ -217,6 +227,7 @@ impl Deployment {
             tag,
             phase: ReplacementPhase::Prepared {},
             profile: None,
+            uncommitted: None,
         };
         self.replace_journal(|state| {
             state.image_replacement = Some(replacement);
@@ -236,6 +247,21 @@ impl Deployment {
                 return Err(Error::Invalid("Image replacement is already built"));
             }
             replacement.profile = changed.then(|| Box::new(profile));
+            Ok(())
+        })
+    }
+
+    /// Records `hash`, the hash of the confirmed uncommitted files that the prepared
+    /// replacement builds from, or `None` when it builds from the commit alone.
+    /// # Errors
+    /// Refuses unless the replacement is prepared, and a hash of another form.
+    pub fn replacement_takes_uncommitted(&mut self, hash: Option<String>) -> Result<()> {
+        self.replace_journal(|state| {
+            let replacement = state.pending_replacement()?;
+            if !matches!(replacement.phase, ReplacementPhase::Prepared {}) {
+                return Err(Error::Invalid("Image replacement is already built"));
+            }
+            replacement.uncommitted = hash;
             Ok(())
         })
     }
@@ -323,6 +349,10 @@ impl Deployment {
             }
         }
         self.registry_generation.clone_from(&image.registry_generation);
+        self.uncommitted_image = replacement.uncommitted.as_ref().map(|hash| UncommittedImage {
+            revision: replacement.recipe_revision.clone(),
+            hash: hash.clone(),
+        });
         self.profile.clone_from(&next.profile);
         self.spec = Some(next);
         self.image_replacement = None;

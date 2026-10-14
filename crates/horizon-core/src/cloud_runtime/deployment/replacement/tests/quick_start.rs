@@ -34,6 +34,7 @@ fn on_base(image: &str) -> Fixture {
 /// the pin of this version, which needs no login.
 fn pinned(fixture: &Fixture) -> Script {
     let mut script = Script::new(fixture);
+    script.head.committed = None;
     script.head.config = None;
     script.built = quick_start::IMAGE.into();
     script.built_login = None;
@@ -79,7 +80,7 @@ fn a_quick_start_cloud_already_on_the_pin_is_unchanged() {
 fn committed_settings_are_never_passed_over() {
     let fixture = on_base(&earlier_pin());
     let mut script = pinned(&fixture);
-    script.head.config = Some(config(&fixture.state().profile));
+    script.head.committed = Some(config(&fixture.state().profile));
     let error = rebuild_with(&fixture, &script).unwrap_err().to_string();
     assert!(error.contains("its own .horizon/cloud.yml"), "{error}");
     assert_eq!(*script.calls.borrow(), ["head"], "nothing is built or switched");

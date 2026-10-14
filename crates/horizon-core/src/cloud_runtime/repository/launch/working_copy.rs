@@ -1,7 +1,9 @@
-//! New cloud's settings while the selected revision is the checked-out commit. Where a
-//! worker runs and how big it is come from the working copy of `.horizon/cloud.yml`, so
-//! an edit applies without a commit. What is built and transferred comes from the commit:
-//! the image builds from the committed tree, and the source is a committed archive.
+//! The settings New cloud and a rebuild read while the checked-out commit is the one they
+//! use. For New cloud, where a worker runs and how big it is come from the working copy of
+//! `.horizon/cloud.yml`, so an edit applies without a commit. What is built and transferred
+//! comes from the commit: New cloud builds the image from the committed tree, and the
+//! source is a committed archive. A rebuild builds from the working copy, so it reads the
+//! working copy's file whole ([`for_rebuild`]).
 use super::{CloudConfig, Error, Path, Runner};
 use horizon_cloud::{Cancellation, Profile};
 use std::{
@@ -38,11 +40,7 @@ pub(super) fn apply(
     runner: &Runner<'_>,
 ) -> super::super::Result<(CloudConfig, Vec<String>)> {
     runner.cancel.check()?;
-    let file = match contents(repository) {
-        None => WorkingFile::Missing,
-        Some(Ok(yaml)) => CloudConfig::parse(&yaml).map_or(WorkingFile::Invalid, WorkingFile::Valid),
-        Some(Err(())) => WorkingFile::Invalid,
-    };
+    let file = read(repository);
     runner.cancel.check()?;
     match (file, committed) {
         (WorkingFile::Valid(working), committed) => merge(committed.as_ref(), working),
@@ -50,6 +48,57 @@ pub(super) fn apply(
         (WorkingFile::Invalid, Some(committed)) => Ok((committed, vec![INVALID.into()])),
         (WorkingFile::Missing, None) => Err(Error::Invalid(super::MISSING_CONFIG)),
         (WorkingFile::Invalid, None) => Err(Error::Invalid(super::INVALID_CONFIG)),
+    }
+}
+
+/// The settings a rebuild reads at the checked-out commit, whose own file is `committed`.
+/// The image builds from the working copy too ([`super::super::uncommitted`]), so the
+/// working copy's file applies whole, with the commit's source and companions, which
+/// name what comes from commits. The commit's file applies when the working copy has no
+/// valid one; a note says so.
+pub(in crate::cloud_runtime) fn for_rebuild(
+    repository: &Path,
+    committed: Option<CloudConfig>,
+    runner: &Runner<'_>,
+) -> super::super::Result<(Option<CloudConfig>, Vec<String>)> {
+    runner.cancel.check()?;
+    let file = read(repository);
+    runner.cancel.check()?;
+    Ok(match (file, committed) {
+        (WorkingFile::Valid(working), committed) => {
+            let (source, companions) = committed
+                .map(|config| (config.source, config.companions))
+                .unwrap_or_default();
+            let mut ignored = Vec::new();
+            note_field(&mut ignored, "source", source != working.source);
+            note_field(&mut ignored, "companions", companions != working.companions);
+            let notes = (!ignored.is_empty())
+                .then(|| {
+                    format!(
+                        "Uncommitted changes to {} are not used until you commit them.",
+                        list(&ignored)
+                    )
+                })
+                .into_iter()
+                .collect();
+            let config = CloudConfig {
+                source,
+                companions,
+                ..working
+            };
+            (Some(config), notes)
+        }
+        (WorkingFile::Missing, Some(committed)) => (Some(committed), vec![MISSING.into()]),
+        (WorkingFile::Invalid, Some(committed)) => (Some(committed), vec![INVALID.into()]),
+        (_, None) => (None, Vec::new()),
+    })
+}
+
+fn read(repository: &Path) -> WorkingFile {
+    match contents(repository) {
+        None => WorkingFile::Missing,
+        Some(Ok(yaml)) => CloudConfig::parse(&yaml).map_or(WorkingFile::Invalid, WorkingFile::Valid),
+        Some(Err(())) => WorkingFile::Invalid,
     }
 }
 

@@ -459,6 +459,7 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             last_self_stop: None,
             tailnet_device: None,
             siblings: None,
+            uncommitted_image: None,
         }
     };
     super::providers::admit(

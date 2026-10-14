@@ -1,6 +1,6 @@
 ---
 procedure: cloud-panels-l-lifecycle
-feature: Cloud panels smoke test, area L (stop, resume, reconnect, restart, reconcile, rebuild, rebuild with changed settings, resize, idle stop and delete)
+feature: Cloud panels smoke test, area L (stop, resume, reconnect, restart, reconcile, rebuild, rebuild with changed settings, rebuild from uncommitted files, resize, idle stop and delete)
 platforms: [linux]
 cost: rents compute
 destructive: yes
@@ -14,8 +14,8 @@ owner: peters
 
 This area makes sure that the lifecycle actions of a cloud keep its data and its
 identity. It covers stop, resume, reconnect, a restart of Horizon, the provider
-check, the image rebuild with and without changed settings, resize, idle stop,
-deletion and redeploy.
+check, the image rebuild with and without changed settings, the rebuild from
+uncommitted files, resize, idle stop, deletion and redeploy.
 
 ## 2. Applicability
 
@@ -232,9 +232,10 @@ Use `smoke-sib`. Its profile has a `build` section.
 
 1. On the card of `smoke-sib`, click **Rebuild image & restart…**.
 
-   Result: The card shows `Reading the latest committed .horizon/cloud.yml…`. Then
-   it asks for confirmation, names the consequences and shows `The cloud's settings
-   stay as they are.`
+   Result: The card shows `Reading .horizon/cloud.yml and the uncommitted changes…`.
+   Then it asks for confirmation, names the consequences and shows `The cloud's
+   settings stay as they are.` and `No uncommitted file goes into the image; it builds
+   from the latest commit.`
 
    > **CAUTION:** THIS STEP STARTS A BUILD AND A PUSH. If you do not cancel in
    > time, the worker restarts on the new image.
@@ -243,7 +244,7 @@ Use `smoke-sib`. Its profile has a `build` section.
 
    Result: The card lists the steps of the rebuild with their durations.
 
-3. While the card reads the committed recipe, click **Cancel rebuild**.
+3. While the card reads the recipe, click **Cancel rebuild**.
 
    Result: The rebuild stops. No rebuild step waits to continue. The card offers
    **Reconnect cloud**.
@@ -770,18 +771,21 @@ and its profile `runpod-build`. The profile of the cloud must have `agents: [cla
 and no `idle_stop_minutes` at the start.
 
 1. In `<repo>`, add `codex` to `capabilities.agents` of the profile of the cloud.
-   Add `idle_stop_minutes: 30`. Commit the change.
+   Add `idle_stop_minutes: 30`. Do not commit the change.
 
-   Result: `git -C <repo> log -1` shows the new commit.
+   Result: `git -C <repo> status --short` shows `.horizon/cloud.yml` as modified.
 
-2. Write `Uncommitted change` in a new file in `<repo>`. Do not commit it.
+2. Write `Uncommitted change` in a new file `uncommitted.txt` in `<repo>`. Do not
+   commit it.
 
    Result: `git -C <repo> status --short` shows the new file.
 
 3. On the card, click **Rebuild image & restart…**.
 
    Result: The confirmation lists `Adds agent codex` and `Idle stop off → 30 min`
-   under `The latest commit changes this cloud's settings:`.
+   under `This rebuild changes the cloud's settings:`. If the build context of the
+   profile holds the two files, the confirmation lists `modified .horizon/cloud.yml`
+   and `new uncommitted.txt` under the warning about a public registry.
 
 4. Record the worker ID from the **Machine** tab.
 
@@ -813,13 +817,14 @@ and no `idle_stop_minutes` at the start.
 
    Result: The command shows a path.
 
-9. Revert the commit of step 1. Delete the file of step 2.
+9. Discard the change of step 1. Delete the file of step 2.
 
    ```sh
-   git -C <repo> revert --no-edit HEAD
+   git -C <repo> checkout -- .horizon/cloud.yml; rm <repo>/uncommitted.txt
    ```
 
    Result: The profile has `agents: [claude]` and no `idle_stop_minutes`.
+   `git -C <repo> status --short` shows nothing.
 
 10. On the card, click **Rebuild image & restart…**.
 
@@ -843,6 +848,100 @@ and no `idle_stop_minutes` at the start.
     Result: The confirmation shows **Rebuild refused:** with the field `gpu`. Click
     **Keep current image**, then revert the commit.
 
+### 6.14 L14: Rebuild from an uncommitted recipe
+
+Use `smoke-sib` on RunPod. Its profile has a `build` section. In the steps,
+`<context>` is the `build.context` folder and `<dockerfile>` is the
+`build.dockerfile` file of the profile.
+
+1. In `<repo>`, add this line at the end of `<dockerfile>`. Do not commit it.
+
+   ```dockerfile
+   RUN echo synthetic-uncommitted-marker > /etc/horizon-smoke-uncommitted
+   ```
+
+   Result: `git -C <repo> status --short` shows `<dockerfile>` as modified.
+
+2. Write a new file `<context>/smoke-new.txt` with the text `synthetic`. Write a file
+   `<context>/smoke-ignored.log` and add `smoke-ignored.log` to `<context>/.gitignore`.
+
+   Result: `git -C <repo> status --short` shows `smoke-new.txt` and `.gitignore`, and
+   not `smoke-ignored.log`.
+
+3. Write a file `<context>/.env` with the text `SYNTHETIC=1`. On the card, click
+   **Rebuild image & restart…**.
+
+   Result: The confirmation shows **Rebuild refused:** and names a common secret
+   file. It does not show **Rebuild and restart**.
+
+4. Click **Keep current image**. Delete `<context>/.env`. On the card, click
+   **Rebuild image & restart…** again.
+
+   Result: The confirmation lists `modified <dockerfile>`, `new
+   <context>/smoke-new.txt` and `modified <context>/.gitignore` (or `new` when the file
+   was not tracked). It does not list `smoke-ignored.log`. It shows the warning about
+   a public registry.
+
+5. Run the harness plan for the same cloud.
+
+   ```sh
+   <run>/bin/cloud_deploy plan-rebuild <home>/.horizon/cloud/settings.json <state-root> <profile>
+   ```
+
+   Result: The output has one `Uncommitted file:` line for each file of step 4 and a
+   line with the hash.
+
+6. Add a line to `<context>/smoke-new.txt`. Click **Rebuild and restart**.
+
+   Result: The card shows **Rebuild refused:** and says that the uncommitted files
+   are not the confirmed ones. The worker does not restart. The card offers
+   **Reconnect cloud** or shows **Ready**.
+
+   > **CAUTION:** THIS STEP PUSHES AN IMAGE AND RESTARTS THE WORKER. The image goes to
+   > the registry of the profile. Use only synthetic file contents.
+
+7. On the card, click **Rebuild image & restart…**, then **Rebuild and restart**.
+   Wait until the card shows **Ready**.
+
+   Result: The card shows the build, the push and the image switch.
+
+8. Examine the card.
+
+   Result: The card shows `Image: built from <commit> plus uncommitted changes`, where
+   `<commit>` is the first 12 characters of `git -C <repo> rev-parse HEAD`.
+
+9. In a Shell panel of `smoke-sib`, show the marker.
+
+   ```sh
+   cat /etc/horizon-smoke-uncommitted
+   ```
+
+   Result: The panel shows `synthetic-uncommitted-marker`.
+
+10. On this computer, show the label of the new image.
+
+    ```sh
+    docker image inspect --format '{{ index .Config.Labels "io.horizon.worker.uncommitted" }}' <image>
+    ```
+
+    Result: The label names the commit and a 64-character `files_sha256`.
+
+11. Discard the changes of steps 1 and 2.
+
+    ```sh
+    git -C <repo> checkout -- .; rm -f <repo>/<context>/smoke-new.txt <repo>/<context>/smoke-ignored.log
+    git -C <repo> ls-files --error-unmatch <context>/.gitignore || rm <repo>/<context>/.gitignore
+    ```
+
+    Result: `git -C <repo> status --short` shows nothing.
+
+    > **CAUTION:** THIS STEP RESTARTS THE WORKER.
+
+12. On the card, click **Rebuild image & restart…**, then **Rebuild and restart**.
+    Wait until the card shows **Ready**.
+
+    Result: The card does not show `plus uncommitted changes`.
+
 ## 7. Pass criteria
 
 - The marker files survive stop, resume, resize and the Hetzner resume.
@@ -857,6 +956,10 @@ and no `idle_stop_minutes` at the start.
   and on Hetzner. The confirmation lists each change before the rebuild starts. An
   added agent has its credential. A session of a removed agent is reported and does
   not relaunch.
+- A rebuild takes uncommitted settings and uncommitted recipe files. The confirmation
+  lists each uncommitted file and never an ignored file. A secret file name and a file
+  changed after the confirmation refuse the rebuild. The card names an image built
+  from uncommitted changes until a rebuild from the commit only.
 - The rebuild of `smoke-hd` is refused with `storage.container_gb`, and its
   server stays.
 - Idle stop stops `smoke-x` after the profile limit.

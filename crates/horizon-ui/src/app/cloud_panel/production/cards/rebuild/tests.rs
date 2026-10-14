@@ -8,8 +8,8 @@ use super::super::super::{
 use super::super::runtime_actions;
 use super::*;
 use crate::test_egui::DiscardTextures;
-use horizon_core::cloud_runtime::deployment::replacement::Plan;
 use horizon_core::cloud_runtime::{Cancellation, Event, progress::Progress, state::Deployment};
+use horizon_core::cloud_runtime::{deployment::replacement::Plan, repository::uncommitted::Uncommitted};
 use std::{
     path::Path,
     time::{Duration, Instant},
@@ -32,6 +32,8 @@ fn read(runtime: &Runtime, changes: &[&str], refused: Option<&str>) -> Confirmat
     let plan = Plan {
         profile: runtime.state.as_ref().unwrap().profile.clone(),
         changes: changes.iter().map(|change| (*change).to_owned()).collect(),
+        notes: Vec::new(),
+        uncommitted: Uncommitted::default(),
     };
     Confirmation::Rebuild(Preview::of(refused.map_or(Ok(plan), |reason| Err(reason.to_owned()))))
 }
@@ -189,20 +191,25 @@ fn rebuild_confirmation_names_its_consequences_before_starting() {
         .find(|text| text.starts_with("Rebuild the image"))
         .expect("the confirmation is drawn");
     for consequence in [
-        "latest committed .horizon recipe",
+        ".horizon recipe in this checkout, uncommitted changes included",
         "newest agent CLIs",
         "restart the worker",
         "Running agent processes restart",
         "Files under /workspace, including worktrees and agent logins, are kept",
-        "Uncommitted changes are not used",
-        "takes the committed agents, browsers, desktop, readiness timeout, idle stop and build settings",
+        "takes the agents, browsers, desktop, readiness timeout, idle stop and build settings of .horizon/cloud.yml in the working copy",
         "its size, storage, GPU and image repository stay",
     ] {
         assert!(text.contains(consequence), "{consequence}");
     }
-    for line in [CHANGES, "• Adds agent codex", "• Idle stop off → 30 min"] {
+    for line in [
+        CHANGES,
+        "• Adds agent codex",
+        "• Idle stop off → 30 min",
+        NO_UNCOMMITTED,
+    ] {
         assert!(has(&confirming, line), "{line}: {confirming:?}");
     }
+    assert!(!has(&confirming, UNCOMMITTED));
     assert!(!has(&confirming, OFFER));
     assert!(!has(&confirming, SAME_SETTINGS));
 
@@ -225,6 +232,69 @@ fn rebuild_confirmation_names_its_consequences_before_starting() {
     assert!(has(&texts(&ctx, &mut runtime), OFFER));
 
     runtime.confirmation = read(&runtime, &["Adds agent codex"], None);
+    assert!(matches!(
+        click(&ctx, &mut runtime, "Rebuild and restart"),
+        Some(Action::Rebuild)
+    ));
+}
+
+fn git(repository: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repository)
+        .args(["-c", "user.name=Test", "-c", "user.email=test@example.invalid"])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "git {args:?}");
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
+/// A synthetic checkout whose recipe has a modified Dockerfile and a new script, with
+/// the uncommitted files a rebuild of `.horizon` reads from it.
+fn uncommitted_recipe() -> (tempfile::TempDir, Uncommitted) {
+    let repository = tempfile::tempdir().unwrap();
+    let recipe = repository.path().join(".horizon");
+    std::fs::create_dir(&recipe).unwrap();
+    std::fs::write(recipe.join("Dockerfile"), "FROM scratch\n").unwrap();
+    git(repository.path(), &["init", "--quiet"]);
+    git(repository.path(), &["add", "."]);
+    git(repository.path(), &["commit", "--quiet", "-m", "Recipe"]);
+    std::fs::write(recipe.join("Dockerfile"), "FROM scratch\nCOPY setup.sh /\n").unwrap();
+    std::fs::write(recipe.join("setup.sh"), "echo synthetic\n").unwrap();
+    let revision = git(repository.path(), &["rev-parse", "HEAD"]);
+    let build = horizon_core::cloud_panel::Build {
+        context: ".horizon".into(),
+        dockerfile: ".horizon/Dockerfile".into(),
+        platform: "linux/amd64".into(),
+    };
+    let files =
+        horizon_core::cloud_runtime::repository::uncommitted::collect(repository.path(), &revision, &build).unwrap();
+    (repository, files)
+}
+
+#[test]
+fn the_confirmation_lists_every_uncommitted_file_before_a_rebuild_can_start() {
+    let ctx = egui::Context::default();
+    let mut runtime = ready(true, Phase::None);
+    let (_repository, files) = uncommitted_recipe();
+    let note = "Uncommitted changes to companions are not used until you commit them.";
+    runtime.confirmation = Confirmation::Rebuild(Preview::of(Ok(Plan {
+        profile: runtime.state.as_ref().unwrap().profile.clone(),
+        changes: Vec::new(),
+        notes: vec![note.into()],
+        uncommitted: files,
+    })));
+    let confirming = texts(&ctx, &mut runtime);
+    for line in [
+        UNCOMMITTED,
+        "• modified .horizon/Dockerfile",
+        "• new .horizon/setup.sh",
+        note,
+    ] {
+        assert!(has(&confirming, line), "{line}: {confirming:?}");
+    }
+    assert!(!has(&confirming, NO_UNCOMMITTED));
     assert!(matches!(
         click(&ctx, &mut runtime, "Rebuild and restart"),
         Some(Action::Rebuild)

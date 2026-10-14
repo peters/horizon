@@ -37,7 +37,7 @@ fn run() -> cloud_runtime::Result<()> {
     }
     if args.len() < 3 {
         return Err(cloud_runtime::Error::Invalid(
-            "Usage: cloud_deploy offers SETTINGS [REQUIREMENTS_JSON] | deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--quick-start] [--worker-choice OFFER_JSON_FILE] [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|resume|reconnect|endpoint|delete|idle-check|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | plan-rebuild|rebuild SETTINGS STATE_ROOT PROFILE | reconcile SETTINGS STATE_ROOT [WORKER_ID]. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume. --quick-start uses the built-in quick-start profile on the public base image for a commit without .horizon/cloud.yml.",
+            "Usage: cloud_deploy offers SETTINGS [REQUIREMENTS_JSON] | deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--quick-start] [--worker-choice OFFER_JSON_FILE] [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|resume|reconnect|endpoint|delete|idle-check|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | plan-rebuild|rebuild SETTINGS STATE_ROOT PROFILE [UNCOMMITTED_HASH] (rebuild only) | reconcile SETTINGS STATE_ROOT [WORKER_ID]. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume. --quick-start uses the built-in quick-start profile on the public base image for a commit without .horizon/cloud.yml.",
         ));
     }
     let settings = Settings::load(&PathBuf::from(&args[1]))?;
@@ -294,11 +294,22 @@ fn rebuild(args: &[String], settings: Settings, cancel: &Cancellation) -> cloud_
         .ok_or(cloud_runtime::Error::Invalid("No cloud deployment"))?;
     if let ("plan-rebuild", Some(profile), 4) = (args[0].as_str(), args.get(3), args.len()) {
         let plan = replacement::plan(&state.repository, &state.profile, profile, cancel)?;
+        for note in &plan.notes {
+            println!("{note}");
+        }
         if plan.changes.is_empty() {
             println!("The rebuild keeps this cloud's settings");
         }
-        for change in plan.changes {
+        for change in &plan.changes {
             println!("{}{change}", replacement::PROFILE_CHANGE);
+        }
+        // An image can be pushed to a public registry, so each file is listed before a
+        // person confirms it with the hash.
+        for file in plan.uncommitted.files() {
+            println!("Uncommitted file: {} {}", file.change.label(), file.path);
+        }
+        if let Some(hash) = plan.uncommitted.hash() {
+            println!("To build these uncommitted files into the image, pass {hash} to rebuild");
         }
         return Ok(());
     }
@@ -311,8 +322,16 @@ fn rebuild(args: &[String], settings: Settings, cancel: &Cancellation) -> cloud_
         settings,
     );
     match (args[0].as_str(), args.get(3)) {
-        ("rebuild", Some(profile)) if args.len() == 4 => {
-            replacement::rebuild(&request, profile, None, cancel, &print_event)
+        ("rebuild", Some(profile)) if matches!(args.len(), 4 | 5) => {
+            // Confirms what plan-rebuild listed: the settings, and the uncommitted files by
+            // their hash.
+            let plan = replacement::plan(&request.repository, &request.profile, profile, cancel)?;
+            if plan.uncommitted.hash().as_ref() != args.get(4) {
+                return Err(cloud_runtime::Error::Invalid(
+                    "Run plan-rebuild, check the uncommitted files it lists, and pass the hash it prints; without uncommitted files, pass none",
+                ));
+            }
+            replacement::rebuild(&request, profile, Some(&plan), cancel, &print_event)
         }
         ("continue-rebuild", None) => replacement::continue_replacement(&request, cancel, &print_event),
         ("cancel-rebuild", None) => replacement::cancel_replacement(&request, cancel, &print_event),

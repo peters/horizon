@@ -83,6 +83,19 @@ pub struct Deployment {
         skip_serializing_if = "Option::is_none"
     )]
     pub siblings: Option<super::siblings::Set>,
+    /// Set when the worker's image was rebuilt from uncommitted changes. Omitted otherwise,
+    /// so other records keep their encoding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncommitted_image: Option<UncommittedImage>,
+}
+
+/// A rebuilt image whose build context held uncommitted files: the commit they change and
+/// the hash of their content (`repository::uncommitted`), which the image's labels record too.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct UncommittedImage {
+    pub revision: String,
+    pub hash: String,
 }
 
 impl Deployment {

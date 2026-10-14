@@ -117,7 +117,7 @@ fn rebuild_new(fixture: &Fixture, steps: &NewServer<'_>) -> Result<Driven> {
     let store = fixture.store();
     let mut state = store.load().unwrap().unwrap();
     ready(&state)?;
-    let recipes = committed_recipes(steps.script, &state, "dev", &|_| {})?;
+    let recipes = latest_recipes(steps.script, &state, "dev", &|_| {})?;
     begin(steps, &store, &mut state, recipes)?;
     drive(steps, &store, &mut state, &|_| {})
 }
