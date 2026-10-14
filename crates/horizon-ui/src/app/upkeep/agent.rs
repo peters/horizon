@@ -276,7 +276,22 @@ fn work(request: &UsageRequest, upkeep: &UpkeepRequest, caller: &Caller, root: O
                 .and_then(|root| discover(root, &authors(upkeep))),
         );
     }
-    match decide(request, upkeep, caller, worker::saved()) {
+    // A folder that cannot be read says nothing about which Upkeeps exist.
+    let Ok(saved) = worker::read_saved(true) else {
+        return Next::Answer(Err(
+            "upkeep_unavailable: could not read the saved Upkeeps; try again".into()
+        ));
+    };
+    // The reader leaves out a choice it cannot parse: that Upkeep still exists.
+    let unreadable = caller.clouds.iter().any(|cloud| {
+        !saved.iter().any(|(held, _)| held == cloud) && worker::directory(cloud).join("upkeep.json").exists()
+    });
+    if unreadable {
+        return Next::Answer(Err(
+            "upkeep_unavailable: the saved settings of this workspace's Upkeep cannot be read".into(),
+        ));
+    }
+    match decide(request, upkeep, caller, saved) {
         Ok(Next::Status { cloud, config, running }) => Next::Answer(Ok(status(&cloud, &config, running))),
         Ok(Next::Remove { cloud, names }) => remove(request, cloud, &names),
         Ok(next) => next,
@@ -287,15 +302,18 @@ fn work(request: &UsageRequest, upkeep: &UpkeepRequest, caller: &Caller, root: O
 /// Removes `names` from the saved settings as they are now: [`worker::update`] holds the
 /// Upkeep's settings lock from the read to the save, so a change made meanwhile stays.
 fn remove(request: &UsageRequest, cloud: String, names: &[String]) -> Next {
-    let mut outcome = Err("upkeep_unavailable: the request stopped".to_owned());
-    let saved = worker::update(&cloud, |config| outcome = remove_from(config, names, request));
+    let mut outcome = None;
+    let saved = worker::update(&cloud, |config| outcome = Some(remove_from(config, names, request)));
     match (saved, outcome) {
-        (_, Err(error)) => Next::Answer(Err(error)),
-        (Err(error), Ok(_)) => Next::Answer(Err(format!("upkeep_unavailable: could not save: {error}"))),
-        (Ok(config), Ok(removed)) if removed.is_empty() => {
+        (_, Some(Err(error))) => Next::Answer(Err(error)),
+        // No change was tried: the saved choice could not be read.
+        (Err(error), None) => Next::Answer(Err(format!("upkeep_unavailable: could not read the Upkeep: {error}"))),
+        (Err(error), Some(Ok(_))) => Next::Answer(Err(format!("upkeep_unavailable: could not save: {error}"))),
+        (Ok(_), None) => Next::Answer(Err("upkeep_unavailable: the request stopped".into())),
+        (Ok(config), Some(Ok(removed))) if removed.is_empty() => {
             Next::Answer(Ok(json!({ "removed": 0, "repositories": config.repositories })))
         }
-        (Ok(config), Ok(removed)) => Next::Saved {
+        (Ok(config), Some(Ok(removed))) => Next::Saved {
             value: json!({ "removed": removed.len(), "repositories": config.repositories }),
             cloud,
             removed,

@@ -46,11 +46,9 @@ fn text(at: OffsetDateTime, kind: &AgentChangeKind) -> String {
         AgentChangeKind::Paused => "paused the Upkeep".to_string(),
         AgentChangeKind::Resumed => "resumed the Upkeep".to_string(),
         AgentChangeKind::RunRequested => "asked for a run now".to_string(),
-        AgentChangeKind::Removed(names) => match names.as_slice() {
-            [] => "removed no repository".to_string(),
-            [one] => format!("removed {one}"),
-            [first, rest @ ..] => format!("removed {first} and {} more", rest.len()),
-        },
+        // Every name: an Upkeep keeps at most 50, and the board shows the full line on hover.
+        AgentChangeKind::Removed(names) if names.is_empty() => "removed no repository".to_string(),
+        AgentChangeKind::Removed(names) => format!("removed {}", names.join(", ")),
     };
     format!("An agent {what}, {}", super::clock(at))
 }
@@ -98,13 +96,16 @@ mod tests {
             texts,
             [
                 "An agent paused the Upkeep, 19:32 UTC",
-                "An agent removed acme/app and 2 more, 19:32 UTC",
+                "An agent removed acme/app, acme/api, acme/web, 19:32 UTC",
                 "An agent resumed the Upkeep, 19:32 UTC",
                 "An agent asked for a run now, 19:32 UTC",
             ]
         );
         assert_eq!(changes[1].kind, removed(&["acme/app", "acme/api", "acme/web"]));
         record(&mut changes, AgentChange::at(at, removed(&["acme/one"])));
-        assert_eq!(changes[0].text(), "An agent removed acme/one and 3 more, 19:32 UTC");
+        assert_eq!(
+            changes[0].text(),
+            "An agent removed acme/one, acme/app, acme/api, acme/web, 19:32 UTC"
+        );
     }
 }

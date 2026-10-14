@@ -457,8 +457,9 @@ Horizon guarantees these items:
   `remove` keeps at least one repository.
 - The board shows each change that an agent made with `remove`, `pause`, `resume` or
   `run_now` below its title, for example "An agent paused the Upkeep, 19:32 UTC". The
-  board shows the newest change of each kind. The removal line counts all repositories
-  that agents removed, thus many other changes cannot hide a removal. Horizon writes
+  board shows the newest change of each kind. The removal line names all repositories
+  that agents removed (the full line shows on hover), thus many other changes cannot
+  hide a removal. Horizon writes
   this text. It does not come from the worker or from the agent. Horizon keeps these
   lines only while it runs.
 - When two saved clouds have the ID of the Upkeep, Horizon refuses the request,
@@ -475,6 +476,9 @@ Horizon guarantees these items:
 - A request that changes the Upkeep and that arrives after its deadline changes
   nothing.
 - File reads and writes for a request occur on a separate thread, not on the UI thread.
+- When Horizon cannot read the folder of the saved Upkeeps, or the saved settings of
+  the Upkeep in the workspace of the agent, it answers `upkeep_unavailable`. It does not answer `upkeep_not_found`, and `create` does not
+  propose a second Upkeep.
 - `status` reads the status document with the same limits as the board. It sends back
   only the parsed fields and only pull request URLs of the exact GitHub form.
 

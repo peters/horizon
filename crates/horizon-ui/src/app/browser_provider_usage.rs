@@ -161,9 +161,12 @@ impl HorizonApp {
             Vec::new(),
             Some("upkeep_unavailable: this Horizon build has no cloud support".into()),
         );
-        if let Err(error) = manifest::provider_usage::complete_provider_usage(&result) {
-            tracing::warn!(kind = ?error.kind(), "could not answer an Upkeep request");
-        }
+        // The answer is a file write: never on the UI thread.
+        std::thread::spawn(move || {
+            if let Err(error) = manifest::provider_usage::complete_provider_usage(&result) {
+                tracing::warn!(kind = ?error.kind(), "could not answer an Upkeep request");
+            }
+        });
     }
 
     #[cfg(not(feature = "cloud-workspaces"))]
