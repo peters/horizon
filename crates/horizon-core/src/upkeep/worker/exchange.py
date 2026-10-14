@@ -15,6 +15,7 @@ import secrets
 import stat
 import subprocess
 import sys
+import zlib
 
 HOME = '/workspace/home'
 SESSIONS = '/workspace/sessions'
@@ -137,7 +138,9 @@ def install(payload, upkeep):
     installed first, so an exchange that stops midway leaves the mark for the next one."""
     session = payload['session']
     write(upkeep, 'config.json', json.dumps(payload['config'], indent=1))
-    write(upkeep, 'prompt.md', payload['prompt'])
+    # The person's instructions lead both prompts; they travel once.
+    write(upkeep, 'prompt.md', payload['instructions'] + payload['prompt'])
+    write(upkeep, 'daily.md', payload['instructions'] + payload['daily_prompt'])
     if (read(upkeep, 'run.sh', len(payload['run'].encode()) + 1) != payload['run'].encode()
             or read(upkeep, 'run.py', len(payload['scheduler'].encode()) + 1) != payload['scheduler'].encode()):
         write(upkeep, 'installing', '')
@@ -245,6 +248,8 @@ def run_record(line):
         record['finished_at'] = run['finished_at']
     if type(run.get('merged')) is int and 0 <= run['merged'] < 2 ** 31:
         record['merged'] = run['merged']
+    if run.get('kind') == 'daily':
+        record['kind'] = 'daily'
     if isinstance(run.get('outcome'), str):
         # A lone surrogate from a \ud800 escape is not valid JSON for Horizon.
         record['outcome'] = run['outcome'][:40].encode('utf-8', 'replace').decode()
@@ -333,7 +338,7 @@ def exchange(payload):
 
 
 def main():
-    payload = json.loads(base64.b64decode(sys.argv[1]))
+    payload = json.loads(zlib.decompress(base64.b64decode(sys.argv[1])))
     try:
         print(exchange(payload))
     except Refused as error:

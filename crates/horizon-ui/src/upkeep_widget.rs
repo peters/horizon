@@ -11,6 +11,7 @@ use horizon_core::upkeep::{Checks, PrState, Status};
 
 use crate::theme;
 
+mod daily;
 mod header;
 mod list;
 mod runs;
@@ -99,6 +100,7 @@ impl<'a> UpkeepView<'a> {
                     }
                     ui.add_space(12.0);
                     activity(ui, &status);
+                    daily::show(ui, &status, now);
                 });
             });
         ui.data_mut(|data| data.insert_temp(filter_id, filter));
@@ -220,12 +222,29 @@ fn empty(ui: &mut Ui, error: Option<&str>, path: &str) {
     });
 }
 
-/// The latest run's own account of what it did.
+/// The latest run's own account of what it did. The lines of the daily maintenance pass
+/// show in their own section.
 fn activity(ui: &mut Ui, status: &Status) {
-    if status.activity.is_empty() {
+    if !status.activity.iter().any(|entry| !entry.daily) {
         return;
     }
     caption(ui, "Latest run");
+    lines(ui, status, false);
+}
+
+/// The newest eight activity lines of the repositories' agents, or of the daily pass, oldest
+/// first, without allocating.
+fn lines(ui: &mut Ui, status: &Status, daily: bool) {
+    const SHOWN: usize = 8;
+    let first = status
+        .activity
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(_, entry)| entry.daily == daily)
+        .take(SHOWN)
+        .last()
+        .map_or(0, |(index, _)| index);
     Frame::new()
         .fill(theme::BG_ELEVATED())
         .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
@@ -234,7 +253,7 @@ fn activity(ui: &mut Ui, status: &Status) {
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 5.0;
-            for entry in status.activity.iter().rev().take(8).rev() {
+            for entry in status.activity[first..].iter().filter(|entry| entry.daily == daily) {
                 ui.horizontal(|ui| {
                     ui.add_sized(
                         [76.0, 16.0],

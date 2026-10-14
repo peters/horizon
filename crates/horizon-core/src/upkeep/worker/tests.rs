@@ -199,7 +199,7 @@ fn a_run_now_travels_with_its_token() {
         let remote = command("abc-123", &"a".repeat(40), &config(), signals).unwrap();
         let encoded = remote.rsplit(" - '").next().unwrap().trim_end_matches('\'');
         let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).unwrap();
-        serde_json::from_slice(&bytes).unwrap()
+        serde_json::from_reader(flate2::read::ZlibDecoder::new(bytes.as_slice())).unwrap()
     };
     assert_eq!(payload(Signals::default())["run_now"], false);
     let run = Signals {

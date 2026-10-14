@@ -13,8 +13,8 @@ owner: peters
 ## 1. Purpose
 
 This procedure proves that the Upkeep board shows the status that an Upkeep agent
-writes: the next run, the runs of the last 24 hours, the pull requests by state and
-the latest run. It also proves that a pull request row opens its page beside the
+writes: the next run, the runs of the last 24 hours, the pull requests by state,
+the latest run and the daily maintenance pass. It also proves that a pull request row opens its page beside the
 board, and that **New Upkeep** starts a real Upkeep on a Hetzner cloud.
 
 ## 2. Applicability
@@ -22,7 +22,7 @@ board, and that **New Upkeep** starts a real Upkeep on a Hetzner cloud.
 - Candidate: a Horizon build with the `upkeep` panel kind.
 - Platforms: Linux host.
 - UPK-01 to UPK-06 read a synthetic status document. UPK-07 runs the worker
-  exchange in a local container. UPK-08 to UPK-13 use real GitHub data and a real
+  exchange in a local container. UPK-08 to UPK-14 use real GitHub data and a real
   Hetzner cloud.
 - This procedure does not test: the quality of the work of the agent, Renovate
   pull requests, or a schedule longer than one hour.
@@ -54,7 +54,7 @@ made-up repositories and one public pull request.
 - Network access to github.com for task UPK-03.
 - For task UPK-07: Docker, a Rust toolchain for this repository, and a Horizon
   worker image (`ghcr.io/peters/horizon-worker-base`) on this computer.
-- For tasks UPK-08 to UPK-13: the
+- For tasks UPK-08 to UPK-14: the
   [local device smoke fixture](../../../scripts/device-smoke/README.md) with
   `--native-view`, a persistent session, and Cloud settings with a GitHub sign-in,
   a Hetzner project with free capacity for one `cx23` server, and the ChatGPT login
@@ -100,17 +100,32 @@ made-up repositories and one public pull request.
 
    Result: It shows one bar for each hour. A failed run is red, a skipped run has an
    outline, and a green mark shows a run that merged. The total shows **12 merged**.
+   A cyan mark is under the bar of the hour after 00:00 UTC, or under no bar when
+   the time is before 00:46 UTC.
 
-4. Look at the list.
+4. When the time is 00:46 UTC or later, put the pointer on the bar with the cyan
+   mark.
+
+   Result: The tooltip starts with the hour and
+   **2 runs with the daily maintenance pass**.
+
+5. Look at the list.
 
    Result: The list shows 5 open pull requests in groups **Blocked**, **Fixing**,
    **Needs review**, **Checks running** and **Ready to merge**. Each row shows the
    repository, the number and title, the check state, the time and the note.
 
-5. Look at **Latest run**.
+6. Look at **Latest run**.
 
    Result: It shows 5 lines with their UTC times. The last line is
-   **Run finished: 1 merged, 1 fixing, 1 waiting on checks**.
+   **Run finished: 1 merged, 1 fixing, 1 waiting on checks**. No line starts with
+   **Runtime patch releases**.
+
+7. Look at **Daily maintenance** under **Latest run**.
+
+   Result: The section has a cyan mark and the pill **Done 00:12 UTC, 34 min**. It
+   shows 3 lines. The last line starts with **Runtime patch releases: acme/mobile
+   left alone**.
 
 ### 6.2 UPK-02 — The chips filter the list
 
@@ -518,9 +533,60 @@ script first in `PATH` that writes `HORIZON_BROWSER_ACTOR` and
 
     Result: The answer starts with `upkeep_unavailable`.
 
+### 6.14 UPK-14 — The daily maintenance pass
+
+Do this task before UPK-12, on the cloud of UPK-10.
+
+> **CAUTION:** THE DAILY MAINTENANCE PASS DOES THE TASKS OF THE SHARED INSTRUCTIONS
+> THAT THE REPOSITORIES LINK. It can open pull requests in `<repo>` and `<second>`
+> and start the test-channel releases that those instructions authorize.
+
+1. Read the `AGENTS.md` of `<repo>` and the shared instructions that it links. Find
+   the section **Daily maintenance**.
+
+   Result: You know the tasks that the pass must report. When there is no such
+   section, the pass must report that and stop.
+
+2. In the shell panel of UPK-10, type
+   `cat /workspace/home/upkeep/daily.md`.
+
+   Result: The file starts with the instructions of the Upkeep and has the heading
+   **This run: daily maintenance**. It names no shared repository.
+
+3. Type `echo 2000-01-01 > /workspace/home/upkeep/daily-day`. Then wait for the
+   next planned run.
+
+   Result: The board shows **Running**. After the agents of the repositories end,
+   the line under **Running** starts with **Daily maintenance**, and
+   `/workspace/home/upkeep/runs.jsonl` has a line with `"kind": "daily"`.
+
+4. When the agent asks for read access to the repository of the shared
+   instructions, allow it on the cloud card.
+
+   Result: The agent continues. Horizon allowed no request for that repository
+   without you.
+
+5. Wait until the pass ends.
+
+   Result: **Daily maintenance** on the board shows **Done** or **Failed** with the
+   start time. It shows one line for each task of step 1, or one line that no
+   repository links daily tasks. A cyan mark is under the bar of the hour of the
+   pass. `/workspace/home/upkeep/daily-day` holds the UTC date of today.
+
+6. Make sure that the pass started no production release or production workflow,
+   and that it left alone work that it did not start. Each pull request that it
+   opened has one comment that starts with `<!-- upkeep-daily -->`.
+
+   Result: The release pages and the workflow runs of `<repo>` and `<second>` show
+   no production release from the pass.
+
+7. Click **Run now** again and wait until the run ends.
+
+   Result: `runs.jsonl` has no new line with `"kind": "daily"`.
+
 ## 7. Pass criteria
 
-- UPK-01 to UPK-13 give the results above.
+- UPK-01 to UPK-14 give the results above.
 
 ## 8. Cleanup
 

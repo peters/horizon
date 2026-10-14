@@ -79,6 +79,17 @@ pub enum RunOutcome {
     Other,
 }
 
+/// What a run did: the agents of the repositories, or the daily maintenance pass.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunKind {
+    Daily,
+    /// No kind, or one this Horizon does not know.
+    #[default]
+    #[serde(other)]
+    Repositories,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Run {
     #[serde(deserialize_with = "rfc3339")]
@@ -89,6 +100,8 @@ pub struct Run {
     pub outcome: RunOutcome,
     #[serde(default, deserialize_with = "lenient")]
     pub merged: u32,
+    #[serde(default, deserialize_with = "lenient")]
+    pub kind: RunKind,
 }
 
 /// Where a pull request stands, as the agent sees it.
@@ -207,6 +220,9 @@ pub struct Activity {
     #[serde(deserialize_with = "rfc3339")]
     pub at: OffsetDateTime,
     pub text: String,
+    /// A line of the daily maintenance pass rather than of a repository's agent.
+    #[serde(default, deserialize_with = "lenient")]
+    pub daily: bool,
 }
 
 /// The default instructions every Upkeep agent starts from.
@@ -219,7 +235,9 @@ explicit merge request that a repository's AGENTS.md may require. When a merge d
 production or publishes a package by itself, that is authorized too, but only as the \
 repository's AGENTS.md and the shared procedures it links describe it: keep their order, \
 verify each deployment or package the way they say before the next merge, and stop when one \
-cannot be verified. Never start a release or a production workflow by hand.
+cannot be verified. Never start a release or a production workflow by hand. The only \
+exception is the daily maintenance pass: it may start the releases to a test channel that \
+the shared instructions authorize for a daily task, never a production release.
 
 1. Read each repository's AGENTS.md and follow it. Shared rules in a linked \
 company repository apply too.
@@ -537,6 +555,21 @@ mod tests {
             pr.number = 7;
             assert_eq!(pr.github_url(), None, "{repository}");
         }
+    }
+
+    #[test]
+    fn the_daily_pass_is_a_run_and_its_lines_are_marked() {
+        let status: Status = serde_json::from_str(
+            r#"{"runs":[{"started_at":"2026-10-13T00:00:00Z","kind":"daily"},
+                        {"started_at":"2026-10-13T01:00:00Z","kind":"weekly"},
+                        {"started_at":"2026-10-13T02:00:00Z","kind":7}],
+                "activity":[{"at":"2026-10-13T00:10:00Z","text":"a","daily":true},
+                            {"at":"2026-10-13T00:20:00Z","text":"b","daily":"yes"}]}"#,
+        )
+        .unwrap();
+        let kinds: Vec<RunKind> = status.runs.iter().map(|run| run.kind).collect();
+        assert_eq!(kinds, [RunKind::Daily, RunKind::Repositories, RunKind::Repositories]);
+        assert!(status.activity[0].daily && !status.activity[1].daily);
     }
 
     #[test]

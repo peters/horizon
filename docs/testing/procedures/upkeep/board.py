@@ -49,6 +49,13 @@ def status(now):
             }
         )
     runs.append({"started_at": iso(hour), "finished_at": iso(hour + dt.timedelta(minutes=3)), "outcome": "done", "merged": 1})
+    # The daily maintenance pass followed the first run of the UTC day, or of the day before
+    # when today's pass would not have ended yet.
+    daily = hour.replace(hour=0) + dt.timedelta(minutes=12)
+    if daily + dt.timedelta(minutes=34) > now:
+        daily -= dt.timedelta(days=1)
+    runs.append({"started_at": iso(daily), "finished_at": iso(daily + dt.timedelta(minutes=34)), "outcome": "done", "kind": "daily"})
+    runs.sort(key=lambda run: run["started_at"])
     pulls = [
         # A public Dependabot pull request, so opening a row shows a real page.
         pull_request("peters/horizon", 1516, "chore(deps): bump comrak from 0.55.0 to 0.56.0", "ready", "passed", "Merges in the next run", hour),
@@ -67,6 +74,11 @@ def status(now):
         (2, "acme/web#409: lint failed after the update; fixing on the branch"),
         (3, "Run finished: 1 merged, 1 fixing, 1 waiting on checks"),
     ]
+    daily_activity = [
+        (3, "Read the shared instructions that 5 repositories link: 1 daily task"),
+        (21, "Runtime patch releases: acme/api and acme/web moved to 2.4.7; test releases started"),
+        (33, "Runtime patch releases: acme/mobile left alone, an update by a person is under way"),
+    ]
     return {
         "version": 1,
         "agent": "codex",
@@ -75,7 +87,8 @@ def status(now):
         "repositories": ["acme/api", "acme/docs", "acme/mobile", "acme/web", "peters/horizon"],
         "runs": runs,
         "pull_requests": pulls,
-        "activity": [{"at": iso(hour + dt.timedelta(minutes=m)), "text": t} for m, t in activity],
+        "activity": [{"at": iso(daily + dt.timedelta(minutes=m)), "text": t, "daily": True} for m, t in daily_activity]
+        + [{"at": iso(hour + dt.timedelta(minutes=m)), "text": t} for m, t in activity],
     }
 
 

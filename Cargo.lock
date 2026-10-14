@@ -2633,6 +2633,7 @@ dependencies = [
  "base64 0.23.1",
  "comrak",
  "ed25519-dalek",
+ "flate2",
  "git2",
  "horizon-browser",
  "horizon-browser-control",
