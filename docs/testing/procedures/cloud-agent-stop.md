@@ -57,9 +57,13 @@ stop credential, the worker must record the request for Horizon to take.
 
 - A clock. Write down the time of each result.
 
-In this procedure, `<state root>` is the directory of the cloud. Use a cloud
-without a tailnet: on a worker with agent isolation, the agent sessions use
-another tmux server.
+In this procedure, `<state root>` is the directory of the cloud. Agent
+sessions run as the agent user on their own tmux server. In the root shell,
+`<agent tmux>` is this command, typed in `/workspace`:
+
+```bash
+horizon-worker-tailnet agent tmux -L horizon-cloud
+```
 
 ## 5. Setup
 
@@ -89,7 +93,8 @@ another tmux server.
 
 4. If the image is not built from the candidate, copy the candidate scripts
    `horizon-worker-stopd`, `horizon-worker-stop`, `horizon-worker-supervise`,
-   `horizon-worker-check` and `horizon-worker-configure` to `/usr/local/bin/`.
+   `horizon-worker-check` and `horizon-worker-configure` to `/usr/local/bin/`
+   with mode 755.
    Then start the service:
 
    ```bash
@@ -102,7 +107,7 @@ another tmux server.
 
 ### 6.1 A01 — The worker offers the agent stop without an idle period
 
-1. Type `horizon-worker-check --agent claude | grep agent-stop`.
+1. Type `horizon-worker-check | grep agent-stop`.
 
    Result: The output is `horizon-agent-stop-contract=1`.
 
@@ -124,15 +129,15 @@ another tmux server.
 2. Start `smoke-b` so that it prints one line each second:
 
    ```bash
-   tmux -L horizon-cloud new-session -d -s smoke-b 'while true; do date; sleep 1; done'
+   <agent tmux> new-session -d -s smoke-b 'while true; do date; sleep 1; done'
    ```
 
-   Result: `tmux -L horizon-cloud ls` shows `smoke-b`.
+   Result: `<agent tmux> ls` shows `smoke-b`.
 
 3. Start `smoke-a` so that it asks for a stop:
 
    ```bash
-   tmux -L horizon-cloud new-session -d -s smoke-a \
+   <agent tmux> new-session -d -s smoke-a \
      'horizon-worker-stop --reason "smoke: task done" > /var/tmp/stop-a.txt 2>&1; sleep 900'
    ```
 
