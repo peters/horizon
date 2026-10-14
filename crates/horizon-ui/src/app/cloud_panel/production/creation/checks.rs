@@ -174,6 +174,8 @@ fn rows(form: &Production) -> Vec<Row> {
                 .is_some_and(|fetched| fetched.value.is_some()),
             form.prices.hetzner.error(),
         ),
+        // Nothing is rented: there is no account to check and no price to fetch.
+        Kind::DockerHost => (true, None),
     };
     rows.push(if let Some(problem) = problem("Provider profile") {
         // What no key can fix: the profile asks for something this provider cannot give.
@@ -182,6 +184,8 @@ fn rows(form: &Production) -> Vec<Row> {
         Row::Fail(problem.reason.clone())
     } else if let Some(error) = error {
         Row::Fail(error.to_owned())
+    } else if live && found.is_some() && provider.kind == Kind::DockerHost {
+        Row::Pass("Docker host saved; nothing is rented".into())
     } else if live && found.is_some() {
         Row::Pass(format!("{} account accepted, prices are current", provider.label))
     } else {
@@ -227,6 +231,7 @@ fn provider_error(form: &Production) -> Option<&str> {
     match provider::current(form.provider, profile).kind {
         Kind::RunPod => form.prices.list_error.as_deref(),
         Kind::Hetzner => form.prices.hetzner.error(),
+        Kind::DockerHost => None,
     }
 }
 

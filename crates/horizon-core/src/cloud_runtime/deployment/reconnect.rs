@@ -48,9 +48,9 @@ fn admit(store: &Store, state: &Deployment) -> Result<()> {
     }
     let bound = matches!(state.operation, CreateState::Bound { .. });
     match horizon_cloud::provider::Description::of(&state.profile).kind {
-        Kind::RunPod if bound => Ok(()),
+        Kind::RunPod | Kind::DockerHost if bound => Ok(()),
         Kind::Hetzner => hetzner_admits(store, bound),
-        Kind::RunPod => Err(NO_WORKER),
+        Kind::RunPod | Kind::DockerHost => Err(NO_WORKER),
     }
 }
 

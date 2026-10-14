@@ -1,13 +1,13 @@
 ---
-applyTo: "crates/horizon-cloud/src/docker_host.rs,crates/horizon-cloud/src/docker_host/**"
+applyTo: "crates/horizon-cloud/src/docker_host.rs,crates/horizon-cloud/src/docker_host/**,crates/horizon-core/src/cloud_runtime/providers/docker_host.rs,crates/horizon-core/src/cloud_runtime/ssh.rs"
 ---
 
 # Trust boundary of the Docker host provider
 
 `horizon_cloud::docker_host` runs clouds on a Docker engine that the person
 already has: this computer's engine, or a host that Horizon reaches with
-`ssh` or `tailscale ssh`. Nothing calls it yet: a later change connects it to
-the deployment, the cloud lifecycle and the worker SSH connection.
+`ssh` or `tailscale ssh`. `cloud_runtime::providers::docker_host` connects it
+to the deployment, the cloud lifecycle and the worker SSH connection.
 
 ## What is trusted
 
@@ -34,8 +34,9 @@ the deployment, the cloud lifecycle and the worker SSH connection.
   which keeps ports published on the loopback private. Earlier engines let
   hosts on the same network segment reach them.
 - The worker publishes its SSH only on the host's loopback, on a port that
-  stays the same for the life of the container. `Host::proxy_command` gives
-  the SSH `ProxyCommand` that reaches it through the host.
+  stays the same for the life of the container. Horizon reaches it through
+  the host with an SSH `ProxyCommand`, and pins the worker host key as for
+  other providers.
 - Each docker call has a time limit and stops when the operation is cancelled.
 - A delete removes only the cloud's container and workspace volume, each with
   the cloud's owner label and recorded name, and examines that both are gone.
@@ -47,6 +48,7 @@ the deployment, the cloud lifecycle and the worker SSH connection.
   volume size is not enforced and disk space is not checked.
 - The capacity check reads the free CPU and memory once, at create time.
   Clouds that are created at the same time on one host can overcommit it.
-- The host pulls only public images: its docker CLI has no registry login.
+- The host pulls only public images: its docker CLI has no registry login, and
+  Horizon refuses a profile with a build or a private registry binding.
 - A person or program with Docker access on the host can read, change or
   remove the worker and its volume.

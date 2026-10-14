@@ -154,6 +154,7 @@ impl<'a> Live<'a> {
         let (provider, server) = match Description::of(&state.profile).rebuild {
             Rebuild::InPlace => (Some(RunPod::new(settings.credential()?)), None),
             Rebuild::NewServer => (None, Some(Released::new(settings, cancel))),
+            Rebuild::Unsupported => return Err(Error::Invalid(super::UNSUPPORTED)),
         };
         Ok(Self {
             request,

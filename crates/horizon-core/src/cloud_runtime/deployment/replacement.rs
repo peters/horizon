@@ -196,6 +196,7 @@ pub fn continue_replacement(request: &Request, cancel: &Cancellation, emit: &dyn
                 let server = live::Released::new(&request.settings, cancel);
                 new_server::switch(&server, &store, &mut state, emit)?;
             }
+            Rebuild::Unsupported => return Err(Error::Invalid(UNSUPPORTED)),
         }
         drop(store);
         return finish(request, Driven::Committed, state, cancel, emit);
@@ -241,6 +242,7 @@ pub fn cancel_replacement(request: &Request, cancel: &Cancellation, emit: &dyn F
                 return Ok(state);
             }
         }
+        Rebuild::Unsupported => return Err(Error::Invalid(UNSUPPORTED)),
     }
     drop(store);
     tail(request, &state.profile, cancel, emit)
@@ -306,11 +308,18 @@ fn same_worker(state: &Deployment) -> Result<()> {
 /// public base image without one, by moving to the base image this Horizon version pins.
 #[must_use]
 pub fn rebuildable(profile: &Profile) -> bool {
-    profile.build.is_some() || quick_start::on_public_base(profile)
+    Description::of(profile).rebuild != Rebuild::Unsupported
+        && (profile.build.is_some() || quick_start::on_public_base(profile))
 }
+
+/// Why a cloud on a provider without rebuilds cannot rebuild.
+const UNSUPPORTED: &str = "A cloud on this provider keeps the image it was created with; Rebuild is not available";
 
 fn ready(state: &Deployment) -> Result<()> {
     state.refuse_pending_replacement()?;
+    if Description::of(&state.profile).rebuild == Rebuild::Unsupported {
+        return Err(Error::Invalid(UNSUPPORTED));
+    }
     if !rebuildable(&state.profile) {
         return Err(Error::Invalid(NO_RECIPE));
     }

@@ -1,9 +1,9 @@
 ---
 procedure: docker-host-provider
-feature: Clouds on an existing Docker host (provider module)
+feature: Clouds on an existing Docker host
 platforms: [linux, macos]
 cost: none
-destructive: no
+destructive: yes
 secrets: none
 owner: peters
 ---
@@ -12,29 +12,40 @@ owner: peters
 
 ## 1. Purpose
 
-This procedure proves that the `horizon-cloud` Docker host module creates,
-stops, starts and deletes a worker container on a Docker engine, keeps the
-worker's SSH port the same, and changes only the container and volume of its
-own cloud.
+This procedure proves that Horizon creates, stops, resumes and deletes clouds
+on a Docker engine that the person already has, through the same deployment
+and lifecycle as rented workers. It also proves that a delete removes only
+the cloud's own container and volume.
 
 ## 2. Applicability
 
-- Candidate: a Horizon checkout that has `horizon_cloud::docker_host`.
-- Platforms: Linux and macOS, with a simulated Docker engine.
-- This procedure does not test: deployment of a cloud, the cloud card, the
-  Cloud settings card, the New cloud provider choice or the MCP tools. Nothing
-  calls the module yet. A later change connects it and extends this
-  procedure with live tasks on this computer and on a remote host.
+- Candidate: a Horizon checkout that has the `docker-host` provider.
+- Platforms: this computer's Docker engine on Linux, and a remote Docker
+  host that you reach with SSH. The remote host can be Linux or macOS with
+  Docker Desktop.
+- This procedure does not test: the Cloud settings card, the New cloud
+  provider choice or the MCP tools. These come in a later change. Until
+  then, you add a host to `docker_hosts` in the cloud settings file, and New
+  cloud shows the Docker mark only for a profile with `provider: docker-host`.
+  Task D6 examines that mark.
 
 ## 3. Safety
 
-No step rents compute, deletes data, sends a secret or changes access. The
-tests use a simulated Docker engine and private temporary directories.
+> **CAUTION:** DO NOT USE THE DEFAULT DOCKER CONFIGURATION OVER SSH ON A MAC.
+> A keychain prompt over SSH stops that Mac until a person closes it. Horizon
+> uses a private configuration; use one for manual commands too.
+
+> **CAUTION:** DELETE ONLY THE TEST CLOUDS.
+> The delete step removes a container and a volume on the host. Use test
+> cloud IDs that no other cloud uses.
 
 ## 4. Equipment and preconditions
 
-- The Horizon checkout and a Rust toolchain.
-- A POSIX `sh` and `/bin/sleep` for the two Unix-only tests.
+- A Linux computer with Docker and Git, and the Horizon checkout.
+- For task D3: a remote host that `ssh <host> true` reaches without a
+  password prompt. On that host, the SSH user has access to Docker, and
+  `docker` is at a known absolute path.
+- Network access to `ghcr.io` to pull the public worker base image.
 
 ## 5. Setup
 
@@ -43,43 +54,162 @@ tests use a simulated Docker engine and private temporary directories.
 
    Result: The builds and the test files go to these directories.
 
+2. Run `cargo build -p horizon-core --example cloud_deploy`.
+
+   Result: The `cloud_deploy` example is built.
+
+3. Make a test directory `$T`. Make a Git repository in `$T/repo` with one
+   commit. Put this text in `$T/repo/.horizon/cloud.yml` before the commit:
+
+   ```yaml
+   version: 1
+   default: local
+   profiles:
+     local:
+       provider: docker-host
+       image: ghcr.io/peters/horizon-worker-base@sha256:f28a0ceb76b559b299000b440a26951bc70a820003d3911c4e130174bef944ec
+       cpu: 2
+       memory_gb: 4
+       gpu: false
+       storage: {container_gb: 20, volume_gb: 20}
+       bootstrap: {readiness_seconds: 600}
+       capabilities: {agents: [claude, codex], browsers: [chromium], desktop: true}
+   ```
+
+   Result: The repository has a Docker host profile.
+
+4. Run `ssh-keygen -t ed25519 -N '' -f $T/worker_ed25519`.
+
+   Result: The worker key pair is in `$T`.
+
+5. Write `$T/settings.json` with absolute paths in `$T` for
+   `runpod_key_file`, `ssh_identity_file` (the new key) and `docker_config`,
+   `cpu_flavors: ["cpu3c"]`, `gpu_types: []`, and this host list:
+
+   ```json
+   "docker_hosts": [{"name": "this-pc", "access": "this-pc"}]
+   ```
+
+   Result: The settings name this computer as the only Docker host.
+
+6. Write down the number of containers and volumes on the host:
+   `docker ps -aq | wc -l` and `docker volume ls -q | wc -l`.
+
+   Result: You have the baseline counts.
+
 ## 6. Tasks
 
-### 6.1 M1: Lifecycle on a simulated engine
+In each command, `cloud_deploy` is the example from setup step 2.
+
+### 6.1 D1: Two clouds on this computer
+
+1. Run `cloud_deploy deploy $T/settings.json $T/repo local $T/state/one test-one`.
+
+   Result: The last lines show `Ready: worker=<container ID>`.
+
+2. Run the same command with `$T/state/two` and `test-two`.
+
+   Result: The second cloud is ready too.
+
+3. Run `docker ps --filter label=io.horizon.cloud`.
+
+   Result: The containers `horizon-cloud-test-one` and
+   `horizon-cloud-test-two` run. Each publishes port 22 on `127.0.0.1` only,
+   and the two ports are different.
+
+### 6.2 D2: Stop and resume on the same port
+
+1. Run `cloud_deploy stop $T/settings.json $T/state/one`, then
+   `cloud_deploy reconcile $T/settings.json $T/state/one`.
+
+   Result: The report shows `inactive` and `Resume starts the same worker again.`
+
+2. Run `cloud_deploy resume $T/settings.json $T/state/one`, then
+   `cloud_deploy reconnect $T/settings.json $T/state/one`.
+
+   Result: The cloud is ready again. `docker ps` shows the same container on
+   the same `127.0.0.1` port as in task D1.
+
+### 6.3 D3: A remote host over SSH
+
+1. Write `$T/settings-remote.json` like `$T/settings.json`, with this host
+   list. Use your host's SSH address and docker path:
+
+   ```json
+   "docker_hosts": [{"name": "remote", "access": "ssh", "address": "<user@host>", "docker": "/usr/local/bin/docker"}]
+   ```
+
+   Result: The settings name the remote host.
+
+2. Run `cloud_deploy deploy $T/settings-remote.json $T/repo local $T/state/remote test-remote`.
+
+   Result: The cloud is ready. An ARM host runs the arm64 build of the worker
+   image, and `uname -m` in the worker shows `aarch64`.
+
+3. Run `cloud_deploy stop`, `reconcile`, `resume` and `reconcile` with
+   `$T/settings-remote.json` and `$T/state/remote`.
+
+   Result: The reports show `inactive` after the stop and `found` after the
+   resume. The container keeps the same loopback port.
+
+### 6.4 D4: Delete removes only the cloud's own resources
+
+1. Run `cloud_deploy delete <settings> <state>` for each test cloud.
+
+   Result: Each command shows `Stage: Delete worker` and ends without an
+   error.
+
+2. Count the containers and volumes on each host again.
+
+   Result: The counts are the same as the baseline counts from setup step 6.
+   No container or volume with the label `io.horizon.cloud` remains for the
+   test clouds.
+
+### 6.5 D5: Automatic tests
 
 1. Run `cargo test -p horizon-cloud docker_host`.
 
-   Result: All tests pass. Among them:
-   - two clouds on one host get their own names, volumes and SSH ports, also
-     when another worker holds the port that a cloud tries first;
-   - the SSH port stays the same after a stop and a start, and a start fails
-     with a clear message when another program took the port;
-   - a host without free CPU or memory refuses before anything is created;
-   - a delete removes only the cloud's own container and volume, and a volume
-     with the cloud's name that Horizon did not create is never used;
-   - a request that runs out of time is reported, and a cloud whose delete
-     started does not start again.
+   Result: All tests pass. They use a simulated Docker engine.
 
-### 6.2 M2: Commands and quoting
+2. Run `cargo test -p horizon-core --test docker_host_live -- --ignored`.
 
-1. Examine the result of the same command for these tests:
-   `host_settings_refuse_shell_syntax`, `workers_are_reached_through_the_host`,
-   `remote_arguments_reach_docker_unchanged` and
-   `a_command_that_outlives_its_time_is_stopped`.
+   Result: The test passes and removes its two clouds.
 
-   Result: Each test passes. Shell syntax in a host setting is refused, each
-   remote argument reaches docker unchanged, the private Docker configuration
-   is written, and a command that outlives its time is stopped.
+### 6.6 D6: The Docker mark in New cloud
+
+1. Start the candidate in an isolated Horizon desktop that a native VNC Device
+   panel shows, with the settings of setup step 5 and `$T/repo` as the
+   repository.
+
+   Result: Horizon starts on the isolated desktop.
+
+2. Open **New cloud** for `$T/repo` and select the profile `local`.
+
+   Result: The provider mark is the blue Docker whale, sharp at the dialog's
+   size, in the light and the dark theme. The checks show "Docker host saved;
+   nothing is rented". **Start cloud** stays off with "New cloud cannot start a
+   cloud on a Docker host yet.", also when a rented provider's offer is chosen.
 
 ## 7. Pass criteria
 
-- Tasks M1 and M2 pass.
+- Tasks D1, D2, D4, D5 and D6 pass.
+- Task D3 passes, and SSH reaches the worker through the host with the pinned
+  worker host key.
 
 ## 8. Cleanup
 
-1. Remove the private `TMPDIR` directory if you made it for this run.
+1. Delete each test cloud that task D4 did not delete.
 
-   Result: No test files remain.
+   Result: No container or volume with the test cloud IDs remains.
+
+2. On a remote host, remove the worker image if this run pulled it, and
+   remove `~/.horizon/docker-config` if this run made it.
+
+   Result: The host has its state from before the run.
+
+3. Remove `$T`.
+
+   Result: The test files are gone.
 
 ## 9. Record of results
 

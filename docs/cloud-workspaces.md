@@ -3,8 +3,9 @@
 A cloud is one remote development container. New shell and agent panels share its
 Git checkout; branches and additional worktrees are created manually. Browser and
 Device panels share that cloud's runtime.
-RunPod and Hetzner provision workers. Daytona and Fly.io appear in labelled design
-fixtures.
+RunPod and Hetzner provision workers. An existing Docker host can also run them;
+see the `docker-host` provider in the horizon-cloud skill reference. Daytona and
+Fly.io appear in labelled design fixtures.
 
 Cloud deployment and lifecycle control currently require a Unix host with supported
 file and directory synchronization. Windows cloud operations fail before state or

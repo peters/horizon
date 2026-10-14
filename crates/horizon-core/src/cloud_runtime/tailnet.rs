@@ -335,6 +335,7 @@ mod tests {
             identity: cloud.path().join("absent-identity"),
             known_hosts: cloud.path().join("absent-host-key"),
             host_key_alias: "fixture".into(),
+            proxy_command: None,
         };
         let cancel = horizon_cloud::Cancellation::default();
         cancel.cancel();

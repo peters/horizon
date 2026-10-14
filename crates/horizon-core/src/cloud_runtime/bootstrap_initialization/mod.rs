@@ -418,6 +418,7 @@ fn endpoint_target(record: &Record, address: &horizon_cloud::SshEndpoint) -> Res
             identity: record.request.identity_file.clone(),
             known_hosts: record.request.known_hosts.clone(),
             host_key_alias: format!("horizon-cloud-{worker_id}"),
+            proxy_command: None,
         },
     })
 }

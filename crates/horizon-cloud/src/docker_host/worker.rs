@@ -21,8 +21,6 @@ const QUICK: Duration = Duration::from_secs(30);
 /// Starting, and stopping, which waits 30 seconds for the worker to exit.
 const POWER: Duration = Duration::from_secs(90);
 const PULL: Duration = Duration::from_mins(30);
-/// Worker images are built for this platform only; an ARM host emulates it.
-const PLATFORM: &str = "linux/amd64";
 const NANO_CPUS: u64 = 1_000_000_000;
 const GIB: u64 = 1 << 30;
 
@@ -371,7 +369,9 @@ pub fn provision(
     }
     if *operation == CreateState::Prepared {
         check_capacity(docker, spec)?;
-        let pull = format!("pull --quiet --platform {PLATFORM} {}", spec.image_digest);
+        // No platform is named: Docker takes the host's own from a multi-platform image, and
+        // runs an amd64-only image under emulation on an ARM host.
+        let pull = format!("pull --quiet {}", spec.image_digest);
         call(docker, &pull, PULL)?;
     }
     // Recorded once nothing refused the cloud, before anything is created for it.
@@ -477,7 +477,7 @@ pub(super) fn create(docker: &impl Docker, spec: &WorkerSpec, port: u16) -> Resu
     let (id, cpu, memory_gb) = (&spec.operation_id, spec.profile.cpu, spec.profile.memory_gb);
     let shm_gb = crate::hetzner::cloud::shared_memory_gb(memory_gb);
     let command = format!(
-        "container create --name {} --platform {PLATFORM} --label {} --cpus {cpu} --memory {memory_gb}g \
+        "container create --name {} --label {} --cpus {cpu} --memory {memory_gb}g \
          --shm-size {shm_gb}g --publish 127.0.0.1:{port}:22 --mount type=volume,src={},dst=/workspace",
         container_name(id),
         owner(id),

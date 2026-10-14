@@ -1047,4 +1047,6 @@ that reaches a worker on the host's loopback. `command` runs one bounded,
 cancellable docker call. `worker` is the storage-free lifecycle: capacity
 check, pinned port, owner labels, provision, power and delete. It hands its
 `Journal` and the operation fence to the caller's `Records` before the request
-that each guards. Nothing calls the module yet.
+that each guards. `cloud_runtime::providers::docker_host` keeps that journal in
+`docker-host.json`, implements `Lifecycle` and `Compute` for `Kind::DockerHost`,
+and waits for readiness through the host's `ProxyCommand`.

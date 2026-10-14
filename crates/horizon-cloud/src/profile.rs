@@ -307,11 +307,21 @@ impl Profile {
                 "High-performance network storage requires a RunPod CPU cloud",
             ));
         }
-        let supported = matches!(self.provider.as_str(), "runpod" | crate::hetzner::PROVIDER);
+        let supported = matches!(
+            self.provider.as_str(),
+            "runpod" | crate::hetzner::PROVIDER | crate::docker_host::PROVIDER
+        );
         let fixture = design_fixture && matches!(self.provider.as_str(), "daytona" | "fly");
         if !(supported || fixture) {
             return Err(ProfileError::Invalid(
-                "Supported providers are RunPod and Hetzner; Daytona and Fly.io are design fixtures",
+                "Supported providers are RunPod, Hetzner and Docker hosts; Daytona and Fly.io are design fixtures",
+            ));
+        }
+        if self.provider == crate::docker_host::PROVIDER
+            && (self.gpu || self.capabilities.browserstack.is_some() || self.idle_stop_minutes.is_some())
+        {
+            return Err(ProfileError::Invalid(
+                "A Docker host runs CPU clouds without GPUs, hosted devices or an idle stop",
             ));
         }
         if self.provider == crate::hetzner::PROVIDER {

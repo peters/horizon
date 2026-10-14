@@ -65,7 +65,12 @@ pub fn can_remove(store: &Store, state: &Deployment) -> Result<bool> {
 /// # Errors
 /// The record directory cannot be read.
 pub fn can_remove_without_deployment(store: &Store) -> Result<bool> {
-    for file in ["hetzner.json", "workspace-volume.json", "workspace-volume.required"] {
+    for file in [
+        "hetzner.json",
+        "docker-host.json",
+        "workspace-volume.json",
+        "workspace-volume.required",
+    ] {
         if store.root().join(file).try_exists()? {
             return Ok(false);
         }

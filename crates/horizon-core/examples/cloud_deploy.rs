@@ -458,6 +458,7 @@ fn endpoint(root: &std::path::Path, settings: &Settings, cancel: &Cancellation) 
             "host_key_alias": connection.host_key_alias,
             "known_hosts": std::path::absolute(&connection.known_hosts)?,
             "identity_file": connection.identity,
+            "proxy_command": connection.proxy_command,
         }))
         .map_err(|_| cloud_runtime::Error::Json)?
     );
