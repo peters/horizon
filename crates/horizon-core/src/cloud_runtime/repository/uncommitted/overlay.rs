@@ -295,7 +295,7 @@ const fn executable(_: &fs::Metadata) -> bool {
     false
 }
 
-/// Makes a link at `target` to `link`, a link's target as [`link_target`] read it.
+/// Makes a link at `target` to `link`, a link's target as [`find`] read it.
 #[cfg(unix)]
 fn make_link(link: Vec<u8>, target: &Path) -> Result<()> {
     let link = PathBuf::from(<std::ffi::OsString as std::os::unix::ffi::OsStringExt>::from_vec(link));
