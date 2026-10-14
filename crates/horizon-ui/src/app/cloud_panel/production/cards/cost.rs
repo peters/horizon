@@ -8,7 +8,7 @@ use egui::{RichText, Sense, vec2};
 use horizon_core::cloud_runtime::{
     self,
     billing::BillingBucket,
-    cost::{RunGap, format_amount, format_rate},
+    cost::{RunGap, format_amount, format_rate, outlook},
     provider::{self, Description},
 };
 use std::time::{Instant, SystemTime};
@@ -166,6 +166,7 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
     if runtime.state_unavailable {
         return Spend {
             line: "Costs unknown".into(),
+            outlook: None,
             explanation: "The deployment record could not be read, so Horizon cannot tell whether a worker is billing."
                 .into(),
         };
@@ -173,6 +174,7 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
     if no_rent(runtime) {
         return Spend {
             line: "No rent".into(),
+            outlook: None,
             explanation: "The worker runs on a saved Docker host, so no provider bills it.".into(),
         };
     }
@@ -185,6 +187,8 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
     let deleted = worker_deleted(runtime);
     let unpriced = rate_not_reported(runtime);
     let mut parts = Vec::new();
+    // The rate of a worker that bills now, which the day, week and month come from.
+    let mut billing = None;
     // A deleted worker bills no compute; its history can still follow.
     if let Some(deleted) = deleted {
         parts.push(match deleted {
@@ -194,7 +198,7 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
     } else {
         match rate {
             Some(_) if idle => parts.push("compute stopped".to_owned()),
-            Some(rate) => parts.push(format_rate(rate, currency)),
+            Some(rate) => billing = Some(rate),
             None => {}
         }
     }
@@ -208,6 +212,9 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
         Some(total) => parts.push(format!("{} total", format_amount(total.total(), currency))),
         None if runtime.billing.error().is_some() => parts.push("total unavailable".into()),
         None => {}
+    }
+    if let Some(rate) = billing {
+        parts.push(outlook::per(rate, currency, outlook::Period::Day));
     }
     let line = if !parts.is_empty() {
         parts.join(" · ")
@@ -254,7 +261,14 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
             None => "Nothing is billed until a worker is requested.".into(),
         },
     };
-    Spend { line, explanation }
+    Spend {
+        line,
+        outlook: billing.map(|rate| outlook::line(rate, currency, now)),
+        explanation: match billing {
+            Some(rate) => format!("{}\n\n{explanation}", outlook::detail(rate, currency, now)),
+            None => explanation,
+        },
+    }
 }
 
 /// The Cost tab's run note. The run is estimated once the worker is Ready; before that a
@@ -521,7 +535,7 @@ mod tests {
         assert!(runtime.total_cost(now).is_none());
         let line = spend(&runtime, now).line;
         assert!(
-            line.contains("$0.690/h") && line.contains("run") && !line.contains("total"),
+            line.contains("$16.56/day") && line.contains("run") && !line.contains("total"),
             "{line}"
         );
         let shown = texts(&runtime);
@@ -668,7 +682,7 @@ mod tests {
     fn the_spend_explanation_never_contradicts_the_line_it_explains() {
         let running = runtime();
         let spend_now = spend(&running, SystemTime::now());
-        assert!(spend_now.line.contains("/h"), "{}", spend_now.line);
+        assert!(spend_now.line.contains("/day"), "{}", spend_now.line);
         assert!(
             !spend_now.explanation.contains("not reported its rate"),
             "{}",
@@ -684,6 +698,8 @@ mod tests {
             "{}",
             spend_stopped.line
         );
+        assert!(spend_now.outlook.is_some(), "a billing worker shows what it adds");
+        assert_eq!(spend_stopped.outlook, None, "a stopped worker adds nothing");
         assert!(
             spend_stopped.explanation.starts_with("Compute is stopped"),
             "{}",
@@ -796,7 +812,18 @@ mod tests {
     fn a_ready_hetzner_worker_shows_its_euro_rate_and_run_in_the_card_header_and_list() {
         let ready = hetzner(Stage::Ready, &server(&serde_json::json!({})));
         let now = created() + std::time::Duration::from_mins(45);
-        assert_eq!(spend(&ready, now).line, "€0.0240/h · €0.02 run");
+        let header = spend(&ready, now);
+        assert_eq!(header.line, "€0.02 run · €0.58/day");
+        let outlook = header.outlook.unwrap_or_default();
+        assert!(outlook.starts_with("€4.03/wk · €17.52/mo · +€"), "{outlook}");
+        assert!(outlook.ends_with(" if left running"), "{outlook}");
+        assert!(
+            header
+                .explanation
+                .starts_with("€0.0240/h · €0.58/day · €4.03/week · €17.52/month · €210.24/year\n"),
+            "{}",
+            header.explanation
+        );
         assert_eq!(ready.cost_badge(now).as_deref(), Some("€0.02 run"));
         assert_eq!(card(&ready, now)[0], "This run · 45m 00s · €0.02 · €0.0240/h");
         assert_eq!(teaser(&ready), "€0.0240/h");
@@ -904,13 +931,13 @@ mod tests {
         }
 
         let unstarted = hetzner(Stage::Ready, &server(&serde_json::json!({"lastStartedAt": null})));
-        assert_eq!(spend(&unstarted, now).line, "€0.0240/h");
+        assert_eq!(spend(&unstarted, now).line, "€0.58/day");
         assert!(has(&texts(&unstarted), "no start time reported"));
         let unknown = hetzner(Stage::Ready, &server(&serde_json::json!({"desiredStatus": "UNKNOWN"})));
         assert!(has(&texts(&unknown), "worker status unknown"));
         // A powered-off Hetzner server still bills until a stop deletes it.
         let off = hetzner(Stage::Ready, &server(&serde_json::json!({"desiredStatus": "EXITED"})));
-        assert_eq!(spend(&off, now).line, "€0.0240/h");
+        assert_eq!(spend(&off, now).line, "€0.58/day");
         let shown = texts(&off);
         assert!(
             has(&shown, "powered off, still billed") && has(&shown, "€0.0240/h"),

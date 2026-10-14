@@ -343,7 +343,7 @@ fn rename_field(
         header.min + Vec2::new(64.0, 16.0),
         Vec2::new((header.width() - 64.0 - reserved).max(120.0), 32.0),
     );
-    let edit = show_inline_rename_editor(ui, field, draft, FontId::proportional(21.0));
+    let edit = show_inline_rename_editor(ui, field, draft, FontId::proportional(TITLE_SIZE));
     let pressed_outside = ui.input(|input| {
         input.pointer.any_pressed()
             && input
@@ -360,6 +360,9 @@ fn rename_field(
 
 /// The hover text of the card itself.
 pub(super) const CARD_HINT: &str = "Click the title to rename. Drag to move this cloud.";
+/// Font sizes of a card's title and subtitle.
+pub(super) const TITLE_SIZE: f32 = 21.0;
+pub(super) const SUBTITLE_SIZE: f32 = 13.0;
 
 /// The title over the drag area: it takes the clicks, and drags fall through to the
 /// header so the card still moves from its title.
@@ -378,7 +381,7 @@ fn title_target(ui: &egui::Ui, group: &CloudGroup, header: Rect, reserved: f32) 
     let room = (header.width() - 64.0 - reserved).max(0.0);
     let width = ui
         .painter()
-        .layout_no_wrap(group.title.clone(), FontId::proportional(21.0), theme::FG())
+        .layout_no_wrap(group.title.clone(), FontId::proportional(TITLE_SIZE), theme::FG())
         .size()
         .x;
     let title = Rect::from_min_size(header.min + Vec2::new(64.0, 16.0), Vec2::new(width.min(room), 30.0));
@@ -508,7 +511,7 @@ fn paint_header(
             title_rect.left_center(),
             Align2::LEFT_CENTER,
             &group.title,
-            FontId::proportional(21.0),
+            FontId::proportional(TITLE_SIZE),
             theme::FG(),
         );
     }
@@ -533,7 +536,8 @@ fn paint_header(
         Pos2::new((rect.right() - reserved).max(rect.left() + 64.0), rect.top() + 70.0),
     );
     // Too long for the room left beside the strip: end it with an ellipsis, not a cut.
-    let mut job = egui::text::LayoutJob::simple_singleline(subtitle, FontId::proportional(13.0), theme::FG_SOFT());
+    let mut job =
+        egui::text::LayoutJob::simple_singleline(subtitle, FontId::proportional(SUBTITLE_SIZE), theme::FG_SOFT());
     job.wrap = egui::text::TextWrapping::truncate_at_width(subtitle_rect.width());
     let galley = painter.layout_job(job);
     painter.galley(

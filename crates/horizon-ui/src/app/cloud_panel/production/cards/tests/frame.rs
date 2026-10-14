@@ -229,9 +229,10 @@ fn a_running_operation_keeps_the_header_quiet_between_its_once_a_second_ticks() 
             };
             let spend = strip::Spend {
                 line: String::new(),
+                outlook: None,
                 explanation: String::new(),
             };
-            strip::show(ui, header, &status, &indicators, &spend, false, None);
+            strip::show(ui, header.into(), &status, &indicators, &spend, false, None);
         })
         .discard_textures()
     };
@@ -281,9 +282,10 @@ fn a_press_on_cancel_does_not_complete_as_the_retry_that_replaces_it() {
                     };
                     let spend = strip::Spend {
                         line: String::new(),
+                        outlook: None,
                         explanation: String::new(),
                     };
-                    clicked = strip::show(ui, header, &status, &indicators, &spend, false, None).action;
+                    clicked = strip::show(ui, header.into(), &status, &indicators, &spend, false, None).action;
                 },
             )
             .discard_textures();

@@ -293,9 +293,13 @@ sessions continue on the worker. **Parked** holds a cloud
 with parked terminals or a stopped worker. **This PC** holds workspaces without a
 cloud. Each row shows a status dot and one status line, for example the last line
 of a parked agent. A **Parked** row is compact: its status line is the hover and
-accessibility text of its dot. A group header shows the hourly cost of its running
-workers, with one sum per currency: RunPod bills in US dollars and Hetzner in euros
-net of VAT. A click on a row goes to its workspace, and a parked cloud then attaches.
+accessibility text of its dot. A group header shows what its running workers cost
+a day, with one sum per currency, for example `€0.58/day + $16.56/day`: RunPod
+bills in US dollars and Hetzner in euros net of VAT. The header of a billing cloud
+card shows its run and its cost a day, and when there is room the cost a week and a
+month and what it adds by the end of the month (UTC) if it keeps running. A day is
+24 hours and a month 730. A click on a row goes to its workspace, and a parked cloud
+then attaches.
 To find a cloud for the person, name its workspace and its group.
 
 `cloud_list` reads and acts on the clouds in your own workspace only.

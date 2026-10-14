@@ -10,6 +10,8 @@ use horizon_cloud::{
 use std::time::{Duration, SystemTime};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
+pub mod outlook;
+
 const SECONDS_PER_HOUR: f64 = 3600.0;
 
 /// Estimated cost of a worker's current run, from its latest start until now.
