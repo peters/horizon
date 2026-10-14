@@ -16,6 +16,8 @@ struct Fake {
     calls: RefCell<Vec<(String, Duration)>>,
     cpus: u64,
     memory_gb: u64,
+    /// The engine's version; a current one when unset.
+    version: Option<&'static str>,
 }
 
 fn flag<'a>(args: &'a [String], name: &str) -> &'a str {
@@ -114,7 +116,9 @@ impl Docker for Fake {
         let (mut containers, mut volumes) = (self.containers.borrow_mut(), self.volumes.borrow_mut());
         match words.as_slice() {
             ["info", ..] => {
-                return Ok(json!({"OSType": "linux", "NCPU": self.cpus, "MemTotal": self.memory_gb << 30}).to_string());
+                let version = self.version.unwrap_or("29.0.1");
+                let info = json!({"OSType": "linux", "NCPU": self.cpus, "MemTotal": self.memory_gb << 30, "ServerVersion": version});
+                return Ok(info.to_string());
             }
             ["container", "ls", .., "--filter", filter, "--format", _] => {
                 let ids = containers
@@ -348,6 +352,26 @@ fn a_full_host_refuses_before_anything_is_created() {
     // A stopped worker holds no capacity.
     docker.containers.borrow_mut().get_mut("busy").unwrap()["State"]["Running"] = json!(false);
     cloud.provision(&docker).unwrap();
+}
+
+#[test]
+fn an_engine_that_publishes_loopback_ports_openly_is_refused() {
+    let mut docker = Fake::host(8, 16);
+    docker.version = Some("27.5.1");
+    let error = Cloud::new("old", 2).provision(&docker).unwrap_err();
+    assert!(error.to_string().contains("Docker Engine 28"), "{error}");
+    assert!(docker.volumes.borrow().is_empty());
+    // A worker made before the engine was replaced by an older one does not start again.
+    docker.version = None;
+    let mut cloud = Cloud::new("kept", 2);
+    cloud.provision(&docker).unwrap();
+    cloud.power(&docker, false).unwrap();
+    for version in ["27.5.1", "28.0.0-rc.1", "28"] {
+        docker.version = Some(version);
+        assert!(cloud.power(&docker, true).is_err(), "{version}");
+    }
+    docker.version = Some("28.0.0-ce");
+    cloud.power(&docker, true).unwrap();
 }
 
 #[test]

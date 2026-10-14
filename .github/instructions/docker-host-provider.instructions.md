@@ -30,6 +30,9 @@ the deployment, the cloud lifecycle and the worker SSH connection.
   every host. A configuration without a login makes the CLI use a credential
   helper, such as the macOS keychain, and a keychain prompt over SSH waits for
   a person at the host.
+- A worker is created or started only on a stable Docker Engine 28 or later,
+  which keeps ports published on the loopback private. Earlier engines let
+  hosts on the same network segment reach them.
 - The worker publishes its SSH only on the host's loopback, on a port that
   stays the same for the life of the container. `Host::proxy_command` gives
   the SSH `ProxyCommand` that reaches it through the host.

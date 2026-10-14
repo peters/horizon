@@ -60,6 +60,12 @@ pub struct Engine<'a> {
 impl Docker for Engine<'_> {
     fn docker(&self, args: &[String], timeout: Duration) -> Result<String, Failure> {
         if self.host.access == Access::ThisPc {
+            // The worker's loopback must be this computer's, as its record says.
+            if std::env::var("DOCKER_HOST").is_ok_and(|engine| !engine.is_empty() && !engine.starts_with("unix://")) {
+                return Err(
+                    CloudError::Invalid("DOCKER_HOST names another computer's engine; save that host instead").into(),
+                );
+            }
             private_config(&self.local_config)
                 .map_err(|_| CloudError::Invalid("The private Docker configuration could not be written"))?;
         }

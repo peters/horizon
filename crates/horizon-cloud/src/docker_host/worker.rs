@@ -222,13 +222,7 @@ pub fn describe(container: &Container, host: &Host, spec: &WorkerSpec) -> Result
 /// Refuses a worker that the host's free CPU or memory cannot hold, after the other
 /// Horizon workers that run there. Disk is not checked: a Docker volume has no size.
 fn check_capacity(docker: &impl Docker, spec: &WorkerSpec) -> Result<(), CloudError> {
-    let info = docker.docker(&["info".into(), "--format".into(), "{{json .}}".into()], QUICK)?;
-    let info: Value = serde_json::from_str(&info).map_err(|_| CloudError::InvalidResponse)?;
-    if info["OSType"] != "linux" {
-        return Err(CloudError::Invalid(
-            "Workers need a Docker host that runs Linux containers",
-        ));
-    }
+    let info = engine(docker)?;
     let (Some(cpus), Some(memory)) = (info["NCPU"].as_u64(), info["MemTotal"].as_u64()) else {
         return Err(CloudError::InvalidResponse);
     };
@@ -246,6 +240,37 @@ fn check_capacity(docker: &impl Docker, spec: &WorkerSpec) -> Result<(), CloudEr
         return Err(CloudError::Capacity(Reason::from_text(&text, "")));
     }
     Ok(())
+}
+
+/// The engine's `docker info`, once it runs Linux containers and keeps ports published
+/// on the loopback private: Docker before stable 28 lets hosts on the same network
+/// segment reach them.
+fn engine(docker: &impl Docker) -> Result<Value, CloudError> {
+    let info = docker.docker(&["info".into(), "--format".into(), "{{json .}}".into()], QUICK)?;
+    let info: Value = serde_json::from_str(&info).map_err(|_| CloudError::InvalidResponse)?;
+    if info["OSType"] != "linux" {
+        return Err(CloudError::Invalid(
+            "Workers need a Docker host that runs Linux containers",
+        ));
+    }
+    if !info["ServerVersion"].as_str().is_some_and(private_ports) {
+        return Err(CloudError::Invalid(
+            "Use a stable Docker Engine 28 or later on the host, so the worker's SSH port stays private",
+        ));
+    }
+    Ok(info)
+}
+
+/// Whether `version` is a stable Docker Engine 28 or later, such as `28.5.1` or `29.0.0-ce`.
+fn private_ports(version: &str) -> bool {
+    let (release, suffix) = version.split_once('-').unwrap_or((version, ""));
+    let parts: Vec<&str> = release.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+        && parts[0].parse::<u32>().is_ok_and(|major| major >= 28)
+        && matches!(suffix, "" | "ce" | "ee")
 }
 
 /// `value` in `unit`s with one decimal, rounded down.
@@ -467,6 +492,9 @@ pub fn power(
     let container = bound(docker, operation_id, worker_id)?;
     if container.running == on {
         return Ok(());
+    }
+    if on {
+        engine(docker)?;
     }
     announce()?;
     let command = if on { "start" } else { "stop --time 30" };
