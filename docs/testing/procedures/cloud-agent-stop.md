@@ -187,13 +187,19 @@ another tmux server.
    Result: `/var/tmp/stop-a.txt` says that Horizon stops the worker the next
    time it checks. The worker runs.
 
-3. Type `horizon-worker-stopd --take` two times.
+3. Type `horizon-worker-stopd --take` at once.
+
+   Result: The output starts with `{"waiting":`. A take counts the output of
+   every agent session, also of `smoke-a`, which started less than two minutes
+   ago. The request stays.
+
+4. Wait two minutes. Type `horizon-worker-stopd --take` two times.
 
    Result: Each output is the same stop record with the reason
    `smoke: task done`. The stop log
    `/workspace/.horizon/self-stops.jsonl` has the record one time.
 
-4. Type `horizon-worker-stopd --untake <at>`, with the `at` value of the
+5. Type `horizon-worker-stopd --untake <at>`, with the `at` value of the
    record.
 
    Result: The output is `true`. The stop log does not have the record.
