@@ -84,6 +84,35 @@ mod tests {
         .unwrap()
     }
 
+    #[test]
+    #[cfg(unix)]
+    fn enrollment_ledger_survives_failed_save_confirmed_deletion_and_redeploy() {
+        use crate::cloud_runtime::tailnet::receipt::tests::populated;
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        let mut state = deleted(&serde_json::json!({"state":"terminated","worker_id":"worker1"}));
+        state.spec = None;
+        state.tailnet_enrollment = populated();
+        state.stage = Stage::Provision;
+        store.save(&state).unwrap();
+        let before = state.tailnet_enrollment.clone();
+        // A failed later stage cannot discard an already durable captured ID.
+        std::fs::rename(root.path().join("deployment.json"), root.path().join("saved.json")).unwrap();
+        std::fs::create_dir(root.path().join("deployment.json")).unwrap();
+        assert!(store.save(&state).is_err());
+        std::fs::remove_dir(root.path().join("deployment.json")).unwrap();
+        std::fs::rename(root.path().join("saved.json"), root.path().join("deployment.json")).unwrap();
+        assert_eq!(store.load().unwrap().unwrap().tailnet_enrollment, before);
+        super::super::deletion::finish_deletion(state, &store).unwrap();
+        let mut deleted = store.load().unwrap().unwrap();
+        assert_eq!(deleted.stage, Stage::Deleted);
+        assert!(deleted.worker.is_none());
+        assert_eq!(deleted.tailnet_enrollment, before);
+        reopen(&store, &mut deleted, "unused").unwrap();
+        assert_eq!(deleted.stage, Stage::Validate);
+        assert_eq!(store.load().unwrap().unwrap().tailnet_enrollment, before);
+    }
+
     #[cfg(unix)]
     fn write_matching_journal(root: &std::path::Path, spec: &horizon_cloud::WorkerSpec, state: &str) {
         let body = serde_json::json!({

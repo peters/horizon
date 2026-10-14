@@ -161,6 +161,7 @@ fn resizing_requires_a_saved_record_without_a_requested_worker() {
         timeline: None,
         last_self_stop: None,
         tailnet_device: None,
+        tailnet_enrollment: horizon_core::cloud_runtime::tailnet::receipt::EnrollmentLedger::default(),
         siblings: None,
         uncommitted_image: None,
         working_copy: None,

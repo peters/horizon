@@ -499,3 +499,7 @@ Horizon does not override those trust options. See the verified
 The probe requires a complete engine release version. It accepts build metadata and the Community or Enterprise suffix. Development and release-candidate versions do not pass admission. CPU, memory and free storage must be positive even when no profile is selected.
 
 The worker image runs natively on x86 hosts. ARM64 can use an explicit emulation policy, which produces a warning and requires deployment validation. Empty and unsupported architecture values block admission even when emulation is selected. The live test is excluded when the cloud-workspaces feature is disabled.
+
+Enrollment receipts are allocation metadata, separate from the displayed device name. The bounded ledger preserves exact IDs and uncertain capture attempts through worker replacement. It adds no new MCP operation or cleanup authority; the node-cleanup activation is a separate outcome. See docs/architecture/tailnet-enrollment-receipts.md and docs/testing/procedures/tailnet-enrollment-ledger.md.
+
+The receipt-capture adapter reads only the worker's actual tagged Self.ID via pinned root SSH and the existing userspace daemon socket, persists it before readiness and records uncertain attempts before enrollment. It binds the existing allocation request and saved tailnet ID to the owning cloud root. Worker agents cannot query this private root lane. No API secret is sent to a worker and no API editor or node-delete operation is activated by this adapter.

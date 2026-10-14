@@ -5,6 +5,8 @@ use crate::cloud_runtime::{
 };
 use serde_json::json;
 
+mod enrollment_neighbors;
+
 struct Fixture {
     _temp: tempfile::TempDir,
     root: PathBuf,
