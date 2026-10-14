@@ -4,6 +4,8 @@ use keyring_core::CredentialStore;
 use std::{path::Path, sync::Arc};
 use zeroize::Zeroizing;
 
+mod native;
+
 const AUTH: &str = "tskey-auth-synthetic12345678901234567890";
 
 struct Networks {
@@ -172,12 +174,16 @@ fn qualified_synthetic_store() {
         assert!(metadata.is_dir());
         assert_eq!(metadata.permissions().mode() & 0o777, 0o700);
     }
+    assert_eq!(std::env::var("HORIZON_HOME").as_deref(), Ok("/fixture/state/horizon"));
     let root = Path::new("/fixture/state/horizon/cloud");
     let result = match std::env::var("HORIZON_TAILNET_FIXTURE_PHASE").as_deref() {
         Ok("exercise") => exercise(root),
         Ok("probe") => probe(root, false, false),
         Ok("unavailable") => probe(root, true, false),
         Ok("cleanup") => probe(root, false, true),
+        Ok("native-prepare") => native::prepare(root),
+        Ok("native-cleanup") => native::cleanup(root),
+        Ok("native-check") => native::check(root),
         _ => Err("fixture phase refused".into()),
     };
     assert!(result.is_ok(), "{}", result.err().unwrap_or_default());
