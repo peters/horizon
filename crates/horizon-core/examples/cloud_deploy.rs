@@ -614,7 +614,10 @@ fn recorded_host(mut settings: Settings, args: &[String]) -> cloud_runtime::Resu
     let Ok(bytes) = std::fs::read(PathBuf::from(&args[2]).join("deployment.json")) else {
         return Ok(settings);
     };
-    let record: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| cloud_runtime::Error::Json)?;
+    // A record that cannot be read is left to the command itself to report.
+    let Ok(record) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return Ok(settings);
+    };
     let spec = &record["spec"];
     if spec["profile"]["provider"] != horizon_cloud::docker_host::PROVIDER {
         return Ok(settings);

@@ -85,7 +85,8 @@ pub fn readings(settings: &Settings, root: &Path, cancel: &Cancellation) -> Vec<
 /// without one. A host that could not be read is listed under `host_errors`.
 #[must_use]
 pub fn section(readings: &[Reading], requirements: &Requirements) -> Option<serde_json::Value> {
-    if readings.is_empty() || requirements.gpu {
+    // No host has a GPU or a region.
+    if readings.is_empty() || requirements.gpu || requirements.region.is_some() {
         return None;
     }
     let offers: Vec<_> = readings
@@ -96,10 +97,14 @@ pub fn section(readings: &[Reading], requirements: &Requirements) -> Option<serd
     let errors: serde_json::Map<_, _> = readings
         .iter()
         .filter_map(|reading| {
-            Some((
-                reading.host.name.clone(),
-                reading.capacity.as_ref().err()?.clone().into(),
-            ))
+            let error = match &reading.capacity {
+                Err(error) => error.clone(),
+                Ok(capacity) if !capacity.native() => {
+                    format!("The worker image has no build for {}", capacity.architecture)
+                }
+                Ok(_) => return None,
+            };
+            Some((reading.host.name.clone(), error.into()))
         })
         .collect();
     let mut section = serde_json::json!({
@@ -157,6 +162,23 @@ mod tests {
             ..Requirements::default()
         };
         assert!(super::section(&readings, &gpu).is_none());
+        let region = Requirements {
+            region: Some("EUROPE".into()),
+            ..Requirements::default()
+        };
+        assert!(super::section(&readings, &region).is_none());
+        let mut riscv = readings[0].clone();
+        if let Ok(capacity) = &mut riscv.capacity {
+            capacity.architecture = "riscv64".into();
+        }
+        let section = super::section(&[riscv], &Requirements::default()).unwrap();
+        assert_eq!(section["offers"], serde_json::json!([]));
+        assert!(
+            section["host_errors"]["build-box"]
+                .as_str()
+                .unwrap()
+                .contains("riscv64")
+        );
         let one = Requirements {
             limit: Some(1),
             ..Requirements::default()
