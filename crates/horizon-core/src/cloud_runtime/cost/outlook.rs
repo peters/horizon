@@ -111,7 +111,10 @@ pub fn detail(rate: f64, currency: &str, now: SystemTime) -> String {
         )
         .collect::<Vec<_>>()
         .join(" · ");
-    let ends = [month_end(now), year_end(now)]
+    let month = month_end(now);
+    // In December the month and the year end on the same day.
+    let year = year_end(now).filter(|year| month.as_ref().is_none_or(|month| month.label != year.label));
+    let ends = [month, year]
         .into_iter()
         .flatten()
         .map(|end| added(rate, currency, &end))
@@ -228,5 +231,11 @@ mod tests {
             text.contains("If it keeps running: +€9.91 by Oct 31 and +€45.05 by Dec 31 (UTC)."),
             "{text}"
         );
+    }
+
+    #[test]
+    fn december_names_its_end_once() {
+        let text = detail(0.024, "EUR", at("2026-12-30T12:00:00Z"));
+        assert!(text.contains("If it keeps running: +€0.86 by Dec 31 (UTC)."), "{text}");
     }
 }
