@@ -509,9 +509,15 @@ fn typed_path(text: &str) -> PathBuf {
 }
 
 /// Whether `path` is a folder with a repository in it to use: a clone that stopped halfway is
-/// a plain folder, as it is among the search's results.
+/// a plain folder, as it is among the search's results. On macOS a guarded folder, or a link
+/// into one, is not looked in, as the search does not look in it either.
 fn holds_repository(path: &Path) -> bool {
-    path.join(".git").exists() && !source::clone_stopped_in(path)
+    let dot_git = path.join(".git");
+    // `.git` and the clone marker in it may be links, which are followed only when they stay
+    // out of guarded folders too.
+    horizon_core::dir_search::may_look_in(&[path, &dot_git, &dot_git.join(source::CLONE_MARKER)])
+        && dot_git.exists()
+        && !source::clone_stopped_in(path)
 }
 
 /// The address with any password removed, and that password, when one is written into it:

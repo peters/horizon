@@ -121,15 +121,36 @@ pub fn checkout_in(path: &Path) -> Option<Checkout> {
     checkout_outside(path, &guarded)
 }
 
+/// Whether each of `paths` may be looked at, by the same rules as [`checkout_in`]: on macOS
+/// not a guarded folder itself, nor a link into one, nor a path with `..`. Only links on the
+/// way are read, never anything inside a guarded folder. The guarded folders are worked out
+/// once, as this runs while the person types.
+#[must_use]
+pub fn may_look_in(paths: &[&Path]) -> bool {
+    static GUARDED_HERE: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
+    let guarded = GUARDED_HERE.get_or_init(|| own_home().map(|home| guarded_below(&home)).unwrap_or_default());
+    paths.iter().all(|path| outside_guarded(path, guarded))
+}
+
 /// As [`checkout_in`], with the guarded folders given.
 fn checkout_outside(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
+    outside_guarded(path, guarded).then(|| read(path, guarded)).flatten()
+}
+
+/// As [`may_look_in`], with the guarded folders given.
+fn outside_guarded(path: &Path, guarded: &[PathBuf]) -> bool {
     if guarded.is_empty() {
-        return read(path, guarded);
+        return true;
     }
+    // A relative path is judged where it lies, from the working folder.
+    let Ok(path) = std::path::absolute(path) else {
+        return false;
+    };
+    let path = path.as_path();
     // The system takes `..` after a link from the link's target, not from the text, so a
     // path with one could lead anywhere: it is not read as a checkout.
     if path.components().any(|part| part == std::path::Component::ParentDir) {
-        return None;
+        return false;
     }
     let named = lexical(path);
     let inside: Vec<&PathBuf> = guarded
@@ -148,8 +169,7 @@ fn checkout_outside(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
         .cloned()
         .collect();
     // Links are followed one step at a time, refused before one enters a guarded folder.
-    resolved(path, &others)?;
-    read(path, guarded)
+    resolved(path, &others).is_some()
 }
 
 /// Where the folders that macOS guards below `root` are, by name and for real, so no link
@@ -176,8 +196,9 @@ pub fn checkouts(root: &Path) -> Vec<Checkout> {
     checkouts_while(root, &mut |_| true)
 }
 
-/// As [`checkouts`], telling `progress` what was found after each folder read; it stops
-/// when `progress` says so.
+/// As [`checkouts`], telling `progress` what was found after each entry looked at, so a
+/// folder with very many entries still reports and stops in time; it stops when `progress`
+/// says so.
 fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -> Vec<Checkout> {
     let mut found = Vec::new();
     // Folders below `~/github` and the other usual places are all read before any other
@@ -216,8 +237,15 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
         // Every entry looked at, one that could not be read too, counts against the budget,
         // so one folder with very many entries cannot keep the search busy past it.
         let mut probed = 0;
+        // Reported and asked between entries while they are listed too, as listing a large
+        // folder on a slow disk takes long.
+        let mut stopped = false;
         let mut children: Vec<PathBuf> = entries
             .take(VISITS.saturating_sub(visits))
+            .take_while(|_| {
+                stopped = !progress(&found);
+                !stopped
+            })
             .inspect(|_| probed += 1)
             .flatten()
             // Hidden folders, and on macOS the folders it guards with a privacy prompt, are
@@ -240,6 +268,9 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
                 (place.is_dir() && seen.insert(place)).then_some(path)
             })
             .collect();
+        if stopped {
+            return settled(found);
+        }
         visits += probed;
         children.sort_by_key(|path| {
             let name = path
@@ -269,6 +300,10 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
                 } else {
                     queue.push_back((child, depth + 1));
                 }
+            }
+            // A closed dialog stops the search here too, not only after the folder's last entry.
+            if !progress(&found) {
+                return settled(found);
             }
         }
         if !progress(&found) {
@@ -658,6 +693,20 @@ mod tests {
     }
 
     #[test]
+    fn a_relative_path_is_judged_from_the_working_folder() {
+        let guarded = [std::env::current_dir().unwrap().join("Guarded-for-test")];
+        // The guarded folder named relatively is still the guarded folder itself.
+        assert!(!super::outside_guarded(
+            std::path::Path::new("Guarded-for-test"),
+            &guarded
+        ));
+        assert!(super::outside_guarded(
+            std::path::Path::new("elsewhere/project"),
+            &guarded
+        ));
+    }
+
+    #[test]
     fn a_guarded_folder_itself_is_no_checkout() {
         let home = tempfile::tempdir().unwrap();
         let documents = home.path().join("Documents");
@@ -788,16 +837,31 @@ mod tests {
         let git = home.path().join("github/acme/web/.git");
         fs::create_dir_all(&git).unwrap();
         fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
-        // Reading the usual places first, a search stopped after the first folder still has it.
+        // Reading the usual places first, a search stopped long before it reaches the home
+        // folder's own fifty entries still has it.
         let mut reads = 0;
         let found = super::checkouts_while(home.path(), &mut |_| {
             reads += 1;
-            reads < 3
+            reads < 10
         });
         assert!(
             found.iter().any(|checkout| checkout.path.ends_with("github/acme/web")),
             "{found:?}"
         );
+    }
+
+    #[test]
+    fn a_search_told_to_stop_stops_inside_a_folder_with_many_entries() {
+        let home = tempfile::tempdir().unwrap();
+        for n in 0..20 {
+            fs::create_dir_all(home.path().join(format!("repo-{n:02}/.git"))).unwrap();
+        }
+        let mut asked = 0;
+        let found = super::checkouts_while(home.path(), &mut |_| {
+            asked += 1;
+            asked < 5
+        });
+        assert!(found.len() < 5, "stopped within the folder, not after it: {found:?}");
     }
 
     #[test]

@@ -4,7 +4,7 @@ use std::sync::mpsc;
 
 mod checkouts;
 
-pub use checkouts::{Checkout, checkout_in, checkouts, spawn_checkouts};
+pub use checkouts::{Checkout, checkout_in, checkouts, may_look_in, spawn_checkouts};
 
 /// Directories that are never useful to enter.
 const SKIP_NAMES: &[&str] = &[

@@ -37,7 +37,8 @@ empty, on every platform. Without one, nothing is searched.
   step at a time and refused when a step enters a guarded folder. A checkout
   whose repository lies there is listed with nothing read.
 - At most two searches run at the same time across all dialogs. A closed dialog
-  stops its search at the next report of what was found, about once a second.
+  stops its search at the next report of what was found, about once a second,
+  also while a folder with very many entries is listed and read.
 - A checkout counts as finished only when no clone into it stopped and its
   `HEAD` is an object name (40 or 64 hexadecimal digits) or names a branch
   whose ref file holds one or that `packed-refs` lists. A clone marker that is
@@ -61,6 +62,12 @@ empty, on every platform. Without one, nothing is searched.
   ask; a link in it that leads into another guarded folder is not followed. A
   typed path with a `..` part is not read as a checkout on macOS, since `..`
   after a link leads where the link goes.
+
+- When the typed text itself is a folder, the source field checks on the UI
+  thread whether it holds a repository to use: its `.git` entry and clone
+  marker. On macOS it first applies the same guard (`may_look_in`) to the
+  folder, its `.git` entry and the clone marker, so it does not look in a guarded folder the
+  text was not typed into, also through a link.
 
 ## What is not guaranteed
 
