@@ -536,8 +536,9 @@ its desktop show next to the board.
    Horizon remembers the last 256 tested heads; a refused request, which rented no
    cloud, is the first to be forgotten.
 3. Horizon gets the head commit into the checkout of the repository on this
-   computer, as **Start Upkeep** does for its first repository. This fetch uses
-   only HTTPS and starts no program that the checkout's Git configuration names. It starts the test
+   computer, as **Start Upkeep** does for its first repository. The network fetch
+   runs in a staging repository with HTTPS only, so the Git configuration of the
+   checkout never applies to the request that carries the GitHub sign-in. It starts the test
    cloud **Test NAME #NUMBER** on Hetzner with the default profile of the repository
    at that commit.
 4. When the cloud is ready, Horizon opens the panel **Native test agent** (Codex, or
@@ -594,10 +595,13 @@ Horizon guarantees these items:
   no companion of the profile for the test cloud. Only the person can check one, on
   the card of the cloud, so no agent can start one.
 - Horizon closes the test cloud when the qualification ends, and at the latest at
-  the time limit. When the cloud did not start, or the person closed it, the test
-  ends as blocked. When the deletion fails, the close dialog asks the person, as
-  for any cloud. Horizon starts the cloud only after the ledger on disk names it,
-  keeps it there until its card is gone, and after a restart closes it once more.
+  the time limit; the last copy of the evidence before the close takes at most 3
+  minutes. When the cloud did not start, or the person closed it, the test ends as
+  blocked. When the deletion fails, the close dialog asks the person, as for any
+  cloud. Horizon starts the cloud only after the ledger on disk names it, keeps it
+  there until its card is gone, and after a restart closes it once more. While a
+  test cloud that Horizon closes still has its card, also after a failed close,
+  no other test cloud of the Upkeep starts.
   Horizon follows a test while the session that holds the Upkeep's cloud or the
   test cloud is open. When the person closes the Upkeep's cloud while a test runs,
   the test still ends in that run of Horizon; after a restart, the person closes

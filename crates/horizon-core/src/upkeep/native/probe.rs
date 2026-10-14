@@ -3,7 +3,7 @@
 //! beside it: the result is parsed into a fixed shape, names and sizes are checked again
 //! here, and only files of known kinds are kept.
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use serde::Deserialize;
@@ -13,6 +13,8 @@ use crate::cloud_runtime::{Error, Result, command::Runner, ssh::Connection};
 
 const PROBE: &str = include_str!("probe.py");
 const TIMEOUT: Duration = Duration::from_secs(60);
+/// The longest copy of the evidence, so the close at the time limit is not held off longer.
+pub const COLLECT_LIMIT: Duration = Duration::from_mins(2);
 /// The most evidence files kept from one test besides [`TEXTS`], and their total size.
 const FILES: usize = 12;
 /// The result and the report, which Horizon keeps besides the evidence files.
@@ -155,8 +157,8 @@ fn kept(name: &str) -> bool {
 }
 
 /// Copies the evidence that `status` lists into the new folder `destination`, within the
-/// limits on count and total size. Returns the names of the files it kept. A file that cannot
-/// be read is left out.
+/// limits on count and total size and within [`COLLECT_LIMIT`]. Returns the names of the
+/// files it kept. A file that cannot be read in time is left out.
 /// # Errors
 /// The folder cannot be made, or a file cannot be written.
 pub fn collect(
@@ -168,14 +170,19 @@ pub fn collect(
     std::fs::create_dir_all(destination)?;
     let mut kept_files = Vec::new();
     let mut total = 0_u64;
+    let deadline = Instant::now() + COLLECT_LIMIT;
     for (name, size) in &status.files {
         if total + size > TOTAL_LIMIT {
             continue;
         }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
+        }
         let Ok(output) = runner.run_parsed(
             "Native test evidence",
             &mut connection.pinned_command(&command(&format!("file {name}"))),
-            TIMEOUT,
+            left.min(TIMEOUT),
         ) else {
             continue;
         };

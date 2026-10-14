@@ -140,3 +140,40 @@ fn the_task_counts_as_given_only_when_the_enter_reaches_the_agent_panel() {
     assert!(native.submit_at.is_none());
     assert_eq!(ledger.reports[0].state, Test::Starting);
 }
+
+#[test]
+fn a_test_cloud_whose_close_failed_holds_back_the_next_test() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let workspace = app.board.create_workspace("Upkeep");
+    let mut group = horizon_core::cloud_panel::CloudGroup::new(
+        101,
+        "Test web #7".into(),
+        app.board.workspace(workspace).unwrap().local_id.clone(),
+        "/repo".into(),
+        [0.0, 0.0],
+    );
+    group.remote = Some(CloudLaunch {
+        id: "test-cloud".into(),
+        revision: "a".repeat(40),
+        profile_name: "cpu".into(),
+        profile: serde_json::from_value(
+            serde_json::json!({"provider": "hetzner", "image": "web", "cpu": 4, "memory_gb": 8}),
+        )
+        .unwrap(),
+        placement: Placement::default(),
+        deployment_started: true,
+    });
+    app.cloud_prototype.groups.0.push(group);
+    let mut ledger = native::Ledger {
+        closing: vec!["test-cloud".into()],
+        ..native::Ledger::default()
+    };
+    // Its close was tried in this run and stopped short, so nothing deletes it now.
+    let mut native = Native::default();
+    native.close_tried.insert("test-cloud".into());
+    let ctx = egui::Context::default();
+    assert!(app.native_closing(&ctx, &mut ledger, &mut native));
+    app.cloud_prototype.groups.0.clear();
+    assert!(!app.native_closing(&ctx, &mut ledger, &mut native), "its card is gone");
+    assert!(ledger.closing.is_empty());
+}

@@ -638,3 +638,43 @@ fn a_commit_fetch_runs_no_program_that_the_checkout_configures() {
     );
     assert!(git_output(&checkout, &["cat-file", "-e", &head]).is_none());
 }
+
+#[test]
+fn a_commit_fetch_reaches_the_remote_past_the_checkouts_configuration() {
+    let temp = tempfile::tempdir().unwrap();
+    let origin = origin(temp.path());
+    let checkout = temp.path().join("checkout");
+    let status = Command::new("git")
+        .args(["clone", "-q", &origin.url])
+        .arg(&checkout)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let origin_folder = temp.path().join("origin");
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(&origin_folder)
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+        .args(["commit", "-q", "--allow-empty", "-m", "new"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let head = count(&origin_folder, &["rev-parse", "HEAD"]);
+    let refs = count(&checkout, &["for-each-ref"]);
+    // A rewrite in the checkout would send the request elsewhere; the network fetch never
+    // reads the checkout's configuration.
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(&checkout)
+        .args(["config", "url.file:///nowhere.insteadOf", &origin.url])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    fetch_commits_over(&origin, &checkout, &[&head], None, &Cancellation::default(), "file").unwrap();
+    assert!(
+        git_output(&checkout, &["cat-file", "-e", &head]).is_some(),
+        "the commit arrived"
+    );
+    assert_eq!(count(&checkout, &["for-each-ref"]), refs, "no ref changed");
+    assert!(!checkout.join(".git/FETCH_HEAD").exists());
+}

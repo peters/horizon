@@ -16,6 +16,7 @@ section "Trust boundary of the test cloud", describes the boundary. Check that:
   a marker that cannot be read counts as there.
 - `close_cloud_unasked` closes only as the confirmed close dialog does.
 - `fetch_commits` changes no ref, no working tree and no `FETCH_HEAD` of the person's
-  checkout, never removes a lock there, and starts no program that the checkout's
-  configuration names (only HTTPS, no credential helper, monitor or hook).
+  checkout, never removes a lock there, and never lets the checkout's configuration
+  see the token: the network fetch runs in a staging repository, the checkout takes
+  the commits from it over the file system.
 - `Client::pull_request` checks the commits and names it returns.

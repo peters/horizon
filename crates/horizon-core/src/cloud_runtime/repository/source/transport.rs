@@ -623,6 +623,11 @@ pub fn clone(
 /// changing a branch, a tag, the working tree or `FETCH_HEAD`. Git keeps the objects until
 /// a later garbage collection; the checkout stays as the person left it.
 ///
+/// The checkout's Git configuration never sees the token: the network fetch runs in a new
+/// staging repository that borrows the checkout's objects, and the checkout then takes the
+/// commits from it over the local file system. So no proxy, certificate, credential helper
+/// or URL rewrite of the checkout applies to the request that carries the token.
+///
 /// # Errors
 /// Names why the fetch failed.
 pub fn fetch_commits(
@@ -632,18 +637,40 @@ pub fn fetch_commits(
     token: Option<&Token>,
     cancel: &Cancellation,
 ) -> Result<(), Failure> {
-    let mut command = git(token);
-    // The checkout's own configuration starts no program: no credential helper, no transport
-    // but HTTPS, which `GIT_ALLOW_PROTOCOL` enforces over any `protocol.*` setting (so neither
-    // SSH with its command nor the remote helper of a URL rewrite), no file system monitor
-    // and no hooks. A rewrite to another host gets no token: its header is for GitHub only.
-    command.env("GIT_ALLOW_PROTOCOL", "https").args([
-        "-c",
-        "credential.helper=",
-        "-c",
-        "core.fsmonitor=false",
-        "-c",
-        "core.hooksPath=/dev/null",
+    fetch_commits_over(remote, checkout, commits, token, cancel, "https")
+}
+
+/// [`fetch_commits`] with the network transports in `allowed`, `GIT_ALLOW_PROTOCOL`'s list.
+fn fetch_commits_over(
+    remote: &Remote,
+    checkout: &Path,
+    commits: &[&str],
+    token: Option<&Token>,
+    cancel: &Cancellation,
+    allowed: &str,
+) -> Result<(), Failure> {
+    let other = |what: &str, error: std::io::Error| Failure::Other(format!("{what}: {error}"));
+    let objects = git_output(checkout, &["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .map(|folder| PathBuf::from(folder.trim()).join("objects"))
+        .ok_or_else(|| Failure::Other("The checkout is not a Git repository".into()))?;
+    let staging = tempfile::Builder::new()
+        .prefix("horizon-fetch-")
+        .tempdir()
+        .map_err(|error| other("Cannot make a staging repository", error))?;
+    let mut init = Command::new("git");
+    init.args(["init", "--quiet", "--bare", "."])
+        .env("GIT_ALLOW_PROTOCOL", allowed)
+        .stdin(Stdio::null())
+        .stderr(Stdio::piped());
+    quietly(init, staging.path(), remote, cancel)?;
+    std::fs::write(
+        staging.path().join("objects/info/alternates"),
+        format!("{}\n", objects.display()),
+    )
+    .map_err(|error| other("Cannot prepare the staging repository", error))?;
+    // The staging repository has only the configuration of this computer and the person.
+    let mut fetch = git(token);
+    fetch.env("GIT_ALLOW_PROTOCOL", allowed).args([
         "fetch",
         "--quiet",
         "--no-tags",
@@ -652,9 +679,35 @@ pub fn fetch_commits(
         "--",
         &remote.url,
     ]);
-    command.args(commits).current_dir(checkout);
+    fetch.args(commits).current_dir(staging.path());
+    bounded(fetch, remote, cancel, FETCH_LIMIT)?;
+    // Over the file system, with no token: the checkout's configuration may start no program
+    // either (no credential helper, file system monitor or hook).
+    let mut local = Command::new("git");
+    local
+        .env("GIT_ALLOW_PROTOCOL", "file")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .args([
+            "-c",
+            "credential.helper=",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "--no-recurse-submodules",
+            "--",
+        ])
+        .arg(staging.path())
+        .args(commits)
+        .current_dir(checkout)
+        .stdin(Stdio::null())
+        .stderr(Stdio::piped());
     // Never `run`: its cleanup after a cancel would take locks out of the person's checkout.
-    bounded(command, remote, cancel, FETCH_LIMIT).map(drop)
+    bounded(local, remote, cancel, FETCH_LIMIT).map(drop)
 }
 
 /// [`clone`], ending after `last_step` as a lost connection would.

@@ -66,9 +66,9 @@ impl HorizonApp {
                 native.dirty |= ledger.take(requests);
             }
         }
-        let deleting = self.native_closing(ctx, &mut ledger, native);
+        let closing = self.native_closing(ctx, &mut ledger, native);
         approval(&mut ledger, native);
-        if !deleting && native.approving.is_none() {
+        if !closing && native.approving.is_none() {
             // A test whose check a restart cut short is checked again.
             let unchecked = ledger
                 .current
@@ -431,10 +431,10 @@ impl HorizonApp {
 
     /// Follows the test clouds that Horizon closes: forgets each one whose card is gone, and
     /// closes once more, once in each run of Horizon, one that a restart left open. A close
-    /// that the person declined in the close dialog is not asked again. Returns whether a
-    /// deletion runs, so no new test cloud starts meanwhile.
+    /// that the person declined in the close dialog is not asked again. Returns whether one
+    /// still has its card, also after a close that failed or waits in the dialog: no new test
+    /// cloud starts until each one is gone.
     fn native_closing(&mut self, ctx: &egui::Context, ledger: &mut native::Ledger, native: &mut Native) -> bool {
-        let mut deleting = false;
         let mut gone = Vec::new();
         for cloud in ledger.closing.clone() {
             let Some(card) = self
@@ -448,7 +448,6 @@ impl HorizonApp {
                 gone.push(cloud);
                 continue;
             };
-            deleting |= self.cloud_prototype.production.closing(card);
             let busy = self
                 .cloud_prototype
                 .production
@@ -457,14 +456,13 @@ impl HorizonApp {
                 .is_some_and(Runtime::busy);
             if !busy && native.close_tried.insert(cloud) {
                 self.close_cloud_unasked(card, ctx);
-                deleting |= self.cloud_prototype.production.closing(card);
             }
         }
         if !gone.is_empty() {
             ledger.closing.retain(|cloud| !gone.contains(cloud));
             native.dirty = true;
         }
-        deleting
+        !ledger.closing.is_empty()
     }
 
     /// Writes the ledger's reports to the Upkeep worker after they changed, where its agents
