@@ -37,10 +37,16 @@ It has no provider configuration or external network. No real credential is read
 The artifact manifest and build invocation belong to the operator. This fixture
 is not a sandbox for arbitrary Rust build scripts. Review the candidate before
 building it. Source hashing and control copying accept only declared checkout
-inputs and refuse symlinks. The running container can write its state directory;
+inputs and refuse symlinks. Hashing and copying use the same open descriptor, and
+the frozen target is verified. The declared inventory includes tracked Cargo
+configuration and rejects untracked configuration overrides. It is compared before
+and after the build and after controls are frozen. The running container can write its state directory;
 the host treats those entries as untrusted. Host control reads use bounded regular
 file descriptors with no-follow checks. Host output creation is exclusive and
-does not truncate pre-existing candidate entries. Docker operations have explicit
+does not truncate pre-existing candidate entries. Relay ownership, stop requests,
+endpoints and results stay in a host-only sibling directory outside that mount.
+Candidate stderr and RPC evidence have byte limits. Relay acceptance and retained
+children have total budgets as well as concurrent limits. Docker operations have explicit
 timeouts. A timed-out launch preserves its unique name, labels and daemon for
 exact reconciliation; uncertainty never authorizes broad removal.
 
@@ -140,7 +146,8 @@ exact reconciliation; uncertainty never authorizes broad removal.
    python3 scripts/tailnet-api-status-fixture/vnc_proxy.py --ownership /tmp/horizon-tailnet-tooling-native/ownership.json
    ```
 
-   Result: `state/vnc-address.json` gives the numeric loopback endpoint.
+   Result: `relay/vnc-address.json` gives the numeric loopback endpoint.
+   The host-only `relay` directory is never mounted into the candidate.
    The relay rechecks exact ownership and transports actual x11vnc bytes with bounded clients, queues and lifetime.
 
 3. Create a public Device panel at that endpoint.

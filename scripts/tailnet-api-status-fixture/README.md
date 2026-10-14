@@ -100,7 +100,7 @@ python3 scripts/tailnet-api-status-fixture/vnc_proxy.py --ownership /tmp/horizon
 ```
 
 Keep this process in an owned terminal. It binds a numeric host-loopback port and
-writes `state/vnc-address.json`. Each connection rechecks exact container ownership
+writes `relay/vnc-address.json`. Each connection rechecks exact container ownership
 and relays actual x11vnc bytes through `docker exec`; it supplies no rendered pixels
 or input. It has at most two clients, bounded 64-KiB queues in each guest direction
 and a 30-minute lifetime. A public `device_panel` uses that endpoint for the live

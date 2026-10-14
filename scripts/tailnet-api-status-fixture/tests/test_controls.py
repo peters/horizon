@@ -3,6 +3,9 @@ import importlib.util
 import json
 from pathlib import Path
 import queue
+import signal
+import sys
+import threading
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -190,7 +193,7 @@ class Controls(unittest.TestCase):
         import sys
         with tempfile.TemporaryDirectory() as folder:
             ownership = Path(folder) / "ownership.json"
-            state = Path(folder) / "state"
+            state = Path(folder) / "relay"
             state.mkdir(mode=0o700)
             record = {"container_id": "exact-cid", "daemon_id": "exact-daemon", "labels": {"fixture-owner": "owned"}}
             binding = proxy.binding_for(ownership, record, "a" * 32)
@@ -307,6 +310,10 @@ class Controls(unittest.TestCase):
             rpc.events.put(reply)
             rpc.next_id = 0
             rpc.evidence = Path(folder)
+            rpc.failure = threading.Event()
+            rpc.rpc_bytes = 0
+            rpc.rpc_log = (rpc.evidence / "rpc.jsonl").open("wb")
+            self.addCleanup(rpc.rpc_log.close)
             sent = []
             rpc.send = sent.append
             result = rpc.request("tools/call", {"name": "cloud_companions", "arguments": {}})
@@ -321,6 +328,117 @@ class Controls(unittest.TestCase):
         with patch.object(Path, "is_file", return_value=True):
             with self.assertRaisesRegex(RuntimeError, "normal Horizon agent"):
                 observer.validate_launch({}, Path("/fixture/state/horizon"), Path("unused"), "a" * 64)
+
+    def test_noisy_stderr_is_capped_terminated_and_cannot_retain_qualification(self):
+        observer = module("observer")
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            evidence = root / "evidence"
+            evidence.mkdir(mode=0o700)
+            (evidence / "qualification.json").write_text('{"passed":true}')
+            binary = root / "noisy"
+            binary.write_text(f"#!{sys.executable}\nimport os,signal\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\nwhile True: os.write(2,b'x'*4096)\n")
+            binary.chmod(0o700)
+            with patch.object(observer, "MAX_STDERR_BYTES", 1024):
+                rpc = observer.Rpc(binary, evidence)
+                try:
+                    self.assertTrue(rpc.failure.wait(timeout=3))
+                    rpc.process.wait(timeout=5)
+                    # A response racing the collector cannot restore a passing receipt.
+                    (evidence / "qualification.json").write_text('{"passed":true}')
+                    with self.assertRaisesRegex(RuntimeError, "stderr exceeded"):
+                        rpc.close()
+                    with self.assertRaisesRegex(RuntimeError, "stderr exceeded"):
+                        rpc.close()
+                    self.assertIsNotNone(rpc.process.poll())
+                    self.assertEqual(rpc.process.returncode, -signal.SIGKILL)
+                    self.assertEqual((evidence / "server.stderr").stat().st_size, 1024)
+                    self.assertFalse((evidence / "qualification.json").exists())
+                    self.assertTrue(all(not reader.is_alive() for reader in rpc.readers))
+                finally:
+                    if not rpc.closed:
+                        try:
+                            rpc.close()
+                        except RuntimeError:
+                            pass
+
+    def test_rpc_evidence_cap_refuses_response_before_writing_or_qualifying(self):
+        observer = module("observer")
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            evidence = root / "evidence"
+            evidence.mkdir(mode=0o700)
+            binary = root / "candidate"
+            binary.write_text(f"#!{sys.executable}\nimport json,sys\nfor line in sys.stdin:\n v=json.loads(line); print(json.dumps({{'id':v['id'],'result':'x'*512}}),flush=True)\n")
+            binary.chmod(0o700)
+            with patch.object(observer, "MAX_RPC_BYTES", 128):
+                rpc = observer.Rpc(binary, evidence)
+                with self.assertRaisesRegex(RuntimeError, "reply evidence exceeded"):
+                    rpc.request("tools/list", {})
+                with self.assertRaisesRegex(RuntimeError, "reply evidence exceeded"):
+                    rpc.close()
+                self.assertIsNotNone(rpc.process.poll())
+                self.assertLessEqual((evidence / "rpc.jsonl").stat().st_size, 128)
+
+    def test_normal_rpc_drains_stderr_and_closes_owned_process_idempotently(self):
+        observer = module("observer")
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            evidence = root / "evidence"
+            evidence.mkdir(mode=0o700)
+            binary = root / "candidate"
+            binary.write_text(f"#!{sys.executable}\nimport json,sys\nsys.stderr.write('bounded stderr\\n');sys.stderr.flush()\nfor line in sys.stdin:\n v=json.loads(line); print(json.dumps({{'id':v['id'],'result':{{}}}}),flush=True)\n")
+            binary.chmod(0o700)
+            rpc = observer.Rpc(binary, evidence)
+            try:
+                self.assertEqual(rpc.request("tools/list", {})["result"], {})
+            finally:
+                rpc.close()
+            rpc.close()
+            self.assertEqual(rpc.process.returncode, 0)
+            self.assertEqual((evidence / "server.stderr").read_text(), "bounded stderr\n")
+
+    def test_sequential_clients_exhaust_a_finite_child_and_accept_budget(self):
+        proxy = module("vnc_proxy")
+        for accepts, children, expected in [(3, 8, 3), (8, 2, 2)]:
+            with self.subTest(accepts=accepts, children=children), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                host = root / "relay"
+                host.mkdir(mode=0o700)
+                ownership = root / "ownership.json"
+                record = {"container_id": "owned", "daemon_id": "daemon", "labels": {"owner": "fixture"}}
+                clients = []
+                listener = Mock()
+                listener.__enter__ = Mock(return_value=listener)
+                listener.__exit__ = Mock(return_value=False)
+                listener.getsockname.return_value = ("127.0.0.1", 1234)
+                def accept():
+                    if clients:
+                        self.assertTrue(clients[-1].finished.wait(timeout=2))
+                    client = Mock()
+                    client.finished = threading.Event()
+                    client.close.side_effect = client.finished.set
+                    clients.append(client)
+                    return client, ("127.0.0.1", 4321)
+                listener.accept.side_effect = accept
+                process = Mock()
+                process.poll.return_value = 0
+                with proxy.safe_io.PrivateDirectory(host) as directory, \
+                        patch.object(proxy.socket, "socket", return_value=listener), \
+                        patch.object(proxy.signal, "signal"), patch.object(proxy, "validate_ownership", return_value=record), \
+                        patch.object(proxy.subprocess, "Popen", return_value=process) as spawn, \
+                        patch.object(proxy, "MAX_ACCEPTED_CLIENTS", accepts), patch.object(proxy, "MAX_CHILDREN", children):
+                    proxy.serve_owned(ownership, record, directory)
+                self.assertEqual(spawn.call_count, expected)
+                self.assertEqual(listener.accept.call_count, expected)
+                listener.close.assert_called()
+                result = proxy.read_control(host / "vnc-proxy-result.json")
+                self.assertEqual(result["accepted_clients"], expected)
+                self.assertEqual(result["children_started"], expected)
+                self.assertTrue(result["budget_exhausted"])
+                self.assertTrue(result["owned_children_stopped"])
+                self.assertTrue(result["owned_relay_stopped"])
+                self.assertFalse((host / "vnc-address.json").exists())
 
 
 if __name__ == "__main__":

@@ -17,6 +17,9 @@ _spec = importlib.util.spec_from_file_location("fixture_safe_io", Path(__file__)
 safe_io = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(safe_io)
 
+MAX_ACCEPTED_CLIENTS = 128
+MAX_CHILDREN = 64
+
 def guest():
     with socket.create_connection(("127.0.0.1", 5900), timeout=5) as connection:
         connection.setblocking(False)
@@ -85,7 +88,7 @@ def validate_ownership(ownership, expected=None):
 
 def request_stop(ownership):
     record = validate_ownership(ownership)
-    state = ownership.parent / "state"
+    state = ownership.parent / "relay"
     with safe_io.PrivateDirectory(state) as directory:
         binding = control(directory, "vnc-relay-owner.json")
         if binding != binding_for(ownership, record, binding.get("relay_nonce")):
@@ -113,7 +116,7 @@ def requested(directory, binding):
 
 def serve(ownership):
     record = validate_ownership(ownership)
-    with safe_io.PrivateDirectory(ownership.parent / "state") as directory:
+    with safe_io.PrivateDirectory(ownership.parent / "relay") as directory:
         serve_owned(ownership, record, directory)
 
 def serve_owned(ownership, record, directory):
@@ -121,6 +124,8 @@ def serve_owned(ownership, record, directory):
     binding = binding_for(ownership, record, uuid.uuid4().hex)
     directory.write_exclusive_json("vnc-relay-owner.json", binding)
     active, children = [], []
+    accepted, launched = 0, 0
+    budget_exhausted = False
     lock = threading.Lock()
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
@@ -161,14 +166,24 @@ def serve_owned(ownership, record, directory):
                 if requested(directory, binding):
                     stop.set()
                     break
+                if accepted >= MAX_ACCEPTED_CLIENTS or launched >= MAX_CHILDREN:
+                    budget_exhausted = True
+                    listener.close()
+                    with lock:
+                        if not active:
+                            break
+                    stop.wait(.2)
+                    continue
                 try:
                     client, _ = listener.accept()
                 except socket.timeout:
                     continue
+                accepted += 1
                 with lock:
                     if len(active) >= 2:
                         client.close()
                         continue
+                    launched += 1
                     worker = threading.Thread(target=relay, args=(client,))
                     active.append(worker)
                     worker.start()
@@ -182,7 +197,10 @@ def serve_owned(ownership, record, directory):
     stopped = all(not worker.is_alive() for worker in workers) and all(process.poll() is not None for process in children)
     directory.write_exclusive_json("vnc-proxy-result.json", {
         "owned_relay_stopped": stopped, "owned_children_stopped": all(process.poll() is not None for process in children),
-        "container_id": container, "relay_nonce": binding["relay_nonce"], "actual_vnc_transport": True})
+        "container_id": container, "relay_nonce": binding["relay_nonce"], "actual_vnc_transport": True,
+        "accepted_clients": accepted, "children_started": len(children), "child_slots_used": launched,
+        "max_accepted_clients": MAX_ACCEPTED_CLIENTS, "max_children": MAX_CHILDREN,
+        "budget_exhausted": budget_exhausted})
     if not stopped:
         raise RuntimeError("owned relay children did not stop")
 

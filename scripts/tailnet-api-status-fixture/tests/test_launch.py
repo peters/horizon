@@ -236,12 +236,14 @@ class Launch(unittest.TestCase):
             result = {"state": "passed", "owned_service_empty": True, "owned_processes_stopped": True, "target_expired": True}
             run.private_io().write_exclusive_json(state / "native-result.json", result)
             binding = proxy.binding_for(path, value, "d" * 32)
-            run.private_io().write_exclusive_json(state / "vnc-relay-owner.json", binding)
-            run.private_io().write_exclusive_json(state / "vnc-proxy-result.json",
+            host = root / "relay"
+            host.mkdir(mode=0o700)
+            run.private_io().write_exclusive_json(host / "vnc-relay-owner.json", binding)
+            run.private_io().write_exclusive_json(host / "vnc-proxy-result.json",
                                                   {"owned_relay_stopped": True, "owned_children_stopped": True,
                                                    "container_id": value["container_id"], "relay_nonce": binding["relay_nonce"]})
-            endpoint = state / "vnc-address.json"
-            endpoint.symlink_to(state / "missing-endpoint-target")
+            endpoint = host / "vnc-address.json"
+            endpoint.symlink_to(host / "missing-endpoint-target")
             with patch.dict(sys.modules, {"vnc_proxy": proxy}), patch.object(run, "collect_logs"), \
                  patch.object(run, "owned", return_value=value), patch.object(run, "inspect_owned", return_value=actual(value)), \
                  patch.object(run.subprocess, "run") as docker, patch.object(run, "cleanup_files") as files:
@@ -252,6 +254,61 @@ class Launch(unittest.TestCase):
             self.assertTrue(endpoint.is_symlink())
             self.assertFalse(run.private_io().read_json(path, 4096)["cleanup_confirmed"])
             self.assertNotIn("cleanup_phase", run.private_io().read_json(path, 4096))
+
+    def test_forged_candidate_relay_receipt_cannot_qualify_host_cleanup(self):
+        run = runner()
+        spec = importlib.util.spec_from_file_location("launch_vnc_proxy", HERE / "vnc_proxy.py")
+        proxy = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(proxy)
+        value = dict(record(), container_id="a" * 64, check_only=False)
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            state, host = root / "state", root / "relay"
+            state.mkdir(mode=0o700)
+            host.mkdir(mode=0o700)
+            path = root / "ownership.json"
+            run.private_io().write_exclusive_json(path, value)
+            run.private_io().write_exclusive_json(state / "native-result.json", {
+                "state": "passed", "owned_service_empty": True, "owned_processes_stopped": True, "target_expired": True})
+            binding = proxy.binding_for(path, value, "d" * 32)
+            receipt = {"owned_relay_stopped": True, "owned_children_stopped": True,
+                       "container_id": value["container_id"], "relay_nonce": binding["relay_nonce"]}
+            run.private_io().write_exclusive_json(state / "vnc-relay-owner.json", binding)
+            run.private_io().write_exclusive_json(state / "vnc-proxy-result.json", receipt)
+            run.private_io().write_exclusive_json(host / "vnc-relay-owner.json", binding)
+            with patch.dict(sys.modules, {"vnc_proxy": proxy}), patch.object(run, "collect_logs"), \
+                    patch.object(run, "owned", return_value=value), patch.object(run, "inspect_owned", return_value=actual(value)), \
+                    patch.object(run.subprocess, "run") as docker, patch.object(run, "cleanup_files") as files:
+                with self.assertRaises(FileNotFoundError):
+                    run.cleanup(path)
+                docker.assert_not_called()
+                files.assert_not_called()
+                self.assertNotIn("cleanup_phase", run.private_io().read_json(path, 4096))
+                run.private_io().write_exclusive_json(host / "vnc-proxy-result.json", receipt)
+                run.qualify_cleanup(path, value)
+                self.assertEqual(run.private_io().read_json(path, 4096)["cleanup_phase"], "qualified")
+
+    def test_launch_keeps_relay_custody_outside_every_candidate_mount(self):
+        run = runner()
+        from argparse import Namespace
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            binary, manifest = root / "binary", root / "manifest"
+            binary.write_bytes(b"synthetic helper")
+            manifest.write_text('{}')
+            evidence = root / "evidence"
+            backend = SimpleNamespace(build=lambda *_: (binary, ["synthetic build"]), docker_id=lambda: "daemon", IMAGE="pinned-os")
+            with patch.object(run, "runtime_mounts", return_value=[]), patch.object(run, "storage", return_value=backend), \
+                    patch.object(run, "source_inputs", return_value={}), patch.object(run, "freeze_controls", return_value={}), \
+                    patch.object(run, "freeze_artifacts", return_value={"horizon": {"sha256": "a" * 64}}), \
+                    patch.object(run.subprocess, "check_output", return_value="b" * 40), patch.object(run, "launch_container") as launch:
+                run.start(Namespace(evidence_dir=evidence, manifest=manifest, target_dir=None, check_only=False, expect_api_status=False))
+            host = evidence / "relay"
+            self.assertEqual(host.stat().st_mode & 0o777, 0o700)
+            arguments = launch.call_args.args[0]
+            mounts = [arguments[index + 1] for index, argument in enumerate(arguments) if argument == "--mount"]
+            self.assertTrue(any("source=" + str(evidence / "state") + "," in mount for mount in mounts))
+            self.assertTrue(all("source=" + str(host) + "," not in mount for mount in mounts))
 
     def test_rm_timeout_after_delete_and_partial_file_cleanup_can_retry(self):
         run = runner()
