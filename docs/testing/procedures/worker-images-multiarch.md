@@ -91,7 +91,7 @@ image of its own architecture.
 
    ```
    docker buildx imagetools inspect --raw <reference> > index.json
-   sha256sum index.json
+   shasum -a 256 index.json
    ```
 
    Result: The hash is the same as the digest after `@sha256:` in the reference.
