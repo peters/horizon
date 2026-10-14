@@ -431,3 +431,29 @@ fn only_part_of_a_listed_name_narrows_the_list() {
     );
     assert!(!super::narrows("octocat/hello-world", "octocat-labs/hello-world-docs"));
 }
+
+#[test]
+fn a_very_long_list_keeps_the_best_results_in_order() {
+    let mut repositories: Vec<String> = (0..20_000).map(|n| format!("acme/service-{n:05}")).collect();
+    repositories.push("acme/web".into());
+    let rows = rows_for("web", &[], &repositories);
+    assert_eq!(rows[0].title, "acme/web", "the best match leads");
+    let rows = rows_for("", &[], &repositories);
+    assert_eq!(rows.len(), super::LISTED);
+    assert_eq!(rows[0].title, "acme/service-00000", "the account's order among equals");
+    assert_eq!(rows[1].title, "acme/service-00001");
+    // With a query that matches many, the best are what a full sort would list first.
+    let mut expected: Vec<(i32, &String)> = repositories
+        .iter()
+        .filter_map(|name| super::fuzzy::score("sv1", name).map(|found| (found.score, name)))
+        .collect();
+    expected.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+    let expected: Vec<&str> = expected
+        .iter()
+        .take(super::LISTED)
+        .map(|(_, name)| name.as_str())
+        .collect();
+    let rows = rows_for("sv1", &[], &repositories);
+    let titles: Vec<&str> = rows.iter().map(|row| row.title.as_str()).collect();
+    assert!(expected.len() == super::LISTED && titles == expected);
+}
