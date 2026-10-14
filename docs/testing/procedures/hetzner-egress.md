@@ -123,8 +123,9 @@ resolver or the firewall rules stop.
 ### 6.4 EGR-04: An agent model call works
 
 1. Run `claude -p --model claude-haiku-4-5 "Reply with exactly: egress ok"` in the
-   container as the agent account. Give the key on standard input:
-   `read -r ANTHROPIC_API_KEY; export ANTHROPIC_API_KEY`.
+   container as the agent account. Give the key on standard input from the key file,
+   never by typing it: `docker exec -i horizon-worker setpriv ... sh -c 'read -r
+   ANTHROPIC_API_KEY; export ANTHROPIC_API_KEY; claude -p ...' < <key file>`.
 
    Result: The answer is `egress ok`.
 

@@ -148,6 +148,18 @@ assert server_name(hello()) is None
 assert server_name(hello(b'github.com')[:-3]) is None
 assert server_name(b'') is None
 assert server_name(b'\x02' + hello(b'github.com')[1:]) is None
+# A name that reaches past its extension, or a list length that does not match, is refused.
+good = hello(b'github.com')
+at = good.index(b'\x00\x00\x00\x0f')
+assert server_name(good[:at + 2] + b'\x00\x40' + good[at + 4:]) is None
+assert server_name(good[:at + 4] + b'\x00\x0e' + good[at + 6:]) is None
+# A complete ClientHello larger than the budget is never read in full.
+left, right = socket.socketpair()
+big = records(hello(b'github.com', padding=HELLO_LIMIT))
+threading.Thread(target=lambda: (left.sendall(big), left.close())).start()
+read, handshake = read_hello(right)
+assert handshake is None and len(read) <= HELLO_LIMIT, len(read)
+right.close()
 message = hello(b'api.github.com', padding=3000)
 for size, chunk in ((16384, 4096), (1000, 7), (5, 1)):
     left, right = socket.socketpair()

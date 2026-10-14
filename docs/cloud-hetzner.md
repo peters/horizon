@@ -231,8 +231,10 @@ The host enforces the allowlist like this:
 - The proxy and the resolver write each refused name to
   `/workspace/.horizon-egress/refused.jsonl` in the container: one JSON line with
   the time, the name and `tls` or `dns`. Each of the two services writes at most
-  one line a minute for a name, and at most 30 lines a minute. The folder belongs to root, so an
-  agent cannot change the log. The log starts again after 256 KiB.
+  one line a minute for a name, and at most 30 lines a minute. The folder belongs to
+  root, so an agent cannot change the log; root in the container can. The journal of
+  the host keeps a copy (`journalctl -u horizon-worker-egress-proxy`). The log starts
+  again after 256 KiB.
 - The allowlist is in `/etc/horizon-worker/egress-allow` on the host. No process in
   the container can change it. A rebuild keeps the allowlist of the worker; a new
   cloud gets the allowlist of its profile.

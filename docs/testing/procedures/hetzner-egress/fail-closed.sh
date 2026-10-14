@@ -6,7 +6,9 @@ probe "baseline"
 echo "== stop the proxy"; systemctl stop horizon-worker-egress-proxy; probe "proxy stopped"
 $A getent hosts github.com >/dev/null && echo "dns still answers"
 echo "== start it again, then kill -9 it"; systemctl start horizon-worker-egress-proxy; sleep 1; probe "proxy started"
-pid=$(systemctl show -p MainPID --value horizon-worker-egress-proxy); kill -9 $pid; probe "right after kill -9"; sleep 2
+pid=$(systemctl show -p MainPID --value horizon-worker-egress-proxy)
+[ "${pid:-0}" -gt 0 ] || { echo "the proxy did not start"; exit 1; }
+kill -9 "$pid"; probe "right after kill -9"; sleep 2
 echo "new pid differs: $( [ "$(systemctl show -p MainPID --value horizon-worker-egress-proxy)" != "$pid" ] && echo yes)"; probe "after restart"
 echo "== stop the resolver"; systemctl stop horizon-worker-egress-dns; printf 'resolve github.com: '; $A getent hosts github.com >/dev/null && echo answered || echo "no answer (exit $?)"
 probe "resolver stopped"

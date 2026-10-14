@@ -28,7 +28,9 @@ connection goes to, the timing, and the folders on the workspace volume. Check t
 - `allowed` matches an exact name, or a name under a `*.` entry, with ASCII case and
   a last dot ignored. `evilexample.com` never matches `example.com`.
 - The log of refused names is rate-limited and written only into a folder that root
-  owns and that no other account can write, without following a link.
+  owns and that no other account can write, without following a link or opening a pipe
+  or a device. It is on the volume, so root in the container can change it: it is
+  evidence for the board, not a control. The host's journal keeps a copy.
 - The number of threads is bounded, so a flood from the container cannot exhaust
   the host.
 

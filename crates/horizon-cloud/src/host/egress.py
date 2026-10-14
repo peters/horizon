@@ -78,6 +78,8 @@ class Log:
             if self.count >= 30:
                 return
             self.seen[name], self.count = now, self.count + 1
+            # The journal of the host keeps a copy that nothing in the container can change.
+            print('refused %s via %s' % (name, via), flush=True)
             try:
                 self.write(json.dumps({'at': now, 'name': name, 'via': via}) + '\n')
             except OSError:
@@ -108,7 +110,8 @@ class Log:
 
 
 def server_name(hello):
-    """The host name of a complete TLS ClientHello handshake message, or None."""
+    """The host name of a complete TLS ClientHello handshake message, or None. Every length
+    must fit the one around it, so no name comes from outside its extension."""
     if len(hello) < 4 or hello[0] != 1:
         return None
     end = 4 + int.from_bytes(hello[1:4], 'big')
@@ -123,30 +126,36 @@ def server_name(hello):
     while at + 4 <= extensions_end:
         kind, length = struct.unpack('!HH', hello[at:at + 4])
         at += 4
-        if kind == 0:
-            names = hello[at + 2:at + length]
-            if len(names) >= 3 and names[0] == 0:
-                size = int.from_bytes(names[1:3], 'big')
-                try:
-                    return names[3:3 + size].decode('ascii') if size == len(names) - 3 else None
-                except UnicodeDecodeError:
-                    return None
+        if at + length > extensions_end:
             return None
+        if kind == 0:
+            names = hello[at:at + length]
+            # The list's length, then one entry: type 0 (a host name), its length, the name.
+            if len(names) < 5 or int.from_bytes(names[0:2], 'big') != len(names) - 2 or names[2] != 0:
+                return None
+            size = int.from_bytes(names[3:5], 'big')
+            if size != len(names) - 5:
+                return None
+            try:
+                return names[5:].decode('ascii')
+            except UnicodeDecodeError:
+                return None
         at += length
     return None
 
 
 def read_hello(connection):
     """(every byte read, the handshake message) from the first TLS records of `connection`.
-    The message is None when the records are not a handshake or grow past HELLO_LIMIT."""
+    The message is None when the records are not a handshake, or when it is not complete
+    within HELLO_LIMIT bytes: no read goes past that budget."""
     data, handshake, at = b'', b'', 0
     while True:
         if len(handshake) >= 4 and len(handshake) >= 4 + int.from_bytes(handshake[1:4], 'big'):
             return data, handshake
         while len(data) < at + 5 or len(data) < at + 5 + int.from_bytes(data[at + 3:at + 5], 'big'):
-            if len(data) > HELLO_LIMIT or len(data) > at and data[at] != 0x16:
+            if len(data) >= HELLO_LIMIT or len(data) > at and data[at] != 0x16:
                 return data, None
-            chunk = connection.recv(4096)
+            chunk = connection.recv(min(4096, HELLO_LIMIT - len(data)))
             if not chunk:
                 return data, None
             data += chunk
