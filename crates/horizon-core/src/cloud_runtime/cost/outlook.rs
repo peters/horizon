@@ -119,13 +119,15 @@ pub fn detail(rate: f64, currency: &str, now: SystemTime) -> String {
         .flatten()
         .map(|end| added(rate, currency, &end))
         .collect::<Vec<_>>();
-    let mut text = periods;
-    if !ends.is_empty() {
-        text.push_str(&format!("\nIf it keeps running: {} (UTC).", ends.join(" and ")));
-    }
-    text.push_str("\nA day is 24 hours, a week 168, a month 730 and a year 8,760.");
-    text
+    let ends = (!ends.is_empty()).then(|| format!("If it keeps running: {} (UTC).", ends.join(" and ")));
+    [Some(periods), ends, Some(LENGTHS.to_owned())]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n")
 }
+
+const LENGTHS: &str = "A day is 24 hours, a week 168, a month 730 and a year 8,760.";
 
 /// What `rate` adds until `end`: `+€9.89 by Oct 31`.
 fn added(rate: f64, currency: &str, end: &Until) -> String {

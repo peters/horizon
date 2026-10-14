@@ -67,6 +67,7 @@ pub(super) fn header_fits_layout(width: f32) -> bool {
 }
 
 /// The header's rectangle, and how wide its title and subtitle are untruncated.
+#[derive(Clone, Copy)]
 pub(in crate::app::cloud_panel) struct Header {
     pub rect: Rect,
     pub title_width: f32,
