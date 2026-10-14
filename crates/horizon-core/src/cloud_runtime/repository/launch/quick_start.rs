@@ -9,7 +9,7 @@ use horizon_cloud::{Capabilities, Profile};
 // to put here; docs/release-flow.md describes the update, which also updates CONTRACT.
 macro_rules! image {
     () => {
-        "ghcr.io/peters/horizon-worker-base@sha256:7d337851edd33a790e01ed560f43dd61d83847552178f5a8540113ea3f07a07c"
+        "ghcr.io/peters/horizon-worker-base@sha256:f28a0ceb76b559b299000b440a26951bc70a820003d3911c4e130174bef944ec"
     };
 }
 
@@ -307,29 +307,36 @@ mod tests {
     #[ignore = "pulls the pinned image and runs its worker check in local Docker; run it when the pin changes"]
     fn the_trusted_report_is_what_the_pinned_image_reports() {
         let capabilities = &builtin().unwrap().profiles[PROFILE].capabilities;
-        let output = std::process::Command::new("docker")
-            .args([
-                "run",
-                "--rm",
-                "--pull",
-                "missing",
-                "--platform",
-                "linux/amd64",
-                "--network=none",
-            ])
-            .args(["--entrypoint", "/usr/local/bin/horizon-worker-check", "--env"])
-            .arg(crate::cloud_runtime::worker_contract::environment(capabilities).unwrap())
-            .args([IMAGE, "--git-auth"])
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-        let report = std::str::from_utf8(&output.stdout).unwrap();
-        // With --nocapture, the report to put in CONTRACT when the pin changes.
-        println!("{report}");
-        assert_eq!(
-            report, CONTRACT,
-            "the immutable pin must return the exact attested report"
-        );
+        // The pin is an index; the architecture the host does not run needs emulation.
+        for platform in ["linux/amd64", "linux/arm64"] {
+            let output = std::process::Command::new("docker")
+                .args([
+                    "run",
+                    "--rm",
+                    "--pull",
+                    "missing",
+                    "--platform",
+                    platform,
+                    "--network=none",
+                ])
+                .args(["--entrypoint", "/usr/local/bin/horizon-worker-check", "--env"])
+                .arg(crate::cloud_runtime::worker_contract::environment(capabilities).unwrap())
+                .args([IMAGE, "--git-auth"])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{platform}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let report = std::str::from_utf8(&output.stdout).unwrap();
+            // With --nocapture, the report to put in CONTRACT when the pin changes.
+            println!("{platform}:\n{report}");
+            assert_eq!(
+                report, CONTRACT,
+                "{platform}: the immutable pin must return the exact attested report"
+            );
+        }
     }
 
     #[test]

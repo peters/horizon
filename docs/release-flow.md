@@ -117,7 +117,9 @@ the worker contract or the agent CLIs in the base image must change for a releas
 8. On a computer with Docker, run
    `cargo test -p horizon-core quick_start -- --ignored --nocapture`.
 
-   Result: The test pulls the pinned image and runs its worker check. It prints the
+   Result: The test pulls the `linux/amd64` and the `linux/arm64` image of the pinned
+   index and runs the worker check of each. The architecture that the computer does
+   not run needs emulation (QEMU and `binfmt_misc`). For each image, it prints the
    report and finds the same markers as `CONTRACT`.
 9. On a computer with Docker, do lane C of the
    [worker GitHub chain procedure](testing/procedures/worker-github-chain.md)
