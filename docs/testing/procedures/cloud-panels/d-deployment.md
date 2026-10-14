@@ -120,7 +120,7 @@ fixture terminal.
 
 ### 6.1 D01 — Deploy a Hetzner CPU cloud end to end
 
-1. Open **Menu › New cloud**.
+1. Open **Menu › Add cloud here**.
 
    Result: The New cloud dialog opens.
 
@@ -206,7 +206,7 @@ fixture terminal.
 
 ### 6.2 D02 — Deploy a RunPod CPU cloud on a network volume
 
-1. Click **New** in the sidebar, then click **Cloud**.
+1. Click **+ New cloud** in the toolbar.
 
    Result: The New cloud dialog opens for a new workspace. The workspace of
    `smoke-a` is not the workspace of the new cloud.
@@ -288,7 +288,7 @@ fixture terminal.
 
 ### 6.3 D03 — Deploy a RunPod GPU cloud with a CUDA minimum
 
-1. Open **Menu › New cloud**.
+1. Open **Menu › Add cloud here**.
 
    Result: The New cloud dialog opens.
 

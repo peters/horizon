@@ -92,7 +92,7 @@ permission error. It also makes sure of these conditions:
 
    Result: The dialog closes.
 
-7. Open **Menu › New cloud**.
+7. Open **Menu › Add cloud here**.
 
    Result: The New cloud dialog opens.
 

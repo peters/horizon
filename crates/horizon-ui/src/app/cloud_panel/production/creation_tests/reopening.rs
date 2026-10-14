@@ -34,7 +34,7 @@ fn reopening_keeps_cloud_controls_below_the_modal() {
     for _ in 0..2 {
         click(&ctx, &mut app, menu);
         let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
-        let new_cloud = label_position(&output, "New cloud");
+        let new_cloud = label_position(&output, "Add cloud here");
         click(&ctx, &mut app, new_cloud);
         let deadline = Instant::now() + Duration::from_secs(5);
         while !app.cloud_prototype.production.creating {

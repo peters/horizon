@@ -1,11 +1,11 @@
-//! The toolbar's two controls: the primary New workspace button and the Menu that holds
-//! Quick Nav, Remote Hosts, Cloud, Sessions and Settings.
-use egui::{Align2, CornerRadius, CursorIcon, FontId, Popup, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, Vec2};
+//! The toolbar's controls: the primary New cloud button, the New workspace button and the
+//! Menu that holds Quick Nav, Remote Hosts, Cloud, Upkeep, Sessions and Settings.
+use egui::{Align2, CursorIcon, FontId, Popup, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::app::HorizonApp;
 use crate::app::root_chrome::{
-    ROOT_TOOLBAR_BUTTON_HEIGHT, ROOT_TOOLBAR_MENU_WIDTH, ROOT_TOOLBAR_NEW_COMPACT_WIDTH, ROOT_TOOLBAR_NEW_WIDTH,
-    ToolbarAction,
+    ROOT_TOOLBAR_BUTTON_HEIGHT, ROOT_TOOLBAR_MENU_WIDTH, ROOT_TOOLBAR_NEW_CLOUD_COMPACT_WIDTH,
+    ROOT_TOOLBAR_NEW_CLOUD_WIDTH, ROOT_TOOLBAR_NEW_WORKSPACE_WIDTH, ToolbarAction,
 };
 use crate::app::sidebar::new_workspace::NewWorkspace;
 use crate::app::sidebar::rich_menu;
@@ -18,6 +18,8 @@ enum MenuChoice {
     Action(ToolbarAction),
     #[cfg(feature = "cloud-workspaces")]
     NewCloud,
+    #[cfg(feature = "cloud-workspaces")]
+    NewUpkeep,
     #[cfg(feature = "cloud-workspaces")]
     FitClouds,
 }
@@ -57,10 +59,18 @@ const MENU: &[MenuEntry] = &[
     #[cfg(feature = "cloud-workspaces")]
     MenuEntry {
         group: Some("Cloud"),
-        title: "New cloud",
+        title: "Add cloud here",
         detail: "Start a cloud worker in the current workspace",
         action: None,
         choice: MenuChoice::NewCloud,
+    },
+    #[cfg(feature = "cloud-workspaces")]
+    MenuEntry {
+        group: None,
+        title: "New Upkeep",
+        detail: "An agent fixes and merges dependency updates on a schedule",
+        action: None,
+        choice: MenuChoice::NewUpkeep,
     },
     #[cfg(feature = "cloud-workspaces")]
     MenuEntry {
@@ -87,58 +97,70 @@ const MENU: &[MenuEntry] = &[
     },
 ];
 
-/// Width of the part that chooses where the workspace runs.
-const CHOOSER_WIDTH: f32 = 82.0;
-
 impl HorizonApp {
-    /// "+ New workspace" makes a workspace where the default says; the part after the
-    /// divider opens the menu of places.
-    pub(super) fn render_toolbar_new_workspace(&mut self, ui: &mut Ui, compact: bool) {
+    /// "+ New cloud" makes a workspace and opens New cloud for it. Cancel takes the empty
+    /// workspace away again. The tooltip shows the machine of a quick start and its price,
+    /// asked for only while the pointer is on the button.
+    pub(super) fn render_toolbar_new_cloud(&mut self, ui: &mut Ui, compact: bool) {
         let width = if compact {
-            ROOT_TOOLBAR_NEW_COMPACT_WIDTH
+            ROOT_TOOLBAR_NEW_CLOUD_COMPACT_WIDTH
         } else {
-            ROOT_TOOLBAR_NEW_WIDTH
+            ROOT_TOOLBAR_NEW_CLOUD_WIDTH
         };
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, ROOT_TOOLBAR_BUTTON_HEIGHT), Sense::hover());
-        let split = rect.max.x - CHOOSER_WIDTH;
-        let create_rect = Rect::from_min_max(rect.min, Pos2::new(split, rect.max.y));
-        let choose_rect = Rect::from_min_max(Pos2::new(split, rect.min.y), rect.max);
-        let create = ui
-            .interact(create_rect, ui.id().with("toolbar-new-workspace"), Sense::click())
-            .on_hover_cursor(CursorIcon::PointingHand);
-        let choose = ui
-            .interact(choose_rect, ui.id().with("toolbar-new-workspace-place"), Sense::click())
-            .on_hover_cursor(CursorIcon::PointingHand);
-        let default = if self.new_cloud_workspace_ready() {
-            NewWorkspace::Cloud
+        let ready = self.new_cloud_workspace_ready();
+        // A dimmed button takes no click or focus, but still explains itself on hover.
+        let sense = if ready { Sense::click() } else { Sense::hover() };
+        let (rect, button) = ui.allocate_exact_size(Vec2::new(width, ROOT_TOOLBAR_BUTTON_HEIGHT), sense);
+        let button = if ready {
+            button.on_hover_cursor(CursorIcon::PointingHand)
         } else {
-            NewWorkspace::ThisPc
+            button
         };
-        let create = create.on_hover_ui(|ui| {
-            ui.label(format!("New workspace: {}", default.detail()));
-        });
-        create.widget_info(|| {
-            egui::WidgetInfo::labeled(
-                egui::WidgetType::Button,
-                true,
-                format!("New workspace on {}", default.label()),
-            )
-        });
-        choose.widget_info(|| {
-            egui::WidgetInfo::labeled(
-                egui::WidgetType::Button,
-                true,
-                format!("Choose where it runs, now {}", default.label()),
-            )
-        });
-
-        paint_new_workspace(ui.painter(), [&create, &choose], compact, default);
-
-        if create.clicked() {
-            self.create_new_workspace(ui.ctx(), default, None);
+        button.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ready, "New cloud"));
+        paint_new_cloud(ui.painter(), rect, &button, compact, ready);
+        if !ready {
+            button.on_hover_text(super::super::NEW_CLOUD_NOT_READY);
+            return;
         }
-        if let Some(choice) = self.new_workspace_menu(&choose) {
-            self.create_new_workspace(ui.ctx(), choice, None);
+        #[cfg(feature = "cloud-workspaces")]
+        let machine = button
+            .hovered()
+            .then(|| self.new_cloud_machine_line(ui.ctx()))
+            .flatten();
+        #[cfg(not(feature = "cloud-workspaces"))]
+        let machine: Option<String> = None;
+        let button = button.on_hover_ui(|ui| {
+            ui.label("A new workspace with a cloud worker. Agents run there, also while this computer sleeps.");
+            if let Some(machine) = &machine {
+                ui.label(egui::RichText::new(machine).color(theme::FG_DIM()));
+            }
+        });
+        if button.clicked() {
+            self.create_new_workspace(ui.ctx(), NewWorkspace::Cloud, None);
+        }
+    }
+
+    /// "+ Workspace" makes an empty workspace on this computer at once.
+    pub(super) fn render_toolbar_new_workspace(&mut self, ui: &mut Ui) {
+        let (rect, button) = ui.allocate_exact_size(
+            Vec2::new(ROOT_TOOLBAR_NEW_WORKSPACE_WIDTH, ROOT_TOOLBAR_BUTTON_HEIGHT),
+            Sense::click(),
+        );
+        let button = button
+            .on_hover_cursor(CursorIcon::PointingHand)
+            .on_hover_text("A new empty workspace. Terminals and agents run on this computer.");
+        button.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "New workspace"));
+        paint_framed_button(ui.painter(), rect, &button, |painter, ink| {
+            painter.text(
+                Pos2::new(rect.min.x + 14.0, rect.center().y),
+                Align2::LEFT_CENTER,
+                "+  Workspace",
+                FontId::proportional(12.5),
+                ink,
+            );
+        });
+        if button.clicked() {
+            self.create_new_workspace(ui.ctx(), NewWorkspace::ThisPc, None);
         }
     }
 
@@ -166,7 +188,13 @@ impl HorizonApp {
                 }
                 let shortcut = entry.action.and_then(|action| self.toolbar_shortcut(action));
                 let enabled = self.menu_entry_enabled(entry.choice);
-                if rich_menu::row(ui, None, entry.title, entry.detail, None, shortcut.as_deref(), enabled).clicked() {
+                let row = rich_menu::row(ui, entry.title, entry.detail, shortcut.as_deref(), enabled);
+                // A dimmed cloud row says why, as + New cloud does.
+                let row = match disabled_reason(entry.choice) {
+                    Some(reason) if !enabled => row.on_hover_text(reason),
+                    _ => row,
+                };
+                if row.clicked() {
                     chosen = Some(entry.choice);
                     ui.close();
                 }
@@ -185,7 +213,7 @@ impl HorizonApp {
     fn menu_entry_enabled(&self, choice: MenuChoice) -> bool {
         match choice {
             #[cfg(feature = "cloud-workspaces")]
-            MenuChoice::NewCloud => self.cloud_launch_ready(),
+            MenuChoice::NewCloud | MenuChoice::NewUpkeep => self.cloud_launch_ready(),
             #[cfg(feature = "cloud-workspaces")]
             MenuChoice::FitClouds => !self.cloud_prototype.groups.0.is_empty(),
             _ => true,
@@ -200,6 +228,9 @@ impl HorizonApp {
                 let workspace = self.board.ensure_workspace();
                 self.open_cloud_for_workspace(ctx, workspace);
             }
+            // New Upkeep makes its workspace once its cloud starts.
+            #[cfg(feature = "cloud-workspaces")]
+            MenuChoice::NewUpkeep => self.open_upkeep_dialog(ctx),
             #[cfg(feature = "cloud-workspaces")]
             MenuChoice::FitClouds => self.cloud_overview(ctx),
         }
@@ -220,97 +251,75 @@ impl HorizonApp {
     }
 }
 
-/// Paints the split button: the accent pill, the hovered or pressed part, the label, the
-/// place of `default` with its glyph, and a focus ring around the focused part.
-fn paint_new_workspace(
-    painter: &egui::Painter,
-    [create, choose]: [&egui::Response; 2],
-    compact: bool,
-    default: NewWorkspace,
-) {
-    let rect = create.rect.union(choose.rect);
-    let split = choose.rect.min.x;
-    let (create_rect, choose_rect) = (create.rect, choose.rect);
-    let radius = CornerRadius::same(10);
-    painter.rect_filled(rect, radius, theme::ACCENT());
-    // The hovered part lightens; the other keeps the solid accent.
-    let lift = |response: &egui::Response| {
-        if response.is_pointer_button_down_on() {
-            Some(theme::blend(theme::ACCENT(), theme::BG(), 0.14))
-        } else if response.hovered() {
-            Some(theme::blend(theme::ACCENT(), theme::FG(), 0.16))
-        } else {
-            None
-        }
-    };
-    if let Some(fill) = lift(create) {
-        let corners = CornerRadius {
-            nw: 10,
-            sw: 10,
-            ne: 0,
-            se: 0,
-        };
-        painter.rect_filled(create_rect, corners, fill);
-    }
-    if let Some(fill) = lift(choose) {
-        let corners = CornerRadius {
-            nw: 0,
-            sw: 0,
-            ne: 10,
-            se: 10,
-        };
-        painter.rect_filled(choose_rect, corners, fill);
-    }
-    let ink = theme::BG();
-    painter.line_segment(
-        [Pos2::new(split, rect.min.y + 7.0), Pos2::new(split, rect.max.y - 7.0)],
-        Stroke::new(1.0, theme::alpha(ink, 90)),
-    );
-    let label = if compact { "+  New" } else { "+  New workspace" };
-    painter.text(
-        Pos2::new(create_rect.min.x + 14.0, rect.center().y),
-        Align2::LEFT_CENTER,
-        label,
-        FontId::proportional(12.5),
-        ink,
-    );
-    let icon_center = Pos2::new(choose_rect.min.x + 17.0, rect.center().y);
-    let glyph = if default == NewWorkspace::ThisPc {
-        rich_menu::Glyph::Screen
-    } else {
-        rich_menu::Glyph::Cloud
-    };
-    rich_menu::paint(painter, glyph, icon_center, ink);
-    let place = if default == NewWorkspace::ThisPc { "PC" } else { "Cloud" };
-    painter.text(
-        Pos2::new(icon_center.x + 12.0, rect.center().y),
-        Align2::LEFT_CENTER,
-        place,
-        FontId::proportional(12.0),
-        ink,
-    );
-    paint_chevron(painter, Pos2::new(choose_rect.max.x - 13.0, rect.center().y), ink);
-    // The ring marks the focused part only, so the keyboard shows which one Enter takes.
-    for (part, response) in [(create_rect, create), (choose_rect, choose)] {
-        if response.has_focus() {
-            painter.rect_stroke(part.expand(2.0), 12, Stroke::new(2.0, theme::FG()), StrokeKind::Outside);
-        }
+/// Why a dimmed Menu row cannot be chosen, for the rows that need cloud workspaces.
+fn disabled_reason(choice: MenuChoice) -> Option<&'static str> {
+    match choice {
+        #[cfg(feature = "cloud-workspaces")]
+        MenuChoice::NewCloud | MenuChoice::NewUpkeep => Some(super::super::NEW_CLOUD_NOT_READY),
+        _ => None,
     }
 }
 
-fn paint_chevron(painter: &egui::Painter, center: Pos2, color: egui::Color32) {
-    painter.add(Shape::line(
-        vec![
-            Pos2::new(center.x - 3.5, center.y - 1.5),
-            Pos2::new(center.x, center.y + 2.0),
-            Pos2::new(center.x + 3.5, center.y - 1.5),
-        ],
-        Stroke::new(1.5, color),
-    ));
+/// Paints the New cloud button: the accent pill, lighter while hovered and darker while
+/// pressed. When no cloud can start, it is a framed pill with dim text, as disabled
+/// controls are.
+fn paint_new_cloud(painter: &egui::Painter, rect: Rect, button: &egui::Response, compact: bool, ready: bool) {
+    let label = if compact { "+  Cloud" } else { "+  New cloud" };
+    let paint_label = |painter: &egui::Painter, ink| {
+        painter.text(
+            Pos2::new(rect.min.x + 14.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            label,
+            FontId::proportional(12.5),
+            ink,
+        );
+    };
+    if !ready {
+        painter.rect_filled(rect, 10, theme::PANEL_BG_ALT());
+        painter.rect_stroke(
+            rect,
+            10,
+            Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 210)),
+            StrokeKind::Inside,
+        );
+        paint_label(painter, theme::FG_DIM());
+        return;
+    }
+    let fill = if button.is_pointer_button_down_on() {
+        theme::blend(theme::ACCENT(), theme::BG(), 0.14)
+    } else if button.hovered() {
+        theme::blend(theme::ACCENT(), theme::FG(), 0.16)
+    } else {
+        theme::ACCENT()
+    };
+    painter.rect_filled(rect, 10, fill);
+    paint_label(painter, theme::BG());
+    if button.has_focus() {
+        painter.rect_stroke(rect.expand(2.0), 12, Stroke::new(2.0, theme::FG()), StrokeKind::Outside);
+    }
 }
 
 /// Paints the Menu button: a framed pill with three lines and the word Menu.
 fn paint_menu_button(painter: &egui::Painter, rect: Rect, button: &egui::Response) {
+    paint_framed_button(painter, rect, button, |painter, ink| {
+        paint_lines(painter, Pos2::new(rect.min.x + 18.0, rect.center().y), ink);
+        painter.text(
+            Pos2::new(rect.min.x + 32.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            "Menu",
+            FontId::proportional(12.0),
+            ink,
+        );
+    });
+}
+
+/// Paints a framed pill, its content in `ink`, and the focus ring.
+fn paint_framed_button(
+    painter: &egui::Painter,
+    rect: Rect,
+    button: &egui::Response,
+    content: impl FnOnce(&egui::Painter, egui::Color32),
+) {
     let fill = if button.hovered() || button.has_focus() {
         theme::blend(theme::PANEL_BG_ALT(), theme::FG(), 0.08)
     } else {
@@ -323,15 +332,7 @@ fn paint_menu_button(painter: &egui::Painter, rect: Rect, button: &egui::Respons
         Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 210)),
         StrokeKind::Inside,
     );
-    let ink = theme::FG_SOFT();
-    paint_lines(painter, Pos2::new(rect.min.x + 18.0, rect.center().y), ink);
-    painter.text(
-        Pos2::new(rect.min.x + 32.0, rect.center().y),
-        Align2::LEFT_CENTER,
-        "Menu",
-        FontId::proportional(12.0),
-        ink,
-    );
+    content(painter, theme::FG_SOFT());
     if button.has_focus() {
         painter.rect_stroke(rect.expand(2.0), 12, Stroke::new(2.0, theme::FG()), StrokeKind::Outside);
     }

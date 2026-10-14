@@ -1,18 +1,5 @@
+use crate::app::test_support::test_app;
 use crate::app::upkeep::form::Bot;
-use crate::app::{sidebar::NewWorkspace, test_support::test_app};
-
-#[test]
-fn new_upkeep_opens_its_dialog_and_makes_a_workspace_only_once_it_starts() {
-    let (_temp, mut app) = test_app();
-    let ctx = egui::Context::default();
-    let before = app.board.workspaces.len();
-    app.create_new_workspace(&ctx, NewWorkspace::Upkeep, None);
-    assert!(app.upkeep.form.is_none(), "not without cloud workspaces");
-    app.cloud_prototype.ready = true;
-    app.create_new_workspace(&ctx, NewWorkspace::Upkeep, None);
-    assert!(app.upkeep.form.is_some());
-    assert_eq!(app.board.workspaces.len(), before, "New Upkeep makes no workspace yet");
-}
 
 #[test]
 fn a_start_that_cannot_begin_keeps_the_dialog_open_with_the_reason() {

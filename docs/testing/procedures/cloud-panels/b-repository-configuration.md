@@ -111,7 +111,7 @@ bind of S02 alone does not change the socket that the candidate uses.
 
    Result: The Menu opens.
 
-2. Click **New cloud**.
+2. Click **Add cloud here**.
 
    Result: The New cloud dialog opens. Wait 3 seconds before the next click.
 
@@ -237,7 +237,7 @@ bind of S02 alone does not change the socket that the candidate uses.
 
    Result: Each repository has a committed `.horizon` directory.
 
-6. Open **Menu › New cloud**.
+6. Open **Menu › Add cloud here**.
 
    Result: The New cloud dialog opens.
 

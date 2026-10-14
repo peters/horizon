@@ -75,7 +75,7 @@ setting must open a repair form.
 
 1. Click **Menu** in the toolbar.
 
-   Result: The Menu shows **New cloud** and **Cloud settings** under the caption
+   Result: The Menu shows **Add cloud here** and **Cloud settings** under the caption
    **CLOUD**.
 
 2. Click **Cloud settings**.
@@ -278,7 +278,7 @@ Do this task after B02. It needs the synthetic repository.
 
    Result: The second fixture shows the repository at `<home>/smoke/app`.
 
-4. In the second fixture, open **Menu › New cloud**.
+4. In the second fixture, open **Menu › Add cloud here**.
 
    Result: The New cloud dialog opens.
 
