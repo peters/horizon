@@ -18,6 +18,7 @@ fn selected_entrypoint_requires_capture_while_none_keeps_existing_behavior() {
             identity: root.path().join("unused-key"),
             known_hosts: root.path().join("unused-hosts"),
             host_key_alias: "unused".into(),
+            proxy_command: None,
         };
         let cancel = horizon_cloud::Cancellation::default();
         cancel.cancel();
@@ -281,15 +282,27 @@ fn capture_binding_requires_the_exact_worker_endpoint_and_owning_cloud_root() {
         identity: root.join("unused-private-identity"),
         known_hosts: root.join("known-hosts-synthetic-worker"),
         host_key_alias: "horizon-cloud-synthetic-worker".into(),
+        proxy_command: None,
     };
-    assert!(validate_binding(&connection, &root, "synthetic", "synthetic-worker", "127.0.0.1", 2222).is_ok());
+    assert!(
+        validate_binding(
+            &connection,
+            &root,
+            "synthetic",
+            "synthetic-worker",
+            "127.0.0.1",
+            2222,
+            None
+        )
+        .is_ok()
+    );
     for (cloud, worker, host, port) in [
         ("other-cloud", "synthetic-worker", "127.0.0.1", 2222),
         ("synthetic", "other-worker", "127.0.0.1", 2222),
         ("synthetic", "synthetic-worker", "other.invalid", 2222),
         ("synthetic", "synthetic-worker", "127.0.0.1", 22),
     ] {
-        assert!(validate_binding(&connection, &root, cloud, worker, host, port).is_err());
+        assert!(validate_binding(&connection, &root, cloud, worker, host, port, None).is_err());
     }
     assert!(
         validate_binding(
@@ -298,8 +311,49 @@ fn capture_binding_requires_the_exact_worker_endpoint_and_owning_cloud_root() {
             "synthetic",
             "synthetic-worker",
             "127.0.0.1",
-            2222
+            2222,
+            None
         )
         .is_err()
+    );
+}
+
+#[test]
+fn capture_binding_refuses_a_different_docker_host_proxy() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("synthetic");
+    let connection = Connection {
+        host: "127.0.0.1".into(),
+        port: 2222,
+        identity: root.join("unused-private-identity"),
+        known_hosts: root.join("known-hosts-synthetic-worker"),
+        host_key_alias: "horizon-cloud-synthetic-worker".into(),
+        proxy_command: Some("synthetic-owned-proxy".into()),
+    };
+    for expected in [None, Some("synthetic-other-proxy")] {
+        assert!(
+            validate_binding(
+                &connection,
+                &root,
+                "synthetic",
+                "synthetic-worker",
+                "127.0.0.1",
+                2222,
+                expected
+            )
+            .is_err()
+        );
+    }
+    assert!(
+        validate_binding(
+            &connection,
+            &root,
+            "synthetic",
+            "synthetic-worker",
+            "127.0.0.1",
+            2222,
+            Some("synthetic-owned-proxy")
+        )
+        .is_ok()
     );
 }

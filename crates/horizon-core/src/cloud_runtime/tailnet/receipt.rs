@@ -85,6 +85,7 @@ impl EnrollmentProvider {
         match self.0 {
             Kind::RunPod => provider::RUNPOD.id,
             Kind::Hetzner => provider::HETZNER.id,
+            Kind::DockerHost => provider::DOCKER_HOST.id,
         }
     }
 }
@@ -334,6 +335,13 @@ pub(in crate::cloud_runtime) mod tests {
             assert_eq!(ledger.receipts().len(), count);
             assert_eq!(ledger.attempts(), unknown);
         }
+        let mut local = attempt("docker-worker");
+        local.provider = EnrollmentProvider::new(Kind::DockerHost);
+        ledger.arm(local.clone()).unwrap();
+        ledger
+            .record(local.attempt_id, DeviceId::new("nDockerSelected").unwrap())
+            .unwrap();
+        assert_eq!(ledger.receipts().last().unwrap().provider.as_str(), "docker-host");
         let bytes = serde_json::to_vec(&ledger).unwrap();
         assert_eq!(serde_json::from_slice::<EnrollmentLedger>(&bytes).unwrap(), ledger);
     }
@@ -373,7 +381,7 @@ pub(in crate::cloud_runtime) mod tests {
         }
         assert!(serde_json::from_str::<DeviceId>("123").is_err());
         assert!(serde_json::from_str::<EnrollmentProvider>("\"unsupported\"").is_err());
-        for kind in [Kind::RunPod, Kind::Hetzner] {
+        for kind in [Kind::RunPod, Kind::Hetzner, Kind::DockerHost] {
             let provider = EnrollmentProvider::new(kind);
             assert_eq!(
                 serde_json::from_str::<EnrollmentProvider>(&serde_json::to_string(&provider).unwrap()).unwrap(),

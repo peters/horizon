@@ -57,6 +57,12 @@ pub(super) fn configure_and_record(
     let endpoint = worker
         .ssh_endpoint()
         .ok_or(Error::Invalid("Missing capture worker endpoint"))?;
+    let proxy = worker
+        .docker_host
+        .as_ref()
+        .map(|host| host.proxy_command())
+        .transpose()?
+        .flatten();
     validate_binding(
         connection,
         store.root(),
@@ -64,6 +70,7 @@ pub(super) fn configure_and_record(
         &worker.id,
         endpoint.host().as_str(),
         endpoint.port(),
+        proxy.as_deref(),
     )?;
     let selected = TailnetId::new(&selected).map_err(|_| Error::Invalid(CAPTURE_ERROR))?;
     let attempt = CaptureAttempt {
@@ -96,12 +103,14 @@ fn validate_binding(
     worker_id: &str,
     host: &str,
     port: u16,
+    proxy: Option<&str>,
 ) -> Result<()> {
     if root.file_name().and_then(|name| name.to_str()) != Some(cloud_id)
         || connection.host_key_alias != format!("horizon-cloud-{worker_id}")
         || connection.known_hosts != root.join(format!("known-hosts-{worker_id}"))
         || connection.host != host
         || connection.port != port
+        || connection.proxy_command.as_deref() != proxy
     {
         return Err(Error::Invalid(
             "Tailnet capture connection differs from its owning allocation root",
