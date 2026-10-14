@@ -584,7 +584,8 @@ fn remote_arguments_reach_docker_unchanged() {
     use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().unwrap();
     let docker = root.path().join("docker");
-    std::fs::write(&docker, "#!/bin/sh\nprintf '%s\\0' \"$@\"\n").unwrap();
+    let script = "#!/bin/sh\n[ \"$3\" = info ] && { echo ENGINE-A; exit 0; }\nprintf '%s\\0' \"$@\"\n";
+    std::fs::write(&docker, script).unwrap();
     std::fs::set_permissions(&docker, std::fs::Permissions::from_mode(0o755)).unwrap();
     let host = Host {
         docker: Some(docker.to_string_lossy().into_owned()),
@@ -617,6 +618,30 @@ fn remote_arguments_reach_docker_unchanged() {
         .collect();
     assert_eq!(received[..2], ["-H", "unix:///var/run/docker.sock"]);
     assert_eq!(received[2..], hostile);
+    // The same session checks the engine's own ID before it runs anything.
+    let run = |engine: &str| {
+        let command = host
+            .command_on(&args, std::path::Path::new("/unused"), Some(engine))
+            .unwrap();
+        let script = command.get_args().last().unwrap().to_owned();
+        let shell = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .env("HOME", root.path())
+            .output();
+        shell.unwrap()
+    };
+    assert!(run("ENGINE-A").status.success());
+    assert_eq!(run("ENGINE-B").status.code(), Some(OTHER_ENGINE));
+    // A docker that cannot answer reports its own failure, not another engine.
+    std::fs::write(
+        &docker,
+        "#!/bin/sh\necho 'Cannot connect to the Docker daemon' >&2; exit 1\n",
+    )
+    .unwrap();
+    let failed = run("ENGINE-A");
+    assert_eq!(failed.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("Cannot connect"));
     assert!(!root.path().join("pwned").exists());
     let config = std::fs::read_to_string(root.path().join(".horizon/docker-config/config.json")).unwrap();
     assert_eq!(config, PRIVATE_CONFIG, "no credential helper is ever detected");
@@ -637,6 +662,7 @@ fn a_command_that_outlives_its_time_is_stopped() {
         host: &host,
         local_config: config.path().join("docker"),
         cancel: &cancel,
+        engine_id: std::sync::Mutex::new(None),
     };
     let started = std::time::Instant::now();
     let error = CloudError::from(engine.docker(&["5".into()], Duration::from_millis(200)).unwrap_err());

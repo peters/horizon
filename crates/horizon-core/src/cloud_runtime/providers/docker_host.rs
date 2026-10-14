@@ -118,11 +118,13 @@ fn host<'a>(settings: &'a Settings, journal: &Journal, spec: &WorkerSpec) -> Res
     Ok(host)
 }
 
-fn engine<'a>(host: &'a Host, store: &Store, cancel: &'a Cancellation) -> Engine<'a> {
+/// The host's engine; every remote call also checks the engine ID the journal recorded.
+fn engine<'a>(host: &'a Host, store: &Store, cancel: &'a Cancellation, journal: &Journal) -> Engine<'a> {
     Engine {
         host,
         local_config: store.root().join("docker-config"),
         cancel,
+        engine_id: std::sync::Mutex::new(journal.engine_id.clone()),
     }
 }
 
@@ -192,7 +194,7 @@ impl Compute for DockerHost<'_> {
         }
         let mut journal = load(store.root())?;
         let host = host(self.settings, &journal, spec)?;
-        let engine = engine(host, store, runner.cancel);
+        let engine = engine(host, store, runner.cancel, &journal);
         let mut operation = state.operation.clone();
         let mut saved = Saved {
             store,
@@ -278,7 +280,7 @@ impl DockerHost<'_> {
             return Err(Error::Invalid("Finish deleting this cloud before it starts again"));
         }
         let host = host(self.settings, &journal, spec)?;
-        let (engine, cloud_id) = (engine(host, store, cancel), state.cloud_id.clone());
+        let (engine, cloud_id) = (engine(host, store, cancel, &journal), state.cloud_id.clone());
         journal.confirms(&engine)?;
         let needed = match docker_host::find(&engine, &cloud_id)? {
             Some(container) if container.id == worker_id => container.running != on,
@@ -307,7 +309,7 @@ impl Lifecycle for DockerHost<'_> {
         let spec = state.spec.clone().ok_or(Error::Invalid("No worker was requested"))?;
         let journal = load(store.root())?;
         let host = host(self.settings, &journal, &spec)?;
-        let engine = engine(host, store, cancel);
+        let engine = engine(host, store, cancel, &journal);
         // A missing container counts only on the engine the cloud was created on.
         journal.confirms(&engine)?;
         let found = docker_host::find(&engine, &state.cloud_id)?;
@@ -386,7 +388,7 @@ impl Lifecycle for DockerHost<'_> {
         // Once deletion starts it runs to the end; each step is recorded so it can resume.
         cancel.check()?;
         let committed = Cancellation::default();
-        let engine = engine(host, store, &committed);
+        let engine = engine(host, store, &committed, &journal);
         let cloud_id = state.cloud_id.clone();
         let mut operation = state.operation.clone();
         let mut saved = Saved {

@@ -125,14 +125,29 @@ pub(super) fn mark(ui: &mut egui::Ui, provider: &Description, size: f32) {
 }
 
 /// The Docker whale in Docker blue; `assets/docker-mark.svg` names its source and license.
+/// The PNG is decoded once on a worker thread, never on the UI thread; the mark shows
+/// from the frame after.
 fn docker_mark(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    // A process-wide cache: the pixels never change, and every window may draw the mark.
+    static PIXELS: std::sync::OnceLock<Option<egui::ColorImage>> = std::sync::OnceLock::new();
+    static DECODE: std::sync::Once = std::sync::Once::new();
     let id = egui::Id::new("cloud-provider-mark-docker");
     if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
         return Some(texture);
     }
-    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../../../../../assets/docker-mark.png")).ok()?;
-    let size = [icon.width as usize, icon.height as usize];
-    let image = egui::ColorImage::from_rgba_unmultiplied(size, &icon.rgba);
+    DECODE.call_once(|| {
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            PIXELS.get_or_init(|| {
+                let png = include_bytes!("../../../../../assets/docker-mark.png");
+                let icon = eframe::icon_data::from_png_bytes(png).ok()?;
+                let size = [icon.width as usize, icon.height as usize];
+                Some(egui::ColorImage::from_rgba_unmultiplied(size, &icon.rgba))
+            });
+            ctx.request_repaint();
+        });
+    });
+    let image = PIXELS.get()?.clone()?;
     let texture = ctx.load_texture("cloud-provider-mark-docker", image, egui::TextureOptions::LINEAR);
     ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
     Some(texture)

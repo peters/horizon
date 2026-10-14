@@ -95,13 +95,14 @@ impl Journal {
     /// Another engine, or Docker failures.
     pub fn confirms(&self, docker: &impl Docker) -> Result<(), CloudError> {
         match &self.engine_id {
-            Some(recorded) if *recorded != engine_id(docker)? => Err(CloudError::Invalid(
-                "This cloud's saved Docker host now reaches another Docker engine than the one the cloud runs on",
-            )),
+            Some(recorded) if *recorded != engine_id(docker)? => Err(CloudError::Invalid(ANOTHER_ENGINE)),
             _ => Ok(()),
         }
     }
 }
+
+pub(super) const ANOTHER_ENGINE: &str =
+    "This cloud's saved Docker host now reaches another Docker engine than the one the cloud runs on";
 
 fn engine_id(docker: &impl Docker) -> Result<String, CloudError> {
     let id = docker.docker(&["info".into(), "--format".into(), "{{.ID}}".into()], QUICK)?;
@@ -450,6 +451,10 @@ pub fn provision(
             next.engine = Some(Route::of(host));
             next.engine_id = Some(engine);
         })?;
+    }
+    // Every later call checks, in its own session, that it still reaches this engine.
+    if let Some(engine) = &journal.engine_id {
+        docker.pin_engine(engine);
     }
     if *operation == CreateState::Prepared {
         if !volume(docker, id)? {
