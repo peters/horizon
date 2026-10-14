@@ -58,7 +58,9 @@ pub(super) fn watch(
                 runner
                     .run(
                         "Cloud worker check",
-                        &mut connection.command("true"),
+                        // Readiness pinned the host key: a missing pin fails into the
+                        // provider check rather than trust another host.
+                        &mut connection.pinned_command("true"),
                         Duration::from_secs(40),
                     )
                     .map(drop)
