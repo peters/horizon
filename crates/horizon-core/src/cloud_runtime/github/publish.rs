@@ -278,9 +278,21 @@ fn sign_in_user(
     cloud_id: &str,
     runner: &Runner<'_>,
 ) -> Result<(horizon_cloud::github::User, Secret)> {
+    let result = sign_in_user_inner(docker_config, client, cloud_id, runner);
+    (runner.emit)(Event::GitHub(Prompt::Published {
+        allowed: result.is_ok(),
+    }));
+    result
+}
+
+fn sign_in_user_inner(
+    docker_config: &Path,
+    client: &Client,
+    cloud_id: &str,
+    runner: &Runner<'_>,
+) -> Result<(horizon_cloud::github::User, Secret)> {
     runner.cancel.check()?;
     let say = |text: String| (runner.emit)(Event::Output(format!("GitHub: {text}")));
-    let ended = || (runner.emit)(Event::GitHub(Prompt::Published { allowed: false }));
     // A Skip from an earlier attempt does not end this one.
     signin::skipped(cloud_id);
     say("this cloud's image goes to ghcr.io; asking GitHub to let Horizon publish images for you.".into());
@@ -292,31 +304,27 @@ fn sign_in_user(
     let chain = match signin::device_chain(client, CLIENT_ID, Some(SCOPE), cloud_id, runner, prompt) {
         Ok(chain) => chain,
         Err(signin::Ended::Error(error)) => {
-            ended();
             return Err(error);
         }
         Err(signin::Ended::Skipped) => {
-            ended();
             return Err(Error::Invalid(SKIPPED));
         }
         Err(signin::Ended::Reason(reason)) => {
             say(reason);
-            ended();
             return Err(Error::Invalid(REFUSED));
         }
     };
+    runner.cancel.check()?;
     let user = match client.user(&chain.access_token) {
         Ok(user) => user,
         Err(error) => {
             say(error.to_string());
-            ended();
             return Err(Error::Invalid(REFUSED));
         }
     };
     runner.cancel.check()?;
     stored::save(&docker_config.join(STORE), &user.login, &chain, false)?;
     say(format!("Horizon may now publish images as {}.", user.login));
-    (runner.emit)(Event::GitHub(Prompt::Published { allowed: true }));
     Ok((user, chain.access_token))
 }
 

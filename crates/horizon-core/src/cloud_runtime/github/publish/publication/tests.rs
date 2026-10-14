@@ -304,3 +304,69 @@ fn cancellation_during_device_code_lookup_does_not_display_the_code() {
         "a stopped lookup must not display a new code"
     );
 }
+
+#[test]
+fn a_cancelled_token_or_account_answer_ends_the_prompt_without_saving_a_chain() {
+    use std::io::Write as _;
+    for account_lookup in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = Client::loopback(listener.local_addr().unwrap()).unwrap();
+        let cancel = Cancellation::default();
+        let stop = cancel.clone();
+        let task = std::thread::spawn(move || {
+            let mut replies = vec![
+                serde_json::json!({"device_code":"synthetic-device","user_code":"WDJB-MJHT","verification_uri":"https://github.com/login/device","expires_in":900,"interval":1}),
+                serde_json::json!({"access_token":"synthetic-access","expires_in":28_800,"refresh_token":"synthetic-refresh","refresh_token_expires_in":15_724_800,"token_type":"bearer","scope":"write:packages"}),
+            ];
+            if account_lookup {
+                replies.push(serde_json::json!({"id":10,"login":"alice"}));
+            }
+            let expected = replies.len();
+            for (index, body) in replies.into_iter().enumerate() {
+                let (mut stream, _) = listener.accept().unwrap();
+                crate::cloud_runtime::github::tests::read_request(&mut stream);
+                if index + 1 == expected {
+                    stop.cancel();
+                }
+                let body = body.to_string();
+                write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+            }
+            listener.set_nonblocking(true).unwrap();
+            let until = std::time::Instant::now() + Duration::from_secs(2);
+            while std::time::Instant::now() < until {
+                match listener.accept() {
+                    Ok(_) => return expected + 1,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("{error}"),
+                }
+            }
+            expected
+        });
+        let events = std::cell::RefCell::new(Vec::new());
+        let emit = |event| events.borrow_mut().push(event);
+        let runner = Runner {
+            cancel: &cancel,
+            emit: &emit,
+            secrets: Vec::new(),
+        };
+        let result = super::super::sign_in_user(root.path(), &client, "cancel-token-or-account", &runner);
+        assert!(matches!(
+            result,
+            Err(Error::Provider(horizon_cloud::CloudError::Cancelled))
+        ));
+        assert_eq!(task.join().unwrap(), if account_lookup { 3 } else { 2 });
+        assert!(matches!(
+            events.borrow().last(),
+            Some(crate::cloud_runtime::Event::GitHub(super::super::Prompt::Published {
+                allowed: false
+            }))
+        ));
+        assert!(
+            !root.path().join(STORE).exists(),
+            "a cancelled answer must not save a credential chain"
+        );
+    }
+}

@@ -73,6 +73,7 @@ The tests use synthetic tokens. They do not change an installed login.
    after authentication removes the prepared configuration and returns an error.
    A cancelled revoked-token lookup makes no new sign-in request.
    A cancelled device-code lookup displays no authorization prompt.
+   Cancellation during token polling or account lookup ends the displayed prompt and saves no credential chain.
 
 2. Examine the permission and metadata results.
 
