@@ -456,8 +456,8 @@ fn close_rect(header: Rect) -> Rect {
     Rect::from_center_size(header.right_top() + Vec2::new(-24.0, 35.0), Vec2::splat(28.0))
 }
 
-/// The header's fill, bottom rule and cloud mark, under everything else in it.
-/// The header's fill and mark: the Docker whale for a cloud on a Docker host, else a cloud.
+/// The header's fill, bottom rule and mark, under everything else in it: the Docker
+/// whale for a cloud on a Docker host, else a cloud.
 fn paint_header_base(ui: &egui::Ui, rect: Rect, accent: Color32, group: &CloudGroup) {
     let on_docker_host = group
         .remote
