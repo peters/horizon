@@ -5,7 +5,7 @@
 //! stays independent of that filesystem and of Horizon's panel model.
 
 use crate::{
-    BrowserCommand, BrowserHttpAuthOperation, BrowserInput, BrowserKey, BrowserNetworkCaptureOptions,
+    BrowserCommand, BrowserHttpAuthOperation, BrowserInput, BrowserKey, BrowserModifiers, BrowserNetworkCaptureOptions,
     BrowserNetworkOperation, BrowserTarget, BrowserVideoCaptureOverrides, BrowserVideoOperation, SecretString,
     SelectorState, parse_http_auth_origin, validate_http_auth_password, validate_http_auth_username,
 };
@@ -18,6 +18,9 @@ pub const MAX_SNAPSHOT_NODES: u32 = 1_000;
 pub const MAX_QUERY_RESULTS: u32 = 250;
 pub const DEFAULT_CLICK_COUNT: u32 = 1;
 pub const MAX_CLICK_COUNT: u32 = 3;
+pub const DEFAULT_PRESS_COUNT: u32 = 1;
+/// Most consecutive presses of one key chord in a single action.
+pub const MAX_PRESS_COUNT: u32 = 100;
 /// Most host files one `set_files` action attaches.
 pub const MAX_ATTACHMENT_FILES: usize = 32;
 /// Maximum bytes in one remote file-transfer envelope.
@@ -151,6 +154,16 @@ pub enum BrowserControlAction {
         target: BrowserTarget,
         value: String,
     },
+    /// Press a key chord `count` times through trusted backend key events,
+    /// delivered to the element that has focus. Audit records name
+    /// non-printable keys only, so typed text never reaches them.
+    Press {
+        key: BrowserKey,
+        #[serde(default)]
+        modifiers: BrowserModifiers,
+        #[serde(default = "default_press_count")]
+        count: u32,
+    },
     /// Scroll the top-level viewport or a selected element.
     Scroll {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -278,6 +291,7 @@ impl BrowserControlAction {
                 validate_target(target)?;
                 validate_text(value)
             }
+            Self::Press { key, count, .. } => validate_press(*key, *count),
             Self::Scroll {
                 target,
                 delta_x,
@@ -348,6 +362,7 @@ impl BrowserControlAction {
             | Self::WaitForSelector { .. }
             | Self::Click { .. }
             | Self::Fill { .. }
+            | Self::Press { .. }
             | Self::Scroll { .. }
             | Self::SetFiles { .. }
             | Self::DropFiles { .. }
@@ -579,6 +594,19 @@ const fn default_click_count() -> u32 {
     DEFAULT_CLICK_COUNT
 }
 
+const fn default_press_count() -> u32 {
+    DEFAULT_PRESS_COUNT
+}
+
+fn validate_press(key: BrowserKey, count: u32) -> Result<(), &'static str> {
+    validate_key(key)?;
+    if (DEFAULT_PRESS_COUNT..=MAX_PRESS_COUNT).contains(&count) {
+        Ok(())
+    } else {
+        Err("press count must be between 1 and 100")
+    }
+}
+
 fn validate_click_count(click_count: u32) -> Result<(), &'static str> {
     if (DEFAULT_CLICK_COUNT..=MAX_CLICK_COUNT).contains(&click_count) {
         Ok(())
@@ -676,7 +704,43 @@ mod tests {
             assert_eq!(action.validate(), Err(message));
         }
     }
-    use crate::{BrowserButton, BrowserModifiers};
+    use crate::BrowserButton;
+
+    #[test]
+    fn press_actions_bound_their_count_and_decode_with_defaults() {
+        let action: BrowserControlAction = serde_json::from_value(serde_json::json!({
+            "type": "press", "key": {"type": "tab"},
+        }))
+        .expect("press");
+        assert_eq!(
+            action,
+            BrowserControlAction::Press {
+                key: BrowserKey::Tab,
+                modifiers: BrowserModifiers::none(),
+                count: DEFAULT_PRESS_COUNT,
+            }
+        );
+        assert!(action.to_command().is_none(), "press is a semantic action");
+        for (count, valid) in [
+            (0, false),
+            (1, true),
+            (MAX_PRESS_COUNT, true),
+            (MAX_PRESS_COUNT + 1, false),
+        ] {
+            let action = BrowserControlAction::Press {
+                key: BrowserKey::Tab,
+                modifiers: BrowserModifiers::none(),
+                count,
+            };
+            assert_eq!(action.validate().is_ok(), valid, "count {count}");
+        }
+        let control = BrowserControlAction::Press {
+            key: BrowserKey::Char('\u{7}'),
+            modifiers: BrowserModifiers::none(),
+            count: 1,
+        };
+        assert!(control.validate().is_err());
+    }
 
     #[test]
     fn evaluation_bounds_validate_and_legacy_actions_still_decode() {

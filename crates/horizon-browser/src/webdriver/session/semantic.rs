@@ -239,6 +239,9 @@ impl Driver {
             )),
             BrowserControlAction::Click { target, count } => self.semantic_click(target, *count, event_tx),
             BrowserControlAction::Fill { target, value } => self.semantic_fill(target, value, event_tx),
+            BrowserControlAction::Press { key, modifiers, count } => {
+                self.semantic_press(*key, *modifiers, *count, event_tx)
+            }
             BrowserControlAction::Scroll {
                 target,
                 delta_x,
@@ -449,6 +452,28 @@ impl Driver {
             event_tx,
         )
         .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
+        if self.safari.is_some() {
+            self.flush_safari_input(event_tx)
+                .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
+        }
+        Ok(BrowserControlValue::Accepted)
+    }
+
+    /// Perform trusted key actions (`BiDi` `input.performActions`, or classic
+    /// Perform Actions for Safari and remote targets) on the focused element.
+    fn semantic_press(
+        &mut self,
+        key: crate::BrowserKey,
+        modifiers: crate::BrowserModifiers,
+        count: u32,
+        event_tx: &BrowserEventSender,
+    ) -> Result<BrowserControlValue, BrowserControlFailure> {
+        for _ in 0..count {
+            for input in crate::semantic_keys::press_inputs(key, modifiers) {
+                self.perform_input(input, event_tx)
+                    .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
+            }
+        }
         if self.safari.is_some() {
             self.flush_safari_input(event_tx)
                 .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
@@ -717,6 +742,7 @@ mod tests {
     }
 
     mod fill;
+    mod press;
     mod set_files;
 
     #[test]

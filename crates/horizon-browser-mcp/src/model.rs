@@ -566,6 +566,8 @@ pub(crate) struct QueryInput {
 pub(crate) enum ActKind {
     Click,
     Fill,
+    /// Press a key or chord on the focused element, such as `Tab` or `Shift+Tab`.
+    Press,
     Scroll,
     /// Attach host files to an `input[type=file]`.
     SetFiles,
@@ -592,7 +594,13 @@ pub(crate) struct ActInput {
     pub(crate) delta_x: Option<f64>,
     /// Vertical CSS-pixel delta for `scroll` (default 0).
     pub(crate) delta_y: Option<f64>,
-    /// Consecutive trusted clicks for `click` (1-3, default 1).
+    /// Key or chord for `press`: `Tab`, `Shift+Tab`, `Enter`, `Escape`,
+    /// `Space`, `ArrowDown`, `Home`, `F5`, or one printable US-layout character
+    /// with modifiers such as `Control+a`. Modifiers are `Shift`, `Control`,
+    /// `Alt` and `Meta`. Printable keys are audited as `printable`, never as text.
+    pub(crate) key: Option<String>,
+    /// Consecutive trusted clicks for `click` (1-3, default 1), or presses
+    /// for `press` (1-100, default 1).
     pub(crate) count: Option<u32>,
     /// Absolute host paths for `set_files` or `drop_files` (1-32). Each must resolve to a
     /// regular file under the agent work root (`HORIZON_WORK_ROOT`, else the
@@ -608,8 +616,11 @@ impl ActInput {
     pub(crate) fn build_action(&self) -> Result<horizon_browser::BrowserControlAction, String> {
         use horizon_browser::BrowserControlAction;
 
-        if !matches!(self.action, ActKind::Click) && self.count.is_some() {
-            return Err("count is only accepted for click".to_string());
+        if !matches!(self.action, ActKind::Click | ActKind::Press) && self.count.is_some() {
+            return Err("count is only accepted for click or press".to_string());
+        }
+        if !matches!(self.action, ActKind::Press) && self.key.is_some() {
+            return Err("key is only accepted for press".to_string());
         }
         if !matches!(self.action, ActKind::SetFiles | ActKind::DropFiles) && self.files.is_some() {
             return Err("files is only accepted for set_files or drop_files".to_string());
@@ -629,6 +640,7 @@ impl ActInput {
                 target: required_target(self.reference.as_deref(), self.selector.as_deref())?,
                 value: self.value.clone().ok_or_else(|| "fill requires value".to_string())?,
             }),
+            ActKind::Press => self.build_press(),
             ActKind::Scroll => Ok(BrowserControlAction::Scroll {
                 target: optional_target(self.reference.as_deref(), self.selector.as_deref())?,
                 delta_x: self.delta_x.unwrap_or(0.0),
@@ -674,6 +686,33 @@ impl ActInput {
             ActKind::Back => no_target_or_value(self, BrowserControlAction::Back),
             ActKind::Forward => no_target_or_value(self, BrowserControlAction::Forward),
         }
+    }
+}
+
+impl ActInput {
+    fn build_press(&self) -> Result<horizon_browser::BrowserControlAction, String> {
+        if self.reference.is_some()
+            || self.selector.is_some()
+            || self.value.is_some()
+            || self.delta_x.is_some()
+            || self.delta_y.is_some()
+        {
+            return Err(
+                "press sends keys to the focused element and does not accept a target, value, or deltas".to_string(),
+            );
+        }
+        let chord = horizon_browser::BrowserKeyChord::parse(
+            self.key.as_deref().ok_or_else(|| "press requires key".to_string())?,
+        )?;
+        let count = self.count.unwrap_or(horizon_browser::DEFAULT_PRESS_COUNT);
+        if !(horizon_browser::DEFAULT_PRESS_COUNT..=horizon_browser::MAX_PRESS_COUNT).contains(&count) {
+            return Err("press count must be between 1 and 100".to_string());
+        }
+        Ok(horizon_browser::BrowserControlAction::Press {
+            key: chord.key,
+            modifiers: chord.modifiers,
+            count,
+        })
     }
 }
 
@@ -988,6 +1027,7 @@ fn semantic_capabilities(
         "query",
         "click",
         "fill",
+        "press",
         "scroll",
         "reload",
         "back",
@@ -1052,9 +1092,10 @@ fn no_target_or_value(
         || input.delta_x.is_some()
         || input.delta_y.is_some()
         || input.count.is_some()
+        || input.key.is_some()
         || input.files.is_some()
     {
-        Err("navigation-history actions do not accept target, value, deltas, count, or files".to_string())
+        Err("navigation-history actions do not accept target, value, deltas, count, key, or files".to_string())
     } else {
         Ok(action)
     }
@@ -1073,10 +1114,41 @@ mod tests {
             value: None,
             delta_x: None,
             delta_y: None,
+            key: None,
             count: None,
             files: None,
             timeout_millis: None,
         }
+    }
+
+    #[test]
+    fn press_parses_its_chord_and_repeat_count() {
+        let mut press = act(ActKind::Press);
+        press.key = Some("Shift+Tab".to_string());
+        press.count = Some(3);
+        let Ok(horizon_browser::BrowserControlAction::Press { key, modifiers, count }) = press.build_action() else {
+            panic!("press must build");
+        };
+        assert_eq!(key, horizon_browser::BrowserKey::Tab);
+        assert!(modifiers.shift && !modifiers.ctrl);
+        assert_eq!(count, 3);
+        press.count = Some(101);
+        assert!(press.build_action().is_err());
+        press.count = None;
+        press.key = Some("Hyper+Tab".to_string());
+        assert!(press.build_action().is_err());
+        press.key = None;
+        assert!(press.build_action().is_err(), "press requires key");
+        press.key = Some("Tab".to_string());
+        press.selector = Some("#name".to_string());
+        assert!(press.build_action().is_err(), "press has no target");
+        let mut click = act(ActKind::Click);
+        click.selector = Some("#name".to_string());
+        click.key = Some("Tab".to_string());
+        assert!(click.build_action().is_err(), "key belongs to press");
+        let mut reload = act(ActKind::Reload);
+        reload.key = Some("Tab".to_string());
+        assert!(reload.build_action().is_err());
     }
 
     #[test]

@@ -295,9 +295,25 @@ or raw provider capabilities.
 
 ## Actions, attachments, and screenshots
 
-`browser_act` operations are `click`, `fill`, `scroll`, `reload`, `back`, `forward`,
-`set_files`, and `drop_files`. A click accepts `count: 1..3`, including a trusted
-double-click with 2. Use a fresh ref or selector and examine the visible result.
+`browser_act` operations are `click`, `fill`, `press`, `scroll`, `reload`, `back`,
+`forward`, `set_files`, and `drop_files`. A click accepts `count: 1..3`, including
+a trusted double-click with 2. Use a fresh ref or selector and examine the visible
+result.
+
+For keyboard checks, `press` sends trusted key presses to the element that has
+focus: `key` is a named key (`Tab`, `Enter`, `Escape`, `Space`, `Backspace`,
+`Delete`, `Home`, `End`, `PageUp`, `PageDown`, arrows such as `ArrowDown`,
+`F1`..`F12`) or one printable US-layout character, optionally with `Shift`,
+`Control`, `Alt` or `Meta` (`Shift+Tab`, `Control+a`), and `count: 1..100`
+repeats it. On a remote target each press is a network round trip, so give a
+large count a `timeout_millis` that covers it. It takes no ref or selector: click or fill a field first to move
+focus there. Local Chromium uses CDP key events, local Firefox WebDriver BiDi
+actions, and Safari and remote targets classic WebDriver actions; a real mobile
+device may ignore focus keys such as `Tab`. Audit records name non-printable
+keys and record printable ones only as `printable`; use `fill` for text. After
+the presses, read `document.activeElement` (and `:focus-visible`) with
+`browser_evaluate` or take a `browser_screenshot` to judge focus order and the
+focus ring.
 
 For `set_files`, target the actual `input[type=file]`, even when hidden.
 Use its `file_input` metadata for accept and multiple-file policy.

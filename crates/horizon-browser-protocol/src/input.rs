@@ -1,5 +1,9 @@
 //! Backend-neutral input values shared by browser hosts and clients.
 
+mod chord;
+
+pub use chord::BrowserKeyChord;
+
 /// Keyboard and pointer modifiers active for an input event.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(default)]

@@ -96,6 +96,7 @@ impl FileChooserHandle {
                 crate::BrowserControlAction::Input { .. }
                     | crate::BrowserControlAction::Click { .. }
                     | crate::BrowserControlAction::Fill { .. }
+                    | crate::BrowserControlAction::Press { .. }
                     | crate::BrowserControlAction::Scroll { .. }
                     | crate::BrowserControlAction::SetFiles { .. }
                     | crate::BrowserControlAction::DropFiles { .. }

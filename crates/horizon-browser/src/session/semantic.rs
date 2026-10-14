@@ -88,6 +88,9 @@ impl DriverState {
             BrowserControlAction::Fill { target, value } => {
                 self.semantic_fill(link, event_tx, frame_slot, target, value)
             }
+            BrowserControlAction::Press { key, modifiers, count } => {
+                self.semantic_press(link, event_tx, frame_slot, *key, *modifiers, *count)
+            }
             BrowserControlAction::Scroll {
                 target,
                 delta_x,
@@ -276,6 +279,25 @@ impl DriverState {
                 text: value.to_string(),
             },
         )?;
+        Ok(BrowserControlValue::Accepted)
+    }
+
+    /// Dispatch trusted `Input.dispatchKeyEvent` presses to the focused element.
+    fn semantic_press(
+        &mut self,
+        link: &mut crate::cdp::CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        key: crate::BrowserKey,
+        modifiers: BrowserModifiers,
+        count: u32,
+    ) -> Result<BrowserControlValue, BrowserControlFailure> {
+        self.interaction_started_at.get_or_insert_with(std::time::Instant::now);
+        for _ in 0..count {
+            for input in crate::semantic_keys::press_inputs(key, modifiers) {
+                self.send_semantic_input(link, event_tx, frame_slot, input)?;
+            }
+        }
         Ok(BrowserControlValue::Accepted)
     }
 
@@ -558,3 +580,6 @@ fn pointer_release(x: f64, y: f64, click_count: u32) -> BrowserInput {
         modifiers: BrowserModifiers::none(),
     }
 }
+
+#[cfg(test)]
+mod tests;
