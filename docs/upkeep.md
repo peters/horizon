@@ -45,7 +45,8 @@ another status document, for example one that a config file opens, has no button
   Upkeep. **Save** adds and removes only the repositories that the person changed,
   on the list that is saved at that time. Thus a change that another part of
   Horizon made in the meantime stays. An Upkeep keeps at least one repository. The
-  next run uses the new list.
+  next run uses the new list. A saved repository that the app does not list now
+  stays chosen, also after **Clear**, and the editor shows how many there are.
 
 The board reads the status document that the panel `command` names.
 When the command is empty, it reads `~/.horizon/upkeep/status.json`. A config file
@@ -125,7 +126,12 @@ after 30 seconds and does not keep an incomplete list. After three failed reads 
 row, it leaves out a saved choice that it cannot read, so that choice does not stop
 the other Upkeeps. A saved choice that is missing, refused or not valid JSON is
 always left out. Each exchange
-runs on a separate thread and does these steps:
+runs on a separate thread. It uses the saved choice of that moment and holds the
+lock of that choice until it ends, so a change of the repositories waits for an
+exchange of the same Upkeep under way and the next exchange carries it. Other
+Upkeeps do not wait. An exchange never sends a
+list, or allows a request, for a repository that a save removed. The exchange does
+these steps:
 
 1. It reads the GitHub access requests on the worker. It allows the requests of
    the loop, as the section

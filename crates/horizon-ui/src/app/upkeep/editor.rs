@@ -50,11 +50,30 @@ impl Editor {
         (added, removed)
     }
 
+    /// The chosen repositories that the app does not list now, once a search answered.
+    /// They stay chosen, also through Clear.
+    fn unlisted(&self) -> Vec<&str> {
+        // Without an answer, or after a failed search, nothing is known to be unlisted.
+        if self.form.finding.is_some() || self.form.find_error.is_some() || self.form.codex_login.is_none() {
+            return Vec::new();
+        }
+        let listed = &self.form.catalog.repositories;
+        self.form
+            .selected
+            .iter()
+            .filter(|name| !listed.iter().any(|repository| repository.name == **name))
+            .map(String::as_str)
+            .collect()
+    }
+
     /// Why Save cannot save now, or `None` when it can.
     fn blocked(&self) -> Option<&'static str> {
         let (added, removed) = self.changes();
         if self.saving.is_some() {
             Some("Saving...")
+        } else if self.form.finding.is_some() {
+            // The list grows when the search answers; Save waits, so a click lands on it.
+            Some("Finding repositories...")
         } else if self.form.selected.is_empty() {
             Some("An Upkeep keeps at least one repository. Pause it instead.")
         } else if added.is_empty() && removed.is_empty() {
@@ -179,6 +198,20 @@ fn show(ctx: &Context, editor: &mut Editor) -> Outcome {
             ui.add_enabled_ui(editor.saving.is_none(), |ui| {
                 super::repositories::show(ui, &mut editor.form);
             });
+            let unlisted = editor.unlisted();
+            if !unlisted.is_empty() {
+                let count = unlisted.len();
+                ui.label(
+                    RichText::new(format!(
+                        "{count} saved {} that the app does not list now {} chosen.",
+                        if count == 1 { "repository" } else { "repositories" },
+                        if count == 1 { "stays" } else { "stay" },
+                    ))
+                    .size(12.5)
+                    .color(theme::FG_SOFT()),
+                )
+                .on_hover_text(unlisted.join("\n"));
+            }
             ui.add_space(10.0);
             let (added, removed) = editor.changes();
             let blocked = editor.blocked();
@@ -277,8 +310,10 @@ mod tests {
         }))
         .unwrap();
         editor.form.finding = Some(rx);
+        assert_eq!(editor.blocked(), Some("Finding repositories..."));
         editor.form.receive();
         assert_eq!(editor.changes(), (Vec::new(), Vec::new()), "acme/web stays");
+        assert_eq!(editor.unlisted(), ["acme/web"]);
     }
 
     #[test]

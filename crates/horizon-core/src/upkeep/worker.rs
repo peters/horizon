@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::cloud_runtime::{Error, Result, command::Runner, ssh::Connection};
 
+mod lock;
+pub use lock::{SettingsLock, settings_lock};
+
 const EXCHANGE: &str = include_str!("worker/exchange.py");
 const RUN: &str = include_str!("worker/run.sh");
 const SCHEDULER: &str = include_str!("worker/run.py");
@@ -279,29 +282,29 @@ pub fn first_run_sent(cloud_id: &str) -> std::io::Result<()> {
     }
 }
 
-/// Held while a saved choice is read, changed and saved again, so two changes of one Upkeep
-/// from this Horizon (the board and an agent tool) never undo each other.
-pub fn settings_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
 /// Reads the saved choice of `cloud_id`, changes it with `change` and saves it, all under
 /// [`settings_lock`], so a change made meanwhile by another part of Horizon is kept. Blocks
 /// on the disk: call it off the UI thread.
 /// # Errors
 /// No saved choice, a change that [`Config::validate`] refuses, or a write that fails.
 pub fn update(cloud_id: &str, change: impl FnOnce(&mut Config)) -> Result<Config> {
-    if !valid_cloud_id(cloud_id) {
-        return Err(Error::Invalid("Invalid cloud for Upkeep"));
-    }
-    let _lock = settings_lock();
-    let text = std::fs::read_to_string(directory(cloud_id).join("upkeep.json"))?;
-    let mut config: Config = serde_json::from_str(&text).map_err(|_| Error::Json)?;
+    let _lock = settings_lock(cloud_id);
+    let mut config = load(cloud_id)?;
     change(&mut config);
     config.validate()?;
     save(cloud_id, &config)?;
     Ok(config)
+}
+
+/// The saved choice of `cloud_id`. Blocks on the disk.
+/// # Errors
+/// An invalid cloud id, no saved choice, or one that is not valid JSON.
+pub fn load(cloud_id: &str) -> Result<Config> {
+    if !valid_cloud_id(cloud_id) {
+        return Err(Error::Invalid("Invalid cloud for Upkeep"));
+    }
+    let text = std::fs::read_to_string(directory(cloud_id).join("upkeep.json"))?;
+    serde_json::from_str(&text).map_err(|_| Error::Json)
 }
 
 /// The cloud id of the Upkeep whose status document is `status`, when it is the one

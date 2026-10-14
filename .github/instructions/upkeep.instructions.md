@@ -91,6 +91,10 @@ Run now, Pause and Repositories show only on a board whose status path is exactl
 `worker::directory(<cloud>)/status.json` of a saved Upkeep (`worker::cloud_of`). Check that:
 
 - A board from a config file or the default path never gets a cloud.
-- The Repositories editor saves through `worker::update`, under `worker::settings_lock`,
+- The Repositories editor saves through `worker::update`, under `worker::settings_lock(<cloud>)`,
   with only the added and removed names, off the UI thread, and the result still passes
   `Config::validate`.
+- An exchange holds `worker::settings_lock(<cloud>)` and loads the saved choice itself
+  (`worker::load`), so no exchange started before a save allows a request for, or sends
+  the list with, a repository that the save removed. Do not pass it a choice read
+  earlier, and call `worker::update` only off the UI thread: it can wait for an exchange.

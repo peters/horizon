@@ -20,8 +20,8 @@ const MERGED_WINDOW: time::Duration = time::Duration::days(7);
 /// How far ahead of this computer's clock a time may be and still count.
 const CLOCK_SKEW: time::Duration = time::Duration::minutes(5);
 /// How long Run now stays unavailable after a press while the status does not show the run:
-/// two exchanges and the loop's own wait.
-const RUN_REQUEST_WAIT: time::Duration = time::Duration::minutes(2);
+/// two exchanges and the loop's own wait. Measured on the monotonic clock.
+const RUN_REQUEST_WAIT: Duration = Duration::from_secs(120);
 /// How far the worker's clock may lag this computer's for a run to count as the one asked for.
 const RUN_CLOCK_SKEW: time::Duration = time::Duration::seconds(30);
 
@@ -60,13 +60,10 @@ impl<'a> UpkeepView<'a> {
                     };
                     // Run now waits for the status to show its run, at most a few minutes.
                     let running = runs::live(&status, now).is_some();
-                    // Run now waits for a run that started after the press, also one that ended
-                    // at once, and at most a few minutes.
                     if running
-                        || board.run_requested.is_some_and(|at| {
-                            now - at > RUN_REQUEST_WAIT
-                                || status.runs.iter().any(|run| run.started_at >= at - RUN_CLOCK_SKEW)
-                        })
+                        || board
+                            .run_requested
+                            .is_some_and(|(at, pressed)| run_request_done(&status, at, pressed.elapsed(), now))
                     {
                         board.run_requested = None;
                     }
@@ -75,7 +72,7 @@ impl<'a> UpkeepView<'a> {
                     });
                     if let Some(request) = header::show(ui, &status, actions) {
                         if request == horizon_core::upkeep::Request::RunNow {
-                            board.run_requested = Some(now);
+                            board.run_requested = Some((now, std::time::Instant::now()));
                         }
                         board.request = Some(request);
                     }
@@ -106,6 +103,17 @@ impl<'a> UpkeepView<'a> {
         ui.data_mut(|data| data.insert_temp(filter_id, filter));
         hovered
     }
+}
+
+/// Whether Run now pressed at `at`, `waited` ago, no longer waits: the status shows a run
+/// that started after the press, also one that ended at once, or the wait is over. A start
+/// in the future is not believed.
+fn run_request_done(status: &Status, at: OffsetDateTime, waited: Duration, now: OffsetDateTime) -> bool {
+    waited > RUN_REQUEST_WAIT
+        || status
+            .runs
+            .iter()
+            .any(|run| run.started_at >= at - RUN_CLOCK_SKEW && run.started_at <= now + CLOCK_SKEW)
 }
 
 /// Which pull requests the list shows.
@@ -261,6 +269,33 @@ mod tests {
             [3, 2, 5],
             "older than a week or with no merge time leaves the board"
         );
+    }
+
+    #[test]
+    fn run_now_waits_for_a_run_after_the_press_and_not_longer_than_its_limit() {
+        let at = parse_time("2026-10-13T14:00:00Z").unwrap();
+        let runs = |started: &str| -> Status {
+            serde_json::from_str(&format!(
+                r#"{{"runs":[{{"started_at":"{started}","outcome":"done"}}]}}"#
+            ))
+            .unwrap()
+        };
+        let short = Duration::from_secs(10);
+        assert!(run_request_done(&runs("2026-10-13T14:00:20Z"), at, short, at));
+        assert!(
+            !run_request_done(&runs("2026-10-13T13:00:00Z"), at, short, at),
+            "an older run"
+        );
+        assert!(
+            !run_request_done(&runs("2027-01-01T00:00:00Z"), at, short, at),
+            "a run dated far ahead is not the one asked for"
+        );
+        assert!(run_request_done(
+            &runs("2026-10-13T13:00:00Z"),
+            at,
+            Duration::from_secs(121),
+            at
+        ));
     }
 
     #[test]
