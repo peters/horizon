@@ -479,8 +479,9 @@ fn search_rows(query: &str, checkouts: &[Checkout], labels: &[(String, String)],
     scored.into_iter().take(LISTED).map(|(_, row)| row).collect()
 }
 
-/// The folders of a typed path: repositories first, then by name. Hidden folders show
-/// only once a dot is typed.
+/// The folders of a typed path: the folder named as typed first, then those whose name
+/// starts as typed, then repositories, then by name. Hidden folders show only once a dot
+/// is typed.
 fn folder_rows(typed: &str, folders: &[(PathBuf, bool)]) -> Vec<Row> {
     let dotted = typed
         .rsplit(['/', '\\'])

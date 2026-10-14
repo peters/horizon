@@ -116,23 +116,14 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
             })
             .filter_map(|entry| {
                 let path = entry.path();
-                // A link's target is read before anything is looked up through it, so a link
-                // into a guarded folder never touches it.
-                let into_guarded = |path: &Path| guarded.iter().any(|guarded| path.starts_with(guarded));
-                let is_folder = match entry.file_type() {
-                    Ok(kind) if kind.is_dir() => true,
-                    Ok(kind) if kind.is_symlink() => {
-                        let target = std::fs::read_link(&path).map(|target| lexical(&folder.join(target)));
-                        !target.is_ok_and(|target| into_guarded(&target)) && path.is_dir()
-                    }
-                    _ => false,
-                };
-                if !is_folder {
+                let kind = entry.file_type().ok()?;
+                if !kind.is_dir() && !kind.is_symlink() {
                     return None;
                 }
-                let place = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-                let inside_guarded = guarded.iter().any(|guarded| place.starts_with(guarded));
-                (!inside_guarded && seen.insert(place)).then_some(path)
+                // Links are followed one at a time and never into a guarded folder, so its
+                // real place is known before anything inside it is looked at.
+                let place = resolved(&path, &guarded)?;
+                (place.is_dir() && seen.insert(place)).then_some(path)
             })
             .collect();
         children.sort_by_key(|path| {
@@ -170,6 +161,45 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
         }
     }
     settled(found)
+}
+
+/// Where `path` really is, with every link in it followed one at a time: `None` when a
+/// step would enter a guarded folder, a link cannot be read, or links loop. Each link is
+/// read with `read_link` from a place already known to be outside the guarded folders, so
+/// nothing inside them is ever touched.
+fn resolved(path: &Path, guarded: &[PathBuf]) -> Option<PathBuf> {
+    if guarded.is_empty() {
+        return Some(std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned()));
+    }
+    let inside = |place: &Path| guarded.iter().any(|guarded| place.starts_with(guarded));
+    let mut rest: Vec<std::ffi::OsString> = lexical(path).iter().map(std::ffi::OsStr::to_os_string).collect();
+    rest.reverse();
+    let mut done = PathBuf::new();
+    let mut hops = 0;
+    while let Some(part) = rest.pop() {
+        let next = done.join(&part);
+        if inside(&next) {
+            return None;
+        }
+        let is_link = std::fs::symlink_metadata(&next).is_ok_and(|meta| meta.file_type().is_symlink());
+        if !is_link {
+            done = next;
+            continue;
+        }
+        hops += 1;
+        if hops > 32 {
+            return None;
+        }
+        let target = std::fs::read_link(&next).ok()?;
+        let target = lexical(&done.join(target));
+        // The link's target replaces what was resolved so far, and the rest follows it.
+        let mut parts: Vec<std::ffi::OsString> = target.iter().map(std::ffi::OsStr::to_os_string).collect();
+        parts.reverse();
+        rest.extend(parts);
+        done = PathBuf::new();
+    }
+    let done = lexical(&done);
+    (!inside(&done)).then_some(done)
 }
 
 /// `path` with its `.` and `..` worked out from the text alone, without reading the disk:
@@ -217,28 +247,28 @@ fn read(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
     } else {
         let pointer = std::fs::read_to_string(&dot).ok()?;
         let named = PathBuf::from(pointer.strip_prefix("gitdir:")?.trim());
-        lexical(&if named.is_absolute() { named } else { path.join(named) })
+        let named = if named.is_absolute() { named } else { path.join(named) };
+        // A worktree whose repository lies in a guarded folder, also through links, is
+        // listed, but nothing of it is read there.
+        let Some(git) = resolved(&named, guarded) else {
+            return Some(Checkout {
+                path: path.to_owned(),
+                origin: None,
+                branch: None,
+                touched: None,
+            });
+        };
+        git
     };
-    // A worktree whose repository lies in a guarded folder is listed, but nothing of it is
-    // read there.
-    let inside_guarded = |place: &Path| guarded.iter().any(|guarded| place.starts_with(guarded));
-    if inside_guarded(&git) {
-        return Some(Checkout {
-            path: path.to_owned(),
-            origin: None,
-            branch: None,
-            touched: None,
-        });
-    }
     let head = std::fs::read_to_string(git.join("HEAD")).unwrap_or_default();
     let branch = head.trim().strip_prefix("ref: refs/heads/").map(str::to_owned);
-    let common = std::fs::read_to_string(git.join("commondir"))
-        .map_or_else(|_| git.clone(), |common| lexical(&git.join(common.trim())));
-    let config = if inside_guarded(&common) {
-        String::new()
-    } else {
-        std::fs::read_to_string(common.join("config")).unwrap_or_default()
-    };
+    let common = std::fs::read_to_string(git.join("commondir")).map_or_else(
+        |_| Some(git.clone()),
+        |common| resolved(&git.join(common.trim()), guarded),
+    );
+    let config = common
+        .and_then(|common| std::fs::read_to_string(common.join("config")).ok())
+        .unwrap_or_default();
     let modified = |name: &str| std::fs::metadata(git.join(name)).and_then(|meta| meta.modified()).ok();
     Some(Checkout {
         path: path.to_owned(),
@@ -361,5 +391,21 @@ mod tests {
         let checkout = super::read(&worktree, &[home.path().join("Documents")]).unwrap();
         assert_eq!(checkout.origin, None);
         assert_eq!(checkout.branch, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chain_of_links_into_a_guarded_folder_is_stopped() {
+        let home = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(home.path()).unwrap();
+        let documents = home.join("Documents");
+        fs::create_dir_all(documents.join("code")).unwrap();
+        std::os::unix::fs::symlink(&documents, home.join("alias")).unwrap();
+        std::os::unix::fs::symlink(home.join("alias"), home.join("github")).unwrap();
+        let guarded = [documents.clone()];
+        assert_eq!(super::resolved(&home.join("github"), &guarded), None);
+        assert_eq!(super::resolved(&home.join("github/code"), &guarded), None);
+        fs::create_dir_all(home.join("code")).unwrap();
+        assert_eq!(super::resolved(&home.join("code"), &guarded), Some(home.join("code")));
     }
 }
