@@ -146,13 +146,15 @@ pub fn bind(request: &Request<'_>, binding: Binding) -> Result<()> {
 pub fn bind_selected(request: &Request<'_>) -> Result<()> {
     let (_, state) = request.load()?;
     if let Some(binding) = state.intents.binding(request.alias) {
-        // A binding made before such clouds were refused is refused too; a reserved
-        // target that has no deployment yet is left as it is.
+        // A binding made before such clouds were refused is refused too. The record is
+        // read without the cloud's lock, which its own running operation may hold; a
+        // reserved target without a record yet is left as it is.
         let directory = crate::cloud_runtime::state::cloud_directory(request.root, &binding.target().cloud_id)?;
-        if directory.join("deployment.json").try_exists()?
-            && let Some(deployed) = Store::lock(&directory)?.load()?
+        if let Ok(bytes) = std::fs::read(directory.join("deployment.json"))
+            && let Ok(record) = serde_json::from_slice::<serde_json::Value>(&bytes)
+            && record["profile"]["provider"] == horizon_cloud::docker_host::PROVIDER
         {
-            refuse_docker_host(&deployed)?;
+            return Err(Error::Invalid(DOCKER_HOST_COMPANION));
         }
         return Ok(());
     }
@@ -187,12 +189,12 @@ pub fn bind_selected(request: &Request<'_>) -> Result<()> {
 /// host's loopback, which no other cloud's worker reaches.
 fn refuse_docker_host(deployed: &crate::cloud_runtime::state::Deployment) -> Result<()> {
     if deployed.profile.provider == horizon_cloud::docker_host::PROVIDER {
-        return Err(Error::Invalid(
-            "cloud_companion_unsupported: a cloud on a Docker host cannot be a companion yet, as other clouds' workers cannot reach it",
-        ));
+        return Err(Error::Invalid(DOCKER_HOST_COMPANION));
     }
     Ok(())
 }
+
+const DOCKER_HOST_COMPANION: &str = "cloud_companion_unsupported: a cloud on a Docker host cannot be a companion yet, as other clouds' workers cannot reach it";
 
 /// Durably submit an explicit request, without provider or SSH calls. Run `execute`
 /// on a background worker after returning this ID to the caller; poll `status`.
