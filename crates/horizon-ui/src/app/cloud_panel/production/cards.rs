@@ -70,7 +70,11 @@ fn accent_button<'a>(ui: &egui::Ui, label: &'a str) -> egui::Button<'a> {
 }
 
 fn deleted_runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> Option<Action> {
-    ui.label(DELETED_RESOURCES_MESSAGE);
+    ui.label(if wording::on_docker_host(runtime) {
+        "Worker deleted; its container and workspace volume are gone from the Docker host."
+    } else {
+        DELETED_RESOURCES_MESSAGE
+    });
     if let Some(elapsed) = runtime.progress.ended_in(Stage::Deleted) {
         ui.small(format!("Deleted in {}", cloud_runtime::progress::duration(elapsed)));
     }
@@ -138,7 +142,11 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
         )
     }) {
         progress_output(ui, id, runtime);
-        ui.label("Worker deleted. Finish managed workspace storage cleanup to stop its storage charges.");
+        ui.label(if wording::on_docker_host(runtime) {
+            "Worker deleted. Finish removing its workspace volume from the Docker host."
+        } else {
+            "Worker deleted. Finish managed workspace storage cleanup to stop its storage charges."
+        });
         return if runtime.receiver.is_some() {
             ui.spinner();
             None
@@ -351,7 +359,11 @@ fn ready_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Acti
         && section::row(
             ui,
             "Worker",
-            "Running and billed for compute. Stopping keeps the workspace for a resume.",
+            if wording::on_docker_host(runtime) {
+                "Running on the Docker host. Stopping keeps the workspace for a resume."
+            } else {
+                "Running and billed for compute. Stopping keeps the workspace for a resume."
+            },
             |ui| ui.add(section::row_button(ui, danger_button("Stop worker…"))).clicked(),
         )
     {
@@ -430,7 +442,11 @@ fn deletion_action(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
     if section::row(
         ui,
         "Delete",
-        "Deletes the worker and its storage. Charges end; files are gone.",
+        if wording::on_docker_host(runtime) {
+            "Deletes the worker's container and volume on the Docker host; files are gone."
+        } else {
+            "Deletes the worker and its storage. Charges end; files are gone."
+        },
         |ui| {
             ui.add(section::row_button(ui, danger_button("Delete cloud resources…")))
                 .clicked()

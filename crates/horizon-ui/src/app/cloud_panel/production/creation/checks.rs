@@ -78,6 +78,13 @@ impl State {
                         format!("{error}. Open Cloud settings to repair them."),
                     )],
                 }
+            } else if profile.provider == horizon_core::cloud_runtime::provider::DOCKER_HOST.id {
+                // Not a key a rented provider asks for, so no key form either.
+                vec![problem(
+                    "Docker host",
+                    "No Docker host is saved on this computer yet. Add it to docker_hosts in the cloud settings file."
+                        .into(),
+                )]
             } else {
                 vec![problem(
                     "Cloud settings",
@@ -150,7 +157,7 @@ fn rows(form: &Production) -> Vec<Row> {
     ))];
     let found = form.checks.problems.as_deref();
     let problem = |what: &str| found.and_then(|found| found.iter().find(|problem| problem.what == what));
-    if let Some(problem) = problem("Cloud settings") {
+    if let Some(problem) = problem("Cloud settings").or_else(|| problem("Docker host")) {
         rows.push(Row::Fail(problem.reason.clone()));
         return rows;
     }
@@ -394,6 +401,14 @@ mod tests {
         let rows = rows(&form_with(Vec::new()));
         assert_eq!(rows.len(), 1);
         assert!(matches!(&rows[0], Row::Pass(text) if text.contains("demo-atlas")));
+    }
+
+    #[test]
+    fn a_missing_docker_host_asks_for_no_rented_provider_key() {
+        let form = form_with(vec![problem("Docker host", "No Docker host is saved.".into())]);
+        let rows = rows(&form);
+        assert_eq!(rows.last(), Some(&Row::Fail("No Docker host is saved.".into())));
+        assert!(unfinished(&rows) && !needs_account(&form));
     }
 
     #[test]

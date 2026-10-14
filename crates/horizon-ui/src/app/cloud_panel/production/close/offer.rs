@@ -119,6 +119,10 @@ pub(super) fn remains(runtime: &Runtime, provider_id: &str) -> String {
         return "Its worker and storage may still exist at the provider and cost money until you delete them there."
             .into();
     };
+    if provider.kind == provider::Kind::DockerHost {
+        return "Its container and workspace volume may still exist on the Docker host until you delete them there."
+            .into();
+    }
     let state = runtime.state.as_ref();
     let worker = match state.map(|state| &state.operation) {
         Some(CreateState::Bound { worker_id }) => Some(format!("{} {worker_id}", noun(provider.stopped))),

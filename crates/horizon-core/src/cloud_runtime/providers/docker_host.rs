@@ -24,6 +24,7 @@ use std::{
 };
 
 const JOURNAL: &str = "docker-host.json";
+const AMBIGUOUS: &str = "Choose one of the saved Docker hosts for this cloud";
 const PROBE_INTERVAL: Duration = Duration::from_secs(1);
 const TIMEOUT: &str = "Worker readiness timed out; the container remains on the Docker host for inspection or deletion";
 
@@ -50,14 +51,19 @@ pub(super) fn hosts(settings: &Settings) -> Result<Vec<String>> {
             "Add the Docker host to docker_hosts in the cloud settings file first",
         )),
         1 => Ok(names),
-        _ => Err(Error::Invalid("Choose one of the saved Docker hosts for this cloud")),
+        _ => Err(Error::Invalid(AMBIGUOUS)),
     }
 }
 
 /// Refuses a cloud without one saved host, and an image the host would need a registry
 /// login for: the docker CLI there has none, and Horizon sends it no credential.
 pub(super) fn preflight(profile: &horizon_cloud::Profile, settings: &Settings) -> Result<()> {
-    hosts(settings)?;
+    // Only a host to choose from is needed here: a reconnect resolves the host its cloud
+    // recorded, and a new cloud's spec refuses an ambiguous choice before anything is made.
+    match hosts(settings) {
+        Err(Error::Invalid(AMBIGUOUS)) => {}
+        other => drop(other?),
+    }
     let private = settings
         .registries
         .as_ref()
@@ -97,7 +103,7 @@ fn save(root: &Path, journal: &Journal) -> Result<()> {
 /// The host the cloud recorded, or the one its spec names before anything was created.
 fn host<'a>(settings: &'a Settings, journal: &Journal, spec: &WorkerSpec) -> Result<&'a Host> {
     let ((Some(name), _) | (None, [name])) = (&journal.host, spec.data_centers.as_slice()) else {
-        return Err(Error::Invalid("Choose one of the saved Docker hosts for this cloud"));
+        return Err(Error::Invalid(AMBIGUOUS));
     };
     let host = settings
         .docker_hosts
@@ -417,6 +423,12 @@ mod tests {
         ]))
         .unwrap();
         assert!(hosts(&saved).is_err(), "several hosts and no choice");
+        // A reconnect resolves the host its cloud recorded, so preflight lets it through.
+        let profile: horizon_cloud::Profile = serde_json::from_value(serde_json::json!({
+            "provider": "docker-host", "image": "registry.example/worker", "cpu": 2, "memory_gb": 4
+        }))
+        .unwrap();
+        preflight(&profile, &saved).unwrap();
         let mut chosen = saved.clone();
         chosen.placement = Some(crate::cloud_panel::Placement {
             data_centers: vec!["build-server".into()],
