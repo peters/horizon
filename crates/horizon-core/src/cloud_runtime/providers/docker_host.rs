@@ -30,6 +30,10 @@ const TIMEOUT: &str = "Worker readiness timed out; the container remains on the 
 /// The saved host a cloud runs on: the one its placement names, or the only saved host.
 /// The spec keeps it as its CPU flavor and data center.
 pub(super) fn hosts(settings: &Settings) -> Result<Vec<String>> {
+    // Settings built in code skip `Settings::load`, so the hosts are checked here too.
+    for host in &settings.docker_hosts {
+        host.validate()?;
+    }
     let chosen = settings
         .placement
         .as_ref()
@@ -95,13 +99,17 @@ fn host<'a>(settings: &'a Settings, journal: &Journal, spec: &WorkerSpec) -> Res
     let ((Some(name), _) | (None, [name])) = (&journal.host, spec.data_centers.as_slice()) else {
         return Err(Error::Invalid("Choose one of the saved Docker hosts for this cloud"));
     };
-    settings
+    let host = settings
         .docker_hosts
         .iter()
         .find(|host| host.name == *name)
         .ok_or(Error::Invalid(
             "This cloud's Docker host is no longer saved; save it again under the same name",
-        ))
+        ))?;
+    host.validate()?;
+    // A name saved again for another engine must not answer for this cloud's resources.
+    journal.admits(host)?;
+    Ok(host)
 }
 
 fn engine<'a>(host: &'a Host, store: &Store, cancel: &'a Cancellation) -> Engine<'a> {

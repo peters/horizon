@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::{path::Path, process::Command};
 
 pub use command::{Docker, Engine, Failure};
-pub use worker::{Container, Journal, Records, delete, describe, find, power, provision};
+pub use worker::{Container, Journal, Records, Route, delete, describe, find, power, provision};
 
 /// The profile's `provider` value.
 pub const PROVIDER: &str = "docker-host";
@@ -138,7 +138,8 @@ impl Host {
         Ok(match self.access {
             Access::ThisPc => {
                 let mut command = Command::new(self.docker.as_deref().map_or_else(|| local_docker(), Path::new));
-                // A context could name another computer's engine; only a local `DOCKER_HOST` is kept.
+                // A context could name another computer's engine. `Engine` refuses a
+                // `DOCKER_HOST` that is not a local socket, and the journal records it.
                 command
                     .env("DOCKER_CONFIG", local_config)
                     .env_remove("DOCKER_CONTEXT")

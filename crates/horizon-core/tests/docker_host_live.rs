@@ -63,9 +63,14 @@ impl Drop for Cleanup {
             {
                 let _ = Command::new("docker").args(["rm", "--force", container]).output();
             }
-            let _ = Command::new("docker")
-                .args(["volume", "rm", &format!("horizon-cloud-{id}-workspace")])
+            // Only the test cloud's own labelled volume, never a foreign one of that name.
+            let name = format!("horizon-cloud-{id}-workspace");
+            let volumes = Command::new("docker")
+                .args(["volume", "ls", "-q", "--filter", &filter])
                 .output();
+            if volumes.is_ok_and(|output| String::from_utf8_lossy(&output.stdout).lines().any(|line| line == name)) {
+                let _ = Command::new("docker").args(["volume", "rm", &name]).output();
+            }
         }
     }
 }

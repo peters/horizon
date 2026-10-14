@@ -428,6 +428,22 @@ fn delete_removes_only_the_clouds_own_container_and_volume() {
         )
         .is_err()
     );
+    // Nor is the same name saved again for another engine, which would find nothing.
+    let moved = Host {
+        address: Some("builder@other-server".into()),
+        ..host()
+    };
+    let (mut operation, mut journal) = (cloud.operation.clone().unwrap(), cloud.journal.clone());
+    let error = delete(
+        &docker,
+        &moved,
+        "mine",
+        &mut operation,
+        &mut journal,
+        &mut Cloud::default(),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("another engine"), "{error}");
     cloud.delete(&docker).unwrap();
     let containers: Vec<String> = docker.containers.borrow().keys().cloned().collect();
     assert_eq!(containers, [neighbour.worker_id(), "foreign".into()]);

@@ -154,6 +154,11 @@ In each command, `cloud_deploy` is the example from setup step 2.
 
 ### 6.4 D4: Delete removes only the cloud's own resources
 
+> **CAUTION:** DELETE ONLY THE TEST CLOUDS OF THIS RUN.
+> This step removes a container and a volume on each host. Make sure that each
+> state directory is one this run made and that its settings name the host
+> this run used.
+
 1. Run `cloud_deploy delete <settings> <state>` for each test cloud.
 
    Result: Each command shows `Stage: Delete worker` and ends without an
@@ -197,6 +202,10 @@ In each command, `cloud_deploy` is the example from setup step 2.
   worker host key.
 
 ## 8. Cleanup
+
+> **CAUTION:** DELETE ONLY WHAT THIS RUN MADE.
+> These steps remove containers, volumes and an image. Make sure that each one
+> carries a test cloud ID of this run or was pulled by this run.
 
 1. Delete each test cloud that task D4 did not delete.
 
