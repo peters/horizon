@@ -29,6 +29,9 @@ pub(super) struct Row {
     /// Characters of `title` the query matched, for highlighting.
     pub marks: Vec<usize>,
     pub kind: Kind,
+    /// The GitHub repository the row stands for, in lowercase `owner/name`, whether it is
+    /// listed or cloned: the same repository across a list that changes.
+    pub repo: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -248,7 +251,10 @@ impl Finder {
             self.folders.1.len(),
         );
         if self.made_for.as_ref() != Some(&key) {
-            let previous = self.rows.get(self.highlighted).map(|row| row.kind.clone());
+            let previous = self
+                .rows
+                .get(self.highlighted)
+                .map(|row| (row.kind.clone(), row.repo.clone()));
             // An earlier path's folders stay in view until this one's are read.
             self.stale = is_path(&key.0) && self.folders_for != key.0;
             self.rows = if is_path(&key.0) {
@@ -266,6 +272,7 @@ impl Finder {
                                 path: here.clone(),
                                 github: false,
                             },
+                            repo: None,
                         });
                     }
                     rows.extend(folder_rows(&key.0, &self.folders.1));
@@ -287,8 +294,10 @@ impl Finder {
             if self.made_for.as_ref().is_none_or(|made| made.0 != key.0) {
                 self.highlighted = 0;
                 self.moved = false;
-            } else if let Some(kind) = previous.filter(|_| self.moved) {
-                self.highlighted = self.rows.iter().position(|row| row.kind.same_place(&kind)).unwrap_or(0);
+            } else if let Some((kind, repo)) = previous.filter(|_| self.moved) {
+                // The same place, or the same repository now that it is cloned or listed.
+                let same = |row: &Row| row.kind.same_place(&kind) || (repo.is_some() && row.repo == repo);
+                self.highlighted = self.rows.iter().position(same).unwrap_or(0);
             } else {
                 // Not chosen by the person: the best result leads.
                 self.highlighted = 0;
@@ -423,8 +432,8 @@ fn search_rows(query: &str, checkouts: &[Checkout], labels: &[(String, String)],
     for (recency, (checkout, (title, detail))) in checkouts.iter().zip(labels).enumerate() {
         let name = checkout.origin.as_deref().and_then(github_name);
         let github = name.as_deref().is_some_and(|name| listed.contains(name));
-        if github && let Some(name) = name {
-            cloned.insert(name);
+        if github && let Some(name) = &name {
+            cloned.insert(name.clone());
         }
         let (score, marks) = if query.is_empty() {
             if recency >= RECENT {
@@ -455,6 +464,7 @@ fn search_rows(query: &str, checkouts: &[Checkout], labels: &[(String, String)],
                 detail: detail.clone(),
                 marks,
                 kind,
+                repo: name,
             },
         ));
     }
@@ -471,6 +481,7 @@ fn search_rows(query: &str, checkouts: &[Checkout], labels: &[(String, String)],
             detail: "github.com  ·  not on this computer yet".into(),
             marks,
             kind: Kind::GitHub { name: name.clone() },
+            repo: Some(name.clone()),
         };
         scored.push((score, row));
     }
@@ -526,6 +537,7 @@ fn folder_rows(typed: &str, folders: &[(PathBuf, bool)]) -> Vec<Row> {
                 path: path.clone(),
                 checkout,
             },
+            repo: None,
         })
         .collect()
 }

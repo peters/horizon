@@ -254,3 +254,25 @@ fn home_and_a_final_dot_list_the_right_folders() {
     assert_eq!(super::folder_query("~/code"), "~/code");
     assert_eq!(folder_rows("~/.", &[(PathBuf::from("/x/.config"), false)]).len(), 1);
 }
+
+#[test]
+fn a_chosen_repository_stays_chosen_when_its_checkout_is_found() {
+    let mut finder = super::Finder {
+        checkouts: Some(vec![checkout("/home/x/code/tool", None)]),
+        ..super::Finder::default()
+    };
+    let names = vec!["acme/api".to_owned(), "acme/web".to_owned()];
+    let _ = finder.rows("acme", &names);
+    while finder.current_rows()[finder.highlighted].title != "acme/web" {
+        finder.move_highlight(true);
+    }
+    // The scan finds acme/web's checkout, which ranks ahead now.
+    finder.checkouts = Some(vec![
+        checkout("/home/x/code/tool", None),
+        checkout("/home/x/github/acme/web", Some("https://github.com/acme/web")),
+    ]);
+    let _ = finder.rows("acme", &names);
+    let row = &finder.current_rows()[finder.highlighted];
+    assert!(matches!(row.kind, Kind::Local { .. }), "{row:?}");
+    assert_eq!(row.repo.as_deref(), Some("acme/web"));
+}

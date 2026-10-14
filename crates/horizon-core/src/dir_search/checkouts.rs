@@ -321,11 +321,15 @@ fn read(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
 fn origin(config: &str) -> Option<String> {
     let mut inside = false;
     for line in config.lines().map(str::trim) {
-        if line.starts_with('[') {
-            inside = line.replace(' ', "") == "[remote\"origin\"]";
+        if let Some(header) = line.strip_prefix('[') {
+            // The section name is case-insensitive in Git; the subsection name is not.
+            let header = header.trim_end_matches(']');
+            inside = header.split_once('"').is_some_and(|(section, rest)| {
+                section.trim().eq_ignore_ascii_case("remote") && rest.trim_end_matches('"') == "origin"
+            });
         } else if inside
             && let Some((key, value)) = line.split_once('=')
-            && key.trim() == "url"
+            && key.trim().eq_ignore_ascii_case("url")
         {
             return Some(value.trim().to_owned());
         }
@@ -344,6 +348,16 @@ mod tests {
                       [remote \"origin\"]\n\tfetch = +refs/heads/*\n\turl = git@github.com:acme/web.git\n";
         assert_eq!(origin(config).as_deref(), Some("git@github.com:acme/web.git"));
         assert_eq!(origin("[core]\n"), None);
+        assert_eq!(
+            origin("[REMOTE \"origin\"]\n\tURL = https://github.com/acme/web\n").as_deref(),
+            Some("https://github.com/acme/web"),
+            "section and key names are case-insensitive"
+        );
+        assert_eq!(
+            origin("[remote \"Origin\"]\n\turl = x\n"),
+            None,
+            "the remote's name is exact"
+        );
     }
 
     #[test]

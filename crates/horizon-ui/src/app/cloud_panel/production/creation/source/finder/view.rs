@@ -115,15 +115,20 @@ fn account_status(ui: &mut Ui, state: &mut State) -> bool {
 /// What the results are, and how many there are of each kind.
 fn caption_row(ui: &mut Ui, state: &State, rows: &[Row], typed: &str, github_count: usize, busy: bool) {
     ui.horizontal(|ui| {
-        let count = |one: &str, many: &str| format!("{} {}", rows.len(), if rows.len() == 1 { one } else { many });
+        let count = |shown: usize, one: &str, many: &str| format!("{shown} {}", if shown == 1 { one } else { many });
         let caption = if is_path(typed) {
-            count("FOLDER", "FOLDERS")
+            // The row that uses the typed repository is no folder of it.
+            let folders = rows
+                .iter()
+                .filter(|row| matches!(row.kind, Kind::Folder { .. }))
+                .count();
+            count(folders, "FOLDER", "FOLDERS")
         } else if typed.is_empty() && state.account.is_some() {
             "RECENT ON THIS COMPUTER, THEN GITHUB".to_owned()
         } else if typed.is_empty() {
             "RECENT ON THIS COMPUTER".to_owned()
         } else {
-            count("MATCH", "MATCHES")
+            count(rows.len(), "MATCH", "MATCHES")
         };
         widgets::caption(ui, &caption);
         // A narrow dialog keeps the caption and leaves the counts out.
