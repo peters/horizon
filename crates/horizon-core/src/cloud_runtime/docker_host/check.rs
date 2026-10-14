@@ -119,18 +119,30 @@ fn refusal(text: &str) -> (String, &'static str) {
         .map(str::trim)
         .find(|line| !line.is_empty())
         .unwrap_or("docker refused");
-    if lower.contains("not found") || lower.contains("no such file") {
-        (
-            "docker was not found on the host".into(),
-            "Set the docker path, such as /usr/local/bin/docker.",
-        )
-    } else if lower.contains("permission denied") {
+    // Docker reports a socket it cannot reach as a missing file, so the engine comes
+    // before a missing docker, and a refused socket before both.
+    if lower.contains("permission denied") {
         (
             "This user cannot use the Docker engine".into(),
             "Add the user to the docker group, then sign in again.",
         )
-    } else if lower.contains("cannot connect to the docker daemon") {
-        ("The Docker engine is not running".into(), "Start Docker on the host.")
+    } else if [
+        "cannot connect to the docker daemon",
+        "connect to the docker api",
+        "is the docker daemon running",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase))
+    {
+        (
+            "The Docker engine is not running or not at /var/run/docker.sock".into(),
+            "Start Docker on the host. Docker Desktop on macOS links /var/run/docker.sock to its engine.",
+        )
+    } else if lower.contains("not found") || lower.contains("no such file") {
+        (
+            "docker was not found on the host".into(),
+            "Set the docker path, such as /usr/local/bin/docker.",
+        )
     } else {
         (
             first.chars().take(200).collect(),
@@ -209,6 +221,9 @@ mod tests {
             ]
         );
         assert!(rows[1].remedy.as_deref().unwrap().contains("docker group"));
+        let down = "failed to connect to the docker API at unix:///var/run/docker.sock: dial unix /var/run/docker.sock: connect: no such file or directory";
+        let (_, rows) = checked(Access::ThisPc, vec![Err(Failure::Refused(down.into()))]);
+        assert!(rows[0].detail.contains("not running"), "{}", rows[0].detail);
         let (_, rows) = checked(
             Access::ThisPc,
             vec![Err(Failure::Refused("sh: docker: not found".into()))],
