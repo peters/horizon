@@ -1454,8 +1454,14 @@ the card shows **Stopped**. You can also choose **Check provider** at any time. 
 profile without `idle_stop_minutes` never stops by itself. Shared workers and
 profiles with hosted devices do not support idle stop.
 
-On RunPod, the same opt-in lets an agent stop its worker when its task is done, such as when
-its pull request is merged, without this computer. Agents get a
+An agent can stop its worker when its task is done, such as when its pull request
+is merged. A worker image built from the current worker bootstrap offers this on
+every dedicated RunPod worker, with no idle period, and has no idle stop of its
+own; it reports `horizon-agent-stop-contract=1`. Older images offer it only with
+`idle_stop_minutes`. On RunPod the worker stops itself, without this computer.
+On Hetzner and Docker host clouds the worker records the request for Horizon to
+carry out; Horizon does not take such requests yet. Shared workers and profiles
+with hosted devices offer no agent stop. Agents get a
 `stop_this_worker` MCP tool (or run `horizon-worker-stop --reason "..."`) with a
 one-line reason. The worker identifies the requesting agent session itself,
 refuses callers outside a Claude, Codex or Grok session (including shell sessions), and
