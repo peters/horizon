@@ -682,8 +682,8 @@ on reconnect and relaunches sessions afterwards. Its Git, Docker, registry, prov
 SSH steps live in `replacement::live` behind a trait, so every persistence boundary is
 tested offline.
 `repository::uncommitted` lists, hashes and copies the uncommitted files of an image
-recipe's build context with git2. It copies links as links, refuses secret names, hard
-links and files reached through a folder that is a link.
+recipe's build context with git2. It copies links as links and refuses secret names,
+files reached through a folder that is a link, and on Unix hard links.
 `deployment` orchestrates one deploy and still owns registry binding, provisioning,
 ready bookkeeping, initial state and replacement commits; the other steps have leaves.
 `sizing` applies CPU, memory and machine settings until a worker is requested;

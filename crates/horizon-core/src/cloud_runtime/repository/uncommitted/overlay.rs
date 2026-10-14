@@ -172,23 +172,29 @@ fn find(repository: &Path, path: &str) -> Result<Found> {
 
 #[cfg(not(unix))]
 fn find(repository: &Path, path: &str) -> Result<Found> {
-    use std::os::windows::fs::OpenOptionsExt;
-    // Win32: open a link itself rather than its target.
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    // Win32: open a link itself rather than its target; the attribute of every link,
+    // junctions included.
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    let linked = |metadata: &fs::Metadata| {
+        metadata.file_type().is_symlink() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    };
     let (folders, leaf) = parts(path)?;
     let mut full = repository.to_path_buf();
     for part in folders {
         full.push(part);
-        if !fs::symlink_metadata(&full).map_err(moved)?.is_dir() {
+        let metadata = fs::symlink_metadata(&full).map_err(moved)?;
+        if linked(&metadata) || !metadata.is_dir() {
             return Err(Refusal::LinkedFolder(path.to_owned()).into());
         }
     }
     full.push(leaf);
     let metadata = fs::symlink_metadata(&full).map_err(moved)?;
-    if metadata.file_type().is_symlink() {
-        // Listed like any link; copying it is refused (`make_link`).
-        let target = fs::read_link(&full).map_err(moved)?;
-        return Ok(Found::Link(target.to_string_lossy().into_owned().into_bytes()));
+    if linked(&metadata) {
+        // Listed as a link, which `content` refuses on Windows.
+        let target = fs::read_link(&full).map(|target| target.to_string_lossy().into_owned().into_bytes());
+        return Ok(Found::Link(target.unwrap_or_default()));
     }
     if !metadata.is_file() {
         return Ok(Found::Other);

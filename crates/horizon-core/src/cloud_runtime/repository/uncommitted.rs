@@ -269,10 +269,17 @@ impl Scope {
         }
     }
 
+    /// Whether `path` lies in the context or is the Dockerfile. Names compare without
+    /// case, so a build path spelled with other case on a checkout that ignores case still
+    /// matches; on a checkout that does not, this only lists more.
     fn covers(&self, path: &str) -> bool {
         let starts = |prefix: &[String]| {
             let mut parts = path.split('/');
-            prefix.iter().all(|part| parts.next() == Some(part.as_str()))
+            prefix.iter().all(|part| {
+                parts
+                    .next()
+                    .is_some_and(|name| name.to_lowercase() == part.to_lowercase())
+            })
         };
         self.context.as_deref().is_none_or(starts)
             || self
@@ -282,15 +289,22 @@ impl Scope {
     }
 }
 
+/// The parts of the build path `value` from the repository root, with `.` and `..`
+/// resolved as the build resolves them; `None` when it is not a plain relative path that
+/// stays in the checkout.
 fn parts(value: &str) -> Option<Vec<String>> {
-    Path::new(value)
-        .components()
-        .filter(|component| *component != Component::CurDir)
-        .map(|component| match component {
-            Component::Normal(part) => part.to_str().map(str::to_owned),
-            _ => None,
-        })
-        .collect()
+    let mut parts = Vec::new();
+    for component in Path::new(value).components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                parts.pop()?;
+            }
+            Component::Normal(part) => parts.push(part.to_str()?.to_owned()),
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    Some(parts)
 }
 
 /// Refuses a name that a list could show as something else.

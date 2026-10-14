@@ -145,6 +145,40 @@ fn a_dockerfile_outside_the_context_and_staged_or_unstaged_files_count() {
 }
 
 #[test]
+fn build_paths_match_with_dots_resolved_and_without_case() {
+    let (repository, revision) = checkout();
+    let path = repository.path();
+    write(path, ".horizon/Dockerfile", "FROM scratch\nRUN true\n");
+    write(path, ".horizon/setup.sh", "echo changed\n");
+    let dotted = Build {
+        context: ".horizon/tool".into(),
+        dockerfile: ".horizon/tool/../Dockerfile".into(),
+        platform: "linux/amd64".into(),
+    };
+    assert_eq!(
+        listed(&collect(path, &revision, &dotted).unwrap()),
+        [(".horizon/Dockerfile", Change::Modified)]
+    );
+    let other_case = Build {
+        context: ".HORIZON".into(),
+        ..dotted
+    };
+    assert_eq!(
+        listed(&collect(path, &revision, &other_case).unwrap()),
+        [
+            (".horizon/Dockerfile", Change::Modified),
+            (".horizon/setup.sh", Change::Modified),
+        ]
+    );
+    // A path that leaves the checkout counts the whole checkout.
+    let outside = Build {
+        context: "../elsewhere".into(),
+        ..other_case
+    };
+    assert!(listed(&collect(path, &revision, &outside).unwrap()).contains(&(".horizon/setup.sh", Change::Modified)));
+}
+
+#[test]
 fn the_hash_binds_each_files_content() {
     let (repository, revision) = checkout();
     let path = repository.path();

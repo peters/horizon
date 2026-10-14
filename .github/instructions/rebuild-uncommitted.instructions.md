@@ -15,6 +15,9 @@ The image can be pushed to a public registry, for example
 `ghcr.io/peters/horizon-development`. Every uncommitted file in the build
 context can go into the image, so a person must see each one first.
 
+- Build paths resolve `.` and `..` as the build does, and names compare
+  without case, so a build path that a case-insensitive checkout accepts
+  still matches; a path that leaves the checkout counts all of it.
 - `collect` lists every uncommitted file of the build context with
   `modified`, `new` or `deleted`: tracked files with their working-tree
   content, untracked files that Git does not ignore, and deletions, inside
@@ -48,7 +51,8 @@ context can go into the image, so a person must see each one first.
 - `.dockerignore` is applied by Docker, not here, so the list can name a
   file that the image does not get.
 - On Windows, a hard link is not refused, and a folder swapped for a junction
-  between the check and the read can be followed. A symbolic link is refused
+  between the check and the read can be followed. A folder that is already a
+  junction or another reparse point is refused. A symbolic link is refused
   on Windows while the list is read, because it cannot be copied there.
 
 ## Untrusted: the repository's own configuration
