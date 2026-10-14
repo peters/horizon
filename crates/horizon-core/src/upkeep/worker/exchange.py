@@ -26,6 +26,13 @@ RUNS_LIMIT = 256 * 1024
 OUTPUT_LIMIT = 3 * 1024 * 1024
 # Horizon reads times as 64-bit integers.
 TIME_LIMIT = 2 ** 62
+# The log of the GitHub changes that root's GitHub service refused on the worker. The agent
+# cannot write it.
+REFUSALS = (('/workspace/.horizon-gate', 'refused.jsonl'),)
+REFUSALS_OWNER = 0
+REFUSED_KINDS = {'dispatch': 'a workflow start', 'merge': 'a merge'}
+REFUSALS_LIMIT = 16 * 1024
+REFUSALS_KEPT = 20
 SESSION = re.compile(r'upkeep-[A-Za-z0-9_-]{1,90}')
 REVISION = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
 
@@ -242,6 +249,44 @@ def run_record(line):
     return record
 
 
+def refusal_text(entry):
+    """The board's line for one refusal, from its fixed fields only, or None."""
+    if not isinstance(entry, dict) or type(entry.get('at')) is not int or not 0 < entry['at'] < TIME_LIMIT \
+            or not isinstance(entry.get('reason'), str):
+        return None
+    clean = lambda value: ''.join(c for c in str(value) if c.isprintable())[:200]
+    where = ' on ' + clean(entry['repository']) if isinstance(entry.get('repository'), str) else ''
+    kind = entry.get('kind')
+    what = REFUSED_KINDS.get(kind, 'a GitHub change') if isinstance(kind, str) else 'a GitHub change'
+    return 'The worker refused %s%s: %s' % (what, where, clean(entry['reason']))
+
+
+def refusals():
+    """The newest lines of the refusal log that root wrote, as {at, text}, oldest first."""
+    found = []
+    for path, name in REFUSALS:
+        try:
+            parent = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError:
+            continue
+        try:
+            if os.fstat(parent).st_uid != REFUSALS_OWNER:
+                continue
+            data = read(parent, name, REFUSALS_LIMIT, tail=True) or b''
+        finally:
+            os.close(parent)
+        for line in data.decode('utf-8', 'replace').splitlines():
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            text = refusal_text(entry)
+            if text is not None:
+                found.append({'at': entry['at'], 'text': text})
+    found.sort(key=lambda entry: entry['at'])
+    return found[-REFUSALS_KEPT:]
+
+
 def report(upkeep, loop, settled):
     """What the board shows. Everything here comes from files that the agent can write, so
     only the fields and types that Horizon reads are sent back."""
@@ -253,7 +298,7 @@ def report(upkeep, loop, settled):
     except (ValueError, IndexError):
         next_run = None
     answer = {'loop': loop, 'settled': settled, 'runs': runs, 'next_run': next_run,
-              'paused': read(upkeep, 'paused', 0) is not None,
+              'paused': read(upkeep, 'paused', 0) is not None, 'refused': refusals(),
               'status': status.decode('utf-8', 'replace') if status is not None else None}
     text = json.dumps(answer, allow_nan=False)
     if len(text) > OUTPUT_LIMIT:

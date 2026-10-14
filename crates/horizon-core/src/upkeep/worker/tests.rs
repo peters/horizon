@@ -1,6 +1,6 @@
 use super::*;
 
-fn config() -> Config {
+pub(super) fn config() -> Config {
     Config {
         repositories: vec!["acme/web".into(), "acme/api".into()],
         authors: vec!["app/dependabot".into()],
@@ -10,6 +10,7 @@ fn config() -> Config {
         worker: "Hetzner cx23".into(),
         checkouts: Checkouts::OnDemand,
         order: Vec::new(),
+        workflows: Vec::new(),
     }
 }
 
@@ -151,6 +152,32 @@ fn the_document_keeps_the_last_record_of_each_run() {
     assert_eq!(document["runs"][0]["merged"], 2);
     assert_eq!(document["pull_requests"][0]["repository"], "acme/web");
     assert_eq!(document["schedule"]["every_minutes"], 60);
+}
+
+#[test]
+fn refusals_that_root_logged_join_the_activity_of_the_agent() {
+    let exchange = parse(
+        r#"{"loop": true, "runs": [], "next_run": null,
+            "status": "{\"activity\": [{\"at\": \"2026-10-14T10:00:00Z\", \"text\": \"Merged #1\"}]}",
+            "refused": [{"at": 1791972000, "text": "The worker refused a merge on acme/web: #7 is by someone."},
+                        {"at": "soon", "text": "left out"}, {"at": 1791972000}]}"#,
+    )
+    .unwrap();
+    let activity = exchange.document(&config())["activity"].clone();
+    assert_eq!(
+        activity,
+        serde_json::json!([
+            {"at": "2026-10-14T10:00:00Z", "text": "Merged #1"},
+            {"at": "2026-10-14T10:00:00Z", "text": "The worker refused a merge on acme/web: #7 is by someone."}
+        ])
+    );
+    // An agent that writes no activity, or a list of the wrong type, still leaves the refusals.
+    let exchange = parse(
+        r#"{"loop": true, "runs": [], "next_run": null, "status": "{\"activity\": 7}",
+            "refused": [{"at": 1791972000, "text": "The worker refused a merge on acme/web."}]}"#,
+    )
+    .unwrap();
+    assert_eq!(exchange.document(&config())["activity"].as_array().unwrap().len(), 1);
 }
 
 #[test]

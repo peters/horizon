@@ -1622,6 +1622,28 @@ outcomes print JSON and exit with status 0. `read` and `push` keep the meaning
 described above: `permissions.push` reports your account's access, and the
 GitHub App's own permissions still limit what the token can do.
 
+**The Upkeep policy.** On the cloud of an Upkeep, Horizon sets a policy as root
+before each exchange, over SSH stdin:
+
+```bash
+horizon-worker-github upkeep <<< '{"version":1,"session":"upkeep-<cloud>","repositories":["owner/name"],
+  "bots":["app/dependabot"],"workflows":[{"repository":"owner/name","workflow":"release.yml"}]}'
+# {"session":"upkeep-<cloud>","repositories":["owner/name"],"bots":["dependabot[bot]"],
+#  "workflows":[{"repository":"owner/name","workflow":"release.yml"}]}
+```
+
+- The session is `upkeep-` and up to 90 letters, digits, `-` and `_`. There are 1
+  to 50 repositories, each listed one time, ignoring case; at most 20 bots and 20
+  workflows, each workflow in a listed repository. Unknown fields are refused, and
+  so is a worker without agent isolation.
+- The policy is stored root-only next to the chain, as `upkeep.json`, on the volume
+  and on tmpfs. A copy that exists but cannot be read counts as the strictest
+  policy. Root then writes `/run/horizon-worker/github-upkeep-policy`; the loop of
+  Upkeep starts no agent without it.
+- While the policy is set, the API broker refuses what
+  [What the agent can do on GitHub](../../docs/upkeep.md#what-the-agent-can-do-on-github)
+  lists, and logs each refusal in `/workspace/.horizon-gate/refused.jsonl`.
+
 **Status and removal.** Horizon runs these as root:
 
 ```bash

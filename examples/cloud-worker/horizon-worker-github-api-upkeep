@@ -1,0 +1,67 @@
+"""The Upkeep checks of the worker's API broker (horizon-worker-github-api): the policy's
+refusals and the list of workflows. A mixin of the broker's Exchange, which provides `broker`
+and `record`. A module that horizon-worker-github loads, not a command."""
+import importlib.machinery
+import importlib.util
+from pathlib import Path
+import sys
+import urllib.parse
+
+
+def load_common():
+    name = 'horizon_worker_github_common'
+    if name not in sys.modules:
+        loader = importlib.machinery.SourceFileLoader(
+            name, str(Path(__file__).resolve().with_name('horizon-worker-github-common')))
+        module = importlib.util.module_from_spec(importlib.util.spec_from_loader(name, loader))
+        sys.modules[name] = module
+        loader.exec_module(module)
+    return sys.modules[name]
+
+
+common = load_common()
+relay = common.load_sibling('horizon-worker-github-http', 'horizon_worker_github_http')
+rest = common.load_sibling('horizon-worker-github-api-rest', 'horizon_worker_github_api_rest')
+upkeep = common.load_sibling('horizon-worker-github-upkeep', 'horizon_worker_github_upkeep')
+policy = rest.policy
+
+PREFIX = 'Horizon: '
+
+
+def refusal(status, message):
+    return relay.Refusal(status, PREFIX + message)
+
+
+class Checks:
+    """The broker's checks for a cloud with an Upkeep policy."""
+
+    def upkeep_refused(self, kind, repository, reason):
+        """Logs a refusal of the Upkeep policy for the board and refuses the request."""
+        self.broker.log.refused(kind, repository, reason)
+        raise refusal(403, reason)
+
+    def upkeep_dispatch(self, rules, request, route, candidate, repository):
+        """Refuses a workflow dispatch of a workflow that the person did not list."""
+        workflow = upkeep.dispatched(route.parts, request.method)
+        if workflow is None:
+            return
+        status, reply = self.broker.call(rest.API, 'GET', '/repos/%s/actions/workflows/%s'
+                                         % (repository, urllib.parse.quote(workflow, safe='')), candidate.token,
+                                         sent=lambda: self.record.update(granted=True))
+        try:
+            upkeep.check_dispatch(rules, repository, reply.get('path') if status == 200
+                                  and isinstance(reply, dict) else None)
+        except upkeep.Refused as refused:
+            self.upkeep_refused('dispatch', repository, str(refused))
+
+    def upkeep_mutations(self, plan):
+        """Refuses auto-merge for an Upkeep."""
+        for name, _ in plan.mutations:
+            if name == 'enablePullRequestAutoMerge':
+                reason = 'this Upkeep does not let an agent turn on auto-merge.'
+                self.broker.log.refused('merge', None, reason)
+                raise policy.Refused(reason)
+
+
+if __name__ == '__main__':
+    raise SystemExit('horizon-worker-github-api-upkeep is a module of horizon-worker-github, not a command.')

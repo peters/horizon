@@ -1,0 +1,289 @@
+"""The Upkeep policy of the worker's GitHub access. Horizon sets it as root on the cloud of an
+Upkeep (`horizon-worker-github upkeep`), because the agent there reads pull request text that
+other people write and runs without approvals. The policy names the loop's session, the
+repositories and bots of the Upkeep, and the workflows that an agent may start. While it is set,
+for every agent of the cloud:
+
+- The API broker refuses the changes that an Upkeep never needs and that could start code with
+  the secrets of a repository or change its workflows: the Git data API, merges of branches,
+  releases, deployments, repository dispatches, commit statuses and check runs, approvals of
+  deployments and runs, file changes under .github/workflows, and auto-merge. A workflow dispatch passes only
+  for a workflow that the person listed. Runs can be started again or cancelled.
+
+Each refusal also goes to a log that root owns and the exchange of Upkeep reads for the board.
+A module that horizon-worker-github loads, not a command."""
+import contextlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import threading
+import time
+
+POLICY = 'upkeep.json'
+# Root's word for the loop of Upkeep, which starts no agent without it: the policy is set.
+MARKER = Path('/run/horizon-worker/github-upkeep-policy')
+MAX_POLICY = 16384
+MAX_BOTS = 20
+MAX_WORKFLOWS = 20
+FIELDS = {'version', 'session', 'repositories', 'bots', 'workflows'}
+# The loop's tmux session, as Horizon's exchange names it (upkeep-<cloud>).
+SESSION = re.compile(r'upkeep-[A-Za-z0-9_-]{1,90}')
+# Config::validate in Horizon allows 1 to 50 repositories.
+MAX_REPOSITORIES = 50
+LOGIN = r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})'
+REPOSITORY = re.compile(r'[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}')
+BOT = re.compile(r'(?:app/(?P<app>%s)|(?P<login>%s(?:\[bot\])?))' % (LOGIN, LOGIN))
+WORKFLOW = re.compile(r'[A-Za-z0-9_][A-Za-z0-9._-]{0,99}\.ya?ml')
+WORKFLOWS = '.github/workflows/'
+# Where root writes the refusals, next to the store's folder at the top of the volume
+# (/workspace/.horizon-gate), readable for the agent account.
+LOG_FOLDER = '.horizon-gate'
+LOG = 'refused.jsonl'
+LOG_LIMIT = 256 << 10
+# Changes under a repository path that the policy refuses whatever the grant.
+REFUSED_CHANGES = {
+    'git': 'the Git data API can write any file, workflows included',
+    'merges': 'a merge of branches goes around the checks of a pull request',
+    'merge-upstream': 'a merge of branches goes around the checks of a pull request',
+    'releases': 'a release publishes the repository',
+    'deployments': 'a deployment can start a workflow with the secrets of the repository',
+    'dispatches': 'a repository dispatch can start a workflow with the secrets of the repository',
+    'statuses': 'a commit status could stand in for a required check',
+}
+# The check changes that stay: ask GitHub to run a check again. A new or changed check run
+# could stand in for a required check.
+CHECK_CHANGES = re.compile(r'/check-(?:runs|suites)/[1-9][0-9]{0,19}/rerequest')
+# The run and job changes that stay: start again and cancel.
+RUN_CHANGES = re.compile(r'/actions/(?:runs/[1-9][0-9]{0,19}/(?:rerun|rerun-failed-jobs|cancel|force-cancel)'
+                         r'|jobs/[1-9][0-9]{0,19}/rerun)')
+DISPATCH = re.compile(r'/actions/workflows/(?P<workflow>[^/]{1,256})/dispatches')
+
+
+class Refused(Exception):
+    """The policy refuses the request; the text says why."""
+
+
+class Policy:
+    """`session` is the loop's tmux session and `repositories` the repositories of the Upkeep,
+    as Horizon gave them. `bots` are the logins whose pull requests Upkeep merges, as
+    `name[bot]` or `name`, in lowercase. `workflows` are (owner/name in lowercase, workflow
+    file) that an agent may start."""
+
+    def __init__(self, bots=(), workflows=(), session=None, repositories=()):
+        self.bots, self.workflows = frozenset(bots), frozenset(workflows)
+        self.session, self.repositories = session, tuple(repositories)
+
+
+def parse(value):
+    """The Policy of Horizon's JSON, or ValueError."""
+    if not isinstance(value, dict) or set(value) != FIELDS or type(value['version']) is not int \
+            or value['version'] != 1:
+        raise ValueError('Invalid Upkeep policy')
+    if not isinstance(value['session'], str) or not SESSION.fullmatch(value['session']):
+        raise ValueError('Invalid Upkeep session')
+    repositories = value['repositories']
+    if not isinstance(repositories, list) or not 1 <= len(repositories) <= MAX_REPOSITORIES \
+            or not all(isinstance(name, str) and REPOSITORY.fullmatch(name) for name in repositories) \
+            or len({name.lower() for name in repositories}) != len(repositories):
+        raise ValueError('Invalid Upkeep repository list')
+    bots, workflows = value['bots'], value['workflows']
+    if not isinstance(bots, list) or len(bots) > MAX_BOTS or not isinstance(workflows, list) \
+            or len(workflows) > MAX_WORKFLOWS:
+        raise ValueError('Invalid Upkeep policy')
+    logins = []
+    for bot in bots:
+        match = BOT.fullmatch(bot) if isinstance(bot, str) else None
+        if match is None:
+            raise ValueError('Invalid Upkeep policy bot')
+        logins.append((match['app'] + '[bot]' if match['app'] else match['login']).lower())
+    allowed = []
+    for entry in workflows:
+        if not isinstance(entry, dict) or set(entry) != {'repository', 'workflow'} \
+                or not isinstance(entry['repository'], str) or not REPOSITORY.fullmatch(entry['repository']) \
+                or not isinstance(entry['workflow'], str) or not WORKFLOW.fullmatch(entry['workflow']):
+            raise ValueError('Invalid Upkeep policy workflow')
+        if entry['repository'].lower() not in {name.lower() for name in repositories}:
+            raise ValueError('Invalid Upkeep policy workflow repository')
+        allowed.append((entry['repository'].lower(), entry['workflow']))
+    return Policy(logins, allowed, value['session'], repositories)
+
+
+def summary(policy):
+    """What Horizon reads back to tell whether the worker holds its current policy."""
+    return {'session': policy.session, 'repositories': list(policy.repositories),
+            'bots': sorted(policy.bots), 'workflows': [{'repository': repository, 'workflow': workflow}
+                                                       for repository, workflow in sorted(policy.workflows)]}
+
+
+def log_directory(store):
+    """/workspace/.horizon-gate for the store in /workspace/.horizon-root/github."""
+    return store.persistent.parent.parent / LOG_FOLDER
+
+
+def directories(store):
+    return (store.persistent, store.runtime)
+
+
+def install(store, common, source, marker=MARKER):
+    """Saves Horizon's policy in every private storage of the store, then the marker that the
+    loop of Upkeep reads; returns what it holds. A storage that does not take the policy loses
+    its older copy, which would otherwise win; the policy fails when that removal fails too."""
+    value = json.loads(source)
+    policy = parse(value)
+    data = json.dumps(value, separators=(',', ':'))
+    saved = False
+    for directory in directories(store):
+        try:
+            if directory == store.persistent:
+                common.private_directory(directory.parent, create=True)
+            common.write_private(common.private_directory(directory, create=True), POLICY, data)
+            saved = True
+        except common.Unsynced:
+            saved = True
+        except (OSError, ValueError):
+            try:
+                common.remove_durably(directory, POLICY)
+            except OSError:
+                raise ValueError('A storage kept an older Upkeep policy') from None
+    if not saved:
+        raise ValueError('No private storage accepted the Upkeep policy')
+    mark(marker)
+    return summary(policy)
+
+
+def mark(marker=MARKER):
+    """Writes the marker without which the loop of Upkeep starts no agent: root set the policy.
+    It lives on tmpfs, so a container restart removes it until the policy is set or loaded again."""
+    marker.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    temporary = marker.with_name('.' + marker.name + '.new')
+    temporary.unlink(missing_ok=True)
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(descriptor, 'w') as output:
+        os.fchmod(output.fileno(), 0o644)
+        output.write('1\n')
+    os.replace(temporary, marker)
+
+
+def load(store, common):
+    """The Policy of the cloud, or None for a cloud that is not an Upkeep. A policy file that
+    cannot be read gives a policy without bots or workflows: the strictest one."""
+    found, broken = [], False
+    for directory in directories(store):
+        try:
+            value = common.read_json(directory / POLICY, MAX_POLICY)
+        except (OSError, ValueError, RecursionError):
+            # A copy that exists but is not private, or not a file, counts as a policy.
+            broken = True
+            continue
+        if value is not None:
+            try:
+                found.append(parse(value))
+            except ValueError:
+                broken = True
+    if broken:
+        return Policy()
+    return found[0] if found else None
+
+
+def rest_refusal(policy, method, parts):
+    """Why the policy refuses `method` on the repository path `parts` (decoded, after
+    OWNER/NAME), or None. A workflow dispatch passes here; the broker checks it."""
+    if policy is None or method in ('GET', 'HEAD') or not parts:
+        return None
+    first = parts[0]
+    # A branch may be deleted, as `gh pr merge --delete-branch` does; that writes no file.
+    if first == 'git' and method == 'DELETE' and parts[1:3] == ['refs', 'heads'] and len(parts) > 3:
+        return None
+    if first in REFUSED_CHANGES:
+        return 'this Upkeep does not let an agent change %s: %s.' % (first, REFUSED_CHANGES[first])
+    if first == 'contents' and '/'.join(parts[1:]).startswith(WORKFLOWS):
+        return 'this Upkeep does not let an agent change workflow files.'
+    if first in ('check-runs', 'check-suites') and not CHECK_CHANGES.fullmatch('/' + '/'.join(parts)):
+        return 'this Upkeep lets an agent only ask for a check again: a check run could stand in for a required check.'
+    if first == 'actions':
+        rest = '/' + '/'.join(parts)
+        if not RUN_CHANGES.fullmatch(rest) and not DISPATCH.fullmatch(rest):
+            return 'this Upkeep lets an agent only start runs again, cancel them and start listed workflows.'
+    return None
+
+
+def dispatched(parts, method):
+    """The workflow, as the path names it, of a REST workflow dispatch, or None."""
+    match = DISPATCH.fullmatch('/' + '/'.join(parts)) if method == 'POST' else None
+    return match['workflow'] if match else None
+
+
+def check_dispatch(policy, repository, path):
+    """Refuses a dispatch of a workflow that the person did not list. `path` is the workflow's
+    path in the repository, as GitHub gives it."""
+    name = path[len(WORKFLOWS):] if isinstance(path, str) and path.startswith(WORKFLOWS) else None
+    if name is None or (repository.lower(), name) not in policy.workflows:
+        raise Refused('this Upkeep lets an agent start only the workflows that the person listed in its '
+                      'settings, and %s of %s is not one of them.' % (name or 'this workflow', repository))
+
+
+LOGS = {}
+LOGS_LOCK = threading.Lock()
+
+
+def shared_log(directory):
+    """One Log for each folder in this process, so every service in it shares its limit."""
+    with LOGS_LOCK:
+        return LOGS.setdefault(str(directory), Log(directory))
+
+
+class Log:
+    """The refusals: one JSON line each, at most 30 a minute, in a folder that
+    only root can change, never through a link, a pipe or a device."""
+
+    def __init__(self, directory, now=time.time):
+        self.directory, self.now, self.lock = Path(directory), now, threading.Lock()
+        self.minute, self.count = 0, 0
+
+    def refused(self, kind, repository, reason):
+        with self.lock:
+            now = int(self.now())
+            if now // 60 != self.minute:
+                self.minute, self.count = now // 60, 0
+            if self.count >= 30:
+                return
+            self.count += 1
+            line = json.dumps({'at': now, 'kind': kind, 'repository': repository, 'reason': reason[:300]})
+            # The container's log on the host keeps a copy that a later flood cannot cut.
+            print('Upkeep policy refused: ' + line, flush=True)
+            with contextlib.suppress(OSError):
+                self.write(line + '\n')
+
+    def write(self, line):
+        with contextlib.suppress(FileExistsError):
+            os.mkdir(self.directory, 0o755)
+        folder = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            info = os.fstat(folder)
+            if info.st_uid != os.geteuid():
+                return
+            # Readable for the exchange, which runs as the agent account; the service's umask
+            # would keep it private.
+            if stat.S_IMODE(info.st_mode) != 0o755:
+                os.fchmod(folder, 0o755)
+            flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+            descriptor = os.open(LOG, flags, 0o644, dir_fd=folder)
+            try:
+                info = os.fstat(descriptor)
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+                    return
+                if stat.S_IMODE(info.st_mode) != 0o644:
+                    os.fchmod(descriptor, 0o644)
+                if info.st_size > LOG_LIMIT:
+                    os.ftruncate(descriptor, 0)
+                os.write(descriptor, line.encode())
+            finally:
+                os.close(descriptor)
+        finally:
+            os.close(folder)
+
+
+if __name__ == '__main__':
+    raise SystemExit('horizon-worker-github-upkeep is a module of horizon-worker-github, not a command.')

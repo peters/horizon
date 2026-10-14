@@ -79,6 +79,16 @@ The worker and its agents write every request field. Check that:
 - The decision is always `Decision::AllowTask`, never a cloud-wide allow.
 - Every other request stays on the cloud card for the person.
 
+## The worker's GitHub policy and refusals
+
+Before each exchange, `sync.rs` sends `worker::policy::send` as root. `run.py` starts no
+agent unless root wrote `/run/horizon-worker/github-upkeep-policy` (`guarded`), a regular
+file that root owns. The exchange reads back the refusal log that root owns
+(`REFUSALS`): only from a folder that root owns, only a regular file, a bounded tail,
+and only the fixed fields; the text goes to the board as activity lines. Check that no
+change starts an agent without the `guarded` check, reads the log from a folder the
+agent can write, or sends more than `REFUSALS_KEPT` lines.
+
 ## Host work off the UI thread
 
 Discovery (`horizon_core::upkeep::discover`), the clone of the first repository, the

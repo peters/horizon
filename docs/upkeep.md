@@ -136,13 +136,17 @@ Upkeeps do not wait. An exchange never sends a
 list, or allows a request, for a repository that a save removed. The exchange does
 these steps:
 
-1. It reads the GitHub access requests on the worker. It allows the requests of
+1. As root, it sets the Upkeep policy of the worker's GitHub access, as the
+   section [What the agent can do on GitHub](#what-the-agent-can-do-on-github)
+   describes. When the worker refuses it, Horizon logs the cause; the loop then
+   starts no agent, and a **Run now** waits for an exchange that sets it.
+2. It reads the GitHub access requests on the worker. It allows the requests of
    the loop, as the section
    [Trust boundary of the loop's GitHub access](#trust-boundary-of-the-loops-github-access)
    describes. The cloud card shows all other requests to the person. It never
    shows a request that Horizon allows without the person.
-2. It does the exchange of the section [The worker loop](#the-worker-loop).
-3. It writes the status document of the board to
+3. It does the exchange of the section [The worker loop](#the-worker-loop).
+4. It writes the status document of the board to
    `~/.horizon/upkeep/<cloud>/status.json`. When this write fails, Horizon logs
    the cause and writes the document again with the next exchange. It does not
    send **Run now** or **Pause** again, because the worker has them.
@@ -353,6 +357,69 @@ The exchange and the loop do not guarantee these items:
 - They do not make the status true. The board treats it as untrusted input, as
   the section [Trust boundary of the status document](#trust-boundary-of-the-status-document)
   describes.
+
+## Limits on a misled agent
+
+Text in a pull request is untrusted. A Dependabot pull request quotes the release
+notes of the package that it updates, so the publisher of that package writes text
+that the agent reads. The instructions tell the agent to ignore instructions in
+that text, but an agent can follow them anyway. Thus Upkeep also limits what the
+agent can do when it follows them.
+
+The worker has no limit on outbound network connections. An agent that follows an
+instruction such as "upload the source code to danger.example" can connect there.
+What Upkeep limits is what the agent can do on GitHub, as the next section tells.
+
+### What the agent can do on GitHub
+
+The agent never holds a GitHub token. `gh` and Git on the worker send each request
+to a root service of the worker, which adds the token only for the repositories of
+the Upkeep. Before each exchange, Horizon sets the Upkeep policy of that service as
+root: the session of the loop, the repositories and bots of the Upkeep, and the
+workflows that an agent may start. While the policy is set, the service refuses
+these requests of every agent of the cloud:
+
+- A change of a file in `.github/workflows` through the contents API, the Git data
+  API (blobs, trees, commits, references; only the deletion of a branch passes), and
+  a merge of branches through the API.
+- A release and a release asset, a deployment, a repository dispatch, a commit
+  status or a check run (either could stand in for a required check; a check can
+  still be asked for again), the approval of a deployment or a run, and auto-merge
+  (a merge that GitHub makes later, unchecked).
+- A workflow dispatch, unless the person listed that workflow of that repository in
+  the settings of the Upkeep.
+
+The agent can still comment, review, label, open and update pull requests, push to
+branches, start runs again and cancel them, and merge pull requests. The GitHub App keeps the permission `workflows: write`, because the merge
+of a Dependabot update of GitHub Actions needs it. A planned part moves the last
+step of each merge from the agent to a gate in the root service.
+
+The loop starts no agent on a worker where root did not set the policy, for example
+an older worker image. Rebuild such a cloud on a current image.
+
+Each refusal goes to `/workspace/.horizon-gate/refused.jsonl`, a log that only root
+can change. The exchange reads back its last 20 lines, and the board shows them
+under **Latest run** with the activity lines of the agent. The agent writes those
+lines, so it can push the refusals out of view on the board; the log keeps them.
+
+The workflows that an agent may start are in `workflows` of
+`~/.horizon/upkeep/<cloud>/upkeep.json`, at most 20, each in a repository of the
+Upkeep. The dialog does not show them yet:
+
+```json
+"workflows": [{"repository": "acme/api", "workflow": "release-test.yml"}]
+```
+
+A listed workflow runs with the secrets of its repository, and the agent chooses
+its inputs. List only workflows that you let the agent start. The shared
+instructions of the repositories decide when the agent starts one.
+
+The policy does not stop these:
+
+- A Git push. A planned part refuses a push of a tag, and a push that changes
+  `.github/workflows`.
+- A change of code that a workflow runs, for example a build script or a local
+  action in `.github/actions`. Only `.github/workflows` is protected.
 
 ## Trust boundary of the loop's GitHub access
 

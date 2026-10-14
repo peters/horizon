@@ -192,6 +192,7 @@ impl Form {
             worker: String::new(),
             checkouts: self.checkouts,
             order: Vec::new(),
+            workflows: Vec::new(),
         }
     }
 
