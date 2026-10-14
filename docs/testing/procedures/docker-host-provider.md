@@ -262,7 +262,8 @@ In each command, `cloud_deploy` stands for `"$cloud_deploy"` from setup step 2.
    Result: The host card shows **Too little free now** and you cannot click
    it. **Start cloud** stays off.
 
-4. Add `build: {dockerfile: Dockerfile}` to the profile `local` and select it.
+4. Add `build: {context: ., dockerfile: Dockerfile}` to the profile `local`
+   and select it.
 
    Result: The host card shows **Cannot run this profile**. Its hover text
    says that a Docker host runs public images only.
