@@ -472,7 +472,8 @@ so an ARM host such as an Apple silicon Mac runs it natively.
 `cloud_offers` lists the saved hosts in `other_providers` under
 `provider: docker-host`, at an `estimated_total` of 0. An offer's `id` is the
 host name; `vcpu` and `memory_gb` are the largest worker that is free now,
-which nothing reserves. Unread hosts are in `host_errors`. Only the
+which nothing reserves. Unread hosts are in `host_errors`, and they set
+`comparison_incomplete`, as a no-rent host may be the cheapest. Only the
 person's Horizon lists hosts: `cloud_offers` on a cloud worker has none. A cloud on a
 Docker host cannot be a companion yet: the companion tools refuse it with
 `cloud_companion_unsupported`, because other workers cannot reach its

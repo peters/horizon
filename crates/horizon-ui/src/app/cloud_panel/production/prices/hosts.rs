@@ -142,7 +142,7 @@ impl State {
         deadline_in_millis: i64,
     ) -> Option<Vec<serde_json::Value>> {
         // No host has a GPU or a region, so these requests wait for no reading.
-        if requirements.gpu || requirements.region.is_some() {
+        if !hosts::wanted(requirements) {
             return Some(Vec::new());
         }
         // A reading older than FRESH, also one whose refresh failed, offers nothing: free

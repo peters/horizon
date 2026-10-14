@@ -81,12 +81,19 @@ pub fn readings(settings: &Settings, root: &Path, cancel: &Cancellation) -> Vec<
         .collect()
 }
 
+/// Whether saved hosts can answer `requirements`: no host has a GPU or a region, so
+/// such requests need no reading.
+#[must_use]
+pub fn wanted(requirements: &Requirements) -> bool {
+    !requirements.gpu && requirements.region.is_none()
+}
+
 /// The `cloud_offers` section of the saved hosts, beside the rented providers', or None
-/// without one. A host that could not be read is listed under `host_errors`.
+/// without one. A host that could not be read is listed under `host_errors` and makes
+/// the cost comparison incomplete, since it may have been the cheapest offer.
 #[must_use]
 pub fn section(readings: &[Reading], requirements: &Requirements) -> Option<serde_json::Value> {
-    // No host has a GPU or a region.
-    if readings.is_empty() || requirements.gpu || requirements.region.is_some() {
+    if readings.is_empty() || !wanted(requirements) {
         return None;
     }
     let offers: Vec<_> = readings
@@ -114,6 +121,9 @@ pub fn section(readings: &[Reading], requirements: &Requirements) -> Option<serd
     });
     if !errors.is_empty() {
         section["host_errors"] = errors.into();
+    }
+    if readings.iter().any(|reading| reading.capacity.is_err()) {
+        section["comparison_incomplete"] = true.into();
     }
     Some(section)
 }
@@ -157,6 +167,7 @@ mod tests {
             section["host_errors"]["asleep"],
             "The Docker host did not answer in time"
         );
+        assert_eq!(section["comparison_incomplete"], true);
         let gpu = Requirements {
             gpu: true,
             ..Requirements::default()
@@ -173,6 +184,8 @@ mod tests {
         }
         let section = super::section(&[riscv], &Requirements::default()).unwrap();
         assert_eq!(section["offers"], serde_json::json!([]));
+        // A host that was read is known, also when it cannot run the worker image.
+        assert!(section.get("comparison_incomplete").is_none());
         assert!(
             section["host_errors"]["build-box"]
                 .as_str()

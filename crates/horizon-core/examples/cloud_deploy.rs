@@ -574,7 +574,11 @@ fn offers(path: &std::path::Path, requirements: Option<&str>) -> cloud_runtime::
         Err(error) => vec![serde_json::json!({"provider": "Hetzner", "error": error.to_string()})],
     };
     let root = path.parent().unwrap_or(std::path::Path::new("."));
-    let hosts = cloud_runtime::docker_host::hosts::readings(&settings, root, &cancel);
+    let hosts = if cloud_runtime::docker_host::hosts::wanted(&requirements) {
+        cloud_runtime::docker_host::hosts::readings(&settings, root, &cancel)
+    } else {
+        Vec::new()
+    };
     let other_providers: Vec<_> = other_providers
         .into_iter()
         .chain(cloud_runtime::docker_host::hosts::section(&hosts, &requirements))
