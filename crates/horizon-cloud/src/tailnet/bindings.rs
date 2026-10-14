@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{File, OpenOptions},
+    io::Read,
     path::PathBuf,
 };
 
@@ -88,7 +89,8 @@ impl Credentials for Native {
 }
 
 /// Machine-local metadata and write-only OS-store bindings.
-/// Credential reads belong to the private host deployment adapter.
+/// Enrollment-key reads belong to the private host deployment adapter. API status
+/// reads remain internal and return only the credential source kind.
 ///
 /// ```compile_fail
 /// let store = horizon_cloud::tailnet::Store::new("settings".into());
@@ -96,7 +98,7 @@ impl Credentials for Native {
 /// ```
 #[derive(Clone, Debug)]
 pub struct Store {
-    root: PathBuf,
+    pub(super) root: PathBuf,
 }
 impl Store {
     #[must_use]
@@ -119,12 +121,22 @@ impl Store {
         records.validate()?;
         Ok(records)
     }
-    fn read<T: serde::de::DeserializeOwned>(&self, name: &str, limit: usize) -> Result<Option<T>> {
-        match std::fs::read(self.root.join(name)) {
-            Ok(bytes) if bytes.len() <= limit => serde_json::from_slice(&bytes).map(Some).map_err(|_| Error::Storage),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            _ => Err(Error::Storage),
+    pub(super) fn read<T: serde::de::DeserializeOwned>(&self, name: &str, limit: usize) -> Result<Option<T>> {
+        let file = match File::open(self.root.join(name)) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err(Error::Storage),
+        };
+        let bound = u64::try_from(limit)
+            .ok()
+            .and_then(|limit| limit.checked_add(1))
+            .ok_or(Error::Storage)?;
+        let mut bytes = Vec::new();
+        file.take(bound).read_to_end(&mut bytes).map_err(|_| Error::Storage)?;
+        if bytes.len() > limit {
+            return Err(Error::Storage);
         }
+        serde_json::from_slice(&bytes).map(Some).map_err(|_| Error::Storage)
     }
     /// Recover an interrupted write without reading any secret bytes.
     /// # Errors
@@ -199,13 +211,19 @@ impl Store {
     /// # Errors
     /// Missing binding or failed durable deletion/cleanup. Existing cloud assignments remain explicit missing selections.
     pub fn delete(&self, id: &str) -> Result<Catalog> {
-        self.delete_with(id, &Native)
+        self.delete_with(id, &Native, &super::api::Native)
     }
-    fn delete_with(&self, id: &str, keys: &impl Credentials) -> Result<Catalog> {
+    fn delete_with(
+        &self,
+        id: &str,
+        keys: &impl Credentials,
+        api_keys: &impl super::api::Credentials,
+    ) -> Result<Catalog> {
         let _lock = self.lock()?;
         self.recover_with(keys)?;
         let before = self.records()?;
         let retired = Some(before.slot(id)?);
+        super::api::remove(self, id, api_keys)?;
         let mut after = before.clone();
         after.tailnets.retain(|t| t.id != id);
         after.slots.remove(id);
@@ -221,7 +239,10 @@ impl Store {
         self.recover_with(keys)?;
         Ok(pending.after.catalog())
     }
-    fn lock(&self) -> Result<File> {
+    pub(super) fn require_tailnet(&self, id: &str) -> Result<()> {
+        self.records()?.slot(id).map(|_| ())
+    }
+    pub(super) fn lock(&self) -> Result<File> {
         std::fs::create_dir_all(&self.root).map_err(|_| Error::Storage)?;
         let file = OpenOptions::new()
             .create(true)

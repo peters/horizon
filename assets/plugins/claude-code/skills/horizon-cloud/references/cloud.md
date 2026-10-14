@@ -131,6 +131,35 @@ cannot claim readiness. Use returned SSH aliases and isolated worktrees for
 ordinary SSH, Git, or rsync work within the authorized task. A stopped or
 unavailable target needs owner action; inspection grants no new access.
 
+## Tailnet API credential storage
+
+The shared host store supports a personal API token or OAuth client for each
+saved local tailnet. API bindings use the desktop OS-store namespace
+`horizon-cloud-tailnet-api`; enrollment auth keys stay in `horizon-cloud-tailnets`.
+API replacement and removal preserve the enrollment auth key. Auth-key replacement
+preserves the API binding. Saved-network removal cleans both exact bindings.
+
+Stored presence reports only missing or stored credential kind. It does not prove
+validity, expiry, scopes, tags or API access. Locked or malformed storage returns
+an error. Saving does not contact Tailscale, record an enrollment receipt or remove
+nodes. The foundation supplies shared storage APIs for host credential adapters.
+No API credential editor or new public CLI/MCP credential operation ships here.
+Worker enrollment still needs marker 4; storing an API credential does not enable
+a selected tailnet on an older quick-start pin.
+
+A staged entry at the exact saved local tailnet ID remains usable without another
+paste. Its personal-token schema uses `kind: personal_token`; OAuth uses `kind: oauth`.
+Status reads do not migrate it. Explicit removal suppresses staged fallback.
+The resolver never substitutes another network, namespace or enrollment key.
+Profiles that reuse a saved local tailnet ID intentionally share its API binding.
+A profile name does not create credential isolation.
+Never send API values to workers, MCP, command arguments or logs.
+
+For an OAuth client, select `devices:core` and `tag:horizon-worker` at Tailscale.
+Do not assume the tag restricts which devices the credential can delete.
+Personal API tokens can have broad API authority and an expiry date.
+No automatic node cleanup exists in this storage milestone.
+
 ## Tagged tailnet enrollment
 
 A new cloud defaults to **None**. For an authorized companion, use a saved

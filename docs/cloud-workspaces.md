@@ -132,6 +132,23 @@ state on the cloud's persistent volume. The newer signed project-session runtime
 currently refuses a tailnet until its own unprivileged runtime is qualified;
 the ordinary cloud panel's shell/agent runtime uses the isolated launcher.
 
+## Tailnet API credential storage
+
+The host store supports a personal API token or OAuth client for each saved tailnet.
+API credentials use the desktop OS-store service `horizon-cloud-tailnet-api`.
+Enrollment auth keys remain independent in `horizon-cloud-tailnets`.
+This foundation supplies host storage APIs. The Settings editor and UI/CLI/MCP
+status adapters are separate milestones; no API credential editor or new public
+credential operation ships here. A staged entry at the exact saved local tailnet
+ID is recognized by the shared resolver without another paste. Profiles that
+reuse that saved ID intentionally share the binding; a profile name does not
+isolate API credentials. Worker image
+qualification still requires marker 4; API storage does not qualify an older pin.
+Stored presence reports kind only. Saving does not test remote scope, expiry or
+API access, and does not remove tailnet nodes.
+See [the storage boundary](architecture/tailnet-api-credentials.md) and
+[the foundation test procedure](testing/procedures/tailnet-api-credential-store.md).
+
 ## Companion declarations
 
 Version 1 configuration accepts optional companion repository metadata:

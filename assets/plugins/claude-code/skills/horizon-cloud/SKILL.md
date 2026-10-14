@@ -29,6 +29,13 @@ There is no continuous tag monitoring or separate tag for each workspace.
 The tailnet policy controls reachability. The current quick-start pin predates
 marker 4 and refuses a selected tailnet until the image and pin update.
 
+Personal API token and OAuth client bindings stay in the desktop OS store,
+independently of enrollment auth keys. Stored presence reports kind only; it
+does not prove API validity, scope or network access. Saving does not remove
+nodes. Never pass an API secret to MCP or a worker.
+This foundation supplies host storage APIs; an API editor and UI/CLI/MCP status
+adapters follow separately. API storage does not qualify an older worker image.
+
 Discovery and price results do not authorize spending or lifecycle changes.
 Get explicit authorization for the exact resource before starting or stopping a worker.
 Keep credentials in Horizon. Do not send keys, tokens, endpoints, or raw provider

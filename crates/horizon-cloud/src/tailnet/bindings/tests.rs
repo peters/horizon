@@ -36,6 +36,87 @@ fn fixture() -> (tempfile::TempDir, Store, Keys) {
 }
 
 #[test]
+fn auth_and_api_rotations_are_independent_and_network_removal_cleans_both() {
+    use super::super::api::{self, ApiCredential, ApiCredentialKind, ApiCredentialStatus};
+    let (root, store, keys) = fixture();
+    let api_keys = api::tests::Keys::default();
+    store.save_with(Some("work"), "Work", KEY, &keys).unwrap();
+    api::save(
+        &store,
+        "work",
+        &ApiCredential::personal_token("tskey-api-synthetic-only").unwrap(),
+        &api_keys,
+    )
+    .unwrap();
+    let metadata = std::fs::read(root.path().join("tailnet-api-bindings.json")).unwrap();
+    let original_auth = store.credential_slot("work").unwrap();
+    store.save_with(Some("work"), "New name", KEY, &keys).unwrap();
+    let rotated_auth = store.credential_slot("work").unwrap();
+    assert_ne!(original_auth, rotated_auth);
+    assert_eq!(
+        std::fs::read(root.path().join("tailnet-api-bindings.json")).unwrap(),
+        metadata
+    );
+    assert_eq!(
+        api::status(&store, "work", &api_keys).unwrap(),
+        ApiCredentialStatus::Stored(ApiCredentialKind::PersonalToken)
+    );
+    api::save(
+        &store,
+        "work",
+        &ApiCredential::oauth("client-id", "synthetic-client-secret").unwrap(),
+        &api_keys,
+    )
+    .unwrap();
+    assert_eq!(store.credential_slot("work").unwrap(), rotated_auth);
+    assert_eq!(keys.values.borrow()[&rotated_auth], KEY);
+    store.delete_with("work", &keys, &api_keys).unwrap();
+    assert!(keys.values.borrow().is_empty());
+    assert_eq!(api_keys.count(), 0);
+    assert!(store.load().unwrap().tailnets.is_empty());
+}
+
+#[test]
+fn corrupt_api_cleanup_never_blocks_auth_catalog_recovery_or_rotation() {
+    use super::super::api;
+    let (root, store, keys) = fixture();
+    store.save_with(Some("work"), "Work", KEY, &keys).unwrap();
+    let journal = br#"{"invalid":"synthetic-api-journal"}"#;
+    std::fs::write(root.path().join("tailnet-api.pending.json"), journal).unwrap();
+    store.recover_with(&keys).unwrap();
+    assert_eq!(store.load().unwrap().tailnets[0].id, "work");
+    let old = store.credential_slot("work").unwrap();
+    store.save_with(Some("work"), "New name", KEY, &keys).unwrap();
+    assert_ne!(store.credential_slot("work").unwrap(), old);
+    assert_eq!(store.load().unwrap().tailnets[0].name, "New name");
+    assert!(matches!(
+        api::status(&store, "work", &api::tests::Keys::default()),
+        Err(Error::Storage)
+    ));
+    assert_eq!(
+        std::fs::read(root.path().join("tailnet-api.pending.json")).unwrap(),
+        journal
+    );
+}
+
+#[test]
+fn metadata_reader_caps_bytes_before_deserializing_a_large_file() {
+    let (root, store, _keys) = fixture();
+    let file = File::create(root.path().join("oversized.json")).unwrap();
+    file.set_len(64 * 1024 * 1024).unwrap();
+    assert!(matches!(
+        store.read::<serde_json::Value>("oversized.json", 16),
+        Err(Error::Storage)
+    ));
+    std::fs::write(root.path().join("bounded.json"), b"null").unwrap();
+    assert_eq!(
+        store.read::<serde_json::Value>("bounded.json", 4).unwrap(),
+        Some(serde_json::Value::Null)
+    );
+    assert!(store.read::<serde_json::Value>("missing.json", 4).unwrap().is_none());
+}
+
+#[test]
 fn recovery_preserves_the_published_generation_at_every_interruption_boundary() {
     for existing in [false, true] {
         for boundary in 0..4 {
@@ -163,7 +244,9 @@ fn legacy_slots_migrate_without_changing_the_public_binding_id() {
     assert_ne!(store.credential_slot("work").unwrap(), "work");
     assert!(!keys.values.borrow().contains_key("work"));
     assert!(!serde_json::to_string(&updated).unwrap().contains("slots"));
-    store.delete_with("work", &keys).unwrap();
+    store
+        .delete_with("work", &keys, &super::super::api::tests::Keys::default())
+        .unwrap();
     assert!(keys.values.borrow().is_empty());
 }
 #[test]

@@ -1,9 +1,12 @@
-//! Auth-key-only cloud networking. Persistent metadata never contains a secret.
+//! Cloud enrollment keys and desktop API credentials. Persistent metadata contains no secret.
+mod api;
 mod bindings;
 mod keychain;
+pub use api::{ApiCredential, ApiCredentialKind, ApiCredentialStatus};
 pub use bindings::Store;
 /// OS-store namespace; credentials have no public read API.
 pub const KEYCHAIN_SERVICE: &str = "horizon-cloud-tailnets";
+pub const API_KEYCHAIN_SERVICE: &str = "horizon-cloud-tailnet-api";
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::fs::File;
@@ -12,6 +15,8 @@ use zeroize::Zeroizing;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("Use a personal Tailscale API token, or an OAuth client ID and secret.")]
+    InvalidApiCredential,
     #[error("Use a name and a Tailscale auth key beginning with tskey-auth-.")]
     Invalid,
     #[error("The OS credential store is unavailable or locked. Unlock it and try again.")]
