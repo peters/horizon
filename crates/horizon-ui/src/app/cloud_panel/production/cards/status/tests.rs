@@ -5,6 +5,7 @@ use horizon_core::cloud_runtime::progress::{Progress, Unit};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Instant;
 
+mod diagnosis_scope;
 mod skipped;
 
 fn deployment(

@@ -277,6 +277,15 @@ pub fn remedy(meaning: &str) -> Option<Remedy> {
 #[must_use]
 pub fn is_failure(line: &str) -> bool {
     let lower = without_zero_counts(&line.to_ascii_lowercase());
+    // Package installs may intentionally skip service actions inside an image.
+    // Keep real command errors that quote the notice and append an exit status.
+    if lower.contains("invoke-rc.d: policy-rc.d denied execution of ")
+        && ["start.", "stop.", "restart.", "reload."]
+            .iter()
+            .any(|action| lower.trim_end().ends_with(action))
+    {
+        return false;
+    }
     (FAILURE_MARKERS.iter().any(|marker| starts_a_word(&lower, marker)) || known_cause(&lower)) && !transient(&lower)
 }
 
@@ -347,6 +356,19 @@ mod tests {
     use super::*;
 
     const SUMMARY: &str = "Uploading image failed; inspect deployment output";
+
+    #[test]
+    fn skipped_service_actions_are_not_failure_causes() {
+        let notice = "#25 178.4 invoke-rc.d: policy-rc.d denied execution of start.";
+        assert!(!is_failure(notice));
+        assert_eq!(diagnose([notice].into_iter(), "Build failed"), None);
+        let actual = format!("ERROR: command printed '{notice}' and failed: exit code: 1");
+        assert!(is_failure(&actual));
+        assert_eq!(
+            diagnose([notice, &actual].into_iter(), "Build failed").unwrap().cause,
+            actual
+        );
+    }
 
     #[test]
     fn the_registry_denial_behind_a_push_failure_is_the_cause() {

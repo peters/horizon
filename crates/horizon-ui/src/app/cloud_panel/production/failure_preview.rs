@@ -12,14 +12,20 @@ const WITH_PANEL: u32 = 8_800_003;
 const WITHOUT_PANELS: u32 = 8_800_004;
 
 const CAUSE: &str = "Error response from daemon: Conflict. The container name \"/horizon-contract-00000000-1111-2222-3333-444444444444\" is already in use by container \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\". You have to remove (or rename) that container to be able to reuse that name.";
+const PLACEMENT: &str = "Provider rejected the request or capacity is unavailable: error during placement";
 
 pub(super) fn seed(app: &mut HorizonApp) {
-    if std::env::var_os("HORIZON_CLOUD_FAILURE_PREVIEW").is_some() {
-        seed_failures(app);
+    if let Ok(mode) = std::env::var("HORIZON_CLOUD_FAILURE_PREVIEW") {
+        seed_kind(app, mode == "placement");
     }
 }
 
+#[cfg(test)]
 fn seed_failures(app: &mut HorizonApp) -> bool {
+    seed_kind(app, false)
+}
+
+fn seed_kind(app: &mut HorizonApp, placement: bool) -> bool {
     if !super::preview::accepts(app) {
         return false;
     }
@@ -49,19 +55,46 @@ fn seed_failures(app: &mut HorizonApp) -> bool {
         group.panels = panels;
         app.cloud_prototype.groups.0.push(group);
         let runtime = app.cloud_prototype.production.runtimes.entry(issue).or_default();
+        if placement {
+            runtime.rebuild = Some(super::rebuild::Attempt::new(super::rebuild::Kind::Rebuild));
+        }
         let now = Instant::now();
-        for stage in [Stage::Validate, Stage::Provision, Stage::Readiness] {
+        let stages: &[Stage] = if placement {
+            &[
+                Stage::Validate,
+                Stage::Build,
+                Stage::Push,
+                Stage::Replace,
+                Stage::Provision,
+            ]
+        } else {
+            &[Stage::Validate, Stage::Provision, Stage::Readiness]
+        };
+        for &stage in stages {
             runtime.progress.stage(stage, now);
             runtime.stage = Some(stage);
             // Enough lines that the output under the cause has rows to keep.
             for line in 1..=3 {
                 runtime.push_log(format!("synthetic {} output {line}", stage.label().to_lowercase()));
             }
+            if placement && stage == Stage::Build {
+                runtime.push_log("#25 178.4 invoke-rc.d: policy-rc.d denied execution of start.".into());
+                runtime.push_log("error: recovered build warning".into());
+            }
         }
-        runtime.push_log("starting the synthetic contract container".into());
-        runtime.push_log(CAUSE.into());
+        if !placement {
+            runtime.push_log("starting the synthetic contract container".into());
+            runtime.push_log(CAUSE.into());
+        }
         runtime.progress.finish(now);
-        runtime.error = Some("Readiness check failed; inspect deployment output".into());
+        runtime.error = Some(
+            if placement {
+                PLACEMENT
+            } else {
+                "Readiness check failed; inspect deployment output"
+            }
+            .into(),
+        );
         // The cloud with a panel opens on its Status tab, where the failure is read.
         if issue == WITH_PANEL {
             runtime.drawer = Some(super::cards::Tab::Status);
