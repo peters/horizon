@@ -58,7 +58,8 @@ It checks that host user data receives the read-only material that verified the 
 
    Result: The probe verifies an immutable digest with a synthetic read-only login.
    A later credential-file change does not replace that login in host user data.
-   The operation also retains its original declared expiry when local settings change.
+   The operation retains the earliest configured or issuer-observed expiry.
+   Issuer-only expiry and later settings changes cannot remove the allocation deadline.
    The user data contains no publishing credential.
    Expired or unconfirmed grants fail.
    Explicit default and zero-padded ports retain the image-facing Docker login key.

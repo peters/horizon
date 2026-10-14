@@ -79,5 +79,6 @@ These checks prove the immutable image read at that moment; they cannot guarante
 This prerequisite retains the existing Container registry journal requirement for a configured RunPod account.
 A host-only journal is a required follow-up before portable publishing activates on a Hetzner-only machine.
 
-The verified CPU pull material retains its declared expiry. An elapsed known expiry stops allocation before provider contact.
+The verified CPU pull material retains the earliest configured or issuer-observed expiry.
+An elapsed known expiry stops allocation before provider contact.
 This checkpoint does not prove that an issuer will keep an unexpired grant valid through the host pull.

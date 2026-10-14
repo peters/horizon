@@ -234,9 +234,18 @@ impl Prepared {
         self.binding.host_login_with(&self.pull.secret)
     }
 
-    /// Known expiry of the pull material retained by this operation, in Unix seconds.
+    /// Earliest declared or issuer-observed expiry of the current verified material.
     pub(in crate::cloud_runtime) fn pull_expires_at(&self) -> Result<Option<i64>> {
-        self.binding.pull.expires_at.as_deref().map(parse_expiry).transpose()
+        if !self.verified {
+            return Err(Error::Invalid("Verify the pull grant before retaining its expiry"));
+        }
+        let validation = self
+            .journal
+            .validation()
+            .ok_or(Error::Invalid("Verified pull metadata is missing"))?;
+        let declared = self.binding.pull.expires_at.as_deref().map(parse_expiry).transpose()?;
+        let observed = validation.expires_at.as_deref().map(parse_expiry).transpose()?;
+        Ok(declared.into_iter().chain(observed).min())
     }
 
     /// # Errors

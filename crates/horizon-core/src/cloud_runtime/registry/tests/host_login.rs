@@ -8,8 +8,7 @@ fn a_host_login_requires_verification_and_keeps_the_verified_pull_material() {
     let (root, mut settings) = fixture();
     binding(&mut settings).pull.expires_at = Some("2999-01-01T00:00:00Z".into());
     let mut prepared = Prepared::for_image(&settings, &image(), None, false).unwrap().unwrap();
-    let expiry = prepared.pull_expires_at().unwrap();
-    assert_eq!(expiry, Some(parse_expiry("2999-01-01T00:00:00Z").unwrap()));
+    assert!(prepared.pull_expires_at().is_err());
     assert!(
         prepared.host_login().is_err(),
         "unverified material cannot reach a host"
@@ -35,6 +34,8 @@ fn a_host_login_requires_verification_and_keeps_the_verified_pull_material() {
     prepared
         .verify_image_with(&image(), &Cancellation::default(), Command::new(&script))
         .unwrap();
+    let expiry = prepared.pull_expires_at().unwrap();
+    assert_eq!(expiry, Some(parse_expiry("2999-01-01T00:00:00Z").unwrap()));
     let path = binding(&mut settings).pull.secret_file.clone();
     std::fs::write(&path, "another-account-pull").unwrap();
     binding(&mut settings).pull.expires_at = Some("2000-01-01T00:00:00Z".into());
@@ -81,6 +82,63 @@ fn an_unconfirmed_or_expired_binding_cannot_supply_a_host_login() {
     binding(&mut settings).read_only_confirmed = true;
     binding(&mut settings).pull.expires_at = Some("2000-01-01T00:00:00Z".into());
     assert!(binding(&mut settings).host_login().is_err());
+}
+
+#[test]
+fn verified_expiry_retains_issuer_only_and_the_earlier_known_deadline() {
+    for (declared, observed, expected) in [
+        (None, Some("2030-01-01T00:00:00Z"), Some("2030-01-01T00:00:00Z")),
+        (
+            Some("2031-01-01T00:00:00Z"),
+            Some("2030-01-01T00:00:00Z"),
+            Some("2030-01-01T00:00:00Z"),
+        ),
+        (
+            Some("2030-01-01T00:00:00Z"),
+            Some("2031-01-01T00:00:00Z"),
+            Some("2030-01-01T00:00:00Z"),
+        ),
+        (None, None, None),
+    ] {
+        let (_root, mut settings) = fixture();
+        binding(&mut settings).pull.expires_at = declared.map(str::to_owned);
+        let mut prepared = Prepared::for_image(&settings, &image(), None, false).unwrap().unwrap();
+        // Supply the current issuer observation at the verification boundary without network access.
+        prepared
+            .journal
+            .record_validation(Validation {
+                image: image(),
+                scope: "synthetic issuer-verified read-only".into(),
+                expires_at: observed.map(str::to_owned),
+                checked_at: time::OffsetDateTime::now_utc().unix_timestamp(),
+            })
+            .unwrap();
+        assert!(
+            prepared.pull_expires_at().is_err(),
+            "old journal metadata alone is not current verification"
+        );
+        prepared.verified = true;
+        std::fs::remove_file(&binding(&mut settings).pull.secret_file).unwrap();
+        assert_eq!(
+            prepared.pull_expires_at().unwrap(),
+            expected.map(|value| parse_expiry(value).unwrap())
+        );
+        let expired = "2000-01-01T00:00:00Z";
+        prepared
+            .journal
+            .record_validation(Validation {
+                image: image(),
+                scope: "synthetic issuer observation".into(),
+                expires_at: Some(expired.into()),
+                checked_at: 0,
+            })
+            .unwrap();
+        assert_eq!(
+            prepared.pull_expires_at().unwrap(),
+            Some(parse_expiry(expired).unwrap()),
+            "an elapsed issuer deadline must reach the allocation guard"
+        );
+    }
 }
 
 #[test]
