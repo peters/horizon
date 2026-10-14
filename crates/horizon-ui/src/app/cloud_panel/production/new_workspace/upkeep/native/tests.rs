@@ -192,12 +192,17 @@ fn a_failed_save_of_the_ledger_is_tried_again_after_a_while() {
     let now = Instant::now();
     assert_eq!(
         save(&ctx, "upkeep", &ledger, &mut native, now),
-        None,
-        "a launch waits for the next save"
+        Some(false),
+        "a launch that this ledger names is refused"
     );
-    assert!(native.dirty, "the ledger on disk is older than the one in memory");
-    assert!(native.saving.is_none(), "the next save waits");
+    assert!(native.saving.is_none() && !native.undelivered);
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(false).unwrap();
+    native.saving = Some(rx);
+    // A change after the failed save started: its launch waits for the next save.
+    native.dirty = true;
+    assert_eq!(save(&ctx, "upkeep", &ledger, &mut native, now), None);
     assert_eq!(save(&ctx, "upkeep", &ledger, &mut native, now + RETRY / 2), None);
-    assert!(native.saving.is_none() && native.dirty);
+    assert!(native.saving.is_none() && native.dirty, "the next save waits");
     assert_eq!(native.save_after, Some(now + RETRY));
 }

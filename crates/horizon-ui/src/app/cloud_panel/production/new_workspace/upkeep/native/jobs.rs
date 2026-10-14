@@ -68,21 +68,27 @@ pub(super) fn save(
         }
         native.saving = None;
         if !native.stored {
-            // The disk keeps an older ledger, which a restart would read: save again.
-            native.dirty = true;
+            // The disk keeps an older ledger, which a restart would read: save again later.
             native.save_after = Some(now + RETRY);
+            if !native.dirty {
+                // The save of this very ledger failed.
+                return Some(false);
+            }
         }
     }
     if let Some(after) = native.save_after.filter(|after| now < *after) {
         ctx.request_repaint_after(after - now);
         return None;
     }
-    if !native.dirty {
+    if !native.dirty && native.save_after.is_none() {
         return Some(native.stored);
     }
+    if native.dirty {
+        // Every change of the ledger goes to the worker too; a save tried again is no change.
+        native.undelivered = true;
+    }
     native.dirty = false;
-    // Every change of the ledger goes to the worker too.
-    native.undelivered = true;
+    native.save_after = None;
     let (tx, rx) = channel();
     let (repaint, cloud, ledger) = (ctx.clone(), cloud_id.to_owned(), ledger.clone());
     std::thread::spawn(move || {
