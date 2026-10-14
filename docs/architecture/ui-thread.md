@@ -305,6 +305,11 @@ This work still runs on the UI thread. Do not copy it into new code.
   [`new_workspace.rs`](../../crates/horizon-ui/src/app/cloud_panel/production/new_workspace.rs)).
   The **Forget** link calls it too
   ([`new_workspace/choice.rs`](../../crates/horizon-ui/src/app/cloud_panel/production/new_workspace/choice.rs)).
+- The live panel of an Upkeep (`show_upkeep_agent` in
+  [`new_workspace/upkeep/sync.rs`](../../crates/horizon-ui/src/app/cloud_panel/production/new_workspace/upkeep/sync.rs))
+  opens through `prepare_cloud_remote_panel`, as **Add panel** and the restore
+  of cloud sessions do. It reads the cloud settings and the cloud record on the
+  UI thread, at most once for each exchange, until the panel opens.
 - Some cloud card paths read the cloud record from disk under a lock that
   they take with `try_lock`. They do not wait for the lock, but the read
   itself is file I/O.

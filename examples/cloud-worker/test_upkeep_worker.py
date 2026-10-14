@@ -113,6 +113,47 @@ class ExchangeTests(unittest.TestCase):
         self.assertFalse(self.worker.exchange(payload(paused=False))['paused'])
         self.assertEqual((upkeep / 'config.json').stat().st_ino, before)
 
+    def test_a_run_now_sent_again_with_its_token_starts_one_run(self):
+        upkeep = self.worker.upkeep
+        token = 'b' * 32
+        self.worker.exchange(payload(run_now=token))
+        self.assertEqual((upkeep / 'run-now').read_text(), token)
+        take = RUN['take_run_now']
+        with mock.patch.dict(take.__globals__, DIR=str(upkeep)):
+            # Sent again while pending: still one signal.
+            self.worker.exchange(payload(run_now=token))
+            self.assertTrue(take())
+            self.assertFalse((upkeep / 'run-now').exists())
+            self.assertEqual((upkeep / 'run-now-token').read_text(), token)
+            # Taken already: sending it again asks for nothing.
+            self.worker.exchange(payload(run_now=token))
+            self.assertFalse((upkeep / 'run-now').exists())
+            # A loop that stopped after it recorded the token never runs it twice.
+            (upkeep / 'run-now').write_text(token)
+            self.assertFalse(take())
+            self.assertFalse((upkeep / 'run-now').exists())
+            self.worker.exchange(payload(run_now='c' * 32))
+            self.assertTrue(take())
+            # A value that is not a token still asks for a run each time, as before.
+            self.worker.exchange(payload(run_now='../x'))
+            self.assertEqual((upkeep / 'run-now').read_text(), '')
+            self.assertTrue(take())
+            self.assertFalse(take(), 'no signal, no run')
+            # A token that cannot be recorded starts no run, and the loop goes on.
+            (upkeep / 'run-now').write_text('d' * 32)
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    mock.patch('tempfile.mkstemp', side_effect=OSError('disk full')):
+                self.assertFalse(take())
+            self.assertFalse((upkeep / 'run-now').exists())
+            # Pipes the agent planted never block the loop.
+            os.mkfifo(upkeep / 'run-now')
+            self.assertFalse(take())
+            (upkeep / 'run-now-token').unlink()
+            os.mkfifo(upkeep / 'run-now-token')
+            (upkeep / 'run-now').write_text('e' * 32)
+            self.assertTrue(take())
+            self.assertEqual((upkeep / 'run-now-token').read_text(), 'e' * 32)
+
     def test_a_planted_link_is_replaced_and_never_written_through(self):
         self.worker.upkeep.mkdir()
         for name in ('config.json', 'run.sh', 'run-now', 'paused'):

@@ -309,7 +309,10 @@ pub(super) fn validate_ssh_identity(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn validate_private_key_file(path: &Path) -> Result<()> {
+/// Checks that `path` is a private key file that deployment accepts.
+/// # Errors
+/// The file is missing, empty, too large, unreadable, or readable by others.
+pub fn validate_private_key_file(path: &Path) -> Result<()> {
     let meta = std::fs::metadata(path)?;
     #[cfg(unix)]
     {

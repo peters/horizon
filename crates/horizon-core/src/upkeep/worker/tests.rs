@@ -158,3 +158,32 @@ fn a_report_that_is_not_json_is_left_out() {
     let exchange = parse(r#"{"loop": false, "status": "{half", "runs": [], "next_run": null}"#).unwrap();
     assert_eq!(exchange.document(&config())["pull_requests"], serde_json::json!([]));
 }
+
+#[test]
+fn a_run_now_travels_with_its_token() {
+    let payload = |signals: Signals| -> serde_json::Value {
+        let remote = command("abc-123", &"a".repeat(40), &config(), signals).unwrap();
+        let encoded = remote.rsplit(" - '").next().unwrap().trim_end_matches('\'');
+        let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    };
+    assert_eq!(payload(Signals::default())["run_now"], false);
+    let run = Signals {
+        run_now: true,
+        run_token: Some(0xab),
+        ..Signals::default()
+    };
+    assert_eq!(payload(run)["run_now"], format!("{:032x}", 0xab));
+    let token = Signals {
+        run_now: true,
+        ..Signals::default()
+    }
+    .with_run_token()
+    .run_token;
+    assert!(token.is_some());
+    assert_eq!(
+        Signals::default().with_run_token().run_token,
+        None,
+        "no Run now, no token"
+    );
+}

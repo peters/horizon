@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/upkeep.rs,crates/horizon-core/src/upkeep/**,examples/cloud-worker/test_upkeep_worker.py,docs/upkeep.md,docs/testing/procedures/upkeep/worker.sh,crates/horizon-ui/src/upkeep_widget.rs,crates/horizon-ui/src/upkeep_widget/**,crates/horizon-ui/src/app/upkeep.rs"
+applyTo: "crates/horizon-core/src/upkeep.rs,crates/horizon-core/src/upkeep/**,examples/cloud-worker/test_upkeep_worker.py,docs/upkeep.md,docs/testing/procedures/upkeep/worker.sh,crates/horizon-ui/src/upkeep_widget.rs,crates/horizon-ui/src/upkeep_widget/**,crates/horizon-ui/src/app/upkeep.rs,crates/horizon-ui/src/app/upkeep/**,crates/horizon-ui/src/app/cloud_panel/production/new_workspace/upkeep.rs,crates/horizon-ui/src/app/cloud_panel/production/new_workspace/upkeep/**"
 ---
 
 # Trust boundaries of Upkeep
@@ -68,3 +68,19 @@ or the prompt. Check that:
 
 The instructions, schedule and worker name come from the person. They have size
 limits but no content rules: the instructions are the person's own prompt.
+
+## Untrusted: GitHub access requests from the worker
+
+`new_workspace/upkeep/sync.rs` allows some `github_access` requests without the person.
+The worker and its agents write every request field. Check that:
+
+- `allowed` needs all of: `task` true, `session` exactly `upkeep-<cloud>`, access `read`
+  or `push`, and a repository of this Upkeep's saved list (ASCII case ignored).
+- The decision is always `Decision::AllowTask`, never a cloud-wide allow.
+- Every other request stays on the cloud card for the person.
+
+## Host work off the UI thread
+
+Discovery (`horizon_core::upkeep::discover`), the clone of the first repository, the
+reads and writes under `~/.horizon/upkeep` and every exchange with a worker run on
+their own threads. The UI thread only polls their channels.
