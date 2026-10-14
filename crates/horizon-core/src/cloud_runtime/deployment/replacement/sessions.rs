@@ -7,9 +7,10 @@ pub(super) const RELAUNCH_STATUS: &str = "horizon-relaunch-status=";
 /// process in its existing worktree and clears the request. A relaunch is idempotent per
 /// replacement, so a reconnect retries safely. Images without the relaunch contract
 /// report their sessions lost, as Stop and Resume do. A session of an agent that the
-/// profile no longer has, after a rebuild removed it, is reported and not relaunched:
-/// an image that checks the profile's capabilities refuses to start that agent. Its
-/// record stays, so a later rebuild that adds the agent again relaunches it.
+/// profile no longer has, after a rebuild removed it, is reported once and not
+/// relaunched: an image that checks the profile's capabilities refuses to start that
+/// agent. Its record stays, marked as reported so later reconnects stay quiet, and a
+/// later rebuild that adds the agent again relaunches it and clears the mark.
 /// # Errors
 /// Keeps the request when a relaunch cannot be confirmed.
 pub(in crate::cloud_runtime::deployment) fn relaunch_sessions(
@@ -25,14 +26,18 @@ pub(in crate::cloud_runtime::deployment) fn relaunch_sessions(
     if contract.session_restart && !state.sessions.is_empty() {
         emit(activity("Relaunching sessions in their existing worktrees"));
     }
-    for session in &state.sessions {
+    for session in &mut state.sessions {
         if contract.capabilities && !state.profile.capabilities.permits_agent(&session.agent) {
-            emit(Event::Output(format!(
-                "Session {} ({}): this cloud's profile no longer has agent {}, so its process was not relaunched",
-                session.panel_id, session.agent, session.agent
-            )));
+            if !session.removed_agent_reported {
+                emit(Event::Output(format!(
+                    "Session {} ({}): this cloud's profile no longer has agent {}, so its process was not relaunched",
+                    session.panel_id, session.agent, session.agent
+                )));
+                session.removed_agent_reported = true;
+            }
             continue;
         }
+        session.removed_agent_reported = false;
         let relaunched = contract.session_restart
             && match relaunch_status(&run(&relaunch_command(operation, session, &state.revision)?)?) {
                 Some(0 | 5) => true,

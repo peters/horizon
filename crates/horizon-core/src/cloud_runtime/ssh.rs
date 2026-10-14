@@ -400,6 +400,7 @@ mod tests {
             tmux: "panel".into(),
             branch: String::new(),
             worktree: super::super::siblings::shared_worktree(None),
+            removed_agent_reported: false,
         };
         (root, connection, session)
     }

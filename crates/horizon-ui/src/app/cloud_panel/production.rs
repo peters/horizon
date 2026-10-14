@@ -920,6 +920,7 @@ impl HorizonApp {
                     tmux: id.clone(),
                     branch: String::new(),
                     worktree: cloud_runtime::siblings::shared_worktree(saved.siblings.as_ref()),
+                    removed_agent_reported: false,
                 };
                 saved.sessions.push(session.clone());
                 (session, true)

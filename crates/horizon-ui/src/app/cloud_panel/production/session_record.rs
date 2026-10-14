@@ -483,6 +483,7 @@ mod tests {
             tmux: panel_id.into(),
             branch: String::new(),
             worktree: "/workspace/checkout".into(),
+            removed_agent_reported: false,
         }
     }
 

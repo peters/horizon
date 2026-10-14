@@ -21,6 +21,11 @@ pub struct Session {
     pub tmux: String,
     pub branch: String,
     pub worktree: String,
+    /// Set once a relaunch reported that the profile no longer has this session's agent,
+    /// so later reconnects stay quiet; cleared when the profile has the agent again.
+    /// Omitted when unset, so other records keep their encoding.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub removed_agent_reported: bool,
 }
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub enum ReadyHistory {

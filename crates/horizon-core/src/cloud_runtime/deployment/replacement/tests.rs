@@ -650,6 +650,7 @@ fn sessions_relaunch_in_place_and_lost_ones_are_reported() {
                 tmux: id.into(),
                 branch: format!("agent/{id}"),
                 worktree: format!("/workspace/agents/{id}"),
+                removed_agent_reported: false,
             });
         }
     });

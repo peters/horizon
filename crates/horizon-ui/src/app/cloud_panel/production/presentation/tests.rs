@@ -214,6 +214,7 @@ fn new_panels_share_a_checkout_while_recorded_sessions_keep_their_paths() {
             tmux: "legacy".into(),
             branch: "agent/legacy".into(),
             worktree: "/workspace/agents/legacy".into(),
+            removed_agent_reported: false,
         });
         store.save(&saved).unwrap();
     }
@@ -565,6 +566,7 @@ fn missing_durable_session_retries_after_store_lock_is_released() {
             tmux: "missing-shell".into(),
             branch: "agent/missing-shell".into(),
             worktree: "/workspace/agents/missing-shell".into(),
+            removed_agent_reported: false,
         });
     let lock = cloud_runtime::state::Store::lock(&temp.path().join("fixture")).unwrap();
     // In view: missing sessions attach live, so they need the store.
@@ -639,6 +641,7 @@ fn pending_session_retry_does_not_reopen_a_closed_healthy_view() {
         tmux: id.into(),
         branch: format!("agent/{id}"),
         worktree: format!("/workspace/agents/{id}"),
+        removed_agent_reported: false,
     });
     app.cloud_prototype
         .production
