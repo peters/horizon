@@ -52,7 +52,8 @@ context can go into the image, so a person must see each one first.
   file that the image does not get.
 - On Windows, a hard link is not refused, and a folder swapped for a junction
   between the check and the read can be followed. A folder that is already a
-  junction or another reparse point is refused. A symbolic link is refused
+  symbolic link or a junction is refused; other reparse points, such as cloud
+  placeholders, count as plain folders and files. A symbolic link is refused
   on Windows while the list is read, because it cannot be copied there.
 
 ## Untrusted: the repository's own configuration

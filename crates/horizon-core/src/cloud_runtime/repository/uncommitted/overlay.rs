@@ -172,14 +172,12 @@ fn find(repository: &Path, path: &str) -> Result<Found> {
 
 #[cfg(not(unix))]
 fn find(repository: &Path, path: &str) -> Result<Found> {
-    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
-    // Win32: open a link itself rather than its target; the attribute of every link,
-    // junctions included.
+    use std::os::windows::fs::OpenOptionsExt;
+    // Win32: open a link itself rather than its target.
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-    let linked = |metadata: &fs::Metadata| {
-        metadata.file_type().is_symlink() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-    };
+    // The standard library reports symbolic links and junctions as links, but not other
+    // reparse points such as cloud placeholders (OneDrive), which hold the file itself.
+    let linked = |metadata: &fs::Metadata| metadata.file_type().is_symlink();
     let (folders, leaf) = parts(path)?;
     let mut full = repository.to_path_buf();
     for part in folders {
