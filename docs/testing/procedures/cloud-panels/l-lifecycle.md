@@ -883,7 +883,7 @@ Use `smoke-sib` on RunPod. Its profile has a `build` section. In the steps,
    a public registry.
 
 5. In the fixture terminal, run the harness plan for `smoke-sib`. `<cloud-id>` is the
-   cloud ID of `smoke-sib`, as in L03.
+   folder of `smoke-sib` below `<home>/.horizon/cloud`; find it as in E09 step 1.
 
    ```sh
    <run>/bin/cloud_deploy plan-rebuild <home>/.horizon/cloud/settings.json <home>/.horizon/cloud/<cloud-id> runpod-build
@@ -947,8 +947,9 @@ Use `smoke-sib` on RunPod. Its profile has a `build` section. In the steps,
     done
     ```
 
-    Result: A line with the tag `horizon-<cloud-id>-<operation>` of `<build-repository>`
-    shows a label that names the commit of step 10 and a 64-character `files_sha256`.
+    Result: A line with a tag of `<build-repository>` that starts with
+    `horizon-<cloud-id>-` (the rebuild adds 32 hexadecimal characters) shows a label
+    that names the commit of step 10 and a 64-character `files_sha256`.
 
 13. Discard the changes of steps 1 and 2.
 
