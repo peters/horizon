@@ -1061,5 +1061,5 @@ The saved hosts' UI and agent surfaces read the host through the same
 `Engine`. `cloud_runtime::docker_host::check` sends the rows of the Cloud
 settings Check one by one, and `docker_host::hosts` reads each saved host's
 free capacity and builds its `cloud_offers` section. In `horizon-ui`,
-`prices::hosts` keeps the last reading for New cloud, Cloud settings and
+`prices::hosts` keeps the last reading for Cloud settings and
 `cloud_offers`; `setup::docker_hosts` is the settings card and its editor.

@@ -81,7 +81,6 @@ impl State {
         // Hetzner is offered beside RunPod for CPU profiles when this machine has a binding.
         if !profile.gpu {
             self.hetzner.request(root, ctx);
-            self.hosts.request(root, ctx);
             self.exchange.request(ctx);
         }
         let key = key(profile);
