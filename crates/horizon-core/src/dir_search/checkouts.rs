@@ -1,6 +1,6 @@
 //! The Git checkouts under the home folder, found once in the background so a search can
 //! offer them by name, with where each came from and what it was last doing.
-use super::{SKIP_NAMES, home_dir};
+use super::SKIP_NAMES;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -44,6 +44,9 @@ pub struct Checkout {
     /// names a commit, and no clone into it stopped halfway. Only such a checkout stands in
     /// for a clone.
     pub complete: bool,
+    /// A clone into it started and stopped halfway: its files are no checkout to use, and
+    /// cloning the repository again picks the clone up.
+    pub stopped: bool,
 }
 
 /// Looks for checkouts on a background thread, most recently changed first.
@@ -54,8 +57,14 @@ pub fn spawn_checkouts() -> mpsc::Receiver<Vec<Checkout>> {
         // What is found so far goes out every second, so one slow folder hides nothing
         // found before it; the channel closes when the search is done.
         let mut last = std::time::Instant::now();
+        // Without a home folder there is nowhere of the person's own to search: the file
+        // system's root holds system and mounted folders, not their checkouts.
+        let Some(home) = own_home() else {
+            let _ = sender.send(Vec::new());
+            return;
+        };
         // A closed dialog stops the search: nobody reads it any more.
-        let found = checkouts_while(&home_dir(), &mut |so_far| {
+        let found = checkouts_while(&home, &mut |so_far| {
             if last.elapsed() < std::time::Duration::from_secs(1) {
                 return true;
             }
@@ -65,6 +74,16 @@ pub fn spawn_checkouts() -> mpsc::Receiver<Vec<Checkout>> {
         let _ = sender.send(found);
     });
     receiver
+}
+
+/// The person's home folder, from `HOME` or, on Windows, `USERPROFILE`; `None` without
+/// either.
+fn own_home() -> Option<PathBuf> {
+    ["HOME", "USERPROFILE"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .find(|home| !home.is_empty())
+        .map(PathBuf::from)
 }
 
 /// The checkouts below `root`, most recently changed first. A checkout's own folders are
@@ -295,6 +314,7 @@ fn read(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
         branch: None,
         touched: None,
         complete: false,
+        stopped: false,
     };
     let dot = path.join(".git");
     let kind = std::fs::symlink_metadata(&dot).ok()?.file_type();
@@ -317,7 +337,12 @@ fn read(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
         return None;
     };
     let head = small_file(&git.join("HEAD"), guarded).unwrap_or_default();
-    let branch = head.trim().strip_prefix("ref: refs/heads/").map(str::to_owned);
+    // Reftable's placeholder in `HEAD` names no branch; the branch is kept in its tables.
+    let branch = head
+        .trim()
+        .strip_prefix("ref: refs/heads/")
+        .filter(|name| *name != ".invalid")
+        .map(str::to_owned);
     let common = small_file(&git.join("commondir"), guarded).map_or_else(
         || Some(git.clone()),
         |common| resolved(&git.join(common.trim()), guarded),
@@ -330,19 +355,19 @@ fn read(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
             .and_then(|meta| meta.modified())
             .ok()
     };
-    let complete = own
-        && head_resolves(&git, head.trim(), guarded)
-        && !small_file(
-            &git.join(crate::cloud_runtime::repository::source::CLONE_MARKER),
-            guarded,
-        )
-        .is_some_and(|marker| crate::cloud_runtime::repository::source::clone_stopped(&marker));
+    let stopped = small_file(
+        &git.join(crate::cloud_runtime::repository::source::CLONE_MARKER),
+        guarded,
+    )
+    .is_some_and(|marker| crate::cloud_runtime::repository::source::clone_stopped(&marker));
+    let complete = own && head_resolves(&git, head.trim(), guarded) && !stopped;
     Some(Checkout {
         path: path.to_owned(),
         origin: origin(&config),
         branch,
         touched: modified("index").or_else(|| modified("HEAD")),
         complete,
+        stopped,
     })
 }
 
@@ -353,6 +378,13 @@ fn head_resolves(git: &Path, head: &str, guarded: &[PathBuf]) -> bool {
         return object_name(head);
     };
     let name = name.trim();
+    // A repository that keeps its refs in reftable (Git 2.45 and later) names this
+    // placeholder in `HEAD`. Its tables are not read here: a listed table counts, so such a
+    // repository with no commit yet counts as finished too, which is rare with an origin.
+    if name == "refs/heads/.invalid" {
+        return small_file(&git.join("reftable").join("tables.list"), guarded)
+            .is_some_and(|tables| !tables.trim().is_empty());
+    }
     if name.split('/').any(|part| part.is_empty() || part == "..") {
         return false;
     }
@@ -639,5 +671,28 @@ mod tests {
         fs::create_dir_all(git.join("refs/heads")).unwrap();
         fs::write(git.join("refs/heads/main"), "not-a-commit\n").unwrap();
         assert!(!super::head_resolves(&git, "ref: refs/heads/main", &[]));
+    }
+
+    #[test]
+    fn a_reftable_repository_with_tables_names_a_commit() {
+        let home = tempfile::tempdir().unwrap();
+        let git = home.path().join(".git");
+        fs::create_dir_all(git.join("reftable")).unwrap();
+        assert!(
+            !super::head_resolves(&git, "ref: refs/heads/.invalid", &[]),
+            "no tables"
+        );
+        fs::write(
+            git.join("reftable/tables.list"),
+            "0x000000000001-0x000000000002-1a2b3c4d.ref\n",
+        )
+        .unwrap();
+        assert!(super::head_resolves(&git, "ref: refs/heads/.invalid", &[]));
+        fs::write(git.join("HEAD"), "ref: refs/heads/.invalid\n").unwrap();
+        assert_eq!(
+            super::read(home.path(), &[]).unwrap().branch,
+            None,
+            "the placeholder is no branch"
+        );
     }
 }

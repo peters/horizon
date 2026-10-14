@@ -67,6 +67,9 @@ pub(super) struct Finder {
     lookup: folders::Lookup,
     folders_for: String,
     folders: Folders,
+    /// How many answers the folders have had: one path may be answered twice, first with
+    /// no folders while every listing thread is busy.
+    answers: usize,
     /// The repository list the digest below was made for, by place and length, and the
     /// digest: a list is hashed again only when it is another one.
     digested: Option<((usize, usize), u64)>,
@@ -83,7 +86,8 @@ pub(super) struct Finder {
 }
 
 /// The query, the checkout count, a digest of the repository names, and whether the
-/// folders listed answer the query, with their count: what the rows were made from.
+/// folders listed answer the query, with how many answers they had: what the rows were
+/// made from.
 type Made = (String, usize, u64, bool, usize);
 
 /// A digest of `names`, so a fresh list of as many names still makes the rows again.
@@ -145,6 +149,7 @@ impl Finder {
         if let Some((asked, found)) = self.lookup.poll(ctx, typed, &self.folders_for) {
             self.folders_for = asked;
             self.folders = found;
+            self.answers += 1;
         }
     }
 
@@ -192,7 +197,7 @@ impl Finder {
             self.local_count(),
             self.digest(repositories),
             self.folders_for == typed.trim(),
-            self.folders.1.len(),
+            self.answers,
         );
         if self.made_for.as_ref() != Some(&key) {
             let previous = self
@@ -373,10 +378,18 @@ fn search_rows(query: &str, checkouts: &[Checkout], labels: &[(String, String)],
     let listed: HashSet<&str> = repositories.iter().map(String::as_str).collect();
     let mut cloned = HashSet::new();
     let mut scored: Vec<(i32, Row)> = Vec::new();
-    for (recency, (checkout, (title, detail))) in checkouts.iter().zip(labels).enumerate() {
+    // A clone that stopped halfway is no checkout to use. Its folder can still be typed as
+    // a path, and a clone into the same place picks it up.
+    let usable = checkouts.iter().zip(labels).filter(|(checkout, _)| !checkout.stopped);
+    for (recency, (checkout, (title, detail))) in usable.enumerate() {
         let name = checkout.origin.as_deref().and_then(github_name);
         let github = name.as_deref().is_some_and(|name| listed.contains(name));
-        if github && let Some(name) = &name {
+        // Only a finished checkout of its own stands in for the repository's row; a worktree
+        // or one with no commit yet is listed beside it.
+        if github
+            && checkout.complete
+            && let Some(name) = &name
+        {
             cloned.insert(name.clone());
         }
         let (score, marks) = if query.is_empty() {

@@ -19,6 +19,7 @@ fn checkout(path: &str, origin: Option<&str>) -> Checkout {
         branch: Some("main".into()),
         touched: None,
         complete: true,
+        stopped: false,
     }
 }
 
@@ -297,4 +298,50 @@ fn a_repository_already_on_this_computer_is_found_by_its_origin() {
     );
     let other = horizon_core::cloud_runtime::repository::source::parse("https://github.com/acme/api").unwrap();
     assert_eq!(finder.checkout_of(&other), None);
+}
+
+#[test]
+fn a_stopped_clone_is_no_result_and_a_worktree_hides_no_repository() {
+    let mut stopped = checkout("/home/x/github/acme/web", Some("https://github.com/acme/web"));
+    stopped.complete = false;
+    stopped.stopped = true;
+    let mut worktree = checkout("/home/x/trees/api-fix", Some("https://github.com/acme/api"));
+    worktree.complete = false;
+    let rows = rows_for("", &[stopped, worktree], &names(&["acme/web", "acme/api"]));
+    let titles: Vec<&str> = rows.iter().map(|row| row.title.as_str()).collect();
+    assert!(
+        !rows
+            .iter()
+            .any(|row| matches!(&row.kind, Kind::Local { path, .. } if path.ends_with("web"))),
+        "the stopped clone is not offered: {titles:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|row| matches!(&row.kind, Kind::GitHub { name } if name == "acme/web")),
+        "its repository's row clones it again: {titles:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|row| matches!(&row.kind, Kind::Local { path, .. } if path.ends_with("api-fix"))),
+        "{titles:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|row| matches!(&row.kind, Kind::GitHub { name } if name == "acme/api")),
+        "a worktree stands beside its repository's row: {titles:?}"
+    );
+}
+
+#[test]
+fn a_path_answered_again_makes_its_rows_again() {
+    let mut finder = super::Finder {
+        checkouts: Some(Vec::new()),
+        folders_for: "~/code/web/".into(),
+        ..super::Finder::default()
+    };
+    // First no folders, while every listing thread was busy; then the real answer.
+    assert!(finder.rows("~/code/web/", &[]).is_empty());
+    finder.folders = (Some(PathBuf::from("/x/code/web")), Vec::new());
+    finder.answers += 1;
+    assert_eq!(finder.rows("~/code/web/", &[])[0].title, "Use this repository");
 }
