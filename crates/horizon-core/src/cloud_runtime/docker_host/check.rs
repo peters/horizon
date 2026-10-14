@@ -110,7 +110,7 @@ fn reached(host: &Host, docker: &impl Docker, row: &mut dyn FnMut(Check)) -> boo
         send(row, "Connection", CheckState::Ready, detail, None);
     }
     if let Err(Failure::Refused(text)) = &answer {
-        let (detail, remedy) = refusal(text);
+        let (detail, remedy) = refusal(text, remote);
         send(row, "Docker access", CheckState::Blocked, detail, Some(remedy));
         return false;
     }
@@ -119,8 +119,9 @@ fn reached(host: &Host, docker: &impl Docker, row: &mut dyn FnMut(Check)) -> boo
     true
 }
 
-/// What a docker that ran and refused needs, from what it wrote.
-fn refusal(text: &str) -> (String, &'static str) {
+/// What a docker that ran and refused needs, from what it wrote. On this computer, docker
+/// finds its engine as the person's own shell does, such as through `DOCKER_HOST`.
+fn refusal(text: &str, remote: bool) -> (String, &'static str) {
     let lower = text.to_ascii_lowercase();
     let first = text
         .lines()
@@ -142,6 +143,12 @@ fn refusal(text: &str) -> (String, &'static str) {
     .iter()
     .any(|phrase| lower.contains(phrase))
     {
+        if !remote {
+            return (
+                "The Docker engine of this computer is not running".into(),
+                "Start Docker on this computer.",
+            );
+        }
         (
             "The Docker engine is not running or not at /var/run/docker.sock".into(),
             "Start Docker on the host. Docker Desktop on macOS links /var/run/docker.sock to its engine.",
@@ -232,6 +239,9 @@ mod tests {
         let down = "failed to connect to the docker API at unix:///var/run/docker.sock: dial unix /var/run/docker.sock: connect: no such file or directory";
         let (_, rows) = checked(Access::ThisPc, vec![Err(Failure::Refused(down.into()))]);
         assert!(rows[0].detail.contains("not running"), "{}", rows[0].detail);
+        assert!(!rows[0].detail.contains("/var/run"), "{}", rows[0].detail);
+        let (_, rows) = checked(Access::Ssh, vec![Err(Failure::Refused(down.into()))]);
+        assert!(rows[1].detail.contains("/var/run/docker.sock"), "{}", rows[1].detail);
         let (_, rows) = checked(
             Access::ThisPc,
             vec![Err(Failure::Refused("sh: docker: not found".into()))],
