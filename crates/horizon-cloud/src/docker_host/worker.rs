@@ -35,6 +35,10 @@ pub struct Journal {
     /// is refused rather than asked about this cloud's resources.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine: Option<Route>,
+    /// The engine's own ID from `docker info`, which a route cannot prove: an SSH alias
+    /// or a name can come to point at another machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_id: Option<String>,
     /// The host loopback port of the worker's SSH, pinned for the container's life.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
@@ -55,21 +59,13 @@ pub struct Route {
     pub access: super::Access,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
-    /// For this computer, the local socket `DOCKER_HOST` named, when one was set:
-    /// another socket can be another engine, such as a rootless one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub socket: Option<String>,
 }
 
 impl Route {
     fn of(host: &Host) -> Self {
-        let socket = (host.access == super::Access::ThisPc)
-            .then(|| std::env::var("DOCKER_HOST").ok().filter(|socket| !socket.is_empty()))
-            .flatten();
         Self {
             access: host.access,
             address: host.address.clone(),
-            socket,
         }
     }
 }
@@ -85,11 +81,35 @@ impl Journal {
         }
         if self.engine.as_ref().is_some_and(|engine| *engine != Route::of(host)) {
             return Err(CloudError::Invalid(
-                "This cloud's saved Docker host now reaches another engine; restore its access and address, or the DOCKER_HOST it was created with",
+                "This cloud's saved Docker host now reaches another engine; restore its access and address",
             ));
         }
         Ok(())
     }
+}
+
+impl Journal {
+    /// Refuses an engine other than the one the cloud recorded, before its answers,
+    /// such as a container that is not there, may count for this cloud.
+    /// # Errors
+    /// Another engine, or Docker failures.
+    pub fn confirms(&self, docker: &impl Docker) -> Result<(), CloudError> {
+        match &self.engine_id {
+            Some(recorded) if *recorded != engine_id(docker)? => Err(CloudError::Invalid(
+                "This cloud's saved Docker host now reaches another Docker engine than the one the cloud runs on",
+            )),
+            _ => Ok(()),
+        }
+    }
+}
+
+fn engine_id(docker: &impl Docker) -> Result<String, CloudError> {
+    let id = docker.docker(&["info".into(), "--format".into(), "{{.ID}}".into()], QUICK)?;
+    let id = id.trim();
+    if id.is_empty() || id.len() > 256 || id.chars().any(char::is_control) {
+        return Err(CloudError::InvalidResponse);
+    }
+    Ok(id.to_owned())
 }
 
 /// Where a provisioning or delete step persists what it is about to do.
@@ -414,6 +434,7 @@ pub fn provision(
     }
     let id = spec.operation_id.as_str();
     journal.admits(host)?;
+    journal.confirms(docker)?;
     if *operation == CreateState::Prepared {
         check_capacity(docker, spec)?;
         // No platform is named: Docker takes the host's own from a multi-platform image, and
@@ -422,10 +443,12 @@ pub fn provision(
         call(docker, &pull, PULL)?;
     }
     // Recorded once nothing refused the cloud, before anything is created for it.
-    if journal.host.is_none() || journal.engine.is_none() {
+    if journal.host.is_none() || journal.engine.is_none() || journal.engine_id.is_none() {
+        let engine = engine_id(docker)?;
         record(journal, records, |next| {
             next.host = Some(host.name.clone());
             next.engine = Some(Route::of(host));
+            next.engine_id = Some(engine);
         })?;
     }
     if *operation == CreateState::Prepared {
@@ -588,6 +611,7 @@ pub fn delete(
 ) -> Result<(), CloudError> {
     // Another host's engine would find nothing and report the cloud deleted.
     journal.admits(host)?;
+    journal.confirms(docker)?;
     if !crate::valid_id(operation_id) {
         return Err(CloudError::Invalid("Invalid cloud identity"));
     }

@@ -139,7 +139,8 @@ impl Host {
             Access::ThisPc => {
                 let mut command = Command::new(self.docker.as_deref().map_or_else(|| local_docker(), Path::new));
                 // A context could name another computer's engine. `Engine` refuses a
-                // `DOCKER_HOST` that is not a local socket, and the journal records it.
+                // `DOCKER_HOST` that is not a local socket, and the journal's engine ID
+                // tells one local engine from another.
                 command
                     .env("DOCKER_CONFIG", local_config)
                     .env_remove("DOCKER_CONTEXT")

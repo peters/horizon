@@ -273,6 +273,7 @@ impl DockerHost<'_> {
         }
         let host = host(self.settings, &journal, spec)?;
         let (engine, cloud_id) = (engine(host, store, cancel), state.cloud_id.clone());
+        journal.confirms(&engine)?;
         let needed = match docker_host::find(&engine, &cloud_id)? {
             Some(container) if container.id == worker_id => container.running != on,
             Some(_) => return Err(CloudError::IdentityMismatch.into()),
@@ -298,8 +299,12 @@ impl Lifecycle for DockerHost<'_> {
         cancel: &Cancellation,
     ) -> Result<(Reconciliation, CreateState)> {
         let spec = state.spec.clone().ok_or(Error::Invalid("No worker was requested"))?;
-        let host = host(self.settings, &load(store.root())?, &spec)?;
-        let found = docker_host::find(&engine(host, store, cancel), &state.cloud_id)?;
+        let journal = load(store.root())?;
+        let host = host(self.settings, &journal, &spec)?;
+        let engine = engine(host, store, cancel);
+        // A missing container counts only on the engine the cloud was created on.
+        journal.confirms(&engine)?;
+        let found = docker_host::find(&engine, &state.cloud_id)?;
         let worker = found
             .as_ref()
             .map(|container| docker_host::describe(container, host, &spec))

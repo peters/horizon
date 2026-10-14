@@ -18,6 +18,8 @@ struct Fake {
     memory_gb: u64,
     /// The engine's version; a current one when unset.
     version: Option<&'static str>,
+    /// The engine's ID; one fixed ID when unset.
+    engine: Option<&'static str>,
 }
 
 fn flag<'a>(args: &'a [String], name: &str) -> &'a str {
@@ -115,6 +117,7 @@ impl Docker for Fake {
         let words: Vec<&str> = args.iter().map(String::as_str).collect();
         let (mut containers, mut volumes) = (self.containers.borrow_mut(), self.volumes.borrow_mut());
         match words.as_slice() {
+            ["info", "--format", "{{.ID}}"] => return Ok(format!("{}\n", self.engine.unwrap_or("ENGINE-ONE"))),
             ["info", ..] => {
                 let version = self.version.unwrap_or("29.0.1");
                 let info = json!({"OSType": "linux", "NCPU": self.cpus, "MemTotal": self.memory_gb << 30, "ServerVersion": version});
@@ -404,7 +407,7 @@ fn an_engine_that_publishes_loopback_ports_openly_is_refused() {
 
 #[test]
 fn delete_removes_only_the_clouds_own_container_and_volume() {
-    let docker = Fake::host(16, 64);
+    let mut docker = Fake::host(16, 64);
     let (mut cloud, mut neighbour) = (Cloud::new("mine", 2), Cloud::new("neighbour", 2));
     cloud.provision(&docker).unwrap();
     neighbour.provision(&docker).unwrap();
@@ -444,6 +447,12 @@ fn delete_removes_only_the_clouds_own_container_and_volume() {
     )
     .unwrap_err();
     assert!(error.to_string().contains("another engine"), "{error}");
+    // Nor another engine behind the same route, such as an SSH alias moved to a new machine.
+    docker.engine = Some("ENGINE-TWO");
+    let error = cloud.delete(&docker).unwrap_err();
+    assert!(error.to_string().contains("another Docker engine"), "{error}");
+    assert!(cloud.provision(&docker).is_err());
+    docker.engine = None;
     cloud.delete(&docker).unwrap();
     let containers: Vec<String> = docker.containers.borrow().keys().cloned().collect();
     assert_eq!(containers, [neighbour.worker_id(), "foreign".into()]);

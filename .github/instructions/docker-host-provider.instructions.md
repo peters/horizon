@@ -39,8 +39,11 @@ to the deployment, the cloud lifecycle and the worker SSH connection.
   other providers.
 - A cloud records the saved host and the access and address it was created
   through. A host that is removed, or saved again under the name for another
-  engine, is refused for that cloud's lifecycle, so a delete never reports
-  success from an engine that never had the cloud.
+  engine, is refused for that cloud's lifecycle. The cloud also records the
+  engine's own ID from `docker info`, and every lifecycle step compares it, so
+  an SSH alias or a name that now points at another machine is refused too. A
+  delete therefore never reports success from an engine that never had the
+  cloud.
 - Each docker call has a time limit and stops when the operation is cancelled.
 - A delete removes only the cloud's container and workspace volume, each with
   the cloud's owner label and recorded name, and examines that both are gone.
