@@ -1,0 +1,105 @@
+//! A verified account and an operation-private Docker login for one publication.
+//! Mutable host sign-ins cannot replace credentials in a prepared operation.
+use super::{CLIENT_ID, Client, Error, Kept, LOCK, Result, Runner, STORE, Secret, private_directory, stored};
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+
+/// The provider's immutable account ID and its current namespace name. Neither is a secret.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Account {
+    pub id: u64,
+    pub login: String,
+}
+
+impl Account {
+    /// # Errors
+    /// Rejects malformed metadata and another account, even if a login name was reused.
+    pub fn check(&self, observed: &Self) -> Result<()> {
+        if self.id == 0 || observed.id != self.id || !self.login.eq_ignore_ascii_case(&observed.login) {
+            return Err(Error::Invalid(
+                "This cloud is bound to another image-publishing account. Sign in to the recorded account before retrying",
+            ));
+        }
+        if !stored::valid_login(&self.login) || !stored::valid_login(&observed.login) {
+            return Err(Error::Invalid("Invalid image-publishing account metadata"));
+        }
+        Ok(())
+    }
+}
+
+/// Owns the login until the Docker operation finishes. It cannot be debug-printed or serialized.
+pub struct Prepared {
+    account: Account,
+    config: tempfile::TempDir,
+}
+
+impl Prepared {
+    #[must_use]
+    pub fn account(&self) -> &Account {
+        &self.account
+    }
+
+    #[must_use]
+    pub fn docker_config(&self) -> &Path {
+        self.config.path()
+    }
+}
+
+/// Authorizes publication before a build and pins the Docker login to one operation.
+/// An expected account comes from the cloud's record, never repository configuration.
+/// # Errors
+/// A cancelled or refused sign-in, another account, unreachable provider or local file error.
+pub fn prepare(
+    docker_config: &Path,
+    cloud_id: &str,
+    expected: Option<&Account>,
+    runner: &Runner<'_>,
+) -> Result<Prepared> {
+    private_directory(docker_config)?;
+    let _lock = stored::lock(&docker_config.join(LOCK), || Ok(runner.cancel.check()?))?;
+    let client = Client::new();
+    prepare_with(expected, || {
+        let found =
+            stored::current_user(&docker_config.join(STORE), &client, CLIENT_ID, None).map_err(|kept| match kept {
+                Kept::Unreachable => Error::Invalid("GitHub could not be reached to prepare image publication"),
+                Kept::Unconfirmed => Error::Invalid("GitHub did not confirm the image-publishing permission; retry"),
+                Kept::Local(error) => error,
+            })?;
+        let (user, token) = match found {
+            Some(found) => found,
+            None => super::sign_in_user(docker_config, &client, cloud_id, runner)?,
+        };
+        Ok((
+            Account {
+                id: user.id,
+                login: user.login.to_ascii_lowercase(),
+            },
+            token,
+        ))
+    })
+}
+
+fn prepare_with(
+    expected: Option<&Account>,
+    authenticate: impl FnOnce() -> Result<(Account, Secret)>,
+) -> Result<Prepared> {
+    let (account, token) = authenticate()?;
+    account.check(&account)?;
+    if let Some(expected) = expected {
+        expected.check(&account)?;
+    }
+    // The existing safe skeleton supplies daemon context and CLI plugins without logins.
+    // A nonexistent chain path keeps this construction from reauthenticating another account.
+    let empty = tempfile::tempdir()?;
+    let machine = std::env::var_os("DOCKER_CONFIG")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".docker")));
+    let (config, _) = super::build_config_with(empty.path(), machine.as_deref())?;
+    super::write_auth(config.path(), &account.login, &token)?;
+    // The host's shared config remains intact, including credentials of another operation.
+    Ok(Prepared { account, config })
+}
+
+#[cfg(test)]
+mod tests;

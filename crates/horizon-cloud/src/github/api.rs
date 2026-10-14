@@ -22,6 +22,7 @@ const SEARCH_LIMIT: u64 = 24 * 1024 * 1024;
 /// commit never shows the person's own address.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct User {
+    pub id: u64,
     pub login: String,
     pub name: String,
     pub email: String,
@@ -40,7 +41,7 @@ impl Client {
             name: Option<String>,
         }
         let fields: Fields = self.get(token, "/user")?;
-        if !valid_login(&fields.login) {
+        if fields.id == 0 || !valid_login(&fields.login) {
             return Err(Error::InvalidResponse);
         }
         let name = fields
@@ -48,6 +49,7 @@ impl Client {
             .filter(|name| !name.trim().is_empty() && name.len() <= 200 && !name.chars().any(char::is_control))
             .unwrap_or_else(|| fields.login.clone());
         Ok(User {
+            id: fields.id,
             email: format!("{}+{}@users.noreply.github.com", fields.id, fields.login),
             login: fields.login,
             name,

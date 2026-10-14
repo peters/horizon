@@ -15,6 +15,8 @@ use horizon_cloud::github::{Client, Secret};
 use std::path::Path;
 use zeroize::{Zeroize as _, Zeroizing};
 
+pub mod publication;
+
 /// Horizon's own OAuth app "Horizon": public, with device sign-in on. Its tokens carry
 /// scopes, which the package registry requires.
 const CLIENT_ID: &str = "Ov23liPNCPgWraJDo6XM";
@@ -256,6 +258,15 @@ fn current(docker_config: &Path, client: &Client) -> Result<Option<(String, Secr
 }
 
 fn sign_in(docker_config: &Path, client: &Client, cloud_id: &str, runner: &Runner<'_>) -> Result<(String, Secret)> {
+    sign_in_user(docker_config, client, cloud_id, runner).map(|(user, token)| (user.login, token))
+}
+
+fn sign_in_user(
+    docker_config: &Path,
+    client: &Client,
+    cloud_id: &str,
+    runner: &Runner<'_>,
+) -> Result<(horizon_cloud::github::User, Secret)> {
     let say = |text: String| (runner.emit)(Event::Output(format!("GitHub: {text}")));
     let ended = || (runner.emit)(Event::GitHub(Prompt::Published { allowed: false }));
     // A Skip from an earlier attempt does not end this one.
@@ -293,7 +304,7 @@ fn sign_in(docker_config: &Path, client: &Client, cloud_id: &str, runner: &Runne
     stored::save(&docker_config.join(STORE), &user.login, &chain, false)?;
     say(format!("Horizon may now publish images as {}.", user.login));
     (runner.emit)(Event::GitHub(Prompt::Published { allowed: true }));
-    Ok((user.login, chain.access_token))
+    Ok((user, chain.access_token))
 }
 
 /// Sets `ghcr.io` in `docker_config/config.json` to `login` and `token`, keeping every

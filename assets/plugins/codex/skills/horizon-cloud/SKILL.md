@@ -44,6 +44,11 @@ for an explicit fresh read. Never pass an API secret to MCP.
 Status qualification uses the production UI, actual CLI and normal AGENT public
 MCP responses; baseline id/name evidence alone does not qualify API status.
 
+Image publication credentials belong on the host. An operation preparation helper
+retains the authenticated provider account ID and owns a separate temporary Docker
+login. It has no launch caller yet; existing launch behavior and explicit `image`
+requirements remain. Never copy publication credentials to a worker or repository.
+
 Discovery and price results do not authorize spending or lifecycle changes.
 Get explicit authorization for the exact resource before starting or stopping a worker.
 Keep credentials in Horizon. Do not send keys, tokens, endpoints, or raw provider

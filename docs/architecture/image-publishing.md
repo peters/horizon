@@ -5,6 +5,22 @@ The destination policy is a reusable module in `horizon-cloud`.
 It does not authenticate, send network requests or publish an image.
 The launch pipeline does not use automatic destinations yet.
 
+## Host publication preparation
+
+The host has an operation preparation helper in `github::publish::publication`.
+It authenticates the publishing account and returns non-secret account metadata with a private Docker configuration.
+The account metadata contains the provider's immutable user ID and its login name.
+The helper rejects another user ID, including a reused login. Letter case does not change the account.
+An account rename is refused because it could change the selected namespace.
+
+The operation owns its temporary Docker configuration until it finishes.
+It writes only its authenticated publishing login there, not into the host's shared Docker configuration.
+A later sign-in or another publication cannot replace that operation's credentials.
+The temporary configuration is removed when the operation is dropped.
+Credentials are neither printable nor serializable through this helper.
+Expected account metadata is untrusted and must pass validation before the login is prepared.
+This helper has no launch caller yet. The launch integration follows separately.
+
 ## Destination identity
 
 A destination contains an explicit registry repository and a non-secret publisher identity.
