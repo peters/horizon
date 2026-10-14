@@ -233,6 +233,23 @@ pub fn existing(parent: &Path, remote: &Remote) -> Option<PathBuf> {
         })
 }
 
+/// Whether `path` is a finished checkout of `remote` that stands on its own (no worktree):
+/// what a checkout found elsewhere on this computer must be to be used instead of a clone.
+/// Its `origin` may be written another way (`git@` or `https`) for the same repository.
+#[must_use]
+pub fn usable(path: &Path, remote: &Remote) -> bool {
+    path.join(".git").is_dir()
+        && origin_url(path)
+            .and_then(|origin| parse(&origin))
+            .is_some_and(|origin| {
+                origin.host == remote.host
+                    && origin.owner.eq_ignore_ascii_case(&remote.owner)
+                    && origin.name.eq_ignore_ascii_case(&remote.name)
+            })
+        && is_checkout(path)
+        && !transport::unfinished(path)
+}
+
 /// The address a checkout's `origin` was cloned from, read from its config file: a folder is
 /// looked at without starting a process, so a search can run while a dialog is drawn.
 fn origin_url(checkout: &Path) -> Option<String> {

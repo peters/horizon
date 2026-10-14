@@ -24,6 +24,9 @@ struct Plan {
     url: String,
     parent: PathBuf,
     existing: Option<PathBuf>,
+    /// How many checkouts the search had found when the plan was made: one found later may
+    /// be this repository.
+    found: usize,
     /// A folder where an earlier try at this link stopped, and that a new try picks up from.
     resumable: Option<PathBuf>,
     destination: PathBuf,
@@ -217,16 +220,16 @@ impl State {
     /// Where `remote` would be cloned; looked up again only when the link or the folder changes.
     fn plan(&mut self, remote: &Remote) -> &Plan {
         let parent = self.parent().to_owned();
-        if self
-            .plan
-            .as_ref()
-            .is_some_and(|plan| plan.url != remote.url || plan.parent != parent)
-        {
+        if self.plan.as_ref().is_some_and(|plan| {
+            plan.url != remote.url || plan.parent != parent || plan.found != self.finder.local_count()
+        }) {
             self.plan = None;
         }
         self.plan.get_or_insert_with(|| Plan {
             url: remote.url.clone(),
-            existing: source::existing(&parent, remote),
+            // A checkout of it found anywhere on this computer is used rather than cloned again.
+            existing: source::existing(&parent, remote).or_else(|| self.finder.checkout_of(remote)),
+            found: self.finder.local_count(),
             resumable: source::resumable(&parent, remote),
             destination: source::destination(&parent, remote),
             parent,
@@ -260,12 +263,7 @@ impl State {
             return;
         };
         let parent = self.parent().to_owned();
-        if let Some(path) = source::existing(&parent, &remote) {
-            self.ready = Some(path);
-            return;
-        }
-        // A checkout of it found anywhere on this computer is used rather than cloned again.
-        if let Some(path) = self.finder.checkout_of(&remote) {
+        if let Some(path) = self.plan(&remote).existing.clone() {
             self.ready = Some(path);
             return;
         }

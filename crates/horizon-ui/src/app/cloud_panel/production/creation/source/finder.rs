@@ -233,7 +233,8 @@ impl Finder {
         self.lookup.is_some()
     }
 
-    /// A checkout found on this computer of the repository `remote` names.
+    /// A checkout found on this computer of the repository `remote` names: a finished one of
+    /// its own, not a worktree or a clone that stopped.
     pub fn checkout_of(&self, remote: &source::Remote) -> Option<PathBuf> {
         let same = |origin: &str| {
             source::parse(origin).is_some_and(|found| {
@@ -245,8 +246,9 @@ impl Finder {
         self.checkouts
             .as_deref()?
             .iter()
-            .find(|checkout| checkout.origin.as_deref().is_some_and(same))
+            .filter(|checkout| checkout.origin.as_deref().is_some_and(same))
             .map(|checkout| checkout.path.clone())
+            .find(|path| source::usable(path, remote))
     }
 
     pub fn scanning(&self) -> bool {
