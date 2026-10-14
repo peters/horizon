@@ -4,7 +4,7 @@
 
 The host Horizon browser MCP (`horizon --browser-mcp`) provides `cloud_offers`,
 `cloud_list`, `cloud_upkeep`, `cloud_companions`, `cloud_companion_ensure_ready`,
-`cloud_companion_stop`, `cloud_companion_uncheck`, and `cloud_companion_operation`. Host operations require the owning Horizon to run.
+`cloud_companion_stop`, `cloud_companion_uncheck`, `cloud_companion_operation`, and `tailnet_api_credential`. Host operations require the owning Horizon to run.
 
 On a configured worker, `horizon-cloud-worker companions mcp` provides
 `cloud_companions_list`, `cloud_companion_inspect`, and `cloud_offers`.
@@ -143,7 +143,8 @@ Stored presence reports only missing or stored credential kind. It does not prov
 validity, expiry, scopes, tags or API access. Locked or malformed storage returns
 an error. Saving does not contact Tailscale, record an enrollment receipt or remove
 nodes. The foundation supplies shared storage APIs for host credential adapters.
-No API credential editor ships in this milestone. Status interfaces return kind only.
+The native owner can remove an existing API binding. There is no API entry or
+replacement control in this outcome. Status returns kind only.
 Worker enrollment still needs marker 4; storing an API credential does not enable
 a selected tailnet on an older quick-start pin.
 
@@ -163,8 +164,8 @@ No automatic node cleanup exists in this storage milestone.
 ### Credential status parity
 
 Settings > Tailnets displays Not stored, Personal API token stored, OAuth client
-stored, Reading… or Status unavailable. The row is read-only; no API credential
-editor ships in this milestone. Enrollment auth-key editing remains independent.
+stored, Reading… or Status unavailable. Owner setup buttons never reveal saved values.
+Enrollment auth-key editing remains independent.
 
 The CLI is `cloud_deploy tailnets STATE_ROOT [TAILNET_ID]`.
 CLI and `cloud_companions` return `tailnet_api_credentials` keyed by saved local
@@ -514,3 +515,37 @@ The worker image runs natively on x86 hosts. ARM64 can use an explicit emulation
 Enrollment receipts are allocation metadata, separate from the displayed device name. The bounded ledger preserves exact IDs and uncertain capture attempts through worker replacement. It adds no new MCP operation or cleanup authority; the node-cleanup activation is a separate outcome. See docs/architecture/tailnet-enrollment-receipts.md and docs/testing/procedures/tailnet-enrollment-ledger.md.
 
 The receipt-capture adapter reads only the worker's actual tagged Self.ID via pinned root SSH and the existing userspace daemon socket, persists it before readiness and records uncertain attempts before enrollment. It binds the existing allocation request and saved tailnet ID to the owning cloud root. Worker agents cannot query this private root lane. No API secret is sent to a worker and no API editor or node-delete operation is activated by this adapter.
+
+## Owner API credential removal
+
+`tailnet_api_credential` operations are `remove`, `status`, and `cancel`.
+The tool takes only `operation`, `tailnet_id` and `request_id`. Use an exact saved
+ID from `cloud_companions` and generate the UUID before submission. Remove returns
+pending_owner. It does not authorize deletion or open Settings. The person selects
+Approve API credential removal on that exact row in Settings > Tailnets, or
+Decline request. Direct native removal also needs an explicit owner click.
+
+Status and cancel require the original caller, saved ID and UUID. Requests are
+volatile, bounded to32entries, and pending approval expires after15minutes. Cancel
+refuses running writes. Applied means the local Store transaction completed;
+failed, interrupted or timed-out work does not prove rollback. Terminal results
+remain readable for15minutes after host receipt, also after catalog-row removal.
+The old approval deadline cannot discard a newly completed result. Read status
+and refresh nonsecret kind after uncertainty; do not submit a new request blindly.
+
+CLI parity uses `horizon-browser run PLAN.json` from a normal Horizon AGENT panel:
+
+```json
+{"version":1,"steps":[{"id":"remove","tool":"tailnet_api_credential","arguments":{"operation":"remove","tailnet_id":"SAVED-ID","request_id":"dff44c5a-d077-4eaf-8092-615849346347"}}]}
+```
+
+Removal preserves the saved network and enrollment auth key. It suppresses staged
+API fallback and removes only the exact registered API binding. The credential is
+desktop-global: a workspace actor cannot approve its own request. Sharing a saved
+ID intentionally shares its binding. Set/replace, secret import/getter, API
+validation and automatic node cleanup are not supplied. No provider action is needed.
+
+Reader failures and native removal failures remain separate. A successful status
+read does not erase a failed removal or prove rollback. Settings close retains
+each pending job's kind, result and failure. Use the bound request receipt for the
+Store outcome; observed kind alone does not prove the request applied.

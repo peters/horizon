@@ -1,5 +1,6 @@
 //! Cloud-only named networks. Settings never reads a saved key back into the form.
 mod api_credentials;
+pub(in crate::app) mod requests;
 pub(in crate::app) use api_credentials::Observation as ApiCredentialObservation;
 
 use crate::theme;
@@ -219,7 +220,7 @@ impl State {
             store.recover().and_then(|()| store.load()).map_err(|e| e.to_string())
         });
     }
-    pub(super) fn settings(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn settings(&mut self, ui: &mut egui::Ui, requests: &mut requests::Requests) {
         self.poll(ui.ctx());
         ui.label(egui::RichText::new("Tailnets").size(24.0).strong().color(theme::FG()));
         ui.label(egui::RichText::new("Private networks for your clouds").color(theme::FG_SOFT()));
@@ -273,6 +274,15 @@ impl State {
                         );
                         let observation = self.api_credential_observation(&network.id);
                         self.api_credentials.row(ui, &network.id, observation);
+                        self.api_credentials.manage(
+                            ui,
+                            &requests::Target {
+                                root: self.root.clone(),
+                                id: network.id.clone(),
+                                name: network.name.clone(),
+                            },
+                            requests,
+                        );
                     });
                 ui.add_space(8.0);
             }
@@ -412,6 +422,9 @@ impl State {
         }
     }
     fn status(&self, ui: &mut egui::Ui) {
+        if let Some(error) = self.api_credentials.write_error() {
+            ui.colored_label(theme::PALETTE_RED(), error);
+        }
         if let Some(error) = self.api_credentials.read_error() {
             ui.colored_label(theme::PALETTE_RED(), error);
         }

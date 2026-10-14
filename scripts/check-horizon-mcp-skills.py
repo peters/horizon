@@ -19,6 +19,7 @@ OPERATIONS = [
     ('crates/horizon-browser-control/src/manifest/device.rs', 'VideoAction', 'horizon-device', set(), 'device_panel video'),
     ('crates/horizon-browser-control/src/manifest/cloud_list.rs', 'CloudListOperation', 'horizon-cloud', {'Stop'}, 'cloud_list'),
     ('crates/horizon-browser-control/src/manifest/upkeep.rs', 'UpkeepOperation', 'horizon-cloud', set(), 'cloud_upkeep'),
+    ('crates/horizon-browser-control/src/manifest/tailnet_credential.rs', 'CredentialOperation', 'horizon-cloud', set(), 'tailnet_api_credential'),
     ('crates/horizon-browser-mcp/src/model.rs', 'ActKind', 'horizon-browser', set(), 'browser_act'),
     ('crates/horizon-browser-mcp/src/model/network.rs', 'NetworkOperation', 'horizon-browser', set(), 'browser_network'),
     ('crates/horizon-browser-mcp/src/model/video.rs', 'VideoOperation', 'horizon-browser', set(), 'browser_video'),
@@ -124,7 +125,7 @@ def check():
                 skill = 'horizon-cast'
             elif name == 'device_panel':
                 skill = 'horizon-device'
-            elif name.startswith('cloud_'):
+            elif name.startswith('cloud_') or name == 'tailnet_api_credential':
                 skill = 'horizon-cloud'
             if name not in documents.get(skill, ''):
                 errors.append(f'{relative}: {name} missing from {skill}')

@@ -232,6 +232,8 @@ impl HorizonApp {
                 &mut self.speech_model_info_cache,
                 &mut self.remote_browser_credentials,
                 &mut self.browser_create_host.remote_allocations,
+                #[cfg(feature = "cloud-workspaces")]
+                &mut self.browser_create_host.provider_usage.tailnet_credentials,
             );
         }
         #[cfg(target_os = "linux")]
@@ -427,6 +429,7 @@ fn render_settings_panel(
     model_info_cache: &mut speech::SpeechModelInfoCache,
     credentials: &mut CredentialWorkbench,
     allocations: &mut horizon_core::browser::remote_recovery::RemoteAllocations,
+    #[cfg(feature = "cloud-workspaces")] requests: &mut super::tailnets::requests::Requests,
 ) {
     let viewport_width = util::viewport_local_rect(ui).width();
     let default_width = settings_panel_default_width(viewport_width);
@@ -454,7 +457,7 @@ fn render_settings_panel(
                 SettingsTab::Tailnets => {
                     egui::ScrollArea::vertical()
                         .max_height(available.y)
-                        .show(ui, |ui| editor.tailnets.settings(ui));
+                        .show(ui, |ui| editor.tailnets.settings(ui, requests));
                 }
                 SettingsTab::Yaml => {
                     yaml_editor::render(ui, config_path, &mut editor.buffer, available);

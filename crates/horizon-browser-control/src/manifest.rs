@@ -51,6 +51,7 @@ pub mod provider_usage;
 pub mod recovery;
 mod request_queue;
 mod result;
+mod tailnet_credential;
 mod upkeep;
 mod visibility;
 mod workspace;

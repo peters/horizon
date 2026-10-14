@@ -13,6 +13,8 @@ use super::{HorizonApp, browser_requests::actor_panel};
 #[derive(Default)]
 pub(super) struct UsageHostState {
     pending: Vec<PendingUsage>,
+    #[cfg(feature = "cloud-workspaces")]
+    pub(in crate::app) tailnet_credentials: super::tailnets::requests::Requests,
 }
 
 struct PendingUsage {
@@ -21,6 +23,14 @@ struct PendingUsage {
 }
 
 impl HorizonApp {
+    #[cfg(feature = "cloud-workspaces")]
+    fn poll_tailnet_credential_requests(&mut self) {
+        self.browser_create_host
+            .provider_usage
+            .tailnet_credentials
+            .poll(manifest::now_millis());
+    }
+
     pub(super) fn poll_provider_usage(&mut self) -> bool {
         self.poll_provider_usage_queue(&UsageQueue::default())
     }
@@ -33,7 +43,13 @@ impl HorizonApp {
                 Vec::new()
             }
         };
+        #[cfg(feature = "cloud-workspaces")]
+        self.poll_tailnet_credential_requests();
         for request in requests {
+            if request.tailnet_credential.is_some() {
+                self.answer_tailnet_credential(&request);
+                continue;
+            }
             if request.cloud_companion.is_some() {
                 self.queue_cloud_companion(request);
                 continue;
@@ -120,6 +136,17 @@ impl HorizonApp {
             }
         }
         changed
+    }
+}
+
+impl HorizonApp {
+    #[cfg(not(feature = "cloud-workspaces"))]
+    fn answer_tailnet_credential(&self, request: &UsageRequest) {
+        let result = request.result(
+            Vec::new(),
+            Some("tailnet_credential_unavailable: cloud support is disabled".into()),
+        );
+        let _ = manifest::provider_usage::complete_provider_usage(&result);
     }
 }
 
