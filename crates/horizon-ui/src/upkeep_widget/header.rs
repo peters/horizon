@@ -63,7 +63,7 @@ fn buttons(ui: &mut Ui, status: &Status, actions: Actions, from_right: bool) -> 
                 let reason = if paused {
                     "Resume first: a paused Upkeep does not run."
                 } else {
-                    "A run is in progress. Only one runs at a time."
+                    "A run is in progress or about to start. Only one runs at a time."
                 };
                 ui.add_enabled(
                     !actions.busy && !paused,

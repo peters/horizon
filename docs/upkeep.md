@@ -38,7 +38,8 @@ another status document, for example one that a config file opens, has no button
 
 - **Run now** starts a run with the next exchange, which starts at once. It is
   unavailable while a run continues and while the Upkeep is paused. After a click,
-  it stays unavailable until the status shows the run, for at most 2 minutes.
+  it stays unavailable on every board of that Upkeep until the status shows a run
+  that is newer than the newest run at the click, for at most 2 minutes.
 - **Pause** stops the planned runs with the next exchange. A run in progress
   finishes. **Resume** starts the planned runs again.
 - **Repositories** opens the repository picker of New Upkeep with the list of the

@@ -269,9 +269,9 @@ pub struct UpkeepBoard {
     /// The Upkeep cloud whose status this is, once the app knows it: only such a board
     /// offers Run now, Pause and Repositories.
     pub cloud: Option<String>,
-    /// When Run now was pressed, by this computer's clock and by the monotonic one, until
-    /// the status shows the run.
-    pub run_requested: Option<(OffsetDateTime, std::time::Instant)>,
+    /// Run now was pressed: the start of the newest run the status showed then, and when it
+    /// was pressed by the monotonic clock, until the status shows a newer run.
+    pub run_requested: Option<(Option<OffsetDateTime>, std::time::Instant)>,
     latest: Option<reader::Latest>,
     /// The reader thread could not start; the board does not try again.
     reader_failed: bool,

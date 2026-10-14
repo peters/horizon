@@ -159,7 +159,7 @@ fn the_board_of_a_saved_upkeep_runs_now_and_pauses_through_its_exchange() {
 
     // As the board does when Run now is pressed.
     let pressed = (
-        horizon_core::upkeep::time::OffsetDateTime::now_utc(),
+        Some(horizon_core::upkeep::time::OffsetDateTime::now_utc()),
         std::time::Instant::now(),
     );
     upkeep(&mut app, board).run_requested = Some(pressed);
