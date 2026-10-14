@@ -109,7 +109,8 @@ fn git_origins_preserve_paths_suffixes_transports_and_local_scopes() {
 }
 
 #[test]
-#[cfg(unix)]
+// APFS refuses these byte sequences before a checkout can exist. Linux exercises the fallback.
+#[cfg(target_os = "linux")]
 fn non_utf8_local_paths_are_refused_without_lossy_package_identity() {
     use std::os::unix::ffi::OsStringExt;
     let root = tempfile::tempdir().unwrap();

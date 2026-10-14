@@ -44,7 +44,7 @@ It tests scope separation, account identity, credential-free source naming and s
 
 2. Examine the source-identity test results.
 
-   Result: URL credentials do not change the destination or enter output events. Transports, hosts, ports, complete paths and local scopes distinguish sources. Non-UTF-8 fallback paths are refused.
+   Result: URL credentials do not change the destination or enter output events. Transports, hosts, ports, complete paths and local scopes distinguish sources. The Linux filesystem case refuses non-UTF-8 fallback paths. APFS refuses those directory names before a checkout can exist.
 
 ### 6.2 IP02 — Transactional save
 
