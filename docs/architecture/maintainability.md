@@ -702,6 +702,12 @@ owns nonsecret sidecar/journal validation. Mutations use fresh OS-store slots an
 the shared tailnet lock. Public status returns only missing or stored kind.
 The core tailnet adapter reexports these types for later host adapters; worker
 enrollment still uses its separate private auth-key path.
+`app::tailnets::api_credentials` owns nonsecret background status snapshots from
+shared API credential storage. `app::tailnets` republishes changed Settings
+observations to the production cache before agent requests, and retains closed
+operation barriers before a fresh read. The `companions/agent/tailnets` leaf reads
+that root-scoped cache without filesystem or OS-store IO. CLI status lives in the
+focused `cloud_deploy/tailnets` leaf and uses the same nonsecret observation DTO.
 `image` prepares the worker image and checks its contract before allocation;
 `source` validates and packs the committed source before allocation and transfers
 it to the ready worker; `git_credentials` and `agent_credentials` install or clear

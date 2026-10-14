@@ -143,7 +143,7 @@ Stored presence reports only missing or stored credential kind. It does not prov
 validity, expiry, scopes, tags or API access. Locked or malformed storage returns
 an error. Saving does not contact Tailscale, record an enrollment receipt or remove
 nodes. The foundation supplies shared storage APIs for host credential adapters.
-No API credential editor or new public CLI/MCP credential operation ships here.
+No API credential editor ships in this milestone. Status interfaces return kind only.
 Worker enrollment still needs marker 4; storing an API credential does not enable
 a selected tailnet on an older quick-start pin.
 
@@ -159,6 +159,32 @@ For an OAuth client, select `devices:core` and `tag:horizon-worker` at Tailscale
 Do not assume the tag restricts which devices the credential can delete.
 Personal API tokens can have broad API authority and an expiry date.
 No automatic node cleanup exists in this storage milestone.
+
+### Credential status parity
+
+Settings > Tailnets displays Not stored, Personal API token stored, OAuth client
+stored, Reading… or Status unavailable. The row is read-only; no API credential
+editor ships in this milestone. Enrollment auth-key editing remains independent.
+
+The CLI is `cloud_deploy tailnets STATE_ROOT [TAILNET_ID]`.
+CLI and `cloud_companions` return `tailnet_api_credentials` keyed by saved local
+ID: ready with credential.state missing/stored, and credential.kind personal_token
+or oauth when stored. CLI also reports unavailable. MCP uses background snapshots
+and also reports pending. Pending/unavailable never mean missing. Settings need
+not be open. While Settings is open, pending and completed observations update
+MCP before request handling; closing Settings is not required for a status update.
+Neither a null catalog nor an empty map proves credential absence.
+Cached status is not continuous OS-store monitoring. Use Tailnets Refresh for an
+explicit fresh read after a service change; unavailable remains distinct from missing.
+The native status procedure requires frozen production UI/CLI artifacts and
+normal host-launched AGENT public MCP observations through the existing Device
+viewer and native-input interfaces. Baseline legacy id/name proof is insufficient.
+A saved ID reused across profiles intentionally shares its API binding.
+Status can finish prior recorded local recovery and retire exact obsolete slots;
+it submits no new credential mutation, imports no secret and starts no node cleanup.
+Completed saved-tailnet deletion prunes only its exact disabled API record. A stale
+status reply must not restore a removed ID. Metadata cleanup failure retains the
+recorded deletion intent; it does not authorize another binding.
 
 ## Tagged tailnet enrollment
 

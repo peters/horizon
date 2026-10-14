@@ -71,6 +71,38 @@ fn snapshot() -> Snapshot {
     }
 }
 
+#[test]
+fn companion_request_poll_loads_tailnet_metadata_with_settings_closed() {
+    let (temp, mut app) = crate::app::test_support::test_app();
+    let root = temp.path().join("cloud");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("tailnets.json"), br#"{"tailnets":[]}"#).unwrap();
+    app.cloud_prototype.root = Some(root.clone());
+    app.cloud_prototype.production.tailnets = crate::app::tailnets::State::for_root_fixture(root.clone());
+    assert!(app.settings.is_none());
+    assert!(app.companion_listing("workspace")["tailnets"].is_null());
+    let ctx = egui::Context::default();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app
+        .cloud_prototype
+        .production
+        .tailnets
+        .cached_catalog_at(&root)
+        .is_none()
+    {
+        assert!(
+            Instant::now() < deadline,
+            "background catalog load must settle without Settings"
+        );
+        app.poll_cloud_companion_requests(&ctx);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let listing = app.companion_listing("workspace");
+    assert_eq!(listing["tailnets"], json!([]));
+    assert_eq!(listing["tailnet_api_credentials"], json!({}));
+    assert!(app.settings.is_none());
+}
+
 /// An app with an agent panel in workspace `agents`, whose cloud `source` declares the
 /// companion `consumer`: the app's temporary folder, the app, the workspace and the agent.
 fn agent_app() -> (tempfile::TempDir, crate::app::HorizonApp, String, String) {

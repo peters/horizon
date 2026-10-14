@@ -89,6 +89,11 @@ pub(super) struct SettingsEditor {
 }
 
 impl SettingsEditor {
+    #[cfg(feature = "cloud-workspaces")]
+    pub(in crate::app) fn tailnet_status_state(&mut self) -> &mut super::tailnets::State {
+        &mut self.tailnets
+    }
+
     /// Adopt config text that was just written to disk by another path, so
     /// the YAML buffer, the saved baseline and the GUI tabs' parsed snapshot
     /// all describe the file again.

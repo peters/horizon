@@ -2,6 +2,7 @@
 //! the lifecycle service; loading, checking a box and restoring Horizon never start
 //! a companion. A request's operation runs on the target cloud's card, as its own
 //! buttons would, and the agent polls its status by operation ID.
+mod tailnets;
 use super::{CloudGroups, HorizonApp, Owner};
 use crate::app::browser_requests::actor_panel;
 use horizon_core::{
@@ -105,6 +106,15 @@ impl HorizonApp {
 
     /// Starts queued agent requests and finishes the ones whose jobs answered.
     pub(in crate::app::cloud_panel) fn poll_cloud_companion_requests(&mut self, ctx: &egui::Context) {
+        if self.cloud_prototype.root.is_some() {
+            self.cloud_prototype.production.tailnets.poll(ctx);
+            if let Some(settings) = self.settings.as_mut() {
+                self.cloud_prototype
+                    .production
+                    .tailnets
+                    .observe_settings(settings.tailnet_status_state(), ctx);
+            }
+        }
         for request in std::mem::take(&mut self.cloud_prototype.production.companions.agent.queued) {
             if let Err(error) = self.start_companion_request(&request, ctx) {
                 complete(&request, Err(error));
@@ -344,14 +354,11 @@ impl HorizonApp {
                 }))
             })
             .collect::<Vec<_>>();
-        let tailnets = self
-            .cloud_prototype
-            .root
-            .as_deref()
-            .map(cloud_runtime::tailnet::store)
-            .and_then(|store| store.load().ok())
-            .map(|catalog| catalog.tailnets);
-        json!({ "clouds": clouds, "tailnets": tailnets })
+        let tailnets = tailnets::inventory(
+            &self.cloud_prototype.production.tailnets,
+            self.cloud_prototype.root.as_deref(),
+        );
+        json!({ "clouds": clouds, "tailnets": tailnets.tailnets, "tailnet_api_credentials": tailnets.api_credentials })
     }
 
     /// Runs a submitted operation on the target cloud's card when nothing else is
