@@ -4,7 +4,7 @@ feature: Cloud panels smoke test, area L (stop, resume, reconnect, restart, reco
 platforms: [linux]
 cost: rents compute
 destructive: yes
-secrets: [RunPod API key in Cloud settings, Hetzner Cloud API token in Cloud settings, registry push and pull credentials]
+secrets: [RunPod API key in Cloud settings, Hetzner Cloud API token in Cloud settings, registry push and pull credentials, Anthropic API-key file in Cloud settings]
 owner: peters
 ---
 
@@ -859,6 +859,69 @@ and no `idle_stop_minutes` at the start.
     Result: The confirmation shows **Rebuild refused:** with the field `gpu`. Click
     **Keep current image**, then revert the commit.
 
+If Cloud settings has an Anthropic API-key file, do steps 15 to 21 with `smoke-sib`.
+`<anthropic-key>` is that file. At the start, the profile of the cloud has
+`agents: [claude]`.
+
+> **CAUTION:** MOVE THE FILE BACK IN STEP 19. Until then, no cloud of this computer
+> can deploy, reconnect or rebuild with the agent `claude`.
+
+15. Move `<anthropic-key>` to a backup.
+
+    ```sh
+    mv <anthropic-key> <anthropic-key>.l13-backup
+    ```
+
+    Result: `<anthropic-key>` does not exist.
+
+16. In `<repo>`, add `codex` to `capabilities.agents` of the profile of the cloud.
+    Do not commit the change.
+
+    Result: `git -C <repo> status --short` shows `.horizon/cloud.yml` as modified.
+
+17. On the card, click **Rebuild image & restart…**.
+
+    Result: The confirmation lists `Adds agent codex`.
+
+18. Click **Rebuild and restart**.
+
+    Result: The card shows this refusal:
+
+    ```text
+    Rebuild refused: Agent claude cannot use its API-key file <anthropic-key>: the file is missing. A reconnect of this cloud with this profile needs this file too, so fix it before the rebuild
+    ```
+
+    After the refusal, Horizon reconnects the cloud automatically. That reconnect
+    fails with this message:
+
+    ```text
+    Agent claude cannot use its API-key file <anthropic-key>: the file is missing
+    ```
+
+19. Move the file back.
+
+    ```sh
+    mv <anthropic-key>.l13-backup <anthropic-key>
+    ```
+
+    Result: `<anthropic-key>` exists.
+
+20. Discard the change of step 16.
+
+    ```sh
+    git -C <repo> checkout -- .horizon/cloud.yml
+    ```
+
+    Result: `git -C <repo> status --short` shows nothing.
+
+> **CAUTION:** THE NEXT STEP SENDS THE ANTHROPIC API KEY TO THE WORKER AGAIN. Do it
+> only on `smoke-sib`.
+
+21. On the card, click **Reconnect cloud**.
+
+    Result: The card shows **Ready**. The **Machine** tab shows `Agents` with
+    `claude` only.
+
 ### 6.14 L14: Rebuild from an uncommitted recipe
 
 Use `smoke-sib` on RunPod. Its profile has a `build` section. In the steps,
@@ -1010,6 +1073,9 @@ Use `smoke-sib` on RunPod. Its profile has a `build` section. In the steps,
   and on Hetzner. The confirmation lists each change before the rebuild starts. An
   added agent has its credential. A session of a removed agent is reported once and
   does not relaunch. A later reconnect does not report it again.
+- If Cloud settings has an Anthropic API-key file, a rebuild that adds `codex` while
+  that file is missing is refused before the build. The refusal names `claude`, the
+  file, and that a reconnect needs it too.
 - A rebuild takes uncommitted settings and uncommitted recipe files. The confirmation
   lists each uncommitted file and never an ignored file. A secret file name and a file
   changed after the confirmation refuse the rebuild. The harness rebuild refuses a
@@ -1090,6 +1156,14 @@ to 12 revoke it while the fixture runs.
 12. Delete `<data-home>/smoke/registry-status.json`.
 
     Result: No registry action file of this run stays in the private home.
+
+13. If `<anthropic-key>.l13-backup` from L13 exists, move it back.
+
+    ```sh
+    test ! -e <anthropic-key>.l13-backup || mv <anthropic-key>.l13-backup <anthropic-key>
+    ```
+
+    Result: `<anthropic-key>.l13-backup` does not exist.
 
 Area X deletes the other clouds.
 

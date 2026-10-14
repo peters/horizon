@@ -1630,8 +1630,13 @@ Horizon also refuses a profile with values that no profile can have, for example
 `idle_stop_minutes` together with hosted devices. For each change, the rebuild output
 shows a line that starts with `Profile change:`, for example `Profile change: Adds
 agent codex`. Before Horizon builds, it checks the API key file of each agent in the
-new profile, as each deployment does. Thus an added agent with an unusable key file
-stops the rebuild before the worker changes.
+new profile, not only of an added agent, as each deployment does. A reconnect of the
+cloud needs each of these files too. Thus an unusable key file stops the rebuild
+before the long build and before the worker changes. The refusal names the agent, the file
+and the problem, and says that a reconnect needs the file too, for example `Agent
+claude cannot use its API-key file /home/me/keys/anthropic: the file is missing`.
+Fix the file, or remove the agent from the profile, and rebuild again. **Continue
+rebuild** does the same check until Horizon requests the image switch.
 
 Some differences are not a change. When you create the cloud, you choose these
 values in **New cloud**:

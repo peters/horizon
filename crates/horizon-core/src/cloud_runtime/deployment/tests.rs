@@ -532,7 +532,7 @@ fn local_preparation_and_unsent_replacements_preserve_mutation_evidence() {
         )
         .unwrap_err();
         if failure == "auth" {
-            assert!(matches!(error, Error::Io(_)));
+            assert!(matches!(error, Error::AgentCredential { agent: "codex", .. }));
         } else {
             assert!(matches!(error, Error::Command(_)));
         }
