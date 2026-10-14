@@ -408,9 +408,11 @@ mod tests {
     use super::*;
 
     fn settings(hosts: &serde_json::Value) -> Result<Settings> {
+        // Absolute on every platform, which the settings require.
+        let absent = std::env::temp_dir().join("absent");
         let settings: Settings = serde_json::from_value(serde_json::json!({
-            "runpod_key_file": "/absent/key", "ssh_identity_file": "/absent/identity",
-            "docker_config": "/absent/docker", "registry_pull_auth_id": null,
+            "runpod_key_file": absent.join("key"), "ssh_identity_file": absent.join("identity"),
+            "docker_config": absent.join("docker"), "registry_pull_auth_id": null,
             "cpu_flavors": [], "gpu_types": [], "docker_hosts": hosts
         }))
         .map_err(|_| Error::Json)?;
