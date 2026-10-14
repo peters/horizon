@@ -1695,12 +1695,12 @@ readiness, Horizon gives the credentials of each added agent to the worker, as f
 new cloud, and relaunches each session's process in its existing worktree without
 resetting it. Images without the relaunch contract report those sessions lost, as
 Stop and Resume do. A session of an agent that the rebuild removed does not relaunch.
-The output reports it, for example `Session panel-1 (codex): this cloud's profile no
-longer has agent codex, so its process was not relaunched`. The output reports each
-such session once: the cloud keeps the record of the session, marked as reported, so
-later reconnects and reconnects after a restart of Horizon do not report it again. If
-a later rebuild adds the agent again, the session relaunches in its worktree and the
-mark is cleared. A session that ends for another reason is always reported.
+The output reports it once, for example `Session panel-1 (codex): this cloud's profile
+no longer has agent codex, so its process was not relaunched`. The cloud keeps the
+record of the session, marked as reported, so later reconnects, also after a restart
+of Horizon, do not report it again. If a later rebuild adds the agent again, the
+session relaunches in its worktree and the mark is cleared. A session that ends for
+another reason is always reported.
 
 The replacement is journaled in the deployment record before each provider
 mutation, and older Horizon versions cannot read the record while the update may
