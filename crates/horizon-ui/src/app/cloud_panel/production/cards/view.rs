@@ -85,6 +85,19 @@ fn teasers(group: &CloudGroup, runtime: &Runtime, status: &Status, occupancy: Oc
 }
 
 /// Provider and profile, then where the cloud lives and its size.
+/// How wide the title and the subtitle are without truncation, as the header paints them.
+fn title_width(ui: &egui::Ui, title: &str, subtitle: &str) -> f32 {
+    use crate::app::cloud_panel::render::{SUBTITLE_SIZE, TITLE_SIZE};
+    let painter = ui.painter();
+    let width = |text: &str, size: f32| {
+        painter
+            .layout_no_wrap(text.to_owned(), egui::FontId::proportional(size), theme::FG())
+            .size()
+            .x
+    };
+    width(title, TITLE_SIZE).max(width(subtitle, SUBTITLE_SIZE))
+}
+
 fn subtitle(group: &CloudGroup, runtime: &Runtime) -> String {
     let provider = group.environment.provider.as_deref().unwrap_or("Local");
     let provider = horizon_core::cloud_runtime::provider::by_id(provider).map_or(provider, |described| described.label);
@@ -171,16 +184,20 @@ impl Production {
         };
         let spend = super::cost::spend(runtime, now);
         let layout = layout_controls(group, &status, occupancy);
+        let subtitle = subtitle(group, runtime);
         let mut strip = strip::show(
             ui,
-            header,
+            strip::Header {
+                rect: header,
+                title_width: title_width(ui, &group.title, &subtitle),
+            },
             &status,
             &indicators,
             &spend,
             runtime.drawer.is_some(),
             layout,
         );
-        strip.subtitle = subtitle(group, runtime);
+        strip.subtitle = subtitle;
         status::keep(runtime, status, frame);
         strip
     }

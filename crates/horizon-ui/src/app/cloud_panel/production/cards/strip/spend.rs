@@ -17,17 +17,30 @@ const ABOVE: f32 = 4.0;
 /// Space between the title row's centre and the second row's top.
 const BELOW: f32 = 2.0;
 
+/// How many rows of the spend a width check is for.
+#[derive(Clone, Copy)]
+pub(super) enum Rows {
+    One,
+    Two,
+}
+
 /// Paints `spend` with its right edge at `right`, centred on `y`. Both rows show when
-/// `fits` allows the wider one, otherwise only the first; `None` when even that does
+/// `fits` allows their width, otherwise only the first; `None` when even that does
 /// not fit.
-pub(super) fn paint(ui: &egui::Ui, right: f32, y: f32, spend: &Spend, fits: impl Fn(f32) -> bool) -> Option<Rect> {
+pub(super) fn paint(
+    ui: &egui::Ui,
+    right: f32,
+    y: f32,
+    spend: &Spend,
+    fits: impl Fn(f32, Rows) -> bool,
+) -> Option<Rect> {
     let painter = ui.painter();
     let line = painter.layout_no_wrap(spend.line.clone(), FontId::proportional(14.0), theme::FG_SOFT());
     let outlook = spend
         .outlook
         .as_ref()
         .map(|text| painter.layout_no_wrap(text.clone(), FontId::proportional(12.5), theme::FG_DIM()))
-        .filter(|outlook| fits(outlook.size().x.max(line.size().x)));
+        .filter(|outlook| fits(outlook.size().x.max(line.size().x), Rows::Two));
     let shown_outlook = outlook.is_some();
     let rect = match outlook {
         Some(outlook) => {
@@ -41,7 +54,7 @@ pub(super) fn paint(ui: &egui::Ui, right: f32, y: f32, spend: &Spend, fits: impl
             painter.galley(second, outlook, theme::FG_DIM());
             rect
         }
-        None if fits(line.size().x) => {
+        None if fits(line.size().x, Rows::One) => {
             let rect = Rect::from_min_size(pos2(right - line.size().x, y - line.size().y / 2.0), line.size());
             painter.galley(rect.min, line, theme::FG_SOFT());
             rect

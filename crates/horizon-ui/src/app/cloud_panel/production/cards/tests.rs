@@ -6,6 +6,8 @@ use horizon_core::{cloud_panel::CloudLaunch, cloud_runtime::state::Deployment};
 
 const LINE: &str = "$1.02 run · $8.86 total · $7.68/day";
 const OUTLOOK: &str = "$53.76/wk · $233.60/mo · +$130.12 by Oct 31 if left running";
+/// The untruncated width of the title and subtitle beside the strip.
+const TITLE_WIDTH: f32 = 260.0;
 
 /// Every text and control the header strip draws for `status`, at `width`.
 fn strip_frame(width: f32, status: &status::Status) -> (strip::Strip, Vec<(String, egui::Rect)>, egui::Rect) {
@@ -26,7 +28,18 @@ fn strip_frame(width: f32, status: &status::Status) -> (strip::Strip, Vec<(Strin
                 outlook: Some(OUTLOOK.into()),
                 explanation: String::new(),
             };
-            result = Some(strip::show(ui, header, status, &indicators, &spend, false, None));
+            result = Some(strip::show(
+                ui,
+                strip::Header {
+                    rect: header,
+                    title_width: TITLE_WIDTH,
+                },
+                status,
+                &indicators,
+                &spend,
+                false,
+                None,
+            ));
         })
         .discard_textures();
     let texts = output
@@ -103,6 +116,10 @@ fn the_header_strip_fits_the_narrowest_cloud_with_long_errors() {
                 assert!(
                     outlook.top() >= line.bottom(),
                     "the outlook sits under the line at {width}"
+                );
+                assert!(
+                    outlook.left() >= 64.0 + TITLE_WIDTH,
+                    "the outlook never shortens the title at {width}"
                 );
             }
             assert_eq!(

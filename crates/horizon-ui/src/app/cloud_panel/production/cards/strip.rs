@@ -16,6 +16,8 @@ const CONTROLS_Y: f32 = 35.0;
 /// Room the title keeps before optional controls are dropped.
 const TITLE_MIN: f32 = 170.0;
 const TITLE_LEFT: f32 = 64.0;
+/// Space between the end of the title and the spend's second row.
+const TITLE_GAP: f32 = 24.0;
 
 /// Which way the local network bridge is going, for its indicator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,6 +66,18 @@ pub(super) fn header_fits_layout(width: f32) -> bool {
     width >= LAYOUT_MIN_HEADER
 }
 
+/// The header's rectangle, and how wide its title and subtitle are untruncated.
+pub(in crate::app::cloud_panel) struct Header {
+    pub rect: Rect,
+    pub title_width: f32,
+}
+
+impl From<Rect> for Header {
+    fn from(rect: Rect) -> Self {
+        Self { rect, title_width: 0.0 }
+    }
+}
+
 pub(in crate::app::cloud_panel) struct Strip {
     /// Width from the header's right edge that the title must leave free.
     pub reserved: f32,
@@ -109,13 +123,17 @@ pub(super) fn stage_color(stage: Stage) -> Color32 {
 
 pub(super) fn show(
     ui: &mut egui::Ui,
-    header: Rect,
+    header: Header,
     status: &Status,
     indicators: &Indicators,
     spend: &Spend,
     drawer_open: bool,
     layout: Option<LayoutControls>,
 ) -> Strip {
+    let Header {
+        rect: header,
+        title_width,
+    } = header;
     let mut action = None;
     let y = header.top() + CONTROLS_Y;
     let close_left = header.right() - 42.0;
@@ -144,7 +162,13 @@ pub(super) fn show(
         paint_indicators(ui, pos2(left - width, y), placed);
         left -= width + 22.0;
     }
-    if indicators_fit && let Some(rect) = spend::paint(ui, left, y, spend, |width| room(left, width)) {
+    // The spend's second row never shortens the title or the subtitle; the first may.
+    let title_end = header.left() + TITLE_LEFT + title_width + TITLE_GAP;
+    let fits = |width: f32, rows: spend::Rows| match rows {
+        spend::Rows::One => room(left, width),
+        spend::Rows::Two => room(left, width) && left - width >= title_end,
+    };
+    if indicators_fit && let Some(rect) = spend::paint(ui, left, y, spend, fits) {
         left = rect.left() - 24.0;
     }
     let mut reserved_row = 0.0;
