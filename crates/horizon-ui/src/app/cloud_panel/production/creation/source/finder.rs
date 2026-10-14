@@ -233,6 +233,22 @@ impl Finder {
         self.lookup.is_some()
     }
 
+    /// A checkout found on this computer of the repository `remote` names.
+    pub fn checkout_of(&self, remote: &source::Remote) -> Option<PathBuf> {
+        let same = |origin: &str| {
+            source::parse(origin).is_some_and(|found| {
+                found.host == remote.host
+                    && found.owner.eq_ignore_ascii_case(&remote.owner)
+                    && found.name.eq_ignore_ascii_case(&remote.name)
+            })
+        };
+        self.checkouts
+            .as_deref()?
+            .iter()
+            .find(|checkout| checkout.origin.as_deref().is_some_and(same))
+            .map(|checkout| checkout.path.clone())
+    }
+
     pub fn scanning(&self) -> bool {
         self.scan.is_some()
     }
@@ -557,9 +573,9 @@ impl super::State {
     /// holds now, before keys and the focus lock use them.
     pub(super) fn update_rows(&mut self, ctx: &egui::Context) {
         let typed = self.input.trim().to_owned();
-        if self.searching() {
-            self.finder.poll(ctx, &typed);
-        }
+        // The search for checkouts goes on also once a repository is chosen, so a clone can
+        // still find that it is already on this computer.
+        self.finder.poll(ctx, if self.searching() { &typed } else { "" });
         let repositories = self
             .account
             .as_ref()

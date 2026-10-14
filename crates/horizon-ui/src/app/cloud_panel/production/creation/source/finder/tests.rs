@@ -276,3 +276,21 @@ fn a_chosen_repository_stays_chosen_when_its_checkout_is_found() {
     assert!(matches!(row.kind, Kind::Local { .. }), "{row:?}");
     assert_eq!(row.repo.as_deref(), Some("acme/web"));
 }
+
+#[test]
+fn a_repository_already_on_this_computer_is_found_by_its_origin() {
+    let finder = super::Finder {
+        checkouts: Some(vec![checkout(
+            "/home/x/elsewhere/web",
+            Some("git@github.com:Acme/web.git"),
+        )]),
+        ..super::Finder::default()
+    };
+    let remote = horizon_core::cloud_runtime::repository::source::parse("https://github.com/acme/web").unwrap();
+    assert_eq!(
+        finder.checkout_of(&remote),
+        Some(PathBuf::from("/home/x/elsewhere/web"))
+    );
+    let other = horizon_core::cloud_runtime::repository::source::parse("https://github.com/acme/api").unwrap();
+    assert_eq!(finder.checkout_of(&other), None);
+}

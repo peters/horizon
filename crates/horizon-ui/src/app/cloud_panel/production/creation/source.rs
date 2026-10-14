@@ -264,6 +264,11 @@ impl State {
             self.ready = Some(path);
             return;
         }
+        // A checkout of it found anywhere on this computer is used rather than cloned again.
+        if let Some(path) = self.finder.checkout_of(&remote) {
+            self.ready = Some(path);
+            return;
+        }
         // A clone that stopped is picked up from what it received, not started again.
         let destination = source::resumable(&parent, &remote).unwrap_or_else(|| source::destination(&parent, &remote));
         // What the probe read without one needs no token, whatever was typed before.

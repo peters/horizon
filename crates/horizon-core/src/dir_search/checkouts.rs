@@ -93,6 +93,21 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
     } else {
         Vec::new()
     };
+    // The usual places are read first of all, before the home folder's own entries spend
+    // the budget.
+    for name in FIRST {
+        let place = root.join(name);
+        if let Some(real) = resolved(&place, &guarded)
+            && real.is_dir()
+            && seen.insert(real)
+        {
+            if let Some(checkout) = read(&place, &guarded) {
+                found.push(checkout);
+            } else {
+                preferred.push_back((place, 1));
+            }
+        }
+    }
     let mut visits = 0;
     while let Some((folder, depth)) = preferred.pop_front().or_else(|| queue.pop_front()) {
         visits += 1;
@@ -474,5 +489,26 @@ mod tests {
         }
         assert_eq!(super::read(&repo, &[]), None, "a pipe is not a repository");
         assert!(super::small_file(&repo.join(".git"), &[]).is_none());
+    }
+
+    #[test]
+    fn the_usual_places_are_read_although_the_home_folder_is_full() {
+        let home = tempfile::tempdir().unwrap();
+        for n in 0..50 {
+            fs::create_dir_all(home.path().join(format!("aaa-{n:03}"))).unwrap();
+        }
+        let git = home.path().join("github/acme/web/.git");
+        fs::create_dir_all(&git).unwrap();
+        fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        // Reading the usual places first, a search stopped after the first folder still has it.
+        let mut reads = 0;
+        let found = super::checkouts_while(home.path(), &mut |_| {
+            reads += 1;
+            reads < 3
+        });
+        assert!(
+            found.iter().any(|checkout| checkout.path.ends_with("github/acme/web")),
+            "{found:?}"
+        );
     }
 }
