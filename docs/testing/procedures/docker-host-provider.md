@@ -250,11 +250,14 @@ In each command, `cloud_deploy` stands for `"$cloud_deploy"` from setup step 2.
    Result: `other_providers` has a section with `provider: docker-host`, an
    offer with `id: this-pc` and `estimated_total: 0`.
 
-2. Start a cloud for `$T/repo` with `cloud_deploy deploy` under the fixture's
-   cloud folder, make it a companion of another cloud, and call
-   `cloud_companion_ensure_ready` for it.
+2. Run `cargo test -p horizon-core --lib
+   companions::lifecycle::tests::a_checked_companion_binds_to_the_checkout_its_deployment_records`.
 
-   Result: The tool refuses with `cloud_companion_unsupported`.
+   Result: The test passes. It binds a companion whose cloud record names a
+   Docker host, first as a new binding and then as a binding that already
+   exists, and both times gets `cloud_companion_unsupported`. This procedure
+   does not make a live companion on a host: the
+   [companion clouds procedure](companion-clouds.md) needs two rented clouds.
 
 ## 7. Pass criteria
 

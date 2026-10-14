@@ -92,11 +92,15 @@ impl State {
         if requirements.gpu || requirements.region.is_some() {
             return Some(Vec::new());
         }
-        let current = self.fetched.as_ref().filter(|fetched| fetched.at.elapsed() < FRESH);
-        if current.is_none() && self.job.is_some() && deadline_in_millis > ANSWER_MARGIN_MILLIS {
-            return None;
-        }
-        Some(hosts::section(self.readings(), requirements).into_iter().collect())
+        // A reading older than FRESH, also one whose refresh failed, offers nothing: free
+        // capacity changes as clouds start and stop.
+        let Some(current) = self.fetched.as_ref().filter(|fetched| fetched.at.elapsed() < FRESH) else {
+            if self.job.is_some() && deadline_in_millis > ANSWER_MARGIN_MILLIS {
+                return None;
+            }
+            return Some(Vec::new());
+        };
+        Some(hosts::section(&current.value, requirements).into_iter().collect())
     }
 
     /// As if the hosts had just been read, for the dialog tests, which never reach one
@@ -107,5 +111,38 @@ impl State {
             value: readings,
             at: std::time::Instant::now(),
         });
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use horizon_core::cloud_runtime::{
+        docker_host::{Capacity, Host},
+        offers::Requirements,
+    };
+
+    #[test]
+    fn only_a_current_reading_is_offered() {
+        let reading = Reading {
+            host: serde_json::from_value::<Host>(serde_json::json!({"name": "build-box", "access": "this-pc"}))
+                .unwrap(),
+            capacity: Ok(Capacity {
+                cpus: 8,
+                memory_bytes: 16 << 30,
+                free_nano_cpus: 8_000_000_000,
+                free_memory_bytes: 16 << 30,
+                architecture: "x86_64".into(),
+                version: "28.5.1".into(),
+            }),
+        };
+        let mut state = State::default();
+        state.answered(vec![reading.clone()]);
+        assert_eq!(state.sections(&Requirements::default(), 0).unwrap().len(), 1);
+        state.fetched = Some(Fetched {
+            value: vec![reading],
+            at: Instant::now().checked_sub(FRESH * 2).unwrap(),
+        });
+        assert_eq!(state.sections(&Requirements::default(), 0), Some(Vec::new()));
     }
 }
