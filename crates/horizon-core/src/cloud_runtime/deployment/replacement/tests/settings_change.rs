@@ -159,7 +159,7 @@ fn an_unconfirmed_profile_or_an_unusable_credential_of_an_added_agent_is_refused
     assert_eq!(
         error.to_string(),
         format!(
-            "Agent codex cannot use its API-key file {}: the file is missing. A reconnect of this cloud needs this file too, so fix it before the rebuild",
+            "Agent codex cannot use its API-key file {}: the file is missing. A reconnect of this cloud with this profile needs this file too, so fix it before the rebuild",
             key.display()
         )
     );
@@ -187,7 +187,7 @@ fn a_rebuild_that_adds_an_agent_names_the_unusable_file_of_an_agent_the_cloud_al
         assert_eq!(
             error,
             format!(
-                "Agent claude cannot use its API-key file {}: the file is missing. A reconnect of this cloud needs this file too, so fix it before the rebuild",
+                "Agent claude cannot use its API-key file {}: the file is missing. A reconnect of this cloud with this profile needs this file too, so fix it before the rebuild",
                 claude.display()
             )
         );
@@ -490,7 +490,7 @@ fn continuing_an_unsent_settings_change_checks_the_added_agent_credential_again(
     assert_eq!(
         error.to_string(),
         format!(
-            "Agent codex cannot use its API-key file {}: API-key file must be private (0600). A reconnect of this cloud needs this file too, so fix it before the rebuild",
+            "Agent codex cannot use its API-key file {}: API-key file must be private (0600). A reconnect of this cloud with this profile needs this file too, so fix it before the rebuild",
             key.display()
         )
     );

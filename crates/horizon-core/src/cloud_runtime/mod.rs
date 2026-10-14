@@ -73,7 +73,7 @@ pub enum Error {
     #[error(
         "Agent {agent} cannot use its API-key file {}: {problem}{}",
         path.display(),
-        if *rebuild { ". A reconnect of this cloud needs this file too, so fix it before the rebuild" } else { "" }
+        if *rebuild { ". A reconnect of this cloud with this profile needs this file too, so fix it before the rebuild" } else { "" }
     )]
     AgentCredential {
         agent: &'static str,
