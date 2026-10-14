@@ -506,7 +506,7 @@ token at once.
   the checkouts that changed last come first.
 - A repository that is on GitHub and on this computer shows one time, with both
   badges. If you choose it, Horizon uses the checkout.
-- Type a path that starts with `/`, `~` or `.` to see its folders. **Tab** opens
+- Type a path that starts with `/`, `~`, `./` or `../` to see its folders. **Tab** opens
   the highlighted folder, and **Enter** uses a repository.
 - Paste a link to clone a repository. Choosing a GitHub repository that is not
   on this computer puts its link in the field. Continue clones it on this

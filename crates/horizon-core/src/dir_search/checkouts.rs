@@ -81,7 +81,11 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
     let guarded: Vec<PathBuf> = if cfg!(target_os = "macos") {
         GUARDED
             .iter()
-            .map(|name| std::fs::canonicalize(root.join(name)).unwrap_or_else(|_| root.join(name)))
+            .flat_map(|name| {
+                let named = root.join(name);
+                let real = std::fs::canonicalize(&named).unwrap_or_else(|_| named.clone());
+                [named, real]
+            })
             .collect()
     } else {
         Vec::new()
@@ -109,12 +113,18 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
             })
             .filter_map(|entry| {
                 let path = entry.path();
-                let folder = match entry.file_type() {
+                // A link's target is read before anything is looked up through it, so a link
+                // into a guarded folder never touches it.
+                let into_guarded = |path: &Path| guarded.iter().any(|guarded| path.starts_with(guarded));
+                let is_folder = match entry.file_type() {
                     Ok(kind) if kind.is_dir() => true,
-                    Ok(kind) if kind.is_symlink() => path.is_dir(),
+                    Ok(kind) if kind.is_symlink() => {
+                        let target = std::fs::read_link(&path).map(|target| folder.join(target));
+                        !target.is_ok_and(|target| into_guarded(&target)) && path.is_dir()
+                    }
                     _ => false,
                 };
-                if !folder {
+                if !is_folder {
                     return None;
                 }
                 let place = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());

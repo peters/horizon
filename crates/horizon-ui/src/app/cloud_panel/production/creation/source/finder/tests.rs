@@ -223,3 +223,20 @@ fn letters_that_lower_to_more_than_one_still_light_their_own_place() {
     let found = super::fuzzy::score("w", "İacme/web").unwrap();
     assert_eq!(found.positions, [6]);
 }
+
+#[test]
+fn a_typed_folder_that_is_a_repository_offers_itself_first() {
+    let mut finder = super::Finder {
+        checkouts: Some(Vec::new()),
+        folders_for: "~/code/web/".into(),
+        folders: (
+            Some(PathBuf::from("/x/code/web")),
+            vec![(PathBuf::from("/x/code/web/src"), false)],
+        ),
+        ..super::Finder::default()
+    };
+    let rows = finder.rows("~/code/web/", &[]).to_vec();
+    assert_eq!(rows[0].title, "Use this repository");
+    assert_eq!(pick(&rows[0], false), Pick::Checkout(PathBuf::from("/x/code/web")));
+    assert_eq!(rows[1].title, "src");
+}

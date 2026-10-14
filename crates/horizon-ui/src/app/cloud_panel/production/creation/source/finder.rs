@@ -88,13 +88,20 @@ fn digest(names: &[String]) -> u64 {
 }
 
 /// Folders of a typed path, each with whether it holds a repository.
-type Folders = Vec<(PathBuf, bool)>;
+/// The folders of a typed path, each with whether it holds a repository, and the typed
+/// folder itself when it ends in a separator and holds one.
+type Folders = (Option<PathBuf>, Vec<(PathBuf, bool)>);
 
 /// Lists the folders of a typed path on a thread, with whether each holds a repository,
 /// so no folder is read while a frame is drawn.
 fn spawn_folders(query: String) -> Receiver<Folders> {
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
+        let here = query
+            .ends_with(std::path::is_separator)
+            .then(|| dir_search::resolve_query_path(&query))
+            .flatten()
+            .filter(|path| path.join(".git").exists());
         let found = dir_search::spawn_lookup(query).recv().unwrap_or_default();
         let marked = found
             .into_iter()
@@ -103,7 +110,7 @@ fn spawn_folders(query: String) -> Receiver<Folders> {
                 (path, checkout)
             })
             .collect();
-        let _ = sender.send(marked);
+        let _ = sender.send((here, marked));
     });
     receiver
 }
@@ -179,7 +186,7 @@ impl Finder {
                     // A lookup that ended without an answer found nothing.
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                         self.folders_for.clone_from(asked);
-                        self.folders.clear();
+                        self.folders = (None, Vec::new());
                         self.lookup = None;
                     }
                 }
@@ -202,7 +209,7 @@ impl Finder {
             self.local_count(),
             digest(repositories),
             self.folders_for == typed.trim(),
-            self.folders.len(),
+            self.folders.1.len(),
         );
         if self.made_for.as_ref() != Some(&key) {
             let previous = self.rows.get(self.highlighted).map(|row| row.kind.clone());
@@ -212,7 +219,21 @@ impl Finder {
                 if self.stale {
                     std::mem::take(&mut self.rows)
                 } else {
-                    folder_rows(&key.0, &self.folders)
+                    let mut rows = Vec::new();
+                    // A typed folder that is itself a repository can be used from here.
+                    if let Some(here) = &self.folders.0 {
+                        rows.push(Row {
+                            title: "Use this repository".into(),
+                            detail: dir_search::abbreviate_home(here),
+                            marks: Vec::new(),
+                            kind: Kind::Local {
+                                path: here.clone(),
+                                github: false,
+                            },
+                        });
+                    }
+                    rows.extend(folder_rows(&key.0, &self.folders.1));
+                    rows
                 }
             } else {
                 let checkouts = self.checkouts.as_deref().unwrap_or_default();

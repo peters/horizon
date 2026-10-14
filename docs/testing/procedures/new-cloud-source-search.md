@@ -163,9 +163,9 @@ takes a pasted link. It also proves the keyboard: the arrow keys, **Enter** and
 4. Select all the text in the field and type `~/github/acme/`. Highlight `web` and
    push **Tab**.
 
-   Result: The field shows `~/github/acme/web/` and the rows show its folders. The
-   dialog does not use the repository until you push **Enter** on a row or delete
-   the last `/`.
+   Result: The field shows `~/github/acme/web/`. The first row is **Use this
+   repository**, and the rows below it show its folders. The dialog does not use
+   the repository until you push **Enter** on a row or delete the last `/`.
 
 5. Clear the field. While the rows show, push **Down** two times, then wait for
    the spinner beside the counts to stop.
