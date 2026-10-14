@@ -131,6 +131,10 @@ image of its own architecture.
 
 ### 6.4 W04 — A published tag is not replaced
 
+> **CAUTION:** THIS TASK RUNS THE PUBLISHING WORKFLOW AGAIN.
+> If the tag guard is defective, the run replaces the published images and moves
+> the `main` and `cpu` tags.
+
 1. Open the run of task W02. Select **Re-run all jobs**.
 
    Result: Each **Publish worker helpers** job stops in the step **Publish** with
