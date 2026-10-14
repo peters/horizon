@@ -65,9 +65,14 @@ impl BrowserController {
         })?;
         let started = Instant::now();
         loop {
-            if let Some(result) = provider_usage::take_provider_usage_result(self.identity(), &id)
-                .map_err(|_| "upkeep_result_unavailable".to_string())?
-            {
+            let taken = match provider_usage::take_provider_usage_result(self.identity(), &id) {
+                Ok(taken) => taken,
+                // Horizon holds the queue lock while it writes an answer, which a slow disk
+                // can stretch past the lock wait: the answer is still coming.
+                Err(error) if error.kind() == std::io::ErrorKind::TimedOut => None,
+                Err(_) => return Err("upkeep_result_unavailable".into()),
+            };
+            if let Some(result) = taken {
                 if let Some(error) = result.error {
                     return Err(error);
                 }
