@@ -40,13 +40,16 @@ pub struct Checkout {
     pub branch: Option<String>,
     /// When the repository last changed: its index, or its `HEAD` without one.
     pub touched: Option<SystemTime>,
-    /// A finished checkout of its own: its `.git` is a folder (no worktree), its `HEAD`
-    /// names a commit, and no clone into it stopped halfway. Only such a checkout stands in
-    /// for a clone.
+    /// A finished checkout: its `HEAD` names a commit, read from its repository's refs (a
+    /// worktree's are its main repository's), and no clone into it stopped halfway. Only
+    /// such a checkout stands in for a clone.
     pub complete: bool,
     /// A clone into it started and stopped halfway: its files are no checkout to use, and
     /// cloning the repository again picks the clone up.
     pub stopped: bool,
+    /// A linked worktree (its git folder names a `commondir`), on a branch of its own,
+    /// rather than the repository's own checkout, also one cloned with `--separate-git-dir`.
+    pub worktree: bool,
 }
 
 /// Looks for checkouts on a background thread, most recently changed first.
@@ -306,6 +309,8 @@ fn settled(mut found: Vec<Checkout>) -> Vec<Checkout> {
 /// The checkout in `path`, or `None` when it holds no repository. A worktree's `.git` is a
 /// file that names the repository's own folder, which holds its config.
 fn read(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
+    let dot = path.join(".git");
+    let kind = std::fs::symlink_metadata(&dot).ok()?.file_type();
     // A checkout whose repository lies in a guarded folder, also through links, is listed,
     // but nothing of it is read there.
     let unread = || Checkout {
@@ -315,15 +320,13 @@ fn read(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
         touched: None,
         complete: false,
         stopped: false,
+        worktree: !kind.is_dir(),
     };
-    let dot = path.join(".git");
-    let kind = std::fs::symlink_metadata(&dot).ok()?.file_type();
     let Some(dot) = resolved(&dot, guarded) else {
         return Some(unread());
     };
     let meta = std::fs::symlink_metadata(&dot).ok()?;
-    let own = meta.is_dir();
-    let git = if own {
+    let git = if meta.is_dir() {
         dot
     } else if meta.is_file() || kind.is_symlink() {
         let pointer = small_file(&dot, guarded)?;
@@ -343,11 +346,14 @@ fn read(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
         .strip_prefix("ref: refs/heads/")
         .filter(|name| *name != ".invalid")
         .map(str::to_owned);
-    let common = small_file(&git.join("commondir"), guarded).map_or_else(
+    let commondir = small_file(&git.join("commondir"), guarded);
+    let worktree = commondir.is_some();
+    let common = commondir.map_or_else(
         || Some(git.clone()),
         |common| resolved(&git.join(common.trim()), guarded),
     );
     let config = common
+        .as_ref()
         .and_then(|common| small_file(&common.join("config"), guarded))
         .unwrap_or_default();
     let modified = |name: &str| {
@@ -360,7 +366,8 @@ fn read(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
         guarded,
     )
     .is_some_and(|marker| crate::cloud_runtime::repository::source::clone_stopped(&marker));
-    let complete = own && head_resolves(&git, head.trim(), guarded) && !stopped;
+    // Branches live in the repository's shared folder, also for a worktree.
+    let complete = common.is_some_and(|common| head_resolves(&common, head.trim(), guarded)) && !stopped;
     Some(Checkout {
         path: path.to_owned(),
         origin: origin(&config),
@@ -368,6 +375,7 @@ fn read(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
         touched: modified("index").or_else(|| modified("HEAD")),
         complete,
         stopped,
+        worktree,
     })
 }
 
@@ -632,6 +640,51 @@ mod tests {
         )
         .unwrap();
         assert!(super::read(&repo, &[]).unwrap().complete, "a packed ref counts");
+    }
+
+    #[test]
+    fn a_worktree_on_a_branch_with_a_commit_is_complete() {
+        let home = tempfile::tempdir().unwrap();
+        let main = home.path().join("code/web/.git");
+        let own = main.join("worktrees/fix");
+        fs::create_dir_all(&own).unwrap();
+        fs::write(own.join("HEAD"), "ref: refs/heads/fix\n").unwrap();
+        fs::write(own.join("commondir"), "../..\n").unwrap();
+        fs::write(
+            main.join("config"),
+            "[remote \"origin\"]\n\turl = https://github.com/acme/web\n",
+        )
+        .unwrap();
+        let tree = home.path().join("trees/fix");
+        fs::create_dir_all(&tree).unwrap();
+        fs::write(tree.join(".git"), format!("gitdir: {}\n", own.display())).unwrap();
+        assert!(
+            !super::read(&tree, &[]).unwrap().complete,
+            "no commit on its branch yet"
+        );
+        fs::write(
+            main.join("packed-refs"),
+            "0123456789abcdef0123456789abcdef01234567 refs/heads/fix\n",
+        )
+        .unwrap();
+        let read = super::read(&tree, &[]).unwrap();
+        assert!(read.complete, "its branch is in the main repository's refs");
+        assert!(read.worktree);
+        assert_eq!(read.origin.as_deref(), Some("https://github.com/acme/web"));
+    }
+
+    #[test]
+    fn a_separate_git_folder_is_no_worktree() {
+        let home = tempfile::tempdir().unwrap();
+        let git = home.path().join("store/web.git");
+        fs::create_dir_all(&git).unwrap();
+        fs::write(git.join("HEAD"), "0123456789abcdef0123456789abcdef01234567\n").unwrap();
+        let repo = home.path().join("code/web");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(repo.join(".git"), format!("gitdir: {}\n", git.display())).unwrap();
+        let read = super::read(&repo, &[]).unwrap();
+        assert!(read.complete);
+        assert!(!read.worktree, "cloned with --separate-git-dir, still its own checkout");
     }
 
     #[test]

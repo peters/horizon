@@ -20,6 +20,7 @@ fn checkout(path: &str, origin: Option<&str>) -> Checkout {
         touched: None,
         complete: true,
         stopped: false,
+        worktree: false,
     }
 }
 
@@ -301,13 +302,14 @@ fn a_repository_already_on_this_computer_is_found_by_its_origin() {
 }
 
 #[test]
-fn a_stopped_clone_is_no_result_and_a_worktree_hides_no_repository() {
+fn a_stopped_clone_is_no_result_and_an_empty_checkout_hides_no_repository() {
     let mut stopped = checkout("/home/x/github/acme/web", Some("https://github.com/acme/web"));
     stopped.complete = false;
     stopped.stopped = true;
-    let mut worktree = checkout("/home/x/trees/api-fix", Some("https://github.com/acme/api"));
-    worktree.complete = false;
-    let rows = rows_for("", &[stopped, worktree], &names(&["acme/web", "acme/api"]));
+    // A checkout with no commit yet, such as a fresh `git init` given an origin.
+    let mut empty = checkout("/home/x/trees/api-fix", Some("https://github.com/acme/api"));
+    empty.complete = false;
+    let rows = rows_for("", &[stopped, empty], &names(&["acme/web", "acme/api"]));
     let titles: Vec<&str> = rows.iter().map(|row| row.title.as_str()).collect();
     assert!(
         !rows
@@ -328,7 +330,7 @@ fn a_stopped_clone_is_no_result_and_a_worktree_hides_no_repository() {
     assert!(
         rows.iter()
             .any(|row| matches!(&row.kind, Kind::GitHub { name } if name == "acme/api")),
-        "a worktree stands beside its repository's row: {titles:?}"
+        "an empty checkout stands beside its repository's row: {titles:?}"
     );
 }
 
@@ -344,4 +346,29 @@ fn a_path_answered_again_makes_its_rows_again() {
     finder.folders = (Some(PathBuf::from("/x/code/web")), Vec::new());
     finder.answers += 1;
     assert_eq!(finder.rows("~/code/web/", &[])[0].title, "Use this repository");
+}
+
+#[test]
+fn the_repository_s_own_checkout_comes_before_a_worktree() {
+    let mut tree = checkout("/home/x/trees/web-fix", Some("https://github.com/acme/web"));
+    tree.worktree = true;
+    let remote = horizon_core::cloud_runtime::repository::source::parse("acme/web").unwrap();
+    let mut finder = super::Finder {
+        // The worktree changed last, so the search lists it first.
+        checkouts: Some(vec![
+            tree,
+            checkout("/home/x/github/acme/web", Some("git@github.com:acme/web.git")),
+        ]),
+        ..super::Finder::default()
+    };
+    assert_eq!(
+        finder.checkout_of(&remote),
+        Some(PathBuf::from("/home/x/github/acme/web"))
+    );
+    finder.checkouts.as_mut().unwrap().pop();
+    assert_eq!(
+        finder.checkout_of(&remote),
+        Some(PathBuf::from("/home/x/trees/web-fix")),
+        "a worktree when it is the only one"
+    );
 }

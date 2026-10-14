@@ -171,15 +171,36 @@ impl Finder {
         self.lookup.looking(&self.folders_for)
     }
 
-    /// A checkout found on this computer of the repository `remote` names: a finished one of
-    /// its own, not a worktree or a clone that stopped.
+    /// The path of [`Self::found_checkout`].
+    #[cfg(test)]
     pub fn checkout_of(&self, remote: &source::Remote) -> Option<PathBuf> {
-        let same = |origin: &str| source::parse(origin).is_some_and(|found| source::same_repository(&found, remote));
-        self.checkouts
-            .as_deref()?
+        self.found_checkout(remote).map(|checkout| checkout.path.clone())
+    }
+
+    /// Puts `checkouts` in as if the search had found them, still searching when `scanning`.
+    #[cfg(test)]
+    pub fn found_for_test(&mut self, checkouts: Vec<Checkout>, scanning: bool) {
+        self.labels = checkouts
             .iter()
-            .find(|checkout| checkout.complete && checkout.origin.as_deref().is_some_and(same))
-            .map(|checkout| checkout.path.clone())
+            .map(|checkout| (checkout_title(checkout), checkout_detail(checkout)))
+            .collect();
+        self.checkouts = Some(checkouts);
+        self.scanned = true;
+        self.scan = scanning.then(|| std::sync::mpsc::channel().1);
+    }
+
+    /// A checkout found on this computer of the repository `remote` names: a finished one,
+    /// not one with no commit or a clone that stopped. The repository's own checkout comes
+    /// before a worktree, whose branch and changes are another piece of work.
+    pub fn found_checkout(&self, remote: &source::Remote) -> Option<&Checkout> {
+        let same = |origin: &str| source::parse(origin).is_some_and(|found| source::same_repository(&found, remote));
+        let found = self.checkouts.as_deref()?;
+        let usable = || {
+            found
+                .iter()
+                .filter(|checkout| checkout.complete && checkout.origin.as_deref().is_some_and(same))
+        };
+        usable().find(|checkout| !checkout.worktree).or_else(|| usable().next())
     }
 
     pub fn scanning(&self) -> bool {
@@ -384,8 +405,8 @@ fn search_rows(query: &str, checkouts: &[Checkout], labels: &[(String, String)],
     for (recency, (checkout, (title, detail))) in usable.enumerate() {
         let name = checkout.origin.as_deref().and_then(github_name);
         let github = name.as_deref().is_some_and(|name| listed.contains(name));
-        // Only a finished checkout of its own stands in for the repository's row; a worktree
-        // or one with no commit yet is listed beside it.
+        // Only a finished checkout stands in for the repository's row, a worktree too; one
+        // with no commit yet is listed beside it.
         if github
             && checkout.complete
             && let Some(name) = &name

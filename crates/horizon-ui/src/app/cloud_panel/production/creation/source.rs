@@ -24,6 +24,9 @@ struct Plan {
     url: String,
     parent: PathBuf,
     existing: Option<PathBuf>,
+    /// `existing` is a worktree found by the search: the repository's own checkout may still
+    /// turn up and comes first.
+    worktree: bool,
     /// The checkout at the clone's own place, looked up on the disk once per link and folder.
     at_destination: Option<PathBuf>,
     /// How many checkouts the search had found when `existing` was worked out: one found later
@@ -239,6 +242,7 @@ impl State {
             Plan {
                 url: remote.url.clone(),
                 existing: at_destination.clone(),
+                worktree: false,
                 at_destination,
                 found: usize::MAX,
                 resumable: source::resumable(&parent, remote),
@@ -250,7 +254,16 @@ impl State {
         // above runs once per link and folder. One found anywhere is used rather than cloned.
         if plan.found != found {
             plan.found = found;
-            plan.existing = plan.at_destination.clone().or_else(|| finder.checkout_of(remote));
+            let found = plan
+                .at_destination
+                .is_none()
+                .then(|| finder.found_checkout(remote))
+                .flatten();
+            plan.worktree = found.is_some_and(|checkout| checkout.worktree);
+            plan.existing = plan
+                .at_destination
+                .clone()
+                .or_else(|| found.map(|checkout| checkout.path.clone()));
         }
         plan
     }
@@ -422,7 +435,9 @@ impl State {
         // While the search for checkouts runs, a checkout of it may still turn up; Continue
         // waits for it a few seconds after the link was typed, not for the whole search.
         let waiting = self.changed.is_some_and(|at| at.elapsed() < SCAN_WAIT);
-        if waiting && self.finder.scanning() && self.plan(&remote).existing.is_none() {
+        let plan = self.plan(&remote);
+        let unsure = plan.existing.is_none() || plan.worktree;
+        if waiting && self.finder.scanning() && unsure {
             return Err("Looking for this repository on this computer…");
         }
         if !looked_up && self.plan(&remote).existing.is_none() {
@@ -786,6 +801,41 @@ mod tests {
         )
         .unwrap();
         folder
+    }
+
+    #[test]
+    fn a_worktree_found_first_waits_for_the_repository_s_own_checkout() {
+        let temp = tempfile::tempdir().unwrap();
+        let found = |path: &str, worktree: bool| horizon_core::dir_search::Checkout {
+            path: PathBuf::from(path),
+            origin: Some("https://github.com/demo-org/demo-atlas".into()),
+            branch: Some("main".into()),
+            touched: None,
+            complete: true,
+            stopped: false,
+            worktree,
+        };
+        let mut state = typed("github.com/demo-org/demo-atlas");
+        state.set_parent(temp.path());
+        state.remote();
+        state
+            .finder
+            .found_for_test(vec![found("/x/trees/atlas-fix", true)], true);
+        assert_eq!(
+            state.next_step(),
+            Err("Looking for this repository on this computer…"),
+            "the repository's own checkout may still turn up"
+        );
+        state.finder.found_for_test(
+            vec![found("/x/trees/atlas-fix", true), found("/x/code/atlas", false)],
+            true,
+        );
+        assert!(state.next_step().is_ok());
+        let remote = source::parse("github.com/demo-org/demo-atlas").unwrap();
+        assert_eq!(
+            state.plan(&remote).existing.as_deref(),
+            Some(Path::new("/x/code/atlas"))
+        );
     }
 
     #[test]
