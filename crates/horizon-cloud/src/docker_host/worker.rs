@@ -162,6 +162,10 @@ fn containers(docker: &impl Docker, filter: &str) -> Result<Vec<Container>, Clou
 /// # Errors
 /// Reports Docker failures and more than one such container.
 pub fn find(docker: &impl Docker, operation_id: &str) -> Result<Option<Container>, CloudError> {
+    // Docker commands are split on spaces, so the ID must be plain.
+    if !crate::valid_id(operation_id) {
+        return Err(CloudError::Invalid("Invalid cloud identity"));
+    }
     let mut found = containers(docker, &owner(operation_id))?;
     found.retain(|container| container.name == container_name(operation_id));
     match found.len() {
@@ -277,6 +281,20 @@ fn port_taken(error: &str) -> bool {
     error.contains("port is already allocated") || error.contains("address already in use")
 }
 
+/// Changes `journal` only once the change is persisted, so a failed save leaves the
+/// caller's copy as it was and a retry records it again.
+fn record(
+    journal: &mut Journal,
+    records: &mut impl Records,
+    change: impl FnOnce(&mut Journal),
+) -> Result<(), CloudError> {
+    let mut next = journal.clone();
+    change(&mut next);
+    records.journal(&next)?;
+    *journal = next;
+    Ok(())
+}
+
 fn save(operation: &mut CreateState, next: CreateState, records: &mut impl Records) -> Result<(), CloudError> {
     records.operation(&next)?;
     *operation = next;
@@ -305,9 +323,16 @@ pub fn provision(
     if spec.profile.gpu || spec.startup_metadata.is_some() {
         return Err(CloudError::Invalid("A Docker host runs dedicated CPU workers only"));
     }
-    // Docker commands are split on spaces, so their words must be plain.
-    if !crate::valid_id(&spec.operation_id) || !crate::valid_image(&spec.image_digest) {
-        return Err(CloudError::Invalid("Worker requires a stable operation ID and image"));
+    // As `WorkerSpec::validate`, whose profile rules do not know this provider yet.
+    // Docker commands are split on spaces, so their words must be plain too.
+    if !crate::valid_id(&spec.operation_id)
+        || !crate::valid_image(&spec.image_digest)
+        || !spec.image_digest.contains("@sha256:")
+        || !crate::valid_public_key(&spec.public_key)
+    {
+        return Err(CloudError::Invalid(
+            "Worker requires a stable operation ID, an immutable image digest and an Ed25519 public key",
+        ));
     }
     let id = spec.operation_id.as_str();
     if journal.host.as_ref().is_some_and(|recorded| *recorded != host.name) {
@@ -320,14 +345,12 @@ pub fn provision(
     }
     // Recorded once nothing refused the cloud, before anything is created for it.
     if journal.host.is_none() {
-        journal.host = Some(host.name.clone());
-        records.journal(journal)?;
+        record(journal, records, |next| next.host = Some(host.name.clone()))?;
     }
     if *operation == CreateState::Prepared {
         if !volume(docker, id)? {
             if !journal.volume {
-                journal.volume = true;
-                records.journal(journal)?;
+                record(journal, records, |next| next.volume = true)?;
             }
             call(
                 docker,
@@ -373,8 +396,7 @@ fn bind(
                 port
             } else {
                 let port = choose_port(docker, id, &avoid)?;
-                journal.port = Some(port);
-                records.journal(journal)?;
+                record(journal, records, |next| next.port = Some(port))?;
                 port
             };
             create(docker, spec, port)?;
@@ -476,8 +498,7 @@ pub fn delete(
         return Err(CloudError::Invalid("This cloud lives on another Docker host"));
     }
     if !journal.deleting {
-        journal.deleting = true;
-        records.journal(journal)?;
+        record(journal, records, |next| next.deleting = true)?;
     }
     if let Some(container) = find(docker, operation_id)? {
         call(
@@ -499,6 +520,5 @@ pub fn delete(
         CreateState::Prepared | CreateState::Requested => container_name(operation_id),
     };
     save(operation, CreateState::Terminated { worker_id }, records)?;
-    *journal = Journal::default();
-    records.journal(journal)
+    record(journal, records, |next| *next = Journal::default())
 }

@@ -160,10 +160,15 @@ struct Cloud {
     journal: Journal,
     operations: Vec<CreateState>,
     mutations: usize,
+    /// Every journal save fails.
+    unsaved: bool,
 }
 
 impl Records for Cloud {
     fn journal(&mut self, journal: &Journal) -> Result<(), CloudError> {
+        if self.unsaved {
+            return Err(CloudError::Persistence);
+        }
         self.journal = journal.clone();
         Ok(())
     }
@@ -385,6 +390,26 @@ fn delete_removes_only_the_clouds_own_container_and_volume() {
         .insert("horizon-cloud-taken-workspace".into(), None);
     let error = Cloud::new("taken", 2).provision(&docker).unwrap_err();
     assert!(error.to_string().contains("did not create"), "{error}");
+}
+
+#[test]
+fn a_worker_request_needs_an_immutable_image_and_a_valid_key() {
+    let docker = Fake::host(8, 16);
+    let mut cloud = Cloud::new("loose", 2);
+    cloud.spec.as_mut().unwrap().image_digest = "ghcr.io/example/worker:latest".into();
+    assert!(cloud.provision(&docker).is_err());
+    let mut keyless = Cloud::new("keyless", 2);
+    keyless.spec.as_mut().unwrap().public_key = "ssh-ed25519 short".into();
+    assert!(keyless.provision(&docker).is_err());
+    assert!(docker.calls.borrow().is_empty(), "nothing reached Docker");
+    // A journal that cannot be saved is not changed, so a retry saves it again.
+    let mut unsaved = Cloud::new("unsaved", 2);
+    unsaved.unsaved = true;
+    let (spec, mut operation, mut journal) = (unsaved.spec.clone().unwrap(), CreateState::Prepared, Journal::default());
+    let error = provision(&docker, &host(), &spec, &mut operation, &mut journal, &mut unsaved).unwrap_err();
+    assert!(matches!(error, CloudError::Persistence));
+    assert_eq!((journal, operation), (Journal::default(), CreateState::Prepared));
+    assert!(docker.volumes.borrow().is_empty());
 }
 
 #[test]
