@@ -1037,3 +1037,14 @@ for setup, limits and evidence boundaries.
 admission checks. Its transport runs bounded commands against a local engine
 or an authenticated SSH host. Tailscale trust checks are separate from command
 construction. The probe changes no host software or access.
+
+### Docker host provider
+
+`horizon-cloud::docker_host` runs workers on a Docker engine that the person
+already has. The module root holds the saved `Host` and builds the docker
+command for this computer, `ssh` or `tailscale ssh`, and the `ProxyCommand`
+that reaches a worker on the host's loopback. `command` runs one bounded,
+cancellable docker call. `worker` is the storage-free lifecycle: capacity
+check, pinned port, owner labels, provision, power and delete. It hands its
+`Journal` and the operation fence to the caller's `Records` before the request
+that each guards. Nothing calls the module yet.

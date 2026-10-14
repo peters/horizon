@@ -140,6 +140,7 @@ impl Pod {
             private_ip: None,
             network_zone: None,
             env: self.env,
+            docker_host: None,
         })
     }
 }
