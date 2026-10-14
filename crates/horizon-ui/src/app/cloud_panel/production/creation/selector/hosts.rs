@@ -80,11 +80,12 @@ pub(super) fn card(ui: &mut Ui, card: &Card) -> bool {
             ui.label(RichText::new("No rent").size(19.0).strong().color(theme::FG()));
             ui.add(egui::Label::new(RichText::new(&free).size(12.0).color(theme::FG_SOFT())).wrap());
             ui.horizontal(|ui| widgets::pill(ui, word, color));
+            // New cloud is a tooltip-order modal, so hover text would draw under it.
+            if let Some(reason) = card.refusal {
+                ui.add(egui::Label::new(RichText::new(reason).size(12.0).color(theme::FG_SOFT())).wrap());
+            }
         })
     });
-    if let Some(reason) = card.refusal {
-        response.response.on_hover_text(reason);
-    }
     response.inner
 }
 

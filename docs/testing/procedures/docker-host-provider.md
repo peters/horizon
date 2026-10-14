@@ -265,8 +265,8 @@ In each command, `cloud_deploy` stands for `"$cloud_deploy"` from setup step 2.
 4. Add `build: {context: ., dockerfile: Dockerfile}` to the profile `local`
    and select it.
 
-   Result: The host card shows **Cannot run this profile**. Its hover text
-   says that a Docker host runs public images only.
+   Result: The host card shows **Cannot run this profile**, and below it the
+   reason: a Docker host runs public images only.
 
 5. Restore the profile `local`, select it and click **Start cloud**.
 
