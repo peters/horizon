@@ -43,7 +43,7 @@ documents that are not yet STE.
 | [companion-clouds](procedures/companion-clouds.md) | Companion clouds, agent access to the SSH alias, the key and the catalog | rents compute |
 | [connect-github](procedures/connect-github.md) | Connect GitHub: the GitHub card, per-cloud sign-in in both modes, reconnect, skip and access requests | rents compute |
 | [device-type-multi-chunk](procedures/device-type-multi-chunk.md) | `horizon-device` text input in several `type` actions | none |
-| [docker-host-provider](procedures/docker-host-provider.md) | Clouds on an existing Docker host: create, stop, resume, delete, owned resources and the New cloud mark | none |
+| [docker-host-provider](procedures/docker-host-provider.md) | Clouds on an existing Docker host: create, stop, resume, delete, owned resources, the Cloud settings card and Check, and `cloud_offers` | none |
 | [github-app-tokens](procedures/github-app-tokens.md) | GitHub App user tokens: device sign-in, renewal, refusal and expiry | none |
 | [local-network-bridge-agent-access](procedures/local-network-bridge-agent-access.md) | Local Network Bridge, agent access on the worker | rents compute |
 | [new-cloud-catalog-refresh](procedures/new-cloud-catalog-refresh.md) | New cloud dialog, background price refresh and layout height | none |

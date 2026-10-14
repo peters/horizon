@@ -95,7 +95,7 @@ pub(super) fn compared(form: &Production) -> Vec<&'static Description> {
 
 /// A provider's mark, `size` points square: its logo where Horizon has one, else a
 /// drawn mark, so listing a new provider needs one line here.
-pub(super) fn mark(ui: &mut egui::Ui, provider: &Description, size: f32) {
+pub(in crate::app::cloud_panel::production) fn mark(ui: &mut egui::Ui, provider: &Description, size: f32) {
     let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::hover());
     match provider.kind {
         provider::Kind::RunPod => {

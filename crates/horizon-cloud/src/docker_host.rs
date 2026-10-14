@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::{path::Path, process::Command};
 
 pub use command::{Docker, Engine, Failure};
-pub use worker::{Container, Journal, Records, Route, delete, describe, find, power, provision};
+pub use worker::{Capacity, Container, Journal, Records, Route, capacity, delete, describe, find, power, provision};
 
 /// The profile's `provider` value.
 pub const PROVIDER: &str = "docker-host";
@@ -197,6 +197,49 @@ impl Host {
             _ => None,
         })
     }
+}
+
+/// The saved host `name` as a `cloud_offers` offer: at no rent, the largest worker its
+/// free CPU and memory hold now. None for GPU requirements and for a host below the
+/// requested minimums or in no region; nothing is reserved.
+#[must_use]
+pub fn offer(
+    name: &str,
+    capacity: &Capacity,
+    requirements: &crate::offers::Requirements,
+) -> Option<crate::offers::Offer> {
+    let (vcpu, memory_gb) = capacity.largest();
+    if requirements.gpu
+        || requirements.region.is_some()
+        || !capacity.native()
+        || requirements.min_vcpu.is_some_and(|min| vcpu < min)
+        || requirements.min_memory_gb.is_some_and(|min| memory_gb < min)
+        || vcpu == 0
+        || memory_gb == 0
+    {
+        return None;
+    }
+    Some(crate::offers::Offer {
+        provider: PROVIDER,
+        currency: crate::provider::DOCKER_HOST.currency,
+        kind: "cpu",
+        id: name.to_owned(),
+        name: format!("Docker host {name}: {}", capacity.free()),
+        vcpu: Some(vcpu),
+        memory_gb: Some(memory_gb),
+        gpu_memory_gb: None,
+        hourly: 0.0,
+        flavors: Vec::new(),
+        estimated_total: 0.0,
+        monthly: None,
+        stopped_monthly: 0.0,
+        location: None,
+        availability: "host_capacity",
+        regions_in_stock: Vec::new(),
+        host: "own",
+        interruptible: false,
+        rentable: true,
+    })
 }
 
 /// This computer's docker: the one on `PATH`, else where Docker Desktop and Homebrew

@@ -1,6 +1,7 @@
 //! Machine account form; filesystem work and key generation run outside rendering.
 mod chatgpt;
 mod dashboard;
+mod docker_hosts;
 mod fields;
 mod github;
 mod needed;
@@ -96,6 +97,7 @@ pub(in crate::app::cloud_panel) struct State {
     measured: bool,
     github: github::Card,
     chatgpt: chatgpt::Card,
+    docker_hosts: docker_hosts::Card,
     needed: needed::Needed,
 }
 
@@ -142,10 +144,14 @@ impl State {
         self.open && self.continue_creation
     }
 
-    fn render_fields(&mut self, ui: &mut egui::Ui) -> Option<horizon_core::cloud_runtime::registry::Action> {
+    fn render_fields(
+        &mut self,
+        ui: &mut egui::Ui,
+        hosts: &mut super::prices::hosts::State,
+    ) -> Option<horizon_core::cloud_runtime::registry::Action> {
         let state = self;
         let registry_action = ui
-            .add_enabled_ui(state.receiver.is_none(), |ui| dashboard::page(ui, state))
+            .add_enabled_ui(state.receiver.is_none(), |ui| dashboard::page(ui, state, hosts))
             .inner;
         if let Some(status) = &state.registry_status {
             ui.label(status);
@@ -183,7 +189,8 @@ impl State {
                         self.draft.is_some()
                             && self.receiver.is_none()
                             && !self.github.connecting()
-                            && !self.chatgpt.busy(),
+                            && !self.chatgpt.busy()
+                            && !self.docker_hosts.editing(),
                         egui::Button::new(if self.continue_creation {
                             "Save and start"
                         } else {
@@ -357,9 +364,15 @@ impl HorizonApp {
 
     pub(in crate::app::cloud_panel) fn render_cloud_accounts(&mut self, ctx: &Context) {
         self.poll_cloud_accounts(ctx);
-        let state = &mut self.cloud_prototype.production.setup;
+        let production = &mut self.cloud_prototype.production;
+        let (state, hosts) = (&mut production.setup, &mut production.prices.hosts);
         if !state.open {
             return;
+        }
+        // Saved hosts show what they have free, read again while the settings are open.
+        hosts.poll();
+        if let Some(draft) = &state.draft {
+            hosts.request(draft.root(), ctx);
         }
         let mut footer = Footer::default();
         let mut registry_action = None;
@@ -409,7 +422,7 @@ impl HorizonApp {
                     .min_scrolled_height(dashboard_height)
                     .max_height(dashboard_height)
                     .show(ui, |ui| {
-                        registry_action = state.render_fields(ui);
+                        registry_action = state.render_fields(ui, hosts);
                     });
                 footer = state.render_footer(ui);
             });

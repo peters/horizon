@@ -41,6 +41,10 @@ pub struct Settings {
     /// until one is saved, so existing settings keep their encoding.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub docker_hosts: Vec<horizon_cloud::docker_host::Host>,
+    /// New clouds are not offered the saved Docker hosts; clouds already on one keep
+    /// working. Omitted while false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub docker_hosts_off: bool,
     /// The GitHub App of Connect GitHub. Omitted until it is connected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub github: Option<super::github::Settings>,
@@ -93,6 +97,12 @@ impl Settings {
         value.codex_home = path.parent().map(super::codex_login::home);
         super::github::remember(value.github.is_some());
         Ok(value)
+    }
+
+    /// Whether New cloud and `cloud_offers` offer the saved Docker hosts.
+    #[must_use]
+    pub fn docker_hosts_on(&self) -> bool {
+        !self.docker_hosts.is_empty() && !self.docker_hosts_off
     }
 
     /// The machine settings narrowed to one cloud's placement, so every attempt,

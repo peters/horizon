@@ -453,12 +453,13 @@ an agent to construct or change a private registry through it as a lifecycle fal
 
 ## Docker host provider
 
-A profile with `provider: docker-host` runs its cloud on a Docker engine that
-the person already has: this computer's engine, or a host that Horizon reaches
-with `ssh` or `tailscale ssh`. The person adds each host to `docker_hosts` in
-the cloud settings file with a unique `name`, an `access` (`this-pc`, `ssh` or
-`tailscale-ssh`), an SSH `address` and an optional absolute `docker` path. No
-secret is stored. A cloud placement names the host when more than one is saved.
+A Docker host runs clouds on a Docker engine that the person already has:
+this computer's engine, or a host that Horizon reaches with `ssh` or
+`tailscale ssh`. The person adds each host in **Cloud settings > Docker host**
+with a unique name, an access (This PC, SSH or Tailscale SSH), an SSH address
+and an optional absolute docker path, and checks it read-only there. No
+secret is stored. A profile with `provider: docker-host` runs on a saved
+host; a cloud placement names the host.
 
 The worker publishes its SSH only on the host's loopback, on a port that stays
 the same after a stop. Horizon reaches it through the host. Stop, resume and
@@ -468,7 +469,15 @@ private registry login is refused. There is no rent, GPU, hosted device, idle st
 public worker image has amd64 and arm64 builds, and Docker takes the host's own,
 so an ARM host such as an Apple silicon Mac runs it natively.
 
-There is no Cloud settings card or MCP operation for Docker hosts yet.
+`cloud_offers` lists the saved hosts in `other_providers` under
+`provider: docker-host`, at an `estimated_total` of 0. An offer's `id` is the
+host name; `vcpu` and `memory_gb` are the largest worker that is free now,
+which nothing reserves. Unread hosts are in `host_errors`. A cloud on a
+Docker host cannot be a companion yet: the companion tools refuse it with
+`cloud_companion_unsupported`, because other workers cannot reach its
+loopback SSH. Requirements: Docker 28 or later, Docker access for the SSH
+user, Tailscale SSH in accept mode, and no desktop credential store; see
+`docs/cloud-docker-host.md`.
 
 ## Existing Docker engine probe
 

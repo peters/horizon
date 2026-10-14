@@ -23,11 +23,8 @@ the cloud's own container and volume.
 - Platforms: this computer's Docker engine on Linux, and a remote Docker
   host that you reach with SSH. The remote host can be Linux or macOS with
   Docker Desktop.
-- This procedure does not test: the Cloud settings card, the New cloud
-  provider choice or the MCP tools. These come in a later change. Until
-  then, you add a host to `docker_hosts` in the cloud settings file, and New
-  cloud shows the Docker mark only for a profile with `provider: docker-host`.
-  Task D6 examines that mark.
+- Tasks D1 to D5 use the `cloud_deploy` example and a settings file. Tasks D6
+  and D7 use the Cloud settings card and the MCP tools in an isolated Horizon.
 
 ## 3. Safety
 
@@ -51,7 +48,7 @@ the cloud's own container and volume.
 - For task D3: a remote host that `ssh <host> true` reaches without a
   password prompt. On that host, the SSH user has access to Docker, and
   `docker` is at a known absolute path.
-- For task D6: the isolated Horizon desktop of
+- For tasks D6 and D7: the isolated Horizon desktop of
   [the device-smoke runbook](../../../scripts/device-smoke/README.md#horizon-inside-a-native-vnc-device-panel).
 - Network access to `ghcr.io` to pull the public worker base image.
 
@@ -208,7 +205,7 @@ In each command, `cloud_deploy` stands for `"$cloud_deploy"` from setup step 2.
 
    Result: The test passes and removes its two clouds.
 
-### 6.6 D6: The Docker mark in New cloud
+### 6.6 D6: Add and check a host in Cloud settings
 
 1. Run `cargo build -p horizon-ui --bin horizon`. Start that binary with
    `python3 scripts/device-smoke/serve.py --horizon "$CARGO_TARGET_DIR/debug/horizon"
@@ -217,22 +214,51 @@ In each command, `cloud_deploy` stands for `"$cloud_deploy"` from setup step 2.
    Inside the fixture, your home is `$S/data/home`. Run
    `mkdir -p -m 700 $S/data/home/.horizon/cloud`, then make a key there with
    `ssh-keygen -t ed25519 -N '' -f $S/data/home/.horizon/cloud/worker_ed25519`.
-   Write the settings of setup step 5 to
+   Write the settings of setup step 5 without `docker_hosts` to
    `$S/data/home/.horizon/cloud/settings.json`, with paths as the fixture sees
    them: `$HOME/.horizon/cloud/...` with your real `$HOME` value.
 
    Result: Horizon starts on the isolated desktop and reads those settings.
 
-2. Open **New cloud** for `$T/repo` and select the profile `local`.
+2. Open **Menu > Cloud settings**.
 
-   Result: The provider mark is the blue Docker whale, sharp at the dialog's
-   size, in the light and the dark theme. The checks show "Docker host saved;
-   nothing is rented". **Start cloud** stays off with "New cloud cannot start a
-   cloud on a Docker host yet."
+   Result: The **Docker host** card shows **Off**.
+
+3. Select **Use a Docker host for clouds**. Type the name `this-pc`, click
+   **This PC**, then click **Check host**.
+
+   Result: The rows show one by one. The check ends with "4 of 4 checks
+   passed" or with the warnings and their remedies only.
+
+4. Type the docker path `/nonexistent/docker` and click **Check host**.
+
+   Result: The **Docker access** row shows "docker was not found on the host"
+   and the remedy to set the docker path. **Keep host** stays off.
+
+5. Clear the docker path, check again, click **Keep host**, then click
+   **Save settings**.
+
+   Result: The settings file has `docker_hosts` with `this-pc` and no secret.
+   When you open Cloud settings again, the row shows the architecture, the
+   Docker version and the free CPUs and memory.
+
+### 6.7 D7: Agents
+
+1. Ask `cloud_offers` with `{"min_vcpu": 2}` from an agent panel in the
+   isolated Horizon.
+
+   Result: `other_providers` has a section with `provider: docker-host`, an
+   offer with `id: this-pc` and `estimated_total: 0`.
+
+2. Start a cloud for `$T/repo` with `cloud_deploy deploy` under the fixture's
+   cloud folder, make it a companion of another cloud, and call
+   `cloud_companion_ensure_ready` for it.
+
+   Result: The tool refuses with `cloud_companion_unsupported`.
 
 ## 7. Pass criteria
 
-- Tasks D1, D2, D4, D5 and D6 pass.
+- Tasks D1, D2, D4, D5, D6 and D7 pass.
 - Task D3 passes, and SSH reaches the worker through the host with the pinned
   worker host key.
 

@@ -162,6 +162,12 @@ pub fn bind_selected(request: &Request<'_>) -> Result<()> {
     .ok_or(Error::Invalid(
         "The companion cloud has not been created; start it from its card",
     ))?;
+    // Its worker's SSH is on the host's loopback, which no other cloud's worker reaches.
+    if deployed.profile.provider == horizon_cloud::docker_host::PROVIDER {
+        return Err(Error::Invalid(
+            "cloud_companion_unsupported: a cloud on a Docker host cannot be a companion yet, as other clouds' workers cannot reach it",
+        ));
+    }
     bind(
         request,
         Binding::new(

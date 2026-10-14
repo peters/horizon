@@ -114,17 +114,17 @@ impl Draft {
     }
 
     /// # Errors
-    /// Requires one compute provider, `RunPod` or Hetzner, and credentials only for
-    /// selected API-authenticated agents.
+    /// Requires one compute provider, `RunPod`, Hetzner or a Docker host, and credentials
+    /// only for selected API-authenticated agents.
     pub fn validate(&self) -> Result<()> {
         self.settings.validate()?;
         for registry in &self.registries {
             registry.validate()?;
         }
         let runpod = !self.runpod_key.is_empty() || self.settings.runpod_configured();
-        if !runpod && !self.hetzner.enabled {
+        if !runpod && !self.hetzner.enabled && !self.settings.docker_hosts_on() {
             return Err(Error::Invalid(
-                "Enter your RunPod API key, or turn on Hetzner and enter its token",
+                "Enter your RunPod API key, turn on Hetzner and enter its token, or add a Docker host",
             ));
         }
         if runpod {
@@ -335,6 +335,7 @@ fn defaults(root: &Path) -> Settings {
         docker_config: root.join("docker"),
         docker_host: None,
         docker_hosts: Vec::new(),
+        docker_hosts_off: false,
         registry_pull_auth_id: None,
         registries: None,
         cpu_flavors: vec!["cpu3c".into()],
