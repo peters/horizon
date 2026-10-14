@@ -50,9 +50,16 @@ shell commands, files, or other MCP servers.
   is returned with `navigation: superseded` at the user's page. `startup_millis` reports the latency from the host accepting the
   request until the panel was reported. It uses the configured
   backend unless explicitly overridden. Set `visible: false` to start a live
-  background panel. If the same agent already owns a panel, creation is rejected
-  unless the user explicitly requested another independent session and the call
-  sets `allow_additional: true`. Reuse the original panel for iframe, popup,
+  background panel. An agent may hold one panel per browser engine: with a
+  Chromium panel open, `backend: firefox` or `backend: safari` opens a panel of
+  that engine. A second panel of the same engine, a create without `backend`
+  while the agent owns a panel (Horizon's configured browser is unknown to this
+  server), or a remote `target` while it owns a panel is rejected unless the
+  user explicitly requested another independent session and the call sets
+  `allow_additional: true`. A create that is still queued or in progress
+  counts as a panel of its engine, also when another MCP server process of
+  the same agent queued it, so of two concurrent creates of one engine one is
+  refused. Reuse the original panel for iframe, popup,
   dialog, and consent flows instead of creating a helper panel.
 - `browser_create` with `target: <name>` runs the session at a configured
   remote target (`browser.remote.targets` in Horizon's configuration) instead

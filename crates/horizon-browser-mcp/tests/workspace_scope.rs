@@ -360,6 +360,22 @@ fn idle_hidden_panel_discovery_agrees_with_create_without_renewing_the_lease() {
     assert!(create["content"][0]["text"].as_str().is_some_and(
         |message| message.contains(SAME_WORKSPACE_PANEL) && message.contains("already owned by this agent")
     ));
+    let same_engine = agent.call("browser_create", &json!({ "visible": false, "backend": "chromium" }));
+    assert!(same_engine["content"][0]["text"].as_str().is_some_and(
+        |message| message.contains(SAME_WORKSPACE_PANEL) && message.contains("(chromium) is already owned")
+    ));
+    // Another engine passes the guard and is queued for the host, which this
+    // fixture does not run, so the bounded create times out instead.
+    let other_engine = agent.call(
+        "browser_create",
+        &json!({ "visible": false, "backend": "firefox", "timeout_millis": 5000 }),
+    );
+    assert!(
+        other_engine["content"][0]["text"]
+            .as_str()
+            .is_some_and(|message| message.contains("timed out") && !message.contains("already owned")),
+        "{other_engine}"
+    );
     assert_eq!(
         read_manifest(home.path(), SAME_WORKSPACE_PANEL).owner,
         panel.owner,

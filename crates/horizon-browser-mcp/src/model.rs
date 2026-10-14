@@ -274,7 +274,7 @@ pub(crate) struct CreateInput {
     pub(crate) orientation: Option<orientation::Orientation>,
     /// Whether the panel is shown initially (default true). Hidden panels remain live and controllable.
     pub(crate) visible: Option<bool>,
-    /// Explicitly permit another panel when this agent already owns one. Use only for a user-requested independent session.
+    /// Explicitly permit another panel of an engine this agent already holds, or any panel when backend is omitted or target is set while it owns one. One panel per named engine needs no opt-in. Use only for a user-requested independent session.
     pub(crate) allow_additional: Option<bool>,
     /// Total host-and-browser startup timeout in milliseconds (5000-60000, default 60000).
     pub(crate) timeout_millis: Option<u64>,
@@ -1007,7 +1007,7 @@ pub(crate) struct AuditOutput {
     pub(crate) cursor_lost: bool,
 }
 
-fn backend_name(backend: BackendKind) -> &'static str {
+pub(crate) const fn backend_name(backend: BackendKind) -> &'static str {
     match backend {
         BackendKind::ChromiumCdp => "chromium",
         BackendKind::FirefoxBidi => "firefox",
