@@ -11,6 +11,7 @@ use horizon_core::cloud_runtime::{
 use std::time::Duration;
 
 mod cards;
+mod hosts;
 pub(super) mod summary;
 pub(super) mod widgets;
 
@@ -317,8 +318,20 @@ pub(super) fn section(ui: &mut Ui, form: &mut Production) {
         return;
     };
     widgets::heading(ui, "Machine", &requirement(&profile, &form.selected_profile));
+    let hosts = hosts::cards(form, &profile);
+    if profile.provider == horizon_core::cloud_runtime::provider::DOCKER_HOST.id {
+        hosts::only(ui, form, &profile, &hosts);
+        return;
+    }
+    if profile.gpu && form.prices.hosts.bound() {
+        widgets::note(
+            ui,
+            "Docker hosts run CPU clouds only, so this GPU profile runs on a rented worker.",
+        );
+    }
     freshness(ui, form, &profile);
     let Some(mut catalog) = catalog(form) else {
+        hosts::only(ui, form, &profile, &hosts);
         return;
     };
     // The three picks answer most starts; every worker and the filters are one click away.
@@ -368,12 +381,19 @@ pub(super) fn section(ui: &mut Ui, form: &mut Production) {
             "Comparison incomplete: waiting for current provider prices and exchange rates. Choose a worker explicitly.",
         );
     }
-    let mut chosen = cards::picks(ui, &catalog, form);
+    let mut chosen = match cards::picks(ui, Some(&catalog), form, &hosts) {
+        Some(cards::Picked::Worker(index)) => Some(index),
+        Some(cards::Picked::Host(name)) => {
+            hosts::choose(form, &profile, &name);
+            None
+        }
+        None => None,
+    };
     ui.add_space(4.0);
     if open {
         chosen = cards::all(ui, &catalog, form).or(chosen);
         if super::provider::current(form.provider, &profile).placement
-            != horizon_core::cloud_runtime::provider::Placement::DataCenters
+            == horizon_core::cloud_runtime::provider::Placement::Locations
         {
             widgets::note(
                 ui,
@@ -412,7 +432,11 @@ fn filters(ui: &mut Ui, form: &mut Production, catalog: &Catalog, profile: &Prof
                 .suffix(unit),
         );
         ui.selectable_value(&mut form.launch.selector.provider_filter, None, "All providers");
-        for provider in super::provider::choices(&form.prices, profile) {
+        // Hosts have their own cards and no rows to filter.
+        let rented = super::provider::choices(&form.prices, profile)
+            .into_iter()
+            .filter(|provider| provider.kind != horizon_core::cloud_runtime::provider::Kind::DockerHost);
+        for provider in rented {
             ui.selectable_value(
                 &mut form.launch.selector.provider_filter,
                 Some(provider.label.to_owned()),

@@ -121,6 +121,11 @@ impl State {
         self.readings().iter().find(|reading| reading.host == *host)
     }
 
+    /// Whether New cloud may offer a saved host: the last reading found one.
+    pub fn bound(&self) -> bool {
+        !self.readings().is_empty()
+    }
+
     /// Keeps what a Check of a saved host found, until the next reading. A host that is
     /// not saved as checked is left out, so nothing offers it.
     pub fn record(&mut self, reading: Reading) {

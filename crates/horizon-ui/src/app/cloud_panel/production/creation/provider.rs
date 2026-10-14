@@ -10,8 +10,8 @@ use horizon_core::cloud_runtime::{
 };
 
 /// The providers this machine can use: `RunPod` unless a fetch found no API key for it,
-/// and each other provider once a fetch finds its binding, including while its catalog
-/// is refreshed or could not be fetched.
+/// and each other provider once a fetch finds its binding or a saved host, including
+/// while its catalog is refreshed or could not be fetched.
 fn configured(prices: &State) -> Vec<&'static Description> {
     let mut configured = Vec::new();
     if prices.runpod_bound() {
@@ -19,6 +19,9 @@ fn configured(prices: &State) -> Vec<&'static Description> {
     }
     if prices.hetzner.bound() {
         configured.push(&provider::HETZNER);
+    }
+    if prices.hosts.bound() {
+        configured.push(&provider::DOCKER_HOST);
     }
     configured
 }
@@ -127,7 +130,7 @@ pub(in crate::app::cloud_panel::production) fn mark(ui: &mut egui::Ui, provider:
 /// The Docker whale in Docker blue; `assets/docker-mark.svg` names its source and license.
 /// The PNG is decoded once on a worker thread, never on the UI thread; the mark shows
 /// from the frame after.
-fn docker_mark(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+pub(in crate::app::cloud_panel) fn docker_mark(ctx: &egui::Context) -> Option<egui::TextureHandle> {
     // A process-wide cache: the pixels never change, and every window may draw the mark.
     static PIXELS: std::sync::OnceLock<Option<egui::ColorImage>> = std::sync::OnceLock::new();
     static DECODE: std::sync::Once = std::sync::Once::new();

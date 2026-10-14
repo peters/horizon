@@ -13,10 +13,32 @@ pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
         return Some(reason);
     }
     let profile = form.profiles.as_ref()?.profiles.get(&form.selected_profile)?;
-    // Until New cloud offers a Docker host as a provider choice, it must not start such a
-    // profile at all, least of all on a rented provider whose offer it picked.
-    if profile.provider == horizon_core::cloud_runtime::provider::DOCKER_HOST.id {
-        return Some("New cloud cannot start a cloud on a Docker host yet.");
+    // Nothing is priced on a Docker host; several saved hosts leave the deployment no
+    // host to pick on its own.
+    if super::provider::current(form.provider, profile).kind == Kind::DockerHost {
+        if profile.build.is_some() {
+            return Some("A Docker host runs public images only; this profile builds its image.");
+        }
+        if !Description::supports(&horizon_core::cloud_runtime::provider::DOCKER_HOST, profile) {
+            return Some("A Docker host runs no profile with hosted devices or an idle stop.");
+        }
+        let readings = form.prices.hosts.readings();
+        let host = match (form.placement.data_centers.as_slice(), readings) {
+            ([name], _) => readings.iter().find(|reading| reading.host.name == *name),
+            (_, [only]) => Some(only),
+            (_, []) => return Some("Save a Docker host in Cloud settings, and turn it on, first."),
+            _ => return Some("Choose one of your Docker hosts."),
+        };
+        let (cpu, memory_gb) = form.size.unwrap_or((profile.cpu, profile.memory_gb));
+        return match host.map(|reading| &reading.capacity) {
+            Some(Ok(capacity)) if !capacity.fits(cpu, memory_gb) => {
+                Some("The Docker host has too little CPU or memory free for this cloud now.")
+            }
+            Some(Err(_)) => Some("The Docker host could not be reached. Check it in Cloud settings."),
+            Some(Ok(_)) => None,
+            // Saved settings no longer offer it, or it is being read again.
+            None => Some("Choose one of your Docker hosts."),
+        };
     }
     if super::provider::current(form.provider, profile).kind == Kind::Hetzner && form.prices.hetzner.too_old() {
         return Some("Hetzner prices are over an hour old. Refresh them before starting.");

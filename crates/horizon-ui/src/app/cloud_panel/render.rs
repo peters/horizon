@@ -112,7 +112,7 @@ impl HorizonApp {
                     ui.set_clip_rect(clip);
                     let (header, _) =
                         ui.allocate_exact_size(Vec2::new(rect.width(), group.header_chrome_height()), Sense::hover());
-                    paint_header_base(ui, header, accent);
+                    paint_header_base(ui, header, accent, group);
                     let drag_rect =
                         Rect::from_min_max(header.min, Pos2::new(close_rect(header).left(), header.bottom()));
                     // Production clouds register the drag first so the strip's controls sit above it.
@@ -457,7 +457,12 @@ fn close_rect(header: Rect) -> Rect {
 }
 
 /// The header's fill, bottom rule and cloud mark, under everything else in it.
-fn paint_header_base(ui: &egui::Ui, rect: Rect, accent: Color32) {
+/// The header's fill and mark: the Docker whale for a cloud on a Docker host, else a cloud.
+fn paint_header_base(ui: &egui::Ui, rect: Rect, accent: Color32, group: &CloudGroup) {
+    let on_docker_host = group
+        .remote
+        .as_ref()
+        .is_some_and(|launch| launch.profile.provider == horizon_core::cloud_runtime::provider::DOCKER_HOST.id);
     let painter = ui.painter();
     painter.rect_filled(
         rect,
@@ -479,7 +484,21 @@ fn paint_header_base(ui: &egui::Ui, rect: Rect, accent: Color32) {
         10,
         theme::blend(theme::PANEL_BG(), accent, 0.15),
     );
-    cloud_glyph(painter, mark, accent);
+    match on_docker_host
+        .then(|| super::production::cards::docker_mark(ui.ctx()))
+        .flatten()
+    {
+        Some(whale) => {
+            let uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+            painter.image(
+                whale.id(),
+                Rect::from_center_size(mark, Vec2::splat(22.0)),
+                uv,
+                Color32::WHITE,
+            );
+        }
+        None => cloud_glyph(painter, mark, accent),
+    }
 }
 
 /// Title, subtitle and what sits right of them. Returns the width taken from the

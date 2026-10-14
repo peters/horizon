@@ -56,23 +56,46 @@ fn symbol(currency: &str) -> &str {
     }
 }
 
-/// The three starting points. Returns the one clicked.
-pub(super) fn picks(ui: &mut Ui, catalog: &Catalog, form: &Production) -> Option<usize> {
-    let picks: Vec<(&str, usize)> = PICKS
-        .into_iter()
-        .zip([catalog.picks.cheapest, catalog.picks.balanced, catalog.picks.powerful])
-        .filter_map(|(label, index)| Some((label, index?)))
-        .collect();
+/// What a starting point's card chose.
+pub(super) enum Picked {
+    Worker(usize),
+    Host(String),
+}
+
+/// The saved Docker hosts, then the three starting points. Returns the one clicked.
+pub(super) fn picks(
+    ui: &mut Ui,
+    catalog: Option<&Catalog>,
+    form: &Production,
+    hosts: &[super::hosts::Card],
+) -> Option<Picked> {
+    let mut picks: Vec<(&str, Option<usize>, Option<&super::hosts::Card>)> =
+        hosts.iter().map(|host| ("YOUR HOST", None, Some(host))).collect();
+    if let Some(catalog) = catalog {
+        picks.extend(
+            PICKS
+                .into_iter()
+                .zip([catalog.picks.cheapest, catalog.picks.balanced, catalog.picks.powerful])
+                .filter_map(|(label, index)| Some((label, Some(index?), None))),
+        );
+    }
     // Cards keep their width when fewer than three are left to show.
-    let columns = if ui.available_width() >= 540.0 { PICKS.len() } else { 1 };
+    let columns = if ui.available_width() >= 540.0 {
+        picks.len().clamp(PICKS.len(), PICKS.len() + 1)
+    } else {
+        1
+    };
     let mut chosen = None;
     for row in picks.chunks(columns) {
         ui.columns(columns, |uis| {
-            for (ui, &(label, index)) in uis.iter_mut().zip(row) {
+            for (ui, &(label, index, host)) in uis.iter_mut().zip(row) {
                 widgets::caption(ui, label);
-                if card(ui, catalog, form, index) {
-                    chosen = Some(index);
-                }
+                let picked = match (catalog.zip(index), host) {
+                    (Some((catalog, index)), _) => card(ui, catalog, form, index).then_some(Picked::Worker(index)),
+                    (_, Some(host)) => super::hosts::card(ui, host).then(|| Picked::Host(host.name.clone())),
+                    _ => None,
+                };
+                chosen = picked.or(chosen.take());
             }
         });
     }
@@ -82,10 +105,27 @@ pub(super) fn picks(ui: &mut Ui, catalog: &Catalog, form: &Production) -> Option
 /// A whole card is the click target; the chosen one has an accent outline.
 fn card(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize) -> bool {
     let offer = &catalog.offers[index];
-    let selected = catalog.selected == Some(index);
     let id = ui
         .id()
         .with(("worker-card", offer.provider, &offer.id, &offer.location));
+    let (name, detail) = title(offer);
+    let (stock, color) = stock(catalog, index, form);
+    let label = format!("{name}, {detail}, {}, {stock}", price(offer));
+    framed(ui, id, catalog.selected == Some(index), &label, |ui| {
+        ui.label(RichText::new(name).size(15.0).strong().color(theme::FG()));
+        ui.label(RichText::new(&detail).size(12.5).color(theme::FG_SOFT()));
+        ui.add_space(4.0);
+        ui.label(RichText::new(price(offer)).size(19.0).strong().color(theme::FG()));
+        if let Some(total) = total(catalog, offer, form) {
+            ui.label(RichText::new(total).size(12.0).color(theme::FG_SOFT()));
+        }
+        ui.horizontal(|ui| widgets::pill(ui, stock, color));
+    })
+}
+
+/// A card frame around `content` that takes clicks and keyboard focus like a button,
+/// named `label` for screen readers. Returns whether it was chosen.
+pub(super) fn framed(ui: &mut Ui, id: egui::Id, selected: bool, label: &str, content: impl FnOnce(&mut Ui)) -> bool {
     let hovered = ui.is_enabled() && ui.ctx().read_response(id).is_some_and(|response| response.hovered());
     // Cards take keyboard focus like buttons, and Enter or Space chooses one.
     let focused = ui.memory(|memory| memory.has_focus(id));
@@ -100,8 +140,6 @@ fn card(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize) -> bool
         (theme::PANEL_BG_ALT(), Stroke::new(1.0, theme::BORDER_SUBTLE()))
     };
     let stroke = if focused { Stroke::new(2.0, theme::FG()) } else { stroke };
-    let (name, detail) = title(offer);
-    let (stock, color) = stock(catalog, index, form);
     let frame = Frame::new()
         .fill(fill)
         .stroke(stroke)
@@ -110,26 +148,12 @@ fn card(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize) -> bool
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 3.0;
-            ui.label(RichText::new(name).size(15.0).strong().color(theme::FG()));
-            ui.label(RichText::new(&detail).size(12.5).color(theme::FG_SOFT()));
-            ui.add_space(4.0);
-            ui.label(RichText::new(price(offer)).size(19.0).strong().color(theme::FG()));
-            if let Some(total) = total(catalog, offer, form) {
-                ui.label(RichText::new(total).size(12.0).color(theme::FG_SOFT()));
-            }
-            ui.horizontal(|ui| widgets::pill(ui, stock, color));
+            content(ui);
         });
     let response = ui
         .interact(frame.response.rect, id, Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand);
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(
-            egui::WidgetType::Button,
-            ui.is_enabled(),
-            selected,
-            format!("{}, {detail}, {}, {stock}", title(offer).0, price(offer)),
-        )
-    });
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), selected, label));
     ui.add_space(4.0);
     response.clicked()
 }

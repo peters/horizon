@@ -4,8 +4,7 @@ A Docker host is a third provider for CPU clouds, beside RunPod and Hetzner
 (epic #1463). It is a Docker engine that you already have: the engine of this
 computer, a Linux server that you reach with SSH, or a machine on your tailnet.
 Each cloud on a host gets its own container and its own workspace volume. Nothing
-is rented, so a cloud on a host has no cost in Horizon. A profile with
-`provider: docker-host` runs its cloud on a saved host.
+is rented, so a cloud on a host has no cost in Horizon.
 
 ## Add a host
 
@@ -65,6 +64,43 @@ working. A profile that names `provider: docker-host` directly, for example in
   configuration in `~/.horizon/docker-config` with no credential helper. Docker
   Desktop on macOS then never asks the keychain, which over SSH can wait for a
   person at the host. Do not point `DOCKER_CONFIG` at the desktop configuration.
+
+## Start a cloud on a host
+
+**New cloud** shows each saved host as a **YOUR HOST** card before the three
+rented starting points. The card shows the profile's size, the Docker whale,
+**No rent** and the CPUs and memory that the host has free now.
+
+- **Fits**: click the card to run the cloud on that host.
+- **Too little free now**: the host cannot take a cloud of this size until a
+  cloud on it stops.
+- **Not reachable**: the last read failed. Check the host in Cloud settings.
+- **Cannot run this profile**: the profile builds its image. A host pulls public
+  images only.
+
+A GPU profile shows no host card: a Docker host runs CPU clouds only. A profile
+with `provider: docker-host` shows only the host cards. When one host fits,
+New cloud selects it.
+
+Free capacity is not reserved. Other programs on the host share its CPUs and
+memory, and the workspace volume uses the host's disk. Horizon reads the free
+capacity again every 30 seconds while New cloud or Cloud settings is open.
+
+## A cloud on a host
+
+The cloud card shows the Docker whale in place of the cloud mark. Stop, Resume
+and Delete work as for a rented worker:
+
+- **Stop** stops the container. The container and its volume stay on the host.
+- **Resume** starts the same container on the same loopback port.
+- **Delete** removes only the container and the volume of this cloud.
+
+**Manage** shows **Rebuild image & restart…** but you cannot click it. A cloud on
+a host keeps the image that it started with. To get a new image, delete the cloud
+and start it again.
+
+The worker publishes its SSH only on the host's loopback. Horizon reaches it
+through the host with an SSH `ProxyCommand`. The Docker API is never exposed.
 
 ## Agents
 
