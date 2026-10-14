@@ -72,7 +72,6 @@ impl Runtime {
                 self.progress.finish(std::time::Instant::now());
                 self.receiver = None;
                 self.sender = None;
-                self.idle_reports = None;
                 if let Some(cancel) = self.cancel.take() {
                     cancel.cancel();
                 }
@@ -266,7 +265,6 @@ impl HorizonApp {
         if let Some(cancel) = runtime.cancel.take() {
             cancel.cancel();
         }
-        runtime.idle_reports = None;
         runtime.desktop = None;
         runtime.rebuild = None;
         runtime.confirmation = super::Confirmation::None;
@@ -285,7 +283,6 @@ impl HorizonApp {
         runtime.sender = Some(tx.clone());
         let cancel = cloud_runtime::Cancellation::default();
         runtime.cancel = Some(cancel.clone());
-        let idle = runtime.listen_idle();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let emit = |event| {
@@ -303,7 +300,6 @@ impl HorizonApp {
             let completion = complete(&root, result, &cancel, &emit);
             let _ = result_tx.send(completion.outcome);
             if let Some(state) = completion.ready {
-                super::idle::watch(&state, &settings, &root, &cancel, idle, &ctx);
                 super::presentation::watch(&state, &settings, &root, &cancel, &tx, &ctx);
             }
             ctx.request_repaint();

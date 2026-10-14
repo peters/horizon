@@ -342,7 +342,7 @@ Use `smoke-r`. It is a RunPod CPU cloud.
 
     Result: The size is the new size.
 
-### 6.7 L07 — Make sure that idle stop works
+### 6.7 L07 — Make sure that Horizon does not stop an idle cloud
 
 1. Open **Menu › Add cloud here**.
 
@@ -389,17 +389,22 @@ Use `smoke-r`. It is a RunPod CPU cloud.
 
 11. Wait 15 minutes.
 
+    Result: The card of `smoke-x` still shows **Ready**. The profile sets
+    `idle_stop_minutes: 10`, but Horizon does not stop an idle cloud.
+
+12. Click **Stop…** on the card of `smoke-x` and confirm.
+
     Result: The card of `smoke-x` shows **Stopped**.
 
-12. Mark the server of `smoke-x` as deleted in the resource ledger.
+13. Mark the server of `smoke-x` as deleted in the resource ledger.
 
     Result: The ledger shows the server as deleted and the volume as kept.
 
-13. Open the **Manage** tab.
+14. Open the **Manage** tab.
 
     Result: The tab shows **Check provider**.
 
-14. Click **Check provider**.
+15. Click **Check provider**.
 
     Result: The card shows **Stopped** and offers **Resume worker**. Nothing
     starts the worker.
@@ -1083,7 +1088,7 @@ Use `smoke-sib` on RunPod. Its profile has a `build` section. In the steps,
   from uncommitted changes until a rebuild from the commit only.
 - The rebuild of `smoke-hd` is refused with `storage.container_gb`, and its
   server stays.
-- Idle stop stops `smoke-x` after the profile limit.
+- Horizon does not stop `smoke-x` after its idle period; Stop releases its server.
 - Deletion removes the resources, and redeploy makes new resources.
 - A Hetzner resume makes a new server. The host key from `/workspace` stays, and
   pinned SSH works.

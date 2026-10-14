@@ -257,7 +257,6 @@ mod tests {
         let profile = &builtin().unwrap().profiles[PROFILE];
         let report = trusted_contract(IMAGE, &profile.capabilities).unwrap();
         crate::cloud_runtime::worker_contract::validate(report, &profile.capabilities, true, true).unwrap();
-        crate::cloud_runtime::worker_contract::validate_idle_report(report, true).unwrap();
         let contract = crate::cloud_runtime::WorkerContract::reported(report);
         assert!(contract.tailnet, "the pinned image enforces tagged enrollment");
         assert!(report.lines().any(|line| line == "horizon-tailnet-contract=4"));

@@ -6,6 +6,12 @@ use std::{
     time::Duration,
 };
 
+/// How often a worker that nothing else reads is asked to answer.
+const WORKER_CHECK: Duration = Duration::from_mins(1);
+/// Checks in a row that must fail before the card is told: one lost answer, as after
+/// a short network loss or a sleep of this computer, is not a stopped worker.
+const WORKER_CHECK_FAILURES: u32 = 3;
+
 pub(super) fn watch(
     state: &Deployment,
     settings: &Settings,
@@ -41,7 +47,21 @@ pub(super) fn watch(
             secrets: vec![],
         };
         if !state.profile.capabilities.desktop && !state.profile.capabilities.browser_tools() {
-            return Ok(());
+            // Nothing below reads such a worker. One that can stop without Horizon, as
+            // after an agent's stop, is still asked to answer, so the card learns of the
+            // stop: a failure here makes it ask the provider.
+            if !cloud_runtime::lifecycle::may_stop_outside(state) {
+                return Ok(());
+            }
+            return keep_checking(cancel, WORKER_CHECK, WORKER_CHECK_FAILURES, || {
+                runner
+                    .run(
+                        "Cloud worker check",
+                        &mut connection.command("true"),
+                        Duration::from_secs(40),
+                    )
+                    .map(drop)
+            });
         }
         while !cancel.is_cancelled() {
             let output = runner.run(
@@ -74,6 +94,40 @@ pub(super) fn watch(
         ctx.request_repaint();
     }
 }
+/// Runs `check` every `interval` until `cancel`, and returns the failure that makes
+/// `failures` failed checks in a row.
+fn keep_checking(
+    cancel: &cloud_runtime::Cancellation,
+    interval: Duration,
+    failures: u32,
+    check: impl Fn() -> cloud_runtime::Result<()>,
+) -> cloud_runtime::Result<()> {
+    let step = Duration::from_millis(100).min(interval);
+    let mut failed = 0;
+    loop {
+        let mut waited = Duration::ZERO;
+        while waited < interval {
+            if cancel.is_cancelled() {
+                return Ok(());
+            }
+            std::thread::sleep(step);
+            waited += step;
+        }
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
+        match check() {
+            Ok(()) => failed = 0,
+            Err(error) => {
+                failed += 1;
+                if failed >= failures {
+                    return Err(error);
+                }
+            }
+        }
+    }
+}
+
 impl super::Runtime {
     fn prepare_attachments(
         &mut self,

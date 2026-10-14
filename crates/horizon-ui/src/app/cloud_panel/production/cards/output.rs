@@ -527,7 +527,7 @@ mod tests {
         };
         runtime.progress.stage(Stage::Sessions, std::time::Instant::now());
         runtime.push_log("session started".into());
-        runtime.push_note("Idle watch: stopped by claude".into());
+        runtime.push_note("Provider check: stopped outside Horizon".into());
         let shown: Vec<String> = {
             let output = egui::Context::default()
                 .run_ui(egui::RawInput::default(), |ui| {
@@ -544,7 +544,7 @@ mod tests {
                 .collect()
         };
         let heading = shown.iter().position(|text| text == "Notes").expect("a Notes heading");
-        let note = shown.iter().position(|text| text.contains("Idle watch")).unwrap();
+        let note = shown.iter().position(|text| text.contains("Provider check")).unwrap();
         let step = shown.iter().position(|text| text == "session started").unwrap();
         assert!(step < heading && heading < note, "{shown:?}");
     }

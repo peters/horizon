@@ -11,7 +11,6 @@ mod creation_tests;
 mod failure_preview;
 mod first_panel;
 mod github_requests;
-mod idle;
 mod launch;
 mod lifecycle;
 mod list;
@@ -38,6 +37,7 @@ mod sessions;
 mod setup;
 #[cfg(debug_assertions)]
 mod stopped_preview;
+mod stops;
 use super::HorizonApp;
 use horizon_core::cloud_panel::CloudConfig;
 use horizon_core::{
@@ -130,7 +130,7 @@ enum Confirmation {
 pub(super) struct LogLine {
     pub text: String,
     pub stage: Option<Stage>,
-    /// Time into the attempt; `None` for lines outside one, such as idle reports.
+    /// Time into the attempt; `None` for lines outside one, such as provider checks.
     pub at: Option<std::time::Duration>,
     /// Classified once on arrival, so drawing the log does not re-scan each line.
     pub kind: LineKind,
@@ -291,13 +291,9 @@ pub(super) struct Runtime {
     billing: cloud_runtime::billing::BillingMonitor,
     rebuild: Option<rebuild::Attempt>,
     resize: resize::State,
-    idle_reports: Option<idle::Reports>,
-    /// The newest idle record the current operation's watch read.
-    last_idle: Option<cloud_runtime::lifecycle::IdleSample>,
-    /// That watch asks the provider; see [`Runtime::idle_confirming`].
-    idle_confirming: bool,
-    /// Why the worker stopped, when it stopped without an operation the owner started.
-    stop_cause: Option<cloud_runtime::lifecycle::StopCause>,
+    /// The worker stopped without an operation the owner started, as the provider
+    /// confirmed.
+    stopped_outside: bool,
     /// A failure of a ready or reconnecting cloud, held while the provider check that
     /// may explain it as a stop runs.
     unexplained_failure: Option<String>,
@@ -359,8 +355,7 @@ impl Runtime {
         self.receiver.is_some() && self.stage == Some(Stage::Ready)
     }
 
-    /// A line outside any operation's steps: an idle report, a provider check or a device
-    /// release. It has no step or time, so it is not filed under the last step's heading.
+    /// A line outside any operation's steps: a provider check or a device release. It has no step or time, so it is not filed under the last step's heading.
     fn push_note(&mut self, text: String) {
         let mut line = LogLine::new(text, None, None);
         line.attempt = self.progress.attempt();
@@ -470,18 +465,17 @@ impl Runtime {
         // failed no longer names this attempt's failure.
         self.operation = None;
         self.rebuild = None;
-        self.stop_cause = None;
+        self.stopped_outside = false;
         self.sharing.await_ready();
         let (tx, rx) = channel();
         let cancel = cloud_runtime::Cancellation::default();
         self.cancel = Some(cancel.clone());
         self.receiver = Some(rx);
         self.sender = Some(tx.clone());
-        let idle = self.listen_idle();
         self.error = None;
         self.state_unavailable = false;
         let ctx = ctx.clone();
-        std::thread::spawn(move || run_deployment_with_siblings(&request, &siblings, &cancel, &tx, idle, &ctx));
+        std::thread::spawn(move || run_deployment_with_siblings(&request, &siblings, &cancel, &tx, &ctx));
     }
 
     /// Only a Ready cloud shows its current run; other stages report their own progress.
@@ -508,9 +502,6 @@ impl Runtime {
 
     fn poll_release_and_repaint(&mut self, ctx: &egui::Context) {
         self.poll_remote_release();
-        // The idle watch's newest record, or its own report of the stop, comes before a
-        // provider check that classifies the stop with it.
-        self.poll_idle();
         self.poll_recovery();
         self.poll_resize();
         if self.needs_repaint() {
@@ -579,7 +570,7 @@ impl HorizonApp {
                         runtime.cancel = None;
                         // A stop can end a rebuild that met it; its steps no longer apply.
                         runtime.rebuild = None;
-                        runtime.stop_cause = None;
+                        runtime.stopped_outside = false;
                     }
                     Event::Resumed => {
                         runtime.receiver = None;
@@ -624,7 +615,7 @@ impl HorizonApp {
                         runtime.state = Some(*state);
                         runtime.stage = Some(Stage::Ready);
                         runtime.error = None;
-                        runtime.stop_cause = None;
+                        runtime.stopped_outside = false;
                         finished.push(id);
                     }
                     Event::Failed(error, at) => {
@@ -799,7 +790,7 @@ impl HorizonApp {
             }
             // A debug build can show a synthetic deploy log. Release builds omit it.
             #[cfg(debug_assertions)]
-            log_preview::seed(self, ctx);
+            log_preview::seed(self);
             #[cfg(debug_assertions)]
             stopped_preview::seed(self, ctx);
             #[cfg(debug_assertions)]
@@ -933,10 +924,9 @@ fn run_deployment(
     request: &Request,
     cancel: &cloud_runtime::Cancellation,
     tx: &std::sync::mpsc::Sender<Event>,
-    idle: std::sync::mpsc::Sender<idle::Report>,
     ctx: &egui::Context,
 ) {
-    run_deployment_with_siblings(request, &[], cancel, tx, idle, ctx);
+    run_deployment_with_siblings(request, &[], cancel, tx, ctx);
 }
 
 fn run_deployment_with_siblings(
@@ -944,7 +934,6 @@ fn run_deployment_with_siblings(
     siblings: &[cloud_runtime::siblings::Binding],
     cancel: &cloud_runtime::Cancellation,
     tx: &std::sync::mpsc::Sender<Event>,
-    idle: std::sync::mpsc::Sender<idle::Report>,
     ctx: &egui::Context,
 ) {
     let emit = |event| {
@@ -955,7 +944,6 @@ fn run_deployment_with_siblings(
     let root = request.state_root.clone();
     match deployment::deploy_with_siblings(request, siblings, cancel, &emit) {
         Ok(state) => {
-            idle::watch(&state, &settings, &root, cancel, idle, ctx);
             presentation::watch(&state, &settings, &root, cancel, tx, ctx);
         }
         Err(error) => {
@@ -965,13 +953,13 @@ fn run_deployment_with_siblings(
 }
 
 /// Reports the saved record with the failure, so the card shows what was kept. A
-/// record found busy is read once its lock is released, since that may be an idle
+/// record found busy is read once its lock is released, since that may be another
 /// stop finishing, which the card then shows instead of the failure. Returns
 /// whether the record could be read, after that wait.
 fn report_failure(root: &std::path::Path, error: &cloud_runtime::Error, emit: &dyn Fn(Event)) -> bool {
     let load = || Store::lock(root).and_then(|store| store.load());
     let (read, saved) = if matches!(error, cloud_runtime::Error::Busy) {
-        match idle::after_busy(load, std::time::Duration::from_secs(1)).map(idle::stopped_while_busy) {
+        match stops::after_busy(load, std::time::Duration::from_secs(1)).map(stops::stopped_while_busy) {
             Some(Ok(events)) => {
                 for event in events {
                     emit(event);

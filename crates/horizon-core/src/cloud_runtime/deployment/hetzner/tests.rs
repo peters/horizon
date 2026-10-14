@@ -104,7 +104,7 @@ fn unsupported_requests_fail_the_preflight_before_any_state() {
     super::Compute::cleanup(&elsewhere).unwrap();
     // Not a Hetzner resource name.
     assert!(preflight("Cloud_1", &spec.profile, &settings).is_err());
-    // Horizon stops an idle Hetzner cloud from the record its worker keeps.
+    // An idle period is accepted on Hetzner, where it has no effect.
     spec.profile.idle_stop_minutes = Some(30);
     preflight(&spec.operation_id, &spec.profile, &settings).unwrap();
     spec.profile.idle_stop_minutes = None;
@@ -634,8 +634,5 @@ fn reconnect_readiness_keeps_the_exact_type_when_fallback_preferences_change() {
 /// Deletion cleans up the record each provisioning failure point leaves.
 #[cfg(unix)]
 mod deletion_points;
-/// Idle stop reads the worker's idle record and stops the cloud as Stop does.
-#[cfg(unix)]
-mod idle;
 #[cfg(unix)]
 mod rebuild;

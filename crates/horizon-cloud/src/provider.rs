@@ -110,9 +110,10 @@ pub enum IdleStop {
     Unsupported,
     /// The worker itself, with a credential the provider gives it for its own billing.
     Worker,
-    /// Horizon, from the idle record the worker keeps, and only while Horizon runs:
-    /// the provider gives the worker no credential that could stop it.
-    Horizon,
+    /// Nobody, though a profile there may set `idle_stop_minutes`: the provider gives
+    /// the worker no credential that could stop it, and Horizon does not stop an idle
+    /// cloud, so the setting has no effect.
+    Ignored,
 }
 
 pub const RUNPOD: Description = Description {
@@ -149,8 +150,8 @@ pub const HETZNER: Description = Description {
     stopped: StoppedCost::ServerDeleted,
     choices: &[Choice::ServerTypeFallback],
     creatable: crate::offers::HETZNER_DEPLOYABLE,
-    // The project token must never reach a worker, so Horizon stops it.
-    idle_stop: IdleStop::Horizon,
+    // The project token must never reach a worker, so it cannot stop itself.
+    idle_stop: IdleStop::Ignored,
     registry_auth: false,
     rebuild: Rebuild::NewServer,
     site: "hetzner.com",
@@ -345,7 +346,7 @@ mod tests {
         profile.idle_stop_minutes = Some(30);
         assert_eq!(
             (RUNPOD.idle_stop, HETZNER.idle_stop),
-            (IdleStop::Worker, IdleStop::Horizon)
+            (IdleStop::Worker, IdleStop::Ignored)
         );
         assert!(RUNPOD.supports(&profile) && HETZNER.supports(&profile));
         assert!(!unsupported.supports(&profile));

@@ -40,15 +40,16 @@ provider after that period without agent terminal output and without the contain
 averaging at least half a CPU core (cgroup v2 `cpu.stat`, or `cpuacct.usage` on cgroup v1
 hosts); lighter background work does not keep it running.
 `horizon-worker-check` reports `horizon-idle-stop-contract=1` for images that support
-this, and Horizon refuses to deploy a profile with `idle_stop_minutes` to other images.
-A provider that gives the worker no credential to stop itself, such as Hetzner, has
-Horizon stop it instead: the watcher then only rewrites `/run/horizon-worker/idle.json`
+this, and Horizon refuses to deploy a profile with `idle_stop_minutes` on a provider
+where the worker stops itself (RunPod) to other images.
+On a provider that gives the worker no credential to stop itself, such as Hetzner,
+nothing stops an idle worker: the watcher only rewrites `/run/horizon-worker/idle.json`
 every minute with how long the worker has been idle, and `horizon-worker-idle --report`
 prints that record, refusing one older than three minutes. Images whose watcher keeps
-this record also report `horizon-idle-report-contract=1`.
+this record also report `horizon-idle-report-contract=1`; Horizon no longer reads it.
 The watcher also answers stop requests from agents on `/run/horizon-worker/stop.sock`:
 `horizon-worker-stop --reason TEXT`, or its `mcp` mode registered as the
-`stop_this_worker` tool on opted-in workers that hold a stop credential (not on Hetzner, where Horizon stops the worker), asks it to stop the worker when a task is
+`stop_this_worker` tool on opted-in workers that hold a stop credential (not on Hetzner), asks it to stop the worker when a task is
 done. The watcher is the only process that uses the provider credential, but agent
 sessions in the stock image run as UID 10001 with no effective capabilities;
 older/custom images may still run as root. The root watcher retains provider credentials. It identifies the requesting session from the

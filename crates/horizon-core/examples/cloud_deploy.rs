@@ -17,7 +17,7 @@ use horizon_core::cloud_runtime::{
     state::Store,
 };
 use std::{path::PathBuf, process::ExitCode};
-const USAGE: &str = "Usage: cloud_deploy tailnets STATE_ROOT [TAILNET_ID] | offers SETTINGS [REQUIREMENTS_JSON] | plan-deploy|deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--quick-start] [--worker-choice OFFER_JSON_FILE] [--plan-token PLAN_TOKEN] (deploy and prepare-image) [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|resume|reconnect|endpoint|delete|idle-check|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | plan-rebuild|rebuild SETTINGS STATE_ROOT PROFILE [PLAN_TOKEN] (rebuild only) | reconcile SETTINGS STATE_ROOT [WORKER_ID]. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume. --quick-start uses the built-in quick-start profile on the public base image for a commit without .horizon/cloud.yml. On the checked-out commit the image builds from the working copy, as in New cloud: plan-deploy lists its uncommitted files and prints the token that deploy and prepare-image then need.";
+const USAGE: &str = "Usage: cloud_deploy tailnets STATE_ROOT [TAILNET_ID] | offers SETTINGS [REQUIREMENTS_JSON] | plan-deploy|deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--quick-start] [--worker-choice OFFER_JSON_FILE] [--plan-token PLAN_TOKEN] (deploy and prepare-image) [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|resume|reconnect|endpoint|delete|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | plan-rebuild|rebuild SETTINGS STATE_ROOT PROFILE [PLAN_TOKEN] (rebuild only) | reconcile SETTINGS STATE_ROOT [WORKER_ID]. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume. --quick-start uses the built-in quick-start profile on the public base image for a commit without .horizon/cloud.yml. On the checked-out commit the image builds from the working copy, as in New cloud: plan-deploy lists its uncommitted files and prints the token that deploy and prepare-image then need.";
 
 fn main() -> ExitCode {
     match run() {
@@ -60,9 +60,6 @@ fn run_args(args: &[String]) -> cloud_runtime::Result<()> {
     if args[0] == "stop" && args.len() == 3 {
         cloud_runtime::lifecycle::stop(&PathBuf::from(&args[2]), &settings, &cancel)?;
         return Ok(());
-    }
-    if args[0] == "idle-check" && args.len() == 3 {
-        return idle_check(&PathBuf::from(&args[2]), &settings, &cancel);
     }
     if args[0] == "revoke-browserstack" && args.len() == 3 {
         cloud_runtime::lifecycle::revoke_browserstack(&PathBuf::from(&args[2]), &settings, &cancel)?;
@@ -613,23 +610,6 @@ fn endpoint(root: &std::path::Path, settings: &Settings, cancel: &Cancellation) 
             "proxy_command": connection.proxy_command,
         }))
         .map_err(|_| cloud_runtime::Error::Json)?
-    );
-    Ok(())
-}
-
-/// Checks a Hetzner cloud's idle record once, stopping it after its whole idle period.
-fn idle_check(root: &std::path::Path, settings: &Settings, cancel: &Cancellation) -> cloud_runtime::Result<()> {
-    use cloud_runtime::lifecycle::IdleCheck;
-    println!(
-        "{}",
-        match cloud_runtime::lifecycle::idle_check(root, settings, cancel)? {
-            IdleCheck::NotWatched => "Not watched: no idle period, or not a running Hetzner cloud".to_owned(),
-            IdleCheck::Active { idle, limit } => format!("Active: idle {}s of {}s", idle.as_secs(), limit.as_secs()),
-            IdleCheck::Stopped { idle } => format!(
-                "Stopped after {}s idle. Resume creates a new server that attaches the same workspace volume.",
-                idle.as_secs()
-            ),
-        }
     );
     Ok(())
 }

@@ -253,7 +253,6 @@ pub fn supported(spec: &WorkerSpec) -> Result<(), CloudError> {
 /// # Errors
 /// Fails only if the capabilities cannot be serialized.
 pub fn plan(spec: &WorkerSpec, device: &str, registry: Option<host::RegistryLogin>) -> Result<host::Plan, CloudError> {
-    // The watcher only records idle time here; Horizon stops the server from that record.
     Ok(host::Plan {
         image: spec.image_digest.clone(),
         environment: spec.container_environment()?,

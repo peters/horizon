@@ -453,7 +453,6 @@ impl HorizonApp {
                 if let Some(cancel) = runtime.cancel.take() {
                     cancel.cancel();
                 }
-                runtime.idle_reports = None;
                 runtime.desktop = None;
                 runtime.confirmation = super::super::Confirmation::None;
                 runtime.rebuild = None;

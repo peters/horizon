@@ -120,14 +120,12 @@ impl Runtime {
     }
 
     /// Holds the failure for the provider check whose result the returned sender
-    /// carries. That check alone decides: the idle watch of the lost worker ends now,
-    /// and a check of its own that already holds the cloud makes this one wait, so no
-    /// provider check holds the cloud once the card shows the result.
+    /// carries. That check alone decides: the watch of the lost worker ends now, so no
+    /// other check holds the cloud once the card shows the result.
     pub(super) fn hold_failure_for_check(&mut self) -> std::sync::mpsc::Sender<RecoveryResult> {
         if let Some(watch) = self.cancel.take() {
             watch.cancel();
         }
-        self.idle_reports = None;
         let (tx, rx) = channel();
         self.unexplained_failure = self.error.take();
         self.recovery_receiver = Some(rx);
@@ -187,7 +185,7 @@ impl Runtime {
         }
         match result {
             Ok(recovered) => {
-                // A stopped worker, including one that stopped itself when idle, only needs Resume.
+                // A stopped worker, including one an agent on it stopped, only needs Resume.
                 let stopped = recovered.confirmed_stopped();
                 let resume = match recovered.stopped() {
                     cloud_runtime::provider::StoppedCost::WorkerKept => "Resume starts the same worker again.",
@@ -227,10 +225,10 @@ impl Runtime {
             || (self.receiver.is_some() && self.stage != Some(Stage::Ready))
     }
 
-    /// A provider check holds, or may hold, the cloud: Check provider, the check of a
-    /// failure, or the idle watch's own check.
+    /// A provider check holds, or may hold, the cloud: Check provider or the check of a
+    /// failure.
     pub(super) fn checking_provider(&self) -> bool {
-        self.recovery_receiver.is_some() || self.idle_confirming()
+        self.recovery_receiver.is_some()
     }
 
     fn start_device_release(&mut self, state_root: std::path::PathBuf, settings: Settings, ctx: &egui::Context) {
@@ -410,9 +408,6 @@ impl HorizonApp {
                 return;
             }
         };
-        // A stop the idle watch reports late must not apply to this or any later
-        // operation, a provider check included.
-        runtime.idle_reports = None;
         if action == Action::Reconcile {
             runtime.start_reconciliation(state_root, settings, ctx);
             return;
