@@ -361,7 +361,7 @@ fn edit(ui: &mut Ui, editor: &mut Editor, saved: &[Host], root: &std::path::Path
     caption(
         ui,
         "Save settings to keep the change. Horizon keeps the name and how to reach the host; no secret is stored. \
-         A cloud on a removed host cannot stop, resume or be deleted until the host is saved again under its name.",
+         A cloud on a removed or renamed host cannot stop, resume or be deleted until the host is saved again under its name.",
     );
     done
 }
