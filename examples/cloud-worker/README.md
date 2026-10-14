@@ -34,34 +34,43 @@ omitted desktop support is disabled. `agent_approvals` is `auto` (the default) o
 `ask`; see [agent approvals](#agent-approvals).
 
 The base always includes SSH, Git/LFS, tmux, the source/worktree helpers and worker
-control service. When the worker is created with `HORIZON_IDLE_STOP_MINUTES`, the
-supervisor also owns `horizon-worker-idle`, which, where the provider gave the worker a
-credential to stop itself, stops this worker after that period without agent terminal
-output and without the container
-averaging at least half a CPU core (cgroup v2 `cpu.stat`, or `cpuacct.usage` on cgroup v1
-hosts); lighter background work does not keep it running.
-`horizon-worker-check` reports `horizon-idle-stop-contract=1` for images that support
-this, and Horizon refuses to deploy a profile with `idle_stop_minutes` on a provider
-where the worker stops itself (RunPod) to other images.
-On a provider that gives the worker no credential to stop itself, such as Hetzner,
-nothing stops an idle worker: the watcher only rewrites `/run/horizon-worker/idle.json`
-every minute with how long the worker has been idle, for information only, and
-`horizon-worker-idle --report` prints that record, refusing one older than three minutes.
-Images whose watcher keeps this record also report `horizon-idle-report-contract=1`;
-Horizon no longer reads it, and its log line that the record is for Horizon to stop the
-worker is out of date.
-The watcher also answers stop requests from agents on `/run/horizon-worker/stop.sock`:
-`horizon-worker-stop --reason TEXT`, or its `mcp` mode registered as the
-`stop_this_worker` tool on opted-in workers that hold a stop credential (not on Hetzner), asks it to stop the worker when a task is
-done. The watcher is the only process that uses the provider credential, but agent
+control service. On a dedicated worker, the supervisor also owns `horizon-worker-stopd`,
+which stops this worker when an agent whose task is done asks: `horizon-worker-stop
+--reason TEXT`, or its `mcp` mode registered as the `stop_this_worker` tool. No
+profile setting is needed. The worker never stops itself after an idle period; an
+image from before this change did that only with `HORIZON_IDLE_STOP_MINUTES`.
+`horizon-worker-check` reports `horizon-agent-stop-contract=1` when both the service
+and the supervisor declare it. A shared worker (`HORIZON_WORKER_STARTUP`) offers no stop, because it runs
+other clouds' sessions, and a worker with hosted devices offers none, because a stopped
+worker could not release the devices it holds.
+
+Where the provider gives the worker a credential to stop itself (RunPod), the service
+checks the request and stops the worker at once. Where it does not (Hetzner, a Docker
+host), Horizon starts the worker with `HORIZON_WORKER_STOP=horizon`: the service checks
+the request and records it in the root-only `/run/horizon-worker/stop-request.json`, and
+Horizon runs `horizon-worker-stopd --take` when it next reads the worker. `--take`
+checks the request again, now counting the output of every agent session, the
+requester's too, adds the stop to the stop log and prints it. Later takes print the same
+stop until the worker stops, so an answer lost on the way to Horizon loses no stop. It
+prints `null` without a request, `{"waiting": ...}` while the worker works (the request
+stays for a later take), and `{"refused": ...}` when the request no longer counts: older
+than ten minutes (a taken stop then leaves the log again), malformed, or its agent
+session ended and its window holds another session. When Horizon cannot start the stop,
+`--untake AT` removes it from the log and drops the request. The supervisor drops a
+request left from before the worker started. This works only while Horizon runs. `horizon-worker-stopd --mode`
+prints `self`, `horizon` or `none`. The supervisor keeps the worker running when the stop
+service exits; agents are then told that the worker cannot stop.
+
+The service is the only process that uses the provider credential, but agent
 sessions in the stock image run as UID 10001 with no effective capabilities;
-older/custom images may still run as root. The root watcher retains provider credentials. It identifies the requesting session from the
+older/custom images may still run as root. The root service retains provider credentials. It identifies the requesting session from the
 connecting process through the kernel's peer credentials and its tmux pane, never from
 the request, and refuses callers outside a Claude, Codex or Grok session (a shell
 session or an ad-hoc tmux session is not one). It refuses while another
 agent window printed output in the last two minutes, checked after its CPU sample and
 right before the stop, while the container averages half a core, or when tmux or the
-container's CPU accounting cannot be read. Accepted stops are recorded with the requesting session and agent in
+container's CPU accounting (cgroup v2 `cpu.stat`, or `cpuacct.usage` on cgroup v1 hosts)
+cannot be read. Stops are recorded with the requesting session and agent in
 `/workspace/.horizon/self-stops.jsonl`; `--ready` reports `horizon-self-stop-contract=1`
 and the newest as `horizon-last-self-stop=`. Device control/ownership works without a browser executable or
 browser MCP registration. Agent configuration contains only enabled tool servers.

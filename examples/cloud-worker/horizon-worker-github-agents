@@ -33,9 +33,9 @@ def load_common():
 
 common = load_common()
 auth = common.auth
-# The stop watcher's mapping from a process to its agent session, so both tools identify
+# The stop service's mapping from a process to its agent session, so both tools identify
 # sessions the same way.
-idle = common.load_sibling('horizon-worker-idle', 'horizon_worker_idle')
+stopd = common.load_sibling('horizon-worker-stopd', 'horizon_worker_stopd')
 tasks = common.load_sibling('horizon-worker-github-tasks', 'horizon_worker_github_tasks')
 
 SOCKET = Path('/run/horizon-worker/github.sock')
@@ -224,7 +224,7 @@ def ask(request, state, book, now, identify):
                        % REASON_LIMIT), repository
     try:
         who = identify()
-    except idle.Refused:
+    except stopd.Refused:
         return refusal('refused', 'Only an agent session on this worker can ask for GitHub access.'), repository
     if covered(cloud_access(state, repository), access):
         return {'ok': True, 'state': 'ok', 'status': 'allowed', 'scope': 'cloud', 'id': None}, repository
@@ -255,7 +255,7 @@ def ask(request, state, book, now, identify):
 def request_status(request, state, book, now, identify):
     try:
         window, session, _, _ = identify()
-    except idle.Refused:
+    except stopd.Refused:
         return refusal('refused', 'Only an agent session on this worker can read its requests.'), None
     data = expire_other_accounts(tidy(book.read(), now), account(state))
     for record in data['requests']:
@@ -311,8 +311,8 @@ def log_request(directory, record):
 
 def identify_session(pid):
     """The agent session of process `pid`, as (window, session, agent, root), where root names
-    the session's pane process for a task grant; raises idle.Refused."""
-    pane, window, session, agent = idle.pane(pid)
+    the session's pane process for a task grant; raises stopd.Refused."""
+    pane, window, session, agent = stopd.pane(pid)
     return window, session, agent, tasks.root(pane)
 
 

@@ -3,8 +3,8 @@
 
 `horizon-worker-stop --reason TEXT` asks from a shell, `horizon-worker-stop mcp` offers
 the same request to agents as one MCP tool, and `--last` prints the newest recorded stop.
-The idle watcher, the only process that uses the worker credential, identifies the
-calling agent session, checks the request and makes the stop.
+The stop service, horizon-worker-stopd, identifies the calling agent session, checks the
+request and makes the stop, or records it for Horizon where the worker holds no credential.
 """
 import argparse
 import json
@@ -21,21 +21,21 @@ GUIDANCE = (
     'merged, and nothing else on this worker needs it. Stopping ends every process here; files on the '
     'workspace volume are kept and the person can resume the worker. It is refused while another agent '
     'session is producing output or the worker is busy. Never stop the worker to escape a failing or stuck '
-    'task; report the problem instead. Give a short reason; it is shown to the person after the worker resumes.'
+    'task; report the problem instead. Give a short reason; it is shown to the person on the cloud card.'
 )
 # MCP protocol versions this server implements, newest first; others get the newest.
 PROTOCOL_VERSIONS = ('2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05')
-NOT_ALLOWED = ('This worker cannot stop itself: its cloud profile does not set idle_stop_minutes, '
-               'or the provider supplied no worker credential.')
+NOT_ALLOWED = ('This worker cannot stop at an agent\'s request: it is shared with other clouds, it holds '
+               'hosted devices, or neither its provider nor Horizon can stop it.')
 
 
 def request_stop(reason, path=STOP_SOCKET):
-    """Asks the idle watcher to stop this worker. Returns (accepted, message)."""
+    """Asks the stop service to stop this worker. Returns (accepted, message)."""
     if not path.exists():
         return False, NOT_ALLOWED
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            # The watcher samples CPU for a few seconds before it answers.
+            # The service samples CPU for a few seconds before it answers.
             client.settimeout(60)
             client.connect(str(path))
             client.sendall((json.dumps({'reason': reason}) + '\n').encode())
