@@ -74,7 +74,10 @@ It has no provider configuration or external network. No real credential is read
    Result: Mode guards, public-response parsing and ownership checks pass without Docker, sockets or native processes.
    Missing or unexecutable native helpers and missing keyboard-map data refuse before
    artifacts, build or container work. The isolated X11 directory has mode `0700`;
-   existing directories and symlinks cannot be reused.
+   existing directories and symlinks cannot be reused. Resolved XKB/evdev bounds,
+   actual CLI readiness envelope/target validation, pre-credential ordering and
+   daemon/CID/nonce-bound stop requests also pass offline. These tests do not
+   qualify actual X11, Secret Service, VNC or public host routing.
    Product and bundled skill bytes stay unchanged.
 
 ### 6.2 T02 — Real synthetic store and exact ledger
@@ -111,7 +114,12 @@ It has no provider configuration or external network. No real credential is read
 
    Result: The actual frozen candidate starts in an owned, network-disabled container with private X11 and bus state.
    A new `/tmp/.X11-unix` directory is created with mode `0700` before credentials
-   or Xvfb start. The mounted xkbcomp compiles its keyboard map without a host socket.
+   or Xvfb start. The resolved XKB tree is mounted read-only at `/fixture/xkb` and
+   Xvfb uses `-xkbdir /fixture/xkb`, with no writable keyboard cache or host socket.
+   Before Secret Service construction or credential preparation, the exact frozen
+   horizon-device doctor validates the X11 protocol within a total five seconds.
+   `state/x11-readiness.json` records its nonsecret result; socket existence alone
+   is not readiness. A failure stops owned Xvfb and expires the target without credentials.
    Its running executable hash matches the frozen artifact.
 
 2. Start the owned real VNC relay in a separate task terminal.
@@ -168,9 +176,18 @@ It has no provider configuration or external network. No real credential is read
 
    Result: The Device panel closes without stopping another target.
 
-3. Stop the owned VNC relay.
+3. Request the exact owned VNC relay to stop.
 
-   Result: Its listener and docker-exec children stop. The endpoint file disappears.
+   ```sh
+   python3 scripts/tailnet-api-status-fixture/vnc_proxy.py --ownership /tmp/horizon-tailnet-tooling-native/ownership.json --stop
+   ```
+
+   Result: The same daemon, immutable container, labels and per-relay nonce bind
+   the private exclusive stop request. The actual relay stops and joins its retained
+   Docker-exec children, closes the listener and removes the endpoint before writing
+   its actual stopped result. Wait for the original relay execution to exit normally
+   with code zero. A request receipt alone is not cleanup proof. Do not interrupt
+   the shell wrapper, kill by host PID/name, or use a Horizon product queue.
 
 4. Reconcile the exact container and synthetic files.
 
@@ -185,4 +202,8 @@ It has no provider configuration or external network. No real credential is read
 ## 9. Record of results
 
 Record commands, hashes, modes and cleanup separately from native and public-interface observations.
+Record the relay's exact container and nonce with its stopped receipt. Before cleanup,
+substitute a different synthetic nonce in that receipt and verify that cleanup refuses
+before removing the container or credential files. Restore the original receipt and
+complete exact cleanup. The stop request alone is not a stopped receipt.
 Reuse requires the repository's consumed-input comparison. An earlier private helper or status-overlay result does not qualify this baseline.

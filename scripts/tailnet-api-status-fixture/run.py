@@ -15,14 +15,12 @@ import uuid
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 
-
 def storage():
     path = HERE.parent / "tailnet-api-store-fixture/run.py"
     spec = importlib.util.spec_from_file_location("store_fixture_build", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
 
 def owned(path):
     if path.is_symlink() or path.stat().st_mode & 0o077 or path.stat().st_size > 4 * 1024 * 1024:
@@ -36,7 +34,6 @@ def owned(path):
     if actual["Id"] != record["container_id"] or any(actual["Config"]["Labels"].get(k) != v for k, v in record["labels"].items()):
         raise RuntimeError("fixture container ownership uncertain")
     return record
-
 
 def freeze_artifacts(manifest, destination):
     if manifest.stat().st_size > 1024 * 1024:
@@ -55,11 +52,9 @@ def freeze_artifacts(manifest, destination):
         result[key] = {"path": str(target), "sha256": digest}
     return result
 
-
 def source_inputs():
     names = subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=REPO).decode().split("\0")
     return {name: hashlib.sha256((REPO / name).read_bytes()).hexdigest() for name in sorted(set(filter(None, names))) if (REPO / name).is_file()}
-
 
 def runtime_mounts():
     executables = ["dbus-daemon", "gnome-keyring-daemon", "gdbus", "Xvfb", "xkbcomp", "openbox", "x11vnc"]
@@ -73,7 +68,16 @@ def runtime_mounts():
         if not path.is_file() or not os.access(path, os.X_OK):
             raise RuntimeError("native runtime executable unavailable: " + str(path))
         mounts.append((path, str(path), True))
+    try:
+        xkb = Path("/usr/share/X11/xkb").resolve(strict=True)
+        share = Path("/usr/share").resolve(strict=True)
+        evdev = (xkb / "rules/evdev").resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise RuntimeError("native XKB directory or rules/evdev unavailable") from error
+    if not xkb.is_relative_to(share) or xkb == share or not evdev.is_relative_to(xkb) or not evdev.is_file():
+        raise RuntimeError("resolved native XKB rules refused")
     mounts.append((Path("/usr/share/X11"), "/usr/share/X11", True))
+    mounts.append((xkb, "/fixture/xkb", True))
     for directory in ["/usr/share/fonts", "/usr/share/openbox", "/usr/share/vulkan/icd.d"]:
         path = Path(directory)
         if path.exists():
@@ -81,7 +85,6 @@ def runtime_mounts():
                 raise RuntimeError("native runtime directory refused: " + directory)
             mounts.append((path, directory, True))
     return mounts
-
 
 def start(args):
     if sys.platform != "linux" or platform.machine() != "x86_64":
@@ -147,7 +150,6 @@ def start(args):
     print(json.dumps({"ownership": str(ownership), "container": record["container_id"],
                       "state": str(state), "check_only": args.check_only}), flush=True)
 
-
 def action(args):
     record = owned(args.ownership)
     container = record["container_id"]
@@ -170,8 +172,13 @@ def action(args):
         if not (result.get("state") == "passed" and result.get("owned_service_empty") and result.get("owned_processes_stopped") and result.get("target_expired") and value["State"]["ExitCode"] == 0):
             raise RuntimeError("native cleanup not qualified; preserve exact container/state")
         if not record["check_only"]:
+            from vnc_proxy import binding_for, read_control
             proxy = state / "vnc-proxy-result.json"
-            if (state / "vnc-address.json").exists() or not proxy.is_file() or not json.loads(proxy.read_text()).get("owned_relay_stopped"):
+            relay = read_control(state / "vnc-relay-owner.json")
+            if relay != binding_for(args.ownership, record, relay.get("relay_nonce")):
+                raise RuntimeError("owned VNC relay binding changed")
+            receipt = read_control(proxy)
+            if (state / "vnc-address.json").exists() or not receipt.get("owned_relay_stopped") or not receipt.get("owned_children_stopped") or receipt.get("container_id") != container or receipt.get("relay_nonce") != relay["relay_nonce"]:
                 raise RuntimeError("owned VNC relay cleanup unresolved")
         subprocess.run(["docker", "rm", container], check=True)
         store = storage()
@@ -188,7 +195,6 @@ def action(args):
         (state / "keyring-password").unlink(missing_ok=True)
         args.ownership.write_text(json.dumps(record, indent=2) + "\n")
         print(json.dumps({"cleanup_confirmed": True, "evidence": str(args.ownership.parent)}))
-
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

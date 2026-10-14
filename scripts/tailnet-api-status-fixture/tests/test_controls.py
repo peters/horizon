@@ -5,7 +5,7 @@ from pathlib import Path
 import queue
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -15,6 +15,12 @@ def module(name):
     result = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(result)
     return result
+
+
+def resolved_native_path(path, strict=False):
+    if str(path) == "/usr/share/X11/xkb":
+        return Path("/usr/share/fixture-xkb-data")
+    return path
 
 
 class Controls(unittest.TestCase):
@@ -29,7 +35,7 @@ class Controls(unittest.TestCase):
                 with patch.object(run.platform, "machine", return_value="x86_64"), patch.object(run.sys, "platform", "linux"), \
                      patch.object(Path, "is_file", lambda path: str(path) != missing), \
                      patch.object(Path, "is_dir", lambda path: str(path) != missing), \
-                     patch.object(run.os, "access", return_value=True), \
+                     patch.object(run.os, "access", return_value=True), patch.object(Path, "resolve", resolved_native_path), \
                      patch.object(run, "storage") as storage, patch.object(run, "freeze_artifacts") as freeze, \
                      patch.object(run.subprocess, "check_output") as execute:
                     with self.assertRaisesRegex(RuntimeError, missing):
@@ -46,7 +52,7 @@ class Controls(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "xkbcomp"):
                 run.runtime_mounts()
         with patch.object(Path, "is_dir", return_value=True), patch.object(Path, "is_file", return_value=True), \
-             patch.object(run.os, "access", return_value=True):
+             patch.object(run.os, "access", return_value=True), patch.object(Path, "resolve", resolved_native_path):
             self.assertIn((Path("/usr/bin/xkbcomp"), "/usr/bin/xkbcomp", True), run.runtime_mounts())
 
     def test_private_x11_directory_is_new_owned_and_never_reuses_a_socket_directory(self):
@@ -63,6 +69,159 @@ class Controls(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "must be new"):
                 control.prepare_x11_directory(linked)
             self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+
+    def test_resolved_xkb_mount_and_missing_evdev_preflight(self):
+        run = module("run")
+        from argparse import Namespace
+        with patch.object(Path, "is_dir", return_value=True), patch.object(Path, "is_file", return_value=True), \
+             patch.object(run.os, "access", return_value=True), patch.object(Path, "resolve", resolved_native_path):
+            self.assertIn((Path("/usr/share/fixture-xkb-data"), "/fixture/xkb", True), run.runtime_mounts())
+        with tempfile.TemporaryDirectory() as folder:
+            evidence = Path(folder) / "not-created"
+            with patch.object(run.platform, "machine", return_value="x86_64"), patch.object(run.sys, "platform", "linux"), \
+                 patch.object(Path, "is_dir", return_value=True), patch.object(run.os, "access", return_value=True), \
+                 patch.object(Path, "resolve", resolved_native_path), \
+                 patch.object(Path, "is_file", lambda path: str(path) != "/usr/share/fixture-xkb-data/rules/evdev"), \
+                 patch.object(run, "storage") as storage, patch.object(run.subprocess, "check_output") as execute:
+                with self.assertRaisesRegex(RuntimeError, "XKB rules refused"):
+                    run.start(Namespace(evidence_dir=evidence))
+                storage.assert_not_called()
+                execute.assert_not_called()
+            self.assertFalse(evidence.exists())
+        def outside_share(path, strict=False):
+            return Path("/tmp/untrusted-xkb") if str(path) == "/usr/share/X11/xkb" else path
+        with patch.object(Path, "is_dir", return_value=True), patch.object(Path, "is_file", return_value=True), \
+             patch.object(run.os, "access", return_value=True), patch.object(Path, "resolve", outside_share):
+            with self.assertRaisesRegex(RuntimeError, "XKB rules refused"):
+                run.runtime_mounts()
+
+    def test_protocol_readiness_precedes_secret_fixture_construction(self):
+        control = module("control")
+        from argparse import Namespace
+        args = Namespace(sha256="a" * 64, check_only=False, expect_api_status=False)
+        with tempfile.TemporaryDirectory() as folder, patch.object(control, "ROOT", Path(folder)), \
+             patch.object(control.argparse.ArgumentParser, "parse_args", return_value=args), \
+             patch.object(control.os, "umask"), patch.object(control.signal, "signal"), patch.dict(control.os.environ, {}, clear=True), \
+             patch.object(Path, "exists", return_value=False), \
+             patch.object(control, "start_native_display", side_effect=RuntimeError("X11 not ready")) as native, \
+             patch.object(control, "fixture_class") as fixture:
+            with self.assertRaisesRegex(RuntimeError, "X11 not ready"):
+                control.main()
+            native.assert_called_once()
+            fixture.assert_not_called()
+
+    def test_check_only_never_starts_native_display(self):
+        control = module("control")
+        from argparse import Namespace
+        args = Namespace(sha256="a" * 64, check_only=True, expect_api_status=False)
+        with tempfile.TemporaryDirectory() as folder, patch.object(control, "ROOT", Path(folder)), \
+             patch.object(control.argparse.ArgumentParser, "parse_args", return_value=args), \
+             patch.object(control.os, "umask"), patch.object(control.signal, "signal"), patch.dict(control.os.environ, {}, clear=True), \
+             patch.object(Path, "exists", return_value=False), patch.object(control, "start_native_display") as native, \
+             patch.object(control, "fixture_class", side_effect=RuntimeError("synthetic constructor reached")) as fixture:
+            with self.assertRaisesRegex(RuntimeError, "constructor reached"):
+                control.main()
+            native.assert_not_called()
+            fixture.assert_called_once()
+
+    def test_doctor_validates_real_protocol_shape_with_five_second_budget(self):
+        control = module("control")
+        import subprocess
+        ready = {"geometry": {"width": 1600, "height": 1000, "surface_id": "display", "revision": "synthetic-revision"},
+                 "capabilities": ["screenshot", "pointer", "keyboard"]}
+        process = Mock()
+        process.poll.return_value = None
+        def doctor(command, **options):
+            self.assertEqual(command[0], "/candidate/horizon-device")
+            self.assertEqual(command[1:], ["--target", str(target), "doctor"])
+            self.assertGreater(options["timeout"], 0)
+            self.assertLessEqual(options["timeout"], 5)
+            ready["geometry"]["target_id"] = json.loads(target.read_text())["id"]
+            options["stdout"].write(json.dumps({"ok": True, "result": ready}).encode())
+            return subprocess.CompletedProcess(command, 0)
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder)
+            target = state / "target.json"
+            children, logs = [], []
+            with patch.object(control, "prepare_x11_directory"), patch.object(control.subprocess, "Popen", return_value=process) as spawn, \
+                 patch.object(control.subprocess, "run", side_effect=doctor):
+                result = control.start_native_display(state, target, children, logs)
+            for log in logs:
+                log.close()
+            self.assertEqual(result["state"], "ready")
+            self.assertEqual(json.loads(target.read_text())["endpoint"], {"kind": "local_x11", "display": ":71"})
+            self.assertIn("-xkbdir", spawn.call_args.args[0])
+            self.assertIn("/fixture/xkb", spawn.call_args.args[0])
+            self.assertEqual(json.loads((state / "x11-readiness.json").read_text())["readiness"], ready)
+
+    def test_doctor_timeout_records_failure_without_a_secret_fixture(self):
+        control = module("control")
+        import subprocess
+        process = Mock()
+        process.poll.return_value = None
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder)
+            children, logs = [], []
+            with patch.object(control, "prepare_x11_directory"), patch.object(control.subprocess, "Popen", return_value=process), \
+                 patch.object(control.subprocess, "run", side_effect=subprocess.TimeoutExpired("synthetic-doctor", 5)):
+                with self.assertRaisesRegex(RuntimeError, "readiness timed out"):
+                    control.start_native_display(state, state / "target.json", children, logs)
+            for log in logs:
+                log.close()
+            self.assertEqual(json.loads((state / "x11-readiness.json").read_text())["state"], "failed")
+            self.assertFalse((state / "keyring-password").exists())
+
+    def test_doctor_rejects_wrong_envelope_target_or_revision(self):
+        control = module("control")
+        ready = {"geometry": {"target_id": "exact-target", "surface_id": "display", "revision": "synthetic",
+                               "width": 1600, "height": 1000}, "capabilities": ["screenshot", "pointer", "keyboard"]}
+        self.assertEqual(control.doctor_readiness(json.dumps({"ok": True, "result": ready}), "exact-target"), ready)
+        for response in [ready, {"ok": False, "result": ready}, {"ok": True, "result": []}]:
+            with self.subTest(response=response), self.assertRaisesRegex(RuntimeError, "envelope refused"):
+                control.doctor_readiness(json.dumps(response), "exact-target")
+        for changes in [{"target_id": "other"}, {"revision": ""}, {"surface_id": ""}, {"width": 1}]:
+            changed = dict(ready, geometry=dict(ready["geometry"], **changes))
+            with self.subTest(changes=changes), self.assertRaisesRegex(RuntimeError, "readiness"):
+                control.doctor_readiness(json.dumps({"ok": True, "result": changed}), "exact-target")
+
+    def test_exact_owned_relay_stop_is_nonce_bound_and_pollable_without_signals(self):
+        proxy = module("vnc_proxy")
+        run = module("run")
+        import sys
+        with tempfile.TemporaryDirectory() as folder:
+            ownership = Path(folder) / "ownership.json"
+            state = Path(folder) / "state"
+            state.mkdir(mode=0o700)
+            record = {"container_id": "exact-cid", "daemon_id": "exact-daemon", "labels": {"fixture-owner": "owned"}}
+            binding = proxy.binding_for(ownership, record, "a" * 32)
+            proxy.write_exclusive(state / "vnc-relay-owner.json", binding)
+            with patch.dict(sys.modules, {"run": run}), patch.object(run, "owned", return_value=record) as owned:
+                proxy.request_stop(ownership)
+                owned.assert_called_once_with(ownership)
+                self.assertTrue(proxy.stop_requested(state, binding))
+                changed = dict(record, container_id="other-cid")
+                with patch.object(run, "owned", return_value=changed):
+                    with self.assertRaisesRegex(RuntimeError, "ownership mismatch"):
+                        proxy.request_stop(ownership)
+            request = state / "vnc-stop-request.json"
+            self.assertEqual(request.stat().st_mode & 0o777, 0o600)
+            request.write_text(json.dumps(dict(binding, relay_nonce="b" * 32)))
+            with self.assertRaisesRegex(RuntimeError, "another ownership"):
+                proxy.stop_requested(state, binding)
+            with patch.dict(sys.modules, {"run": run}), patch.object(run, "owned", return_value=record):
+                with self.assertRaisesRegex(RuntimeError, "another ownership"):
+                    proxy.request_stop(ownership)
+
+    def test_changed_daemon_refuses_relay_stop_before_read_or_write(self):
+        proxy = module("vnc_proxy")
+        run = module("run")
+        import sys
+        with patch.dict(sys.modules, {"run": run}), patch.object(run, "owned", side_effect=RuntimeError("identity changed")), \
+             patch.object(proxy, "read_control") as read, patch.object(proxy, "write_exclusive") as write:
+            with self.assertRaisesRegex(RuntimeError, "identity changed"):
+                proxy.request_stop(Path("unused"))
+            read.assert_not_called()
+            write.assert_not_called()
 
     def test_observer_is_a_normal_agent_without_supplied_host_identity(self):
         config = module("control").document("a" * 64)

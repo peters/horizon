@@ -18,13 +18,25 @@ and Rust. Install the OS runtime dependencies listed in the
 [storage fixture](../tailnet-api-store-fixture/README.md), plus host executables
 `/usr/bin/Xvfb`, `/usr/bin/xkbcomp`, `/usr/bin/openbox` and `/usr/bin/x11vnc`.
 Xvfb invokes xkbcomp to compile its keyboard map. `/usr/share/X11` and its `xkb`
-data directory are required. The runner checks every declared executable and
-required runtime directory before freezing artifacts, building the test or
-creating a container. It mounts these tools read-only with host runtime libraries
-and available font/Openbox/Vulkan data. Inside the new container, the control
-creates `/tmp/.X11-unix` with mode `0700` before credentials or Xvfb start; it refuses
-an existing directory or symlink. This directory is private container tmpfs, never
-a host X11 socket mount. The no-GUI check uses the same host runtime preflight.
+data directory are required. The runner resolves the host XKB directory, requires
+it below `/usr/share` with an actual `rules/evdev` file inside that resolved tree,
+and mounts the resolved directory read-only at `/fixture/xkb`. This handles a host
+`xkb` symlink that points outside `/usr/share/X11`. Xvfb uses explicit
+`-xkbdir /fixture/xkb`; no writable `/var/lib/xkb` cache is added.
+The runner checks every declared executable and required runtime directory before
+freezing artifacts, building the test or creating a container. It mounts these
+tools read-only with host runtime libraries and available font/Openbox/Vulkan data.
+Inside the new container, the control creates `/tmp/.X11-unix` with mode `0700`
+and refuses an existing directory or symlink. It starts Xvfb and requires the frozen
+`horizon-device --target /fixture/state/target.json doctor` to report successful
+X11 protocol readiness within a total five-second budget BEFORE constructing or
+starting Secret Service or preparing credentials. A socket file alone is not ready.
+The receipt validates the actual CLI ok/result envelope, exact target ID, geometry
+revision/surface, dimensions and screenshot/pointer/keyboard capabilities. Nonsecret
+`state/x11-readiness.json` and doctor logs stay private. Failure stops retained
+owned Xvfb and expires the exact target without creating synthetic credentials.
+The directory is private container tmpfs, never a host X11 mount. Check-only runs
+use the same host preflight but start only Secret Service, without Xvfb or doctor.
 The OS-only runtime image is the same pinned image as F05:
 
 ```sh
@@ -141,8 +153,22 @@ same baseline fixture source therefore remains an independent prerequisite.
 
 Close the owned candidate normally through its native UI. The control then runs
 ledger-bound cleanup, checks the service empty and stops retained children. Close
-the public viewer and stop the owned relay; wait for its result and listener close.
-Then reconcile the exact container and synthetic files:
+the public viewer, then explicitly request the exact owned relay to stop:
+
+```sh
+python3 scripts/tailnet-api-status-fixture/vnc_proxy.py --ownership /tmp/horizon-api-native-first/ownership.json --stop
+```
+
+This validates the same healthy daemon, immutable container and labels before
+creating a private exclusive stop request bound to that ownership and per-relay
+nonce. A request for another container/daemon/nonce is refused. The actual relay
+polls the request, stops and joins only its retained Docker-exec children, closes
+its listener and removes `vnc-address.json`, then writes its actual stopped result.
+The request receipt is not cleanup proof. Await the original relay execution's
+normal exit code zero and its stopped result before container cleanup; allow its
+bounded child joins to finish. Do not interrupt its shell wrapper, kill by a host
+PID/process name, or substitute a private product queue. This is task-fixture
+control only, not a Horizon operation. Then reconcile exact container and files:
 
 ```sh
 python3 scripts/tailnet-api-status-fixture/run.py cleanup --ownership /tmp/horizon-api-native-first/ownership.json
