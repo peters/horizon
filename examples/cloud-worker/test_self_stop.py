@@ -333,6 +333,20 @@ class HorizonStopTests(unittest.TestCase):
         recorded.join(5)
         self.assertEqual(json.loads(self.request.read_text())['reason'], 'second')
 
+    def test_a_take_whose_taken_state_cannot_be_saved_leaves_no_stop_on_the_log(self):
+        self.record()
+        self.clock += 130
+        failing = mock.patch.dict(STOPD['take'].__globals__, write_request=mock.Mock(side_effect=OSError('full')))
+        with failing:
+            self.assertIn('could not be recorded', self.take()['waiting'])
+        self.assertEqual(self.log.read_text(), '')
+        # The next take logs the stop once, and taking it back leaves nothing behind.
+        taken = self.take()
+        self.assertEqual(taken['reason'], 'PR 12 merged')
+        self.assertEqual(len(self.log.read_text().splitlines()), 1)
+        self.assertTrue(STOPD['untake'](taken['at'], path=self.request, log=self.log, lock=self.lock))
+        self.assertIsNone(STOP['last_stop'](self.log))
+
     def test_a_taken_stop_lapses_from_its_take_not_from_its_request(self):
         self.record()
         self.clock += STOPD['REQUEST_SECONDS'] - 5

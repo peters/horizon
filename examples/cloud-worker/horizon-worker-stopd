@@ -404,7 +404,13 @@ def take(path=REQUEST, lock=REQUEST_LOCK, log=STOP_LOG, now=time.time, output=ot
             return {'waiting': 'The stop could not be recorded on the workspace volume: ' + type(error).__name__}
         record['taken'] = True
         record['taken_at'] = int(now() * 1000)
-        write_request(path, record)
+        try:
+            write_request(path, record)
+        except OSError as error:
+            # Untaken, the request would be logged again by the next take: the stop
+            # leaves the log, and the next take decides again.
+            remove_newest(log, stop['at'])
+            return {'waiting': 'The stop could not be recorded on the worker: ' + type(error).__name__}
         return stop
 
 
