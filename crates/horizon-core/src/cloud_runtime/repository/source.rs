@@ -275,7 +275,7 @@ pub fn existing_checkout(parent: &Path, remote: &Remote) -> Option<(PathBuf, boo
             let same = origin_in(&git)
                 .and_then(|origin| parse(&origin))
                 .is_some_and(|origin| origin.url == remote.url);
-            (same && is_checkout(&path) && !transport::unfinished(&path)).then_some((path, linked))
+            (same && is_checkout(&path) && !transport::maybe_unfinished(&path)).then_some((path, linked))
         })
 }
 
@@ -291,10 +291,12 @@ pub fn clone_stopped(marker: &str) -> bool {
 
 /// Whether a clone into `folder` was started and not finished, from at most a few kilobytes
 /// of its marker file and without starting a process. Only a regular file is opened: a pipe
-/// in its place would wait for a writer.
+/// in its place would wait for a writer. A marker that is there but cannot be read, or is
+/// too long, counts as a stopped clone, so a partial checkout is never taken for a finished one.
 #[must_use]
 pub fn clone_stopped_in(folder: &Path) -> bool {
-    small_text(&folder.join(".git").join(CLONE_MARKER), 4096).is_some_and(|marker| clone_stopped(&marker))
+    let marker = folder.join(".git").join(CLONE_MARKER);
+    std::fs::symlink_metadata(&marker).is_ok() && clone_stopped(&small_text(&marker, 4096).unwrap_or_default())
 }
 
 /// The text of the regular file at `path`, links followed, read only when it is at most

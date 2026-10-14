@@ -22,7 +22,8 @@ empty, on every platform. Without one, nothing is searched.
 
 - It runs on a background thread and starts no process: Git metadata is read
   from files only, so no configured Git program runs.
-- It reads at most 50,000 folder entries (`VISITS`), keeps at most 2,000
+- It reads at most 50,000 folder entries (`VISITS`), an entry that fails to read
+  counted too, keeps at most 2,000
   checkouts (`LIMIT`) and goes at most four folders below the home folder
   (`DEPTH`). Each folder is read one time, also when links lead to it again.
 - Hidden folders are not searched, and build folders (`SKIP_NAMES`) are not
@@ -39,8 +40,10 @@ empty, on every platform. Without one, nothing is searched.
   stops its search at the next report of what was found, about once a second.
 - A checkout counts as finished only when no clone into it stopped and its
   `HEAD` is an object name (40 or 64 hexadecimal digits) or names a branch
-  whose ref file holds one or that `packed-refs` lists. Only a finished checkout
-  stands in for a repository row or a clone.
+  whose ref file holds one or that `packed-refs` lists. A clone marker that is
+  there but cannot be read, or is too long, counts as a stopped clone. Only a
+  finished checkout stands in for a repository row or a clone; an unreadable
+  marker is never a reason to remove a folder.
 - A branch named in `HEAD` is read only when it is plain names joined by `/`:
   no `.` or `..` part, no `\`, `:`, drive or root, so its text cannot name a
   place outside the Git directory, also on Windows. A Windows device name such

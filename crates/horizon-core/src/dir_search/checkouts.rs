@@ -213,13 +213,13 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
         };
         // Every folder's real place is remembered, so a folder reached both directly and
         // through a link, such as `~/github` on another disk, or a loop, is read one time.
-        // Every entry looked at counts against the budget, so one folder with very many
-        // entries cannot keep the search busy past it.
+        // Every entry looked at, one that could not be read too, counts against the budget,
+        // so one folder with very many entries cannot keep the search busy past it.
         let mut probed = 0;
         let mut children: Vec<PathBuf> = entries
-            .flatten()
             .take(VISITS.saturating_sub(visits))
             .inspect(|_| probed += 1)
+            .flatten()
             // Hidden folders, and on macOS the folders it guards with a privacy prompt, are
             // passed by before a link among them is remembered.
             .filter(|entry| {
@@ -444,11 +444,11 @@ fn read(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
             .and_then(|meta| meta.modified())
             .ok()
     };
-    let stopped = small_file(
-        &git.join(crate::cloud_runtime::repository::source::CLONE_MARKER),
-        guarded,
-    )
-    .is_some_and(|marker| crate::cloud_runtime::repository::source::clone_stopped(&marker));
+    // A marker that is there but cannot be read, or is too long, still says the clone did
+    // not finish.
+    let marker = git.join(crate::cloud_runtime::repository::source::CLONE_MARKER);
+    let stopped = std::fs::symlink_metadata(&marker).is_ok()
+        && crate::cloud_runtime::repository::source::clone_stopped(&small_file(&marker, guarded).unwrap_or_default());
     // Branches live in the repository's shared folder, also for a worktree.
     let complete = common.is_some_and(|common| head_resolves(&common, head.trim(), guarded)) && !stopped;
     Some(Checkout {
@@ -648,12 +648,21 @@ mod tests {
         assert_eq!(super::lexical(joined), std::path::Path::new("/home/x/Documents/code"));
     }
 
+    /// The guarded folders as [`super::guarded_below`] gives them: by name and for real, as
+    /// a temporary folder on macOS lies behind the `/var` link.
+    fn guard(folders: &[&std::path::Path]) -> Vec<std::path::PathBuf> {
+        folders
+            .iter()
+            .flat_map(|folder| [folder.to_path_buf(), fs::canonicalize(folder).unwrap()])
+            .collect()
+    }
+
     #[test]
     fn a_guarded_folder_itself_is_no_checkout() {
         let home = tempfile::tempdir().unwrap();
         let documents = home.path().join("Documents");
         fs::create_dir_all(documents.join(".git")).unwrap();
-        let guarded = [documents.clone()];
+        let guarded = guard(&[&documents]);
         assert_eq!(super::checkout_outside(&documents, &guarded), None);
         let spelled = home.path().join("documents");
         assert_eq!(
@@ -673,7 +682,7 @@ mod tests {
         fs::create_dir_all(project.join(".git")).unwrap();
         let alias = home.path().join("alias");
         std::os::unix::fs::symlink(&project, &alias).unwrap();
-        let guarded = [documents.clone()];
+        let guarded = guard(&[&documents]);
         assert_eq!(super::checkout_outside(&alias, &guarded), None);
         let typed = super::checkout_outside(&project, &guarded).expect("typed inside");
         assert!(typed.origin.is_none(), "listed with nothing read");
@@ -682,7 +691,7 @@ mod tests {
         fs::create_dir_all(desktop.join("proj/.git")).unwrap();
         let across = documents.join("lnk");
         std::os::unix::fs::symlink(desktop.join("proj"), &across).unwrap();
-        assert_eq!(super::checkout_outside(&across, &[documents.clone(), desktop]), None);
+        assert_eq!(super::checkout_outside(&across, &guard(&[&documents, &desktop])), None);
         // `alias/..` is the guarded folder for the system, whatever the text folds to.
         fs::create_dir_all(home.path().join("project/.git")).unwrap();
         assert_eq!(super::checkout_outside(&alias.join("../project"), &guarded), None);
@@ -720,8 +729,22 @@ mod tests {
         let worktree = home.path().join("code/web");
         fs::create_dir_all(&worktree).unwrap();
         let gitdir = home.path().join("Documents/main/.git/worktrees/web");
+        fs::create_dir_all(&gitdir).unwrap();
+        fs::write(gitdir.join("HEAD"), "ref: refs/heads/fix\n").unwrap();
+        fs::write(gitdir.join("commondir"), "../..\n").unwrap();
+        fs::write(
+            home.path().join("Documents/main/.git/config"),
+            "[remote \"origin\"]\n\turl = https://github.com/acme/web\n",
+        )
+        .unwrap();
         fs::write(worktree.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap();
-        let checkout = super::read(&worktree, &[home.path().join("Documents")]).unwrap();
+        let unguarded = super::read(&worktree, &[]).unwrap();
+        assert_eq!(
+            unguarded.branch.as_deref(),
+            Some("fix"),
+            "readable when nothing is guarded"
+        );
+        let checkout = super::read(&worktree, &guard(&[&home.path().join("Documents")])).unwrap();
         assert_eq!(checkout.origin, None);
         assert_eq!(checkout.branch, None);
     }

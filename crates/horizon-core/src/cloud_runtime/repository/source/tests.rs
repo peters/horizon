@@ -524,6 +524,23 @@ fn a_pipe_in_place_of_the_clone_marker_is_never_opened() {
     if !made {
         return;
     }
-    // Opening a pipe with no writer would wait for ever.
-    assert!(!clone_stopped_in(temp.path()));
+    // Opening a pipe with no writer would wait for ever: it is not opened, and a marker that
+    // cannot be read is no finished clone.
+    assert!(clone_stopped_in(temp.path()));
+}
+
+#[test]
+fn a_clone_marker_too_long_to_read_is_a_stopped_clone() {
+    let temp = tempfile::tempdir().unwrap();
+    let git = temp.path().join(".git");
+    std::fs::create_dir_all(&git).unwrap();
+    assert!(!clone_stopped_in(temp.path()), "no marker, no stopped clone");
+    let long = format!("https://example.com/{}\nmain\n0\n", "a".repeat(8192));
+    std::fs::write(git.join(CLONE_MARKER), long).unwrap();
+    assert!(clone_stopped_in(temp.path()));
+    assert!(transport::maybe_unfinished(temp.path()));
+    assert!(
+        !transport::unfinished(temp.path()),
+        "never a reason to remove the folder"
+    );
 }
