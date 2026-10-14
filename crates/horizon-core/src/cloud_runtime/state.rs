@@ -27,6 +27,22 @@ pub struct Session {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub removed_agent_reported: bool,
 }
+
+impl Session {
+    /// The session of a new panel: its tmux session has the panel's name, and it has no
+    /// branch of its own.
+    #[must_use]
+    pub fn new(panel_id: &str, agent: &str, worktree: String) -> Self {
+        Self {
+            panel_id: panel_id.into(),
+            agent: agent.into(),
+            tmux: panel_id.into(),
+            branch: String::new(),
+            worktree,
+            removed_agent_reported: false,
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub enum ReadyHistory {
     #[default]
