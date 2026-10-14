@@ -309,7 +309,8 @@ repeats it. It takes no ref or selector: click or fill a field first to move
 focus there. Local Chromium uses CDP key events, local Firefox WebDriver BiDi
 actions, and Safari and remote targets classic WebDriver actions; a real mobile
 device may ignore focus keys such as `Tab`. Audit records name non-printable
-keys and record printable ones only as `printable`; use `fill` for text. After
+keys and record printable ones and `Space` only as `printable`; use `fill` for
+text. After
 the presses, read `document.activeElement` (and `:focus-visible`) with
 `browser_evaluate` or take a `browser_screenshot` to judge focus order and the
 focus ring.

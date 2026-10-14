@@ -10,7 +10,7 @@ pub(crate) fn press_inputs(key: BrowserKey, modifiers: BrowserModifiers) -> [Bro
     // Chromium runs editing shortcuts only when the key event names the
     // command; select-all is the one shortcut that stays inside the page.
     let edit_command =
-        ((modifiers.ctrl || modifiers.meta) && !modifiers.alt && !modifiers.shift && key == BrowserKey::Char('a'))
+        ((modifiers.ctrl != modifiers.meta) && !modifiers.alt && !modifiers.shift && key == BrowserKey::Char('a'))
             .then_some(BrowserEditCommand::SelectAll);
     [
         BrowserInput::KeyDown {
@@ -78,6 +78,12 @@ mod tests {
                 ..
             }
         ));
+        let both = BrowserKeyChord::parse("Control+Meta+a").expect("chord");
+        let [down, _] = press_inputs(both.key, both.modifiers);
+        assert!(
+            matches!(down, BrowserInput::KeyDown { edit_command: None, .. }),
+            "only a single primary modifier names select-all, as WebDriver sends the chord itself"
+        );
         let copy = BrowserKeyChord::parse("Control+c").expect("chord");
         let [down, _] = press_inputs(copy.key, copy.modifiers);
         assert!(

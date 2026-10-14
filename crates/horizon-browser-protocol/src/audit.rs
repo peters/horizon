@@ -281,7 +281,7 @@ impl BrowserAuditAction {
                 characters: value.chars().count(),
             },
             BrowserControlAction::Press { key, modifiers, count } => Self::Press {
-                key: audit_key(*key),
+                key: press_audit_key(*key),
                 modifiers: *modifiers,
                 count: *count,
             },
@@ -512,6 +512,15 @@ fn audit_key(key: BrowserKey) -> String {
     }
 }
 
+/// Space commits text like a character key, so a press never names it.
+fn press_audit_key(key: BrowserKey) -> String {
+    if key == BrowserKey::Space {
+        "printable".to_string()
+    } else {
+        audit_key(key)
+    }
+}
+
 fn audit_target(target: &crate::BrowserTarget) -> String {
     match target {
         crate::BrowserTarget::Ref { reference } => reference.clone(),
@@ -709,6 +718,12 @@ mod tests {
         let json = serde_json::to_string(&typed).expect("encode");
         assert!(json.contains("printable"));
         assert!(!json.contains("\"q\"") && !json.contains("\"Q\""));
+        let space = BrowserAuditAction::from_control(&BrowserControlAction::Press {
+            key: crate::BrowserKey::Space,
+            modifiers: BrowserModifiers::none(),
+            count: 1,
+        });
+        assert!(matches!(space, BrowserAuditAction::Press { ref key, .. } if key == "printable"));
         let tab = BrowserAuditAction::from_control(&BrowserControlAction::Press {
             key: crate::BrowserKey::Tab,
             modifiers: BrowserModifiers::none(),

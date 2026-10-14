@@ -156,8 +156,8 @@ shell commands, files, or other MCP servers.
   key events to the focused element: CDP `Input.dispatchKeyEvent` on local
   Chromium, and one key-action sequence per call through `input.performActions`
   on local Firefox or classic Perform Actions on Safari and remote targets. A
-  failed WebDriver call releases the held keys. It takes no target. Printable keys are
-  audited as `printable`, never as text.
+  failed WebDriver call releases the held keys. It takes no target. Printable
+  keys and `Space` are audited as `printable`, never as text.
   Remote `fill` uses native Element Clear/Send Keys and reads the live field
   back before reporting completion. An empty, reverted, missing, or otherwise
   unequal value returns `input_failed`, even when the driver accepted the

@@ -597,7 +597,7 @@ pub(crate) struct ActInput {
     /// Key or chord for `press`: `Tab`, `Shift+Tab`, `Enter`, `Escape`,
     /// `Space`, `ArrowDown`, `Home`, `F5`, or one printable US-layout character
     /// with modifiers such as `Control+a`. Modifiers are `Shift`, `Control`,
-    /// `Alt` and `Meta`. Printable keys are audited as `printable`, never as text.
+    /// `Alt` and `Meta`. Printable keys and `Space` are audited as `printable`, never as text.
     pub(crate) key: Option<String>,
     /// Consecutive trusted clicks for `click` (1-3, default 1), or presses
     /// for `press` (1-100, default 1).
