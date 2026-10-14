@@ -226,6 +226,11 @@ Current final LIVE records are under
 The testing index and immediate hazardous-step cautions were corrected. The LIVE
 procedure distinguishes CLI Resume intent from reconnect allocation and Ready.
 This report and procedure update changes no consumed build/runtime input.
+The third review corrected the written key-removal order: revocation and exact
+OS-value removal now precede Stop, with catalog/selection retained; the procedure
+rechecks absence after resumed Ready. The current final LIVE above already ran
+that sequence. Its recorded key, OS-item, catalog and selection proofs remain
+valid; no new execution is claimed for this documentation correction.
 Exact-head GitHub checks and independent review still gate merging.
 
 ## Limits

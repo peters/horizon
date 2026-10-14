@@ -131,20 +131,50 @@ Run this task on both the first reviewable and final source heads. Offline resul
    Record only nonsecret identities.
    A displayed name or peer ID cannot qualify this check.
 
+> **CAUTION:** REVOKE ONLY THE RECORDED TASK KEY.
+> Revocation stops new enrollment with that key.
+> Preserve the original user binding.
+
+10. Revoke the task auth key through the separately authorized admin cleanup path.
+
+    Result: The exact task key is invalid.
+    Record the revocation time even if the API retains revoked metadata.
+
+> **CAUTION:** REMOVE ONLY THE EXACT TASK AUTH-KEY OS VALUE.
+> Removal deletes its saved secret value.
+> Retain the task catalog entry and selection; keep original credential bindings unchanged.
+
+11. Remove only the task auth-key OS value through the separately authorized cleanup path.
+
+    Result: The exact OS item is absent.
+    The task catalog entry, saved tailnet ID and cloud selection remain unchanged.
+    Do not delete the saved tailnet or use catalog-removing binding cleanup before Resume.
+
+> **CAUTION:** USE ONLY THE APPROVED TASK READ CHANNELS.
+> Key status uses an API credential.
+> Keep secret values private.
+
+12. Examine task-key revocation, exact OS-value absence and retained catalog selection before Stop.
+
+    Result: The recorded key is invalid with a nonempty revocation time.
+    Its exact OS item is absent.
+    The catalog entry and selected saved tailnet ID still match the task.
+    Stop cannot proceed without all three proofs.
+
 > **CAUTION:** STOP ONLY THE RECORDED TASK WORKER.
 > Stop interrupts task sessions; retained storage can still cost money.
 > The controller uses the provider credential.
 
-10. Stop the task worker through the owning controller.
+13. Stop the task worker through the owning controller.
 
     Result: The retained volume stays owned.
     Hetzner removes the original server.
 
 > **CAUTION:** RESUME ONLY THE APPROVED TASK CLOUD.
 > UI Resume automatically starts reconnect, which rents compute and changes access.
-> The controller can transfer an auth key if enrollment is necessary.
+> A missing retained daemon login must refuse readiness; do not restore a key.
 
-11. Resume the task cloud through the owning controller.
+14. Resume the task cloud through the owning controller.
 
     Result: The controller records resume intent.
     CLI Resume returns before reconnect allocates compute.
@@ -152,22 +182,32 @@ Run this task on both the first reviewable and final source heads. Offline resul
 
 > **CAUTION:** RECONNECT ONLY THE APPROVED TASK CLOUD.
 > Reconnect rents compute, changes worker access and uses the provider credential.
-> The controller can transfer an auth key if enrollment is necessary.
+> Keep the task auth-key OS value absent; no new enrollment is allowed.
 
-12. If reconnect has not started, connect again through UI **Reconnect** or `cloud_deploy reconnect SETTINGS STATE_ROOT`.
+15. If reconnect has not started, connect again through UI **Reconnect** or `cloud_deploy reconnect SETTINGS STATE_ROOT`.
 
     Result: Hetzner creates a new server on the retained volume.
     An automatic UI reconnect needs no second request.
 
-13. Wait for Ready.
+16. Wait for Ready.
 
     Result: Reconnect completes readiness and saves the worker-bound receipt.
+    A daemon that needs a new login cannot qualify this key-free lane.
+
+> **CAUTION:** READ ONLY THE EXACT TASK AUTH-KEY OS SLOT.
+> Keep secret values private.
+> Do not recreate the absent item.
+
+17. Examine exact task auth-key OS-value absence after resumed Ready.
+
+    Result: The recorded OS item remains absent.
+    No task enrollment key was restored for reconnect.
 
 > **CAUTION:** USE ONLY THE APPROVED TASK READ CHANNELS.
 > The node lookup uses an API credential.
 > Keep all secret values private.
 
-14. Repeat the receipt and actual-ID comparison after resume.
+18. Repeat the receipt and actual-ID comparison after resume.
 
     Result: A logged-in daemon keeps Self.ID without another key transfer.
     Both worker-bound receipts remain when Self.ID stays the same.
@@ -177,43 +217,35 @@ Run this task on both the first reviewable and final source heads. Offline resul
 > **CAUTION:** DELETE ONLY THE RECORDED TASK COMPUTE AND STORAGE.
 > Deletion removes task data and uses the provider credential.
 
-15. Delete the task compute and storage through their owning controllers.
+19. Delete the task compute and storage through their owning controllers.
 
     Result: Exact resource checks report absence.
     The cloud's saved ledger remains intact after provider deletion.
-
-> **CAUTION:** REVOKE ONLY THE RECORDED TASK KEY.
-> Revocation stops new enrollment with that key.
-> Preserve the original user binding.
-
-16. Revoke the task auth key through the separately authorized admin cleanup path.
-
-    Result: The key is invalid.
-    Record the revocation time even if the API retains revoked metadata.
-
-> **CAUTION:** REMOVE ONLY THE TASK KEY FROM ITS DESKTOP BINDING.
-> Removal deletes its saved value.
-> Keep original credential bindings and unrelated catalog entries.
-
-17. Remove the task key from its desktop binding through the owning controller.
-
-    Result: The exact OS item is absent.
-    The original user binding stays unchanged.
 
 > **CAUTION:** DELETE ONLY THE NODE PROVEN BY THIS TASK.
 > Node deletion changes tailnet access.
 > Never delete a protected baseline device.
 
-18. Delete the proven task node through the separately authorized admin cleanup path.
+20. Delete the proven task node through the separately authorized admin cleanup path.
 
     Result: Its exact API read reports absence.
     This is test cleanup, not automatic product node deletion.
+
+> **CAUTION:** CLEAN ONLY THE EXACT TASK CATALOG ENTRY AND OS-BINDING METADATA.
+> Cleanup deletes the saved task network and its remaining binding metadata.
+> Require exact provider and node absence proofs; preserve original and unrelated bindings.
+
+21. After exact provider and task-node absence proofs, remove only the task catalog entry and remaining OS-binding metadata.
+
+    Result: The saved task network and its exact credential-binding metadata are removed.
+    The worker receipt ledger remains intact.
+    The exact task auth-key OS item stays absent.
 
 > **CAUTION:** USE ONLY THE APPROVED CLEANUP READ CHECKS.
 > These checks use API credentials.
 > Keep all secret values private.
 
-19. Examine exact resource absence and the protected baseline device IDs.
+22. Examine exact resource absence and the protected baseline device IDs.
 
     Result: Task resources are absent and baseline devices remain.
     The original user credential binding stays unchanged.
