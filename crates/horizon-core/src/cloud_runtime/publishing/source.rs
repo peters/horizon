@@ -63,7 +63,7 @@ fn remote(origin: &str) -> Result<Option<String>> {
         }
         let (authority, path) = rest.split_once('/').ok_or(Error::Invalid(ORIGIN_INVALID))?;
         (scheme, authority, path, false)
-    } else if let Some((authority, path)) = origin.split_once(':') {
+    } else if let Some((authority, path)) = scp(origin) {
         if authority.len() == 1 && authority.bytes().all(|b| b.is_ascii_alphabetic()) && path.starts_with(['/', '\\']) {
             return Ok(None);
         }
@@ -110,6 +110,22 @@ fn remote(origin: &str) -> Result<Option<String>> {
         return Ok(Some(format!("ssh-home://{server}/{scope}/{path}")));
     }
     Ok(Some(format!("{scheme}://{server}/{path}")))
+}
+
+fn scp(origin: &str) -> Option<(&str, &str)> {
+    let host = origin.rsplit_once('@').map_or(origin, |(_, host)| host);
+    let colon = if host.starts_with('[') {
+        let end = host.find(']')?;
+        let colon = origin.len() - host.len() + end + 1;
+        (origin.as_bytes().get(colon) == Some(&b':')).then_some(colon)?
+    } else {
+        origin.find(':')?
+    };
+    let (authority, path) = origin.split_at(colon);
+    if authority.contains(['/', '\\']) {
+        return None;
+    }
+    Some((authority, &path[1..]))
 }
 
 #[cfg(test)]

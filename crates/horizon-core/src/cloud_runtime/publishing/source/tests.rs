@@ -84,6 +84,15 @@ fn git_origins_preserve_paths_suffixes_transports_and_local_scopes() {
             "distinct Git origins retain separate identities"
         );
     }
+    for local in ["repos/team:project", "repos\\team:project"] {
+        assert!(remote(local).unwrap().is_none());
+    }
+    assert!(
+        remote("git@[2001:db8::1]:team/project.git")
+            .unwrap()
+            .unwrap()
+            .starts_with("ssh-home://[2001:db8::1]/")
+    );
     let scoped = remote("synthetic-ssh-user@git.example:project.git").unwrap().unwrap();
     assert!(!scoped.contains("synthetic-ssh-user"));
     assert_eq!(
