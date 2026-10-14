@@ -94,7 +94,9 @@ pub(super) fn card(ui: &mut Ui, card: &Card) -> bool {
     response.inner
 }
 
-/// Runs the new cloud on the saved host `name`, at the profile's own size.
+/// Runs the new cloud on the saved host `name`, at the profile's own size. No size is
+/// kept for it, so a profile read again with other resources is checked and launched
+/// at its new size.
 pub(super) fn choose(form: &mut Production, profile: &Profile, name: &str) {
     let choice = horizon_core::cloud_panel::WorkerChoice {
         provider: provider::DOCKER_HOST.id.into(),
@@ -107,7 +109,7 @@ pub(super) fn choose(form: &mut Production, profile: &Profile, name: &str) {
     };
     if let Ok(chosen) = choice.for_profile(profile) {
         form.provider = Some(chosen.provider);
-        form.size = chosen.size;
+        form.size = None;
         form.placement = chosen.placement;
     }
 }

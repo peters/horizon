@@ -431,6 +431,17 @@ fn a_saved_docker_host_is_a_starting_point_at_no_rent() {
     assert!(!can_submit(&app.cloud_prototype.production));
 }
 
+fn development(app: &mut HorizonApp) -> &mut horizon_core::cloud_runtime::prices::Profile {
+    app.cloud_prototype
+        .production
+        .profiles
+        .as_mut()
+        .unwrap()
+        .profiles
+        .get_mut("development")
+        .unwrap()
+}
+
 #[test]
 fn a_chosen_docker_host_stays_chosen_and_start_waits_for_a_current_reading() {
     use crate::app::cloud_panel::production::creation::can_submit;
@@ -444,6 +455,16 @@ fn a_chosen_docker_host_stays_chosen_and_start_waits_for_a_current_reading() {
     tall_frame(&ctx, &mut app);
     let output = tall_frame(&ctx, &mut app);
     click(&ctx, &mut app, label_rect(&output, "Docker host · build-box").center());
+    tall_frame(&ctx, &mut app);
+    assert!(can_submit(&app.cloud_prototype.production));
+    // A host keeps no size of its own: a profile read again with more than the host has
+    // free is checked at its new size.
+    assert_eq!(app.cloud_prototype.production.size, None);
+    let cpu = development(&mut app).cpu;
+    development(&mut app).cpu = 16;
+    tall_frame(&ctx, &mut app);
+    assert!(!can_submit(&app.cloud_prototype.production));
+    development(&mut app).cpu = cpu;
     tall_frame(&ctx, &mut app);
     assert!(can_submit(&app.cloud_prototype.production));
     // A reading past its freshness limit keeps the choice, but Start waits for the next one.
@@ -461,15 +482,7 @@ fn a_chosen_docker_host_stays_chosen_and_start_waits_for_a_current_reading() {
     assert_eq!(form.placement.data_centers, ["build-box"]);
     assert!(!can_submit(form));
     // For a profile written for a host, another host does not replace the missing one.
-    app.cloud_prototype
-        .production
-        .profiles
-        .as_mut()
-        .unwrap()
-        .profiles
-        .get_mut("development")
-        .unwrap()
-        .provider = "docker-host".into();
+    development(&mut app).provider = "docker-host".into();
     app.cloud_prototype.production.prices.hosts.answered(vec![Reading {
         host: serde_json::from_value(serde_json::json!({"name": "spare-box", "access": "this-pc"})).unwrap(),
         capacity: Ok(Capacity {
