@@ -61,6 +61,7 @@ pub fn section(readings: &[Reading], requirements: &Requirements) -> Option<serd
     let offers: Vec<_> = readings
         .iter()
         .filter_map(|reading| docker_host::offer(&reading.host.name, reading.capacity.as_ref().ok()?, requirements))
+        .take(requirements.limit.unwrap_or(usize::MAX))
         .collect();
     let errors: serde_json::Map<_, _> = readings
         .iter()
@@ -126,6 +127,15 @@ mod tests {
             ..Requirements::default()
         };
         assert!(super::section(&readings, &gpu).is_none());
+        let one = Requirements {
+            limit: Some(1),
+            ..Requirements::default()
+        };
+        let both = [readings[0].clone(), readings[0].clone()];
+        assert_eq!(
+            super::section(&both, &one).unwrap()["offers"].as_array().unwrap().len(),
+            1
+        );
         assert!(super::section(&[], &Requirements::default()).is_none());
     }
 }

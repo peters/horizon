@@ -31,8 +31,8 @@ containers that carry Horizon's owner label. It starts, pulls and installs
 nothing.
 
 To change or check a saved host again, click **Edit** on its row. **Remove host**
-removes it from the settings. A cloud on a removed host cannot stop, resume or be
-deleted until you save the host again under the same name.
+removes it from the settings. A cloud on a host that you remove or rename cannot
+stop, resume or be deleted until you save the host again under its old name.
 
 Clear **Use a Docker host for clouds** to remove your hosts from New cloud and
 from `cloud_offers`. The saved hosts stay in the settings, and clouds on them keep
