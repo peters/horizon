@@ -283,8 +283,8 @@ class HorizonStopTests(unittest.TestCase):
         # on the way to Horizon loses no stop; the log keeps it once.
         self.assertEqual(self.take(output=self.clock - 5), taken, 'no new check')
         self.assertEqual(len(self.log.read_text().splitlines()), 1)
-        # A taken stop that never happened lapses off the log.
-        self.clock += STOPD['REQUEST_SECONDS']
+        # A taken stop that never happened lapses off the log, ten minutes after its take.
+        self.clock += STOPD['REQUEST_SECONDS'] + 1
         self.assertIn('lapsed', self.take()['refused'])
         self.assertIsNone(STOP['last_stop'](self.log))
         self.assertIsNone(self.take())
@@ -332,6 +332,20 @@ class HorizonStopTests(unittest.TestCase):
         held.close()
         recorded.join(5)
         self.assertEqual(json.loads(self.request.read_text())['reason'], 'second')
+
+    def test_a_taken_stop_lapses_from_its_take_not_from_its_request(self):
+        self.record()
+        self.clock += STOPD['REQUEST_SECONDS'] - 5
+        self.assertEqual(self.take()['reason'], 'PR 12 merged')
+        # Past ten minutes from the request, but not from the take: the stop still counts.
+        self.clock += 10
+        self.assertEqual(self.take()['reason'], 'PR 12 merged')
+        with self.assertRaisesRegex(Refused, 'already stopping'):
+            self.record(reason='second')
+        self.assertEqual(len(self.log.read_text().splitlines()), 1)
+        self.clock += STOPD['REQUEST_SECONDS']
+        self.assertIn('lapsed', self.take()['refused'])
+        self.assertEqual(self.log.read_text(), '')
 
     def test_a_request_while_horizon_carries_out_a_taken_one_is_refused(self):
         self.record(reason='first')

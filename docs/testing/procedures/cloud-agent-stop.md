@@ -48,7 +48,7 @@ stop credential, the worker must record the request for Horizon to take.
   - `hetzner-agent`: Hetzner, the cheapest server type, `agents: [claude]`.
 - A worker image built from the candidate `examples/cloud-worker` directory.
   Before the worker images of the candidate are published, use the quick start
-  image and copy the candidate scripts onto the worker in step 5.3.
+  image and copy the candidate scripts onto the worker in step 5.4.
 - The `cloud_deploy` example program, built from the candidate commit:
 
   ```bash
@@ -57,13 +57,9 @@ stop credential, the worker must record the request for Horizon to take.
 
 - A clock. Write down the time of each result.
 
-In this procedure, `<state root>` is the directory of the cloud. A root SSH
-shell does not have the environment of the worker. `<worker env>` is that
-environment:
-
-```bash
-env $(tr '\0' '\n' < /proc/1/environ | grep -E '^(RUNPOD_|HORIZON_WORKER_)' | xargs)
-```
+In this procedure, `<state root>` is the directory of the cloud. Use a cloud
+without a tailnet: on a worker with agent isolation, the agent sessions use
+another tmux server.
 
 ## 5. Setup
 
@@ -79,13 +75,25 @@ env $(tr '\0' '\n' < /proc/1/environ | grep -E '^(RUNPOD_|HORIZON_WORKER_)' | xa
 
    Result: You have a root prompt on the worker.
 
-3. If the image is not built from the candidate, copy the candidate scripts
-   `horizon-worker-stopd`, `horizon-worker-stop`, `horizon-worker-supervise`,
-   `horizon-worker-check` and `horizon-worker-configure` to `/usr/local/bin/`.
-   Then start the service with the environment of the worker:
+3. A root SSH shell does not have the environment of the worker. Load it into
+   the shell:
 
    ```bash
-   <worker env> setsid nohup horizon-worker-stopd > /var/tmp/stopd.log 2>&1 < /dev/null &
+   while IFS= read -r -d '' variable; do
+     case $variable in RUNPOD_*|HORIZON_WORKER_*) export "$variable" ;; esac
+   done < /proc/1/environ
+   ```
+
+   Result: `echo "$HORIZON_WORKER_CAPABILITIES"` shows the capabilities JSON
+   with its quotes.
+
+4. If the image is not built from the candidate, copy the candidate scripts
+   `horizon-worker-stopd`, `horizon-worker-stop`, `horizon-worker-supervise`,
+   `horizon-worker-check` and `horizon-worker-configure` to `/usr/local/bin/`.
+   Then start the service:
+
+   ```bash
+   setsid nohup horizon-worker-stopd > /var/tmp/stopd.log 2>&1 < /dev/null &
    ```
 
    Result: `/run/horizon-worker/stop.sock` exists.
@@ -98,11 +106,11 @@ env $(tr '\0' '\n' < /proc/1/environ | grep -E '^(RUNPOD_|HORIZON_WORKER_)' | xa
 
    Result: The output is `horizon-agent-stop-contract=1`.
 
-2. Type `<worker env> horizon-worker-stopd --mode`.
+2. Type `horizon-worker-stopd --mode`.
 
    Result: The output is `self`.
 
-3. Type `<worker env> HORIZON_WORKER_STARTUP=1 horizon-worker-stopd --mode`.
+3. Type `HORIZON_WORKER_STARTUP=1 horizon-worker-stopd --mode`.
 
    Result: The output is `none`. A shared worker offers no stop.
 
@@ -168,12 +176,11 @@ env $(tr '\0' '\n' < /proc/1/environ | grep -E '^(RUNPOD_|HORIZON_WORKER_)' | xa
 > **CAUTION:** THIS TASK RENTS A HETZNER SERVER AND A VOLUME.
 
 1. Deploy a cloud with the profile `hetzner-agent` and open an SSH connection
-   to the worker as root. Do setup step 5.3, and add
-   `HORIZON_WORKER_STOP=horizon` after `<worker env>`. Horizon does not give
-   this setting yet.
+   to the worker as root. Do setup steps 5.3 and 5.4, but type
+   `export HORIZON_WORKER_STOP=horizon` before you start the service. Horizon
+   does not give this setting yet.
 
-   Result: `<worker env> HORIZON_WORKER_STOP=horizon horizon-worker-stopd --mode`
-   prints `horizon`.
+   Result: `horizon-worker-stopd --mode` prints `horizon`.
 
 2. Do steps 6.2.1 and 6.2.3 with only the session `smoke-a`.
 

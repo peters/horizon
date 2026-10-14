@@ -4,9 +4,10 @@ horizon-worker-stop.
 
 Where the provider gives the worker a credential to stop itself (RunPod), this service
 checks the request and stops the worker at once. Where it does not (Hetzner, a Docker
-host), Horizon gives the worker HORIZON_WORKER_STOP=horizon: the service checks the
-request and records it, and Horizon carries it out the next time it reads the worker
-with `horizon-worker-stopd --take`, which checks it again. A shared worker and a worker
+host), a worker started with HORIZON_WORKER_STOP=horizon has the service check the
+request and record it, for Horizon to carry out the next time it reads the worker with
+`horizon-worker-stopd --take`, which checks it again. Horizon does not give that setting
+yet. A shared worker and a worker
 with hosted devices offer no stop: the first runs other clouds' sessions, and the second
 could not release the devices it holds once stopped."""
 import fcntl
@@ -38,7 +39,8 @@ STOP_LOG = Path('/workspace/.horizon/self-stops.jsonl')
 # server clears, so a request never outlives the worker it was made on.
 REQUEST = Path('/run/horizon-worker/stop-request.json')
 REQUEST_LOCK = Path('/run/horizon-worker/stop-request.lock')
-# A request Horizon did not take in this time lapses: the checks it passed are stale.
+# A request Horizon did not take in this time lapses, as its checks are stale, and so does a
+# stop Horizon took this long ago that did not happen.
 REQUEST_SECONDS = 600
 # Another agent session with output this recent is still working.
 QUIET_SECONDS = 120
@@ -335,10 +337,17 @@ def refuse_over_taken(path, log, now):
         return
     if not isinstance(record, dict) or record.get('taken') is not True or not isinstance(record.get('at'), int):
         return
-    if 0 <= now() * 1000 - record['at'] <= REQUEST_SECONDS * 1000:
+    if not lapsed(record, now):
         raise Refused('Horizon is already stopping this worker at the request of session '
                       + str(record.get('session')) + '.')
     remove_newest(log, record['at'])
+
+
+def lapsed(record, now):
+    """Whether `record` no longer counts: a request that Horizon did not take within
+    REQUEST_SECONDS, or a stop it took that long ago that did not happen."""
+    since = record.get('taken_at') if record.get('taken') is True else record['at']
+    return not isinstance(since, int) or not 0 <= now() * 1000 - since <= REQUEST_SECONDS * 1000
 
 
 def sessions(query=tmux):
@@ -371,7 +380,7 @@ def take(path=REQUEST, lock=REQUEST_LOCK, log=STOP_LOG, now=time.time, output=ot
             path.unlink(missing_ok=True)
             return {'refused': 'The stop request was malformed.'}
         stop = {key: record[key] for key in ('at', 'reason', 'session', 'agent')}
-        if not 0 <= now() * 1000 - record['at'] <= REQUEST_SECONDS * 1000:
+        if lapsed(record, now):
             if record.get('taken') is True:
                 remove_newest(log, record['at'])
             path.unlink(missing_ok=True)
@@ -394,6 +403,7 @@ def take(path=REQUEST, lock=REQUEST_LOCK, log=STOP_LOG, now=time.time, output=ot
         except OSError as error:
             return {'waiting': 'The stop could not be recorded on the workspace volume: ' + type(error).__name__}
         record['taken'] = True
+        record['taken_at'] = int(now() * 1000)
         write_request(path, record)
         return stop
 
@@ -465,7 +475,7 @@ def answer(line, pid, stop, identify=caller):
                 + type(error).__name__ + '); the worker keeps running.'}
 
 
-def request_line(connection, limit=4096, seconds=30, clock=time.monotonic):
+def request_line(connection, limit=4096, seconds=10, clock=time.monotonic):
     """The first line a client sends, within `seconds` in all: the service answers one
     request at a time, so a client that sends a byte now and then must not hold it."""
     deadline = clock() + seconds

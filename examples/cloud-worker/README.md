@@ -54,8 +54,9 @@ checks the request again, now counting the output of every agent session, the
 requester's too, adds the stop to the stop log and prints it. Later takes print the same
 stop until the worker stops, so an answer lost on the way to Horizon loses no stop. It
 prints `null` without a request, `{"waiting": ...}` while the worker works (the request
-stays for a later take), and `{"refused": ...}` when the request no longer counts: older
-than ten minutes (a taken stop then leaves the log again), malformed, or its agent
+stays for a later take), and `{"refused": ...}` when the request no longer counts: not
+taken within ten minutes, taken ten minutes ago without a stop (the stop then leaves the
+log again), malformed, or its agent
 session ended and its window holds another session. When Horizon cannot start the stop,
 `--untake AT` removes it from the log and drops the request. The supervisor drops a
 request left from before the worker started. This works only while Horizon runs. `horizon-worker-stopd --mode`
