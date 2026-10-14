@@ -196,7 +196,7 @@ fn resolved(path: &Path, guarded: &[PathBuf]) -> Option<PathBuf> {
     if guarded.is_empty() {
         return Some(std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned()));
     }
-    let inside = |place: &Path| guarded.iter().any(|guarded| place.starts_with(guarded));
+    let inside = |place: &Path| guarded.iter().any(|guarded| below(place, guarded));
     let mut rest: Vec<std::ffi::OsString> = lexical(path).iter().map(std::ffi::OsStr::to_os_string).collect();
     rest.reverse();
     let mut done = PathBuf::new();
@@ -332,7 +332,11 @@ fn read(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
     };
     let complete = own
         && head_resolves(&git, head.trim(), guarded)
-        && !crate::cloud_runtime::repository::source::clone_stopped(path);
+        && !small_file(
+            &git.join(crate::cloud_runtime::repository::source::CLONE_MARKER),
+            guarded,
+        )
+        .is_some_and(|marker| crate::cloud_runtime::repository::source::clone_stopped(&marker));
     Some(Checkout {
         path: path.to_owned(),
         origin: origin(&config),
@@ -346,14 +350,30 @@ fn read(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
 /// whose ref is a file or is listed in `packed-refs`. Read from files only.
 fn head_resolves(git: &Path, head: &str, guarded: &[PathBuf]) -> bool {
     let Some(name) = head.strip_prefix("ref: ") else {
-        return head.len() >= 40 && head.bytes().all(|byte| byte.is_ascii_hexdigit());
+        return object_name(head);
     };
     let name = name.trim();
     if name.split('/').any(|part| part.is_empty() || part == "..") {
         return false;
     }
-    small_file(&git.join(name), guarded).is_some_and(|value| !value.trim().is_empty())
+    small_file(&git.join(name), guarded).is_some_and(|value| object_name(value.trim()))
         || packed_ref(&git.join("packed-refs"), name, guarded)
+}
+
+/// Whether `text` is a Git object name: 40 or 64 hexadecimal digits.
+fn object_name(text: &str) -> bool {
+    matches!(text.len(), 40 | 64) && text.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// Whether `path` lies below `folder`, the names compared without regard to case, as a
+/// case-insensitive file system such as macOS's usual one sees them.
+fn below(path: &Path, folder: &Path) -> bool {
+    let mut path = path.components();
+    folder.components().all(|part| {
+        path.next().is_some_and(|other| {
+            other.as_os_str().to_string_lossy().to_lowercase() == part.as_os_str().to_string_lossy().to_lowercase()
+        })
+    })
 }
 
 /// The most bytes of `packed-refs` read while looking for one ref: a repository with very
@@ -598,5 +618,26 @@ mod tests {
         packed.push_str("0123456789abcdef0123456789abcdef01234567 refs/heads/main\n");
         fs::write(git.join("packed-refs"), packed).unwrap();
         assert!(super::head_resolves(&git, "ref: refs/heads/main", &[]));
+    }
+
+    #[test]
+    fn a_guarded_folder_is_found_whatever_the_case() {
+        assert!(super::below(
+            std::path::Path::new("/Users/x/documents/code"),
+            std::path::Path::new("/Users/x/Documents")
+        ));
+        assert!(!super::below(
+            std::path::Path::new("/Users/x/code"),
+            std::path::Path::new("/Users/x/Documents")
+        ));
+    }
+
+    #[test]
+    fn a_ref_that_names_no_object_is_no_commit() {
+        let home = tempfile::tempdir().unwrap();
+        let git = home.path().join(".git");
+        fs::create_dir_all(git.join("refs/heads")).unwrap();
+        fs::write(git.join("refs/heads/main"), "not-a-commit\n").unwrap();
+        assert!(!super::head_resolves(&git, "ref: refs/heads/main", &[]));
     }
 }

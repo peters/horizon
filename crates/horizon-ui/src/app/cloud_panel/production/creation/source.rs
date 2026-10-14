@@ -24,8 +24,10 @@ struct Plan {
     url: String,
     parent: PathBuf,
     existing: Option<PathBuf>,
-    /// How many checkouts the search had found when the plan was made: one found later may
-    /// be this repository.
+    /// The checkout at the clone's own place, looked up on the disk once per link and folder.
+    at_destination: Option<PathBuf>,
+    /// How many checkouts the search had found when `existing` was worked out: one found later
+    /// may be this repository.
     found: usize,
     /// A folder where an earlier try at this link stopped, and that a new try picks up from.
     resumable: Option<PathBuf>,
@@ -223,20 +225,34 @@ impl State {
     /// Where `remote` would be cloned; looked up again only when the link or the folder changes.
     fn plan(&mut self, remote: &Remote) -> &Plan {
         let parent = self.parent().to_owned();
-        if self.plan.as_ref().is_some_and(|plan| {
-            plan.url != remote.url || plan.parent != parent || plan.found != self.finder.local_count()
-        }) {
+        if self
+            .plan
+            .as_ref()
+            .is_some_and(|plan| plan.url != remote.url || plan.parent != parent)
+        {
             self.plan = None;
         }
-        self.plan.get_or_insert_with(|| Plan {
-            url: remote.url.clone(),
-            // A checkout of it found anywhere on this computer is used rather than cloned again.
-            existing: source::existing(&parent, remote).or_else(|| self.finder.checkout_of(remote)),
-            found: self.finder.local_count(),
-            resumable: source::resumable(&parent, remote),
-            destination: source::destination(&parent, remote),
-            parent,
-        })
+        let found = self.finder.local_count();
+        let finder = &self.finder;
+        let plan = self.plan.get_or_insert_with(|| {
+            let at_destination = source::existing(&parent, remote);
+            Plan {
+                url: remote.url.clone(),
+                existing: at_destination.clone(),
+                at_destination,
+                found: usize::MAX,
+                resumable: source::resumable(&parent, remote),
+                destination: source::destination(&parent, remote),
+                parent,
+            }
+        });
+        // Checkouts the search found since are looked at in memory only; the work on the disk
+        // above runs once per link and folder. One found anywhere is used rather than cloned.
+        if plan.found != found {
+            plan.found = found;
+            plan.existing = plan.at_destination.clone().or_else(|| finder.checkout_of(remote));
+        }
+        plan
     }
 
     pub fn set_parent(&mut self, path: &Path) {

@@ -197,7 +197,8 @@ fn list(ui: &mut Ui, state: &mut State, rows: &[Row]) -> Option<Pick> {
 
 /// The keys that work the results, and the way to add repositories to the app.
 fn hint_row(ui: &mut Ui, state: &State, path: bool) {
-    ui.horizontal(|ui| {
+    // Wraps in a narrow dialog, so the GitHub link stays in reach.
+    ui.horizontal_wrapped(|ui| {
         let hint = if path {
             "↑ ↓ move  ·  Enter uses a repository  ·  Tab opens a folder"
         } else {

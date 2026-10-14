@@ -233,11 +233,14 @@ pub fn existing(parent: &Path, remote: &Remote) -> Option<PathBuf> {
         })
 }
 
-/// Whether a clone into `folder` was started and not finished, read from its marker file
-/// alone, without starting a process.
+/// The name of the marker a clone keeps in a checkout's `.git` folder while it runs.
+pub const CLONE_MARKER: &str = transport::MARKER_NAME;
+
+/// Whether `marker`, the text of a [`CLONE_MARKER`] file, says the clone into its folder
+/// was started and not finished. The caller reads the file however it must.
 #[must_use]
-pub fn clone_stopped(folder: &Path) -> bool {
-    transport::unfinished(folder)
+pub fn clone_stopped(marker: &str) -> bool {
+    transport::stopped(marker)
 }
 
 /// The address a checkout's `origin` was cloned from, read from its config file: a folder is

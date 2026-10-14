@@ -365,7 +365,11 @@ struct Marker {
 }
 
 fn marker(folder: &Path) -> Option<Marker> {
-    let text = std::fs::read_to_string(folder.join(".git").join(MARKER)).ok()?;
+    parse_marker(&std::fs::read_to_string(folder.join(".git").join(MARKER)).ok()?)
+}
+
+/// The marker a clone keeps in its `.git` folder, under [`MARKER`], read from its text.
+fn parse_marker(text: &str) -> Option<Marker> {
     let mut lines = text.lines();
     Some(Marker {
         url: lines.next()?.to_owned(),
@@ -431,6 +435,14 @@ impl Claim {
         ))
     }
 }
+
+/// Whether the text of a clone marker says the clone was started and not finished.
+pub(super) fn stopped(marker: &str) -> bool {
+    parse_marker(marker).is_some_and(|marker| !marker.complete())
+}
+
+/// The name of the clone marker in a checkout's `.git` folder.
+pub(super) const MARKER_NAME: &str = MARKER;
 
 /// Whether `folder` is a clone that was started and not finished.
 pub(super) fn unfinished(folder: &Path) -> bool {
