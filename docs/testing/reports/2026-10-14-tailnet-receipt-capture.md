@@ -104,10 +104,63 @@ Private first-run records are retained under
 They contain nonsecret projected identity, provider absence and cleanup evidence;
 the key exchange used private pipes and OS storage.
 
-## Remaining final gate and limits
+## Final real-input result and review fix
 
-A separate final-head LIVE run is required before merge. The first run does not
-replace it. GitHub checks and the independent review must cover the final head.
+The first review found that migration rejected an unrelated neighboring version-4
+deployment. The neighboring reader now accepts only the validated version-4 shape
+and preserves duplicate-worker fencing. Three new regressions cover unrelated
+receipts, the same worker and malformed/future version shapes. The migration
+suite passed 22 tests; capture passed 26 with one existing ignored test; paired
+ledger passed 19. These are named suites, not an additive unique-test count.
+The full current workspace, UI speech, blocking/strict Clippy and static checks
+passed again. The ordinary advisory command still reports pre-existing findings.
+
+Final LIVE passed on runtime commit
+`4f6d83d885ce7b5904345400c340339c754a7724`, tree
+`121fe0c4eea5caf9bd19be8c3bb11eca6ee28d00`, on the same current-main base.
+All 1,703 consumed inputs match the fresh builds made on `0642626a` with the
+three migration-fix paths staged. The original manifests retain that actual
+dirty build identity. The controller SHA-256 is
+`4922e2abc0942c0ca768bd1eb98b314319582bd85103aa098b47f4e5e80b19a7`.
+The current Store/probe adapter SHA-256 is
+`7abf3101f623ea59ed7da0e520663b1919e229cb8c4fe3dbeaabd8979106584a`.
+No old controller or old public-core adapter qualified this final run.
+
+The separate final lane again used one authorized Hetzner cpx22 in fsn1,
+2 vCPU, 4 GB memory, 20 GB volume and the same immutable f28a0ceb worker image.
+The fresh offer listed EUR 0.0312/hour, within the same USD 3 run cap and USD 200
+task budget. One paid worker ran at a time. The original two protected tailnet
+devices were verified before allocation.
+
+1. Initial Ready took 117.910 seconds. The actual Self ID and projected receipt
+   matched the saved tailnet, provider, worker and allocation request. Independent
+   API lookup verified the exact owned node and sole worker tag.
+2. The separate tagged test key was revoked and invalid. Its exact OS value was
+   removed without reading it, while catalog and selection hashes stayed equal.
+3. Stop completed in 8.890 seconds. Exact provider GET confirmed the initial
+   server absent and its original volume retained unattached.
+4. Resume/reconnect reached Ready in 127.031 seconds on a different server.
+   The OS key value remained absent after resume. Actual Self ID stayed equal;
+   both distinct worker-bound receipts survived with no unresolved attempt.
+5. Product Delete completed. Exact GETs returned 404 for both servers, volume
+   and SSH key; all operation-filtered collections were empty. The Deleted
+   deployment retained both receipts.
+6. Separate authorized administration deleted only the proven task node after
+   provider absence and confirmed its GET returned 404. The task catalog/OS
+   binding was removed. The original two protected device IDs and original
+   accessible auth-key binding remained intact.
+
+Private final records are under
+`/tmp/horizon-1335-smoke/private/capture-final-0642626a-8d1e7e7e/`.
+The directory/cloud name predates the fix; its candidate and build manifests
+record the actual final source and binary identities above. Fresh production
+and adapter manifests, checks and full input inventories are under
+`/tmp/horizon-1335-evidence/captured-id-validation/review-round1-0642626a/`.
+This later report-only update changes no consumed runtime/build input.
+The first and final LIVE gates are complete; GitHub checks and independent
+review must still pass on the resulting PR head before merge.
+
+## Limits
 
 This result qualifies Linux CPU enrollment receipt capture and stateful
 stop/resume. It does not qualify GPU, RunPod storage, Docker-host enrollment or
