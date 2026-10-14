@@ -1,5 +1,5 @@
-//! Browser panel chrome strip: navigation buttons, URL bar, ownership
-//! chip, and the handoff banner.
+//! Browser panel chrome strip: navigation buttons, URL bar, ownership and
+//! passkey chip, and the handoff banner.
 
 use egui::{
     RichText, Stroke, TextEdit, TextWrapMode, Ui, WidgetInfo, WidgetType,
@@ -453,13 +453,22 @@ fn sync_url_buffer(url_buffer: &mut String, canonical_url: &str, was_focused: bo
 /// The chip's label and color, or `None` when neither an agent owner nor a
 /// pending handoff should be surfaced.
 fn ownership_chip_label(browser: &BrowserPanelState) -> Option<(String, egui::Color32)> {
-    if browser.handoff_reason.is_some() {
+    chip_label(
+        browser.handoff_reason.is_some(),
+        browser.frame_slot.passkey_pending(),
+        browser.owner.as_deref(),
+    )
+}
+
+/// A handoff wait comes first; a passkey request waiting for the external
+/// authenticator command comes before the owning agent's name.
+fn chip_label(handoff: bool, passkey: bool, owner: Option<&str>) -> Option<(String, egui::Color32)> {
+    if handoff {
         Some((String::from("waiting"), theme::PALETTE_YELLOW()))
+    } else if passkey {
+        Some((String::from("passkey request waiting"), theme::PALETTE_YELLOW()))
     } else {
-        browser
-            .owner
-            .as_ref()
-            .map(|owner| (format!("agent: {owner}"), theme::PALETTE_GREEN()))
+        owner.map(|owner| (format!("agent: {owner}"), theme::PALETTE_GREEN()))
     }
 }
 
@@ -826,5 +835,17 @@ mod tests {
             assert!(!super::video_stop_button(ui, &mut browser, false));
         });
         assert!(disabled_label(&disabled_stop, "Stop recording"));
+    }
+
+    #[test]
+    fn a_waiting_passkey_request_shows_before_the_owner_but_after_a_handoff() {
+        let label = |handoff, passkey, owner| super::chip_label(handoff, passkey, owner).map(|(label, _)| label);
+        assert_eq!(label(true, true, Some("codex")).as_deref(), Some("waiting"));
+        assert_eq!(
+            label(false, true, Some("codex")).as_deref(),
+            Some("passkey request waiting")
+        );
+        assert_eq!(label(false, false, Some("codex")).as_deref(), Some("agent: codex"));
+        assert_eq!(label(false, false, None), None);
     }
 }

@@ -43,6 +43,7 @@ impl Driver {
             self.disable_optional_bidi(slot, events);
         }
         self.tick_file_chooser(events);
+        self.tick_passkeys(events);
         true
     }
 
@@ -72,7 +73,10 @@ impl Driver {
             return;
         }
         self.forget_completed_http_auth(event);
-        if self.handle_file_chooser_event(event, event_tx) || self.handle_network_bidi_event(event) {
+        if self.handle_file_chooser_event(event, event_tx)
+            || self.handle_passkey_bidi_event(event, event_tx)
+            || self.handle_network_bidi_event(event)
+        {
             return;
         }
         let method = event.get("method").and_then(Value::as_str).unwrap_or_default();

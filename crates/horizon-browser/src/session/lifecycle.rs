@@ -99,6 +99,9 @@ impl DriverState {
             return false;
         }
         self.restore_network_capture(link, event_tx, frame_slot, session);
+        if !self.install_passkey_bridge(link, event_tx, frame_slot, session) {
+            return false;
+        }
         if self.config.browser.automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals
             && !self.install_common_signal_minimization(link, event_tx, frame_slot, session)
         {
@@ -343,7 +346,7 @@ impl DriverState {
         true
     }
 
-    fn setup_command(
+    pub(super) fn setup_command(
         &mut self,
         link: &mut CdpLink,
         event_tx: &BrowserEventSender,

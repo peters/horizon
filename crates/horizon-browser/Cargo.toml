@@ -42,3 +42,9 @@ process-wrap.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# Test P-256 keys for the live WebAuthn bridge test's fake authenticator.
+ring.workspace = true
+
+[[test]]
+name = "webauthn_live"
+harness = false

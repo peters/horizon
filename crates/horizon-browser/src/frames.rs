@@ -146,6 +146,7 @@ pub struct FrameSlot {
     teach_active: Arc<AtomicBool>,
     teach_generation: Arc<AtomicU64>,
     teach_observations: Arc<std::sync::Mutex<VecDeque<TeachObservation>>>,
+    passkey_pending: Arc<AtomicBool>,
 }
 
 /// One Teach capture, including failures so the recorder stays aligned.
@@ -164,6 +165,16 @@ impl FrameSlot {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A page's passkey request waits for the external authenticator command.
+    #[must_use]
+    pub fn passkey_pending(&self) -> bool {
+        self.passkey_pending.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn set_passkey_pending(&self, pending: bool) {
+        self.passkey_pending.store(pending, Ordering::Release);
     }
 
     pub fn set_teach_recording(&self, active: bool) {

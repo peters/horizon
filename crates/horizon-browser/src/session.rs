@@ -48,6 +48,7 @@ pub use shutdown::{DriverTeardown, RemoteReleaseReport};
 mod startup;
 pub(crate) mod viewport;
 mod wait;
+mod webauthn;
 
 use clipboard::ClipboardState;
 pub(crate) use command_queue::CommandReceiver;
@@ -463,6 +464,7 @@ fn run_loop(
         }
 
         state.tick_file_chooser(link, event_tx, frame_slot);
+        state.tick_passkeys(link, event_tx, frame_slot);
 
         // 3. Flush a pending throttled manifest write (the loop always
         //    iterates, so a quiet page still gets its url/title flushed).
@@ -616,6 +618,7 @@ struct DriverState {
     video: crate::video::VideoCaptureState,
     pending_http_bodies: VecDeque<http_bodies::PendingHttpBody>,
     http_body_evidence: http_bodies::HttpBodyEvidenceTable,
+    passkeys: Option<webauthn::CdpPasskeys>,
     stop_requested: Arc<AtomicBool>,
 }
 
@@ -684,6 +687,7 @@ impl DriverState {
             video: crate::video::VideoCaptureState::new(Arc::clone(&config.video)),
             pending_http_bodies: VecDeque::new(),
             http_body_evidence: http_bodies::HttpBodyEvidenceTable::default(),
+            passkeys: webauthn::CdpPasskeys::from_config(config),
             stop_requested,
         }
     }
@@ -860,6 +864,8 @@ impl DriverState {
         self.runtime_enable_requested.clear();
         self.runtime_enable_inflight.clear();
         self.clipboard.pending_capture = false;
+        // Passkey caller contexts belong to the Runtime domain of the session.
+        self.reset_passkeys();
     }
 
     fn navigate_to(
