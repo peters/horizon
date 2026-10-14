@@ -104,8 +104,13 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
         };
         // Every folder's real place is remembered, so a folder reached both directly and
         // through a link, such as `~/github` on another disk, or a loop, is read one time.
+        // Every entry looked at counts against the budget, so one folder with very many
+        // entries cannot keep the search busy past it.
+        let mut probed = 0;
         let mut children: Vec<PathBuf> = entries
             .flatten()
+            .take(VISITS.saturating_sub(visits))
+            .inspect(|_| probed += 1)
             // Hidden folders, and on macOS the folders it guards with a privacy prompt, are
             // passed by before a link among them is remembered.
             .filter(|entry| {
@@ -126,6 +131,7 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
                 (place.is_dir() && seen.insert(place)).then_some(path)
             })
             .collect();
+        visits += probed;
         children.sort_by_key(|path| {
             let name = path
                 .file_name()
@@ -202,6 +208,27 @@ fn resolved(path: &Path, guarded: &[PathBuf]) -> Option<PathBuf> {
     (!inside(&done)).then_some(done)
 }
 
+/// The most bytes read of one Git metadata file.
+const SMALL_FILE: u64 = 256 * 1024;
+
+/// A small regular file's text, reached without entering a guarded folder: never a pipe or
+/// a device, whose read could wait forever, and never more than [`SMALL_FILE`] bytes.
+fn small_file(path: &Path, guarded: &[PathBuf]) -> Option<String> {
+    use std::io::Read as _;
+    let place = resolved(path, guarded)?;
+    let meta = std::fs::symlink_metadata(&place).ok()?;
+    if !meta.is_file() || meta.len() > SMALL_FILE {
+        return None;
+    }
+    let mut text = String::new();
+    std::fs::File::open(&place)
+        .ok()?
+        .take(SMALL_FILE)
+        .read_to_string(&mut text)
+        .ok()?;
+    Some(text)
+}
+
 /// `path` with its `.` and `..` worked out from the text alone, without reading the disk:
 /// a link's target is judged before anything is looked up through it.
 fn lexical(path: &Path) -> PathBuf {
@@ -241,35 +268,47 @@ fn settled(mut found: Vec<Checkout>) -> Vec<Checkout> {
 /// The checkout in `path`, or `None` when it holds no repository. A worktree's `.git` is a
 /// file that names the repository's own folder, which holds its config.
 fn read(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
+    // A checkout whose repository lies in a guarded folder, also through links, is listed,
+    // but nothing of it is read there.
+    let unread = || Checkout {
+        path: path.to_owned(),
+        origin: None,
+        branch: None,
+        touched: None,
+    };
     let dot = path.join(".git");
-    let git = if dot.is_dir() {
+    let kind = std::fs::symlink_metadata(&dot).ok()?.file_type();
+    let Some(dot) = resolved(&dot, guarded) else {
+        return Some(unread());
+    };
+    let meta = std::fs::symlink_metadata(&dot).ok()?;
+    let git = if meta.is_dir() {
         dot
-    } else {
-        let pointer = std::fs::read_to_string(&dot).ok()?;
+    } else if meta.is_file() || kind.is_symlink() {
+        let pointer = small_file(&dot, guarded)?;
         let named = PathBuf::from(pointer.strip_prefix("gitdir:")?.trim());
         let named = if named.is_absolute() { named } else { path.join(named) };
-        // A worktree whose repository lies in a guarded folder, also through links, is
-        // listed, but nothing of it is read there.
         let Some(git) = resolved(&named, guarded) else {
-            return Some(Checkout {
-                path: path.to_owned(),
-                origin: None,
-                branch: None,
-                touched: None,
-            });
+            return Some(unread());
         };
         git
+    } else {
+        return None;
     };
-    let head = std::fs::read_to_string(git.join("HEAD")).unwrap_or_default();
+    let head = small_file(&git.join("HEAD"), guarded).unwrap_or_default();
     let branch = head.trim().strip_prefix("ref: refs/heads/").map(str::to_owned);
-    let common = std::fs::read_to_string(git.join("commondir")).map_or_else(
-        |_| Some(git.clone()),
+    let common = small_file(&git.join("commondir"), guarded).map_or_else(
+        || Some(git.clone()),
         |common| resolved(&git.join(common.trim()), guarded),
     );
     let config = common
-        .and_then(|common| std::fs::read_to_string(common.join("config")).ok())
+        .and_then(|common| small_file(&common.join("config"), guarded))
         .unwrap_or_default();
-    let modified = |name: &str| std::fs::metadata(git.join(name)).and_then(|meta| meta.modified()).ok();
+    let modified = |name: &str| {
+        std::fs::symlink_metadata(git.join(name))
+            .and_then(|meta| meta.modified())
+            .ok()
+    };
     Some(Checkout {
         path: path.to_owned(),
         origin: origin(&config),
@@ -407,5 +446,19 @@ mod tests {
         assert_eq!(super::resolved(&home.join("github/code"), &guarded), None);
         fs::create_dir_all(home.join("code")).unwrap();
         assert_eq!(super::resolved(&home.join("code"), &guarded), Some(home.join("code")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_git_pipe_is_never_read() {
+        let home = tempfile::tempdir().unwrap();
+        let repo = home.path().join("code/web");
+        fs::create_dir_all(&repo).unwrap();
+        let made = std::process::Command::new("mkfifo").arg(repo.join(".git")).status();
+        if !made.is_ok_and(|status| status.success()) {
+            return;
+        }
+        assert_eq!(super::read(&repo, &[]), None, "a pipe is not a repository");
+        assert!(super::small_file(&repo.join(".git"), &[]).is_none());
     }
 }
