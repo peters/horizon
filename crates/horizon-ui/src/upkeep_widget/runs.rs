@@ -15,14 +15,21 @@ const CLOCK_SKEW: time::Duration = time::Duration::minutes(5);
 /// The run in progress, if the status shows one: the newest run that was not skipped, when
 /// it is still running. A skipped run after it only says that it was still busy; any other
 /// later run, even of an unknown outcome, ends it. A start in the future is not believed.
+/// Newest by start time, not by place in the list, which the worker writes; of runs with
+/// the same start, the last one.
 pub(super) fn running(status: &Status, now: OffsetDateTime) -> Option<&Run> {
     status
         .runs
         .iter()
-        .rev()
-        .filter(|run| run.started_at <= now + CLOCK_SKEW)
-        .find(|run| run.outcome != RunOutcome::Skipped)
+        .filter(|run| run.started_at <= now + CLOCK_SKEW && run.outcome != RunOutcome::Skipped)
+        .max_by_key(|run| run.started_at)
         .filter(|run| run.outcome == RunOutcome::Running)
+}
+
+/// The run in progress that still reports: a run that stopped reporting no longer holds
+/// back Run now.
+pub(super) fn live(status: &Status, now: OffsetDateTime) -> Option<&Run> {
+    running(status, now).filter(|run| now - run.started_at <= stale_after(status))
 }
 
 /// How long after its start a run that still shows as running counts as no longer
@@ -332,6 +339,11 @@ mod tests {
             "Running / Started 37 min ago"
         );
         let stuck = r#"{"started_at":"2026-10-11T14:00:00Z","outcome":"running"}"#;
+        assert!(live(&status(running, "2026-10-13T15:00:00Z"), now).is_some());
+        assert!(
+            live(&status(stuck, "2026-10-11T15:00:00Z"), now).is_none(),
+            "a run that stopped reporting does not hold back Run now"
+        );
         assert_eq!(
             text(&status(stuck, "2026-10-11T15:00:00Z")),
             "No report / A run started 2 d ago"
@@ -369,6 +381,15 @@ mod tests {
         )
         .unwrap();
         assert!(running(&done, now).is_none(), "a later finished run ends an old one");
+        let out_of_order: Status = serde_json::from_str(
+            r#"{"runs":[{"started_at":"2026-10-13T15:00:00Z","outcome":"running"},
+                        {"started_at":"2026-10-13T14:00:00Z","outcome":"done"}]}"#,
+        )
+        .unwrap();
+        assert!(
+            running(&out_of_order, now).is_some(),
+            "an older run later in the list does not end a newer one"
+        );
     }
 
     #[test]

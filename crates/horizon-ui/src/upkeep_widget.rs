@@ -19,6 +19,9 @@ mod runs;
 const MERGED_WINDOW: time::Duration = time::Duration::days(7);
 /// How far ahead of this computer's clock a time may be and still count.
 const CLOCK_SKEW: time::Duration = time::Duration::minutes(5);
+/// How long Run now stays unavailable after a press while the status does not show the run:
+/// two exchanges and the loop's own wait. Measured on the monotonic clock.
+const RUN_REQUEST_WAIT: Duration = Duration::from_secs(120);
 
 pub struct UpkeepView<'a> {
     panel: &'a mut Panel,
@@ -53,7 +56,24 @@ impl<'a> UpkeepView<'a> {
                         empty(ui, board.error.as_deref(), &board.path().display().to_string());
                         return;
                     };
-                    header::show(ui, &status);
+                    // Run now waits for the status to show its run, at most a few minutes.
+                    let running = runs::live(&status, now).is_some();
+                    if running
+                        || board
+                            .run_requested
+                            .is_some_and(|(newest, pressed)| run_request_done(&status, newest, pressed.elapsed(), now))
+                    {
+                        board.run_requested = None;
+                    }
+                    let actions = board.cloud.is_some().then_some(header::Actions {
+                        busy: running || board.run_requested.is_some(),
+                    });
+                    if let Some(request) = header::show(ui, &status, actions) {
+                        if request == horizon_core::upkeep::Request::RunNow {
+                            board.run_requested = Some((newest_run(&status, now), std::time::Instant::now()));
+                        }
+                        board.request = Some(request);
+                    }
                     if let Some(error) = board.error.as_deref() {
                         // The last status stays, marked as old, until a valid one arrives.
                         ui.add(
@@ -81,6 +101,25 @@ impl<'a> UpkeepView<'a> {
         ui.data_mut(|data| data.insert_temp(filter_id, filter));
         hovered
     }
+}
+
+/// The start of the newest run in `status`; a start in the future is not believed.
+fn newest_run(status: &Status, now: OffsetDateTime) -> Option<OffsetDateTime> {
+    status
+        .runs
+        .iter()
+        .map(|run| run.started_at)
+        .filter(|started| *started <= now + CLOCK_SKEW)
+        .max()
+}
+
+/// Whether Run now, pressed `waited` ago while the newest run had started at `newest`, no
+/// longer waits: the status shows a run newer than that one, also one that ended at once,
+/// or the wait is over. Only a run that came after the press counts, whatever the worker's
+/// clock says of its time; a start in the future is not believed.
+fn run_request_done(status: &Status, newest: Option<OffsetDateTime>, waited: Duration, now: OffsetDateTime) -> bool {
+    waited > RUN_REQUEST_WAIT
+        || newest_run(status, now).is_some_and(|started| newest.is_none_or(|newest| started > newest))
 }
 
 /// Which pull requests the list shows.
@@ -236,6 +275,52 @@ mod tests {
             [3, 2, 5],
             "older than a week or with no merge time leaves the board"
         );
+    }
+
+    #[test]
+    fn run_now_waits_for_a_run_after_the_press_and_not_longer_than_its_limit() {
+        let now = parse_time("2026-10-13T14:00:00Z").unwrap();
+        let runs = |started: &[&str]| -> Status {
+            let runs: Vec<String> = started
+                .iter()
+                .map(|at| format!(r#"{{"started_at":"{at}","outcome":"done"}}"#))
+                .collect();
+            serde_json::from_str(&format!(r#"{{"runs":[{}]}}"#, runs.join(","))).unwrap()
+        };
+        let short = Duration::from_secs(10);
+        // Pressed at 14:00 while the newest run had started at 13:59:50.
+        let before = runs(&["2026-10-13T13:00:00Z", "2026-10-13T13:59:50Z"]);
+        let newest = newest_run(&before, now);
+        assert!(
+            !run_request_done(&before, newest, short, now),
+            "a run that was there before the press is not the one asked for"
+        );
+        assert!(run_request_done(
+            &runs(&["2026-10-13T13:59:50Z", "2026-10-13T14:00:20Z"]),
+            newest,
+            short,
+            now
+        ));
+        assert!(
+            run_request_done(
+                &runs(&["2026-10-13T13:59:50Z", "2026-10-13T13:59:55Z"]),
+                newest,
+                short,
+                now
+            ),
+            "a new run whose worker clock lags still counts"
+        );
+        assert!(
+            !run_request_done(
+                &runs(&["2026-10-13T13:59:50Z", "2027-01-01T00:00:00Z"]),
+                newest,
+                short,
+                now
+            ),
+            "a run dated far ahead is not the one asked for"
+        );
+        assert!(run_request_done(&runs(&["2026-10-13T14:00:20Z"]), None, short, now));
+        assert!(run_request_done(&before, newest, Duration::from_secs(121), now));
     }
 
     #[test]

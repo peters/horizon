@@ -56,5 +56,11 @@ settings. Only the person starts one in the dialog. Horizon allows the loop's Gi
 access for the chosen repositories without asking; every other request still waits on
 the card. See `docs/upkeep.md` for its limits and trust boundaries.
 
+The board of an Upkeep has **Run now**, **Pause** / **Resume** and **Repositories**.
+They are the person's controls in the Horizon UI: Run now and Pause go to the worker
+with the next exchange, and Repositories saves only the repositories that the person
+added or removed. A board that a config file opens has no buttons. Agents have no MCP
+operation for these controls.
+
 Browser provider catalogs and browser sessions use `horizon-browser`.
 This skill does not install servers, start resources, or enable network access on load.

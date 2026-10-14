@@ -187,3 +187,33 @@ fn a_run_now_travels_with_its_token() {
         "no Run now, no token"
     );
 }
+
+#[test]
+fn a_board_belongs_to_the_upkeep_whose_folder_holds_its_status() {
+    let status = directory("c1").join("status.json");
+    assert_eq!(cloud_of(&status).as_deref(), Some("c1"));
+    assert_eq!(cloud_of(&directory("c1").join("other.json")), None);
+    assert_eq!(
+        cloud_of(std::path::Path::new("/tmp/c1/status.json")),
+        None,
+        "another folder"
+    );
+    assert_eq!(
+        cloud_of(&super::super::default_status_path()),
+        None,
+        "the default board"
+    );
+}
+
+#[test]
+fn an_update_refuses_a_cloud_that_is_not_one_folder() {
+    assert!(update("../c1", |_| {}).is_err());
+}
+
+#[test]
+fn moving_a_first_run_marker_needs_one_and_a_plain_cloud() {
+    assert!(first_run_moved("../c1", 1).is_err());
+    let cloud = "upkeep-test-no-marker";
+    first_run_moved(cloud, 1).unwrap();
+    assert_eq!(first_run_pending(cloud).unwrap(), None, "no marker is made");
+}

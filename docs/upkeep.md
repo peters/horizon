@@ -33,7 +33,23 @@ that the board did not open is never used, also when it has the same name. After
 click, the view fits the workspace, so the board and the page are both in view. In a
 workspace with a layout preset, the preset places the new panel.
 
-The board is read-only. It reads the status document that the panel `command` names.
+The board of an Upkeep cloud has three buttons in its header. A board that shows
+another status document, for example one that a config file opens, has no buttons.
+
+- **Run now** starts a run with the next exchange, which starts at once. It is
+  unavailable while a run continues and while the Upkeep is paused. After a click,
+  it stays unavailable on every board of that Upkeep until the status shows a run
+  that is newer than the newest run at the click, for at most 2 minutes.
+- **Pause** stops the planned runs with the next exchange. A run in progress
+  finishes. **Resume** starts the planned runs again.
+- **Repositories** opens the repository picker of New Upkeep with the list of the
+  Upkeep. **Save** adds and removes only the repositories that the person changed,
+  on the list that is saved at that time. Thus a change that another part of
+  Horizon made in the meantime stays. An Upkeep keeps at least one repository. The
+  next run uses the new list. A saved repository that the app does not list now
+  stays chosen, also after **Clear**, and the editor shows how many there are.
+
+The board reads the status document that the panel `command` names.
 When the command is empty, it reads `~/.horizon/upkeep/status.json`. A config file
 can open a board:
 
@@ -111,7 +127,14 @@ after 30 seconds and does not keep an incomplete list. After three failed reads 
 row, it leaves out a saved choice that it cannot read, so that choice does not stop
 the other Upkeeps. A saved choice that is missing, refused or not valid JSON is
 always left out. Each exchange
-runs on a separate thread and does these steps:
+runs on a separate thread. It uses the saved choice of that moment and holds the
+lock of that choice until it ends, so a change of the repositories waits for an
+exchange of the same Upkeep under way and the next exchange carries it. The lock
+is also a file lock, `settings.lock` next to the saved choice, so this is also true
+for two Horizon windows that use the same home. Other
+Upkeeps do not wait. An exchange never sends a
+list, or allows a request, for a repository that a save removed. The exchange does
+these steps:
 
 1. It reads the GitHub access requests on the worker. It allows the requests of
    the loop, as the section
@@ -212,7 +235,11 @@ started also starts agents for the repositories that did not change.
   `run-now-token` already holds it. The loop records the token in
   `run-now-token` before it removes the signal and starts the run. When an
   exchange fails and Horizon does not know whether the worker got **Run now**, it
-  sends the same token again. Thus one token starts one run at most. A loop that
+  sends the same token again. A new press of **Run now** gets a new token, also
+  while an earlier one waits to be sent again. When that replaces the token of the
+  first run, the exchange writes the new token into the `first-run` marker first,
+  so a restart sends the token that the worker got. Thus one token starts one run
+  at most. A loop that
   stops after it recorded the token and before the run started loses that run;
   the next planned run follows. A loop that cannot record the token starts no
   run for it. A value that is not a token asks for a run each

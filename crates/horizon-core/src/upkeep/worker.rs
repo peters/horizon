@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::cloud_runtime::{Error, Result, command::Runner, ssh::Connection};
 
+mod lock;
+pub use lock::{SettingsLock, settings_lock};
+
 const EXCHANGE: &str = include_str!("worker/exchange.py");
 const RUN: &str = include_str!("worker/run.sh");
 const SCHEDULER: &str = include_str!("worker/run.py");
@@ -265,6 +268,25 @@ pub fn first_run_pending(cloud_id: &str) -> std::io::Result<Option<u128>> {
     }
 }
 
+/// Points the marker of a first run that was not sent yet at `token`, the token of the
+/// Run now that replaced it, so a restart sends the token the worker got. Does nothing
+/// without a marker. Blocks on the disk.
+/// # Errors
+/// An invalid cloud id, or a marker that cannot be written.
+pub fn first_run_moved(cloud_id: &str, token: u128) -> std::io::Result<()> {
+    if !valid_cloud_id(cloud_id) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid cloud for Upkeep",
+        ));
+    }
+    let marker = directory(cloud_id).join(FIRST_RUN);
+    if !marker.exists() {
+        return Ok(());
+    }
+    write_atomically(&marker, &format!("{token:032x}"))
+}
+
 /// Forgets the marker once an exchange carried the first run to the worker. Blocks on the
 /// disk.
 /// # Errors
@@ -277,6 +299,39 @@ pub fn first_run_sent(cloud_id: &str) -> std::io::Result<()> {
         Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
         _ => Ok(()),
     }
+}
+
+/// Reads the saved choice of `cloud_id`, changes it with `change` and saves it, all under
+/// [`settings_lock`], so a change made meanwhile by another part of Horizon is kept. Blocks
+/// on the disk: call it off the UI thread.
+/// # Errors
+/// No saved choice, a change that [`Config::validate`] refuses, or a write that fails.
+pub fn update(cloud_id: &str, change: impl FnOnce(&mut Config)) -> Result<Config> {
+    let _lock = settings_lock(cloud_id)?;
+    let mut config = load(cloud_id)?;
+    change(&mut config);
+    config.validate()?;
+    save(cloud_id, &config)?;
+    Ok(config)
+}
+
+/// The saved choice of `cloud_id`. Blocks on the disk.
+/// # Errors
+/// An invalid cloud id, no saved choice, or one that is not valid JSON.
+pub fn load(cloud_id: &str) -> Result<Config> {
+    if !valid_cloud_id(cloud_id) {
+        return Err(Error::Invalid("Invalid cloud for Upkeep"));
+    }
+    let text = std::fs::read_to_string(directory(cloud_id).join("upkeep.json"))?;
+    serde_json::from_str(&text).map_err(|_| Error::Json)
+}
+
+/// The cloud id of the Upkeep whose status document is `status`, when it is the one
+/// [`directory`] names for it.
+#[must_use]
+pub fn cloud_of(status: &Path) -> Option<String> {
+    let cloud = status.parent()?.file_name()?.to_str()?;
+    (valid_cloud_id(cloud) && directory(cloud).join("status.json") == status).then(|| cloud.to_owned())
 }
 
 /// Every saved Upkeep: its cloud id and choice.

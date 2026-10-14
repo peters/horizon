@@ -205,7 +205,7 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_reso
         // The daemon the proof pinned; without a proof that checked one, the daemon of
         // this computer Docker uses now. A daemon on another machine is never touched.
         let pinned = pinned.as_ref().and_then(|pinned| pinned.get().cloned());
-        let Some(daemon) = pinned.or_else(|| LocalDocker::resolve().ok()) else {
+        let Some(daemon) = pinned.or_else(cleanup_daemon) else {
             resources.set_waiting(None);
             return;
         };
@@ -261,6 +261,20 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn expect_removal(
     }
 }
 
+/// The daemon of this computer that a cleanup without a pinned daemon goes to.
+#[cfg(not(test))]
+fn cleanup_daemon() -> Option<LocalDocker> {
+    LocalDocker::resolve().ok()
+}
+
+/// A test never sends a cleanup to the Docker daemon of the computer it runs on. A daemon
+/// that does not answer would hold each dropped run for the whole cleanup timeout, and
+/// each test app's exit for its wait, which made one Windows CI run time out.
+#[cfg(test)]
+fn cleanup_daemon() -> Option<LocalDocker> {
+    None
+}
+
 /// Where Horizon keeps the run resources it could not remove before it exited.
 #[cfg(not(test))]
 fn leftovers_file() -> std::path::PathBuf {
@@ -307,11 +321,9 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn retry_unremoved
         })
         .collect();
     for (resources, daemon) in waiting {
-        super::super::run::keep_ending(std::thread::spawn(move || {
-            match daemon.or_else(|| LocalDocker::resolve().ok()) {
-                Some(daemon) => resources.remove_or_keep(daemon),
-                None => resources.set_waiting(None),
-            }
+        super::super::run::keep_ending(std::thread::spawn(move || match daemon.or_else(cleanup_daemon) {
+            Some(daemon) => resources.remove_or_keep(daemon),
+            None => resources.set_waiting(None),
         }));
     }
 }

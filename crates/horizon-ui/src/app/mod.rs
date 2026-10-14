@@ -439,6 +439,8 @@ impl HorizonApp {
         self.render_active_view(ui, block_root_interaction);
         #[cfg(feature = "cloud-workspaces")]
         self.render_upkeep_dialog(ctx);
+        #[cfg(feature = "cloud-workspaces")]
+        self.render_upkeep_editor(ctx);
         self.apply_upkeep_requests(ctx);
         if block_root_interaction {
             Self::render_root_viewport_stabilizing_overlay(ctx);

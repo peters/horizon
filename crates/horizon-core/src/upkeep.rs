@@ -248,6 +248,12 @@ pub fn default_status_path() -> PathBuf {
 pub enum Request {
     /// Open this pull request page in a browser panel beside the board.
     Open(String),
+    /// Start a run now instead of at the next planned time.
+    RunNow,
+    /// Stop (`true`) or start again (`false`) the planned runs.
+    Pause(bool),
+    /// Edit the repositories of this Upkeep.
+    Repositories,
 }
 
 /// Panel content of the Upkeep board.
@@ -260,6 +266,12 @@ pub struct UpkeepBoard {
     pub request: Option<Request>,
     /// The browser panel this board opened for pull requests, while it exists.
     pub browser: Option<crate::PanelId>,
+    /// The Upkeep cloud whose status this is, once the app knows it: only such a board
+    /// offers Run now, Pause and Repositories.
+    pub cloud: Option<String>,
+    /// Run now was pressed: the start of the newest run the status showed then, and when it
+    /// was pressed by the monotonic clock, until the status shows a newer run.
+    pub run_requested: Option<(Option<OffsetDateTime>, std::time::Instant)>,
     latest: Option<reader::Latest>,
     /// The reader thread could not start; the board does not try again.
     reader_failed: bool,
@@ -275,6 +287,8 @@ impl UpkeepBoard {
             error: None,
             request: None,
             browser: None,
+            cloud: None,
+            run_requested: None,
             latest: None,
             reader_failed: false,
             alive: Arc::new(AtomicBool::new(true)),

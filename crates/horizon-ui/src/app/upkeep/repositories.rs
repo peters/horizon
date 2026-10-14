@@ -178,15 +178,26 @@ fn list(ui: &mut Ui, form: &mut Form, owner: &str) {
         Some(true) => form
             .selected
             .extend(shown.iter().map(|repository| repository.name.clone())),
-        // Clear clears every choice, also of other owners and of rows the filter hides,
-        // so nothing stays chosen out of sight.
-        Some(false) => form.selected.clear(),
+        Some(false) => clear(form),
         None => {}
     }
     for name in toggled {
         if !form.selected.remove(&name) {
             form.selected.insert(name);
         }
+    }
+}
+
+/// Clears every choice, also of other owners and of rows the filter hides, so nothing stays
+/// chosen out of sight. In the Repositories editor a saved repository that the app does not
+/// list stays: it could not be chosen again.
+fn clear(form: &mut Form) {
+    if form.keep_unlisted {
+        let listed = &form.catalog.repositories;
+        form.selected
+            .retain(|name| !listed.iter().any(|repository| repository.name == *name));
+    } else {
+        form.selected.clear();
     }
 }
 
@@ -273,4 +284,31 @@ fn checkbox(ui: &mut Ui, checked: &mut bool, label: &str) {
     );
     let value = *checked;
     response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, value, label));
+}
+
+#[cfg(test)]
+mod tests {
+    use horizon_core::upkeep::{Catalog, CatalogRepository};
+
+    use super::*;
+
+    #[test]
+    fn clear_in_the_editor_keeps_a_saved_repository_the_app_does_not_list() {
+        let mut form = Form::default();
+        form.catalog = Catalog {
+            repositories: vec![CatalogRepository {
+                name: "acme/api".into(),
+                open: 1,
+            }],
+            search_error: None,
+        };
+        form.selected = ["acme/api".to_string(), "acme/gone".to_string()].into();
+        let mut dialog = Form::default();
+        dialog.selected.clone_from(&form.selected);
+        clear(&mut dialog);
+        assert!(dialog.selected.is_empty(), "New Upkeep clears everything");
+        form.keep_unlisted = true;
+        clear(&mut form);
+        assert_eq!(form.selected.iter().collect::<Vec<_>>(), ["acme/gone"]);
+    }
 }

@@ -84,3 +84,20 @@ The worker and its agents write every request field. Check that:
 Discovery (`horizon_core::upkeep::discover`), the clone of the first repository, the
 reads and writes under `~/.horizon/upkeep` and every exchange with a worker run on
 their own threads. The UI thread only polls their channels.
+
+## The board's actions
+
+Run now, Pause and Repositories show only on a board whose status path is exactly
+`worker::directory(<cloud>)/status.json` of a saved Upkeep (`worker::cloud_of`). Check that:
+
+- A board from a config file or the default path never gets a cloud.
+- The Repositories editor saves through `worker::update`, under `worker::settings_lock(<cloud>)`,
+  with only the added and removed names, off the UI thread, and the result still passes
+  `Config::validate`.
+- An exchange holds `worker::settings_lock(<cloud>)` and loads the saved choice itself
+  (`worker::load`), so no exchange started before a save allows a request for, or sends
+  the list with, a repository that the save removed. Do not pass it a choice read
+  earlier, and call `worker::update` only off the UI thread: it can wait for an exchange.
+- `worker::settings_lock(<cloud>)` is a guard for the threads of this process and a file
+  lock (`settings.lock` in the Upkeep's folder) for other Horizon processes on the same
+  home. Both must be held for the whole read, change and save, and the whole exchange.

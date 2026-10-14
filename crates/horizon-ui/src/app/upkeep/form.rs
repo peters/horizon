@@ -68,6 +68,10 @@ impl Bot {
             Self::Renovate => "app/renovate",
         }
     }
+
+    pub(in crate::app) fn from_author(author: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|bot| bot.author() == author)
+    }
 }
 
 pub(in crate::app) fn checkouts_label(checkouts: Checkouts) -> &'static str {
@@ -90,6 +94,9 @@ pub(in crate::app) struct Form {
     searched: BTreeSet<Bot>,
     /// Try again was pressed: the next frame searches, whatever the bots.
     retrying: bool,
+    /// Keeps chosen names that a new list does not hold: the Repositories editor must not
+    /// drop a saved repository just because the app no longer lists it.
+    pub(in crate::app) keep_unlisted: bool,
     pub(in crate::app) codex_login: Option<bool>,
     pub(in crate::app) selected: BTreeSet<String>,
     /// The owner tab of the repository list; `None` shows the first owner.
@@ -117,6 +124,7 @@ impl Default for Form {
             find_error: None,
             searched: BTreeSet::new(),
             retrying: false,
+            keep_unlisted: false,
             codex_login: None,
             selected: BTreeSet::new(),
             owner: None,
@@ -229,14 +237,16 @@ impl Form {
         self.finding = None;
         match answer {
             Ok(found) => {
-                // A repository the app can no longer reach cannot be chosen.
-                self.selected.retain(|name| {
-                    found
-                        .catalog
-                        .repositories
-                        .iter()
-                        .any(|repository| repository.name == *name)
-                });
+                // A repository the app can no longer reach cannot be chosen anew.
+                if !self.keep_unlisted {
+                    self.selected.retain(|name| {
+                        found
+                            .catalog
+                            .repositories
+                            .iter()
+                            .any(|repository| repository.name == *name)
+                    });
+                }
                 self.catalog = found.catalog;
                 self.codex_login = Some(found.codex_login);
                 self.find_error = None;

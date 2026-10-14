@@ -104,3 +104,78 @@ fn a_start_from_another_session_adds_no_cloud() {
         Some("The session changed while the repository was prepared. Start the Upkeep again.")
     );
 }
+
+fn upkeep(app: &mut crate::app::HorizonApp, board: horizon_core::PanelId) -> &mut horizon_core::upkeep::UpkeepBoard {
+    app.board.panel_mut(board).unwrap().content.upkeep_mut().unwrap()
+}
+
+#[test]
+fn the_board_of_a_saved_upkeep_runs_now_and_pauses_through_its_exchange() {
+    use horizon_core::upkeep::{Request, worker};
+    use horizon_core::{PanelKind, PanelOptions};
+
+    let (_temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    let workspace = app.board.create_workspace("Upkeep");
+    let status = worker::directory("upkeep-test-board").join("status.json");
+    let board = app
+        .board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Upkeep,
+                command: Some(status.display().to_string()),
+                ..PanelOptions::default()
+            },
+            workspace,
+        )
+        .unwrap();
+    let second = app
+        .board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Upkeep,
+                command: Some(status.display().to_string()),
+                ..PanelOptions::default()
+            },
+            workspace,
+        )
+        .unwrap();
+    let saved = crate::app::upkeep::Saved::new(vec![("upkeep-test-board".into(), worker::Config::default())]);
+    app.link_upkeep_boards(&saved);
+    assert_eq!(upkeep(&mut app, board).cloud.as_deref(), Some("upkeep-test-board"));
+
+    // As the board does when Run now is pressed.
+    let pressed = (
+        Some(horizon_core::upkeep::time::OffsetDateTime::now_utc()),
+        std::time::Instant::now(),
+    );
+    upkeep(&mut app, board).run_requested = Some(pressed);
+    // A token kept from a failed exchange may be spent on the worker already.
+    app.upkeep
+        .syncs
+        .entry("upkeep-test-board".into())
+        .or_default()
+        .signals
+        .run_token = Some(7);
+    upkeep(&mut app, board).request = Some(Request::RunNow);
+    app.apply_upkeep_requests(&ctx);
+    let sync = &app.upkeep.syncs["upkeep-test-board"];
+    assert!(sync.signals.run_now && sync.next.is_none());
+    assert_eq!(sync.signals.run_token, None, "a press gets a new token");
+    assert_eq!(
+        upkeep(&mut app, second).run_requested,
+        Some(pressed),
+        "another board of the Upkeep waits for the same run"
+    );
+
+    upkeep(&mut app, board).request = Some(Request::Pause(true));
+    app.apply_upkeep_requests(&ctx);
+    assert_eq!(app.upkeep.syncs["upkeep-test-board"].signals.paused, Some(true));
+
+    app.link_upkeep_boards(&crate::app::upkeep::Saved::default());
+    assert_eq!(
+        upkeep(&mut app, board).cloud,
+        None,
+        "a board whose Upkeep is gone offers nothing"
+    );
+}

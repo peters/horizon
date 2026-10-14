@@ -121,10 +121,10 @@ impl HorizonApp {
                 sync.sent = signals;
                 let (tx, rx) = channel();
                 let repaint = ctx.clone();
-                let (cloud_id, config, state) = (cloud_id.clone(), config.clone(), state.clone());
+                let (cloud_id, state) = (cloud_id.clone(), state.clone());
                 let marker_left = sync.marker_left;
                 std::thread::spawn(move || {
-                    let exchanged = exchange(&root, &cloud_id, &revision, &state, &config, signals, marker_left);
+                    let exchanged = exchange(&root, &cloud_id, &revision, &state, signals, marker_left);
                     let _ = tx.send(exchanged);
                     repaint.request_repaint();
                 });
@@ -199,6 +199,7 @@ impl HorizonApp {
                         signals.run_token = Some(token);
                     }
                 }
+                self.link_upkeep_boards(&saved);
                 Some(saved)
             }
             Err(TryRecvError::Empty) => None,
@@ -250,12 +251,15 @@ impl HorizonApp {
 /// One exchange: allows the loop's own GitHub access requests first, since its tool call
 /// waits for them only about a minute, then installs or repairs the loop, applies the
 /// board's signals, and writes the board's status document.
+///
+/// It holds this Upkeep's [`worker::settings_lock`] and uses the choice saved now, not the one read
+/// before: a repository removed meanwhile never reaches the worker again, as a list or as an
+/// allowed request. A save waits for the exchange, and the next exchange carries it.
 fn exchange(
     root: &Path,
     cloud_id: &str,
     revision: &str,
     state: &cloud_runtime::state::Deployment,
-    config: &Config,
     signals: Signals,
     marker_left: bool,
 ) -> Exchanged {
@@ -269,15 +273,34 @@ fn exchange(
         Ok(connection) => connection,
         Err(error) => return (Vec::new(), Err(error)),
     };
+    let _lock = match worker::settings_lock(cloud_id) {
+        Ok(lock) => lock,
+        Err(error) => return (Vec::new(), Err(error.to_string())),
+    };
+    let config = match worker::load(cloud_id) {
+        Ok(config) => config,
+        Err(error) => return (Vec::new(), Err(error.to_string())),
+    };
+    // A press that gave the first run a new token moves its marker along, so a restart
+    // sends again the token that the worker got, never an older one.
+    if let Some(token) = signals.run_token.filter(|_| signals.run_now)
+        && worker::first_run_pending(cloud_id)
+            .ok()
+            .flatten()
+            .is_some_and(|marked| marked != token)
+        && let Err(error) = worker::first_run_moved(cloud_id, token)
+    {
+        tracing::warn!(cloud = %cloud_id, %error, "could not move the Upkeep first-run marker");
+    }
     let cancel = Cancellation::default();
     let runner = Runner {
         cancel: &cancel,
         emit: &|_| {},
         secrets: Vec::new(),
     };
-    let allowed = allow_chosen(&connection, &runner, cloud_id, config);
-    let answer = worker::exchange(&connection, &runner, cloud_id, revision, config, signals)
-        .map(|answer| learned(cloud_id, config, signals, marker_left, &answer))
+    let allowed = allow_chosen(&connection, &runner, cloud_id, &config);
+    let answer = worker::exchange(&connection, &runner, cloud_id, revision, &config, signals)
+        .map(|answer| learned(cloud_id, &config, signals, marker_left, &answer))
         .map_err(|error| error.to_string());
     (allowed, answer)
 }

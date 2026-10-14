@@ -419,6 +419,14 @@ impl HorizonApp {
         // per-panel cache so a same-id panel cannot inherit stale textures or
         // sequence numbers from the previous session.
         self.panel_render_caches = PanelRenderCaches::default();
+        // The saved Upkeeps are read again, which gives the new board's Upkeep boards their
+        // clouds and so their buttons.
+        #[cfg(feature = "cloud-workspaces")]
+        {
+            self.upkeep.saved = None;
+            self.upkeep.reading = None;
+            self.upkeep.read_after = None;
+        }
         self.clear_workspace_rename();
         self.clear_panel_rename();
         self.command_palette = None;
