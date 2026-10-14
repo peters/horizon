@@ -107,10 +107,13 @@ fn eligible(pull: &horizon_cloud::github::PullRequest, request: &Request, config
             request.label()
         ));
     }
-    if !config
-        .authors
-        .iter()
-        .any(|author| login_of(author).eq_ignore_ascii_case(&pull.author))
+    // Only an app's bot: a person or machine account in the authors list may still open
+    // a pull request that the Upkeep reviews, but its code gets no test cloud.
+    if !pull.author.ends_with("[bot]")
+        || !config
+            .authors
+            .iter()
+            .any(|author| login_of(author).eq_ignore_ascii_case(&pull.author))
     {
         return Err(format!(
             "{} was opened by {}, not by a bot of this Upkeep.",
@@ -249,6 +252,14 @@ mod tests {
         let mut closed = pull("dependabot[bot]");
         closed.open = false;
         assert!(eligible(&closed, &request(), &config()).is_err());
+        let machine = Config {
+            authors: vec!["release-robot".into()],
+            ..config()
+        };
+        assert!(
+            eligible(&pull("release-robot"), &request(), &machine).is_err(),
+            "an account in the authors list that is no app's bot"
+        );
     }
 
     #[test]

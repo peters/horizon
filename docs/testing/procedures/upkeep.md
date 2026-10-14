@@ -573,6 +573,12 @@ the `docker` folder of Cloud settings into it, and set `docker_host`.
    and the names of the evidence files. The evidence is in
    `~/.horizon/upkeep/<cloud>/native/` in the fixture home.
 
+   In the checkout of `<native>` in the fixture home, run `git status` and
+   `ls .git/FETCH_HEAD`.
+
+   Result: The branch and the working tree are as before the test, and there is no
+   new `FETCH_HEAD`. `git cat-file -t <head>` gives `commit`.
+
 5. Write the same request again (step 1).
 
    Result: Nothing starts. Horizon tests one head of a pull request one time.

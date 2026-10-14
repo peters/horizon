@@ -578,7 +578,9 @@ Horizon starts a test cloud only when all of these are true:
 - The repository is in the list of the Upkeep.
 - GitHub, read with the GitHub sign-in of this computer, shows the pull request as
   open, with the head commit of the request. The head branch is in the same
-  repository, not in a fork. One of the bots of the Upkeep opened it.
+  repository, not in a fork. One of the bots of the Upkeep opened it, and its
+  author is the bot of a GitHub App (a login that ends in `[bot]`): an account in the
+  list of authors that is a person or a machine user gets no test cloud.
 - The default profile of the repository has a desktop, no GPU, and Codex or Claude
   without approvals.
 - The build of the profile uses only files in `.horizon`, and the pull request does
