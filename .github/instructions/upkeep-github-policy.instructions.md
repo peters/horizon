@@ -17,7 +17,8 @@ body and GraphQL document. The loop and its files in `/workspace/home/upkeep` ar
 agent-writable, so nothing there is a control. Check that:
 
 - `upkeep.load` reads only root-private files and treats a policy file that exists
-  but cannot be read as the strictest policy, never as no policy.
+  but cannot be read, or that the marker does not name, as the strictest policy, never
+  as no policy. `install` names the new policy in the marker before it writes a copy.
 - `rest_refusal` sees the decoded path segments that GitHub reads (`Route.parts`),
   for `/repos/OWNER/NAME/...`, `/repositories/ID/...` and release uploads.
 - Auto-merge (`enablePullRequestAutoMerge`) never reaches GitHub.

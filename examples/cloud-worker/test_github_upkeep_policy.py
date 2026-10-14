@@ -34,7 +34,9 @@ class PolicyTests(ServiceTestCase):
         for directory in (self.store.persistent, self.store.runtime):
             self.assertEqual(stat.S_IMODE((directory / upkeep.POLICY).stat().st_mode), 0o600)
         marker = self.store.runtime.parent / 'marker'
-        self.assertEqual((marker.read_text(), stat.S_IMODE(marker.stat().st_mode)), ('1\n', 0o644))
+        self.assertEqual((marker.read_text(), stat.S_IMODE(marker.stat().st_mode)),
+                         (upkeep.digest(POLICY) + '\n', 0o644))
+        self.assertEqual(upkeep.load(self.store, common, marker).workflows, {('example/project', 'release.yml')})
         for invalid in [{**POLICY, 'extra': 1}, {**POLICY, 'version': 2}, {**POLICY, 'version': True},
                         {**POLICY, 'bots': ['-x']}, {**POLICY, 'session': 'other'},
                         {**POLICY, 'session': 'upkeep-' + 'x' * 91}, {**POLICY, 'repositories': []},
@@ -61,13 +63,20 @@ class PolicyTests(ServiceTestCase):
             saved(self.store, changed)
         self.assertFalse((self.store.persistent / upkeep.POLICY).exists())
         self.assertEqual(upkeep.load(self.store, common).workflows, frozenset())
+        # A storage that keeps its older copy: the marker names the new policy, so the old
+        # copy no longer counts, and the policy is the strictest.
+        marker = self.store.runtime.parent / 'marker'
+        saved(self.store)
         with mock.patch.object(common, 'write_private', failing), \
                 mock.patch.object(common, 'remove_durably', side_effect=OSError('read-only')):
             with self.assertRaises(ValueError):
-                saved(self.store, changed)
+                saved(self.store, {**POLICY, 'bots': []})
+        self.assertEqual(upkeep.marked(marker), upkeep.digest({**POLICY, 'bots': []}))
+        self.assertEqual(upkeep.load(self.store, common, marker).workflows, frozenset())
+        upkeep.mark(upkeep.digest(POLICY), marker)
+        self.assertEqual(upkeep.load(self.store, common, marker).workflows, {('example/project', 'release.yml')})
         # A policy that loses every copy fails closed: the marker stays, and with it the
         # strictest policy; without a marker there is none and no agent starts.
-        marker = self.store.runtime.parent / 'marker'
         with mock.patch.object(common, 'write_private', side_effect=OSError('disk full')):
             with self.assertRaises(ValueError):
                 saved(self.store, changed)

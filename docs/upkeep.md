@@ -373,8 +373,9 @@ What Upkeep limits is what the agent can do on GitHub, as the next section tells
 ### What the agent can do on GitHub
 
 The agent never holds a GitHub token. `gh` and Git on the worker send each request
-to a root service of the worker, which adds the token only for the repositories of
-the Upkeep. Before each exchange, Horizon sets the Upkeep policy of that service as
+to a root service of the worker, which adds the token only for the repositories
+that it granted: those of the Upkeep, which Horizon allows by itself, and any other
+that you allowed on the cloud card. Before each exchange, Horizon sets the Upkeep policy of that service as
 root: the session of the loop, the repositories and bots of the Upkeep, and the
 workflows that an agent may start. While the policy is set, the service refuses
 these requests of every agent of the cloud:
@@ -397,10 +398,11 @@ step of each merge from the agent to a gate in the root service.
 The loop starts no agent on a worker where root did not set the policy, for example
 an older worker image. Rebuild such a cloud on a current image.
 
-Each refusal goes to `/workspace/.horizon-gate/refused.jsonl`, a log that only root
-can change. The exchange reads back its last 20 lines, and the board shows them
-under **Latest run** with the activity lines of the agent. The agent writes those
-lines, so it can push the refusals out of view on the board; the log keeps them.
+The refusals go to `/workspace/.horizon-gate/refused.jsonl`, a log that only root
+can change, at most 30 lines a minute: a refusal beyond that is refused but not
+logged. The exchange reads back the last 20 lines, and the board shows them under
+**Latest run** with the activity lines of the agent. The agent writes those lines,
+so it can push the refusals out of view on the board; the log keeps them.
 
 The workflows that an agent may start are in `workflows` of
 `~/.horizon/upkeep/<cloud>/upkeep.json`, at most 20, each in a repository of the

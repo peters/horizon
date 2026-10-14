@@ -13,6 +13,7 @@ for every agent of the cloud:
 Each refusal also goes to a log that root owns and the exchange of Upkeep reads for the board.
 A module that horizon-worker-github loads, not a command."""
 import contextlib
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -71,9 +72,11 @@ class Policy:
     `name[bot]` or `name`, in lowercase. `workflows` are (owner/name in lowercase, workflow
     file) that an agent may start."""
 
-    def __init__(self, bots=(), workflows=(), session=None, repositories=()):
+    def __init__(self, bots=(), workflows=(), session=None, repositories=(), digest=None):
         self.bots, self.workflows = frozenset(bots), frozenset(workflows)
         self.session, self.repositories = session, tuple(repositories)
+        # Of the stored text, which the marker names (`mark`).
+        self.digest = digest
 
 
 def parse(value):
@@ -107,7 +110,12 @@ def parse(value):
         if entry['repository'].lower() not in {name.lower() for name in repositories}:
             raise ValueError('Invalid Upkeep policy workflow repository')
         allowed.append((entry['repository'].lower(), entry['workflow']))
-    return Policy(logins, allowed, value['session'], repositories)
+    return Policy(logins, allowed, value['session'], repositories, digest(value))
+
+
+def digest(value):
+    """The SHA-256 of a policy as it is stored."""
+    return hashlib.sha256(json.dumps(value, separators=(',', ':')).encode()).hexdigest()
 
 
 def summary(policy):
@@ -127,12 +135,16 @@ def directories(store):
 
 
 def install(store, common, source, marker=MARKER):
-    """Saves Horizon's policy in every private storage of the store, then the marker that the
-    loop of Upkeep reads; returns what it holds. A storage that does not take the policy loses
-    its older copy, which would otherwise win; the policy fails when that removal fails too."""
+    """Saves Horizon's policy in every private storage of the store; returns what it holds.
+    The marker names the new policy first, so a copy that a failed write leaves behind no
+    longer matches it, and load() then gives the strictest policy. A storage that does not
+    take the policy loses its older copy.
+
+    The marker is also what the loop of Upkeep reads: without it, no agent starts."""
     value = json.loads(source)
     policy = parse(value)
     data = json.dumps(value, separators=(',', ':'))
+    mark(policy.digest, marker)
     saved = False
     for directory in directories(store):
         try:
@@ -148,30 +160,42 @@ def install(store, common, source, marker=MARKER):
             except OSError:
                 raise ValueError('A storage kept an older Upkeep policy') from None
     if not saved:
-        # No copy is left. A marker from an earlier policy stays, so load() gives the
-        # strictest policy and agents that run keep every limit; without one, no agent starts.
         raise ValueError('No private storage accepted the Upkeep policy')
-    mark(marker)
     return summary(policy)
 
 
-def mark(marker=MARKER):
-    """Writes the marker without which the loop of Upkeep starts no agent: root set the policy.
-    It lives on tmpfs, so a container restart removes it until the policy is set or loaded again."""
+def mark(policy_digest, marker=MARKER):
+    """Writes the marker that names the policy root set, by its digest. It lives on tmpfs, so
+    a container restart removes it until the policy is set, or loaded and marked, again."""
     marker.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
     temporary = marker.with_name('.' + marker.name + '.new')
     temporary.unlink(missing_ok=True)
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
     with os.fdopen(descriptor, 'w') as output:
         os.fchmod(output.fileno(), 0o644)
-        output.write('1\n')
+        output.write(policy_digest + '\n')
     os.replace(temporary, marker)
+
+
+def marked(marker=MARKER):
+    """The digest that the marker names, '' for one that cannot be read, or None without one."""
+    try:
+        descriptor = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return ''
+    with os.fdopen(descriptor, 'rb') as source:
+        if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+            return ''
+        return source.read(128).decode('ascii', 'replace').strip()
 
 
 def load(store, common, marker=MARKER):
     """The Policy of the cloud, or None for a cloud that is not an Upkeep. A policy file that
     cannot be read gives a policy without bots or workflows: the strictest one. So does a
-    marker without any copy: root set a policy that it then lost."""
+    marker that names another policy than the copies, or a marker without any copy: root set
+    a policy that it then lost."""
     found, broken = [], False
     for directory in directories(store):
         try:
@@ -185,7 +209,8 @@ def load(store, common, marker=MARKER):
                 found.append(parse(value))
             except ValueError:
                 broken = True
-    if broken or not found and os.path.lexists(marker):
+    named = marked(marker)
+    if broken or named is not None and (not found or any(policy.digest != named for policy in found)):
         return Policy()
     return found[0] if found else None
 

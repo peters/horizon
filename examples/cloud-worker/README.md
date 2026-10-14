@@ -1636,10 +1636,11 @@ horizon-worker-github upkeep <<< '{"version":1,"session":"upkeep-<cloud>","repos
   to 50 repositories, each listed one time, ignoring case; at most 20 bots and 20
   workflows, each workflow in a listed repository. Unknown fields are refused, and
   so is a worker without agent isolation.
-- The policy is stored root-only next to the chain, as `upkeep.json`, on the volume
-  and on tmpfs. A copy that exists but cannot be read counts as the strictest
-  policy. Root then writes `/run/horizon-worker/github-upkeep-policy`; the loop of
-  Upkeep starts no agent without it.
+- Root first writes `/run/horizon-worker/github-upkeep-policy`, which names the
+  SHA-256 of the new policy; the loop of Upkeep starts no agent without it. Then the
+  policy is stored root-only next to the chain, as `upkeep.json`, on the volume and
+  on tmpfs. A copy that cannot be read, or that the marker does not name (a write
+  failed), counts as the strictest policy, and so does a marker without a copy.
 - While the policy is set, the API broker refuses what
   [What the agent can do on GitHub](../../docs/upkeep.md#what-the-agent-can-do-on-github)
   lists, and logs each refusal in `/workspace/.horizon-gate/refused.jsonl`.

@@ -105,8 +105,7 @@ def approvals():
 
 def guarded():
     """Whether root set the Upkeep policy of this worker's GitHub access, which refuses the
-    changes that an Upkeep never needs and merges only through its gate. An older worker image
-    has no such policy."""
+    changes that an Upkeep never needs. An older worker image has no such policy."""
     try:
         info = os.stat(GUARD, follow_symlinks=False)
     except OSError:
