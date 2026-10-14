@@ -107,6 +107,7 @@ fn a_dockerfile_outside_the_context_and_staged_or_unstaged_files_count() {
         platform: "linux/amd64".into(),
     };
     write(path, ".horizon/Dockerfile", "FROM scratch\nCOPY . /\n");
+    write(path, ".horizon/Dockerfile.dockerignore", "notes.txt\n");
     write(path, ".horizon/tool/staged.sh", "echo staged\n");
     git(path, &["add", ".horizon/tool/staged.sh"]);
     // Out of the index but still on disk: the commit's file with new content.
@@ -116,6 +117,7 @@ fn a_dockerfile_outside_the_context_and_staged_or_unstaged_files_count() {
         listed(&collect(path, &revision, &build).unwrap()),
         [
             (".horizon/Dockerfile", Change::Modified),
+            (".horizon/Dockerfile.dockerignore", Change::New),
             (".horizon/tool/staged.sh", Change::New),
         ]
     );
@@ -138,6 +140,7 @@ fn a_dockerfile_outside_the_context_and_staged_or_unstaged_files_count() {
         listed(&collect(path, &revision, &whole).unwrap()),
         [
             (".horizon/Dockerfile", Change::Modified),
+            (".horizon/Dockerfile.dockerignore", Change::New),
             (".horizon/setup.sh", Change::Modified),
             (".horizon/tool/staged.sh", Change::New),
         ]

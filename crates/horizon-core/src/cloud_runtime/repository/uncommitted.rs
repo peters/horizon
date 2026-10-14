@@ -254,8 +254,8 @@ fn deltas(opened: &Repository, revision: &str, scope: &Scope) -> Result<Vec<(Str
         .collect()
 }
 
-/// The part of the checkout a recipe's build reads: its context folder and its
-/// Dockerfile, which may lie outside the context.
+/// The part of the checkout a recipe's build reads: its context folder, its Dockerfile,
+/// which may lie outside the context, and that Dockerfile's own `.dockerignore`.
 struct Scope {
     /// `None` when the context is not a plain relative folder, so all of the checkout counts.
     context: Option<Vec<String>>,
@@ -299,11 +299,18 @@ impl Scope {
                     .is_some_and(|name| name.to_lowercase() == part.to_lowercase())
             })
         };
+        let exact = |parts: &[String]| starts(parts) && path.split('/').count() == parts.len();
+        // BuildKit also reads `<Dockerfile>.dockerignore` beside the Dockerfile.
+        let ignore = self.dockerfile.as_ref().map(|dockerfile| {
+            let mut ignore = dockerfile.clone();
+            if let Some(name) = ignore.last_mut() {
+                name.push_str(".dockerignore");
+            }
+            ignore
+        });
         self.context.as_deref().is_none_or(starts)
-            || self
-                .dockerfile
-                .as_deref()
-                .is_some_and(|dockerfile| starts(dockerfile) && path.split('/').count() == dockerfile.len())
+            || self.dockerfile.as_deref().is_some_and(exact)
+            || ignore.as_deref().is_some_and(exact)
     }
 }
 

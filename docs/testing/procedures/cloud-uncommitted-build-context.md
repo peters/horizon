@@ -57,14 +57,15 @@ not use credentials, the network or a container registry.
    cargo test -p horizon-core --features cloud-workspaces --lib -- cloud_runtime::repository::uncommitted
    ```
 
-   Result: All tests pass. On Linux there are 14 tests or more.
+   Result: All tests pass. On Linux there are 16 tests or more.
 
 2. Examine the names of the tests that passed.
 
    Result: Tests pass for each of these rules:
    - Modified, new and deleted files go in. Ignored files, also a file that was
      removed from the index and then ignored, do not go in.
-   - Only files in the context folder and the Dockerfile count.
+   - Only files in the context folder, the Dockerfile and its own
+     `.dockerignore` count. A build path with `..` counts all of the checkout.
    - The hash changes when the content changes.
    - A file that changes after the confirmation is refused.
    - Common secret file names, unclear names and path parts that are not one
@@ -79,8 +80,9 @@ not use credentials, the network or a container registry.
    cargo test -p horizon-core --features cloud-workspaces --lib -- cloud_runtime::repository::uncommitted::tests::unix
    ```
 
-   Result: Three tests pass. A link goes in as a link, a folder replaced by a
-   link is refused, and a hard link is refused.
+   Result: Four tests pass. A link goes in as a link, a folder replaced by a
+   link is refused, a hard link is refused, and a build path that passes a
+   link counts all of the checkout.
 
 ## 7. Pass criteria
 

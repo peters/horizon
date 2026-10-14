@@ -22,7 +22,8 @@ context can go into the image, so a person must see each one first.
 - `collect` lists every uncommitted file of the build context with
   `modified`, `new` or `deleted`: tracked files with their working-tree
   content, untracked files that Git does not ignore, and deletions, inside
-  `build.context` and the `build.dockerfile` file.
+  `build.context`, the `build.dockerfile` file and its own
+  `<Dockerfile>.dockerignore`, which BuildKit reads.
 - `Uncommitted::hash` covers each path, change, kind and content digest.
 - `overlay` collects the files again, refuses another hash than the
   confirmed one, and checks each copied file against its digest.
