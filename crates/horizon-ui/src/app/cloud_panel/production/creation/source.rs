@@ -29,9 +29,9 @@ struct Plan {
     worktree: bool,
     /// The checkout at the clone's own place, looked up on the disk once per link and folder.
     at_destination: Option<PathBuf>,
-    /// How many checkouts the search had found when `existing` was worked out: one found later
+    /// What the search had found when `existing` was worked out: one found later
     /// may be this repository.
-    found: usize,
+    found: Option<(usize, usize)>,
     /// A folder where an earlier try at this link stopped, and that a new try picks up from.
     resumable: Option<PathBuf>,
     destination: PathBuf,
@@ -235,7 +235,7 @@ impl State {
         {
             self.plan = None;
         }
-        let found = self.finder.local_count();
+        let found = self.finder.found_version();
         let finder = &self.finder;
         let plan = self.plan.get_or_insert_with(|| {
             let at_destination = source::existing(&parent, remote);
@@ -244,7 +244,7 @@ impl State {
                 existing: at_destination.clone(),
                 worktree: false,
                 at_destination,
-                found: usize::MAX,
+                found: None,
                 resumable: source::resumable(&parent, remote),
                 destination: source::destination(&parent, remote),
                 parent,
@@ -252,8 +252,8 @@ impl State {
         });
         // Checkouts the search found since are looked at in memory only; the work on the disk
         // above runs once per link and folder. One found anywhere is used rather than cloned.
-        if plan.found != found {
-            plan.found = found;
+        if plan.found != Some(found) {
+            plan.found = Some(found);
             let found = plan
                 .at_destination
                 .is_none()
@@ -475,9 +475,10 @@ fn typed_path(text: &str) -> PathBuf {
     }
 }
 
-/// Whether `path` is a folder with a repository in it.
+/// Whether `path` is a folder with a repository in it to use: a clone that stopped halfway is
+/// a plain folder, as it is among the search's results.
 fn holds_repository(path: &Path) -> bool {
-    path.join(".git").exists()
+    path.join(".git").exists() && !source::clone_stopped_in(path)
 }
 
 /// The address with any password removed, and that password, when one is written into it:
@@ -836,6 +837,16 @@ mod tests {
             state.plan(&remote).existing.as_deref(),
             Some(Path::new("/x/code/atlas"))
         );
+    }
+
+    #[test]
+    fn a_typed_stopped_clone_is_no_repository_to_use() {
+        let temp = tempfile::tempdir().unwrap();
+        let remote = source::parse("github.com/demo-org/demo-atlas").unwrap();
+        let folder = stopped_clone(temp.path(), &remote);
+        assert!(!holds_repository(&folder), "the halfway checkout is a plain folder");
+        std::fs::remove_file(folder.join(".git").join(source::CLONE_MARKER)).unwrap();
+        assert!(holds_repository(&folder));
     }
 
     #[test]

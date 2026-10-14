@@ -282,6 +282,18 @@ pub fn clone_stopped(marker: &str) -> bool {
     transport::stopped(marker)
 }
 
+/// Whether a clone into `folder` was started and not finished, from at most a few kilobytes
+/// of its marker file and without starting a process.
+#[must_use]
+pub fn clone_stopped_in(folder: &Path) -> bool {
+    use std::io::Read as _;
+    let mut marker = String::new();
+    std::fs::File::open(folder.join(".git").join(CLONE_MARKER))
+        .and_then(|file| file.take(4096).read_to_string(&mut marker))
+        .is_ok()
+        && clone_stopped(&marker)
+}
+
 /// The address a checkout's `origin` was cloned from, read from its config file: a folder is
 /// looked at without starting a process, so a search can run while a dialog is drawn.
 fn origin_url(checkout: &Path) -> Option<String> {

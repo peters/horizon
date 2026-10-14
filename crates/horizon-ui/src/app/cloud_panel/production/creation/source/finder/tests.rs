@@ -372,3 +372,15 @@ fn the_repository_s_own_checkout_comes_before_a_worktree() {
         "a worktree when it is the only one"
     );
 }
+
+#[test]
+fn a_stopped_clone_is_not_counted_as_on_this_computer() {
+    let mut stopped = checkout("/home/x/github/acme/web", Some("https://github.com/acme/web"));
+    stopped.complete = false;
+    stopped.stopped = true;
+    let finder = super::Finder {
+        checkouts: Some(vec![stopped, checkout("/home/x/code/api", None)]),
+        ..super::Finder::default()
+    };
+    assert_eq!(finder.local_count(), 1);
+}

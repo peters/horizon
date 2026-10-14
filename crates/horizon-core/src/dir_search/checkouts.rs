@@ -3,6 +3,7 @@
 use super::SKIP_NAMES;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::SystemTime;
 
@@ -52,11 +53,32 @@ pub struct Checkout {
     pub worktree: bool,
 }
 
-/// Looks for checkouts on a background thread, most recently changed first.
+/// The most searches for checkouts whose threads still run, across every dialog: a closed
+/// dialog cannot stop a search held up by a folder on a mount that hangs.
+const SEARCHES: usize = 2;
+
+/// How many searches for checkouts still run.
+static SEARCHING: AtomicUsize = AtomicUsize::new(0);
+
+/// Looks for checkouts on a background thread, most recently changed first. While
+/// [`SEARCHES`] searches still run, none starts: `None`, to be asked again later.
 #[must_use]
-pub fn spawn_checkouts() -> mpsc::Receiver<Vec<Checkout>> {
+pub fn spawn_checkouts() -> Option<mpsc::Receiver<Vec<Checkout>>> {
+    /// Counts the search out however it ends.
+    struct Running;
+    impl Drop for Running {
+        fn drop(&mut self) {
+            SEARCHING.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+    if SEARCHING.fetch_add(1, Ordering::AcqRel) >= SEARCHES {
+        SEARCHING.fetch_sub(1, Ordering::AcqRel);
+        return None;
+    }
     let (sender, receiver) = mpsc::channel();
+    let running = Running;
     std::thread::spawn(move || {
+        let _running = running;
         // What is found so far goes out every second, so one slow folder hides nothing
         // found before it; the channel closes when the search is done.
         let mut last = std::time::Instant::now();
@@ -76,7 +98,7 @@ pub fn spawn_checkouts() -> mpsc::Receiver<Vec<Checkout>> {
         });
         let _ = sender.send(found);
     });
-    receiver
+    Some(receiver)
 }
 
 /// The person's home folder, from `HOME` or, on Windows, `USERPROFILE`; `None` without
@@ -87,6 +109,31 @@ fn own_home() -> Option<PathBuf> {
         .filter_map(std::env::var_os)
         .find(|home| !home.is_empty())
         .map(PathBuf::from)
+}
+
+/// The checkout in `path`, read as the search reads one, or `None` when it holds no
+/// repository. On macOS nothing is read in the folders macOS guards below the home folder.
+#[must_use]
+pub fn checkout_in(path: &Path) -> Option<Checkout> {
+    let guarded = own_home().map(|home| guarded_below(&home)).unwrap_or_default();
+    read(path, &guarded)
+}
+
+/// Where the folders that macOS guards below `root` are, by name and for real, so no link
+/// leads into them either; none elsewhere.
+fn guarded_below(root: &Path) -> Vec<PathBuf> {
+    if cfg!(target_os = "macos") {
+        GUARDED
+            .iter()
+            .flat_map(|name| {
+                let named = root.join(name);
+                let real = std::fs::canonicalize(&named).unwrap_or_else(|_| named.clone());
+                [named, real]
+            })
+            .collect()
+    } else {
+        Vec::new()
+    }
 }
 
 /// The checkouts below `root`, most recently changed first. A checkout's own folders are
@@ -106,19 +153,7 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
     let mut queue = VecDeque::from([(root.to_owned(), 0)]);
     // The home folder itself counts as read, so a link back to it is not followed.
     let mut seen = std::collections::HashSet::from([std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned())]);
-    // Where the folders that macOS guards really are, so no link leads into them either.
-    let guarded: Vec<PathBuf> = if cfg!(target_os = "macos") {
-        GUARDED
-            .iter()
-            .flat_map(|name| {
-                let named = root.join(name);
-                let real = std::fs::canonicalize(&named).unwrap_or_else(|_| named.clone());
-                [named, real]
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let guarded = guarded_below(root);
     // The usual places are read first of all, before the home folder's own entries spend
     // the budget.
     for name in FIRST {
@@ -386,13 +421,9 @@ fn head_resolves(git: &Path, head: &str, guarded: &[PathBuf]) -> bool {
         return object_name(head);
     };
     let name = name.trim();
-    // A repository that keeps its refs in reftable (Git 2.45 and later) names this
-    // placeholder in `HEAD`. Its tables are not read here: a listed table counts, so such a
-    // repository with no commit yet counts as finished too, which is rare with an origin.
-    if name == "refs/heads/.invalid" {
-        return small_file(&git.join("reftable").join("tables.list"), guarded)
-            .is_some_and(|tables| !tables.trim().is_empty());
-    }
+    // A repository that keeps its refs in reftable (Git 2.45 and later) names the
+    // placeholder `refs/heads/.invalid` in `HEAD`, a file that never exists: its refs are
+    // in tables this does not read, so such a repository is never taken as finished.
     if name.split('/').any(|part| part.is_empty() || part == "..") {
         return false;
     }
@@ -727,25 +758,27 @@ mod tests {
     }
 
     #[test]
-    fn a_reftable_repository_with_tables_names_a_commit() {
+    fn a_reftable_repository_is_never_taken_as_finished() {
         let home = tempfile::tempdir().unwrap();
         let git = home.path().join(".git");
         fs::create_dir_all(git.join("reftable")).unwrap();
-        assert!(
-            !super::head_resolves(&git, "ref: refs/heads/.invalid", &[]),
-            "no tables"
-        );
         fs::write(
             git.join("reftable/tables.list"),
             "0x000000000001-0x000000000002-1a2b3c4d.ref\n",
         )
         .unwrap();
-        assert!(super::head_resolves(&git, "ref: refs/heads/.invalid", &[]));
         fs::write(git.join("HEAD"), "ref: refs/heads/.invalid\n").unwrap();
-        assert_eq!(
-            super::read(home.path(), &[]).unwrap().branch,
-            None,
-            "the placeholder is no branch"
-        );
+        let read = super::read(home.path(), &[]).unwrap();
+        assert!(!read.complete, "its tables may hold no commit");
+        assert_eq!(read.branch, None, "the placeholder is no branch");
+    }
+
+    #[test]
+    fn no_search_starts_while_as_many_as_allowed_still_run() {
+        use std::sync::atomic::Ordering;
+        super::SEARCHING.fetch_add(super::SEARCHES, Ordering::AcqRel);
+        let receiver = super::spawn_checkouts();
+        super::SEARCHING.fetch_sub(super::SEARCHES, Ordering::AcqRel);
+        assert!(receiver.is_none(), "no search starts; it is asked for again later");
     }
 }

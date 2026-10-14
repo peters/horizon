@@ -4,7 +4,7 @@ use std::sync::mpsc;
 
 mod checkouts;
 
-pub use checkouts::{Checkout, checkouts, spawn_checkouts};
+pub use checkouts::{Checkout, checkout_in, checkouts, spawn_checkouts};
 
 /// Directories that are never useful to enter.
 const SKIP_NAMES: &[&str] = &[
@@ -93,6 +93,13 @@ pub fn resolve_query_path(query: &str) -> Option<PathBuf> {
     };
     // Drop trailing separators and `.` components so the chosen path displays cleanly.
     Some(path.components().collect())
+}
+
+/// What [`spawn_lookup`] answers, read on the calling thread: for a caller that already
+/// runs on a thread of its own.
+#[must_use]
+pub fn lookup(query: &str) -> Vec<PathBuf> {
+    search_directories(query)
 }
 
 fn search_directories(query: &str) -> Vec<PathBuf> {

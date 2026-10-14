@@ -63,6 +63,10 @@ pub(super) struct Finder {
     /// The search for checkouts started; it runs once per dialog.
     scanned: bool,
     scan: Option<Receiver<Vec<Checkout>>>,
+    /// How many answers the search for checkouts has given.
+    snapshots: usize,
+    /// The search waits to start: earlier dialogs' searches still run.
+    waiting: bool,
     /// The listing of a typed path's folders, and the path the folders below answer.
     lookup: folders::Lookup,
     folders_for: String,
@@ -85,10 +89,10 @@ pub(super) struct Finder {
     stale: bool,
 }
 
-/// The query, the checkout count, a digest of the repository names, and whether the
+/// The query, what the search had found, a digest of the repository names, and whether the
 /// folders listed answer the query, with how many answers they had: what the rows were
 /// made from.
-type Made = (String, usize, u64, bool, usize);
+type Made = (String, (usize, usize), u64, bool, usize);
 
 /// A digest of `names`, so a fresh list of as many names still makes the rows again.
 fn digest(names: &[String]) -> u64 {
@@ -114,8 +118,13 @@ impl Finder {
             self.checkouts = Some(Vec::new());
         }
         if self.checkouts.is_none() && self.scan.is_none() && !self.scanned {
-            self.scan = Some(dir_search::spawn_checkouts());
-            self.scanned = true;
+            self.scan = dir_search::spawn_checkouts();
+            self.scanned = self.scan.is_some();
+            // Earlier dialogs' searches still hold every place: asked again in a while.
+            self.waiting = !self.scanned;
+            if self.waiting {
+                ctx.request_repaint_after(std::time::Duration::from_secs(1));
+            }
         }
         // What the search found so far shows at once; the search is done when it closes.
         if let Some(scan) = &self.scan {
@@ -131,12 +140,15 @@ impl Finder {
                     }
                 }
             }
-            if let Some(found) = latest {
+            // The search tells what it has every second; the rows are made again only when that
+            // changed, so a list scrolled by hand stays where it is.
+            if let Some(found) = latest.filter(|found| self.checkouts.as_ref() != Some(found)) {
                 self.labels = found
                     .iter()
                     .map(|checkout| (checkout_title(checkout), checkout_detail(checkout)))
                     .collect();
                 self.checkouts = Some(found);
+                self.snapshots += 1;
             }
             if done {
                 self.checkouts.get_or_insert_with(Vec::new);
@@ -185,6 +197,7 @@ impl Finder {
             .map(|checkout| (checkout_title(checkout), checkout_detail(checkout)))
             .collect();
         self.checkouts = Some(checkouts);
+        self.snapshots += 1;
         self.scanned = true;
         self.scan = scanning.then(|| std::sync::mpsc::channel().1);
     }
@@ -203,19 +216,30 @@ impl Finder {
         usable().find(|checkout| !checkout.worktree).or_else(|| usable().next())
     }
 
+    /// Whether checkouts may still turn up: the search runs, or waits for earlier dialogs'
+    /// searches to give way.
     pub fn scanning(&self) -> bool {
-        self.scan.is_some()
+        self.scan.is_some() || self.waiting
     }
 
+    /// What the search has found so far, as a number that changes with every new answer:
+    /// rows and plans made from the checkouts are made again when it changes.
+    pub fn found_version(&self) -> (usize, usize) {
+        (self.snapshots, self.checkouts.as_ref().map_or(0, Vec::len))
+    }
+
+    /// How many checkouts were found that can be results: a clone that stopped is none.
     pub fn local_count(&self) -> usize {
-        self.checkouts.as_ref().map_or(0, Vec::len)
+        self.checkouts
+            .as_deref()
+            .map_or(0, |found| found.iter().filter(|checkout| !checkout.stopped).count())
     }
 
     /// The rows for `typed`, made again only when it or what is searched changes.
     pub fn rows(&mut self, typed: &str, repositories: &[String]) -> &[Row] {
         let key: Made = (
             typed.trim().to_owned(),
-            self.local_count(),
+            self.found_version(),
             self.digest(repositories),
             self.folders_for == typed.trim(),
             self.answers,

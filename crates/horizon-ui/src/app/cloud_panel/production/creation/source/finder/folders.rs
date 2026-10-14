@@ -139,12 +139,13 @@ fn spawn_folders(query: String, workers: Arc<AtomicUsize>) -> Receiver<Folders> 
             .ends_with(std::path::is_separator)
             .then(|| dir_search::resolve_query_path(&query))
             .flatten()
-            .filter(|path| path.join(".git").exists());
-        let found = dir_search::spawn_lookup(query).recv().unwrap_or_default();
+            .filter(|path| usable(path));
+        // Read on this thread, the one counted, rather than on one more.
+        let found = dir_search::lookup(&query);
         let marked = found
             .into_iter()
             .map(|path| {
-                let checkout = path.join(".git").exists();
+                let checkout = usable(&path);
                 (path, checkout)
             })
             .collect();
@@ -153,6 +154,12 @@ fn spawn_folders(query: String, workers: Arc<AtomicUsize>) -> Receiver<Folders> 
         let _ = sender.send((here, marked));
     });
     receiver
+}
+
+/// Whether `path` holds a repository to use: read as the search for checkouts reads one,
+/// and not a clone that stopped halfway, which is a plain folder here.
+fn usable(path: &std::path::Path) -> bool {
+    dir_search::checkout_in(path).is_some_and(|checkout| !checkout.stopped)
 }
 
 /// What to list for a typed path: `~`, `.` and `..` name folders whose own folders are
@@ -280,5 +287,23 @@ mod tests {
             .store(super::WORKERS, std::sync::atomic::Ordering::Release);
         assert_eq!(lookup.poll(&ctx, "/b/", "/b/"), None, "its folders stay as they were");
         assert!(lookup.running.is_none() && !lookup.looking("/b/"));
+    }
+
+    #[test]
+    fn a_clone_that_stopped_is_a_plain_folder() {
+        let home = tempfile::tempdir().unwrap();
+        let stopped = home.path().join("web");
+        std::fs::create_dir_all(stopped.join(".git")).unwrap();
+        std::fs::write(
+            stopped
+                .join(".git")
+                .join(horizon_core::cloud_runtime::repository::source::CLONE_MARKER),
+            "https://github.com/acme/web.git\nmain\n1\n",
+        )
+        .unwrap();
+        assert!(!super::usable(&stopped), "a partial checkout is not offered");
+        let fresh = home.path().join("api");
+        std::fs::create_dir_all(fresh.join(".git")).unwrap();
+        assert!(super::usable(&fresh));
     }
 }
