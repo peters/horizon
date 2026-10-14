@@ -173,7 +173,7 @@ bootstrap.
 
 A profile with `egress` lets its worker connect only to the names on an allowlist.
 Only Hetzner workers support it, because the host of the server enforces it, outside
-the container. Upkeep clouds always use it (see [Upkeep](upkeep.md)).
+the container. New Upkeep starts each Upkeep cloud with it (see [Upkeep](upkeep.md)).
 
 ```yaml
 profiles:

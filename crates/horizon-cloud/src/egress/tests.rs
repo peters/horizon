@@ -153,6 +153,25 @@ good = hello(b'github.com')
 at = good.index(b'\x00\x00\x00\x0f')
 assert server_name(good[:at + 2] + b'\x00\x40' + good[at + 4:]) is None
 assert server_name(good[:at + 4] + b'\x00\x0e' + good[at + 6:]) is None
+# A client that sends one byte at a time gets no more time than the whole budget.
+HELLO_SECONDS = 0.5
+left, right = socket.socketpair()
+def trickle():
+    try:
+        for byte in records(hello(b'github.com')):
+            left.sendall(bytes([byte]))
+            time.sleep(0.05)
+    except OSError:
+        pass
+threading.Thread(target=trickle, daemon=True).start()
+started = time.monotonic()
+try:
+    assert read_hello(right)[1] is None
+except TimeoutError:
+    pass
+assert time.monotonic() - started < 2
+left.close(); right.close()
+HELLO_SECONDS = 10
 # A complete ClientHello larger than the budget is never read in full.
 left, right = socket.socketpair()
 big = records(hello(b'github.com', padding=HELLO_LIMIT))

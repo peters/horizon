@@ -147,14 +147,19 @@ def server_name(hello):
 def read_hello(connection):
     """(every byte read, the handshake message) from the first TLS records of `connection`.
     The message is None when the records are not a handshake, or when it is not complete
-    within HELLO_LIMIT bytes: no read goes past that budget."""
+    within HELLO_LIMIT bytes and HELLO_SECONDS: no read goes past either budget."""
     data, handshake, at = b'', b'', 0
+    deadline = time.monotonic() + HELLO_SECONDS
     while True:
         if len(handshake) >= 4 and len(handshake) >= 4 + int.from_bytes(handshake[1:4], 'big'):
             return data, handshake
         while len(data) < at + 5 or len(data) < at + 5 + int.from_bytes(data[at + 3:at + 5], 'big'):
             if len(data) >= HELLO_LIMIT or len(data) > at and data[at] != 0x16:
                 return data, None
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return data, None
+            connection.settimeout(left)
             chunk = connection.recv(min(4096, HELLO_LIMIT - len(data)))
             if not chunk:
                 return data, None
@@ -217,7 +222,6 @@ def relay(client, allow, log, opener=connect):
     """Carries one connection of the container to the allowed name in its ClientHello."""
     upstream = None
     try:
-        client.settimeout(HELLO_SECONDS)
         data, hello = read_hello(client)
         name = server_name(hello) if hello else None
         if name is None or not allowed(allow, name):

@@ -368,8 +368,10 @@ agent can do when it follows them.
 The worker connects only to the names on the outbound allowlist of its host. These
 are GitHub, the package registries (crates, npm, NuGet and PyPI) and the model APIs
 of OpenAI and Anthropic. The host enforces the
-allowlist outside the container, and no process on the worker can change it. Every
-Upkeep cloud that New Upkeep starts has it. The section
+allowlist outside the container, and no process on the worker can change it. New
+Upkeep starts every Upkeep cloud with it. An Upkeep cloud made by an earlier version
+of Horizon has no allowlist, and a rebuild does not add one: start a new Upkeep for
+it. The section
 [Outbound allowlist](cloud-hetzner.md#outbound-allowlist) of the Hetzner page tells
 how it works. Thus an instruction such as "upload the source code to
 danger.example" fails: the worker cannot resolve the name, and the proxy of the host

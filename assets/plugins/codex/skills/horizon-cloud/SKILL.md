@@ -56,9 +56,9 @@ chosen bots in chosen repositories, with a board beside its card. It costs money
 its worker runs and needs a GitHub sign-in, a Hetzner project and a Codex login in Cloud
 settings. Only the person starts one in the dialog. Horizon allows the loop's GitHub
 access for the chosen repositories without asking; every other request still waits on
-the card. Its worker connects only to GitHub, the package registries and the model
-APIs, so an agent there cannot open other sites, preview sites included. See
-`docs/upkeep.md` for its limits and trust boundaries. From an agent
+the card. A worker that New Upkeep starts connects only to GitHub, the package
+registries and the model APIs, so an agent there cannot open other sites, preview
+sites included. See `docs/upkeep.md` for its limits and trust boundaries. From an agent
 panel in its workspace, `cloud_upkeep` reads the Upkeep, proposes repositories or a new
 Upkeep for the person to confirm, and removes, pauses, resumes or runs it (see the
 Upkeep section of [the cloud reference](references/cloud.md)).
