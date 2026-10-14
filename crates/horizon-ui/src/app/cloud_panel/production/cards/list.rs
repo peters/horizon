@@ -6,14 +6,13 @@ use super::{cost, view};
 use horizon_core::{Board, cloud_list::Condition, cloud_panel::CloudGroup, cloud_runtime};
 use std::time::SystemTime;
 
-/// The condition of the cloud `group`, the line of its card's status and whether the
-/// card offers Stop.
+/// The condition of the cloud `group` and the line of its card's status.
 pub(in crate::app::cloud_panel::production) fn condition(
     group: &CloudGroup,
     runtime: &Runtime,
     board: &Board,
     now: SystemTime,
-) -> (Condition, String, bool) {
+) -> (Condition, String) {
     let status = status::of(runtime, view::occupancy(group, board), now);
     let condition = match status.tone {
         // A failed resume offers Resume too, but the resume that the user asked for
@@ -31,7 +30,7 @@ pub(in crate::app::cloud_panel::production) fn condition(
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(" · ");
-    (condition, line, status.primary == Some(Primary::Stop))
+    (condition, line)
 }
 
 /// What the worker of `runtime` bills each hour now, in its provider's currency:

@@ -232,7 +232,6 @@ impl HorizonApp {
         } else {
             self.render_production_runtimes(ctx);
             self.render_parked_strips(ctx);
-            self.finish_waiting_stops(ctx);
         }
         self.render_cloud_dialogs(ctx);
     }
@@ -243,7 +242,6 @@ impl HorizonApp {
         self.release_workspaces_after_creation(ctx);
         self.render_cloud_error(ctx);
         self.render_cloud_close_confirmation(ctx);
-        self.render_idle_stop_confirmation(ctx);
     }
 
     fn render_cloud_error(&mut self, ctx: &egui::Context) {

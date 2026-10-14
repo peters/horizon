@@ -1317,9 +1317,9 @@ the group, **no local cost** for **Parked**, and **live** for **This PC**. The r
 has one sum for each currency, for example `€0.0240/h + $0.690/h`: Hetzner bills in
 euros net of VAT and RunPod in US dollars. The
 summary never wraps. When the sidebar is narrow, it shows fewer parts, and then a
-shortened first part. Hover over it to see all of it. If no part fits, for example
-next to **Stop idle…** on the narrowest sidebar, the header does not show the
-summary. A screen reader still reads it after the group name and count.
+shortened first part. Hover over it to see all of it. If no part fits on the
+narrowest sidebar, the header does not show the summary. A screen reader still
+reads it after the group name and count.
 
 Each row shows a tile, the workspace name and one status line. The tile has the
 color of the workspace on the canvas and the first letters of the first two words
@@ -1340,41 +1340,20 @@ what the badge means.
 Click a row to go to its workspace. A parked cloud then attaches, as described in
 [Parked terminals](#parked-terminals).
 
-#### Stop idle workers
-
-When a group has idle clouds, its header shows **Stop idle…**. An idle cloud is
-ready, its card offers **Stop**, no agent works on it, and it does not wait for
-you. A cloud whose sessions still attach is not idle. A parked cloud is idle only
-after a status read shows each of its parked terminals: right after the park or
-after a failed read, it is not offered. Click **Stop idle…** to open a list of the idle clouds of the group. Each
-cloud has a check box, its workspace and its hourly rate. All clouds are selected
-at first. Clear the clouds that must continue to run. Before you confirm, the
-dialog shows what the stop saves each hour, for example `Saves $0.024/h`. When a
-worker does not report a rate, the saving is a lower bound. Click
-**Stop N workers** to stop the selected workers, or **Keep running** to close the
-dialog. A cloud that became busy or started to work after the list was read
-continues to run. The status of a parked cloud can be some seconds old, so
-Horizon reads the status of its sessions again before it stops the worker. When an
-agent works, when the read does not find a parked session, or when no status
-arrives in 30 seconds, the cloud continues to run. A session that is not found
-moves the cloud to **Needs you**.
-
-Stop ends the running processes. The workspace storage is kept and stays
-billable, and **Resume** on the card starts a worker again.
-
 #### The cloud list for agents
 
 A local agent panel in a workspace reads the clouds of that workspace with the
 `cloud_list` MCP tool, or with `horizon-browser cloud list` in its shell. The
 answer has the ID, the name, the group, the status line and the hourly rate of
-each cloud, and whether it is idle. The agent can act on one of these clouds as
-the sidebar does:
+each cloud, and whether an agent works on it. The agent can act on one of these
+clouds as the sidebar does:
 
 - **attach** moves your view to the cloud, as a click on its row does.
 - **park** parks the terminals of a cloud that is out of view now. Horizon
   refuses a cloud in view, because it attaches again.
-- **stop** stops the worker of an idle cloud, as **Stop idle…** does. Horizon
-  refuses a cloud that is not idle.
+
+The cloud list does not stop workers. Only you stop a worker, with **Stop** on its
+card.
 
 An agent sees only the clouds of its own workspace. Clouds of other workspaces
 and requests from outside Horizon are not available.

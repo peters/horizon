@@ -1,6 +1,6 @@
 //! Agent requests for the cloud list: the clouds in the caller's workspace, and
-//! attach, park and stop of one of them, as the sidebar and the cloud card do.
-use super::super::{Stage, bulk_stop::IdleStop};
+//! attach and park of one of them, as the sidebar and the cloud card do.
+use super::super::Stage;
 use super::HorizonApp;
 use crate::app::browser_requests::actor_panel;
 use horizon_core::{
@@ -12,7 +12,7 @@ use horizon_core::{
     cloud_panel::park::Sight,
 };
 use serde_json::{Value, json};
-use std::time::{Instant, SystemTime};
+use std::time::SystemTime;
 
 impl HorizonApp {
     pub(in crate::app) fn queue_cloud_list_request(&mut self, request: UsageRequest) {
@@ -35,6 +35,13 @@ impl HorizonApp {
     }
 
     fn answer_cloud_list(&mut self, request: &UsageRequest, ctx: &egui::Context) -> Result<Value, String> {
+        if request
+            .cloud_list
+            .as_ref()
+            .is_some_and(|list| list.operation == CloudListOperation::Stop)
+        {
+            return Err(manifest::provider_usage::STOP_REMOVED.into());
+        }
         let list = request
             .cloud_list
             .as_ref()
@@ -85,7 +92,7 @@ impl HorizonApp {
         let group = &self.cloud_prototype.groups.0[index];
         let issue = group.issue;
         match list.operation {
-            CloudListOperation::List => unreachable!("answered above"),
+            CloudListOperation::List | CloudListOperation::Stop => unreachable!("answered above"),
             CloudListOperation::Attach => {
                 self.attach_listed_cloud(index, ctx);
                 Ok(json!({ "cloud": wanted, "attach": "in_view" }))
@@ -122,20 +129,6 @@ impl HorizonApp {
                 }
                 ctx.request_repaint();
                 Ok(json!({ "cloud": wanted, "park": "parking" }))
-            }
-            CloudListOperation::Stop => {
-                if !self.cloud_facts(group, now).idle() {
-                    return Err(
-                        "cloud_list_not_idle: only an idle cloud stops; it is busy, an agent works on it, or it waits for the person"
-                            .into(),
-                    );
-                }
-                let stop = match self.stop_idle_cloud(issue, ctx, Instant::now()) {
-                    IdleStop::Stopping => "stopping",
-                    IdleStop::Waiting => "waiting_for_status",
-                    IdleStop::Busy => return Err("cloud_list_not_idle: the cloud became busy".into()),
-                };
-                Ok(json!({ "cloud": wanted, "stop": stop }))
             }
         }
     }
@@ -185,7 +178,6 @@ fn entry(id: &str, facts: &CloudFacts) -> Value {
         "hourly_rate": facts.hourly_rate.map(|rate| rate.hourly),
         "currency": facts.hourly_rate.map(|rate| rate.currency),
         "working": facts.working,
-        "idle": facts.idle(),
     })
 }
 

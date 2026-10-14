@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use horizon_core::cloud_list::{self, CloudFacts, Group, Row};
+use horizon_core::cloud_list::{self, Group, Row};
 use horizon_core::{AgentStatus, WorkspaceId};
 
 use crate::theme;
@@ -15,7 +15,7 @@ use super::{SidebarActions, SidebarWorkspaceDragState, WorkspaceSidebarEntry};
 
 const REFRESH: Duration = Duration::from_secs(1);
 
-/// The rows of the last read, by workspace, and the idle clouds that a bulk stop offers.
+/// The rows of the last read, by workspace.
 #[derive(Default)]
 pub(in crate::app) struct ListCache {
     refreshed: Option<Instant>,
@@ -23,15 +23,6 @@ pub(in crate::app) struct ListCache {
     /// replaced session, so the id alone does not tell the workspaces apart.
     workspaces: Vec<(WorkspaceId, String)>,
     rows: HashMap<WorkspaceId, Row>,
-    idle: Vec<IdleCloud>,
-}
-
-/// An idle cloud that a bulk stop offers, under the group of its workspace's row.
-#[derive(Clone, Debug, PartialEq)]
-pub(in crate::app) struct IdleCloud {
-    pub group: Group,
-    pub workspace: String,
-    pub cloud: CloudFacts,
 }
 
 impl HorizonApp {
@@ -46,7 +37,6 @@ impl HorizonApp {
         if unchanged && cache.refreshed.is_some_and(|at| now.duration_since(at) < REFRESH) {
             return;
         }
-        let (rows, idle) = self.read_sidebar_list();
         self.sidebar_list = ListCache {
             refreshed: Some(now),
             workspaces: self
@@ -55,26 +45,17 @@ impl HorizonApp {
                 .iter()
                 .map(|workspace| (workspace.id, workspace.local_id.clone()))
                 .collect(),
-            rows,
-            idle,
+            rows: self.read_sidebar_rows(),
         };
     }
 
     /// The row of each workspace now.
-    #[cfg(all(test, unix))]
     pub(in crate::app) fn read_sidebar_rows(&self) -> HashMap<WorkspaceId, Row> {
-        self.read_sidebar_list().0
-    }
-
-    /// The row of each workspace now, and the idle clouds that a bulk stop offers.
-    fn read_sidebar_list(&self) -> (HashMap<WorkspaceId, Row>, Vec<IdleCloud>) {
         #[cfg(feature = "cloud-workspaces")]
         let mut clouds = self.cloud_list_facts(std::time::SystemTime::now());
         #[cfg(not(feature = "cloud-workspaces"))]
         let mut clouds: HashMap<String, Vec<cloud_list::CloudFacts>> = HashMap::new();
-        let mut idle = Vec::new();
-        let rows = self
-            .board
+        self.board
             .workspaces
             .iter()
             .map(|workspace| {
@@ -87,21 +68,9 @@ impl HorizonApp {
                 } else {
                     Row::of(&facts, false, None)
                 };
-                idle.extend(facts.into_iter().filter(CloudFacts::idle).map(|cloud| IdleCloud {
-                    group: row.group,
-                    workspace: workspace.name.clone(),
-                    cloud,
-                }));
                 (workspace.id, row)
             })
-            .collect();
-        (rows, idle)
-    }
-
-    /// The idle clouds of the last read under `group`.
-    pub(in crate::app) fn sidebar_idle_clouds(&self, group: Group) -> Vec<IdleCloud> {
-        let idle = self.sidebar_list.idle.iter();
-        idle.filter(|idle| idle.group == group).cloned().collect()
+            .collect()
     }
 
     /// The groups with their headers and rows. A group without rows is not shown.
@@ -119,10 +88,7 @@ impl HorizonApp {
                 continue;
             }
             let summary = cloud_list::group_summary(group, rows.clone().map(|entry| &entry.row));
-            let idle = self.sidebar_list.idle.iter().filter(|idle| idle.group == group).count();
-            if render_group_header(ui, group, count, &summary, idle) {
-                actions.stop_idle = Some(group);
-            }
+            render_group_header(ui, group, count, &summary);
             for workspace in rows {
                 self.render_sidebar_workspace(ui, workspace, actions, drag_state);
             }
@@ -155,29 +121,15 @@ const HEADER_RIGHT_MARGIN: f32 = 14.0;
 /// The least room for the summary: about one short part, such as `live`.
 const MIN_SUMMARY_WIDTH: f32 = 24.0;
 
-/// The header of a group: its name, how many workspaces it has, a bulk stop when
-/// `idle` clouds of the group can stop and, at the right, its summary on the same
-/// line. Returns whether the bulk stop was clicked.
-pub(super) fn render_group_header(
-    ui: &mut egui::Ui,
-    group: Group,
-    count: usize,
-    summary: &[String],
-    idle: usize,
-) -> bool {
+/// The header of a group: its name, how many workspaces it has and, at the right,
+/// its summary on the same line.
+pub(super) fn render_group_header(ui: &mut egui::Ui, group: Group, count: usize, summary: &[String]) {
     let rect = ui.allocate_space(egui::vec2(ui.available_width(), HEADER_HEIGHT)).1;
     let center_y = rect.max.y - 13.0;
-    let (caption, mut x) = paint_caption(ui, rect, group, count, center_y);
-
-    let mut stop = false;
-    if idle > 0 {
-        let button;
-        (stop, button) = stop_idle_button(ui, group, idle, egui::pos2(x, center_y));
-        x = button.max.x + 6.0;
-    }
+    let (caption, x) = paint_caption(ui, rect, group, count, center_y);
 
     let right = rect.max.x - HEADER_RIGHT_MARGIN;
-    // A narrow header leaves the summary out rather than draw it over the button;
+    // A narrow header leaves the summary out rather than draw it over the caption;
     // a screen reader then hears it with the group name.
     let summary_fits = right - x >= MIN_SUMMARY_WIDTH;
     let caption_response = ui.interact(
@@ -193,7 +145,7 @@ pub(super) fn render_group_header(
         egui::WidgetInfo::labeled(egui::WidgetType::Label, true, spoken)
     });
     if !summary_fits {
-        return stop;
+        return;
     }
     let Some(fitted) = fitted_summary(summary, right - x, |text| {
         ui.painter()
@@ -205,7 +157,7 @@ pub(super) fn render_group_header(
             .size()
             .x
     }) else {
-        return stop;
+        return;
     };
     let galley = text::line(
         ui,
@@ -229,7 +181,6 @@ pub(super) fn render_group_header(
     );
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &full));
     response.on_hover_text(full);
-    stop
 }
 
 /// Paints the group name and its count at the left of the header. Returns the
@@ -263,40 +214,6 @@ fn paint_caption(ui: &egui::Ui, rect: egui::Rect, group: Group, count: usize, ce
         egui::Rect::from_x_y_ranges(left..=count_right, rect.y_range()),
         count_right + 8.0,
     )
-}
-
-/// The `Stop idle…` button of a header, left-centered on `at`. It is painted with
-/// its own click area, not placed with `ui.put`, which would move the list's cursor.
-/// Returns whether it was clicked, and its rect.
-fn stop_idle_button(ui: &egui::Ui, group: Group, idle: usize, at: egui::Pos2) -> (bool, egui::Rect) {
-    let label = text::line(ui, "Stop idle…", SUMMARY_TEXT_SIZE, text::MEDIUM, theme::ACCENT(), 80.0);
-    let button = egui::Rect::from_min_size(egui::pos2(at.x, at.y - label.size().y / 2.0), label.size());
-    ui.painter().galley(button.min, label, theme::ACCENT());
-    let response = ui.interact(
-        button.expand2(egui::vec2(2.0, 4.0)),
-        ui.make_persistent_id(("sidebar_group_stop", group.key())),
-        egui::Sense::click(),
-    );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Stop idle…"));
-    if response.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-    if response.has_focus() {
-        ui.painter().rect_stroke(
-            response.rect,
-            4,
-            egui::Stroke::new(1.5_f32, theme::ACCENT()),
-            egui::StrokeKind::Outside,
-        );
-    }
-    let clouds = if idle == 1 { "1 idle cloud" } else { "idle clouds" };
-    let clicked = response
-        .on_hover_text(format!(
-            "Choose which workers of the {clouds} in {} to stop",
-            group.label()
-        ))
-        .clicked();
-    (clicked, button)
 }
 
 /// The most parts of `summary` that fit in `width`, joined. When not even the first
@@ -354,67 +271,12 @@ mod tests {
         let summary = ["$0.254/h".to_owned(), "no local cost".to_owned()];
         let labels = crate::test_egui::accesskit_texts(|ui| {
             ui.allocate_ui(egui::vec2(150.0, 20.0), |ui| {
-                super::render_group_header(ui, horizon_core::cloud_list::Group::Parked, 2, &summary, 0);
+                super::render_group_header(ui, horizon_core::cloud_list::Group::Parked, 2, &summary);
             });
         });
         assert!(
             labels.iter().any(|(label, _)| label == "$0.254/h · no local cost"),
             "{labels:?}"
-        );
-    }
-
-    #[test]
-    fn a_header_with_stop_idle_keeps_the_list_where_it_was() {
-        use crate::test_egui::DiscardTextures;
-
-        let ctx = egui::Context::default();
-        let mut heights = Vec::new();
-        for idle in [0, 1] {
-            let _output = ctx
-                .run_ui(egui::RawInput::default(), |ui| {
-                    let top = ui.cursor().min.y;
-                    super::render_group_header(ui, horizon_core::cloud_list::Group::Cloud, 2, &[], idle);
-                    heights.push(ui.cursor().min.y - top);
-                })
-                .discard_textures();
-        }
-        assert!((heights[0] - heights[1]).abs() <= f32::EPSILON, "{heights:?}");
-    }
-
-    #[test]
-    fn a_narrow_header_leaves_the_summary_out_instead_of_covering_stop_idle() {
-        use crate::test_egui::DiscardTextures;
-
-        let summary = ["$0.254/h".to_owned()];
-        let ctx = egui::Context::default();
-        let output = ctx
-            .run_ui(egui::RawInput::default(), |ui| {
-                ui.allocate_ui(egui::vec2(168.0, 40.0), |ui| {
-                    super::render_group_header(ui, horizon_core::cloud_list::Group::NeedsYou, 2, &summary, 1);
-                });
-            })
-            .discard_textures();
-        let texts: Vec<String> = output
-            .shapes
-            .iter()
-            .filter_map(|shape| match &shape.shape {
-                egui::epaint::Shape::Text(text) => Some(text.galley.text().to_owned()),
-                _ => None,
-            })
-            .collect();
-        assert!(texts.iter().any(|text| text == "Stop idle…"), "{texts:?}");
-        assert!(
-            texts.iter().all(|text| !text.contains("$0.254") && text != "…"),
-            "{texts:?}"
-        );
-        let labels = crate::test_egui::accesskit_texts(|ui| {
-            ui.allocate_ui(egui::vec2(168.0, 40.0), |ui| {
-                super::render_group_header(ui, horizon_core::cloud_list::Group::NeedsYou, 2, &summary, 1);
-            });
-        });
-        assert!(
-            labels.iter().any(|(label, _)| label == "Needs you 2, $0.254/h"),
-            "a screen reader still hears the summary: {labels:?}"
         );
     }
 }

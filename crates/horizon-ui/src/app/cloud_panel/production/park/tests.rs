@@ -588,16 +588,6 @@ impl Parking {
         self.tracker = Some(ParkTracker::attached());
         self.policy.park_grace = Duration::from_secs(3600);
     }
-
-    /// As [`Parking::park_with`], from a read that started at `started`.
-    pub(in crate::app::cloud_panel::production) fn read_with(
-        &mut self,
-        statuses: Vec<SessionStatus>,
-        started: Instant,
-    ) {
-        self.park_with(statuses);
-        self.statuses_since = Some(started);
-    }
 }
 
 mod index;

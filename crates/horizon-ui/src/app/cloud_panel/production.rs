@@ -1,5 +1,4 @@
 //! UI actions and progress for real deployments. Provider/build/session work lives in core.
-mod bulk_stop;
 mod capabilities;
 pub(super) mod cards;
 mod close;
@@ -69,7 +68,6 @@ const BILLING: cloud_runtime::billing::Fetch = |_, _, _, _| Err(cloud_runtime::b
 
 #[derive(Default)]
 pub(super) struct Production {
-    bulk_stop: bulk_stop::State,
     /// Cloud list requests of agents, answered in the next frame.
     list_requests: Vec<horizon_core::browser::manifest::provider_usage::UsageRequest>,
     close: close::State,

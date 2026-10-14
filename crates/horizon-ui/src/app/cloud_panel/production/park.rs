@@ -27,10 +27,6 @@ pub(super) struct Parking {
     /// The last status of each parked terminal, by its panel's local id.
     statuses: HashMap<String, SessionStatus>,
     reader: Option<Receiver<StatusRead>>,
-    /// When the read in flight started.
-    read_started: Option<Instant>,
-    /// When the read that gave `statuses` started.
-    statuses_since: Option<Instant>,
     next_read: Option<Instant>,
     /// Park the terminals in the next frame when the cloud is still out of view.
     park_requested: bool,
@@ -42,11 +38,6 @@ impl Parking {
     /// Whether the terminals of the cloud are parked.
     pub(super) fn is_parked(&self) -> bool {
         self.tracker.is_some_and(|tracker| tracker.is_parked())
-    }
-
-    /// Whether the last status read of the parked terminals failed.
-    pub(super) fn read_failed(&self) -> bool {
-        self.error.is_some()
     }
 
     /// Whether the terminals of the cloud can park: the cloud is ready and attached.
@@ -377,7 +368,6 @@ impl HorizonApp {
                         runtime.pending_member_attachments.extend(parked);
                         runtime.next_attachment_attempt = None;
                         runtime.parking.statuses.clear();
-                        runtime.parking.statuses_since = None;
                         runtime.parking.error = None;
                         // A read in flight answers for terminals that are attaching now.
                         runtime.parking.reader = None;

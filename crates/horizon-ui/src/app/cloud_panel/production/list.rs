@@ -3,7 +3,7 @@
 //! worker bills each hour.
 use super::{HorizonApp, cards, park};
 use horizon_core::{
-    AgentStatus, CloudWait, Panel,
+    AgentStatus, Panel,
     cloud_list::{self, CloudFacts, Condition},
     cloud_panel::CloudGroup,
     cloud_runtime::session_status::SessionActivity,
@@ -44,14 +44,10 @@ impl HorizonApp {
                 working: attached_working,
                 line: "Not deployed".to_owned(),
                 hourly_rate: None,
-                stoppable: false,
-                known: true,
             };
         };
-        let (mut condition, mut line, stoppable) = cards::list::condition(group, runtime, &self.board, now);
+        let (mut condition, mut line) = cards::list::condition(group, runtime, &self.board, now);
         let mut working = attached_working;
-        // A session or terminal that still attaches does not show yet whether an agent works.
-        let mut known = runtime.pending_session_attachments.is_empty() && runtime.pending_member_attachments.is_empty();
         // A parked cloud stays parked while its connection is down: its terminals keep
         // their snapshots, and the worker's last status is still the best line.
         if matches!(condition, Condition::Ready | Condition::Idle) && runtime.parking.is_parked() {
@@ -61,14 +57,6 @@ impl HorizonApp {
                 || statuses
                     .values()
                     .any(|status| status.activity == SessionActivity::Working);
-            // Right after the park, after a failed read, or for a terminal that parked
-            // since the last read, nothing shows that no agent works.
-            known = known
-                && !runtime.parking.read_failed()
-                && members
-                    .iter()
-                    .filter(|panel| panel.cloud_wait() == Some(CloudWait::Parked))
-                    .all(|panel| statuses.contains_key(&panel.local_id));
             let ended = members
                 .iter()
                 .filter_map(|panel| statuses.get(&panel.local_id))
@@ -102,8 +90,6 @@ impl HorizonApp {
             working,
             line,
             hourly_rate: cards::list::hourly_rate(runtime),
-            stoppable,
-            known,
         }
     }
 }

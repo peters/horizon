@@ -380,10 +380,9 @@ Create-time orientation is available in the MCP plans below.
 
 From a Horizon agent panel, `horizon-browser cloud list` reads the clouds of
 your workspace through the `cloud_list` MCP tool and the durable plan runner.
-`horizon-browser cloud attach|park|stop <CLOUD-ID>` acts on one cloud from that
-list, as the sidebar does: attach moves the person's view to the cloud, park parks
-a cloud that is out of view, and stop stops the worker of an idle cloud. Horizon
-refuses each other case. Use `--output <REPORT.json|->` to choose the JSON report
+`horizon-browser cloud attach|park <CLOUD-ID>` acts on one cloud from that list,
+as the sidebar does: attach moves the person's view to the cloud, and park parks a
+cloud that is out of view. Horizon refuses each other case. Use `--output <REPORT.json|->` to choose the JSON report
 location. Outside a Horizon panel, the command fails.
 
 ## Remote orientation plans

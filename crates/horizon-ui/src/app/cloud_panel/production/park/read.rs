@@ -19,14 +19,8 @@ const STATUS_INTERVAL: Duration = Duration::from_secs(10);
 pub(super) type StatusRead = cloud_runtime::Result<Vec<(String, SessionStatus)>>;
 
 impl Parking {
-    /// Whether the statuses come from a read that started at `at` or later.
-    pub(in crate::app::cloud_panel::production) fn read_since(&self, at: Instant) -> bool {
-        self.statuses_since.is_some_and(|since| since >= at)
-    }
-
     /// Applies a finished read. A panel that parked while the read was in flight has
-    /// no status in it: then the read does not count as a new read of the cloud, and
-    /// the next read is due at once.
+    /// no status in it: then the next read is due at once.
     pub(super) fn apply_read<'a>(
         &mut self,
         result: StatusRead,
@@ -38,9 +32,7 @@ impl Parking {
             Ok(statuses) => {
                 self.error = None;
                 self.statuses = statuses.into_iter().collect();
-                if parked.into_iter().all(|local| self.statuses.contains_key(local)) {
-                    self.statuses_since = self.read_started;
-                } else {
+                if !parked.into_iter().all(|local| self.statuses.contains_key(local)) {
                     self.next_read = Some(now);
                 }
             }
@@ -48,15 +40,7 @@ impl Parking {
                 // An old status is not shown as current.
                 self.error = Some(error.to_string());
                 self.statuses.clear();
-                self.statuses_since = None;
             }
-        }
-    }
-
-    /// Makes the next read due at `now`. A read in flight finishes first.
-    pub(in crate::app::cloud_panel::production) fn read_now(&mut self, now: Instant) {
-        if self.reader.is_none() {
-            self.next_read = Some(now);
         }
     }
 }
@@ -224,7 +208,6 @@ impl HorizonApp {
             return;
         };
         runtime.parking.next_read = Some(now + STATUS_INTERVAL);
-        runtime.parking.read_started = Some(now);
         let (tx, rx) = channel();
         runtime.parking.reader = Some(rx);
         let repaint = runtime.repaint_context.clone();

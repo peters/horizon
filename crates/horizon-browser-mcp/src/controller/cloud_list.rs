@@ -1,9 +1,9 @@
 //! Cloud list requests for the running Horizon: the clouds in the caller's workspace
-//! with their group, status line and hourly rate, and attach, park and stop of one of
-//! them, as the sidebar offers them to the person.
+//! with their group, status line and hourly rate, and attach and park of one of them,
+//! as the sidebar offers them to the person.
 use super::BrowserController;
 use horizon_browser_control::manifest::provider_usage::{
-    self, CloudListOperation, CloudListRequest, REQUEST_DEADLINE_MILLIS,
+    self, CloudListOperation, CloudListRequest, REQUEST_DEADLINE_MILLIS, STOP_REMOVED,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -14,8 +14,7 @@ use std::time::{Duration, Instant};
 #[serde(deny_unknown_fields)]
 pub(crate) struct CloudListInput {
     /// `list` (the default) reads the clouds of your workspace. `attach` moves the
-    /// person's view to a cloud, `park` parks the terminals of a cloud out of view and
-    /// `stop` stops the worker of an idle cloud.
+    /// person's view to a cloud and `park` parks the terminals of a cloud out of view.
     #[serde(default)]
     pub operation: CloudListOperation,
     /// The cloud's ID from `list`. Required by every operation except `list`.
@@ -27,6 +26,9 @@ const WAIT: Duration = Duration::from_millis(REQUEST_DEADLINE_MILLIS.unsigned_ab
 
 impl BrowserController {
     pub(crate) async fn cloud_list(&self, input: CloudListInput) -> Result<Value, String> {
+        if input.operation == CloudListOperation::Stop {
+            return Err(STOP_REMOVED.into());
+        }
         let request = CloudListRequest {
             operation: input.operation,
             cloud: input.cloud,
@@ -35,7 +37,7 @@ impl BrowserController {
             match error.kind() {
                 std::io::ErrorKind::PermissionDenied => "cloud_list_unavailable: requires a Horizon agent panel",
                 std::io::ErrorKind::InvalidInput => {
-                    "cloud_list_invalid_request: list takes no cloud; attach, park and stop need a cloud ID from list"
+                    "cloud_list_invalid_request: list takes no cloud; attach and park need a cloud ID from list"
                 }
                 _ => "cloud_list_unavailable: could not queue the request",
             }

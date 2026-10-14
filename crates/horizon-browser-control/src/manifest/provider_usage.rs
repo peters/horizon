@@ -1,8 +1,8 @@
 //! Bounded host-scoped requests for the live host: shared provider usage, catalogs and
-//! cloud offers only read; companion requests and the `attach`, `park` and `stop` of a
-//! cloud list request change clouds, and the host authorizes each one.
+//! cloud offers only read; companion requests and the `attach` and `park` of a cloud
+//! list request change clouds, and the host authorizes each one.
 pub use super::cloud_companion::{CompanionAction, CompanionRequest, new_operation_id};
-pub use super::cloud_list::{CloudListOperation, CloudListRequest};
+pub use super::cloud_list::{CloudListOperation, CloudListRequest, STOP_REMOVED};
 use super::request_queue::{MAX_PENDING_REQUESTS, prune_at, queue_lock_path, read_json, write_private_json};
 pub use super::upkeep::{UpkeepOperation, UpkeepRequest};
 use super::{AgentIdentity, ManifestLock};
@@ -591,7 +591,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let identity = AgentIdentity::new("horizon:agent", Some("host-a"));
         let request = CloudListRequest {
-            operation: CloudListOperation::Stop,
+            operation: CloudListOperation::Park,
             cloud: Some("cloud-1".into()),
         };
         let id = enqueue_cloud_list_at(root.path(), identity, request.clone()).unwrap();
@@ -599,15 +599,15 @@ mod tests {
         let claimed = claim_at(root.path(), "host-a").unwrap().remove(0);
         assert_eq!(claimed.cloud_list.as_ref(), Some(&request));
         let mut result = claimed.result(Vec::new(), None);
-        result.cloud_list = Some(serde_json::json!({"stop": "requested"}));
+        result.cloud_list = Some(serde_json::json!({"park": "parking"}));
         complete_at(root.path(), &result).unwrap();
         assert!(take_at(root.path(), AgentIdentity::new("horizon:other", Some("host-a")), &id).is_err());
         assert_eq!(
             take_at(root.path(), identity, &id).unwrap().unwrap().cloud_list,
-            Some(serde_json::json!({"stop": "requested"}))
+            Some(serde_json::json!({"park": "parking"}))
         );
         let invalid = CloudListRequest {
-            operation: CloudListOperation::Stop,
+            operation: CloudListOperation::Park,
             cloud: None,
         };
         assert!(enqueue_cloud_list_at(root.path(), identity, invalid).is_err());

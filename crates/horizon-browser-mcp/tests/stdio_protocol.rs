@@ -365,6 +365,11 @@ fn assert_companion_tools_contract(tools: &Value) {
     );
     let list = &listed_tool(tools, "cloud_list")["inputSchema"]["properties"];
     assert!(list.get("operation").is_some() && list.get("cloud").is_some());
+    let schema = listed_tool(tools, "cloud_list")["inputSchema"].to_string();
+    assert!(
+        schema.contains("\"park\"") && !schema.contains("\"stop\""),
+        "the removed stop is not offered: {schema}"
+    );
     assert!(
         list.get("workspace").is_none(),
         "the caller's workspace is the only scope"

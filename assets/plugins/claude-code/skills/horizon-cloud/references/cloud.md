@@ -296,26 +296,23 @@ of a parked agent. A **Parked** row is compact: its status line is the hover and
 accessibility text of its dot. A group header shows the hourly cost of its running
 workers, with one sum per currency: RunPod bills in US dollars and Hetzner in euros
 net of VAT. A click on a row goes to its workspace, and a parked cloud then attaches.
-A group with idle clouds shows **Stop idle…**: the person selects idle clouds and
-sees the hourly saving before their workers stop. To find a cloud for the person,
-name its workspace and its group.
+To find a cloud for the person, name its workspace and its group.
 
 `cloud_list` reads and acts on the clouds in your own workspace only.
-`cloud_list` operations are `list`, `attach`, `park` and `stop`. `list` (the
+`cloud_list` operations are `list`, `attach` and `park`. `list` (the
 default) returns each cloud's `cloud` ID, name, group (`needs_you`, `cloud` or
 `parked`), status line, `hourly_rate` with its ISO 4217 `currency` (both `null`
-when the worker reports no rate), `working` and `idle`. Never add rates in
+when the worker reports no rate) and `working`. Never add rates in
 different currencies. The others take the `cloud` ID from `list`:
 
 - `attach` moves the person's view to the cloud, as a click on its row does.
 - `park` parks the terminals of a cloud that is out of view now. Horizon refuses
   a cloud in view, because it attaches again.
-- `stop` stops the worker of an idle cloud, as **Stop idle…** does. Horizon
-  refuses a busy cloud, a cloud on which an agent works and a cloud that waits for
-  the person. For a parked cloud, the stop waits for a new status read and does
-  not occur when an agent works. Get explicit authorization from the person first.
 
-From a Horizon agent panel, `horizon-browser cloud list|attach|park|stop [CLOUD-ID]`
+The cloud list does not stop workers; the person stops a worker with **Stop** on
+its card.
+
+From a Horizon agent panel, `horizon-browser cloud list|attach|park [CLOUD-ID]`
 calls the same tool.
 
 ## Upkeep
