@@ -118,6 +118,22 @@ fn spawn_folders(query: String) -> Receiver<Folders> {
     receiver
 }
 
+/// What to list for a typed path: `~`, `.` and `..` name folders whose own folders are
+/// listed, as `~/`, `./` and `../` do, and a final `/.` lists the folder before it, its
+/// hidden folders included.
+fn folder_query(typed: &str) -> String {
+    if matches!(typed, "~" | "." | "..") {
+        format!("{typed}/")
+    } else if let Some(folder) = typed
+        .strip_suffix('.')
+        .filter(|rest| rest.ends_with(std::path::is_separator))
+    {
+        folder.to_owned()
+    } else {
+        typed.to_owned()
+    }
+}
+
 /// Text that names a folder rather than a repository or a search.
 pub(super) fn is_path(text: &str) -> bool {
     let text = text.trim_start();
@@ -166,14 +182,13 @@ impl Finder {
             }
         }
         let typed = typed.trim();
+        // A lookup for a path no longer typed is dropped, and with it its spinner.
+        if !is_path(typed) {
+            self.lookup = None;
+        }
         if is_path(typed) {
             if self.lookup.as_ref().is_none_or(|(asked, _)| asked != typed) && self.folders_for != typed {
-                // `.` and `..` name the home folder and its parent, as `./` and `../` do.
-                let query = if matches!(typed, "." | "..") {
-                    format!("{typed}/")
-                } else {
-                    typed.to_owned()
-                };
+                let query = folder_query(typed);
                 self.lookup = Some((typed.to_owned(), spawn_folders(query)));
             }
             if let Some((asked, receiver)) = &self.lookup {

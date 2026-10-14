@@ -148,6 +148,9 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
             let skipped = child
                 .file_name()
                 .is_some_and(|name| SKIP_NAMES.contains(&name.to_string_lossy().as_ref()));
+            if found.len() >= LIMIT {
+                break;
+            }
             if let Some(checkout) = read(&child) {
                 found.push(checkout);
             } else if depth + 1 < DEPTH && !skipped {

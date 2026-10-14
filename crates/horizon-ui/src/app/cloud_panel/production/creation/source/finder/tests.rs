@@ -240,3 +240,17 @@ fn a_typed_folder_that_is_a_repository_offers_itself_first() {
     assert_eq!(pick(&rows[0], false), Pick::Checkout(PathBuf::from("/x/code/web")));
     assert_eq!(rows[1].title, "src");
 }
+
+#[test]
+fn home_and_a_final_dot_list_the_right_folders() {
+    assert_eq!(super::folder_query("~"), "~/");
+    assert_eq!(super::folder_query(".."), "../");
+    assert_eq!(
+        super::folder_query("~/."),
+        "~/",
+        "the home folder, its hidden folders shown"
+    );
+    assert_eq!(super::folder_query("~/code/."), "~/code/");
+    assert_eq!(super::folder_query("~/code"), "~/code");
+    assert_eq!(folder_rows("~/.", &[(PathBuf::from("/x/.config"), false)]).len(), 1);
+}

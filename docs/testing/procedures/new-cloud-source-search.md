@@ -147,11 +147,12 @@ takes a pasted link. It also proves the keyboard: the arrow keys, **Enter** and
 
 ### 6.7 S07 — Edge cases
 
-1. Type `~/code/` and push **Shift+Tab**.
+1. Click the field **Where is your code?**, select all its text, type `~/code/` and
+   push **Shift+Tab**.
 
    Result: The focus moves back to the control before the field. No folder opens.
 
-2. Select all the text in the field and type `..`.
+2. Click the field, select all its text and type `..`.
 
    Result: The rows show the folders of the parent of `<home>`, not a search.
 
@@ -167,7 +168,7 @@ takes a pasted link. It also proves the keyboard: the arrow keys, **Enter** and
    repository**, and the rows below it show its folders. The dialog does not use
    the repository until you push **Enter** on a row or delete the last `/`.
 
-5. Clear the field. While the rows show, push **Down** two times, then wait for
+5. Click the field and clear it. While the rows show, push **Down** two times, then wait for
    the spinner beside the counts to stop.
 
    Result: The highlight stays on the same row, also if rows move.
