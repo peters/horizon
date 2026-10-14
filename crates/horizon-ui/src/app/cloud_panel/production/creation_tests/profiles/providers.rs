@@ -467,6 +467,18 @@ fn a_chosen_docker_host_stays_chosen_and_start_waits_for_a_current_reading() {
     development(&mut app).cpu = cpu;
     tall_frame(&ctx, &mut app);
     assert!(can_submit(&app.cloud_prototype.production));
+    // A profile a host cannot run says what to change on the card.
+    development(&mut app).storage.volume_tier = horizon_core::cloud_runtime::prices::StorageTier::HighPerformance;
+    let output = tall_frame(&ctx, &mut app);
+    assert!(
+        painted(&output).contains("choose standard storage"),
+        "{}",
+        painted(&output)
+    );
+    assert!(!can_submit(&app.cloud_prototype.production));
+    development(&mut app).storage.volume_tier = horizon_core::cloud_runtime::prices::StorageTier::Standard;
+    tall_frame(&ctx, &mut app);
+    assert!(can_submit(&app.cloud_prototype.production));
     // A reading past its freshness limit keeps the choice, but Start waits for the next one.
     app.cloud_prototype.production.prices.hosts.outdated();
     let output = tall_frame(&ctx, &mut app);

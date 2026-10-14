@@ -11,7 +11,7 @@ use horizon_core::cloud_runtime::{
 use std::time::Duration;
 
 mod cards;
-mod hosts;
+pub(super) mod hosts;
 pub(super) mod summary;
 pub(super) mod widgets;
 

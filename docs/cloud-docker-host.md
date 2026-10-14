@@ -79,9 +79,10 @@ rented starting points. The card shows the profile's size, the Docker whale,
   the host again before you can choose it or start a cloud on it.
 - **Architecture not supported**: the worker image has no build for the
   architecture of the host. Use an amd64 or arm64 host.
-- **Cannot run this profile**: the card says why. The profile builds its
-  image, has hosted devices or has an idle stop. A host pulls public images
-  only and has no hosted devices or idle stop.
+- **Cannot run this profile**: the card says why and what to change. The
+  profile builds its image, asks for high-performance storage, has hosted
+  devices or has an idle stop. A host pulls public images only, keeps the
+  workspace on its own disk and has no hosted devices or idle stop.
 
 A GPU profile shows no host card: a Docker host runs CPU clouds only. A profile
 with `provider: docker-host` shows only the host cards, and New cloud selects

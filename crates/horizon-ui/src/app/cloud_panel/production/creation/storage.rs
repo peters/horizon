@@ -16,11 +16,8 @@ pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
     // Nothing is priced on a Docker host; several saved hosts leave the deployment no
     // host to pick on its own.
     if super::provider::current(form.provider, profile).kind == Kind::DockerHost {
-        if profile.build.is_some() {
-            return Some("A Docker host runs public images only; this profile builds its image.");
-        }
-        if !Description::supports(&horizon_core::cloud_runtime::provider::DOCKER_HOST, profile) {
-            return Some("A Docker host runs no profile with hosted devices or an idle stop.");
+        if let Some(reason) = super::selector::hosts::refusal(profile) {
+            return Some(reason);
         }
         let readings = form.prices.hosts.readings();
         let host = match (form.placement.data_centers.as_slice(), readings) {

@@ -28,19 +28,31 @@ impl Card {
     }
 }
 
+/// Why no Docker host can run `profile`, naming what to change, or `None` when one can.
+pub(in crate::app::cloud_panel::production::creation) fn refusal(profile: &Profile) -> Option<&'static str> {
+    if profile.gpu {
+        Some("A Docker host runs CPU clouds only; this profile asks for a GPU.")
+    } else if profile.build.is_some() {
+        Some("This profile builds its image; a Docker host runs public images only.")
+    } else if !profile.storage.standard_tier() {
+        Some("This profile asks for high-performance storage; choose standard storage for a Docker host.")
+    } else if profile.capabilities.browserstack.is_some() {
+        Some("This profile has hosted devices; a Docker host has none.")
+    } else if profile.idle_stop_minutes.is_some() {
+        Some("This profile stops when idle; a Docker host has no idle stop.")
+    } else {
+        (!provider::DOCKER_HOST.supports(profile)).then_some("A Docker host cannot run this profile.")
+    }
+}
+
 /// The saved hosts for `profile`; none for a GPU profile, which no host can run, and
-/// each with the reason it cannot run a profile with a build, hosted devices or an idle stop.
+/// each with the reason it cannot run the profile, if any.
 pub(super) fn cards(form: &Production, profile: &Profile) -> Vec<Card> {
     if profile.gpu {
         return Vec::new();
     }
     let on_host = super::super::provider::current(form.provider, profile).kind == provider::Kind::DockerHost;
-    let refusal = if profile.build.is_some() {
-        Some("This profile builds its image; a Docker host runs public images only.")
-    } else {
-        (!provider::DOCKER_HOST.supports(profile))
-            .then_some("A Docker host runs no profile with hosted devices or an idle stop.")
-    };
+    let refusal = refusal(profile);
     form.prices
         .hosts
         .readings()
