@@ -38,7 +38,7 @@ pub(in super::super) fn step(ui: &mut Ui, form: &mut Production, refocus: bool) 
     }
     // The results answer the arrow keys, Enter and Tab before the field sees them.
     let focused = ui.memory(|memory| memory.has_focus(id));
-    form.source.update_rows();
+    form.source.update_rows(ui.ctx());
     let keyed = form.source.finder_keys(ui, focused);
     // Only while results show: a hidden list never keeps Tab in the field.
     let tab = form.source.searching() && form.source.finder.takes_tab() && ui.input(|input| input.modifiers.is_none());

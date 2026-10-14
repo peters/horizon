@@ -63,6 +63,9 @@ pub(super) struct Finder {
     lookup: Option<(String, Receiver<Folders>)>,
     folders_for: String,
     folders: Folders,
+    /// The repository list the digest below was made for, by place and length, and the
+    /// digest: a list is hashed again only when it is another one.
+    digested: Option<((usize, usize), u64)>,
     /// What the rows were made from.
     made_for: Option<Made>,
     rows: Vec<Row>,
@@ -194,6 +197,24 @@ impl Finder {
         }
     }
 
+    /// A digest of `names`, kept while the same list is shown.
+    fn digest(&mut self, names: &[String]) -> u64 {
+        let key = (names.as_ptr() as usize, names.len());
+        match self.digested {
+            Some((made, value)) if made == key => value,
+            _ => {
+                let value = digest(names);
+                self.digested = Some((key, value));
+                value
+            }
+        }
+    }
+
+    /// Whether the folders of a typed path are being read.
+    pub fn looking(&self) -> bool {
+        self.lookup.is_some()
+    }
+
     pub fn scanning(&self) -> bool {
         self.scan.is_some()
     }
@@ -207,7 +228,7 @@ impl Finder {
         let key: Made = (
             typed.trim().to_owned(),
             self.local_count(),
-            digest(repositories),
+            self.digest(repositories),
             self.folders_for == typed.trim(),
             self.folders.1.len(),
         );
@@ -504,9 +525,13 @@ impl super::State {
         self.apply(picked)
     }
 
-    /// Makes the rows for what the field holds now, before keys and the focus lock use them.
-    pub(super) fn update_rows(&mut self) {
+    /// Takes in what the background searches found and makes the rows for what the field
+    /// holds now, before keys and the focus lock use them.
+    pub(super) fn update_rows(&mut self, ctx: &egui::Context) {
         let typed = self.input.trim().to_owned();
+        if self.searching() {
+            self.finder.poll(ctx, &typed);
+        }
         let repositories = self
             .account
             .as_ref()

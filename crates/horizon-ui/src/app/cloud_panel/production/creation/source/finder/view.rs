@@ -31,11 +31,13 @@ pub(super) fn show(ui: &mut Ui, state: &mut State) -> Option<Pick> {
     let github_count = repositories.len();
     let rows = state.finder.rows(&typed, repositories).to_vec();
     let path = is_path(&typed);
-    let busy = refreshing || state.finder.scanning();
+    let busy = refreshing || state.finder.scanning() || state.finder.looking();
     ui.add_space(2.0);
     caption_row(ui, state, &rows, &typed, github_count, busy);
     if rows.is_empty() {
-        let text = if path {
+        let text = if path && state.finder.looking() {
+            "Looking for folders…"
+        } else if path {
             "No folders here. Keep typing, or go up a level."
         } else if typed.is_empty() && busy {
             "Looking for repositories…"

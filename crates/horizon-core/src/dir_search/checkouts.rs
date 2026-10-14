@@ -74,6 +74,9 @@ pub fn checkouts(root: &Path) -> Vec<Checkout> {
 /// when `progress` says so.
 fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -> Vec<Checkout> {
     let mut found = Vec::new();
+    // Folders below `~/github` and the other usual places are all read before any other
+    // folder, so a home with very many folders still reaches them within the visit cap.
+    let mut preferred: VecDeque<(PathBuf, usize)> = VecDeque::new();
     let mut queue = VecDeque::from([(root.to_owned(), 0)]);
     // The home folder itself counts as read, so a link back to it is not followed.
     let mut seen = std::collections::HashSet::from([std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned())]);
@@ -91,7 +94,7 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
         Vec::new()
     };
     let mut visits = 0;
-    while let Some((folder, depth)) = queue.pop_front() {
+    while let Some((folder, depth)) = preferred.pop_front().or_else(|| queue.pop_front()) {
         visits += 1;
         if visits > VISITS || found.len() >= LIMIT {
             break;
@@ -139,6 +142,7 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
                 .unwrap_or_default();
             (depth > 0 || !FIRST.contains(&name.as_str()), path.clone())
         });
+        let below_preferred = depth > 0 && preferred_root(root, &folder);
         for child in children {
             // A build folder may itself be a checkout, but is never searched further.
             let skipped = child
@@ -147,7 +151,15 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
             if let Some(checkout) = read(&child) {
                 found.push(checkout);
             } else if depth + 1 < DEPTH && !skipped {
-                queue.push_back((child, depth + 1));
+                let first = depth == 0
+                    && child
+                        .file_name()
+                        .is_some_and(|name| FIRST.contains(&name.to_string_lossy().as_ref()));
+                if first || below_preferred {
+                    preferred.push_back((child, depth + 1));
+                } else {
+                    queue.push_back((child, depth + 1));
+                }
             }
         }
         if !progress(&found) {
@@ -155,6 +167,15 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
         }
     }
     settled(found)
+}
+
+/// Whether `folder` lies below one of the usual places in `root`, such as `~/github`.
+fn preferred_root(root: &Path, folder: &Path) -> bool {
+    folder
+        .strip_prefix(root)
+        .ok()
+        .and_then(|below| below.components().next())
+        .is_some_and(|first| FIRST.contains(&first.as_os_str().to_string_lossy().as_ref()))
 }
 
 /// `found` with a checkout reached both directly and through a link shown one time, most
@@ -280,5 +301,13 @@ mod tests {
         let found = checkouts(home.path());
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].path.ends_with("code/vendor"));
+    }
+
+    #[test]
+    fn folders_below_the_usual_places_are_preferred() {
+        let root = std::path::Path::new("/home/x");
+        assert!(super::preferred_root(root, &root.join("github/acme")));
+        assert!(super::preferred_root(root, &root.join("code")));
+        assert!(!super::preferred_root(root, &root.join("Videos/github")));
     }
 }
