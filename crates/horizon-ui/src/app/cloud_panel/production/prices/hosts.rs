@@ -121,6 +121,11 @@ impl State {
         self.readings().iter().find(|reading| reading.host == *host)
     }
 
+    /// Whether the first reading is still on its way, so no host is known yet.
+    pub fn first_reading(&self) -> bool {
+        self.fetched.is_none() && self.job.is_some()
+    }
+
     /// Whether New cloud may offer a saved host: the last reading found one.
     pub fn bound(&self) -> bool {
         !self.readings().is_empty()

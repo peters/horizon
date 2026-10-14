@@ -115,7 +115,14 @@ pub(super) fn only(ui: &mut Ui, form: &mut Production, profile: &Profile, hosts:
     if hosts.is_empty() {
         // Rented prices may still be on their way; only a host profile needs a host.
         if profile.provider == provider::DOCKER_HOST.id {
-            widgets::note(ui, "Save a Docker host in Cloud settings to run this cloud on it.");
+            widgets::note(
+                ui,
+                if form.prices.hosts.first_reading() {
+                    "Reading your Docker hosts…"
+                } else {
+                    "Save a Docker host in Cloud settings to run this cloud on it."
+                },
+            );
         }
         return;
     }

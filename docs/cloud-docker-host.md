@@ -82,8 +82,8 @@ rented starting points. The card shows the profile's size, the Docker whale,
   devices or idle stop.
 
 A GPU profile shows no host card: a Docker host runs CPU clouds only. A profile
-with `provider: docker-host` shows only the host cards. When one host fits,
-New cloud selects it.
+with `provider: docker-host` shows only the host cards, and New cloud selects
+the first host that fits. Click another card to use that host.
 
 Free capacity is not reserved. Other programs on the host share its CPUs and
 memory, and the workspace volume uses the host's disk. Horizon reads the free

@@ -26,6 +26,7 @@ pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
         let host = match (form.placement.data_centers.as_slice(), readings) {
             ([name], _) => readings.iter().find(|reading| reading.host.name == *name),
             (_, [only]) => Some(only),
+            (_, []) if form.prices.hosts.first_reading() => return Some("Reading your Docker hosts…"),
             (_, []) => return Some("Save a Docker host in Cloud settings, and turn it on, first."),
             _ => return Some("Choose one of your Docker hosts."),
         };
