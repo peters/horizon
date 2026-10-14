@@ -638,10 +638,13 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
 fn machine(ui: &mut Ui, form: &mut Production) -> bool {
     if let Some(profile) = selector::profile(form) {
         let gpu = profile.gpu;
-        if form
-            .provider
-            .is_some_and(|chosen| !provider::choices(&form.prices, profile).contains(&chosen))
-        {
+        // A chosen Docker host stays chosen while no reading offers it, also when the
+        // hosts were removed or switched off: Start then refuses it, and the person picks
+        // another worker. Resetting would let New cloud fall back to a rented worker.
+        if form.provider.is_some_and(|chosen| {
+            chosen.kind != horizon_core::cloud_runtime::provider::Kind::DockerHost
+                && !provider::choices(&form.prices, profile).contains(&chosen)
+        }) {
             form.provider = None;
             form.placement = Placement::default();
             form.size = None;

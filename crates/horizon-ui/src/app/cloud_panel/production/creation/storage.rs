@@ -24,12 +24,15 @@ pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
         }
         let readings = form.prices.hosts.readings();
         let host = match (form.placement.data_centers.as_slice(), readings) {
-            ([name], _) => readings.iter().find(|reading| reading.host.name == *name),
-            (_, [only]) => Some(only),
             (_, []) if form.prices.hosts.first_reading() => return Some("Reading your Docker hosts…"),
             (_, []) => return Some("Save a Docker host in Cloud settings, and turn it on, first."),
+            ([name], _) => readings.iter().find(|reading| reading.host.name == *name),
+            (_, [only]) => Some(only),
             _ => return Some("Choose one of your Docker hosts."),
         };
+        if host.is_some() && !form.prices.hosts.current() {
+            return Some("Reading your Docker hosts again…");
+        }
         let (cpu, memory_gb) = form.size.unwrap_or((profile.cpu, profile.memory_gb));
         return match host.map(|reading| &reading.capacity) {
             Some(Ok(capacity)) if !capacity.native() => {
@@ -40,8 +43,8 @@ pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
             }
             Some(Err(_)) => Some("The Docker host could not be reached. Check it in Cloud settings."),
             Some(Ok(_)) => None,
-            // Saved settings no longer offer it, or it is being read again.
-            None => Some("Choose one of your Docker hosts."),
+            // Removed, renamed or no longer read: never another host in its place.
+            None => Some("The chosen Docker host is no longer saved. Choose another host or worker."),
         };
     }
     if super::provider::current(form.provider, profile).kind == Kind::Hetzner && form.prices.hetzner.too_old() {

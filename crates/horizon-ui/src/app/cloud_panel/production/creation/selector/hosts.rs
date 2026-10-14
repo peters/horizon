@@ -12,12 +12,15 @@ pub(super) struct Card {
     capacity: Result<Capacity, String>,
     /// Why the host cannot run the profile, whatever its capacity.
     refusal: Option<&'static str>,
+    /// The reading is older than its freshness limit and is being taken again.
+    outdated: bool,
     selected: bool,
 }
 
 impl Card {
     fn fits(&self) -> bool {
         self.refusal.is_none()
+            && !self.outdated
             && self
                 .capacity
                 .as_ref()
@@ -47,6 +50,7 @@ pub(super) fn cards(form: &Production, profile: &Profile) -> Vec<Card> {
             size: (profile.cpu, profile.memory_gb),
             capacity: reading.capacity.clone(),
             refusal,
+            outdated: !form.prices.hosts.current(),
             selected: on_host && form.placement.data_centers == [reading.host.name.as_str()],
         })
         .collect()
@@ -56,6 +60,7 @@ pub(super) fn card(ui: &mut Ui, card: &Card) -> bool {
     let (word, color) = match (&card.capacity, card.refusal) {
         (_, Some(_)) => ("Cannot run this profile", theme::PALETTE_YELLOW()),
         (Err(_), None) => ("Not reachable", theme::PALETTE_RED()),
+        (Ok(_), None) if card.outdated => ("Reading again…", theme::PALETTE_YELLOW()),
         (Ok(_), None) if card.fits() => ("Fits", theme::PALETTE_GREEN()),
         (Ok(capacity), None) if !capacity.native() => ("Architecture not supported", theme::PALETTE_RED()),
         (Ok(_), None) => ("Too little free now", theme::PALETTE_YELLOW()),
@@ -130,11 +135,19 @@ pub(super) fn only(ui: &mut Ui, form: &mut Production, profile: &Profile, hosts:
     if let Some(cards::Picked::Host(name)) = cards::picks(ui, None, form, hosts) {
         choose(form, profile, &name);
     } else if auto
-        && !hosts.iter().any(|host| host.selected)
+        && !host_chosen(form, profile)
         && let Some(host) = hosts.iter().find(|host| host.fits())
     {
         choose(form, profile, &host.name);
     }
+}
+
+/// Whether the person or New cloud already chose a host, also one that is no longer
+/// offered: that choice stays until the person makes another, so Start refuses it rather
+/// than run the cloud on a different machine.
+fn host_chosen(form: &Production, profile: &Profile) -> bool {
+    super::super::provider::current(form.provider, profile).kind == provider::Kind::DockerHost
+        && !form.placement.data_centers.is_empty()
 }
 
 /// The summary of a cloud on a saved host: its size, the host and what stays there.

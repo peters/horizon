@@ -75,6 +75,8 @@ rented starting points. The card shows the profile's size, the Docker whale,
 - **Too little free now**: the host cannot take a cloud of this size until a
   cloud on it stops.
 - **Not reachable**: the last read failed. Check the host in Cloud settings.
+- **Reading again…**: the last reading is older than 30 seconds. Horizon reads
+  the host again before you can choose it or start a cloud on it.
 - **Architecture not supported**: the worker image has no build for the
   architecture of the host. Use an amd64 or arm64 host.
 - **Cannot run this profile**: the card says why. The profile builds its
@@ -84,6 +86,10 @@ rented starting points. The card shows the profile's size, the Docker whale,
 A GPU profile shows no host card: a Docker host runs CPU clouds only. A profile
 with `provider: docker-host` shows only the host cards, and New cloud selects
 the first host that fits. Click another card to use that host.
+
+If you remove, rename or switch off a host that you chose, New cloud keeps the
+choice and **Start cloud** stays off with the reason. Choose another host or a
+rented worker. New cloud never moves the cloud to another machine for you.
 
 Free capacity is not reserved. Other programs on the host share its CPUs and
 memory, and the workspace volume uses the host's disk. Horizon reads the free

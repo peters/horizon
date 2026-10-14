@@ -268,7 +268,17 @@ In each command, `cloud_deploy` stands for `"$cloud_deploy"` from setup step 2.
    Result: The host card shows **Cannot run this profile**, and below it the
    reason: a Docker host runs public images only.
 
-5. Restore the profile `local`, select it and click **Start cloud**.
+5. Restore the profile `local` and select it. Keep New cloud open. In a
+   terminal, add `"docker_hosts_off": true` to `.horizon/cloud/settings.json`
+   in the home of the isolated Horizon, as another Horizon would save it, and
+   wait 5 seconds.
+
+   Result: The host stays chosen in the summary. **Start cloud** is off and
+   says to save a Docker host and turn it on. No rented worker is chosen in
+   its place.
+
+6. Remove `"docker_hosts_off": true` again and wait 5 seconds. Click
+   **Start cloud**.
 
    Result: The cloud card shows the Docker whale in place of the cloud mark,
    and the cloud becomes ready.

@@ -432,6 +432,62 @@ fn a_saved_docker_host_is_a_starting_point_at_no_rent() {
 }
 
 #[test]
+fn a_chosen_docker_host_stays_chosen_and_start_waits_for_a_current_reading() {
+    use crate::app::cloud_panel::production::creation::can_submit;
+    use horizon_core::cloud_runtime::docker_host::{Capacity, hosts::Reading};
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    hetzner_binding(&mut app);
+    saved_host(&mut app, 12);
+    tall_frame(&ctx, &mut app);
+    let output = tall_frame(&ctx, &mut app);
+    click(&ctx, &mut app, label_rect(&output, "Docker host · build-box").center());
+    tall_frame(&ctx, &mut app);
+    assert!(can_submit(&app.cloud_prototype.production));
+    // A reading past its freshness limit keeps the choice, but Start waits for the next one.
+    app.cloud_prototype.production.prices.hosts.outdated();
+    let output = tall_frame(&ctx, &mut app);
+    assert!(painted(&output).contains("Reading again"), "{}", painted(&output));
+    assert!(!can_submit(&app.cloud_prototype.production));
+    // Hosts removed or switched off: the choice stays and Start refuses it, never renting
+    // a worker in its place.
+    app.cloud_prototype.production.prices.hosts.answered(Vec::new());
+    let output = tall_frame(&ctx, &mut app);
+    assert!(painted(&output).contains("turn it on"), "{}", painted(&output));
+    let form = &app.cloud_prototype.production;
+    assert_eq!(form.provider.map(|provider| provider.id), Some("docker-host"));
+    assert_eq!(form.placement.data_centers, ["build-box"]);
+    assert!(!can_submit(form));
+    // For a profile written for a host, another host does not replace the missing one.
+    app.cloud_prototype
+        .production
+        .profiles
+        .as_mut()
+        .unwrap()
+        .profiles
+        .get_mut("development")
+        .unwrap()
+        .provider = "docker-host".into();
+    app.cloud_prototype.production.prices.hosts.answered(vec![Reading {
+        host: serde_json::from_value(serde_json::json!({"name": "spare-box", "access": "this-pc"})).unwrap(),
+        capacity: Ok(Capacity {
+            cpus: 16,
+            memory_bytes: 64 << 30,
+            free_nano_cpus: 12_000_000_000,
+            free_memory_bytes: 48 << 30,
+            architecture: "x86_64".into(),
+            version: "28.5.1".into(),
+        }),
+    }]);
+    let output = tall_frame(&ctx, &mut app);
+    assert_eq!(app.cloud_prototype.production.placement.data_centers, ["build-box"]);
+    assert!(!can_submit(&app.cloud_prototype.production));
+    assert!(painted(&output).contains("no longer saved"), "{}", painted(&output));
+}
+
+#[test]
 fn container_disk_minimums_disable_an_incompatible_chosen_server() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
