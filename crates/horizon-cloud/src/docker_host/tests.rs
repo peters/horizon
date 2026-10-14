@@ -599,4 +599,8 @@ fn a_command_that_outlives_its_time_is_stopped() {
     assert!(engine.docker(&["0".into()], Duration::from_secs(5)).is_ok());
     let written = std::fs::read_to_string(config.path().join("docker/config.json")).unwrap();
     assert_eq!(written, PRIVATE_CONFIG);
+    // Once cancelled, no further command starts.
+    cancel.cancel();
+    let error = engine.docker(&["0".into()], Duration::from_secs(5)).unwrap_err();
+    assert!(matches!(error, Failure::Error(CloudError::Cancelled)), "{error:?}");
 }

@@ -59,6 +59,8 @@ pub struct Engine<'a> {
 
 impl Docker for Engine<'_> {
     fn docker(&self, args: &[String], timeout: Duration) -> Result<String, Failure> {
+        // A cancelled operation sends nothing more, also between its calls.
+        self.cancel.check()?;
         if self.host.access == Access::ThisPc {
             // The worker's loopback must be this computer's, as its record says.
             if std::env::var("DOCKER_HOST").is_ok_and(|engine| !engine.is_empty() && !engine.starts_with("unix://")) {
