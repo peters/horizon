@@ -33,9 +33,9 @@ changes that an Upkeep never needs, and that the board shows the refusals.
 
 ## 4. Equipment and preconditions
 
-- The [local device smoke fixture](../../../scripts/device-smoke/README.md) with
-  `--native-view`, a persistent session, and Cloud settings with a GitHub sign-in, a
-  Hetzner project and the ChatGPT login of Codex.
+- The persistent launcher of the [cloud panels procedure](cloud-panels.md), with Cloud
+  settings that have a GitHub sign-in, a Hetzner project and the ChatGPT login of Codex.
+  `<data-home>` is the host path of its private home, as that procedure defines it.
 - A test repository `<repo>` with a workflow `.github/workflows/ci.yml` and a second
   workflow `.github/workflows/manual.yml` that has `on: workflow_dispatch`.
 
@@ -75,8 +75,10 @@ Run the commands of the tasks in the shell panel of setup step 2, in `/tmp/check
    Result: Each command fails with a reason that starts with `Horizon: this Upkeep`.
    GitHub has no release, no status, no change of `ci.yml` and no run.
 
-2. Add `{"repository": "<repo>", "workflow": "manual.yml"}` to `workflows` in
-   `~/.horizon/upkeep/<cloud>/upkeep.json`, wait for the next exchange, and run
+2. On this computer, open `<data-home>/.horizon/upkeep/<cloud>/upkeep.json`, where `<cloud>`
+   is the one folder there, the cloud of this Upkeep. Add the field
+   `"workflows": [{"repository": "<repo>", "workflow": "manual.yml"}]`. Wait one minute
+   for the next exchange, and in the shell panel run
    `gh workflow run manual.yml --repo <repo>` again.
 
    Result: GitHub starts the workflow.
@@ -103,9 +105,12 @@ Run the commands of the tasks in the shell panel of setup step 2, in `/tmp/check
    Result: `ls` shows root as the owner of the folder (`drwxr-xr-x`) and of the file
    (`-rw-r--r--`). The file has one line for each refusal of GPO-01.
 
-2. Wait for the next exchange and look at **Latest run** on the board.
+2. Wait one minute for the next exchange. On this computer, type
+   `grep -c "The worker refused" <data-home>/.horizon/upkeep/<cloud>/status.json`.
 
-   Result: The board shows the refusals as lines that start with `The worker refused`.
+   Result: The count is the number of refusals of step 1, or 20 when there are more.
+   **Latest run** on the board shows them among the newest lines, unless the agent
+   wrote newer lines since.
 
 ### 6.4 GPO-04: Delete the cloud
 
