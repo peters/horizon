@@ -44,6 +44,20 @@ impl Prepared {
     pub fn docker_config(&self) -> &Path {
         self.config.path()
     }
+
+    /// Renews the same account's login after a build, before the registry push.
+    /// # Errors
+    /// Cancellation, another account, unavailable or refused authentication, or a local file error.
+    pub fn renew(&self, docker_config: &Path, cloud_id: &str, runner: &Runner<'_>) -> Result<()> {
+        with_credentials(docker_config, cloud_id, runner, |account, token| {
+            self.renew_with(&account, &token)
+        })
+    }
+
+    fn renew_with(&self, account: &Account, token: &Secret) -> Result<()> {
+        self.account.check(account)?;
+        super::write_auth(self.config.path(), &account.login, token)
+    }
 }
 
 /// Authorizes publication before a build and pins the Docker login to one operation.
@@ -56,28 +70,54 @@ pub fn prepare(
     expected: Option<&Account>,
     runner: &Runner<'_>,
 ) -> Result<Prepared> {
+    if let Some(expected) = expected {
+        expected.check(expected)?;
+    }
+    with_credentials(docker_config, cloud_id, runner, |account, token| {
+        prepare_with(expected, || Ok((account, token)))
+    })
+}
+
+fn with_credentials<T>(
+    docker_config: &Path,
+    cloud_id: &str,
+    runner: &Runner<'_>,
+    use_credentials: impl FnOnce(Account, Secret) -> Result<T>,
+) -> Result<T> {
+    with_credentials_using(docker_config, cloud_id, runner, &Client::new(), use_credentials)
+}
+
+fn with_credentials_using<T>(
+    docker_config: &Path,
+    cloud_id: &str,
+    runner: &Runner<'_>,
+    client: &Client,
+    use_credentials: impl FnOnce(Account, Secret) -> Result<T>,
+) -> Result<T> {
+    runner.cancel.check()?;
     private_directory(docker_config)?;
     let _lock = stored::lock(&docker_config.join(LOCK), || Ok(runner.cancel.check()?))?;
-    let client = Client::new();
-    prepare_with(expected, || {
-        let found =
-            stored::current_user(&docker_config.join(STORE), &client, CLIENT_ID, None).map_err(|kept| match kept {
-                Kept::Unreachable => Error::Invalid("GitHub could not be reached to prepare image publication"),
-                Kept::Unconfirmed => Error::Invalid("GitHub did not confirm the image-publishing permission; retry"),
-                Kept::Local(error) => error,
-            })?;
-        let (user, token) = match found {
-            Some(found) => found,
-            None => super::sign_in_user(docker_config, &client, cloud_id, runner)?,
-        };
-        Ok((
-            Account {
-                id: user.id,
-                login: user.login.to_ascii_lowercase(),
-            },
-            token,
-        ))
-    })
+    runner.cancel.check()?;
+    let found =
+        stored::current_user(&docker_config.join(STORE), client, CLIENT_ID, None).map_err(|kept| match kept {
+            Kept::Unreachable => Error::Invalid("GitHub could not be reached to prepare image publication"),
+            Kept::Unconfirmed => Error::Invalid("GitHub did not confirm the image-publishing permission; retry"),
+            Kept::Local(error) => error,
+        })?;
+    let (user, token) = match found {
+        Some(found) => found,
+        None => super::sign_in_user(docker_config, client, cloud_id, runner)?,
+    };
+    runner.cancel.check()?;
+    let prepared = use_credentials(
+        Account {
+            id: user.id,
+            login: user.login.to_ascii_lowercase(),
+        },
+        token,
+    )?;
+    runner.cancel.check()?;
+    Ok(prepared)
 }
 
 fn prepare_with(
@@ -91,7 +131,7 @@ fn prepare_with(
     }
     // The existing safe skeleton supplies daemon context and CLI plugins without logins.
     // A nonexistent chain path keeps this construction from reauthenticating another account.
-    let empty = tempfile::tempdir()?;
+    let empty = super::private_tempdir("horizon-empty-docker-")?;
     let machine = std::env::var_os("DOCKER_CONFIG")
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".docker")));

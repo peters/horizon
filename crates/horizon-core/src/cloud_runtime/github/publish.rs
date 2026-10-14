@@ -124,7 +124,7 @@ const MACHINE_SETTINGS: &[&str] = &["currentContext", "cliPluginsExtraDirs"];
 const MACHINE_SETTINGS: &[&str] = &["cliPluginsExtraDirs"];
 
 fn build_config_with(docker_config: &Path, machine: Option<&Path>) -> Result<(tempfile::TempDir, bool)> {
-    let directory = tempfile::Builder::new().prefix("horizon-build-docker-").tempdir()?;
+    let directory = private_tempdir("horizon-build-docker-")?;
     let login = if docker_config.join(STORE).is_file() {
         // The lock is held while the login renews; a renewal that fails says so instead of
         // turning into an anonymous pull that a private base then refuses.
@@ -166,6 +166,17 @@ fn build_config_with(docker_config: &Path, machine: Option<&Path>) -> Result<(te
     let bytes = stored::serialized(|writer| serde_json::to_writer(writer, &config.0))?;
     write_private(directory.path(), "config.json", &bytes)?;
     Ok((directory, signed_in))
+}
+
+fn private_tempdir(prefix: &str) -> Result<tempfile::TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(prefix);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(0o700));
+    }
+    Ok(builder.tempdir()?)
 }
 
 /// The organization that keeps Horizon's own login from pulling a `ghcr.io` image named

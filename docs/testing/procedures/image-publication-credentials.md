@@ -65,9 +65,27 @@ The tests use synthetic tokens. They do not change an installed login.
 
    Result: Dropping one operation removes only its temporary configuration. The other operation keeps its login.
 
+### 6.4 IC-04 — Check cancellation, permissions and renewal
+
+1. Examine the cancellation results from IC-02.
+
+   Result: An already cancelled operation creates no login folder or prompt. Cancellation
+   after authentication removes the prepared configuration and returns an error.
+
+2. Examine the permission and metadata results.
+
+   Result: On Unix, the configuration directory uses mode 0700 and its file uses mode 0600.
+   Account JSON contains no token. The secret diagnostic value hides the token.
+
+3. Examine the renewal results.
+
+   Result: Token rotation retains the provider ID and saves the new refresh token before use.
+   A private operation login accepts a new token for the same account. Another account
+   leaves its configuration unchanged.
+
 ## 7. Pass criteria
 
-- IC-01 through IC-03 pass.
+- IC-01 through IC-04 pass.
 - Another account cannot replace the expected publisher.
 - No token enters serialized account metadata or diagnostic output.
 - An operation owns its temporary Docker login until it finishes.
