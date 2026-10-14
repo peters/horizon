@@ -112,9 +112,9 @@ fn own_home() -> Option<PathBuf> {
 }
 
 /// The checkout in `path`, read as the search reads one, or `None` when it holds no
-/// repository. On macOS nothing is read in the folders macOS guards below the home folder:
-/// such a folder itself, as when `~/` is listed, is no checkout, and below one only the
-/// path and its `.git` entry are looked at.
+/// repository. On macOS nothing is read in the folders macOS guards below the home folder
+/// unless the path itself lies inside one, as when it is typed there: such a folder itself,
+/// as when `~/` is listed, is no checkout, nor is a link into one.
 #[must_use]
 pub fn checkout_in(path: &Path) -> Option<Checkout> {
     let guarded = own_home().map(|home| guarded_below(&home)).unwrap_or_default();
@@ -126,11 +126,29 @@ fn checkout_outside(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
     if guarded.is_empty() {
         return read(path, guarded);
     }
-    let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
-    let same = |place: &Path, folder: &Path| below(place, folder) && below(folder, place);
-    if guarded.iter().any(|folder| same(path, folder) || same(&real, folder)) {
+    // The system takes `..` after a link from the link's target, not from the text, so a
+    // path with one could lead anywhere: it is not read as a checkout.
+    if path.components().any(|part| part == std::path::Component::ParentDir) {
         return None;
     }
+    let named = lexical(path);
+    let inside: Vec<&PathBuf> = guarded
+        .iter()
+        .filter(|folder| below(&named, folder) && !below(folder, &named))
+        .collect();
+    // A path typed inside a guarded folder is looked at there, but no link in it leads on
+    // into another one; the folder's real place is the same folder.
+    let real: Vec<PathBuf> = inside
+        .iter()
+        .map(|folder| std::fs::canonicalize(folder).unwrap_or_else(|_| (*folder).clone()))
+        .collect();
+    let others: Vec<PathBuf> = guarded
+        .iter()
+        .filter(|folder| !inside.contains(folder) && !real.contains(folder))
+        .cloned()
+        .collect();
+    // Links are followed one step at a time, refused before one enters a guarded folder.
+    resolved(path, &others)?;
     read(path, guarded)
 }
 
@@ -263,17 +281,30 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
 /// Where `path` really is, with every link in it followed one at a time: `None` when a
 /// step would enter a guarded folder, a link cannot be read, or links loop. Each link is
 /// read with `read_link` from a place already known to be outside the guarded folders, so
-/// nothing inside them is ever touched.
+/// nothing inside them is ever touched. A `..` is taken one step at a time from what is
+/// resolved so far, which holds no link, so it goes where the system would go.
 fn resolved(path: &Path, guarded: &[PathBuf]) -> Option<PathBuf> {
     if guarded.is_empty() {
         return Some(std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned()));
     }
     let inside = |place: &Path| guarded.iter().any(|guarded| below(place, guarded));
-    let mut rest: Vec<std::ffi::OsString> = lexical(path).iter().map(std::ffi::OsStr::to_os_string).collect();
-    rest.reverse();
+    let parts = |path: &Path| -> Vec<std::ffi::OsString> {
+        path.components()
+            .rev()
+            .map(|part| part.as_os_str().to_os_string())
+            .collect()
+    };
+    let mut rest = parts(path);
     let mut done = PathBuf::new();
     let mut hops = 0;
     while let Some(part) = rest.pop() {
+        if part == ".." {
+            done.pop();
+            continue;
+        }
+        if part == "." {
+            continue;
+        }
         let next = done.join(&part);
         if inside(&next) {
             return None;
@@ -287,13 +318,13 @@ fn resolved(path: &Path, guarded: &[PathBuf]) -> Option<PathBuf> {
         if hops > 32 {
             return None;
         }
+        // The link's target follows from the link's folder, or replaces it when absolute,
+        // and the rest of the path follows the target.
         let target = std::fs::read_link(&next).ok()?;
-        let target = lexical(&done.join(target));
-        // The link's target replaces what was resolved so far, and the rest follows it.
-        let mut parts: Vec<std::ffi::OsString> = target.iter().map(std::ffi::OsStr::to_os_string).collect();
-        parts.reverse();
-        rest.extend(parts);
-        done = PathBuf::new();
+        if target.has_root() {
+            done = PathBuf::new();
+        }
+        rest.extend(parts(&target));
     }
     let done = lexical(&done);
     (!inside(&done)).then_some(done)
@@ -441,11 +472,24 @@ fn head_resolves(git: &Path, head: &str, guarded: &[PathBuf]) -> bool {
     // A repository that keeps its refs in reftable (Git 2.45 and later) names the
     // placeholder `refs/heads/.invalid` in `HEAD`, a file that never exists: its refs are
     // in tables this does not read, so such a repository is never taken as finished.
-    if name.split('/').any(|part| part.is_empty() || part == "..") {
+    if !ref_name(name) {
         return false;
     }
     small_file(&git.join(name), guarded).is_some_and(|value| object_name(value.trim()))
         || packed_ref(&git.join("packed-refs"), name, guarded)
+}
+
+/// Whether `name` is a ref Git could hold below its directory: plain names joined by `/`.
+/// Git refuses `\` and `:` in a ref, so a Windows separator, drive or share in `HEAD`
+/// never leads out of the Git directory.
+fn ref_name(name: &str) -> bool {
+    !name.contains(['\\', ':'])
+        && name
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+        && Path::new(name)
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
 }
 
 /// Whether `text` is a Git object name: 40 or 64 hexadecimal digits.
@@ -618,6 +662,56 @@ mod tests {
             "names compare without case"
         );
         assert!(super::checkout_outside(&documents, &[]).is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_into_a_guarded_folder_is_no_checkout_but_a_path_typed_there_is() {
+        let home = tempfile::tempdir().unwrap();
+        let documents = home.path().join("Documents");
+        let project = documents.join("project");
+        fs::create_dir_all(project.join(".git")).unwrap();
+        let alias = home.path().join("alias");
+        std::os::unix::fs::symlink(&project, &alias).unwrap();
+        let guarded = [documents.clone()];
+        assert_eq!(super::checkout_outside(&alias, &guarded), None);
+        let typed = super::checkout_outside(&project, &guarded).expect("typed inside");
+        assert!(typed.origin.is_none(), "listed with nothing read");
+        // A link inside one guarded folder does not lead into another.
+        let desktop = home.path().join("Desktop");
+        fs::create_dir_all(desktop.join("proj/.git")).unwrap();
+        let across = documents.join("lnk");
+        std::os::unix::fs::symlink(desktop.join("proj"), &across).unwrap();
+        assert_eq!(super::checkout_outside(&across, &[documents.clone(), desktop]), None);
+        // `alias/..` is the guarded folder for the system, whatever the text folds to.
+        fs::create_dir_all(home.path().join("project/.git")).unwrap();
+        assert_eq!(super::checkout_outside(&alias.join("../project"), &guarded), None);
+        // Nor does a `..` inside a link's target, after a link in it, fold away the guard.
+        fs::create_dir_all(documents.join("sub")).unwrap();
+        fs::create_dir_all(home.path().join("a")).unwrap();
+        fs::create_dir_all(home.path().join("b")).unwrap();
+        std::os::unix::fs::symlink(documents.join("sub"), home.path().join("b/lnk")).unwrap();
+        let hop = home.path().join("a/hop");
+        std::os::unix::fs::symlink("../b/lnk/..", &hop).unwrap();
+        assert_eq!(super::resolved(&hop, &guarded), None);
+        assert_eq!(super::checkout_outside(&hop, &guarded), None);
+    }
+
+    #[test]
+    fn a_ref_with_a_windows_separator_drive_or_dot_part_is_refused() {
+        for bad in [
+            "..\\outside",
+            "C:\\share\\ref",
+            "C:/x",
+            "refs/../x",
+            "refs//x",
+            "./refs",
+            "/etc/x",
+            "refs\\heads\\main",
+        ] {
+            assert!(!super::ref_name(bad), "{bad}");
+        }
+        assert!(super::ref_name("refs/heads/feat/a.b"));
     }
 
     #[test]

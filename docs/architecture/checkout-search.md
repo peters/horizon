@@ -41,6 +41,10 @@ empty, on every platform. Without one, nothing is searched.
   `HEAD` is an object name (40 or 64 hexadecimal digits) or names a branch
   whose ref file holds one or that `packed-refs` lists. Only a finished checkout
   stands in for a repository row or a clone.
+- A branch named in `HEAD` is read only when it is plain names joined by `/`:
+  no `.` or `..` part, no `\`, `:`, drive or root, so its text cannot name a
+  place outside the Git directory, also on Windows. A Windows device name such
+  as `CON` is looked at but never opened, as it is no regular file.
 
 ## The folders of a typed path
 
@@ -48,9 +52,12 @@ empty, on every platform. Without one, nothing is searched.
   listing hangs; the field and its keys work on meanwhile.
 - The typed folder is listed whole, with no cap on its entries, and each listed
   folder is read as a checkout (`checkout_in`) to mark repositories.
-- On macOS a guarded folder itself is no checkout, so listing `~/` reads nothing
-  inside them. A path the person types into a guarded folder is read there, and
-  macOS can then ask.
+- On macOS a guarded folder itself, or a link into one, is no checkout, so
+  marking repositories while `~/` is listed reads nothing inside them. A path the person types into a
+  guarded folder is looked at there (its `.git` entry only), and macOS can then
+  ask; a link in it that leads into another guarded folder is not followed. A
+  typed path with a `..` part is not read as a checkout on macOS, since `..`
+  after a link leads where the link goes.
 
 ## What is not guaranteed
 
@@ -58,6 +65,11 @@ empty, on every platform. Without one, nothing is searched.
   background thread. The cap on running searches keeps such threads from
   adding up; the dialog does not wait for them.
 - A file swapped for a pipe between its check and its open can still be opened.
+- The listing of a typed path (`dir_search::lookup`, shared with the folder
+  picker) checks each entry with a call that follows links, and a typed path
+  through a link is listed where the link leads. On macOS a link from the home
+  folder into a guarded folder can therefore be looked at, though no checkout
+  is read there.
 - The object that `HEAD` or a ref names is not looked up, so a checkout with a
   made-up object name counts as finished.
 - The origin, branch and folder names are shown as written. A checkout can claim
