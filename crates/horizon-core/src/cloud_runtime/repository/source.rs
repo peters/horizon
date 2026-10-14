@@ -274,7 +274,7 @@ pub fn existing_checkout(parent: &Path, remote: &Remote) -> Option<(PathBuf, boo
             let (git, linked) = git_dirs(&path)?;
             let same = origin_in(&git)
                 .and_then(|origin| parse(&origin))
-                .is_some_and(|origin| origin.url == remote.url);
+                .is_some_and(|origin| same_repository(&origin, remote));
             (same && is_checkout(&path) && !transport::maybe_unfinished(&path)).then_some((path, linked))
         })
 }

@@ -114,8 +114,11 @@ pub(super) fn narrows(query: &str, name: &str) -> bool {
 /// Text that names a folder rather than a repository or a search.
 pub(super) fn is_path(text: &str) -> bool {
     let text = text.trim_start();
-    // `.github` is a name to search for; `./`, `../`, `.` and `..` are places.
-    let relative = matches!(text, "." | "..") || text.starts_with("./") || text.starts_with("../");
+    // `.github` is a name to search for; `./`, `../`, `.` and `..` are places, and on
+    // Windows `.\` and `..\` too.
+    let relative = matches!(text, "." | "..")
+        || ["./", "../"].iter().any(|start| text.starts_with(start))
+        || (cfg!(windows) && [".\\", "..\\"].iter().any(|start| text.starts_with(start)));
     // `~` and `~/...` are the home folder; `~alice` is a word to search for, as in the lookup.
     let home = text
         .strip_prefix('~')
@@ -496,6 +499,9 @@ impl super::State {
                     )
                 })
         });
+        // The account's list may have changed earlier in this frame, and with it whether the
+        // text is an `owner/name` to clone.
+        let typed_repository = self.remote().is_some();
         if !focused || !plain || !self.searching() || !self.finder.settled() || self.finder.current_rows().is_empty() {
             return None;
         }
@@ -506,7 +512,7 @@ impl super::State {
             .current_rows()
             .get(self.finder.highlighted)
             .is_some_and(|row| row.title.eq_ignore_ascii_case(self.input.trim()));
-        let takes_enter = self.remote.is_none() || self.finder.moved || exact;
+        let takes_enter = !typed_repository || self.finder.moved || exact;
         let (down, up, enter, tab) = ui.input_mut(|input| {
             (
                 input.consume_key(Modifiers::NONE, Key::ArrowDown),

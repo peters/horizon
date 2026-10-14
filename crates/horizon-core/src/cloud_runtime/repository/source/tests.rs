@@ -482,6 +482,12 @@ fn a_checkout_already_under_the_parent_is_recognised_for_its_own_link_only() {
         &["clone", "-q", origin.to_str().unwrap(), "demo"],
     );
     git(&kept, &["remote", "set-url", "origin", &remote.url]);
+    assert_eq!(existing(temp.path(), &remote), Some(kept.clone()));
+    // Cloned over SSH with the owner's own spelling, it is still the repository of the link.
+    git(
+        &kept,
+        &["remote", "set-url", "origin", "git@github.com:Demo-Org/demo.git"],
+    );
     assert_eq!(existing(temp.path(), &remote), Some(kept));
 }
 

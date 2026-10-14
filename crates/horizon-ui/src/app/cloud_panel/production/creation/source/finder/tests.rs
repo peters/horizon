@@ -44,6 +44,9 @@ fn paths_links_and_words_are_told_apart() {
         assert!(!is_path(words), "{words}");
     }
     assert_eq!(is_path("\\\\server\\share"), cfg!(windows));
+    for windows in [".\\repo", "..\\repo"] {
+        assert_eq!(is_path(windows), cfg!(windows), "{windows}");
+    }
 }
 
 #[test]
