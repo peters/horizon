@@ -21,6 +21,8 @@ pub(in crate::app) type Read = (Saved, Vec<(String, u128)>);
 #[derive(Default)]
 pub(in crate::app) struct State {
     pub(in crate::app) form: Option<Form>,
+    /// The Repositories editor of a board.
+    pub(in crate::app) editor: Option<super::editor::Editor>,
     pub(in crate::app) preparing: Option<Preparing>,
     /// The saved Upkeeps, once read; `None` reads them again.
     pub(in crate::app) saved: Option<Saved>,

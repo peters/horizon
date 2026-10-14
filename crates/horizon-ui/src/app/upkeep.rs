@@ -9,6 +9,8 @@ use super::HorizonApp;
 #[cfg(feature = "cloud-workspaces")]
 mod dialog;
 #[cfg(feature = "cloud-workspaces")]
+mod editor;
+#[cfg(feature = "cloud-workspaces")]
 pub(super) mod form;
 #[cfg(feature = "cloud-workspaces")]
 mod repositories;
@@ -32,6 +34,39 @@ impl HorizonApp {
     /// The folder of this computer's cloud settings, once cloud workspaces are ready.
     pub(super) fn upkeep_root(&self) -> Option<std::path::PathBuf> {
         self.ready_cloud_root()
+    }
+
+    /// After the saved choice of `cloud` changed: reads the saved Upkeeps again and makes
+    /// the next exchange with its worker immediate.
+    pub(super) fn upkeep_settings_saved(&mut self, cloud: &str) {
+        // A read under way may hold the list from before the change.
+        self.upkeep.saved = None;
+        self.upkeep.reading = None;
+        self.upkeep.read_after = None;
+        self.upkeep.syncs.entry(cloud.to_owned()).or_default().next = None;
+    }
+
+    /// Gives each board that shows a saved Upkeep's status its cloud, so it offers Run now,
+    /// Pause and Repositories.
+    pub(super) fn link_upkeep_boards(&mut self, saved: &Saved) {
+        for panel in &mut self.board.panels {
+            let Some(board) = panel.content.upkeep_mut() else {
+                continue;
+            };
+            board.cloud = horizon_core::upkeep::worker::cloud_of(board.path())
+                .filter(|cloud| saved.iter().any(|(held, _)| held == cloud));
+        }
+    }
+
+    /// Carries out Run now and Pause of the board of `cloud` with the next exchange, which
+    /// starts at once.
+    fn signal_upkeep(&mut self, cloud: &str, run_now: bool, paused: Option<bool>) {
+        let sync = self.upkeep.syncs.entry(cloud.to_owned()).or_default();
+        sync.signals.run_now |= run_now;
+        if paused.is_some() {
+            sync.signals.paused = paused;
+        }
+        sync.next = None;
     }
 }
 
@@ -115,6 +150,33 @@ impl HorizonApp {
         for (board, request) in requests {
             match request {
                 Request::Open(url) => self.open_pull_request(ctx, board, &url),
+                #[cfg(feature = "cloud-workspaces")]
+                Request::RunNow | Request::Pause(_) | Request::Repositories => {
+                    let Some(cloud) = self
+                        .board
+                        .panel(board)
+                        .and_then(|panel| panel.content.upkeep())
+                        .and_then(|upkeep| upkeep.cloud.clone())
+                    else {
+                        continue;
+                    };
+                    match request {
+                        Request::RunNow => self.signal_upkeep(&cloud, true, None),
+                        Request::Pause(paused) => self.signal_upkeep(&cloud, false, Some(paused)),
+                        _ => {
+                            // While the saved Upkeeps are read again, the click waits a frame.
+                            if !self.open_upkeep_repositories(ctx, &cloud)
+                                && let Some(upkeep) =
+                                    self.board.panel_mut(board).and_then(|panel| panel.content.upkeep_mut())
+                            {
+                                upkeep.request = Some(Request::Repositories);
+                            }
+                        }
+                    }
+                }
+                // Without cloud workspaces no board has a cloud, so none offers these.
+                #[cfg(not(feature = "cloud-workspaces"))]
+                Request::RunNow | Request::Pause(_) | Request::Repositories => {}
             }
         }
     }

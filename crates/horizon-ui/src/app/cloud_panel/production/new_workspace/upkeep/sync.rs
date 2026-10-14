@@ -199,6 +199,7 @@ impl HorizonApp {
                         signals.run_token = Some(token);
                     }
                 }
+                self.link_upkeep_boards(&saved);
                 Some(saved)
             }
             Err(TryRecvError::Empty) => None,

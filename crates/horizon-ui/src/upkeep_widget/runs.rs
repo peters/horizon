@@ -25,6 +25,12 @@ pub(super) fn running(status: &Status, now: OffsetDateTime) -> Option<&Run> {
         .filter(|run| run.outcome == RunOutcome::Running)
 }
 
+/// The run in progress that still reports: a run that stopped reporting no longer holds
+/// back Run now.
+pub(super) fn live(status: &Status, now: OffsetDateTime) -> Option<&Run> {
+    running(status, now).filter(|run| now - run.started_at <= stale_after(status))
+}
+
 /// How long after its start a run that still shows as running counts as no longer
 /// reported: two schedule periods, and at least three hours.
 fn stale_after(status: &Status) -> time::Duration {
@@ -332,6 +338,11 @@ mod tests {
             "Running / Started 37 min ago"
         );
         let stuck = r#"{"started_at":"2026-10-11T14:00:00Z","outcome":"running"}"#;
+        assert!(live(&status(running, "2026-10-13T15:00:00Z"), now).is_some());
+        assert!(
+            live(&status(stuck, "2026-10-11T15:00:00Z"), now).is_none(),
+            "a run that stopped reporting does not hold back Run now"
+        );
         assert_eq!(
             text(&status(stuck, "2026-10-11T15:00:00Z")),
             "No report / A run started 2 d ago"

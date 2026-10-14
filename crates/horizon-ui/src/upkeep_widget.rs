@@ -19,6 +19,11 @@ mod runs;
 const MERGED_WINDOW: time::Duration = time::Duration::days(7);
 /// How far ahead of this computer's clock a time may be and still count.
 const CLOCK_SKEW: time::Duration = time::Duration::minutes(5);
+/// How long Run now stays unavailable after a press while the status does not show the run:
+/// two exchanges and the loop's own wait.
+const RUN_REQUEST_WAIT: time::Duration = time::Duration::minutes(2);
+/// How far the worker's clock may lag this computer's for a run to count as the one asked for.
+const RUN_CLOCK_SKEW: time::Duration = time::Duration::seconds(30);
 
 pub struct UpkeepView<'a> {
     panel: &'a mut Panel,
@@ -53,7 +58,27 @@ impl<'a> UpkeepView<'a> {
                         empty(ui, board.error.as_deref(), &board.path().display().to_string());
                         return;
                     };
-                    header::show(ui, &status);
+                    // Run now waits for the status to show its run, at most a few minutes.
+                    let running = runs::live(&status, now).is_some();
+                    // Run now waits for a run that started after the press, also one that ended
+                    // at once, and at most a few minutes.
+                    if running
+                        || board.run_requested.is_some_and(|at| {
+                            now - at > RUN_REQUEST_WAIT
+                                || status.runs.iter().any(|run| run.started_at >= at - RUN_CLOCK_SKEW)
+                        })
+                    {
+                        board.run_requested = None;
+                    }
+                    let actions = board.cloud.is_some().then_some(header::Actions {
+                        busy: running || board.run_requested.is_some(),
+                    });
+                    if let Some(request) = header::show(ui, &status, actions) {
+                        if request == horizon_core::upkeep::Request::RunNow {
+                            board.run_requested = Some(now);
+                        }
+                        board.request = Some(request);
+                    }
                     if let Some(error) = board.error.as_deref() {
                         // The last status stays, marked as old, until a valid one arrives.
                         ui.add(

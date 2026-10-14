@@ -33,7 +33,21 @@ that the board did not open is never used, also when it has the same name. After
 click, the view fits the workspace, so the board and the page are both in view. In a
 workspace with a layout preset, the preset places the new panel.
 
-The board is read-only. It reads the status document that the panel `command` names.
+The board of an Upkeep cloud has three buttons in its header. A board that shows
+another status document, for example one that a config file opens, has no buttons.
+
+- **Run now** starts a run with the next exchange, which starts at once. It is
+  unavailable while a run continues and while the Upkeep is paused. After a click,
+  it stays unavailable until the status shows the run, for at most 2 minutes.
+- **Pause** stops the planned runs with the next exchange. A run in progress
+  finishes. **Resume** starts the planned runs again.
+- **Repositories** opens the repository picker of New Upkeep with the list of the
+  Upkeep. **Save** adds and removes only the repositories that the person changed,
+  on the list that is saved at that time. Thus a change that another part of
+  Horizon made in the meantime stays. An Upkeep keeps at least one repository. The
+  next run uses the new list.
+
+The board reads the status document that the panel `command` names.
 When the command is empty, it reads `~/.horizon/upkeep/status.json`. A config file
 can open a board:
 

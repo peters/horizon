@@ -3,7 +3,7 @@ procedure: upkeep
 feature: Upkeep board, worker loop and New Upkeep (the dependency pull request agent)
 platforms: [linux]
 cost: rents compute (UPK-10 only)
-destructive: yes (UPK-11 deletes the cloud that UPK-10 made)
+destructive: yes (UPK-12 deletes the cloud that UPK-10 made)
 secrets: [GitHub sign-in, Hetzner API token, ChatGPT login of Codex]
 owner: peters
 ---
@@ -22,7 +22,7 @@ board, and that **New Upkeep** starts a real Upkeep on a Hetzner cloud.
 - Candidate: a Horizon build with the `upkeep` panel kind.
 - Platforms: Linux host.
 - UPK-01 to UPK-06 read a synthetic status document. UPK-07 runs the worker
-  exchange in a local container. UPK-08 to UPK-11 use real GitHub data and a real
+  exchange in a local container. UPK-08 to UPK-12 use real GitHub data and a real
   Hetzner cloud.
 - This procedure does not test: the quality of the work of the agent, Renovate
   pull requests, or a schedule longer than one hour.
@@ -33,7 +33,7 @@ Tasks UPK-01 to UPK-07 only read local files, and the synthetic status names
 made-up repositories and one public pull request.
 
 > **CAUTION:** TASK UPK-10 RENTS A HETZNER SERVER AND A VOLUME. The provider bills
-> them until UPK-11 deletes the cloud.
+> them until UPK-12 deletes the cloud.
 
 > **CAUTION:** IN UPK-10 THE AGENT CAN PUSH TO AND MERGE PULL REQUESTS OF THE
 > REPOSITORY THAT YOU SELECT. Select only a repository where you are permitted to
@@ -50,7 +50,7 @@ made-up repositories and one public pull request.
 - Network access to github.com for task UPK-03.
 - For task UPK-07: Docker, a Rust toolchain for this repository, and a Horizon
   worker image (`ghcr.io/peters/horizon-worker-base`) on this computer.
-- For tasks UPK-08 to UPK-11: the
+- For tasks UPK-08 to UPK-12: the
   [local device smoke fixture](../../../scripts/device-smoke/README.md) with
   `--native-view`, a persistent session, and Cloud settings with a GitHub sign-in,
   a Hetzner project with free capacity for one `cx23` server, and the ChatGPT login
@@ -360,7 +360,45 @@ made-up repositories and one public pull request.
    **Latest run** shows the lines of the agent. Each pull request that the agent
    worked on has one comment that starts with `<!-- upkeep -->`.
 
-### 6.11 UPK-11 — Remove the Upkeep cloud
+### 6.11 UPK-11 — Run now, Pause and Repositories
+
+Do this task before UPK-12, on the cloud of UPK-10.
+
+1. On the board, wait until no run continues. Click **Run now**.
+
+   Result: **Run now** becomes unavailable. Within one minute, the board shows
+   **Running**, and `/workspace/home/upkeep/runs.jsonl` on the worker has a new run.
+
+2. Click **Pause**.
+
+   Result: Within one minute, **Next run** shows **Paused**. The button shows
+   **Resume**. **Run now** is unavailable.
+
+3. Click **Resume**.
+
+   Result: **Next run** shows the next planned time again.
+
+4. Click **Repositories**.
+
+   Result: The dialog **Repositories** opens with the repositories of the Upkeep
+   selected.
+
+5. Select one more repository that you are permitted to merge in. Read the line
+   next to **Save**.
+
+   Result: The line shows `1 added` and the new number of repositories.
+
+6. Click **Save**.
+
+   Result: The dialog closes. Within one minute, the board shows the new number of
+   repositories, and `/workspace/home/upkeep/config.json` on the worker lists the
+   repository.
+
+7. Open a board from a config file, as in Setup step 2.
+
+   Result: That board shows no buttons.
+
+### 6.12 UPK-12 — Remove the Upkeep cloud
 
 > **CAUTION:** THE NEXT STEP DELETES THE SERVER, THE VOLUME AND THE SSH KEY OF THE
 > CLOUD. Delete only the cloud that UPK-10 made.
@@ -372,12 +410,12 @@ made-up repositories and one public pull request.
 
 ## 7. Pass criteria
 
-- UPK-01 to UPK-11 give the results above.
+- UPK-01 to UPK-12 give the results above.
 
 ## 8. Cleanup
 
 1. Close Horizon and delete `<folder>`.
-2. After UPK-11, delete `~/.horizon/upkeep/<cloud>` in the fixture home.
+2. After UPK-12, delete `~/.horizon/upkeep/<cloud>` in the fixture home.
 
 ## 9. Record of results
 
