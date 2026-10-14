@@ -1,7 +1,7 @@
 //! The board's title, what runs where, and the actions of an Upkeep cloud's board: Run now,
 //! Pause and Repositories.
 use egui::{Align, Layout, RichText, Ui, Vec2};
-use horizon_core::upkeep::{Request, Status};
+use horizon_core::upkeep::{AgentChange, Request, Status};
 
 use crate::theme;
 
@@ -107,6 +107,14 @@ fn chrome(text: &str) -> egui::Button<'_> {
         .fill(theme::PANEL_BG_ALT())
         .stroke(egui::Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 210)))
         .corner_radius(10)
+}
+
+/// What agents changed through `cloud_upkeep`, newest first. Horizon writes these lines,
+/// so a person sees every change an agent made even when the status hides it.
+pub(super) fn agent_changes(ui: &mut Ui, changes: &[AgentChange]) {
+    for change in changes {
+        ui.add(egui::Label::new(RichText::new(change.text()).size(12.0).color(theme::ACCENT())).truncate());
+    }
 }
 
 /// "Codex · every hour · Hetzner cx23, Helsinki · 16 repositories"

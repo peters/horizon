@@ -16,6 +16,9 @@ pub(in crate::app) struct Editor {
     /// The list when the editor opened; Save sends the difference to it.
     original: BTreeSet<String>,
     pub(in crate::app) form: Form,
+    /// The repositories an agent proposed through `cloud_upkeep`, shown as their own rows:
+    /// the list below may not hold them.
+    pub(in crate::app) proposed: Vec<String>,
     saving: Option<Receiver<Result<(), String>>>,
     error: Option<String>,
 }
@@ -38,6 +41,7 @@ impl Editor {
             cloud: cloud.to_owned(),
             original,
             form,
+            proposed: Vec::new(),
             saving: None,
             error: None,
         }
@@ -110,6 +114,35 @@ impl HorizonApp {
         }
         self.upkeep.editor = Some(editor);
         true
+    }
+
+    /// Opens the Repositories editor of the Upkeep of `cloud`, whose saved settings are
+    /// `config`, with `add` ticked: an agent's proposal through `cloud_upkeep`, which
+    /// changes nothing until the person saves it. Save sends only the person's changes, so
+    /// a change saved meanwhile stays.
+    /// # Errors
+    /// An Upkeep dialog is already open.
+    pub(super) fn propose_upkeep_repositories(
+        &mut self,
+        ctx: &Context,
+        cloud: &str,
+        config: &Config,
+        add: &[String],
+    ) -> Result<(), String> {
+        if self.upkeep.editor.is_some() || self.upkeep.form.is_some() {
+            return Err("upkeep_unavailable: an Upkeep dialog is already open; try again later".into());
+        }
+        let mut editor = Editor::new(cloud, config);
+        editor.proposed = add.iter().map(|name| name.to_lowercase()).collect();
+        editor.form.selected.extend(editor.proposed.iter().cloned());
+        // Tests read the developer's real cloud settings: they never search GitHub.
+        if !cfg!(test)
+            && let Some(root) = self.upkeep_root()
+        {
+            editor.form.find(root, ctx);
+        }
+        self.upkeep.editor = Some(editor);
+        Ok(())
     }
 
     pub(in crate::app) fn render_upkeep_editor(&mut self, ctx: &Context) {
@@ -196,6 +229,7 @@ fn show(ctx: &Context, editor: &mut Editor) -> Outcome {
             );
             ui.add_space(8.0);
             ui.add_enabled_ui(editor.saving.is_none(), |ui| {
+                proposed(ui, editor);
                 super::repositories::show(ui, &mut editor.form);
             });
             let unlisted = editor.unlisted();
@@ -251,6 +285,36 @@ fn show(ctx: &Context, editor: &mut Editor) -> Outcome {
         outcome = Outcome::Cancel;
     }
     outcome
+}
+
+/// The repositories an agent proposed, each with its own tick, so the person sees every
+/// name that Save would add even when the list below does not show it.
+fn proposed(ui: &mut egui::Ui, editor: &mut Editor) {
+    if editor.proposed.is_empty() {
+        return;
+    }
+    Frame::new()
+        .fill(theme::alpha(theme::ACCENT(), 24))
+        .corner_radius(10)
+        .inner_margin(12)
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new("An agent proposes these repositories. Untick any you do not want.")
+                    .size(13.0)
+                    .color(theme::FG()),
+            );
+            for name in &editor.proposed {
+                let mut on = editor.form.selected.contains(name);
+                if ui.checkbox(&mut on, RichText::new(name).size(13.0)).changed() {
+                    if on {
+                        editor.form.selected.insert(name.clone());
+                    } else {
+                        editor.form.selected.remove(name);
+                    }
+                }
+            }
+        });
+    ui.add_space(6.0);
 }
 
 /// "2 added, 1 removed · 17 repositories"

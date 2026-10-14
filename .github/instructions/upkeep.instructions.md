@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/upkeep.rs,crates/horizon-core/src/upkeep/**,examples/cloud-worker/test_upkeep_worker.py,docs/upkeep.md,docs/testing/procedures/upkeep/worker.sh,crates/horizon-ui/src/upkeep_widget.rs,crates/horizon-ui/src/upkeep_widget/**,crates/horizon-ui/src/app/upkeep.rs,crates/horizon-ui/src/app/upkeep/**,crates/horizon-ui/src/app/cloud_panel/production/new_workspace/upkeep.rs,crates/horizon-ui/src/app/cloud_panel/production/new_workspace/upkeep/**"
+applyTo: "crates/horizon-core/src/upkeep.rs,crates/horizon-core/src/upkeep/**,examples/cloud-worker/test_upkeep_worker.py,docs/upkeep.md,docs/testing/procedures/upkeep/worker.sh,crates/horizon-ui/src/upkeep_widget.rs,crates/horizon-ui/src/upkeep_widget/**,crates/horizon-ui/src/app/upkeep.rs,crates/horizon-ui/src/app/upkeep/**,crates/horizon-ui/src/app/cloud_panel/production/new_workspace/upkeep.rs,crates/horizon-ui/src/app/cloud_panel/production/new_workspace/upkeep/**,crates/horizon-browser-control/src/manifest/upkeep.rs,crates/horizon-browser-mcp/src/controller/upkeep.rs,crates/horizon-cloud-worker/src/remote.rs"
 ---
 
 # Trust boundaries of Upkeep
@@ -101,3 +101,30 @@ Run now, Pause and Repositories show only on a board whose status path is exactl
 - `worker::settings_lock(<cloud>)` is a guard for the threads of this process and a file
   lock (`settings.lock` in the Upkeep's folder) for other Horizon processes on the same
   home. Both must be held for the whole read, change and save, and the whole exchange.
+
+## Untrusted: agent requests through `cloud_upkeep`
+
+An agent in a Horizon panel can be steered by text it read, so treat every
+`cloud_upkeep` request as untrusted (`docs/upkeep.md`, section "Trust boundary of agent
+requests"). Check that:
+
+- The host answers only when `host_instance` is its own and the actor is an agent panel
+  on its board (`actor_panel`) that is not a member of a cloud (`CloudGroup::panels`),
+  and acts only on the Upkeep whose cloud is in that
+  panel's workspace. No request field names a workspace or a cloud. A cloud ID that
+  another saved cloud also has is refused.
+- `create` and `add` never save settings, launch a cloud or grant a repository. They only
+  open the person's dialog prefilled, and refuse while a dialog is open.
+- `remove` never leaves an Upkeep without repositories, and every saved settings change
+  passes `Config::validate`.
+- Mutations past the request deadline change nothing.
+- Every change that `remove`, `pause`, `resume` or `run_now` makes adds a line that
+  Horizon writes under the board title (`AgentChange`), never text from the request or
+  the worker, and no number of other changes hides a removal.
+- `remove` changes the saved choice only through `worker::update`, so the removal, the
+  deadline check and the at-least-one check apply to the list as it is under the lock.
+- Each read-modify-write of `upkeep.json` holds `worker::settings_lock(<cloud>)`.
+- `horizon-cloud-worker` refuses `upkeep` requests (`host_only_refusal`), so no agent on
+  a worker, the Upkeep agent included, reaches these operations.
+- No file read or write for a request runs on the UI thread, and `status` returns only
+  bounded, parsed fields of the status document.

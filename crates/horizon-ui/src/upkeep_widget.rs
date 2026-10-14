@@ -53,6 +53,8 @@ impl<'a> UpkeepView<'a> {
                 Frame::new().inner_margin(Margin::symmetric(16, 14)).show(ui, |ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
                     let Some(status) = board.status.clone() else {
+                        // An agent's change shows even before the first status arrives.
+                        header::agent_changes(ui, &board.agent_changes);
                         empty(ui, board.error.as_deref(), &board.path().display().to_string());
                         return;
                     };
@@ -74,6 +76,7 @@ impl<'a> UpkeepView<'a> {
                         }
                         board.request = Some(request);
                     }
+                    header::agent_changes(ui, &board.agent_changes);
                     if let Some(error) = board.error.as_deref() {
                         // The last status stays, marked as old, until a valid one arrives.
                         ui.add(

@@ -67,6 +67,45 @@ fn a_second_start_while_one_prepares_is_refused_not_dropped() {
 }
 
 #[test]
+fn an_agent_proposal_opens_new_upkeep_filled_in_for_its_workspace() {
+    use crate::app::upkeep::form::Every;
+    use horizon_core::upkeep::worker::{Checkouts, Config};
+
+    let (_temp, mut app) = test_app();
+    let workspace = app.board.create_workspace("Agents");
+    let config = Config {
+        repositories: vec!["Acme/Web".into(), "acme/api".into()],
+        authors: vec!["app/renovate".into(), "someone-else".into()],
+        agent: "codex".into(),
+        every_minutes: 240,
+        instructions: "Be careful.".into(),
+        checkouts: Checkouts::Partial,
+        ..Config::default()
+    };
+    assert!(
+        app.propose_new_upkeep(workspace, &config).is_err(),
+        "not without cloud workspaces"
+    );
+    app.cloud_prototype.ready = true;
+    app.propose_new_upkeep(workspace, &config).unwrap();
+    let form = app.upkeep.form.as_ref().unwrap();
+    assert_eq!(form.workspace, Some(workspace));
+    assert_eq!(form.selected.iter().collect::<Vec<_>>(), ["acme/api", "acme/web"]);
+    assert_eq!(form.bots.iter().copied().collect::<Vec<_>>(), [Bot::Renovate]);
+    assert_eq!(form.every, Every::FourHours);
+    assert_eq!(
+        (form.checkouts, form.instructions.as_str()),
+        (Checkouts::Partial, "Be careful.")
+    );
+    assert!(form.stale(), "its first frame searches for repositories");
+    assert!(form.proposed, "the dialog says that an agent filled it in");
+    assert!(
+        app.propose_new_upkeep(workspace, &config).is_err(),
+        "one New Upkeep at a time"
+    );
+}
+
+#[test]
 fn an_earlier_clone_is_found_whatever_the_case_of_its_folders() {
     let temp = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(temp.path().join("Acme/Web")).unwrap();
@@ -178,4 +217,15 @@ fn the_board_of_a_saved_upkeep_runs_now_and_pauses_through_its_exchange() {
         None,
         "a board whose Upkeep is gone offers nothing"
     );
+}
+
+#[test]
+fn saved_settings_are_read_again_and_sent_at_once() {
+    let (_temp, mut app) = test_app();
+    app.upkeep.saved = Some(std::sync::Arc::default());
+    app.upkeep.syncs.entry("c1".into()).or_default().next = Some(std::time::Instant::now());
+    app.upkeep_settings_saved("c1");
+    assert!(app.upkeep.saved.is_none());
+    assert!(app.upkeep.syncs["c1"].next.is_none());
+    assert_eq!(app.upkeep.syncs["c1"].loop_running(), None);
 }

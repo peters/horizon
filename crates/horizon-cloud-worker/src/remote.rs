@@ -335,7 +335,7 @@ pub fn poll(
     }
     if let Ok(requests) = manifest::provider_usage::claim_provider_usage_requests(manifest::host_instance()) {
         for request in requests {
-            if refused_cloud_list(&request) {
+            if refused_host_only(&request) {
                 continue;
             }
             // Catalog and cloud offer requests are answered, and retried, with the catalog.
@@ -423,23 +423,55 @@ fn usage(
     Ok(results)
 }
 
-/// The cloud list belongs to a Horizon host; a worker answers that it has none. Returns
-/// whether `request` was such a request.
-fn refused_cloud_list(request: &horizon_browser_control::manifest::provider_usage::UsageRequest) -> bool {
-    use horizon_browser_control::manifest::provider_usage;
-    if request.cloud_list.is_none() {
+/// The cloud list and Upkeep belong to a Horizon host; a worker answers that it has none.
+/// Returns whether `request` was such a request.
+fn refused_host_only(request: &horizon_browser_control::manifest::provider_usage::UsageRequest) -> bool {
+    let Some(error) = host_only_refusal(request) else {
         return false;
-    }
-    let _ = provider_usage::complete_provider_usage(&request.result(
-        Vec::new(),
-        Some("cloud_list_unavailable: requires a Horizon agent panel".into()),
-    ));
+    };
+    let _ = horizon_browser_control::manifest::provider_usage::complete_provider_usage(
+        &request.result(Vec::new(), Some(error.into())),
+    );
     true
+}
+
+/// The refusal of a request that only a Horizon host answers. An agent on the worker, the
+/// Upkeep agent included, must never change the Upkeep or the cloud list.
+fn host_only_refusal(
+    request: &horizon_browser_control::manifest::provider_usage::UsageRequest,
+) -> Option<&'static str> {
+    if request.cloud_list.is_some() {
+        Some("cloud_list_unavailable: requires a Horizon agent panel")
+    } else if request.upkeep.is_some() {
+        Some("upkeep_unavailable: requires a Horizon agent panel on the person's computer")
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_worker_refuses_the_cloud_list_and_upkeep_and_answers_the_rest() {
+        let request = |extra: serde_json::Value| {
+            let mut value = serde_json::json!({
+                "request_id": "r", "actor": "horizon:a", "host_instance": "h", "provider": null,
+                "deadline_at_millis": 0, "claimed": true,
+            });
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            serde_json::from_value::<horizon_browser_control::manifest::provider_usage::UsageRequest>(value).unwrap()
+        };
+        let upkeep = request(serde_json::json!({"upkeep": {"operation": "add", "repositories": ["acme/web"]}}));
+        assert!(host_only_refusal(&upkeep).is_some_and(|error| error.starts_with("upkeep_unavailable")));
+        let list = request(serde_json::json!({"cloud_list": {"operation": "list"}}));
+        assert!(host_only_refusal(&list).is_some_and(|error| error.starts_with("cloud_list_unavailable")));
+        assert_eq!(host_only_refusal(&request(serde_json::json!({}))), None);
+    }
+
     #[test]
     fn restarted_service_preserves_unknown_device_history_and_blocks_new_allocations() {
         let root = tempfile::tempdir().unwrap();

@@ -47,6 +47,9 @@ pub(super) fn show(ctx: &Context, form: &mut Form) -> Outcome {
                 .color(theme::FG_SOFT()),
             );
             ui.add_space(16.0);
+            if form.proposed {
+                proposal(ui, form);
+            }
             ui.add_enabled_ui(!form.starting, |ui| {
                 if width >= TWO_COLUMNS {
                     ui.horizontal_top(|ui| {
@@ -74,6 +77,25 @@ pub(super) fn show(ctx: &Context, form: &mut Form) -> Outcome {
         outcome = Outcome::Cancel;
     }
     outcome
+}
+
+/// An agent filled the form in: the person checks it before Start, the instructions above
+/// all, because they become the prompt of an agent with push access.
+fn proposal(ui: &mut Ui, form: &Form) {
+    let text = if form.instructions == DEFAULT_INSTRUCTIONS {
+        "An agent proposed these settings. Check each repository before you start."
+    } else {
+        "An agent proposed these settings and its own instructions. Read the instructions in full before you start."
+    };
+    Frame::new()
+        .fill(theme::alpha(theme::ACCENT(), 24))
+        .corner_radius(10)
+        .inner_margin(12)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new(text).size(13.0).color(theme::FG()));
+        });
+    ui.add_space(10.0);
 }
 
 fn scroll(ui: &mut Ui, id: &str, height: f32, add: impl FnOnce(&mut Ui)) {

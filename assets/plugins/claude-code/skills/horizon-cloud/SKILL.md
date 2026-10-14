@@ -1,11 +1,11 @@
 ---
 name: horizon-cloud
-description: Inspect Horizon cloud offers and companions, read or act on the cloud list of your workspace, control explicitly authorized companion workers, use a worker Local Network Bridge, or ask for GitHub access from a cloud worker through public MCP tools.
+description: Inspect Horizon cloud offers and companions, read or act on the cloud list of your workspace, see or propose changes to its Upkeep of Dependabot pull requests, control explicitly authorized companion workers, use a worker Local Network Bridge, or ask for GitHub access from a cloud worker through public MCP tools.
 ---
 
 # Horizon cloud MCP
 
-Use this skill for cloud offers, the cloud list of your workspace, companion workers,
+Use this skill for cloud offers, the cloud list of your workspace, Upkeep, companion workers,
 a worker's Local Network Bridge, and GitHub access on a cloud worker.
 Read [the cloud reference](references/cloud.md) for the server and operation you need.
 Use tools from the connected server and their current schemas. Do not substitute
@@ -56,13 +56,16 @@ chosen bots in chosen repositories, with a board beside its card. It costs money
 its worker runs and needs a GitHub sign-in, a Hetzner project and a Codex login in Cloud
 settings. Only the person starts one in the dialog. Horizon allows the loop's GitHub
 access for the chosen repositories without asking; every other request still waits on
-the card. See `docs/upkeep.md` for its limits and trust boundaries.
+the card. See `docs/upkeep.md` for its limits and trust boundaries. From an agent
+panel in its workspace, `cloud_upkeep` reads the Upkeep, proposes repositories or a new
+Upkeep for the person to confirm, and removes, pauses, resumes or runs it (see the
+Upkeep section of [the cloud reference](references/cloud.md)).
 
 The board of an Upkeep has **Run now**, **Pause** / **Resume** and **Repositories**.
 They are the person's controls in the Horizon UI: Run now and Pause go to the worker
 with the next exchange, and Repositories saves only the repositories that the person
-added or removed. A board that a config file opens has no buttons. Agents have no MCP
-operation for these controls.
+added or removed. A board that a config file opens has no buttons. Agents reach the same
+actions through `cloud_upkeep`; the board shows each agent change below its title.
 
 Browser provider catalogs and browser sessions use `horizon-browser`.
 This skill does not install servers, start resources, or enable network access on load.

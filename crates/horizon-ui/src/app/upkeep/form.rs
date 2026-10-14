@@ -42,6 +42,14 @@ impl Every {
             Self::Day => 1440,
         }
     }
+
+    /// The choice of `minutes`; a period the dialog does not offer becomes the default.
+    fn from_minutes(minutes: u32) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|every| every.minutes() == minutes)
+            .unwrap_or_default()
+    }
 }
 
 /// Bots whose pull requests Upkeep moves.
@@ -83,7 +91,7 @@ pub(in crate::app) fn checkouts_label(checkouts: Checkouts) -> &'static str {
 }
 
 pub(in crate::app) struct Form {
-    /// The workspace the cloud goes into; `None` makes a new workspace named Upkeep.
+    /// The workspace the cloud goes into; `None` makes a new workspace.
     pub(in crate::app) workspace: Option<WorkspaceId>,
     pub(in crate::app) catalog: Catalog,
     /// The search for repositories while it runs.
@@ -113,6 +121,8 @@ pub(in crate::app) struct Form {
     pub(in crate::app) hidden: bool,
     /// Why the last start failed.
     pub(in crate::app) error: Option<String>,
+    /// An agent filled the form in through `cloud_upkeep`.
+    pub(in crate::app) proposed: bool,
 }
 
 impl Default for Form {
@@ -137,11 +147,31 @@ impl Default for Form {
             starting: false,
             hidden: false,
             error: None,
+            proposed: false,
         }
     }
 }
 
 impl Form {
+    /// New Upkeep filled in with what an agent proposed, for `workspace`. Bots other than
+    /// those the dialog offers are left out.
+    pub(in crate::app) fn proposed(workspace: WorkspaceId, config: &Config) -> Self {
+        Self {
+            workspace: Some(workspace),
+            selected: config.repositories.iter().map(|name| name.to_lowercase()).collect(),
+            bots: config
+                .authors
+                .iter()
+                .filter_map(|author| Bot::from_author(author))
+                .collect(),
+            every: Every::from_minutes(config.every_minutes),
+            checkouts: config.checkouts,
+            instructions: config.instructions.clone(),
+            proposed: true,
+            ..Self::default()
+        }
+    }
+
     /// What the person chose, as the worker gets it.
     pub(in crate::app) fn config(&self) -> Config {
         Config {
