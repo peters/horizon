@@ -216,6 +216,12 @@ fn status(draft: &Draft, card: &Card, hosts: &super::super::prices::hosts::State
         .any(|host| hosts.of(host).is_some_and(|reading| reading.capacity.is_err()))
     {
         (Tone::Attention, "Not reachable")
+    } else if saved.iter().any(|host| {
+        hosts
+            .of(host)
+            .is_some_and(|reading| reading.capacity.as_ref().is_ok_and(|capacity| !capacity.native()))
+    }) {
+        (Tone::Attention, "Architecture not supported")
     } else {
         (Tone::Ready, "Ready")
     }
@@ -241,6 +247,10 @@ fn row(ui: &mut Ui, host: &Host, reading: Option<&Reading>) -> bool {
                 .map_or_else(|| way.to_owned(), |address| format!("{address} · {way}"));
             ui.label(RichText::new(reach).size(12.5).color(theme::FG_SOFT()));
             let (facts, color) = match reading.map(|reading| &reading.capacity) {
+                Some(Ok(capacity)) if !capacity.native() => (
+                    format!("{}: the worker image has no build for it", capacity.architecture),
+                    theme::PALETTE_RED(),
+                ),
                 Some(Ok(capacity)) => (
                     format!(
                         "{} · Docker {} · {}",
@@ -496,6 +506,24 @@ mod tests {
             text.contains("deploy@build-box · SSH") && text.contains("Not checked yet"),
             "{text}"
         );
+        // A host whose architecture has no worker image build is not ready.
+        hosts.answered(vec![Reading {
+            host: draft.settings.docker_hosts[0].clone(),
+            capacity: Ok(Capacity {
+                cpus: 4,
+                memory_bytes: 8 << 30,
+                free_nano_cpus: 4_000_000_000,
+                free_memory_bytes: 8 << 30,
+                architecture: "riscv64".into(),
+                version: "28.5.1".into(),
+            }),
+        }]);
+        let text = painted(&mut draft, &mut card, &mut hosts);
+        assert!(
+            text.contains("Architecture not supported") && text.contains("riscv64: the worker image"),
+            "{text}"
+        );
+        hosts.answered(Vec::new());
         // Switched off, the host stays saved and is not offered, and the switch saves.
         draft.settings.docker_hosts_off = true;
         assert!(!draft.settings.docker_hosts_on() && draft.validate().is_ok());

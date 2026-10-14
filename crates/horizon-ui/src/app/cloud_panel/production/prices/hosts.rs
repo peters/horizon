@@ -4,11 +4,15 @@ use super::{ANSWER_MARGIN_MILLIS, Fetched, Job, RETRY_FAILED, finished, spawn};
 use horizon_core::cloud_runtime::docker_host::hosts::{self, Reading};
 use std::{
     path::Path,
-    time::{Duration, Instant},
+    sync::mpsc::{self, Receiver, TryRecvError},
+    time::{Duration, Instant, SystemTime},
 };
 
 /// Clouds start and stop on a host, so its free capacity is read again this often.
 const FRESH: Duration = Duration::from_secs(30);
+/// How often a worker thread looks whether the settings file changed, also by another
+/// Horizon, so a removed or switched-off host stops being offered.
+const SETTINGS_CHECK: Duration = Duration::from_secs(2);
 
 #[derive(Default)]
 pub(in crate::app) struct State {
@@ -16,6 +20,14 @@ pub(in crate::app) struct State {
     job: Option<Job<Vec<Reading>>>,
     /// When the last reading failed, such as for settings not saved yet.
     failed_at: Option<Instant>,
+    /// When the running reading started; a reading is as old as its start.
+    started: Option<Instant>,
+    /// When the settings file was saved, as last looked at.
+    settings_saved: Option<SystemTime>,
+    saved_check: Option<Receiver<Option<SystemTime>>>,
+    checked_at: Option<Instant>,
+    /// Whether a look has answered, so the next answer can tell a change.
+    looked: bool,
 }
 
 impl State {
@@ -25,6 +37,7 @@ impl State {
         if cfg!(test) {
             return;
         }
+        self.look_at_settings(root);
         let stale = self
             .fetched
             .as_ref()
@@ -32,6 +45,7 @@ impl State {
         let paused = self.failed_at.is_some_and(|at| at.elapsed() < RETRY_FAILED);
         if self.job.is_none() && !paused && stale {
             let owned = root.to_owned();
+            self.started = Some(Instant::now());
             self.job = Some(spawn(root, ctx, move |settings, cancel| {
                 Ok(hosts::readings(settings, &owned, cancel))
             }));
@@ -45,12 +59,51 @@ impl State {
     pub(in crate::app::cloud_panel::production) fn poll(&mut self) {
         match finished(&mut self.job) {
             Some(Ok(fetched)) => {
-                self.fetched = Some(fetched);
+                self.fetched = Some(Fetched {
+                    at: self.started.unwrap_or(fetched.at),
+                    value: fetched.value,
+                });
                 self.failed_at = None;
             }
             Some(Err(_)) => self.failed_at = Some(Instant::now()),
             None => {}
         }
+    }
+
+    /// Forgets the readings once a worker thread finds that the settings file changed,
+    /// and starts the next look every [`SETTINGS_CHECK`].
+    fn look_at_settings(&mut self, root: &Path) {
+        if let Some(receiver) = &self.saved_check {
+            match receiver.try_recv() {
+                Ok(saved) => {
+                    self.saved_check = None;
+                    self.settings_looked_at(saved);
+                }
+                Err(TryRecvError::Disconnected) => self.saved_check = None,
+                Err(TryRecvError::Empty) => {}
+            }
+        }
+        if self.saved_check.is_none() && self.checked_at.is_none_or(|at| at.elapsed() >= SETTINGS_CHECK) {
+            let (sender, receiver) = mpsc::channel();
+            let path = root.join("settings.json");
+            std::thread::spawn(move || {
+                let _ = sender.send(std::fs::metadata(path).and_then(|metadata| metadata.modified()).ok());
+            });
+            self.saved_check = Some(receiver);
+            self.checked_at = Some(Instant::now());
+        }
+    }
+
+    /// The first look sets what later looks compare with.
+    fn settings_looked_at(&mut self, saved: Option<SystemTime>) {
+        if self.looked && saved != self.settings_saved {
+            // A reading on its way read the settings before the change.
+            self.job = None;
+            self.fetched = None;
+            self.failed_at = None;
+        }
+        self.settings_saved = saved;
+        self.looked = true;
     }
 
     /// Forgets readings taken with settings that were just replaced.
@@ -144,5 +197,24 @@ mod tests {
             at: Instant::now().checked_sub(FRESH * 2).unwrap(),
         });
         assert_eq!(state.sections(&Requirements::default(), 0), Some(Vec::new()));
+    }
+
+    #[test]
+    fn settings_saved_elsewhere_forget_the_readings() {
+        let reading = Reading {
+            host: serde_json::from_value::<Host>(serde_json::json!({"name": "build-box", "access": "this-pc"}))
+                .unwrap(),
+            capacity: Err("not reachable".into()),
+        };
+        let first = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+        let mut state = State::default();
+        state.answered(vec![reading]);
+        // The first look only notes when the settings were saved.
+        state.settings_looked_at(Some(first));
+        assert_eq!(state.readings().len(), 1);
+        state.settings_looked_at(Some(first));
+        assert_eq!(state.readings().len(), 1);
+        state.settings_looked_at(Some(first + Duration::from_secs(1)));
+        assert!(state.readings().is_empty());
     }
 }
