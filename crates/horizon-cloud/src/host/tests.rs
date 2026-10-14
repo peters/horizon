@@ -379,6 +379,11 @@ fn an_allowlisted_worker_starts_only_behind_the_firewall_on_a_network_without_tr
         .collect();
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{guard}");
     assert!(guard.contains(&format!("log={WORKSPACE}/.horizon-egress\n")));
+    // Nothing follows a path on the volume, which the container can swap for a link.
+    assert!(guard.contains("rm -f \"$log\" 2>/dev/null || true\nmkdir -m 0755 \"$log\" 2>/dev/null || true\n"));
+    for followed in ["chown", "chmod", "mkdir -p \"$log", "install "] {
+        assert!(!guard.contains(followed), "{followed}");
+    }
     assert!(guard.contains(
         "[ \"$(docker network inspect -f '{{index .Options \"com.docker.network.bridge.enable_ip_masquerade\"}}' horizon-egress)\" = false ]"
     ));

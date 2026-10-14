@@ -436,6 +436,10 @@ iptables -C DOCKER-USER -d 169.254.0.0/16 -j DROP 2>/dev/null || iptables -I DOC
 /// packet from the container that a rule missed still cannot reach the internet. The
 /// container reaches the host's resolver and, through a redirect of port 443, its TLS
 /// proxy; everything else it sends is dropped. Replies to SSH from outside pass.
+/// The folder of the refusal log is on the volume, which the container can change at any
+/// moment, so the guard never follows a path there: `rm -f` removes a link or a file itself
+/// (never a folder), and `mkdir` makes a new folder only. The log service checks the folder
+/// through a descriptor that follows no link.
 fn egress_guard() -> String {
     let (network, bridge, gateway, port) = (EGRESS_NETWORK, EGRESS_BRIDGE, EGRESS_GATEWAY, EGRESS_PROXY_PORT);
     format!(
@@ -445,10 +449,8 @@ fn egress_guard() -> String {
 [ \"$(docker network inspect -f '{{{{index .Options \"com.docker.network.bridge.enable_ip_masquerade\"}}}}' {network})\" = false ] || \\
   {{ echo 'horizon-worker: the egress network translates addresses' >&2; exit 1; }}
 log={WORKSPACE}/.horizon-egress
-if [ -L \"$log\" ] || {{ [ -e \"$log\" ] && [ ! -d \"$log\" ]; }}; then rm -f \"$log\"; fi
-mkdir -p \"$log\"
-chown root:root \"$log\"
-chmod 0755 \"$log\"
+rm -f \"$log\" 2>/dev/null || true
+mkdir -m 0755 \"$log\" 2>/dev/null || true
 iptables -N HORIZON-EGRESS 2>/dev/null || iptables -F HORIZON-EGRESS
 iptables -A HORIZON-EGRESS -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
 iptables -A HORIZON-EGRESS -j DROP
