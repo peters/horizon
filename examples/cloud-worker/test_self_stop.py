@@ -389,13 +389,26 @@ class HorizonStopTests(unittest.TestCase):
         self.assertTrue(STOPD['logged'](self.log, 2))
         self.assertEqual(self.log.read_text().splitlines()[-1], '{"at": 2}')
 
-    def test_a_request_logged_by_a_take_cut_short_leaves_the_log_when_it_lapses(self):
-        self.record()
-        record = json.loads(self.request.read_text())
-        STOPD['append'](self.log, {key: record[key] for key in ('at', 'reason', 'session', 'agent')})
+    def test_a_request_logged_by_a_take_cut_short_leaves_the_log_however_it_ends(self):
+        def cut_short():
+            self.record()
+            record = json.loads(self.request.read_text())
+            STOPD['append'](self.log, {key: record[key] for key in ('at', 'reason', 'session', 'agent')})
+        # It lapses.
+        cut_short()
         self.clock += STOPD['REQUEST_SECONDS'] + 1
         self.assertIn('lapsed', self.take()['refused'])
         self.assertEqual(self.log.read_text(), '')
+        # Its session ended and another holds the window.
+        cut_short()
+        self.assertIn('ended', self.take(windows='@1 agent-c\n')['refused'])
+        self.assertEqual(self.log.read_text(), '')
+        # Another request replaces it.
+        cut_short()
+        self.clock += 1
+        self.record(reason='second')
+        self.assertEqual(self.log.read_text(), '')
+        self.assertEqual(json.loads(self.request.read_text())['reason'], 'second')
 
     def test_a_line_that_cannot_be_written_whole_leaves_the_log_as_it_was(self):
         STOPD['append'](self.log, {'at': 1})

@@ -340,18 +340,19 @@ def record_request(reason, requester, path=REQUEST, lock=REQUEST_LOCK, now=time.
 
 
 def refuse_over_taken(path, log, now):
-    """Refuses a request while Horizon carries out one it took. A taken stop that lapsed
-    leaves the log first, as a take would remove it, so no stop that did not happen stays
-    on record."""
+    """Refuses a request while Horizon carries out one it took. The stop of the request it
+    replaces leaves the log first, so no stop that did not happen stays on record."""
     try:
         record = json.loads(path.read_text())
     except (OSError, ValueError):
         return
-    if not isinstance(record, dict) or record.get('taken') is not True or not isinstance(record.get('at'), int):
+    if not isinstance(record, dict) or not isinstance(record.get('at'), int):
         return
-    if not lapsed(record, now):
+    if record.get('taken') is True and not lapsed(record, now):
         raise Refused('Horizon is already stopping this worker at the request of session '
                       + str(record.get('session')) + '.')
+    # A lapsed take, or a take that ended before it saved the taken state, may have
+    # logged the stop that this request replaces.
     remove_stop(log, record['at'])
 
 
@@ -410,6 +411,7 @@ def take(path=REQUEST, lock=REQUEST_LOCK, log=STOP_LOG, now=time.time, output=ot
             # Window ids restart with the tmux server: the requester's window must still be
             # its session's.
             if sessions(query).get(record['window'], record['session']) != record['session']:
+                remove_stop(log, record['at'])
                 path.unlink(missing_ok=True)
                 return {'refused': 'The agent session that asked has ended and its window is in use again.'}
             # Every session counts now, the requester's too: it may have taken up new work.
@@ -450,7 +452,8 @@ LOG_TAIL = 65536
 
 def tail(file):
     """The records at the end of the open stop log, as (offset, record) with None for a line
-    that is no record; a line cut by the start of the tail is left out."""
+    that is no record, and the offset where the tail ends; a line cut by the start of the
+    tail is left out."""
     size = os.fstat(file.fileno()).st_size
     start = max(0, size - LOG_TAIL)
     file.seek(start)
@@ -466,7 +469,7 @@ def tail(file):
                 record = None
             records.append((offset, record if isinstance(record, dict) else None))
         offset += len(line)
-    return records
+    return records, offset
 
 
 def logged(log, at):
@@ -476,7 +479,7 @@ def logged(log, at):
     except FileNotFoundError:
         return False
     with os.fdopen(descriptor, 'rb') as file:
-        return any(record is not None and record.get('at') == at for _, record in tail(file))
+        return any(record is not None and record.get('at') == at for _, record in tail(file)[0])
 
 
 def remove_stop(log, at):
@@ -485,14 +488,17 @@ def remove_stop(log, at):
     try:
         descriptor = open_log(log, os.O_RDWR)
         with os.fdopen(descriptor, 'r+b') as file:
-            records = tail(file)
+            records, end = tail(file)
             found = [index for index, (_, record) in enumerate(records)
                      if record is not None and record.get('at') == at]
             if not found:
                 return False
             index = found[-1]
-            file.seek(records[index + 1][0] if index + 1 < len(records) else os.fstat(file.fileno()).st_size)
-            rest = file.read()
+            following = records[index + 1][0] if index + 1 < len(records) else end
+            # Only what the tail held: anything written to the log since stays unread and
+            # is cut off with the rest.
+            file.seek(following)
+            rest = file.read(end - following)
             file.seek(records[index][0])
             file.write(rest)
             file.truncate()
