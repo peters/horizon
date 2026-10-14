@@ -50,7 +50,8 @@ It tests scope separation, account identity, credential-free source naming and s
 
 1. Run `cargo test -p horizon-core cloud_runtime::setup::publishing -- --test-threads=1`.
 
-   Result: All tests pass. Save and restore preserve unrelated settings and do not create repository files.
+   Result: All tests pass. First save and default restore work before a settings file exists.
+   Later saves preserve unrelated settings and do not create repository files.
 
 2. Examine the stale-window and changed-grant test results.
 

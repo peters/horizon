@@ -121,6 +121,46 @@ fn cancellation_prevents_even_the_settings_lock_from_being_created() {
 }
 
 #[test]
+fn a_first_personal_preference_and_default_restore_need_no_existing_settings_file() {
+    for restore in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        let account = crate::cloud_runtime::github::publish::publication::Account {
+            id: 42,
+            login: "builder".into(),
+        };
+        let choice = Selection::Personal {
+            destination: Destination::automatic_github("builder", "https://git.example/team/project", "cpu").unwrap(),
+            account,
+        };
+        let committed = save_image_destination(
+            root.path(),
+            &repo,
+            "cpu",
+            None,
+            (!restore).then_some(&choice),
+            &Cancellation::default(),
+        )
+        .unwrap();
+        assert!(committed.before.is_none());
+        assert_eq!(
+            std::fs::read(root.path().join("settings.json")).unwrap(),
+            committed.after
+        );
+        let saved = Settings::load(&root.path().join("settings.json")).unwrap();
+        assert_eq!(saved.image_publishing.len(), usize::from(!restore));
+        if !restore {
+            assert_eq!(saved.image_publishing[0].selection(&saved).unwrap(), choice);
+        }
+        assert!(
+            !root.path().join("docker").exists(),
+            "saving metadata reads or writes no authentication chain"
+        );
+    }
+}
+
+#[test]
 fn settings_within_the_source_are_refused_before_a_lock_or_write() {
     let root = tempfile::tempdir().unwrap();
     let (settings, _) = fixture(root.path());

@@ -51,7 +51,9 @@ Home-relative SCP origins retain an opaque SSH-user scope; an implicit user uses
 Automatic naming refuses query parameters, fragments and multiple origin URLs.
 The source text cannot choose the publishing account.
 
-A save holds the shared cloud-settings transaction lock and reads the current settings again.
+A save requires an existing trusted cloud root outside the source repository.
+It holds the shared transaction lock and reads the current settings again.
+If the settings file does not exist, the save starts from the standard machine defaults.
 It compares the complete previous preference, including the immutable account ID.
 It also checks that the selected registry publication grant still matches its shown identity.
 A stale window cannot replace another window's choice, including another account at the same URI.

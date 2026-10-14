@@ -7,6 +7,7 @@ use crate::cloud_runtime::{
 
 /// Saves a destination for one canonical checkout and named profile. `None` restores
 /// the repository profile's default. `shown` guards against changing another window's choice.
+/// The trusted cloud root must exist; its settings file can be absent.
 /// Run on a worker thread. No repository file or credential is changed.
 /// # Errors
 /// A malformed scope, a destination without a publishing grant, stale choice or failed write.
@@ -31,8 +32,15 @@ pub fn save_image_destination(
         ));
     }
     let mut write = storage::Transaction::new(root)?;
-    let before = std::fs::read(root.join("settings.json"))?;
-    let mut settings: Settings = serde_json::from_slice(&before).map_err(|_| Error::Json)?;
+    let before = match std::fs::read(root.join("settings.json")) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let mut settings: Settings = before.as_ref().map_or_else(
+        || Ok(super::defaults(root)),
+        |bytes| serde_json::from_slice(bytes).map_err(|_| Error::Json),
+    )?;
     let matches = |choice: &&Override| choice.repository == repository && choice.profile == profile;
     let observed = settings.image_publishing.iter().find(matches);
     if observed != shown {
@@ -72,12 +80,9 @@ pub fn save_image_destination(
         .retain(|choice| choice.repository != repository || choice.profile != profile);
     settings.image_publishing.extend(replacement);
     cancel.check()?;
-    write.commit(&settings, Some(&before))?;
+    write.commit(&settings, before.as_deref())?;
     let after = storage::encode(&settings)?;
-    Ok(Committed {
-        before: Some(before),
-        after,
-    })
+    Ok(Committed { before, after })
 }
 
 #[cfg(test)]
