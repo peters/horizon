@@ -608,8 +608,8 @@ is checked; they do not mean a worker is missing or authorize a replacement.
 ## Repository setup and deployment
 
 If the selected commit has no `.horizon/cloud.yml`, and the working copy has no
-profile that can start before a commit, **New cloud** shows **No cloud setup
-yet**. This is not an error. The dialog then shows two choices:
+`.horizon/cloud.yml` either, **New cloud** shows **No cloud setup
+yet**. A working copy that is not valid shows its error instead. This is not an error. The dialog then shows two choices:
 
 - **Quick start** starts the repository on the base image. See
   [Quick start](#quick-start).
@@ -846,41 +846,44 @@ For the default launch path, commit `.horizon/cloud.yml` using the
 
 **New cloud** reads `.horizon/cloud.yml` when it opens. While **Committed base
 revision** is empty, it reads the file again when you save it, and when the
-checked-out commit changes. You do not have to commit an edit of the size or the
-provider before you start a cloud. If a read fails for a cause outside the file,
+checked-out commit changes. You do not have to commit an edit of the settings or
+the image recipe before you start a cloud. If a read fails for a cause outside the file,
 for example a Git lock, click **Try again**.
 
 When **Committed base revision** is the checked-out commit (`HEAD` is the
 default), **New cloud** uses the working copy of the file, also when the file is
-not tracked. Some fields always come from the commit, because the image builds
-from the committed tree and the worker gets a committed archive of the source:
+not tracked. The image of a profile with `build` builds from the working copy too,
+as a rebuild does: see [Uncommitted files in the image](#uncommitted-files-in-the-image).
+Only two fields come from the commit, because the worker gets a committed archive
+of the source and a companion names its own commit:
 
 | Field | Comes from |
 |---|---|
-| `provider`, `cpu` or `min_cpu`, `memory_gb` or `min_memory_gb`, `gpu`, `min_cuda_version`, `min_gpu_memory_gb`, `storage`, `bootstrap`, `idle_stop_minutes` | The working copy |
-| `default`, the set of profiles, `placement` | The working copy |
-| `image` and `capabilities` of a profile without `build` in the commit and the working copy | The working copy |
-| `build`, and the `image` and `capabilities` of a profile with `build` in the commit or the working copy | The commit. The capabilities are build arguments of the image |
+| Each field of each profile, also `build`, `image` and `capabilities`; `default`, the set of profiles, `placement` | The working copy |
 | `source`, `companions` | The commit |
 
 These rules apply:
 
-- A profile that is only in the working copy is in the list when it has no
-  `build`. A profile with `build` that is only in the working copy is not in the
-  list. A note tells you to commit it.
-- When the working copy changes a field that comes from the commit, a note below
-  **Profile** names the fields, for example `Uncommitted changes to build are not
-  used until you commit them.`
+- A profile that is only in the working copy is in the list, also when it has
+  `build`.
+- For a profile with `build`, the dialog lists below **Profile** each uncommitted
+  file that goes into the image, or the reason that Horizon refuses a file. A
+  refused file stops **Start cloud**. After you remove or rename the refused
+  file, click **Check again** below the reason. The dialog reads the list with the
+  settings. **Start cloud** reads the files again; if they changed since,
+  Horizon refuses the start and shows the new list.
+- When the working copy changes `source` or `companions`, a note below
+  **Profile** names the fields, for example `Uncommitted changes to companions are
+  not used until you commit them.`
 - When the working copy has no `.horizon/cloud.yml`, or the file is not valid,
-  **New cloud** uses the committed file and says so.
+  **New cloud** uses the committed file and says so. The image still builds from
+  the working copy.
 - When the committed file is not valid, **New cloud** shows the error, also if
   the working copy is valid. The worker gets its source settings from the
   commit, thus commit a valid file first.
-- When the working copy changes a profile in a way that does not agree with the
-  committed build settings, for example hosted devices on a Hetzner profile,
-  **New cloud** uses the committed file and says so.
 - When **Committed base revision** is a different commit, **New cloud** uses the
-  file of that commit. It does not use the working copy.
+  file of that commit, and the image builds from that commit only. It does not
+  use the working copy.
 - A new read keeps the profile, size, provider, place and storage that you chose
   while they are still valid. The dialog shows the previous values until the read
   is complete.
@@ -903,8 +906,9 @@ the working copy. See [Rebuilding a cloud's image](#rebuilding-a-clouds-image).
 Credentials always stay in machine-local bindings.
 
 Image-only profiles omit `build`. Repository Dockerfiles build from the selected
-committed tree, honor `.dockerignore`, and reuse local BuildKit layers. Dirty and
-untracked files are excluded. Selected Git LFS objects and recursively pinned
+committed tree, with the confirmed uncommitted files of the build context on the
+checked-out commit, honor `.dockerignore`, and reuse local BuildKit layers. The
+source that the worker gets excludes dirty and untracked files. Selected Git LFS objects and recursively pinned
 submodule commits must be available locally. They are verified before allocation,
 transferred without local Git configuration, and checked out independently for
 each agent. LFS content goes into the transfer archive straight from the local LFS
@@ -1704,9 +1708,9 @@ that could not be relaunched, until the next deployment.
 
 ### Uncommitted files in the image
 
-A rebuild builds the image from the working copy, so that you can change the recipe
-and rebuild without a commit. Horizon extracts the latest commit, as for each build,
-and then copies these files over it:
+**New cloud** on the checked-out commit and a rebuild build the image from the
+working copy, so that you can change the recipe and build without a commit. Horizon
+extracts the commit, as for each build, and then copies these files over it:
 
 - each tracked file that you changed, with its content in the working copy;
 - each untracked file that Git does not ignore;
@@ -1722,8 +1726,8 @@ configuration that names another working folder (`core.worktree`).
 
 > **WARNING:** THE IMAGE CAN GO TO A PUBLIC REGISTRY. For example, the package
 > `ghcr.io/peters/horizon-development` is public. Each uncommitted file in the build
-> context can go into the image. Examine the list in the confirmation before you
-> click **Rebuild and restart**.
+> context can go into the image. Examine the list before you click **Start cloud**
+> in **New cloud** or **Rebuild and restart** in the rebuild confirmation.
 
 These rules keep files out of the image:
 
@@ -1735,7 +1739,7 @@ These rules keep files out of the image:
 - `.dockerignore` applies when Docker reads the context, also a changed or new
   `.dockerignore`. The confirmation can list a file that `.dockerignore` excludes.
   Docker does not put that file in the image.
-- Horizon refuses the rebuild when an uncommitted file in the build context has the
+- Horizon refuses the build when an uncommitted file in the build context has the
   name of a common secret file: `.env`, `.env.<name>`, `<name>.env` (but not an
   `.example`, `.sample`, `.template` or `.dist` file) and `.envrc`; a file that ends
   in `.pem`, `.key`, `.p8`, `.p12`, `.pfx`, `.jks`, `.keystore`, `.kdbx`, `.tfvars` or
@@ -1760,17 +1764,20 @@ These rules keep files out of the image:
 Horizon does not examine the content of a file. A secret in a file with an ordinary
 name goes into the image. You must examine the list.
 
-The confirmation lists each file with `modified`, `new` or `deleted`. Horizon
-calculates a SHA-256 hash of the paths and the contents of the files. It records this
-hash with the rebuild. Before the build, Horizon reads the files again. If a file is
-different from the confirmed file, Horizon refuses the build. **Continue rebuild**
-does the same check. **Cancel rebuild** and a new rebuild let you confirm the files
-again. Without uncommitted files, the confirmation says that the image builds from the
+The list shows each file with `modified`, `new` or `deleted`. Horizon calculates a
+SHA-256 hash of the paths and the contents of the files. It records this hash with
+the rebuild, or with the new cloud when you click **Start cloud**. Before the build, Horizon
+reads the files again. If a file is different from the confirmed file, or a file was
+added, Horizon refuses the build. **Continue rebuild** and a retry of a new cloud do
+the same check. **Cancel rebuild** and a new rebuild let you confirm the files again.
+For a new cloud, put the files back as they were, or delete the cloud and create a
+new one. Without uncommitted files, the list says that the image builds from the
 latest commit.
 
-An image built from uncommitted files gets the label
-`io.horizon.worker.uncommitted` with the commit and the hash. Thus a build of the same
-files can use the build cache and give the same image digest. Until a rebuild from a
+An image built from uncommitted files, by **New cloud** or by a rebuild, gets the
+label `io.horizon.worker.uncommitted` with the commit and the hash. Thus a build of the
+same files can use the build cache and give the same image digest, and a rebuild from
+other files or from the commit alone gives a different one. Until a rebuild from a
 commit only, the card shows `Image: built from <commit> plus uncommitted changes`.
 Commit the changes to make the image reproducible.
 
@@ -1781,7 +1788,13 @@ settings and the files. To confirm the plan, give the token to
 files changed after `plan-rebuild`, the rebuild is refused. Without uncommitted files
 you can give no token; then the rebuild takes the settings as it reads them.
 
-**New cloud** builds from the commit only. It does not use the uncommitted files.
+`cloud_deploy plan-deploy SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID` reads the
+settings as **New cloud** does, prints each uncommitted file of the image in the same
+form and then a plan token. Give it to `cloud_deploy deploy` or `prepare-image` with
+the same arguments and `--plan-token <token>`. The token also covers the worker that
+`--worker-choice` selects, so a plan for one offer does not start another. Without
+uncommitted files you can give no token. A typed `REVISION` that is not the checked-out commit builds that commit
+only.
 
 ### Deployment progress
 

@@ -59,6 +59,8 @@ pub(super) struct Project {
     pub tailnet_device: Option<crate::cloud_runtime::tailnet::DeviceName>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uncommitted_image: Option<UncommittedImage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_copy: Option<crate::cloud_runtime::repository::uncommitted::Confirmed>,
 }
 
 impl Project {
@@ -98,6 +100,7 @@ impl Records {
             // Records with siblings are the sibling record version, which `from_legacy` refuses.
             siblings: _,
             uncommitted_image,
+            working_copy,
         } = legacy;
         Self {
             allocation: Allocation {
@@ -131,6 +134,7 @@ impl Records {
                 session_restart,
                 tailnet_device,
                 uncommitted_image,
+                working_copy,
             },
         }
     }
@@ -165,6 +169,7 @@ impl Records {
             tailnet_device: self.project.tailnet_device.clone(),
             siblings: None,
             uncommitted_image: self.project.uncommitted_image.clone(),
+            working_copy: self.project.working_copy.clone(),
         }
     }
 }

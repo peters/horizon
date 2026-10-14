@@ -30,6 +30,7 @@ fn pending_in(
             placement: horizon_core::cloud_panel::Placement::default(),
         },
         siblings: Vec::new(),
+        working_copy: None,
     });
     sender
 }
@@ -72,6 +73,19 @@ fn completion_uses_captured_workspace_title_profile_and_revision() {
     let _ = app.board.create_workspace("Another workspace");
     app.cloud_prototype.production.title = "Changed title".into();
     app.cloud_prototype.production.selected_profile = "changed".into();
+    // The uncommitted files listed when Start was pressed go with the cloud.
+    let confirmed = horizon_core::cloud_runtime::repository::uncommitted::Confirmed {
+        hash: Some("e".repeat(64)),
+    };
+    let build = serde_json::from_value(serde_json::json!({"context": ".horizon", "dockerfile": ".horizon/Dockerfile"}))
+        .unwrap();
+    let listed = (build, confirmed.clone());
+    app.cloud_prototype
+        .production
+        .pending_creation
+        .as_mut()
+        .unwrap()
+        .working_copy = Some(listed);
     sender.send(Ok(resolved(temp.path()))).unwrap();
     app.poll_cloud_creation(&ctx);
     assert!(app.cloud_prototype.error.is_none(), "{:?}", app.cloud_prototype.error);
@@ -82,6 +96,7 @@ fn completion_uses_captured_workspace_title_profile_and_revision() {
     assert_eq!(launch.profile_name, "dev");
     assert_eq!(launch.revision, "a".repeat(40));
     assert!(!launch.deployment_started);
+    assert_eq!(group.working_copy, Some(confirmed));
     assert!(app.cloud_prototype.production.runtimes.is_empty());
 }
 

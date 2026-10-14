@@ -276,7 +276,7 @@ pub(super) fn offer(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> 
             }
             changes(ui, &plan.changes);
             if !base {
-                uncommitted(ui, plan.uncommitted.files());
+                uncommitted(ui, "rebuild-uncommitted-files", plan.uncommitted.files());
             }
             if ui.add(danger_button("Rebuild and restart")).clicked() {
                 return Some(Action::Rebuild);
@@ -301,9 +301,13 @@ fn changes(ui: &mut egui::Ui, changes: &[String]) {
     }
 }
 
-/// Each uncommitted file the rebuild builds from, with how it differs from the commit; a
-/// long list scrolls.
-fn uncommitted(ui: &mut egui::Ui, files: &[cloud_runtime::repository::uncommitted::File]) {
+/// Each uncommitted file an image builds from, with how it differs from the commit, under
+/// a list `id`; a long list scrolls. New cloud shows it too.
+pub(in crate::app::cloud_panel::production) fn uncommitted(
+    ui: &mut egui::Ui,
+    id: &str,
+    files: &[cloud_runtime::repository::uncommitted::File],
+) {
     if files.is_empty() {
         ui.label(RichText::new(NO_UNCOMMITTED).color(theme::FG_DIM()));
         return;
@@ -327,7 +331,7 @@ fn uncommitted(ui: &mut egui::Ui, files: &[cloud_runtime::repository::uncommitte
     let count = f32::from(u16::try_from(files.len()).unwrap_or(u16::MAX));
     let height = (count * (row + ui.spacing().item_spacing.y)).min(LIST_HEIGHT);
     egui::ScrollArea::both()
-        .id_salt("rebuild-uncommitted-files")
+        .id_salt(id)
         .max_height(LIST_HEIGHT)
         .min_scrolled_height(height)
         .show_rows(ui, row, files.len(), |ui, rows| {

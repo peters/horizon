@@ -83,10 +83,15 @@ pub struct Deployment {
         skip_serializing_if = "Option::is_none"
     )]
     pub siblings: Option<super::siblings::Set>,
-    /// Set when the worker's image was rebuilt from uncommitted changes. Omitted otherwise,
-    /// so other records keep their encoding.
+    /// Set when the worker's image was built from uncommitted changes, by New cloud or a
+    /// rebuild. Omitted otherwise, so other records keep their encoding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uncommitted_image: Option<UncommittedImage>,
+    /// Set when New cloud confirmed that the first image builds from the working copy,
+    /// also when no file was uncommitted, so every attempt before that image is built
+    /// lays exactly the confirmed files over the commit. Omitted otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_copy: Option<super::repository::uncommitted::Confirmed>,
 }
 
 /// A rebuilt image whose build context held uncommitted files: the commit they change and

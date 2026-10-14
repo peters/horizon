@@ -124,7 +124,7 @@ fn a_linked_working_copy_is_not_read() {
 }
 
 #[test]
-fn a_commit_without_settings_offers_the_working_copy_image_profiles() {
+fn a_commit_without_settings_offers_every_working_copy_profile() {
     let temp = tempfile::tempdir().unwrap();
     repository(temp.path());
     std::fs::remove_file(temp.path().join(PATH)).unwrap();
@@ -133,7 +133,8 @@ fn a_commit_without_settings_offers_the_working_copy_image_profiles() {
     write(temp.path(), "invalid-private-marker");
     let error = load(temp.path()).err().unwrap().to_string();
     assert!(error.contains("Invalid .horizon/cloud.yml") && !error.contains("private-marker"));
-    // Untracked settings: the image-only profile is offered, the build profile is not.
+    // Untracked settings: the image builds from the working copy, so a build profile is
+    // offered as well as an image-only one.
     write(
         temp.path(),
         &format!(
@@ -144,29 +145,24 @@ fn a_commit_without_settings_offers_the_working_copy_image_profiles() {
         ),
     );
     let prepared = load(temp.path()).unwrap();
-    assert_eq!(prepared.config.profiles.keys().collect::<Vec<_>>(), ["image-only"]);
+    assert!(prepared.working_copy);
     assert_eq!(
-        prepared.config.default, "image-only",
-        "the build default is not offered"
+        prepared.config.profiles.keys().collect::<Vec<_>>(),
+        ["built", "image-only"]
     );
-    assert_eq!(
-        prepared.notes,
-        ["Profile built builds an image, so New cloud offers it after you commit it."]
-    );
-    // Only build profiles: nothing can start before a commit.
-    write(temp.path(), &format!("{CONFIG}{BUILD}"));
-    let error = load(temp.path()).err().unwrap();
-    assert!(is_missing_config(&error), "{error}");
-    assert!(MISSING_CONFIG.contains("after you commit it"));
+    assert_eq!(prepared.config.default, "built");
+    assert!(prepared.notes.is_empty(), "{:?}", prepared.notes);
+    assert!(!MISSING_CONFIG.contains("commit it"));
 }
 
 #[test]
-fn a_build_profile_takes_what_is_built_from_the_commit_and_its_size_from_the_working_copy() {
+fn a_build_profile_takes_everything_but_the_source_from_the_working_copy_on_the_checked_out_commit() {
     let temp = tempfile::tempdir().unwrap();
     repository(temp.path());
     let committed_yaml = format!("{CONFIG}{BUILD}    capabilities:\n      agents: [codex]\n");
     write(temp.path(), &committed_yaml);
     commit_all(temp.path());
+    let base = committed(temp.path()).unwrap().revision;
     let edited = committed_yaml
         .replace("cpu: 4", "cpu: 16")
         .replace("dockerfile: Dockerfile", "dockerfile: Other.Dockerfile")
@@ -177,29 +173,35 @@ fn a_build_profile_takes_what_is_built_from_the_commit_and_its_size_from_the_wor
         &format!("{edited}    idle_stop_minutes: 30\nsource:\n  submodule_history: pinned\n"),
     );
     let prepared = load(temp.path()).unwrap();
+    assert!(prepared.working_copy);
     let profile = &prepared.config.profiles["dev"];
     assert_eq!(profile.cpu, 16);
     assert_eq!(profile.idle_stop_minutes, Some(30));
-    assert_eq!(profile.build.as_ref().unwrap().dockerfile, "Dockerfile");
-    assert_eq!(profile.image, "example.invalid/worker");
-    assert_eq!(profile.capabilities.agents, [horizon_cloud::Agent::Codex].into());
-    assert!(prepared.config.source.is_default());
+    assert_eq!(profile.build.as_ref().unwrap().dockerfile, "Other.Dockerfile");
+    assert_eq!(profile.image, "example.invalid/elsewhere");
+    assert_eq!(profile.capabilities.agents, [horizon_cloud::Agent::Claude].into());
+    assert!(prepared.config.source.is_default(), "the source is a committed archive");
     assert_eq!(
         prepared.notes,
-        ["Uncommitted changes to build, image, capabilities and source are not used until you commit them."]
+        ["Uncommitted changes to source are not used until you commit them."]
     );
-    // A working copy that drops the recipe still builds as committed.
+    // A working copy that drops the recipe runs its image without a build.
     write(
         temp.path(),
         &CONFIG.replace("example.invalid/worker", "example.invalid/prebuilt"),
     );
     let prepared = load(temp.path()).unwrap();
-    assert!(prepared.config.profiles["dev"].build.is_some());
-    assert_eq!(prepared.config.profiles["dev"].image, "example.invalid/worker");
-    assert_eq!(
-        prepared.notes,
-        ["Uncommitted changes to build, image and capabilities are not used until you commit them."]
-    );
+    assert_eq!(prepared.config.profiles["dev"].build, None);
+    assert_eq!(prepared.config.profiles["dev"].image, "example.invalid/prebuilt");
+    // A typed revision that is not checked out reads that commit alone.
+    write(temp.path(), &format!("{edited}    idle_stop_minutes: 30\n"));
+    commit_all(temp.path());
+    let earlier = load_revision(temp.path(), &base).unwrap();
+    assert!(!earlier.working_copy);
+    let profile = &earlier.config.profiles["dev"];
+    assert_eq!(profile.build.as_ref().unwrap().dockerfile, "Dockerfile");
+    assert_eq!(profile.capabilities.agents, [horizon_cloud::Agent::Codex].into());
+    assert!(earlier.notes.is_empty());
 }
 
 #[test]
@@ -251,39 +253,6 @@ fn companions_and_the_profile_set_follow_their_own_rules() {
 }
 
 #[test]
-fn working_copy_changes_that_break_the_committed_recipe_leave_the_commit_in_place() {
-    let temp = tempfile::tempdir().unwrap();
-    repository(temp.path());
-    write(
-        temp.path(),
-        &format!("{CONFIG}{BUILD}    capabilities:\n      browserstack: {{}}\n"),
-    );
-    commit_all(temp.path());
-    let hetzner = format!("{}{BUILD}", CONFIG.replace("provider: runpod", "provider: hetzner"));
-    write(temp.path(), &hetzner);
-    let prepared = load(temp.path()).unwrap();
-    assert_eq!(prepared.config.profiles["dev"].provider, "runpod");
-    assert_eq!(prepared.notes, [MISMATCH]);
-    // Every working-copy profile builds and is new: the committed settings apply.
-    write(
-        temp.path(),
-        &format!(
-            "{}{BUILD}",
-            CONFIG.replace("dev:", "new:").replace("default: dev", "default: new")
-        ),
-    );
-    let prepared = load(temp.path()).unwrap();
-    assert_eq!(prepared.config.profiles.keys().collect::<Vec<_>>(), ["dev"]);
-    assert_eq!(
-        prepared.notes,
-        [
-            "Profile new builds an image, so New cloud offers it after you commit it.",
-            NONE_OFFERED
-        ]
-    );
-}
-
-#[test]
 fn the_fingerprint_follows_the_file_and_the_checked_out_commit() {
     let temp = tempfile::tempdir().unwrap();
     repository(temp.path());
@@ -312,10 +281,6 @@ fn names_are_listed_as_a_sentence() {
     assert_eq!(list(&["a"]), "a");
     assert_eq!(list(&["a", "b"]), "a and b");
     assert_eq!(list(&["a", "b", "c"]), "a, b and c");
-    assert_eq!(
-        unoffered_note(&["a".into(), "b".into()]),
-        "Profiles a and b build images, so New cloud offers them after you commit them."
-    );
 }
 
 #[cfg(unix)]
@@ -369,7 +334,7 @@ fn a_rebuild_reads_the_working_copy_whole_but_source_and_companions_from_the_com
         secrets: Vec::new(),
     };
     let committed = || committed(temp.path()).unwrap().config;
-    // The recipe and the capabilities of a profile with a build apply too, unlike for New cloud.
+    // The recipe and the capabilities of a profile with a build apply too.
     write(
         temp.path(),
         &format!(

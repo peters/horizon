@@ -1,12 +1,12 @@
-//! The uncommitted files a rebuild lays over its committed snapshot, so that the image
-//! builds from the working copy: tracked files with their working-tree content, and
-//! untracked files that Git does not ignore, inside the recipe's build context and its
-//! Dockerfile. Git-ignored files never go in, and `.dockerignore` still applies when
+//! The uncommitted files that New cloud and a rebuild lay over a committed snapshot, so
+//! that the image builds from the working copy: tracked files with their working-tree
+//! content, and untracked files that Git does not ignore, inside the recipe's build context
+//! and its Dockerfile. Git-ignored files never go in, and `.dockerignore` still applies when
 //! Docker reads the context. The application source a worker gets stays the committed
 //! archive.
 //!
 //! An image can be pushed to a public registry, so a person confirms this list before the
-//! rebuild; its [`Uncommitted::hash`] covers each file's content, so a file that changes
+//! build; its [`Uncommitted::hash`] covers each file's content, so a file that changes
 //! after the confirmation refuses the build. The names of common secret files are refused
 //! even when Git does not ignore them.
 //!
@@ -21,7 +21,8 @@ mod tests;
 
 use super::{Error, Result};
 use git2::{Delta, DiffOptions, Oid, Repository};
-use horizon_cloud::Build;
+use horizon_cloud::{Build, Profile};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
@@ -29,34 +30,34 @@ use std::{
     path::{Component, Path},
 };
 
-pub use overlay::overlay;
+pub use overlay::{changed, overlay};
 
 const UNREADABLE: &str = "Cannot read the uncommitted changes of the repository's working copy";
-const MOVED: &str = "The working copy changed while it was read; rebuild again";
-const OTHER_WORKDIR: &str = "The repository's Git configuration names another working folder (core.worktree), so its uncommitted files cannot be read safely; remove that setting before you rebuild";
+const MOVED: &str = "The working copy changed while it was read; try again";
+const OTHER_WORKDIR: &str = "The repository's Git configuration names another working folder (core.worktree), so its uncommitted files cannot be read safely; remove that setting before you build the image";
 
-/// An uncommitted file of the build context that a rebuild does not take, named by its
+/// An uncommitted file of the build context that a build does not take, named by its
 /// path from the repository root, with what to do about it.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Refusal {
     #[error(
-        "Uncommitted file {0} in the image's build context has the name of a common secret file, and the image can be pushed to a public registry. A rebuild leaves out files that Git ignores: add it to .gitignore, or commit or remove the change, before you rebuild"
+        "Uncommitted file {0} in the image's build context has the name of a common secret file, and the image can be pushed to a public registry. Files that Git ignores are left out: add it to .gitignore, or commit or remove the change, before you build the image"
     )]
     Secret(String),
     #[error(
-        "Uncommitted file {0:?} in the image's build context has a name that is not UTF-8 or holds a control or text-direction character, which a list can show wrongly; rename it, commit it or add it to .gitignore before you rebuild"
+        "Uncommitted file {0:?} in the image's build context has a name that is not UTF-8 or holds a control or text-direction character, which a list can show wrongly; rename it, commit it or add it to .gitignore before you build the image"
     )]
     Name(String),
     #[error(
-        "A folder on the way to uncommitted file {0} in the image's build context is a link, and a rebuild does not follow links; replace it with a folder or add it to .gitignore before you rebuild"
+        "A folder on the way to uncommitted file {0} in the image's build context is a link, and Horizon does not follow links; replace it with a folder or add it to .gitignore before you build the image"
     )]
     LinkedFolder(String),
     #[error(
-        "Uncommitted file {0} in the image's build context is a hard link, which can share its content with a file outside the repository; replace it with a copy or add it to .gitignore before you rebuild"
+        "Uncommitted file {0} in the image's build context is a hard link, which can share its content with a file outside the repository; replace it with a copy or add it to .gitignore before you build the image"
     )]
     HardLink(String),
     #[error(
-        "Uncommitted entry {0} in the image's build context is not a file, a folder or a link; remove it or add it to .gitignore before you rebuild"
+        "Uncommitted entry {0} in the image's build context is not a file, a folder or a link; remove it or add it to .gitignore before you build the image"
     )]
     Special(String),
 }
@@ -140,6 +141,28 @@ impl Uncommitted {
         }
         Some(hex(&hasher.finalize()))
     }
+}
+
+/// What a person confirmed for an image that builds from the working copy: the
+/// [`Uncommitted::hash`] of the files they saw, `None` when there were none, so a file
+/// that appears later is refused too.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Confirmed {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+}
+
+/// A SHA-256 over `profile` and the hash of `uncommitted`, as 64 lowercase hexadecimal
+/// digits: a person who saw a printed plan confirms exactly those settings and files by
+/// giving it back (`cloud_deploy`).
+#[must_use]
+pub fn token(profile: &Profile, uncommitted: &Uncommitted) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(serde_json::to_vec(profile).unwrap_or_default());
+    hasher.update([0]);
+    hasher.update(uncommitted.hash().unwrap_or_default());
+    hex(&hasher.finalize())
 }
 
 /// Whether `hash` has the form [`Uncommitted::hash`] gives.

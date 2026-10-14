@@ -60,6 +60,8 @@ pub(super) struct Input {
     pub fence: super::super::session_record::Fence,
     /// The deployment signs in to GitHub again; see [`Request::renew_github`].
     pub renew_github: bool,
+    /// See [`Request::working_copy`].
+    pub working_copy: Option<cloud_runtime::repository::uncommitted::Confirmed>,
 }
 
 pub(super) enum Report {
@@ -202,6 +204,7 @@ impl Input {
             settings,
         );
         request.renew_github = self.renew_github;
+        request.working_copy = self.working_copy;
         deployment::prepare(&request).map_err(|error| Failure::Refused(error.to_string()))?;
         send(Report::Prepared {
             request: Box::new(request),

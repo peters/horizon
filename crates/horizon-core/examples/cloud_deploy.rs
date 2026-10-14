@@ -10,7 +10,7 @@ use horizon_core::cloud_runtime::{
     self, Cancellation, Event,
     deployment::{self, replacement},
     github::Prompt,
-    repository,
+    repository::{self, uncommitted::Uncommitted},
     settings::Settings,
     state::Store,
 };
@@ -37,10 +37,10 @@ fn run() -> cloud_runtime::Result<()> {
     }
     if args.len() < 3 {
         return Err(cloud_runtime::Error::Invalid(
-            "Usage: cloud_deploy offers SETTINGS [REQUIREMENTS_JSON] | deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--quick-start] [--worker-choice OFFER_JSON_FILE] [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|resume|reconnect|endpoint|delete|idle-check|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | plan-rebuild|rebuild SETTINGS STATE_ROOT PROFILE [PLAN_TOKEN] (rebuild only) | reconcile SETTINGS STATE_ROOT [WORKER_ID]. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume. --quick-start uses the built-in quick-start profile on the public base image for a commit without .horizon/cloud.yml.",
+            "Usage: cloud_deploy offers SETTINGS [REQUIREMENTS_JSON] | plan-deploy|deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--quick-start] [--worker-choice OFFER_JSON_FILE] [--plan-token PLAN_TOKEN] (deploy and prepare-image) [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|resume|reconnect|endpoint|delete|idle-check|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | plan-rebuild|rebuild SETTINGS STATE_ROOT PROFILE [PLAN_TOKEN] (rebuild only) | reconcile SETTINGS STATE_ROOT [WORKER_ID]. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume. --quick-start uses the built-in quick-start profile on the public base image for a commit without .horizon/cloud.yml. On the checked-out commit the image builds from the working copy, as in New cloud: plan-deploy lists its uncommitted files and prints the token that deploy and prepare-image then need.",
         ));
     }
-    let settings = Settings::load(&PathBuf::from(&args[1]))?;
+    let mut settings = Settings::load(&PathBuf::from(&args[1]))?;
     let cancel = Cancellation::default();
     if args[0] == "reconcile" && (3..=4).contains(&args.len()) {
         return reconcile(&args, &settings, &cancel);
@@ -83,34 +83,44 @@ fn run() -> cloud_runtime::Result<()> {
     }
     let (args, worker_choice) = choice::arguments(&args)?;
     let (args, siblings) = sibling_bindings(&args)?;
+    let (args, token) = plan_token(&args)?;
     let quick_start = args.iter().any(|arg| arg == "--quick-start");
     let args: Vec<_> = args.into_iter().filter(|arg| arg != "--quick-start").collect();
-    if !matches!(args[0].as_str(), "deploy" | "prepare-image")
+    if !matches!(args[0].as_str(), "plan-deploy" | "deploy" | "prepare-image")
         || !(6..=7).contains(&args.len())
-        || ((args[0] == "prepare-image" || quick_start) && !siblings.is_empty())
+        || ((args[0] != "deploy" || quick_start) && !siblings.is_empty())
+        || (args[0] == "plan-deploy" && token.is_some())
     {
         return Err(cloud_runtime::Error::Invalid("Invalid deployment arguments"));
     }
-    let (repository, revision, config) = launch_config(&args[2], args.get(6), quick_start, &cancel)?;
-    let profile = config
+    let prepared = launch_config(&args[2], args.get(6), quick_start, &cancel)?;
+    let profile = prepared
+        .config
         .profiles
         .get(&args[3])
         .cloned()
         .ok_or(cloud_runtime::Error::Invalid("Profile does not exist"))?;
-    let mut settings = settings;
+    // The plan token covers the profile as it is deployed, with the worker choice.
     let profile = if let Some(path) = worker_choice {
         choice::apply(&profile, &mut settings, &path, &cancel)?
     } else {
         profile
     };
-    let request = deployment::Request::new(
+    let files = uncommitted_files(&prepared, &profile)?;
+    if args[0] == "plan-deploy" {
+        print_plan(&prepared.notes, &profile, &settings, files.as_ref());
+        return Ok(());
+    }
+    let working_copy = confirm(&profile, &settings, files, token.as_deref())?;
+    let mut request = deployment::Request::new(
         args[5].clone(),
-        repository,
-        revision,
+        prepared.repository,
+        prepared.revision,
         profile,
         PathBuf::from(&args[4]),
         settings,
     );
+    request.working_copy = working_copy;
     if args[0] == "prepare-image" {
         prepare_image(&request, &cancel, &print_event)?;
     } else {
@@ -119,35 +129,135 @@ fn run() -> cloud_runtime::Result<()> {
     Ok(())
 }
 
-/// The repository, revision and configuration a `deploy` or `prepare-image` launches:
-/// the working tree's `.horizon/cloud.yml`, or with `--quick-start` the built-in
-/// profile, which New cloud refuses as well for a commit with its own configuration.
+/// The repository, revision and configuration a `deploy` or `prepare-image` launches, read
+/// as New cloud reads them: on the checked-out commit the working copy's `.horizon/cloud.yml`
+/// with the commit's source and companions, on another revision that commit's file, or
+/// with `--quick-start` the built-in profile, which New cloud refuses as well for a commit
+/// with its own configuration.
 fn launch_config(
     directory: &str,
     revision: Option<&String>,
     quick_start: bool,
     cancel: &Cancellation,
-) -> cloud_runtime::Result<(PathBuf, String, horizon_core::cloud_panel::CloudConfig)> {
-    let revision = revision.map_or("HEAD", String::as_str);
-    if quick_start {
-        let prepared = repository::launch::prepare_with_configuration(
-            directory,
-            revision,
-            repository::launch::Configuration::QuickStart,
-            &cloud_runtime::command::Runner {
-                cancel,
-                emit: &print_event,
-                secrets: Vec::new(),
-            },
-        )?;
-        return Ok((prepared.repository, prepared.revision, prepared.config));
+) -> cloud_runtime::Result<repository::launch::Prepared> {
+    let configuration = if quick_start {
+        repository::launch::Configuration::QuickStart
+    } else {
+        repository::launch::Configuration::WorkingCopy
+    };
+    let prepared = repository::launch::prepare_with_configuration(
+        directory,
+        revision.map_or("HEAD", String::as_str),
+        configuration,
+        &cloud_runtime::command::Runner {
+            cancel,
+            emit: &print_event,
+            secrets: Vec::new(),
+        },
+    )?;
+    Ok(prepared)
+}
+
+/// The uncommitted files that the image of `profile` takes on the checked-out commit, as
+/// New cloud reads them; `None` when it builds from the commit alone.
+fn uncommitted_files(
+    prepared: &repository::launch::Prepared,
+    profile: &horizon_core::cloud_panel::Profile,
+) -> cloud_runtime::Result<Option<Uncommitted>> {
+    match (prepared.working_copy, &profile.build) {
+        (true, Some(build)) => {
+            repository::uncommitted::collect(&prepared.repository, &prepared.revision, build).map(Some)
+        }
+        _ => Ok(None),
     }
-    let repository = PathBuf::from(directory).canonicalize()?;
-    let revision = repository::resolve(&repository, revision)?;
-    let yaml = std::fs::read_to_string(repository.join(".horizon/cloud.yml"))?;
-    let config = horizon_core::cloud_panel::CloudConfig::parse(&yaml)
-        .map_err(|_| cloud_runtime::Error::Invalid("Invalid cloud profile file"))?;
-    Ok((repository, revision, config))
+}
+
+/// The plan token of a deployment: the profile, the uncommitted files and the worker
+/// choice. An offer sets the place and GPU types in `settings` without changing the
+/// profile, so another offer of the same size must not reuse the token.
+fn deploy_token(
+    profile: &horizon_core::cloud_panel::Profile,
+    settings: &Settings,
+    files: Option<&Uncommitted>,
+) -> String {
+    use sha2::Digest as _;
+    use std::fmt::Write as _;
+    let choice = serde_json::json!({
+        "placement": settings.placement,
+        "data_centers": settings.data_centers,
+        "gpu_types": settings.gpu_types,
+    });
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(repository::uncommitted::token(
+        profile,
+        files.unwrap_or(&Uncommitted::default()),
+    ));
+    hasher.update([0]);
+    hasher.update(choice.to_string());
+    hasher.finalize().iter().fold(String::new(), |mut hex, byte| {
+        let _ = write!(hex, "{byte:02x}");
+        hex
+    })
+}
+
+/// What `plan-deploy` prints: the notes, each uncommitted file and the plan token.
+fn print_plan(
+    notes: &[String],
+    profile: &horizon_core::cloud_panel::Profile,
+    settings: &Settings,
+    files: Option<&Uncommitted>,
+) {
+    for note in notes {
+        println!("{note}");
+    }
+    // An image can be pushed to a public registry, so each file is listed before a
+    // person confirms the whole plan with its token.
+    for file in files.map(Uncommitted::files).unwrap_or_default() {
+        println!("Uncommitted file: {} {}", file.change.label(), file.path);
+    }
+    let plan = deploy_token(profile, settings, files);
+    println!("To deploy with exactly these settings and files, pass --plan-token {plan}");
+}
+
+/// The uncommitted files that `token`, from `plan-deploy`, confirms. Without a token, only
+/// a plan without uncommitted files may run.
+fn confirm(
+    profile: &horizon_core::cloud_panel::Profile,
+    settings: &Settings,
+    files: Option<Uncommitted>,
+    token: Option<&str>,
+) -> cloud_runtime::Result<Option<repository::uncommitted::Confirmed>> {
+    let plan = deploy_token(profile, settings, files.as_ref());
+    let confirmed = token.map_or_else(
+        || files.as_ref().is_none_or(Uncommitted::is_empty),
+        |token| token == plan,
+    );
+    if !confirmed {
+        return Err(cloud_runtime::Error::Invalid(
+            "The checkout differs from the printed plan, or has uncommitted files in the image's build context and no token was given. Run plan-deploy, check what it prints, and pass the token it prints",
+        ));
+    }
+    Ok(files.map(|files| repository::uncommitted::Confirmed { hash: files.hash() }))
+}
+
+/// Separates `--plan-token TOKEN`, the token `plan-deploy` printed, from the other arguments.
+fn plan_token(args: &[String]) -> cloud_runtime::Result<(Vec<String>, Option<String>)> {
+    let mut positional = Vec::new();
+    let mut token = None;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg != "--plan-token" {
+            positional.push(arg.clone());
+            continue;
+        }
+        let value = args
+            .next()
+            .ok_or(cloud_runtime::Error::Invalid("Use --plan-token PLAN_TOKEN"))?;
+        if token.replace(value.clone()).is_some() {
+            return Err(cloud_runtime::Error::Invalid("Give --plan-token once"));
+        }
+    }
+    Ok((positional, token))
 }
 
 /// Checks the recorded worker with the provider without creating, starting or deleting anything.
@@ -370,6 +480,34 @@ fn prepare_image(
     }
     repository::validate_tree(&request.repository, &request.revision, &runner)?;
     let snapshot = repository::snapshot(&request.repository, &request.revision, root.path(), &runner)?;
+    // As a deployment builds it: the confirmed uncommitted files laid over the commit.
+    let uncommitted = request.working_copy.as_ref().and_then(|confirmed| {
+        confirmed
+            .hash
+            .clone()
+            .map(|hash| cloud_runtime::state::UncommittedImage {
+                revision: request.revision.clone(),
+                hash,
+            })
+    });
+    if let (Some(confirmed), Some(build)) = (&request.working_copy, &request.profile.build) {
+        repository::uncommitted::overlay(
+            &request.repository,
+            &request.revision,
+            build,
+            confirmed.hash.as_deref(),
+            &snapshot,
+        )
+        .map_err(|error| {
+            if repository::uncommitted::changed(&error) {
+                cloud_runtime::Error::Invalid(
+                    "The uncommitted files in the image's build context changed after plan-deploy printed them. Run plan-deploy again and pass the token it prints",
+                )
+            } else {
+                error
+            }
+        })?;
+    }
     let images = cloud_runtime::image::Images {
         docker_host: request.settings.docker_host.as_deref(),
         isolated_registry: registry.is_some(),
@@ -384,7 +522,12 @@ fn prepare_image(
             cloud_id: &request.cloud_id,
         }),
     };
-    let digest = images.prepare(&request.profile, &snapshot, &request.cloud_id)?;
+    let context = cloud_runtime::image::Context {
+        source: &snapshot,
+        uncommitted: uncommitted.as_ref(),
+    };
+    let tag = cloud_runtime::image::default_tag(&request.cloud_id);
+    let digest = images.prepare_layered(&request.profile, context, &[], &request.cloud_id, &tag, false)?;
     if git_auth.is_some() {
         images.validate_contract(&digest, &request.cloud_id, &request.profile, true)?;
     }

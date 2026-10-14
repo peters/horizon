@@ -56,6 +56,10 @@ pub struct Request {
     /// The person asked this deployment to sign in to GitHub again, for example to add a
     /// repository, although the worker holds access. Only this deployment signs in again.
     pub renew_github: bool,
+    /// The image builds from the working copy, with the uncommitted files a person
+    /// confirmed in New cloud. The first deployment records the confirmation, and a later
+    /// one may only repeat it or name none until the image is built.
+    pub working_copy: Option<repository::uncommitted::Confirmed>,
 }
 
 impl Request {
@@ -76,6 +80,7 @@ impl Request {
             state_root,
             settings,
             renew_github: false,
+            working_copy: None,
         }
     }
 }
@@ -424,6 +429,12 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             || state.repository != request.repository
             || resized != request.profile
             || (state.profile != resized && !state.accepts_next_size())
+            // Until the first image is built; a rebuild records its own files later.
+            || (state.spec.is_none()
+                && request
+                    .working_copy
+                    .as_ref()
+                    .is_some_and(|confirmed| state.working_copy.as_ref() != Some(confirmed)))
         {
             return Err(Error::Invalid(
                 "Cloud is permanently bound to its repository, revision and profile",
@@ -460,6 +471,7 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             tailnet_device: None,
             siblings: None,
             uncommitted_image: None,
+            working_copy: request.working_copy.clone(),
         }
     };
     super::providers::admit(

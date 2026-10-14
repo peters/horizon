@@ -152,7 +152,7 @@ impl HorizonApp {
             .workspace(workspace)
             .map(|workspace| workspace.local_id.clone())
             .ok_or("The Upkeep workspace could not be made.")?;
-        let id = match self.add_cloud_group(NAME.into(), local, prepared.path, launch, Vec::new()) {
+        let id = match self.add_cloud_group(NAME.into(), local, prepared.path, launch, Vec::new(), None) {
             Ok(id) => id,
             Err(error) => {
                 if made {

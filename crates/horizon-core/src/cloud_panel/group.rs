@@ -12,6 +12,7 @@ impl CloudGroup {
         Self {
             remote: None,
             siblings: Vec::new(),
+            working_copy: None,
             issue,
             title,
             workspace,

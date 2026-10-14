@@ -326,8 +326,9 @@ fn rereading_committed_settings_retains_an_explicit_profile_and_valid_size() {
     assert_eq!(app.cloud_prototype.production.size, Some((8, 16)));
 }
 
-/// The person edits `.horizon/cloud.yml` while New cloud is open: the size shows without a
-/// button, the chosen profile stays, and an uncommitted build change is named.
+/// The person edits `.horizon/cloud.yml` while New cloud is open: the size and the recipe
+/// show without a button, the chosen profile stays, and the edited file is listed as an
+/// uncommitted file of the image.
 #[test]
 fn an_edit_of_the_working_copy_shows_while_the_dialog_is_open() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
@@ -370,9 +371,11 @@ fn an_edit_of_the_working_copy_shows_while_the_dialog_is_open() {
         form.profiles.is_some() && !form.launch.loading(),
         "no spinner while it reads"
     );
+    assert!(form.launch.notes.is_empty(), "{:?}", form.launch.notes);
+    let recipe = form.profiles.as_ref().unwrap().profiles["other"].build.clone().unwrap();
     assert_eq!(
-        form.launch.notes,
-        ["Uncommitted changes to build are not used until you commit them."]
+        recipe.dockerfile, "Other.Dockerfile",
+        "the image builds from the working copy"
     );
     for _ in 0..4 {
         run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 2400.0], None));
@@ -382,13 +385,15 @@ fn an_edit_of_the_working_copy_shows_while_the_dialog_is_open() {
         &mut app,
         raw_input([1400.0, 2400.0], None),
     ));
-    assert!(shown.contains("Uncommitted changes to build"), "{shown}");
+    assert!(shown.contains("• modified .horizon/cloud.yml"), "{shown}");
     assert!(!shown.contains("Read .horizon/cloud.yml"), "{shown}");
     assert!(!shown.contains("image-only"), "{shown}");
-    // A commit of the same file leaves nothing to say.
+    // A commit of the same file leaves nothing uncommitted.
     commit(temp.path());
     wait_until(&ctx, &mut app, |app| {
-        app.cloud_prototype.production.launch.notes.is_empty()
+        app.cloud_prototype.production.launch.uncommitted["other"]
+            .as_ref()
+            .is_ok_and(horizon_core::cloud_runtime::repository::uncommitted::Uncommitted::is_empty)
     });
     assert_eq!(cpu(&app), Some(16));
 }

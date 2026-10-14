@@ -19,6 +19,7 @@ pub(super) mod selector;
 pub(super) mod siblings;
 pub(super) mod source;
 mod storage;
+pub(super) mod uncommitted;
 mod watch;
 
 /// The configuration summary's width beside the catalog.
@@ -592,6 +593,9 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
     } else if form.profiles.is_some() {
         profiles::field(ui, form);
         profiles::notes(ui, form);
+        if uncommitted::section(ui, form) {
+            action = RepositoryAction::Load;
+        }
         match super::repository_setup::quick_start_note(ui, form) {
             super::repository_setup::Note::None => {}
             super::repository_setup::Note::UpdateFromCi => action = RepositoryAction::Setup,
@@ -687,7 +691,7 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production) -> RepositoryAction {
 }
 
 /// What the revision decides, and what the working copy still decides on the checked-out commit.
-const REVISION_NOTE: &str = "Only committed files are transferred. On the checked-out commit, profiles and sizes come from the working copy of .horizon/cloud.yml and update as you save it.";
+const REVISION_NOTE: &str = "Only committed files are transferred. On the checked-out commit, the settings come from the working copy of .horizon/cloud.yml and update as you save it, and the image builds with the uncommitted files of its recipe, listed under the profile. Another revision uses that commit alone.";
 
 /// Why Start is unavailable, for the selector tests; the dialog works it out once per
 /// frame with [`submit_reason_given`].

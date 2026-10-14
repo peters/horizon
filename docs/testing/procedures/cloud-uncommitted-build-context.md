@@ -16,8 +16,9 @@ This procedure makes sure that the uncommitted files of an image recipe go into
 the build context only as the
 [trust boundary](../../../.github/instructions/rebuild-uncommitted.instructions.md)
 permits. It tests the library alone. The rebuild that uses it has its own task
-(L14) in the [lifecycle procedure](cloud-panels/l-lifecycle.md) when that task
-exists.
+(L14) in the [lifecycle procedure](cloud-panels/l-lifecycle.md), and **New
+cloud** has task B04 in the
+[repository configuration procedure](cloud-panels/b-repository-configuration.md).
 
 ## 2. Applicability
 

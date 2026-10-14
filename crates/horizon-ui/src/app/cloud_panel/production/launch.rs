@@ -16,6 +16,7 @@ mod reread;
 struct Loaded {
     prepared: Prepared,
     ready_profiles: Vec<String>,
+    uncommitted: super::creation::uncommitted::Files,
 }
 
 #[derive(Default)]
@@ -33,6 +34,8 @@ pub(super) struct State {
     pub read_error: Option<String>,
     /// Why some working-copy settings do not apply, from the last read.
     pub notes: Vec<String>,
+    /// The uncommitted files each build profile's image takes, from the last read.
+    pub uncommitted: super::creation::uncommitted::Files,
     /// Reads the settings again when the checkout changes.
     reread: reread::State,
     pub submitted: bool,
@@ -64,6 +67,7 @@ impl State {
         self.receiver = None;
         self.reread = reread::State::default();
         self.notes.clear();
+        self.uncommitted.clear();
     }
 
     #[cfg(all(test, unix))]
@@ -123,7 +127,7 @@ impl HorizonApp {
 
     /// A `quiet` read follows a change in the checkout and leaves the shown settings in
     /// place until it ends.
-    fn start_cloud_profiles_read(&mut self, ctx: &Context, quiet: bool) {
+    pub(super) fn start_cloud_profiles_read(&mut self, ctx: &Context, quiet: bool) {
         let form = &mut self.cloud_prototype.production;
         form.launch.cancel.cancel();
         form.launch.cancel = cloud_runtime::Cancellation::default();
@@ -133,6 +137,7 @@ impl HorizonApp {
             form.launch.unconfigured = false;
             form.launch.read_error = None;
             form.launch.notes.clear();
+            form.launch.uncommitted.clear();
             form.launch.accounts_checked = false;
             form.launch.ready_profiles.clear();
             // The shown settings keep the person's storage edits for the read that follows.
@@ -174,9 +179,11 @@ impl HorizonApp {
             .map(|prepared| {
                 let ready_profiles =
                     cloud_runtime::repository::launch::ready_profiles(&root, &prepared.config, &cancel);
+                let uncommitted = super::creation::uncommitted::read(&prepared, &cancel);
                 Loaded {
                     prepared,
                     ready_profiles,
+                    uncommitted,
                 }
             });
             let after = cloud_runtime::repository::launch::fingerprint(&repository, &cancel);
@@ -238,6 +245,7 @@ impl HorizonApp {
                 }
                 Some(Err(error)) => {
                     form.launch.notes.clear();
+                    form.launch.uncommitted.clear();
                     if quiet {
                         // This error replaces the shown one; the shown storage waits for the next save.
                         self.cloud_prototype.error = None;
@@ -311,6 +319,7 @@ fn apply(form: &mut super::Production, loaded: Loaded, quiet: bool) {
         form.launch.accounts_checked = false;
     }
     form.launch.notes = prepared.notes;
+    form.launch.uncommitted = loaded.uncommitted;
     let shown = form.profiles.take().or_else(|| form.launch.reread.hidden.take());
     let provider_before = shown
         .as_ref()
@@ -384,9 +393,9 @@ mod tests {
     fn loaded(path: &std::path::Path) -> Loaded {
         Loaded {
             prepared: Prepared {
-                repository: path.into(), revision: "a".repeat(40), notes: Vec::new(),
+                repository: path.into(), revision: "a".repeat(40), notes: Vec::new(), working_copy: false,
                 config: CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n").unwrap(),
-            }, ready_profiles: vec!["dev".into()],
+            }, ready_profiles: vec!["dev".into()], uncommitted: std::collections::BTreeMap::default(),
         }
     }
     #[test]
