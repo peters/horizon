@@ -5,7 +5,11 @@ use horizon_cloud::{
     docker_host::{self, Capacity, Engine, Host},
     offers::Requirements,
 };
-use std::path::Path;
+use std::{
+    path::Path,
+    sync::mpsc,
+    time::{Duration, Instant},
+};
 
 /// A saved host and its capacity, or why it could not be read.
 #[derive(Clone, Debug)]
@@ -14,41 +18,56 @@ pub struct Reading {
     pub capacity: Result<Capacity, String>,
 }
 
-/// Reads every saved host while the hosts are on.
+/// How long a reading waits for the hosts. A host that has not answered by then is read
+/// as not answering, so it holds back no other host's offer.
+const READ_LIMIT: Duration = Duration::from_secs(10);
+const LATE: &str = "The Docker host did not answer within 10 seconds";
+
+/// Reads every saved host at the same time while the hosts are on.
 #[must_use]
 pub fn readings(settings: &Settings, root: &Path, cancel: &Cancellation) -> Vec<Reading> {
     if !settings.docker_hosts_on() {
         return Vec::new();
     }
-    // At the same time, so a host that does not answer holds back no other.
-    std::thread::scope(|scope| {
-        let reads: Vec<_> = settings
-            .docker_hosts
-            .iter()
-            .map(|host| {
-                scope.spawn(move || {
-                    let engine = Engine {
-                        host,
-                        local_config: root.join("docker-host-check"),
-                        cancel,
-                        engine_id: std::sync::Mutex::default(),
-                    };
-                    docker_host::capacity(&engine).map_err(|error| error.to_string())
-                })
-            })
-            .collect();
-        settings
-            .docker_hosts
-            .iter()
-            .zip(reads)
-            .map(|(host, read)| Reading {
-                host: host.clone(),
-                capacity: read
-                    .join()
-                    .unwrap_or_else(|_| Err("The Docker host could not be read".into())),
-            })
-            .collect()
-    })
+    let stop = Cancellation::default();
+    let (sender, receiver) = mpsc::channel();
+    for (index, host) in settings.docker_hosts.iter().enumerate() {
+        let (host, local_config) = (host.clone(), root.join("docker-host-check"));
+        let (stop, sender) = (stop.clone(), sender.clone());
+        std::thread::spawn(move || {
+            let engine = Engine {
+                host: &host,
+                local_config,
+                cancel: &stop,
+                engine_id: std::sync::Mutex::default(),
+            };
+            let _ = sender.send((index, docker_host::capacity(&engine).map_err(|error| error.to_string())));
+        });
+    }
+    drop(sender);
+    let mut read: Vec<Option<Result<Capacity, String>>> = vec![None; settings.docker_hosts.len()];
+    let deadline = Instant::now() + READ_LIMIT;
+    while read.iter().any(Option::is_none) && !cancel.is_cancelled() {
+        let wait = deadline
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_millis(100));
+        match receiver.recv_timeout(wait) {
+            Ok((index, capacity)) => read[index] = Some(capacity),
+            Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
+            Err(_) => break,
+        }
+    }
+    // A host still being read is left to end on its own thread.
+    stop.cancel();
+    settings
+        .docker_hosts
+        .iter()
+        .zip(read)
+        .map(|(host, capacity)| Reading {
+            host: host.clone(),
+            capacity: capacity.unwrap_or_else(|| Err(LATE.into())),
+        })
+        .collect()
 }
 
 /// The `cloud_offers` section of the saved hosts, beside the rented providers', or None
@@ -61,7 +80,7 @@ pub fn section(readings: &[Reading], requirements: &Requirements) -> Option<serd
     let offers: Vec<_> = readings
         .iter()
         .filter_map(|reading| docker_host::offer(&reading.host.name, reading.capacity.as_ref().ok()?, requirements))
-        .take(requirements.limit.unwrap_or(usize::MAX))
+        .take(requirements.effective_limit())
         .collect();
     let errors: serde_json::Map<_, _> = readings
         .iter()

@@ -67,6 +67,12 @@ pub struct Requirements {
 }
 
 impl Requirements {
+    /// How many offers an answer lists at most: the requested limit, else 10.
+    #[must_use]
+    pub fn effective_limit(&self) -> usize {
+        self.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT)
+    }
+
     /// # Errors
     /// Rejects negative or non-finite amounts, more than a year of hours, requirements for
     /// the other kind of worker, an empty GPU type or region, storage Horizon could not
@@ -168,7 +174,7 @@ pub struct Offer {
 pub fn offers(list: &PriceList, preferences: &Preferences, requirements: &Requirements) -> Vec<Offer> {
     let container_gb = crate::Storage::default().container_gb;
     let mut offers = catalog(list, preferences, requirements, (Tier::Standard, container_gb));
-    offers.truncate(requirements.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT));
+    offers.truncate(requirements.effective_limit());
     offers
 }
 

@@ -88,7 +88,8 @@ impl State {
         requirements: &horizon_core::cloud_runtime::offers::Requirements,
         deadline_in_millis: i64,
     ) -> Option<Vec<serde_json::Value>> {
-        if requirements.gpu {
+        // No host has a GPU or a region, so these requests wait for no reading.
+        if requirements.gpu || requirements.region.is_some() {
             return Some(Vec::new());
         }
         let current = self.fetched.as_ref().filter(|fetched| fetched.at.elapsed() < FRESH);

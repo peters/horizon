@@ -26,9 +26,12 @@ is rented, so a cloud on a host has no cost in Horizon. A profile with
    Result: The card shows the host with its architecture, its Docker version and
    the CPUs and memory that it has free.
 
-The check reads only. It runs `docker version`, `docker info` and lists the
-containers that carry Horizon's owner label. It starts, pulls and installs
-nothing.
+The check runs `docker version`, `docker info` and lists the containers that
+carry Horizon's owner label. It starts, pulls and installs nothing. The only file
+that it writes is Horizon's private Docker configuration, one time:
+`~/.horizon/docker-config/config.json` on a remote host, and a file in
+Horizon's own cloud folder for This PC. This configuration keeps docker away
+from a desktop credential store (see the requirements below).
 
 To change or check a saved host again, click **Edit** on its row. **Remove host**
 removes it from the settings. A cloud on a host that you remove or rename cannot

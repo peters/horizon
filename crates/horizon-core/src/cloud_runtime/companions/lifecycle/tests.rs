@@ -528,6 +528,11 @@ fn a_checked_companion_binds_to_the_checkout_its_deployment_records() {
         .load()
         .unwrap();
     assert_eq!(state.intents.binding("consumer"), Some(&fixture.binding));
+    // A binding that already exists is refused too once its cloud is on a Docker host.
+    fixture.save(&on_host);
+    let refused = bind_selected(&fixture.request()).unwrap_err().to_string();
+    assert!(refused.contains("cloud_companion_unsupported"), "{refused}");
+    fixture.save(&fixture.ready());
     // Binding again leaves the saved binding as it is.
     bind_selected(&fixture.request()).unwrap();
     assert_eq!(fixture.submit(Action::EnsureReady).phase, Phase::Submitted);

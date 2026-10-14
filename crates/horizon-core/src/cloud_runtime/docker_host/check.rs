@@ -1,6 +1,7 @@
 //! The read-only Check of a saved Docker host in Cloud settings. Each row goes out as
 //! soon as it is known. It runs `docker version`, `docker info` and lists Horizon's own
-//! containers; it starts, pulls and installs nothing.
+//! containers; it starts, pulls and installs nothing. Like every call to a host, it
+//! first makes sure of Horizon's private Docker configuration there.
 use super::{Check, CheckState};
 use crate::cloud_runtime::Cancellation;
 use horizon_cloud::{

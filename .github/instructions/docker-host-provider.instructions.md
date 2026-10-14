@@ -57,8 +57,10 @@ to the deployment, the cloud lifecycle and the worker SSH connection.
   Clouds that are created at the same time on one host can overcommit it.
   New cloud, Cloud settings and `cloud_offers` show a reading that is up to
   30 seconds old; it reserves nothing. The Check and these readings run only
-  `docker version`, `docker info` and Horizon's own container listing, and
-  change nothing on the host.
+  `docker version`, `docker info` and Horizon's own container listing. Their
+  only write is the private Docker configuration that every call first makes
+  sure of (`~/.horizon/docker-config/config.json` on a remote host), which
+  keeps docker away from a desktop credential store.
 - The host pulls only public images: its docker CLI has no registry login, and
   Horizon refuses a profile with a build or a private registry binding.
 - A person or program with Docker access on the host can read, change or
