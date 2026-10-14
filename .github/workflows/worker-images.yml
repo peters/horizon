@@ -89,6 +89,14 @@ jobs:
               "$RUNNER_TEMP/build.log" | sed '1d;$d'
             echo report_end
           } >> "$GITHUB_OUTPUT"
+      # The worker check only asks the browser for its version; this renders a page.
+      - name: Render a page in Chromium
+        run: |
+          page=$(docker run --rm --network=none --entrypoint /bin/sh horizon-worker-base:check -c \
+            'browser=$(command -v google-chrome-stable || command -v chromium) &&
+             "$browser" --headless=new --no-sandbox --disable-dev-shm-usage --disable-gpu \
+               --dump-dom "data:text/html,<p>worker-page</p>"')
+          grep -q '<p>worker-page</p>' <<< "$page"
 
   check-report:
     name: Compare worker check reports

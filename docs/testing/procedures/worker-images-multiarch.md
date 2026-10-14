@@ -61,7 +61,11 @@ image of its own architecture.
 
    Result: Both lines are in each log. Each job passed.
 
-3. Examine the job **Compare worker check reports**.
+3. In each job, examine the step **Render a page in Chromium**.
+
+   Result: The step passed. Chromium of that architecture rendered the test page.
+
+4. Examine the job **Compare worker check reports**.
 
    Result: The job passed. The two architectures report the same markers.
 
