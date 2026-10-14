@@ -40,6 +40,10 @@ pub struct Checkout {
     pub branch: Option<String>,
     /// When the repository last changed: its index, or its `HEAD` without one.
     pub touched: Option<SystemTime>,
+    /// A finished checkout of its own: its `.git` is a folder (no worktree), its `HEAD`
+    /// names a commit, and no clone into it stopped halfway. Only such a checkout stands in
+    /// for a clone.
+    pub complete: bool,
 }
 
 /// Looks for checkouts on a background thread, most recently changed first.
@@ -290,6 +294,7 @@ fn read(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
         origin: None,
         branch: None,
         touched: None,
+        complete: false,
     };
     let dot = path.join(".git");
     let kind = std::fs::symlink_metadata(&dot).ok()?.file_type();
@@ -297,7 +302,8 @@ fn read(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
         return Some(unread());
     };
     let meta = std::fs::symlink_metadata(&dot).ok()?;
-    let git = if meta.is_dir() {
+    let own = meta.is_dir();
+    let git = if own {
         dot
     } else if meta.is_file() || kind.is_symlink() {
         let pointer = small_file(&dot, guarded)?;
@@ -324,12 +330,34 @@ fn read(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
             .and_then(|meta| meta.modified())
             .ok()
     };
+    let complete = own
+        && head_resolves(&git, head.trim(), guarded)
+        && !crate::cloud_runtime::repository::source::clone_stopped(path);
     Some(Checkout {
         path: path.to_owned(),
         origin: origin(&config),
         branch,
         touched: modified("index").or_else(|| modified("HEAD")),
+        complete,
     })
+}
+
+/// Whether `head`, the text of `HEAD` in `git`, names a commit: an object name, or a branch
+/// whose ref is a file or is listed in `packed-refs`. Read from files only.
+fn head_resolves(git: &Path, head: &str, guarded: &[PathBuf]) -> bool {
+    let Some(name) = head.strip_prefix("ref: ") else {
+        return head.len() >= 40 && head.bytes().all(|byte| byte.is_ascii_hexdigit());
+    };
+    let name = name.trim();
+    if name.split('/').any(|part| part.is_empty() || part == "..") {
+        return false;
+    }
+    small_file(&git.join(name), guarded).is_some_and(|value| !value.trim().is_empty())
+        || small_file(&git.join("packed-refs"), guarded).is_some_and(|packed| {
+            packed
+                .lines()
+                .any(|line| line.split_once(' ').is_some_and(|(_, listed)| listed.trim() == name))
+        })
 }
 
 /// The `url` of `[remote "origin"]` in a Git config.
@@ -510,5 +538,28 @@ mod tests {
             found.iter().any(|checkout| checkout.path.ends_with("github/acme/web")),
             "{found:?}"
         );
+    }
+
+    #[test]
+    fn a_checkout_is_complete_only_with_a_commit_and_no_stopped_clone() {
+        let home = tempfile::tempdir().unwrap();
+        let repo = home.path().join("code/web");
+        let git = repo.join(".git");
+        fs::create_dir_all(git.join("refs/heads")).unwrap();
+        fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        assert!(!super::read(&repo, &[]).unwrap().complete, "no commit on main yet");
+        fs::write(
+            git.join("refs/heads/main"),
+            "0123456789abcdef0123456789abcdef01234567\n",
+        )
+        .unwrap();
+        assert!(super::read(&repo, &[]).unwrap().complete);
+        fs::remove_file(git.join("refs/heads/main")).unwrap();
+        fs::write(
+            git.join("packed-refs"),
+            "0123456789abcdef0123456789abcdef01234567 refs/heads/main\n",
+        )
+        .unwrap();
+        assert!(super::read(&repo, &[]).unwrap().complete, "a packed ref counts");
     }
 }

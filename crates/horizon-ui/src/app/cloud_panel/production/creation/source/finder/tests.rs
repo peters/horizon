@@ -18,6 +18,7 @@ fn checkout(path: &str, origin: Option<&str>) -> Checkout {
         origin: origin.map(str::to_owned),
         branch: Some("main".into()),
         touched: None,
+        complete: true,
     }
 }
 
@@ -279,50 +280,21 @@ fn a_chosen_repository_stays_chosen_when_its_checkout_is_found() {
 
 #[test]
 fn a_repository_already_on_this_computer_is_found_by_its_origin() {
-    let home = tempfile::tempdir().unwrap();
-    let web = home.path().join("elsewhere/web");
-    let made = std::process::Command::new("git")
-        .args(["init", "-q", "-b", "main"])
-        .arg(&web)
-        .status()
-        .is_ok_and(|status| status.success());
-    if !made {
-        return;
-    }
-    let git = |args: &[&str]| {
-        std::process::Command::new("git")
-            .arg("-C")
-            .arg(&web)
-            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
-            .args(args)
-            .status()
-            .unwrap();
-    };
-    git(&["commit", "-q", "--allow-empty", "-m", "first"]);
-    git(&["remote", "add", "origin", "git@github.com:Acme/web.git"]);
+    let mut stopped = checkout("/home/x/stopped/web", Some("https://github.com/acme/web"));
+    stopped.complete = false;
     let finder = super::Finder {
-        checkouts: Some(vec![checkout(
-            web.to_str().unwrap(),
-            Some("git@github.com:Acme/web.git"),
-        )]),
+        checkouts: Some(vec![
+            stopped,
+            checkout("/home/x/elsewhere/web", Some("git@github.com:Acme/web.git")),
+        ]),
         ..super::Finder::default()
     };
     let remote = horizon_core::cloud_runtime::repository::source::parse("https://github.com/acme/web").unwrap();
     assert_eq!(
         finder.checkout_of(&remote),
-        Some(web.clone()),
-        "the same repository, written another way"
+        Some(PathBuf::from("/home/x/elsewhere/web")),
+        "a finished checkout, its origin written another way; not the stopped one"
     );
-    let unfinished = super::Finder {
-        checkouts: Some(vec![checkout(
-            "/home/x/never-cloned/web",
-            Some("https://github.com/acme/web"),
-        )]),
-        ..super::Finder::default()
-    };
-    assert_eq!(
-        unfinished.checkout_of(&remote),
-        None,
-        "only a finished checkout of its own"
-    );
+    let other = horizon_core::cloud_runtime::repository::source::parse("https://github.com/acme/api").unwrap();
+    assert_eq!(finder.checkout_of(&other), None);
 }

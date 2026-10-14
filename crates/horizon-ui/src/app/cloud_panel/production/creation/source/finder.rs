@@ -246,9 +246,8 @@ impl Finder {
         self.checkouts
             .as_deref()?
             .iter()
-            .filter(|checkout| checkout.origin.as_deref().is_some_and(same))
+            .find(|checkout| checkout.complete && checkout.origin.as_deref().is_some_and(same))
             .map(|checkout| checkout.path.clone())
-            .find(|path| source::usable(path, remote))
     }
 
     pub fn scanning(&self) -> bool {

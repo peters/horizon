@@ -400,6 +400,10 @@ impl State {
         };
         // Nothing is cloned before the link has been looked up, unless it is already on disk.
         let looked_up = self.probed.as_deref() == Some(remote.url.as_str()) && self.probe.is_none();
+        // Until the search for checkouts is done, a checkout of it may still turn up.
+        if self.finder.scanning() && self.plan(&remote).existing.is_none() {
+            return Err("Looking for this repository on this computer…");
+        }
         if !looked_up && self.plan(&remote).existing.is_none() {
             return Err("Checking access…");
         }
