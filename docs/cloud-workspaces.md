@@ -68,8 +68,13 @@ Existing keys that cannot assign `tag:horizon-worker` fail enrollment. An alread
 untagged cloud logs out when it resumes with the new helper. Before the upgrade,
 ask the tailnet administrator to define `tag:horizon-worker` in `tagOwners` and
 supply a key with only that tag. Rebuild custom images with contract marker 4.
-The current quick-start pin predates marker 4, so quick start refuses a selected
-tailnet. A later image publication and pin update enable this path.
+The quick-start pin contains marker 4, so a new cloud can select a tailnet on
+compatible storage. Existing clouds retain their recorded image until a rebuild.
+The worker requires root-owned private state and a mount root that agents cannot
+write. The tested RunPod persistent storage reports directories as `0777` and
+files as `0666` even after successful mode changes; this runtime is unsupported
+for isolated worker startup. Choosing **None** does not bypass these checks.
+See the [rollout procedure](testing/procedures/tailnet-marker4-rollout.md).
 
 Each cloud has one device name in its tailnet for the life of the cloud. The
 worker makes the name from the cloud ID. The name stays the same after a stop

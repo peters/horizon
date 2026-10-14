@@ -26,8 +26,10 @@ only `tag:horizon-worker`. The tailnet policy must define this tag in `tagOwners
 The worker checks `Self.Tags` after enrollment and once at each resume.
 An untagged node or a node with extra tags is refused and logged out.
 There is no continuous tag monitoring or separate tag for each workspace.
-The tailnet policy controls reachability. The current quick-start pin predates
-marker 4 and refuses a selected tailnet until the image and pin update.
+The tailnet policy controls reachability. The quick-start pin contains marker 4;
+selected-tailnet startup still requires storage that enforces private root modes.
+The tested RunPod persistent storage does not and is unsupported. Never weaken
+these checks; **None** does not bypass isolation. CPU evidence is not GPU qualification.
 
 Personal API token and OAuth client bindings stay in the desktop OS store,
 independently of enrollment auth keys. Stored presence reports kind only; it
