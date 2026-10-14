@@ -20,6 +20,7 @@ pub fn check(host: &Host, root: &Path, cancel: &Cancellation, row: &mut dyn FnMu
         host,
         local_config: root.join("docker-host-check"),
         cancel,
+        engine_id: std::sync::Mutex::default(),
     };
     rows(host, &engine, row)
 }

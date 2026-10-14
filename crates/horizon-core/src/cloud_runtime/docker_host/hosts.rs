@@ -31,6 +31,7 @@ pub fn readings(settings: &Settings, root: &Path, cancel: &Cancellation) -> Vec<
                         host,
                         local_config: root.join("docker-host-check"),
                         cancel,
+                        engine_id: std::sync::Mutex::default(),
                     };
                     docker_host::capacity(&engine).map_err(|error| error.to_string())
                 })
