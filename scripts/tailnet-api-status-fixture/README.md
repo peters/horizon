@@ -64,6 +64,16 @@ From the task checkout, use fresh private paths outside the repository:
 python3 scripts/tailnet-api-status-fixture/run.py start --evidence-dir /tmp/horizon-api-native-first --manifest /tmp/horizon-api-native-artifacts.json --target-dir /tmp/horizon-api-native-target
 ```
 
+The artifact manifest and build command are operator-owned inputs. Review the
+candidate before building: this fixture does not sandbox arbitrary Rust build
+scripts. The host treats container-writable state paths as untrusted. Bounded
+no-follow reads and exclusive new output creation refuse candidate-planted
+symlinks, hardlinks and nonregular entries without truncating another host file.
+Source hashing/copying accepts only declared checkout inputs and rejects symlinks.
+Docker operations are bounded; a launch timeout retains its unique name, labels
+and daemon for exact reconciliation before reporting failure. Preserve unresolved
+state rather than inferring absence.
+
 The runner automatically builds/freezes the current ignored library test with
 `cargo test -p horizon-cloud --lib --no-run --locked --message-format=json`.
 It adds the chosen target argument, hashes the source before/after build and

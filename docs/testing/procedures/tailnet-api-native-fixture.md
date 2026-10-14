@@ -34,6 +34,15 @@ It tests the real synthetic OS store, native transport and existing public MCP i
 
 The fixture mounts no host home, runtime, X11 or bus socket.
 It has no provider configuration or external network. No real credential is read.
+The artifact manifest and build invocation belong to the operator. This fixture
+is not a sandbox for arbitrary Rust build scripts. Review the candidate before
+building it. Source hashing and control copying accept only declared checkout
+inputs and refuse symlinks. The running container can write its state directory;
+the host treats those entries as untrusted. Host control reads use bounded regular
+file descriptors with no-follow checks. Host output creation is exclusive and
+does not truncate pre-existing candidate entries. Docker operations have explicit
+timeouts. A timed-out launch preserves its unique name, labels and daemon for
+exact reconciliation; uncertainty never authorizes broad removal.
 
 ## 4. Equipment and preconditions
 
@@ -76,7 +85,10 @@ It has no provider configuration or external network. No real credential is read
    artifacts, build or container work. The isolated X11 directory has mode `0700`;
    existing directories and symlinks cannot be reused. Resolved XKB/evdev bounds,
    actual CLI readiness envelope/target validation, pre-credential ordering and
-   daemon/CID/nonce-bound stop requests also pass offline. These tests do not
+   daemon/CID/nonce-bound stop requests also pass offline. Candidate-planted file
+   and directory symlinks, hardlinks, nonregular entries and existing outputs
+   refuse without changing an outside sentinel. Launch timeout tests cover exact
+   label reconciliation, daemon changes and uncertainty preservation. These tests do not
    qualify actual X11, Secret Service, VNC or public host routing.
    Product and bundled skill bytes stay unchanged.
 
@@ -155,6 +167,8 @@ It has no provider configuration or external network. No real credential is read
 
    Result: Actual candidate frames, viewer inspections and public MCP timestamps have separate evidence.
    A sanitized GIF can demonstrate the tooling; it does not claim a new product layout.
+   Keep generated media outside the checkout. Publish through the approved GitHub
+   attachment command when needed; never commit the GIF.
 
 ## 7. Pass criteria
 

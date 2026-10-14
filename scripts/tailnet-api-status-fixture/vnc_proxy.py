@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Transport actual owned-container RFB bytes; never synthesize frames or input."""
 import argparse
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,10 @@ import subprocess
 import threading
 import time
 import uuid
+
+_spec = importlib.util.spec_from_file_location("fixture_safe_io", Path(__file__).with_name("safe_io.py"))
+safe_io = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(safe_io)
 
 def guest():
     with socket.create_connection(("127.0.0.1", 5900), timeout=5) as connection:
@@ -51,14 +56,7 @@ def guest():
                         continue
 
 def read_control(path):
-    metadata = path.lstat()
-    if path.is_symlink() or not path.is_file() or metadata.st_mode & 0o077 or metadata.st_uid != os.getuid() or metadata.st_size > 4096:
-        raise RuntimeError("private relay control refused")
-    with path.open("rb") as source:
-        raw = source.read(4097)
-    if len(raw) > 4096:
-        raise RuntimeError("private relay control oversized")
-    value = json.loads(raw)
+    value = safe_io.read_json(path, 4096)
     if not isinstance(value, dict):
         raise RuntimeError("private relay control shape refused")
     return value
@@ -66,45 +64,62 @@ def read_control(path):
 def binding_for(ownership, record, nonce):
     if not isinstance(nonce, str) or len(nonce) != 32 or any(character not in "0123456789abcdef" for character in nonce):
         raise RuntimeError("relay nonce refused")
-    return {"ownership": str(ownership.resolve()), "daemon_id": record["daemon_id"],
+    return {"ownership": str(ownership.absolute()), "daemon_id": record["daemon_id"],
             "container_id": record["container_id"], "labels": record["labels"], "relay_nonce": nonce}
 
 def write_exclusive(path, value):
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(descriptor, "w") as output:
-        output.write(json.dumps(value) + "\n")
+    safe_io.write_exclusive_json(path, value)
 
-def request_stop(ownership):
+def control(directory, name):
+    value = directory.read_json(name, 4096)
+    if not isinstance(value, dict):
+        raise RuntimeError("private relay control shape refused")
+    return value
+
+def validate_ownership(ownership, expected=None):
     from run import owned
     record = owned(ownership)
+    if expected is not None and any(record[field] != expected[field] for field in ["container_id", "daemon_id", "labels"]):
+        raise RuntimeError("relay ownership changed")
+    return record
+
+def request_stop(ownership):
+    record = validate_ownership(ownership)
     state = ownership.parent / "state"
-    binding = read_control(state / "vnc-relay-owner.json")
-    if binding != binding_for(ownership, record, binding.get("relay_nonce")):
-        raise RuntimeError("relay ownership mismatch")
-    path = state / "vnc-stop-request.json"
-    try:
-        write_exclusive(path, binding)
-    except FileExistsError:
-        if read_control(path) != binding:
-            raise RuntimeError("relay stop request belongs to another ownership")
+    with safe_io.PrivateDirectory(state) as directory:
+        binding = control(directory, "vnc-relay-owner.json")
+        if binding != binding_for(ownership, record, binding.get("relay_nonce")):
+            raise RuntimeError("relay ownership mismatch")
+        try:
+            directory.write_exclusive_json("vnc-stop-request.json", binding)
+        except FileExistsError:
+            if control(directory, "vnc-stop-request.json") != binding:
+                raise RuntimeError("relay stop request belongs to another ownership")
     print(json.dumps({"stop_requested": True, "container_id": binding["container_id"],
                       "relay_nonce": binding["relay_nonce"]}), flush=True)
 
 def stop_requested(state, binding):
-    path = state / "vnc-stop-request.json"
-    if not path.exists() and not path.is_symlink():
+    with safe_io.PrivateDirectory(state) as directory:
+        return requested(directory, binding)
+
+def requested(directory, binding):
+    try:
+        value = control(directory, "vnc-stop-request.json")
+    except FileNotFoundError:
         return False
-    if read_control(path) != binding:
+    if value != binding:
         raise RuntimeError("relay stop request belongs to another ownership")
     return True
 
 def serve(ownership):
-    from run import owned
-    record = owned(ownership)
+    record = validate_ownership(ownership)
+    with safe_io.PrivateDirectory(ownership.parent / "state") as directory:
+        serve_owned(ownership, record, directory)
+
+def serve_owned(ownership, record, directory):
     container = record["container_id"]
-    state = ownership.parent / "state"
     binding = binding_for(ownership, record, uuid.uuid4().hex)
-    write_exclusive(state / "vnc-relay-owner.json", binding)
+    directory.write_exclusive_json("vnc-relay-owner.json", binding)
     active, children = [], []
     lock = threading.Lock()
     stop = threading.Event()
@@ -115,12 +130,12 @@ def serve(ownership):
         listener.bind(("127.0.0.1", 0))
         listener.listen(2)
         listener.settimeout(.2)
-        (state / "vnc-address.json").write_text(json.dumps({"endpoint": f"127.0.0.1:{listener.getsockname()[1]}",
-                                                           "actual_owned_vnc": True}))
+        address = directory.write_exclusive_json("vnc-address.json", {
+            "endpoint": f"127.0.0.1:{listener.getsockname()[1]}", "actual_owned_vnc": True})
         def relay(client):
             process = None
             try:
-                owned(ownership)
+                validate_ownership(ownership, record)
                 process = subprocess.Popen(["docker", "exec", "-i", container, "/usr/bin/python3",
                                             "/fixture/source/scripts/tailnet-api-status-fixture/vnc_proxy.py", "--guest"],
                                            stdin=client, stdout=client, stderr=subprocess.DEVNULL)
@@ -143,7 +158,7 @@ def serve(ownership):
                         active.remove(threading.current_thread())
         try:
             while not stop.is_set() and time.monotonic() < deadline:
-                if stop_requested(state, binding):
+                if requested(directory, binding):
                     stop.set()
                     break
                 try:
@@ -163,12 +178,11 @@ def serve(ownership):
                 workers = list(active)
             for worker in workers:
                 worker.join(timeout=8)
-            (state / "vnc-address.json").unlink(missing_ok=True)
+            directory.unlink_owned("vnc-address.json", address)
     stopped = all(not worker.is_alive() for worker in workers) and all(process.poll() is not None for process in children)
-    (state / "vnc-proxy-result.json").write_text(json.dumps({"owned_relay_stopped": stopped,
-                                                           "owned_children_stopped": all(process.poll() is not None for process in children),
-                                                           "container_id": container, "relay_nonce": binding["relay_nonce"],
-                                                           "actual_vnc_transport": True}))
+    directory.write_exclusive_json("vnc-proxy-result.json", {
+        "owned_relay_stopped": stopped, "owned_children_stopped": all(process.poll() is not None for process in children),
+        "container_id": container, "relay_nonce": binding["relay_nonce"], "actual_vnc_transport": True})
     if not stopped:
         raise RuntimeError("owned relay children did not stop")
 

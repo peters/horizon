@@ -14,6 +14,12 @@ Report concrete failures when:
 
 - Synthetic preparation or cleanup reads a real credential or accepts an unknown catalog ID.
 - A fixture mounts provider credentials or host home/runtime/X11/bus sockets.
+- Host hashing or copying follows candidate symlinks or includes arbitrary untracked paths.
+- A host control read follows a symlink, accepts a nonregular or multiply linked file,
+  or reads beyond its bound.
+- A host log, endpoint or result write follows or truncates a candidate-created entry.
+- Docker launch or reconciliation is unbounded, or a launch timeout discards the
+  recorded unique name, labels and daemon before its immutable identity is recovered.
 - Actor or host-instance values are forged instead of supplied by normal agent spawn.
 - Private host queues/stamps/caches substitute for timestamped public MCP responses.
 - A synthesized image substitutes for actual owned X11 x11vnc bytes.
