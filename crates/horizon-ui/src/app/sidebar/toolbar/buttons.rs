@@ -188,7 +188,13 @@ impl HorizonApp {
                 }
                 let shortcut = entry.action.and_then(|action| self.toolbar_shortcut(action));
                 let enabled = self.menu_entry_enabled(entry.choice);
-                if rich_menu::row(ui, entry.title, entry.detail, shortcut.as_deref(), enabled).clicked() {
+                let row = rich_menu::row(ui, entry.title, entry.detail, shortcut.as_deref(), enabled);
+                // A dimmed cloud row says why, as + New cloud does.
+                let row = match disabled_reason(entry.choice) {
+                    Some(reason) if !enabled => row.on_hover_text(reason),
+                    _ => row,
+                };
+                if row.clicked() {
                     chosen = Some(entry.choice);
                     ui.close();
                 }
@@ -242,6 +248,15 @@ impl HorizonApp {
             ToolbarAction::Cloud => return None,
         };
         (!text.is_empty()).then_some(text)
+    }
+}
+
+/// Why a dimmed Menu row cannot be chosen, for the rows that need cloud workspaces.
+fn disabled_reason(choice: MenuChoice) -> Option<&'static str> {
+    match choice {
+        #[cfg(feature = "cloud-workspaces")]
+        MenuChoice::NewCloud | MenuChoice::NewUpkeep => Some(super::super::NEW_CLOUD_NOT_READY),
+        _ => None,
     }
 }
 

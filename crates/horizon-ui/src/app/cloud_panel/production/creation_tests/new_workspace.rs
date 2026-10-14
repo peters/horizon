@@ -227,12 +227,35 @@ fn a_dimmed_new_cloud_takes_no_focus_and_says_why_on_hover() {
 fn new_upkeep_in_the_menu_opens_its_dialog_only_with_cloud_workspaces() {
     let (_temp, ctx, mut app, workspaces) = ready_app();
     ctx.enable_accesskit();
-    let open_menu = |ctx: &egui::Context, app: &mut HorizonApp| {
-        let output = run_app_frame_with_input(ctx, app, raw_input([1400.0, 900.0], None));
-        click(ctx, app, label_position(&output, "Menu"));
-        run_app_frame_with_input(ctx, app, raw_input([1400.0, 900.0], None))
+    ctx.all_styles_mut(|style| style.interaction.tooltip_delay = 0.0);
+    // Background setup can make cloud workspaces ready again, so each frame starts from
+    // the readiness under test. Time moves on, so a hover after a click shows its tooltip.
+    let clock = std::cell::Cell::new(0.0);
+    let run = |app: &mut HorizonApp, ready: bool, events: Vec<Event>| {
+        app.cloud_prototype.ready = ready;
+        clock.set(clock.get() + 0.2);
+        let mut input = raw_input([1400.0, 900.0], None);
+        input.time = Some(clock.get());
+        input.events = events;
+        run_app_frame_with_input(&ctx, app, input)
     };
-    let upkeep_disabled = |output: &egui::FullOutput| {
+    let press = |app: &mut HorizonApp, ready: bool, pos: Pos2| {
+        run(app, ready, vec![Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            run(
+                app,
+                ready,
+                vec![Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                }],
+            );
+        }
+        run(app, ready, Vec::new())
+    };
+    let upkeep_row = |output: &egui::FullOutput| {
         spoken(output)
             .into_iter()
             .find(|(label, _)| label.starts_with("New Upkeep. "))
@@ -240,18 +263,28 @@ fn new_upkeep_in_the_menu_opens_its_dialog_only_with_cloud_workspaces() {
             .1
     };
 
-    // Startup makes cloud workspaces ready; without them the row is dimmed.
-    app.cloud_prototype.ready = false;
-    let output = open_menu(&ctx, &mut app);
-    assert!(upkeep_disabled(&output), "dimmed without cloud workspaces");
-    click(&ctx, &mut app, label_position(&output, "New Upkeep"));
+    // Without cloud workspaces the row is dimmed, says why, and does nothing.
+    let output = run(&mut app, false, Vec::new());
+    let output = press(&mut app, false, label_position(&output, "Menu"));
+    assert!(upkeep_row(&output), "dimmed without cloud workspaces");
+    let upkeep = label_position(&output, "New Upkeep");
+    for _ in 0..3 {
+        run(&mut app, false, vec![Event::PointerMoved(upkeep)]);
+    }
+    let hovered = run(&mut app, false, vec![Event::PointerMoved(upkeep)]);
+    assert!(
+        text_center(&hovered, crate::app::sidebar::NEW_CLOUD_NOT_READY).is_some(),
+        "the dimmed row says why"
+    );
+    press(&mut app, false, upkeep);
     assert!(app.upkeep.form.is_none(), "a dimmed row does nothing");
     key(&ctx, &mut app, Key::Escape, Modifiers::NONE);
 
-    app.cloud_prototype.ready = true;
-    let output = open_menu(&ctx, &mut app);
-    assert!(!upkeep_disabled(&output));
-    click(&ctx, &mut app, label_position(&output, "New Upkeep"));
+    // With them, it opens New Upkeep and makes no workspace yet.
+    let output = run(&mut app, true, Vec::new());
+    let output = press(&mut app, true, label_position(&output, "Menu"));
+    assert!(!upkeep_row(&output));
+    press(&mut app, true, label_position(&output, "New Upkeep"));
     assert!(app.upkeep.form.is_some(), "New Upkeep opens its dialog");
     assert_eq!(
         app.board.workspaces.len(),
