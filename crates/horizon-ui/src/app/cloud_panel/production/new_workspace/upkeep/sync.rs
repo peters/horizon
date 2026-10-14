@@ -273,7 +273,10 @@ fn exchange(
         Ok(connection) => connection,
         Err(error) => return (Vec::new(), Err(error)),
     };
-    let _lock = worker::settings_lock(cloud_id);
+    let _lock = match worker::settings_lock(cloud_id) {
+        Ok(lock) => lock,
+        Err(error) => return (Vec::new(), Err(error.to_string())),
+    };
     let config = match worker::load(cloud_id) {
         Ok(config) => config,
         Err(error) => return (Vec::new(), Err(error.to_string())),

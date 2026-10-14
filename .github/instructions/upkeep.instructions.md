@@ -98,3 +98,6 @@ Run now, Pause and Repositories show only on a board whose status path is exactl
   (`worker::load`), so no exchange started before a save allows a request for, or sends
   the list with, a repository that the save removed. Do not pass it a choice read
   earlier, and call `worker::update` only off the UI thread: it can wait for an exchange.
+- `worker::settings_lock(<cloud>)` is a guard for the threads of this process and a file
+  lock (`settings.lock` in the Upkeep's folder) for other Horizon processes on the same
+  home. Both must be held for the whole read, change and save, and the whole exchange.

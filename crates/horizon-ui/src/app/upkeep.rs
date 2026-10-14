@@ -58,6 +58,26 @@ impl HorizonApp {
         }
     }
 
+    /// Every board of `cloud` waits for the run that `board` asked for, so a second board
+    /// of the same Upkeep cannot ask for another one before the status shows it.
+    fn share_run_request(&mut self, board: horizon_core::PanelId, cloud: &str) {
+        let Some(requested) = self
+            .board
+            .panel(board)
+            .and_then(|panel| panel.content.upkeep())
+            .and_then(|upkeep| upkeep.run_requested)
+        else {
+            return;
+        };
+        for panel in &mut self.board.panels {
+            if let Some(upkeep) = panel.content.upkeep_mut()
+                && upkeep.cloud.as_deref() == Some(cloud)
+            {
+                upkeep.run_requested = Some(requested);
+            }
+        }
+    }
+
     /// Carries out Run now and Pause of the board of `cloud` with the next exchange, which
     /// starts at once.
     fn signal_upkeep(&mut self, cloud: &str, run_now: bool, paused: Option<bool>) {
@@ -161,7 +181,10 @@ impl HorizonApp {
                         continue;
                     };
                     match request {
-                        Request::RunNow => self.signal_upkeep(&cloud, true, None),
+                        Request::RunNow => {
+                            self.signal_upkeep(&cloud, true, None);
+                            self.share_run_request(board, &cloud);
+                        }
                         Request::Pause(paused) => self.signal_upkeep(&cloud, false, Some(paused)),
                         _ => {
                             // While the saved Upkeeps are read again, the click waits a frame.

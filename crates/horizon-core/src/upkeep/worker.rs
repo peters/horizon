@@ -288,7 +288,7 @@ pub fn first_run_sent(cloud_id: &str) -> std::io::Result<()> {
 /// # Errors
 /// No saved choice, a change that [`Config::validate`] refuses, or a write that fails.
 pub fn update(cloud_id: &str, change: impl FnOnce(&mut Config)) -> Result<Config> {
-    let _lock = settings_lock(cloud_id);
+    let _lock = settings_lock(cloud_id)?;
     let mut config = load(cloud_id)?;
     change(&mut config);
     config.validate()?;

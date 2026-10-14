@@ -142,14 +142,36 @@ fn the_board_of_a_saved_upkeep_runs_now_and_pauses_through_its_exchange() {
             workspace,
         )
         .unwrap();
+    let second = app
+        .board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Upkeep,
+                command: Some(status.display().to_string()),
+                ..PanelOptions::default()
+            },
+            workspace,
+        )
+        .unwrap();
     let saved = crate::app::upkeep::Saved::new(vec![("upkeep-test-board".into(), worker::Config::default())]);
     app.link_upkeep_boards(&saved);
     assert_eq!(upkeep(&mut app, board).cloud.as_deref(), Some("upkeep-test-board"));
 
+    // As the board does when Run now is pressed.
+    let pressed = (
+        horizon_core::upkeep::time::OffsetDateTime::now_utc(),
+        std::time::Instant::now(),
+    );
+    upkeep(&mut app, board).run_requested = Some(pressed);
     upkeep(&mut app, board).request = Some(Request::RunNow);
     app.apply_upkeep_requests(&ctx);
     let sync = &app.upkeep.syncs["upkeep-test-board"];
     assert!(sync.signals.run_now && sync.next.is_none());
+    assert_eq!(
+        upkeep(&mut app, second).run_requested,
+        Some(pressed),
+        "another board of the Upkeep waits for the same run"
+    );
 
     upkeep(&mut app, board).request = Some(Request::Pause(true));
     app.apply_upkeep_requests(&ctx);

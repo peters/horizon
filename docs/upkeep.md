@@ -128,7 +128,9 @@ the other Upkeeps. A saved choice that is missing, refused or not valid JSON is
 always left out. Each exchange
 runs on a separate thread. It uses the saved choice of that moment and holds the
 lock of that choice until it ends, so a change of the repositories waits for an
-exchange of the same Upkeep under way and the next exchange carries it. Other
+exchange of the same Upkeep under way and the next exchange carries it. The lock
+is also a file lock, `settings.lock` next to the saved choice, so this is also true
+for two Horizon windows that use the same home. Other
 Upkeeps do not wait. An exchange never sends a
 list, or allows a request, for a repository that a save removed. The exchange does
 these steps:
