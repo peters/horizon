@@ -14,10 +14,17 @@ use std::{
 };
 
 const CHANGED: &str = "The uncommitted files in the image's build context changed after the rebuild was confirmed. Cancel the rebuild, then rebuild again to confirm the files as they are now";
-const LINK_UNSUPPORTED: &str = "An uncommitted file in the image's build context is a link, which a rebuild on Windows cannot copy; replace it with a file or add it to .gitignore before you rebuild";
+const LINK_UNSUPPORTED: &str = "An uncommitted file in the image's build context is a link, which Horizon on Windows cannot copy; replace it with a file or add it to .gitignore before you build the image";
 const BUFFER: usize = 64 * 1024;
 const SNAPSHOT_LINK: &str =
-    "The build snapshot has a link or a file where an uncommitted file needs a folder; rebuild again";
+    "The build snapshot has a link or a file where an uncommitted file needs a folder; try again";
+
+/// Whether `error` says that the uncommitted files are not the confirmed ones, or changed
+/// while they were copied.
+#[must_use]
+pub fn changed(error: &Error) -> bool {
+    matches!(error, Error::Invalid(message) if *message == CHANGED)
+}
 
 /// Collects the uncommitted files of `repository` against `revision` for `build` again and
 /// lays them over `snapshot`, the committed tree of `revision`, so the image builds from

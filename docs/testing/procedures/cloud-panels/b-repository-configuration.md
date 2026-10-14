@@ -14,7 +14,8 @@ owner: peters
 
 This area makes the synthetic repositories for the run. It also makes sure that
 **New cloud** reads `.horizon/cloud.yml`, offers the setup agent and reads the
-working copy of the settings without a button. It makes sure that
+working copy of the settings without a button. It makes sure that **New cloud**
+lists the uncommitted files of a build profile's image and refuses a secret file. It makes sure that
 `check-markers.py` names the contract markers that an image does not report.
 
 ## 2. Applicability
@@ -274,7 +275,7 @@ bind of S02 alone does not change the socket that the candidate uses.
 
    Result: `git status --short` shows no change. The note goes away.
 
-### 6.4 B04 — Read sizes from the working copy and builds from the commit
+### 6.4 B04 — Read the settings and the image recipe from the working copy
 
 1. In the local file `app/.horizon/cloud.yml`, change `min_cpu: 4` of
    `hetzner-cpu` to `min_cpu: 8`.
@@ -287,38 +288,57 @@ bind of S02 alone does not change the socket that the candidate uses.
 
    Result: `runpod-cpu` stays selected and shows `from 16 vCPU`.
 
-3. In the local file, change `dockerfile: .horizon/Dockerfile` of `runpod-build`
-   to `dockerfile: .horizon/Other.Dockerfile`.
+3. Select `runpod-build` in **Profile**.
 
-   Result: The dialog shows `Uncommitted changes to build are not used until you
-   commit them.`
+   Result: Below **Profile**, the dialog shows the warning that the image can be
+   pushed to a public registry and the line `• modified .horizon/cloud.yml`. The
+   dialog shows no note.
 
 4. In the local file, copy the profile `runpod-build` to a new profile
    `local-build`.
 
-   Result: **Profile** does not list `local-build`. The dialog shows `Profile
-   local-build builds an image, so New cloud offers it after you commit it.`
+   Result: Without a click, **Profile** lists `local-build`.
 
-5. Expand **More options** and type `HEAD~1` in **Committed base revision**.
+5. Make a test file that has the name of a common secret file. Then add a
+   comment line to the local file, so that the dialog reads the settings and the
+   files again.
+
+   ```sh
+   printf 'SMOKE=synthetic\n' > <data-home>/smoke/app/.horizon/.env
+   printf '# smoke\n' >> <data-home>/smoke/app/.horizon/cloud.yml
+   ```
+
+   Result: Below **Profile**, a red line names `.horizon/.env` as the name of a
+   common secret file. **Start cloud** is not available and says that an
+   uncommitted file is refused. Do not click it.
+
+6. Remove the test file.
+
+   ```sh
+   rm <data-home>/smoke/app/.horizon/.env
+   ```
+
+7. Expand **More options** and type `HEAD~1` in **Committed base revision**.
 
    Result: The dialog reads the earlier commit, which has no
    `.horizon/cloud.yml`. It shows **No cloud setup yet**. The working copy does
    not apply to a commit that is not checked out.
 
-6. Remove the text from **Committed base revision**.
+8. Remove the text from **Committed base revision**.
 
    Result: **Profile** lists the profiles of the working copy again.
 
-7. Restore the committed version of the local file.
+9. Restore the committed version of the local file.
 
    ```sh
    git -C <data-home>/smoke/app checkout -- .horizon/cloud.yml
    ```
 
    Result: `git status --short` shows no change. **Profile** shows `from 4 vCPU`
-   for `runpod-cpu` and the dialog shows no note.
+   for `runpod-cpu` and the dialog shows no note. For `runpod-build`, the dialog
+   says that no uncommitted file goes into the image.
 
-8. Click **Cancel**.
+10. Click **Cancel**.
 
    Result: The dialog closes.
 
@@ -361,8 +381,8 @@ bind of S02 alone does not change the socket that the candidate uses.
   cards and one chip for each agent, and no error.
 - B02 lists the six profiles from the committed file.
 - B03 shows the note and keeps the committed profiles.
-- B04 shows working-copy sizes without a click, names the uncommitted build
-  changes and does not offer a new build profile.
+- B04 shows working-copy sizes and build profiles without a click, lists the
+  uncommitted files of the build profile's image, and refuses `.horizon/.env`.
 - B05 names the absent markers of an older image and none for the test images.
 
 ## 8. Cleanup

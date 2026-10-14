@@ -1,12 +1,12 @@
 ---
-applyTo: "crates/horizon-core/src/cloud_runtime/repository/uncommitted.rs,crates/horizon-core/src/cloud_runtime/repository/uncommitted/**,crates/horizon-core/src/cloud_runtime/deployment/replacement.rs,crates/horizon-core/src/cloud_runtime/deployment/replacement/**,crates/horizon-core/examples/cloud_deploy.rs,crates/horizon-ui/src/app/cloud_panel/production/cards/rebuild.rs,crates/horizon-ui/src/app/cloud_panel/production/rebuild.rs"
+applyTo: "crates/horizon-core/src/cloud_runtime/repository/uncommitted.rs,crates/horizon-core/src/cloud_runtime/repository/uncommitted/**,crates/horizon-core/src/cloud_runtime/deployment/replacement.rs,crates/horizon-core/src/cloud_runtime/deployment/replacement/**,crates/horizon-core/examples/cloud_deploy.rs,crates/horizon-ui/src/app/cloud_panel/production/cards/rebuild.rs,crates/horizon-ui/src/app/cloud_panel/production/rebuild.rs,crates/horizon-core/src/cloud_runtime/deployment.rs,crates/horizon-core/src/cloud_runtime/deployment/image.rs,crates/horizon-ui/src/app/cloud_panel/production/creation/uncommitted.rs,crates/horizon-ui/src/app/cloud_panel/production/creation/uncommitted/**,crates/horizon-ui/src/app/cloud_panel/production/creation_job.rs"
 ---
 
 # Trust boundary of the uncommitted build context
 
 `repository::uncommitted` lists, hashes and copies the uncommitted files of an
-image recipe's build context, so that **Rebuild image & restart** builds the
-image from the working copy. The user rules are in the section "Uncommitted
+image recipe's build context, so that **Rebuild image & restart**, and **New
+cloud** on the checked-out commit, build the image from the working copy. The user rules are in the section "Uncommitted
 files in the image" of `docs/cloud-workspaces.md`.
 
 ## What goes out
@@ -33,6 +33,16 @@ context can go into the image, so a person must see each one first.
   file refuses it. The rebuild journals the hash, so **Continue rebuild**
   checks the same files. `cloud_deploy rebuild` takes the printed plan token, which covers the
   settings and the files (`Plan::token`).
+- New cloud lists the files of the chosen build profile under **Profile**
+  (`creation::uncommitted`); a refusal holds back **Start**. **Start** reads
+  them again and refuses a moved `HEAD` or another hash. The confirmed hash
+  goes with the cloud (`CloudGroup::working_copy`, `Request::working_copy`);
+  the first deployment records it (`uncommitted_image`), and `prepare_image`
+  overlays the files with the recorded hash, also when none were listed, so a
+  file added later is refused. A later request can only repeat the recorded
+  hash. `cloud_deploy plan-deploy` prints the files and a token
+  (`uncommitted::token`) that `deploy` and `prepare-image` need while any
+  file is uncommitted.
 
 ## What never goes out
 

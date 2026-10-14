@@ -64,6 +64,7 @@ impl HorizonApp {
         let Some(launch) = group.remote.clone() else { return };
         let repository = group.cwd.clone();
         let siblings = group.siblings.clone();
+        let working_copy = group.working_copy.clone();
         let Some(root) = self.cloud_prototype.root.clone() else {
             return;
         };
@@ -95,6 +96,7 @@ impl HorizonApp {
                 first,
                 fence,
                 renew_github,
+                working_copy,
             },
             ctx,
         );

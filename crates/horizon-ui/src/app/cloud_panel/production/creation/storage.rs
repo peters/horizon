@@ -9,7 +9,7 @@ use horizon_core::cloud_runtime::{
 
 /// Why the chosen worker cannot start now, if anything stands in the way.
 pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
-    if let Some(reason) = super::checks::blocked(form) {
+    if let Some(reason) = super::checks::blocked(form).or_else(|| super::uncommitted::blocked(form)) {
         return Some(reason);
     }
     let profile = form.profiles.as_ref()?.profiles.get(&form.selected_profile)?;

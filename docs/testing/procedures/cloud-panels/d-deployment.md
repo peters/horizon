@@ -571,6 +571,71 @@ before Horizon requests a worker. It uses the changed settings of D06.
 
     Result: The cloud settings are as before D06. `<repo>` has no scratch branch.
 
+### 6.8 D08 — Create a cloud from an uncommitted recipe
+
+This task rents a RunPod CPU pod for a short time, and pushes an image to the
+registry of `runpod-build`. Use only synthetic file contents. In the steps,
+`<context>` is the `build.context` folder and `<dockerfile>` is the
+`build.dockerfile` file of `runpod-build`.
+
+1. In `<repo>`, add this line at the end of `<dockerfile>`, and write a new file
+   `<context>/smoke-new.txt` with the text `synthetic`. Do not commit them.
+
+   ```dockerfile
+   RUN echo synthetic-new-cloud-marker > /etc/horizon-smoke-new-cloud
+   ```
+
+   Result: `git -C <repo> status --short` shows both files.
+
+2. Open **New cloud** for `<repo>`, enter the title `smoke-dirty` and select
+   `runpod-build`.
+
+   Result: Below **Profile**, the dialog shows the warning about a public registry
+   and lists `modified <dockerfile>` and `new <context>/smoke-new.txt`.
+
+3. Add a line to `<context>/smoke-new.txt`. Click **Start cloud**.
+
+   Result: The dialog shows that the uncommitted files changed since they were
+   listed, and lists them again. No cloud card appears.
+
+4. Run the harness plan for the same profile.
+
+   ```sh
+   <run>/bin/cloud_deploy plan-deploy <home>/.horizon/cloud/settings.json <repo> runpod-build <home>/.horizon/cloud/d08-plan d08-plan
+   ```
+
+   Result: The output has one `Uncommitted file:` line for each file of step 1 and
+   a line with `--plan-token`. Nothing is built.
+
+   > **CAUTION:** THE NEXT STEP RENTS COMPUTE AND PUSHES AN IMAGE.
+
+5. In **New cloud**, click **Start cloud**. Wait until the card shows **Ready**.
+
+   Result: The card shows the build, the push and the worker.
+
+6. Examine the card.
+
+   Result: The card shows `Image: built from <commit> plus uncommitted changes`,
+   where `<commit>` is the first 12 characters of `git -C <repo> rev-parse HEAD`.
+
+7. In a Shell panel of `smoke-dirty`, show the marker.
+
+   ```sh
+   cat /etc/horizon-smoke-new-cloud
+   ```
+
+   Result: The panel shows `synthetic-new-cloud-marker`. The worker's checkout has
+   no `<context>/smoke-new.txt`, because the source is the committed archive.
+
+8. Close the card of `smoke-dirty`, and discard the changes of step 1.
+
+   ```sh
+   git -C <repo> checkout -- <dockerfile>; rm <repo>/<context>/smoke-new.txt
+   ```
+
+   Result: The provider shows no pod for `smoke-dirty`. `git -C <repo> status
+   --short` shows nothing.
+
 ## 7. Pass criteria
 
 - `smoke-a`, `smoke-r` and `smoke-g` each show **Ready**.
@@ -582,6 +647,8 @@ before Horizon requests a worker. It uses the changed settings of D06.
 - LFS files and submodules agree with the committed selection.
 - **Where the time went** agrees with the stages in the output.
 - A failed image push shows on **Push image**, not on **Validate**.
+- A new cloud from an uncommitted recipe lists its files before **Start cloud**,
+  refuses a list that changed, and shows `plus uncommitted changes` on its card.
 - A refused push offers **Open Container registry** as its one next action. Cloud
   settings then show the repository of the profile filled in, and the empty form
   of another repository stays behind **Add another**.

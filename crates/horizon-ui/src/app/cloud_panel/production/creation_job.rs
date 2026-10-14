@@ -1,5 +1,6 @@
 //! Resolve captured creation inputs without blocking painting or changing their destination.
 use super::{CloudGroup, CloudLaunch, HorizonApp, PathBuf, cloud_runtime};
+use horizon_core::cloud_runtime::repository::uncommitted::Confirmed;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -14,6 +15,8 @@ pub(super) struct Pending {
     launch: CloudLaunch,
     /// As reviewed, each at the commit the launch must pin.
     siblings: Vec<cloud_runtime::siblings::Sibling>,
+    /// The recipe and uncommitted files listed for an image from the working copy.
+    working_copy: Option<(horizon_core::cloud_panel::Build, Confirmed)>,
     cancel: CancelOnDrop,
 }
 
@@ -101,6 +104,8 @@ impl HorizonApp {
             .ok_or(cloud_runtime::Error::Invalid("Choose a repository profile"))?;
         runpod_usable(form, profile)?;
         let profile = launch_profile(profile, form.provider, form.size)?;
+        let working_copy = super::creation::uncommitted::confirmed(form, profile.build.as_ref())?;
+        let listed = working_copy.clone();
         let placement = form.placement.for_profile(profile.gpu);
         let repository = horizon_core::Config::expand_tilde(&form.repository);
         let revision = if let Some(revision) = &form.launch.revision {
@@ -143,11 +148,12 @@ impl HorizonApp {
                 placement,
             },
             siblings,
+            working_copy,
         });
         self.cloud_prototype.error = None;
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let result = resolve(&repository, &revision, &reviewed, &cancel).and_then(|resolved| {
+            let result = resolve(&repository, &revision, &reviewed, listed.as_ref(), &cancel).and_then(|resolved| {
                 if let Some(tailnet) = tailnet {
                     let root = tailnet_root.ok_or(cloud_runtime::Error::Invalid("Missing cloud settings"))?;
                     cloud_runtime::tailnet::select(&root, &selection_cloud, Some(&tailnet))?;
@@ -180,10 +186,15 @@ impl HorizonApp {
         let Some(pending) = form.pending_creation.take() else {
             return;
         };
+        let working_copy = pending.working_copy.is_some();
         if let Err(error) = result.and_then(|resolved| self.finish_cloud_creation(ctx, pending, resolved)) {
             // A sibling checkout may have moved since it was checked; read the choice again.
             self.cloud_prototype.production.launch.siblings.forget_review();
             self.cloud_prototype.error = Some(error.to_string());
+            // The uncommitted files may have changed since they were listed; list them again.
+            if working_copy {
+                self.start_cloud_profiles_read(ctx, true);
+            }
         }
     }
 
@@ -213,6 +224,7 @@ impl HorizonApp {
             resolved.repository,
             pending.launch,
             siblings,
+            pending.working_copy.map(|(_, confirmed)| confirmed),
         )?;
         self.cloud_prototype.production.creating = false;
         // The workspace New workspace made now holds the cloud.
@@ -240,6 +252,7 @@ impl HorizonApp {
         repository: PathBuf,
         launch: CloudLaunch,
         siblings: Vec<cloud_runtime::siblings::Binding>,
+        working_copy: Option<Confirmed>,
     ) -> cloud_runtime::Result<u32> {
         let workspace_id = self
             .board
@@ -267,6 +280,7 @@ impl HorizonApp {
         group.environment.image.clone_from(&launch.profile.image);
         group.remote = Some(launch);
         group.siblings = siblings;
+        group.working_copy = working_copy;
         group.reconcile(&mut self.board);
         self.cloud_prototype.groups.0.push(group);
         // Registered now, so a workspace preset gives the cloud its slot before the
@@ -336,11 +350,12 @@ pub(super) fn launch_profile(
 }
 
 /// The committed primary revision to launch, once every reviewed sibling checkout is still
-/// at the commit it was reviewed at.
+/// at the commit it was reviewed at, and the `listed` uncommitted files are unchanged.
 fn resolve(
     repository: &std::path::Path,
     revision: &str,
     siblings: &[cloud_runtime::siblings::Sibling],
+    listed: Option<&(horizon_core::cloud_panel::Build, Confirmed)>,
     cancel: &cloud_runtime::Cancellation,
 ) -> cloud_runtime::Result<Resolved> {
     cancel.check()?;
@@ -353,6 +368,9 @@ fn resolve(
     let revision = cloud_runtime::repository::resolve_with_runner(&repository, revision, &runner)?;
     for sibling in siblings {
         sibling.unmoved(&runner)?;
+    }
+    if let Some(listed) = listed {
+        super::creation::uncommitted::unchanged(&repository, &revision, listed, cancel)?;
     }
     Ok(Resolved { repository, revision })
 }

@@ -1,13 +1,11 @@
 //! The settings New cloud and a rebuild read while the checked-out commit is the one they
-//! use. For New cloud, where a worker runs and how big it is come from the working copy of
-//! `.horizon/cloud.yml`, so an edit applies without a commit. What is built and transferred
-//! comes from the commit: New cloud builds the image from the committed tree, and the
-//! source is a committed archive. A rebuild builds from the working copy, so it reads the
-//! working copy's file whole ([`for_rebuild`]).
+//! use. Both build the image from the working copy (`repository::uncommitted`), so the
+//! working copy of `.horizon/cloud.yml` applies whole and an edit applies without a commit.
+//! Only the source and the companions come from the commit: the source is a committed
+//! archive, and companions name commits of their own.
 use super::{CloudConfig, Error, Path, Runner};
-use horizon_cloud::{Cancellation, Profile};
+use horizon_cloud::Cancellation;
 use std::{
-    collections::BTreeMap,
     fs::File,
     hash::{Hash, Hasher},
     io::Read,
@@ -21,10 +19,6 @@ const FILE: &str = "cloud.yml";
 
 const MISSING: &str = "The working copy has no .horizon/cloud.yml, so the committed settings apply.";
 const INVALID: &str = "The working copy of .horizon/cloud.yml is not valid, so the committed settings apply.";
-const MISMATCH: &str =
-    "The working copy's changes do not fit the committed build settings, so the committed settings apply.";
-const NONE_OFFERED: &str =
-    "No profile in the working copy can start before you commit it, so the committed settings apply.";
 
 enum WorkingFile {
     Missing,
@@ -33,7 +27,7 @@ enum WorkingFile {
 }
 
 /// The settings New cloud offers for the checked-out commit, whose own file is `committed`,
-/// with the notes that say which working-copy edits do not apply.
+/// with the notes that say which working-copy edits do not apply ([`whole`]).
 pub(super) fn apply(
     repository: &Path,
     committed: Option<CloudConfig>,
@@ -42,20 +36,14 @@ pub(super) fn apply(
     runner.cancel.check()?;
     let file = read(repository);
     runner.cancel.check()?;
-    match (file, committed) {
-        (WorkingFile::Valid(working), committed) => merge(committed.as_ref(), working),
-        (WorkingFile::Missing, Some(committed)) => Ok((committed, vec![MISSING.into()])),
-        (WorkingFile::Invalid, Some(committed)) => Ok((committed, vec![INVALID.into()])),
-        (WorkingFile::Missing, None) => Err(Error::Invalid(super::MISSING_CONFIG)),
-        (WorkingFile::Invalid, None) => Err(Error::Invalid(super::INVALID_CONFIG)),
+    if matches!((&file, &committed), (WorkingFile::Invalid, None)) {
+        return Err(Error::Invalid(super::INVALID_CONFIG));
     }
+    whole(file, committed).ok_or(Error::Invalid(super::MISSING_CONFIG))
 }
 
-/// The settings a rebuild reads at the checked-out commit, whose own file is `committed`.
-/// The image builds from the working copy too ([`super::super::uncommitted`]), so the
-/// working copy's file applies whole, with the commit's source and companions, which
-/// name what comes from commits. The commit's file applies when the working copy has no
-/// valid one; a note says so.
+/// The settings a rebuild reads at the checked-out commit, whose own file is `committed`,
+/// as New cloud reads them ([`whole`]); `None` when neither has a valid file.
 pub(in crate::cloud_runtime) fn for_rebuild(
     repository: &Path,
     committed: Option<CloudConfig>,
@@ -64,7 +52,14 @@ pub(in crate::cloud_runtime) fn for_rebuild(
     runner.cancel.check()?;
     let file = read(repository);
     runner.cancel.check()?;
-    Ok(match (file, committed) {
+    Ok(whole(file, committed).map_or((None, Vec::new()), |(config, notes)| (Some(config), notes)))
+}
+
+/// The working copy's `file` whole, with the commit's source and companions, which name
+/// what comes from commits. The commit's file applies when the working copy has no valid
+/// one; a note says so.
+fn whole(file: WorkingFile, committed: Option<CloudConfig>) -> Option<(CloudConfig, Vec<String>)> {
+    match (file, committed) {
         (WorkingFile::Valid(working), committed) => {
             let (source, companions) = committed
                 .map(|config| (config.source, config.companions))
@@ -86,12 +81,12 @@ pub(in crate::cloud_runtime) fn for_rebuild(
                 companions,
                 ..working
             };
-            (Some(config), notes)
+            Some((config, notes))
         }
-        (WorkingFile::Missing, Some(committed)) => (Some(committed), vec![MISSING.into()]),
-        (WorkingFile::Invalid, Some(committed)) => (Some(committed), vec![INVALID.into()]),
-        (_, None) => (None, Vec::new()),
-    })
+        (WorkingFile::Missing, Some(committed)) => Some((committed, vec![MISSING.into()])),
+        (WorkingFile::Invalid, Some(committed)) => Some((committed, vec![INVALID.into()])),
+        (_, None) => None,
+    }
 }
 
 fn read(repository: &Path) -> WorkingFile {
@@ -100,89 +95,6 @@ fn read(repository: &Path) -> WorkingFile {
         Some(Ok(yaml)) => CloudConfig::parse(&yaml).map_or(WorkingFile::Invalid, WorkingFile::Valid),
         Some(Err(())) => WorkingFile::Invalid,
     }
-}
-
-/// `working` with the commit's build, image and capabilities for each profile that builds
-/// in either file, and the commit's source and companions. A profile only in the working
-/// copy is offered when it runs an existing image.
-fn merge(committed: Option<&CloudConfig>, working: CloudConfig) -> super::super::Result<(CloudConfig, Vec<String>)> {
-    let empty = BTreeMap::new();
-    let committed_profiles = committed.map_or(&empty, |config| &config.profiles);
-    let mut ignored = Vec::new();
-    let mut unoffered = Vec::new();
-    let mut profiles = BTreeMap::new();
-    for (name, profile) in working.profiles {
-        match committed_profiles.get(&name) {
-            // The recipe's build arguments carry the capabilities, so they are part of
-            // what is built.
-            Some(built) if built.build.is_some() || profile.build.is_some() => {
-                for (field, changed) in [
-                    ("build", built.build != profile.build),
-                    ("image", built.image != profile.image),
-                    ("capabilities", built.capabilities != profile.capabilities),
-                ] {
-                    note_field(&mut ignored, field, changed);
-                }
-                let merged = Profile {
-                    build: built.build.clone(),
-                    image: built.image.clone(),
-                    capabilities: built.capabilities.clone(),
-                    ..profile
-                };
-                profiles.insert(name, merged);
-            }
-            None if profile.build.is_some() => unoffered.push(name),
-            _ => {
-                profiles.insert(name, profile);
-            }
-        }
-    }
-    let (source, companions) = committed
-        .map(|config| (config.source.clone(), config.companions.clone()))
-        .unwrap_or_default();
-    note_field(&mut ignored, "source", source != working.source);
-    note_field(&mut ignored, "companions", companions != working.companions);
-    let mut notes = Vec::new();
-    if !ignored.is_empty() {
-        notes.push(format!(
-            "Uncommitted changes to {} are not used until you commit them.",
-            list(&ignored)
-        ));
-    }
-    if !unoffered.is_empty() {
-        notes.push(unoffered_note(&unoffered));
-    }
-    let fallback = |mut notes: Vec<String>, note: &str| match committed.cloned() {
-        Some(committed) => {
-            notes.push(note.into());
-            Ok((committed, notes))
-        }
-        None => Err(Error::Invalid(super::MISSING_CONFIG)),
-    };
-    if profiles.is_empty() {
-        return fallback(notes, NONE_OFFERED);
-    }
-    // A committed recipe can ask for what the working copy's provider cannot give, such
-    // as hosted devices on Hetzner.
-    if profiles.values().any(|profile| profile.validate(false).is_err()) {
-        return fallback(Vec::new(), MISMATCH);
-    }
-    let default = [Some(&working.default), committed.map(|config| &config.default)]
-        .into_iter()
-        .flatten()
-        .find(|name| profiles.contains_key(*name))
-        .or_else(|| profiles.keys().next())
-        .cloned()
-        .unwrap_or_default();
-    let config = CloudConfig {
-        version: working.version,
-        default,
-        profiles,
-        companions,
-        source,
-        placement: working.placement,
-    };
-    Ok((config, notes))
 }
 
 fn note_field(fields: &mut Vec<&'static str>, field: &'static str, changed: bool) {
@@ -201,17 +113,6 @@ fn list(items: &[impl AsRef<str>]) -> String {
             rest.iter().map(AsRef::as_ref).collect::<Vec<_>>().join(", "),
             last.as_ref()
         ),
-    }
-}
-
-fn unoffered_note(names: &[String]) -> String {
-    if let [name] = names {
-        format!("Profile {name} builds an image, so New cloud offers it after you commit it.")
-    } else {
-        format!(
-            "Profiles {} build images, so New cloud offers them after you commit them.",
-            list(names)
-        )
     }
 }
 

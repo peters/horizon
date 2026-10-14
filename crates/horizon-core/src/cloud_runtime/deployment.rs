@@ -56,6 +56,10 @@ pub struct Request {
     /// The person asked this deployment to sign in to GitHub again, for example to add a
     /// repository, although the worker holds access. Only this deployment signs in again.
     pub renew_github: bool,
+    /// The image builds from the working copy, with the uncommitted files a person
+    /// confirmed in New cloud. The first deployment records them (`uncommitted_image`), and
+    /// a later one may only repeat them until the image is built.
+    pub working_copy: Option<repository::uncommitted::Confirmed>,
 }
 
 impl Request {
@@ -76,6 +80,7 @@ impl Request {
             state_root,
             settings,
             renew_github: false,
+            working_copy: None,
         }
     }
 }
@@ -424,6 +429,12 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             || state.repository != request.repository
             || resized != request.profile
             || (state.profile != resized && !state.accepts_next_size())
+            // Until the first image is built; a rebuild records its own files later.
+            || (state.spec.is_none()
+                && request
+                    .working_copy
+                    .as_ref()
+                    .is_some_and(|confirmed| state.uncommitted_image != uncommitted_image(request, confirmed)))
         {
             return Err(Error::Invalid(
                 "Cloud is permanently bound to its repository, revision and profile",
@@ -459,7 +470,10 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             last_self_stop: None,
             tailnet_device: None,
             siblings: None,
-            uncommitted_image: None,
+            uncommitted_image: request
+                .working_copy
+                .as_ref()
+                .and_then(|confirmed| uncommitted_image(request, confirmed)),
         }
     };
     super::providers::admit(
@@ -470,6 +484,17 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
     )?;
     store.save(&state)?;
     Ok(state)
+}
+
+/// The record of an image that `request` builds with the `confirmed` uncommitted files.
+fn uncommitted_image(
+    request: &Request,
+    confirmed: &repository::uncommitted::Confirmed,
+) -> Option<super::state::UncommittedImage> {
+    Some(super::state::UncommittedImage {
+        revision: request.revision.clone(),
+        hash: confirmed.hash.clone()?,
+    })
 }
 
 fn current_public_key(identity: &std::path::Path) -> Result<String> {

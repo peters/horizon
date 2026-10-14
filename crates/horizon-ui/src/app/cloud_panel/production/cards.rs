@@ -16,7 +16,7 @@ mod output;
 pub(super) mod placement;
 #[cfg(test)]
 mod preparation_tests;
-mod rebuild;
+pub(super) mod rebuild;
 pub(super) mod section;
 mod self_stop;
 mod sizing;

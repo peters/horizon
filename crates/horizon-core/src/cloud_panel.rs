@@ -53,6 +53,10 @@ pub struct CloudGroup {
     /// Omitted when none, so earlier records keep their encoding.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub siblings: Vec<crate::cloud_runtime::siblings::Binding>,
+    /// Set when the image of `remote` builds from the working copy, with the uncommitted
+    /// files confirmed in New cloud. Omitted otherwise, so earlier records keep their encoding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_copy: Option<crate::cloud_runtime::repository::uncommitted::Confirmed>,
     pub issue: u32,
     pub title: String,
     pub workspace: String,
