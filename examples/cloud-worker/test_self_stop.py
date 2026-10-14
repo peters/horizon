@@ -453,6 +453,13 @@ class HorizonStopTests(unittest.TestCase):
         self.assertFalse(STOPD['logged'](self.log, 7))
         self.assertTrue(STOPD['cleared'](self.log, 7))
         self.assertEqual(target.read_text(), '{"at": 7}\n')
+        # So does a file or a dangling link in the place of its folder.
+        self.log.unlink()
+        self.log.parent.rmdir()
+        for place in (lambda: self.log.parent.write_text('x'), lambda: self.log.parent.symlink_to(self.log.parent.parent / 'gone')):
+            place()
+            self.assertFalse(STOPD['logged'](self.log, 7))
+            self.log.parent.unlink()
 
     def test_a_line_that_cannot_be_written_whole_leaves_the_log_as_it_was(self):
         STOPD['append'](self.log, {'at': 1})

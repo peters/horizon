@@ -480,9 +480,10 @@ def logged(log, at):
         descriptor = open_log(log, os.O_RDONLY)
     except FileNotFoundError:
         return False
-    # A link or other file an agent put in the log's place holds none of Horizon's stops.
+    # A link or other file an agent put in the place of the log or its folder holds none
+    # of Horizon's stops.
     except OSError as error:
-        if error.errno in (None, errno.ELOOP, errno.ENOTDIR):
+        if error.errno in (None, errno.ELOOP, errno.ENOTDIR, errno.EEXIST):
             return False
         raise
     with os.fdopen(descriptor, 'rb') as file:
