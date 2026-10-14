@@ -1,4 +1,4 @@
-use super::jobs::finished;
+use super::jobs::{finished, save};
 use super::*;
 use horizon_core::upkeep::native::probe;
 
@@ -176,4 +176,24 @@ fn a_test_cloud_whose_close_failed_holds_back_the_next_test() {
     app.cloud_prototype.groups.0.clear();
     assert!(!app.native_closing(&ctx, &mut ledger, &mut native), "its card is gone");
     assert!(ledger.closing.is_empty());
+}
+
+#[test]
+fn a_failed_save_of_the_ledger_is_tried_again_after_a_while() {
+    let ctx = egui::Context::default();
+    let ledger = native::Ledger::default();
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(false).unwrap();
+    let mut native = Native {
+        saving: Some(rx),
+        stored: true,
+        ..Native::default()
+    };
+    let now = Instant::now();
+    assert_eq!(save(&ctx, "upkeep", &ledger, &mut native, now), Some(false));
+    assert!(native.dirty, "the ledger on disk is older than the one in memory");
+    assert!(native.saving.is_none(), "the next save waits");
+    assert_eq!(save(&ctx, "upkeep", &ledger, &mut native, now + RETRY / 2), Some(false));
+    assert!(native.saving.is_none() && native.dirty);
+    assert_eq!(native.save_after, Some(now + RETRY));
 }

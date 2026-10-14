@@ -579,13 +579,14 @@ impl HorizonApp {
         }
     }
 
-    fn cloud_add_panel(&mut self, ctx: &egui::Context, issue: u32, kind: PanelKind, endpoint: Option<String>) {
+    /// Adds a panel of `kind` to cloud card `issue`. Returns whether the panel was created.
+    fn cloud_add_panel(&mut self, ctx: &egui::Context, issue: u32, kind: PanelKind, endpoint: Option<String>) -> bool {
         let Some(index) = self.cloud_prototype.groups.0.iter().position(|g| g.issue == issue) else {
-            return;
+            return false;
         };
         let group = &self.cloud_prototype.groups.0[index];
         let Some(ws) = self.board.workspace_id_by_local_id(&group.workspace) else {
-            return;
+            return false;
         };
         let mut options = self.presets.iter().find(|p| p.kind == kind).map_or_else(
             || PanelOptions {
@@ -608,15 +609,19 @@ impl HorizonApp {
         options.transcript_root.clone_from(&self.transcript_root);
         if let Err(error) = self.prepare_cloud_remote_panel(index, &mut options) {
             self.cloud_prototype.error = Some(error.to_string());
-            return;
+            return false;
         }
         match self.create_cloud_member(index, options, ws) {
             Ok(id) => {
                 self.reveal_selected_panel(ctx, id);
                 self.cloud_prototype.error = None;
                 self.save_cloud_prototype();
+                true
             }
-            Err(e) => self.cloud_prototype.error = Some(e.to_string()),
+            Err(e) => {
+                self.cloud_prototype.error = Some(e.to_string());
+                false
+            }
         }
     }
 }

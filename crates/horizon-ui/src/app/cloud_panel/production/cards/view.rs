@@ -274,7 +274,9 @@ impl HorizonApp {
         }
         match action {
             Action::Deploy => self.start_production_deployment(id, ctx),
-            Action::Desktop => self.cloud_add_panel(ctx, id, horizon_core::PanelKind::Device, None),
+            Action::Desktop => {
+                self.cloud_add_panel(ctx, id, horizon_core::PanelKind::Device, None);
+            }
             Action::Remove => {
                 self.remove_deleted_cloud(id, ctx);
             }

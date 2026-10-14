@@ -82,7 +82,7 @@ impl HorizonApp {
         }
         self.native_test(ctx, root, cloud_id, &mut ledger, native, now);
         self.native_delivery(ctx, root, cloud_id, &ledger, native, now);
-        if let Some(stored) = save(ctx, cloud_id, &ledger, native) {
+        if let Some(stored) = save(ctx, cloud_id, &ledger, native, now) {
             self.native_launch(ctx, cloud_id, &mut ledger, native, stored);
         }
         native.ledger = Some(ledger);
@@ -306,8 +306,15 @@ impl HorizonApp {
                 .get(&card)
                 .is_some_and(|runtime| runtime.desktop.is_some())
         {
-            native.desktop_shown = true;
-            self.cloud_add_panel(ctx, card, PanelKind::Device, None);
+            // The task waits for the viewer, so that the person can watch the test.
+            if native.desktop_after.is_none_or(|after| now >= after) {
+                native.desktop_shown = self.cloud_add_panel(ctx, card, PanelKind::Device, None);
+                native.desktop_after = Some(now + PROMPT_SETTLE);
+            }
+            if !native.desktop_shown {
+                ctx.request_repaint_after(PROMPT_SETTLE);
+                return;
+            }
         }
         let Some((panel, opened)) = native.agent.filter(|(panel, _)| self.board.panel(*panel).is_some()) else {
             if native.agent_after.is_none_or(|after| now >= after) {

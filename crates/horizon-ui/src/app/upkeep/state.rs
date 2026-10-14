@@ -116,6 +116,8 @@ pub(in crate::app) struct Native {
     pub(in crate::app) saving: Option<Receiver<bool>>,
     /// The last save reached the disk.
     pub(in crate::app) stored: bool,
+    /// After a failed save of the ledger, when to save it again.
+    pub(in crate::app) save_after: Option<Instant>,
     /// Requests that exchanges read, waiting for the ledger.
     pub(in crate::app) intake: Option<Intake>,
     /// The check of the request that starts now.
@@ -130,7 +132,10 @@ pub(in crate::app) struct Native {
     /// The report of a test that ended, kept until its cloud can be closed: a cloud that
     /// deploys or saves cannot close yet.
     pub(in crate::app) ending: Option<Report>,
+    /// The desktop viewer of the test cloud opened.
     pub(in crate::app) desktop_shown: bool,
+    /// After a failed try to open the desktop viewer, when to try again.
+    pub(in crate::app) desktop_after: Option<Instant>,
     /// When the task's Enter goes to the agent panel.
     pub(in crate::app) submit_at: Option<Instant>,
     pub(in crate::app) probing: Option<Receiver<Result<Probed, String>>>,
@@ -153,6 +158,7 @@ impl Native {
         self.agent = None;
         self.agent_after = None;
         self.desktop_shown = false;
+        self.desktop_after = None;
         self.submit_at = None;
         self.next_probe = None;
         self.probing = None;

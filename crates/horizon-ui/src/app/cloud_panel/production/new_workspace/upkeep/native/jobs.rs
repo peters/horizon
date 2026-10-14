@@ -50,9 +50,16 @@ pub(super) fn load(ctx: &egui::Context, cloud_id: &str, native: &mut Native, now
     false
 }
 
-/// Saves the ledger when it changed and no save is under way. Returns whether the ledger on
-/// disk is the one in memory, or `None` while a save of it is under way.
-pub(super) fn save(ctx: &egui::Context, cloud_id: &str, ledger: &native::Ledger, native: &mut Native) -> Option<bool> {
+/// Saves the ledger when it changed and no save is under way, and again a while after a save
+/// failed. Returns whether the ledger on disk is the one in memory, or `None` while a save of
+/// it is under way.
+pub(super) fn save(
+    ctx: &egui::Context,
+    cloud_id: &str,
+    ledger: &native::Ledger,
+    native: &mut Native,
+    now: Instant,
+) -> Option<bool> {
     if let Some(rx) = &native.saving {
         match rx.try_recv() {
             Err(TryRecvError::Empty) => return None,
@@ -60,6 +67,15 @@ pub(super) fn save(ctx: &egui::Context, cloud_id: &str, ledger: &native::Ledger,
             Err(TryRecvError::Disconnected) => native.stored = false,
         }
         native.saving = None;
+        if !native.stored {
+            // The disk keeps an older ledger, which a restart would read: save again.
+            native.dirty = true;
+            native.save_after = Some(now + RETRY);
+        }
+    }
+    if let Some(after) = native.save_after.filter(|after| now < *after) {
+        ctx.request_repaint_after(after - now);
+        return Some(false);
     }
     if !native.dirty {
         return Some(native.stored);
