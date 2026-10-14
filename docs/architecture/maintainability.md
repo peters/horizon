@@ -708,6 +708,13 @@ observations to the production cache before agent requests, and retains closed
 operation barriers before a fresh read. The `companions/agent/tailnets` leaf reads
 that root-scoped cache without filesystem or OS-store IO. CLI status lives in the
 focused `cloud_deploy/tailnets` leaf and uses the same nonsecret observation DTO.
+Tailnet API owner removal uses the focused `tailnets/api_credentials/removal.rs`
+exact target check and `tailnets/requests.rs` volatile owner-decision registry.
+The protocol and MCP controller leaves carry metadata only; the existing CLI
+plan runner invokes the same MCP operation. Background workers use the existing
+Store transaction lock instead of adding a second credential mutation engine.
+Credential request replies use the existing `HostIo` worker; the UI thread keeps
+request validation and volatile decision state.
 `image` prepares the worker image and checks its contract before allocation;
 `source` validates and packs the committed source before allocation and transfers
 it to the ready worker; `git_credentials` and `agent_credentials` install or clear
@@ -1063,9 +1070,3 @@ settings Check one by one, and `docker_host::hosts` reads each saved host's
 free capacity and builds its `cloud_offers` section. In `horizon-ui`,
 `prices::hosts` keeps the last reading for Cloud settings and
 `cloud_offers`; `setup::docker_hosts` is the settings card and its editor.
-
-Tailnet API owner removal uses the focused `tailnets/api_credentials/removal.rs`
-exact target check and `tailnets/requests.rs` volatile owner-decision registry.
-The protocol and MCP controller leaves carry metadata only; the existing CLI
-plan runner invokes the same MCP operation. Background workers use the existing
-Store transaction lock instead of adding a second credential mutation engine.

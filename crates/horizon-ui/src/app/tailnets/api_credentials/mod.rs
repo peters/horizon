@@ -117,6 +117,10 @@ impl State {
         self.start_refresh(ctx);
     }
 
+    pub(super) fn suspend_refresh(&mut self) {
+        self.refresh = None;
+    }
+
     fn start_refresh(&mut self, ctx: &egui::Context) {
         if self.busy() {
             return;
@@ -350,6 +354,8 @@ fn status_text(observation: Observation) -> &'static str {
 mod tests {
     use super::*;
     use horizon_core::cloud_runtime::tailnet::ApiCredentialKind;
+
+    mod reopen;
 
     #[test]
     fn close_preserves_only_current_row_failures_until_a_fresh_reply_replaces_them() {

@@ -36,6 +36,8 @@ separate qualification. Use the merged status adapter from the current main base
 - Three exact synthetic saved IDs: missing, personal-token and OAuth API bindings.
 - Three synthetic enrollment-key bindings whose exact contents can be examined by the trusted fixture helper.
 - A public Device viewer with actual live frames and video.
+- Trusted `timeout`, `flock` and `sleep` commands in the fixture terminal.
+- The existing regular file `/fixture/state/horizon/cloud/tailnets.lock`, owned by the fixture UID.
 
 The fixture is private equipment, not a product dependency or MCP evidence.
 The public viewer is read-only. Use the exact owned `horizon-device local_x11`
@@ -44,6 +46,18 @@ Use at most three normal AGENT panels: an observer and two ordinary task shells.
 Horizon supplies their live host/actor bootstrap. Declare frozen CLI tools as
 exact read-only inputs before launch. A 30-minute native lane and 60-second CLI
 observation guard bound the task; a timeout is not cancellation or rollback.
+
+Record the private fixture runner path, source hash and exact ownership file before launch.
+The existing runner supports `keyring-off` and `keyring-on` with `--ownership`.
+Use these controls only for the accepted fixture. No new helper program is required.
+
+The Linux Store uses `File::lock` on `tailnets.lock`, which uses `flock` on this platform.
+Use its existing inode, not a replacement or symlink. The command below holds it for 45 seconds.
+Its outer timeout is 50 seconds. Record actual lock acquisition before native input.
+If the lock expires too early, record an incomplete attempt, not a passing close/reopen check.
+
+The bounded-write sequence below defines the qualification requirement.
+Use a completed report to establish the result for the exact tested inputs.
 
 ## 5. Setup
 
@@ -90,22 +104,45 @@ observation guard bound the task; a timeout is not cancellation or rollback.
 
    Result: The exact saved row shows its pending removal request.
 
+> **CAUTION:** LOCK ONLY THE OWNED FIXTURE STORE.
+> The lock blocks its reads and writes. Keep host stores and unrelated processes outside this lane.
+
+6. Start the bounded lock command in the fixture terminal.
+
+   ```sh
+   timeout --signal=TERM 50s flock --verbose --exclusive --timeout 2 /fixture/state/horizon/cloud/tailnets.lock sleep 45
+   ```
+
+   Result: The command holds the exact Store lock. Its acquisition output precedes the next native action.
+
 > **CAUTION:** APPROVE ONLY THE EXACT SYNTHETIC API BINDING.
-> Approval deletes its stored credential. Keep enrollment keys and unrelated bindings.
+> Approval deletes its stored credential after the lock clears. Keep enrollment keys and unrelated bindings.
 
-6. Select Approve API credential removal on the exact row.
+7. Select **Approve API credential removal** on the personal-token row.
 
-   Result: The request becomes applied after Store completion. Kind becomes missing without closing Settings.
+   Result: The writer waits for the lock. Its request reports running, not applied.
 
-7. Read actual CLI and public MCP status while Settings remains open.
+8. Close Settings before the lock expires.
+
+   Result: The original writer and its read barriers remain retained.
+
+9. Reopen **Settings > Tailnets** before the lock expires.
+
+   Result: The row remains pending. No independent reader reports the old stored kind as a completed write.
+
+10. Wait for the lock command and original removal request to finish.
+
+   Result: Both finish within the lane guard. The original request reports applied after Store completion.
+
+11. Read actual CLI and public MCP status while Settings remains open.
 
    Result: Both interfaces report missing. The saved network and unrelated API binding remain.
 
-8. Close Settings.
+12. Close Settings.
 
    Result: The shared status cache retains the completed observation.
 
-9. Repeat actual CLI and public MCP status reads.
+13. Repeat actual CLI and public MCP status reads.
 
    Result: Missing persists. Trusted fixture checks show all three enrollment bindings and contents unchanged.
 
@@ -133,20 +170,55 @@ observation guard bound the task; a timeout is not cancellation or rollback.
 
    Result: The new request becomes cancelled. Its credential state stays unchanged and no writer starts.
 
+> **CAUTION:** LOCK ONLY THE OWNED FIXTURE STORE.
+> The lock blocks its reads and writes. Keep host stores and unrelated processes outside this lane.
+
+5. Start the same bounded lock command from R01 in the fixture terminal.
+
+   Result: Its acquisition output precedes the next native action. The OAuth API credential is still stored.
+
 > **CAUTION:** REMOVE ONLY THE EXACT SYNTHETIC API BINDING.
-> Removal deletes its stored credential. Keep its saved network and enrollment key.
+> Removal can delete its stored credential after the lock clears. Keep its saved network and enrollment key.
 
-5. Use the native Remove API credential button on the still-stored OAuth row.
+6. Select **Remove API credential** on the still-stored OAuth row.
 
-   Result: Only its API binding becomes missing. The saved network and enrollment key remain.
+   Result: The native writer waits for the lock.
 
-6. Submit Set operations without secret arguments, then unknown secret/root/reference fields.
+7. Close Settings before the lock expires.
+
+   Result: The original writer remains retained.
+
+> **CAUTION:** STOP ONLY THE OWNED SYNTHETIC SECRET SERVICE.
+> Its API removal will fail. Keep host services and buses intact.
+
+8. Run the declared private fixture control before the lock expires.
+
+   ```sh
+   python3 "$FIXTURE_RUNNER" keyring-off --ownership "$OWNERSHIP"
+   ```
+
+   Result: Its ownership check accepts only the exact fixture. Its recorded service process stops.
+   Do not treat a control request alone as proof of service shutdown.
+
+9. Reopen **Settings > Tailnets** before the lock expires.
+
+   Result: The existing writer remains pending. The reopened UI starts no competing status reader.
+
+10. Record the pending native UI and the original request state.
+
+   Result: The retained operation still reports running before the lock clears.
+
+11. Wait for the bounded lock command and native writer to finish.
+
+   Result: The native UI shows the removal failure after completion. Failure does not guarantee rollback or preservation of the API credential.
+
+12. Submit Set operations without secret arguments, then unknown secret/root/reference fields.
 
    Result: The actual CLI/public schema refuses them before an owner request or store mutation.
 
 ### 6.3 R03 — Failure ownership and close transitions
 
-1. Run deterministic source regressions for blocked, failed and disconnected read/write replies through Settings close.
+1. Run deterministic source regressions for blocked, failed and disconnected read/write replies through Settings close/reopen.
 
    Result: A fresh read clears reader failures only. It cannot erase a failed removal, catalog or save error.
    Known per-ID errors remain unavailable during close/replacement reads; removed-ID errors do not return.
@@ -155,31 +227,48 @@ observation guard bound the task; a timeout is not cancellation or rollback.
 
    Result: The original caller reads a bounded late result. No receipt lookup grants a new write or another actor access.
 
-> **CAUTION:** DISABLE ONLY THE OWNED PRIVATE SYNTHETIC STORE.
-> Store interruption blocks its reads and writes. Keep host stores and buses intact.
+3. Record the reopened native UI and actual CLI/public MCP status after the R02 failure.
 
-3. Make the owned private store unavailable.
+   Result: The UI retains the failed write. Public status reports unavailable, not a successful missing observation.
 
-   Result: Only this fixture's credential service is interrupted.
+> **CAUTION:** RESTORE ONLY THE OWNED SYNTHETIC SECRET SERVICE.
+> Restoration reopens its bindings and permits recorded cleanup. Do not connect a host credential bus.
 
-4. Record actual CLI and public MCP status.
+4. Run the declared private fixture control to restore its Secret Service.
 
-   Result: Public status reports unavailable, not missing.
+   ```sh
+   python3 "$FIXTURE_RUNNER" keyring-on --ownership "$OWNERSHIP"
+   ```
 
-> **CAUTION:** RESTORE ONLY THE OWNED PRIVATE SYNTHETIC STORE.
-> Restoration reopens its stored bindings. Do not connect a host credential bus.
+   Result: Only the exact fixture service becomes available.
 
-5. Restore the owned private store.
+5. Select **Refresh** in **Settings > Tailnets**.
 
-   Result: Only this fixture's credential service becomes available.
+   Result: A fresh status read clears its read failure. The separate API write error remains visible.
+   Recovery can finish recorded cleanup and report missing. This does not turn the failed write into a successful receipt.
 
-6. Refresh its API status in Settings.
+6. Record actual CLI/public MCP status and the reopened native write error.
 
-   Result: Recovery preserves unrelated errors and needs no Settings close.
+   Result: Public kinds match the recovered store. All three enrollment bindings, their exact contents and the saved catalog remain unchanged.
 
-7. Record actual CLI and public MCP status again.
+7. Request removal for the same saved OAuth row with a fresh UUID.
 
-   Result: Both interfaces show the recovered current kinds or completed removal.
+   Result: A new pending owner request appears even if recovery reports missing. The request itself starts no writer.
+
+> **CAUTION:** RETRY ONLY THE EXACT SYNTHETIC API REMOVAL.
+> The retry can delete remaining API data. Keep enrollment keys, saved networks and unrelated bindings.
+
+8. Select **Approve API credential removal** for that fresh request.
+
+   Result: A new native owner decision starts the retry. It does not reuse the failed operation's authority.
+
+9. Wait for the fresh request to report applied.
+
+   Result: The successful native retry clears its write failure. Read recovery alone did not clear that error.
+
+10. Record actual CLI/public MCP status and all three enrollment bindings.
+
+   Result: The exact API binding is missing. Enrollment binding slots and contents match their original private snapshots.
 
 ### 6.4 R04 — Presentation
 

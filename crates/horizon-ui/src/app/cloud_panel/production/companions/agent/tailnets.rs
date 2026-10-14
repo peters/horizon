@@ -90,9 +90,7 @@ impl super::HorizonApp {
             Ok(value) => result.tailnet_credential = Some(value),
             Err(error) => result.error = Some(error),
         }
-        if let Err(error) = manifest::provider_usage::complete_provider_usage(&result) {
-            tracing::warn!(kind = ?error.kind(), "could not answer an API credential request");
-        }
+        self.publish_tailnet_credential_result(result);
     }
 }
 

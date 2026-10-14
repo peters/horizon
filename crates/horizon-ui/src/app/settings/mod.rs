@@ -128,6 +128,10 @@ impl HorizonApp {
             self.casting.refresh_pairings();
             let content = self.load_or_generate_config_yaml();
             let editing_config = Config::from_yaml(&content).ok();
+            #[cfg(feature = "cloud-workspaces")]
+            let mut tailnets = super::tailnets::State::default();
+            #[cfg(feature = "cloud-workspaces")]
+            self.cloud_prototype.reopen_tailnets(&mut tailnets);
             self.settings = Some(SettingsEditor {
                 original: content.clone(),
                 buffer: content,
@@ -138,7 +142,7 @@ impl HorizonApp {
                 portable_profile: remote_browsers::PortableProfilePanel::new(&self.config_path),
                 provider_usage: remote_usage::UsagePanels::default(),
                 #[cfg(feature = "cloud-workspaces")]
-                tailnets: super::tailnets::State::default(),
+                tailnets,
                 #[cfg(target_os = "linux")]
                 remote_devices: remote_devices::RemoteDevicesPanel::default(),
             });

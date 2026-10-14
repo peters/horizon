@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-cloud/src/tailnet.rs,crates/horizon-cloud/src/tailnet/**,crates/horizon-core/src/cloud_runtime/tailnet.rs,crates/horizon-core/src/cloud_runtime/tailnet/**,crates/horizon-core/examples/cloud_deploy.rs,crates/horizon-core/examples/cloud_deploy/tailnets.rs,crates/horizon-ui/src/app/tailnets.rs,crates/horizon-ui/src/app/tailnets/**,crates/horizon-ui/src/app/cloud_panel/production/companions/agent.rs,crates/horizon-ui/src/app/cloud_panel/production/companions/agent/**,crates/horizon-browser-mcp/src/server.rs,crates/horizon-browser-mcp/src/controller/tailnet_credential.rs,crates/horizon-browser-control/src/manifest/tailnet_credential.rs,crates/horizon-browser-control/src/manifest/provider_usage.rs,crates/horizon-ui/src/app/browser_provider_usage.rs,crates/horizon-ui/src/app/settings/mod.rs,crates/horizon-cloud-worker/src/remote.rs"
+applyTo: "crates/horizon-cloud/src/tailnet.rs,crates/horizon-cloud/src/tailnet/**,crates/horizon-core/src/cloud_runtime/tailnet.rs,crates/horizon-core/src/cloud_runtime/tailnet/**,crates/horizon-core/examples/cloud_deploy.rs,crates/horizon-core/examples/cloud_deploy/tailnets.rs,crates/horizon-ui/src/app/tailnets.rs,crates/horizon-ui/src/app/tailnets/**,crates/horizon-ui/src/app/cloud_panel/production/companions/agent.rs,crates/horizon-ui/src/app/cloud_panel/production/companions/agent/**,crates/horizon-browser-mcp/src/server.rs,crates/horizon-browser-mcp/src/controller/tailnet_credential.rs,crates/horizon-browser-control/src/manifest/tailnet_credential.rs,crates/horizon-browser-control/src/manifest/provider_usage.rs,crates/horizon-ui/src/app/browser_provider_usage.rs,crates/horizon-ui/src/app/settings/mod.rs,crates/horizon-ui/src/app/cloud_panel.rs,crates/horizon-cloud-worker/src/remote.rs"
 ---
 
 # Tailnet API credential setup and status boundary
@@ -31,6 +31,13 @@ Also report concrete inputs and wrong results when:
 
 - Status rendering performs filesystem, keychain or network work.
 - Pending reads or failures disappear when Settings closes.
+- Reopening starts an independent reader while a retained write or barrier is pending,
+  or hides its completed write failure from the reopened UI.
+- The passive production mirror drops its known catalog or cached cloud selection.
+- A root change refreshes the wrong store, allows new editor actions, or adopts
+  another root's pending operation or observation.
+- Either cloud-enabled credential replies or feature-disabled refusals write
+  completion files on the UI thread instead of the shared `HostIo` worker.
 - A stale reply restores a removed network's status.
 - Settings completion leaves MCP on an older observation until Settings closes.
 - A fresh catalog/status read starts before a closed API operation barrier completes.

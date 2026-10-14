@@ -60,9 +60,16 @@ MCP must not accept raw API secrets or expose saved values.
 Settings > Tailnets displays API credential kind from background workers.
 The native owner can remove an API credential independently of its enrollment
 auth key. This outcome has no API entry or replacement control.
-Filesystem and OS-store work remains off the render thread. Closing Settings
-preserves unfinished read barriers and errors; stale replies cannot restore a
-removed network's status.
+Filesystem and OS-store work remains off the render thread. Same-root Settings
+close/reopen transfers the single IO owner, including pending read/write jobs,
+barriers and their separate errors. Reopening does not start an independent
+reader that can replace a pending write with an older stored status. While
+Settings owns these jobs, production keeps a passive nonsecret catalog/status
+mirror and cached cloud selections, without refreshing the store. Fresh reads
+wait for retained operations; stale replies cannot restore a removed network.
+A changed storage root blocks new editor actions and refreshes. Existing jobs
+retain their original root and may finish; their state cannot authorize another
+root. Discovery refuses the mismatch until Settings closes.
 
 The CLI is `cloud_deploy tailnets STATE_ROOT [TAILNET_ID]`.
 CLI and `cloud_companions.tailnet_api_credentials` share nonsecret observations
@@ -158,3 +165,8 @@ result cannot clear an unrelated reader failure or catalog/save error. Closing
 Settings retains each pending job's kind and its failure. The parent status area
 shows each error once; the API spinner stays in Settings. Request receipts still
 report the actual Store result independently of these messages.
+
+API credential request replies use the existing `HostIo` result worker in both
+the cloud-enabled host and the feature-disabled refusal branch. Request validation
+and volatile owner decisions remain on the UI thread; result-file publication
+does not. Publishing a receipt grants no new binding or node-cleanup authority.

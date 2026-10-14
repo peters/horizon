@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 
 use horizon_core::browser::manifest::{
     self,
-    provider_usage::{ProviderUsageSummary, UsageQueue, UsageRequest},
+    provider_usage::{ProviderUsageSummary, UsageQueue, UsageRequest, UsageResult},
 };
 use horizon_core::browser::remote::RemoteProviderProfile;
 use horizon_core::browser::remote_usage::ProviderUsageMonitor;
@@ -23,6 +23,14 @@ struct PendingUsage {
 }
 
 impl HorizonApp {
+    pub(in crate::app) fn publish_tailnet_credential_result(&mut self, result: UsageResult) {
+        self.browser_create_host.io.write(move || {
+            if let Err(error) = manifest::provider_usage::complete_provider_usage(&result) {
+                tracing::warn!(kind = ?error.kind(), "could not answer an API credential request");
+            }
+        });
+    }
+
     #[cfg(feature = "cloud-workspaces")]
     fn poll_tailnet_credential_requests(&mut self) {
         self.browser_create_host
@@ -141,12 +149,12 @@ impl HorizonApp {
 
 impl HorizonApp {
     #[cfg(not(feature = "cloud-workspaces"))]
-    fn answer_tailnet_credential(&self, request: &UsageRequest) {
+    fn answer_tailnet_credential(&mut self, request: &UsageRequest) {
         let result = request.result(
             Vec::new(),
             Some("tailnet_credential_unavailable: cloud support is disabled".into()),
         );
-        let _ = manifest::provider_usage::complete_provider_usage(&result);
+        self.publish_tailnet_credential_result(result);
     }
 }
 
