@@ -401,7 +401,8 @@ which is the SHA-256 of the raw index that the registry serves.
 The workflow never replaces a published `sha-` tag. Before each push, it makes sure
 that the tag does not exist; any registry error other than "not found" stops the
 job. Thus, if a run fails after a push, use **Re-run failed jobs**, not
-**Re-run all jobs**.
+**Re-run all jobs**. If a failed job already pushed its own tag, a re-run of that
+job also stops. Then the next main commit that changes the images publishes them.
 
 To make the same image locally, do this command. It pushes nothing:
 

@@ -122,6 +122,8 @@ jobs:
     name: Publish worker helpers (${{ matrix.arch }})
     if: github.repository == 'peters/horizon' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     strategy:
+      # A cancelled leg could stop after its push; its tag would block a re-run.
+      fail-fast: false
       matrix:
         include:
           - arch: amd64
@@ -212,6 +214,8 @@ jobs:
     name: Publish CPU base worker (${{ matrix.arch }})
     needs: helpers-index
     strategy:
+      # A cancelled leg could stop after its push; its tag would block a re-run.
+      fail-fast: false
       matrix:
         include:
           - arch: amd64
