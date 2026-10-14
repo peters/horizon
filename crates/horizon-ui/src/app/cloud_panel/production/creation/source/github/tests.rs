@@ -25,19 +25,6 @@ fn account() -> Account {
 }
 
 #[test]
-fn typing_narrows_the_repositories_by_name() {
-    let names: Vec<String> = ["acme/api", "acme/web", "acme/web-docs", "octo/web"]
-        .iter()
-        .map(|name| (*name).to_owned())
-        .collect();
-    assert_eq!(matching(&names, "").len(), 4);
-    assert_eq!(matching(&names, "WEB"), [&names[1], &names[2], &names[3]]);
-    assert_eq!(matching(&names, "acme/web"), [&names[1], &names[2]]);
-    let many: Vec<String> = (0..20).map(|n| format!("acme/repo-{n}")).collect();
-    assert_eq!(matching(&many, "repo").len(), SHOWN);
-}
-
-#[test]
 fn a_private_github_link_offers_the_connected_account_unless_a_token_was_chosen() {
     let github = horizon_core::cloud_runtime::repository::source::parse("github.com/acme/private").unwrap();
     let gitlab = horizon_core::cloud_runtime::repository::source::parse("gitlab.com/acme/private").unwrap();
@@ -160,6 +147,11 @@ fn a_name_that_narrows_the_list_is_no_unknown_link() {
     state.input = "acme/we".into();
     assert!(state.filters_the_list());
     assert!(state.remote().is_none(), "a partial name is not looked up");
+    state.input = "acme/wb".into();
+    assert!(
+        !state.filters_the_list(),
+        "letters apart are a repository to look up, though the results show the listed one"
+    );
     state.input = "ACME/web".into();
     assert!(!state.filters_the_list(), "a listed repository in full is the choice");
     assert!(state.remote().is_some());

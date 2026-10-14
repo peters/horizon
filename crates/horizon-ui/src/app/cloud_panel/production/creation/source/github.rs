@@ -17,9 +17,6 @@ use std::{
 };
 use zeroize::Zeroize as _;
 
-/// At most this many repositories count as narrowed by a typed name.
-const SHOWN: usize = 8;
-
 /// How long an out-of-date list waits before a quiet refresh tries again.
 const RETRY: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -452,18 +449,6 @@ fn prompt(ui: &mut Ui, prompt: Option<&Prompt>, busy: bool) -> bool {
     cancelled
 }
 
-/// The repositories whose name holds the typed `filter`, at most [`SHOWN`]. A whole link
-/// in the field is looked up as it is, so the list steps aside for it.
-fn matching<'a>(repositories: &'a [String], filter: &str) -> Vec<&'a String> {
-    let filter = filter.trim().to_ascii_lowercase();
-    let filter = filter.as_str();
-    repositories
-        .iter()
-        .filter(|name| filter.is_empty() || name.contains(filter))
-        .take(SHOWN)
-        .collect()
-}
-
 /// Whether the field holds a link rather than a name to narrow the list by.
 pub(super) fn names_a_link(input: &str) -> bool {
     let input = input.trim();
@@ -564,7 +549,7 @@ impl super::State {
             .and_then(|account| account.repositories.as_ref())
             .is_some_and(|repositories| {
                 !names_a_link(text)
-                    && !matching(repositories, text).is_empty()
+                    && repositories.iter().any(|name| super::finder::narrows(text, name))
                     && !repositories.iter().any(|name| name.eq_ignore_ascii_case(text))
             })
     }

@@ -102,6 +102,14 @@ fn digest(names: &[String]) -> u64 {
     hasher.finish()
 }
 
+/// Whether `query` narrows a list that holds `name`: it is part of the name, whatever the
+/// case. Not the looser matching of the results: almost any short `owner/name` has its
+/// letters in order in some listed name of a large account, and text that narrows the list
+/// is not looked up as a repository, so an unlisted one could then only be pasted as a link.
+pub(super) fn narrows(query: &str, name: &str) -> bool {
+    name.to_lowercase().contains(&query.trim().to_lowercase())
+}
+
 /// Text that names a folder rather than a repository or a search.
 pub(super) fn is_path(text: &str) -> bool {
     let text = text.trim_start();
@@ -596,15 +604,18 @@ impl super::State {
     pub(super) fn finder_keys(&mut self, ui: &egui::Ui, focused: bool) -> Option<PathBuf> {
         use egui::{Key, Modifiers};
         // Shift+Tab and other chords keep their own meaning, and an earlier path's rows take
-        // no keys while this path's folders are read. Text typed or pasted in this frame
+        // no keys while this path's folders are read. Text typed, pasted or committed by an
+        // input method in this frame
         // reaches the field only after these keys, so the rows would answer the text before
         // it: the field and Continue take such a frame's keys instead.
         let plain = ui.input(|input| {
             input.modifiers.is_none()
-                && !input
-                    .events
-                    .iter()
-                    .any(|event| matches!(event, egui::Event::Text(_) | egui::Event::Paste(_)))
+                && !input.events.iter().any(|event| {
+                    matches!(
+                        event,
+                        egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Ime(egui::ImeEvent::Commit(_))
+                    )
+                })
         });
         if !focused || !plain || !self.searching() || !self.finder.settled() || self.finder.current_rows().is_empty() {
             return None;

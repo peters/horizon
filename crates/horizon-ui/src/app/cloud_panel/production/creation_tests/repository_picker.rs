@@ -121,6 +121,35 @@ fn open_with_link(ctx: &egui::Context, app: &mut HorizonApp, root: std::path::Pa
 }
 
 #[test]
+fn enter_with_an_input_method_commit_in_one_frame_answers_the_text() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    std::fs::create_dir_all(temp.path().join("repository/.git")).unwrap();
+    open_creation(&ctx, &mut app, temp.path().join("clouds"));
+    type_text(&ctx, &mut app, &format!("{}/", temp.path().display()));
+    wait_for_text(&ctx, &mut app, "repository");
+    // An input method confirms its text and Enter in one frame, as CJK input methods do.
+    frame(
+        &ctx,
+        &mut app,
+        vec![
+            Event::Ime(egui::ImeEvent::Commit("plain".into())),
+            key_event(Key::Enter, true, false),
+        ],
+        Modifiers::NONE,
+    );
+    assert!(
+        app.cloud_prototype.production.repository.is_empty(),
+        "the earlier row is not chosen"
+    );
+    assert_eq!(
+        app.cloud_prototype.production.source.input(),
+        format!("{}/plain", temp.path().display())
+    );
+}
+
+#[test]
 fn clicking_outside_the_picker_cancels_it_and_keeps_the_dialog() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),

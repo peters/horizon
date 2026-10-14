@@ -420,3 +420,14 @@ fn a_github_checkout_on_another_port_is_not_the_account_s_repository() {
         "the account's repository keeps its row"
     );
 }
+
+#[test]
+fn only_part_of_a_listed_name_narrows_the_list() {
+    assert!(super::narrows("ACME/we", "acme/web-board"));
+    assert!(super::narrows("board", "acme/web-board"));
+    assert!(
+        !super::narrows("acme/docs", "acme/dev-ops-cheatsheet"),
+        "a repository to look up"
+    );
+    assert!(!super::narrows("octocat/hello-world", "octocat-labs/hello-world-docs"));
+}
