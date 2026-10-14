@@ -38,6 +38,7 @@ documents that are not yet STE.
 | [cloud-settings-replace-key](procedures/cloud-settings-replace-key.md) | Cloud settings saved keys | none |
 | [cloud-setup-gate](procedures/cloud-setup-gate.md) | Setup gate: the proof and the desktop preview of the setup agent on real repositories | none |
 | [cloud-stopped-panel-restore](procedures/cloud-stopped-panel-restore.md) | Restored panels of a stopped or reconnecting cloud | rents compute |
+| [cloud-uncommitted-build-context](procedures/cloud-uncommitted-build-context.md) | Uncommitted files of an image build context: what goes in, refusals and links | none |
 | [companion-clouds](procedures/companion-clouds.md) | Companion clouds, agent access to the SSH alias, the key and the catalog | rents compute |
 | [connect-github](procedures/connect-github.md) | Connect GitHub: the GitHub card, per-cloud sign-in in both modes, reconnect, skip and access requests | rents compute |
 | [device-type-multi-chunk](procedures/device-type-multi-chunk.md) | `horizon-device` text input in several `type` actions | none |
