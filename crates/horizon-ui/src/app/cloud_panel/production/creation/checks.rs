@@ -82,7 +82,7 @@ impl State {
                 // Not a key a rented provider asks for, so no key form either.
                 vec![problem(
                     "Docker host",
-                    "No Docker host is saved on this computer yet. Add it to docker_hosts in the cloud settings file."
+                    "No Docker host is saved on this computer yet. Add one in the Docker host card of Cloud settings."
                         .into(),
                 )]
             } else {
