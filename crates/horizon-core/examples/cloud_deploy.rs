@@ -49,7 +49,7 @@ fn run_args(args: &[String]) -> cloud_runtime::Result<()> {
     if args.len() < 3 {
         return Err(cloud_runtime::Error::Invalid(USAGE));
     }
-    let mut settings = recorded_host(Settings::load(&PathBuf::from(&args[1]))?, args)?;
+    let mut settings = recorded_host(Settings::load(&PathBuf::from(&args[1]))?, args);
     let cancel = Cancellation::default();
     if args[0] == "reconcile" && (3..=4).contains(&args.len()) {
         return reconcile(args, &settings, &cancel);
@@ -607,20 +607,20 @@ fn offers(path: &std::path::Path, requirements: Option<&str>) -> cloud_runtime::
 /// runs on, as a cloud card's placement does, so a machine with several saved hosts
 /// reaches it. A command that creates a cloud names no state root. The record is only
 /// read: the command takes the lock itself.
-fn recorded_host(mut settings: Settings, args: &[String]) -> cloud_runtime::Result<Settings> {
+fn recorded_host(mut settings: Settings, args: &[String]) -> Settings {
     if matches!(args[0].as_str(), "plan-deploy" | "deploy" | "prepare-image") {
-        return Ok(settings);
+        return settings;
     }
     let Ok(bytes) = std::fs::read(PathBuf::from(&args[2]).join("deployment.json")) else {
-        return Ok(settings);
+        return settings;
     };
     // A record that cannot be read is left to the command itself to report.
     let Ok(record) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-        return Ok(settings);
+        return settings;
     };
     let spec = &record["spec"];
     if spec["profile"]["provider"] != horizon_cloud::docker_host::PROVIDER {
-        return Ok(settings);
+        return settings;
     }
     let data_centers: Vec<String> = serde_json::from_value(spec["data_centers"].clone()).unwrap_or_default();
     if !data_centers.is_empty() {
@@ -629,7 +629,7 @@ fn recorded_host(mut settings: Settings, args: &[String]) -> cloud_runtime::Resu
             ..Default::default()
         });
     }
-    Ok(settings)
+    settings
 }
 
 /// Prints the running worker's SSH endpoint as the provider reports it now, with the
