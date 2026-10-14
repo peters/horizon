@@ -104,7 +104,7 @@ pub(in crate::cloud_runtime) fn stop_observed(
 }
 
 /// As `stop_observed`, without an observer and with the client given.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(super) fn stop_with(compute: &Compute, store: &Store, state: &mut Deployment, cancel: &Cancellation) -> Result<()> {
     stop_with_observer(compute, store, state, cancel, mutation::IGNORE)
 }
