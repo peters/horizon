@@ -2,7 +2,8 @@
 
 Copy these files into a dedicated build context. Put the matching built
 `horizon-browser`, `horizon-cloud-worker` and `horizon-device` (`--features cli`) executables under `bin/`.
-Build with Docker/BuildKit for linux/amd64. The image contains no repository files
+Build with Docker/BuildKit for linux/amd64 or linux/arm64, with executables of the same
+architecture (see [Architectures](#architectures)). The image contains no repository files
 or credentials. Agent login uses each actual CLI and stores its supported state
 under `/workspace/home`, on the worker volume.
 
@@ -438,7 +439,9 @@ The recipe gets these components for each architecture:
 Google does not publish Chrome for arm64, and the Ubuntu 24.04 `chromium` package
 installs a snap, which does not run in a container. An apt pin lets the recipe take
 only `chromium`, `chromium-common`, `libdav1d6` and `libjpeg62-turbo` from Debian.
-Other packages come from Ubuntu.
+Other packages come from Ubuntu. If a later Debian chromium needs another library
+that Ubuntu does not have, the arm64 build fails and no image is published. Then add
+that library to the pin.
 
 > **CAUTION:** DO NOT RUN AN AMD64-ONLY WORKER IMAGE ON AN ARM HOST.
 > The container starts under emulation, but the worker does not become ready.
