@@ -184,10 +184,8 @@ the hovered or focused row.
 3. Move the focus to the group header.
 
    Result: The header says the group name and its count, for example
-   `This PC 13`. The summary `live` is read too. On a narrow sidebar where a
-   summary does not show next to **Stop idle…**, the header says the summary
-   after the count. The [cloud list procedure](cloud-list.md) has a group with
-   **Stop idle…**.
+   `This PC 13`. The summary `live` is read too. On a narrow sidebar where the
+   summary does not show, the header says the summary after the count.
 
 ## 7. Pass criteria
 

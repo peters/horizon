@@ -40,7 +40,7 @@ USAGE:
     horizon-browser "<GOAL>" [--backend <auto|chromium|firefox|safari>] [--visible] [--json]
     horizon-browser do "<GOAL>" [OPTIONS]
     horizon-browser orientation <PANEL-ID> <portrait|landscape> [--timeout-millis <MILLIS>] [-o <REPORT.json|->]
-    horizon-browser cloud <list|attach|park|stop> [CLOUD-ID] [-o <REPORT.json|->]
+    horizon-browser cloud <list|attach|park> [CLOUD-ID] [-o <REPORT.json|->]
     horizon-browser run <PLAN.json|-> [--output <REPORT.json|->] [--timeout <SECONDS>]
     horizon-browser resume <JOB-ID> [--output <REPORT.json|->] [--timeout <SECONDS>] [--on-uncertain fail|skip]
     horizon-browser mcp [--standalone|--connect] [--keep-alive] [--backend <BACKEND>] [--visible]

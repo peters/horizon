@@ -217,7 +217,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "cloud_list",
-        description = "The cloud list of the Horizon sidebar for the clouds in your workspace. operation list (the default) returns each cloud's ID, name, group (needs_you, cloud or parked), status line, hourly rate, whether an agent works on it and whether it is idle. attach moves the person's view to the cloud, as a click on its row does; its terminals attach when the cloud stays in view. park parks the terminals of a cloud that is out of view now instead of after the grace period; a cloud in view is refused, because it attaches again. stop stops the worker of an idle cloud, as Stop idle in the sidebar does; a busy cloud, a cloud on which an agent works and a cloud that waits for the person are refused. For a parked cloud the stop waits for a new status read of its sessions and is skipped when an agent works. Stop ends running processes and keeps the workspace storage; Resume on the card starts a worker again. Get explicit authorization from the person before stop. Requires the running Horizon."
+        description = "The cloud list of the Horizon sidebar for the clouds in your workspace. operation list (the default) returns each cloud's ID, name, group (needs_you, cloud or parked), status line, hourly rate and whether an agent works on it. attach moves the person's view to the cloud, as a click on its row does; its terminals attach when the cloud stays in view. park parks the terminals of a cloud that is out of view now instead of after the grace period; a cloud in view is refused, because it attaches again. Requires the running Horizon."
     )]
     async fn cloud_list(
         &self,

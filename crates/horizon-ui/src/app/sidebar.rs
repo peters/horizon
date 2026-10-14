@@ -7,13 +7,13 @@ mod rows;
 mod text;
 mod toolbar;
 
-pub(in crate::app) use list::{IdleCloud, ListCache};
+pub(in crate::app) use list::ListCache;
 pub(in crate::app) use new_workspace::{NEW_CLOUD_NOT_READY, NewWorkspace};
 
 use std::collections::HashMap;
 
 use egui::{Align, Color32, Context, CornerRadius, CursorIcon, Id, Layout, Order, Pos2, Rect, Sense, Stroke, Vec2};
-use horizon_core::cloud_list::{Group, Row};
+use horizon_core::cloud_list::Row;
 use horizon_core::{PanelId, PanelKind, WorkspaceDockSide, WorkspaceId, WorkspaceLayout};
 
 use crate::theme;
@@ -62,8 +62,6 @@ struct SidebarActions {
     close_all_in_workspace: Option<WorkspaceId>,
     clear_layout: Option<WorkspaceId>,
     arrange_layout: Option<(WorkspaceId, WorkspaceLayout)>,
-    /// The group whose idle clouds the user chooses to stop.
-    stop_idle: Option<Group>,
 }
 
 #[derive(Clone, Copy)]
@@ -526,10 +524,6 @@ impl HorizonApp {
         });
         if let Some(panel_id) = actions.focus_panel {
             self.board.focus(panel_id);
-        }
-        #[cfg(feature = "cloud-workspaces")]
-        if let Some(group) = actions.stop_idle {
-            self.request_idle_stop(group);
         }
 
         let pan_to_panel_workspace = actions

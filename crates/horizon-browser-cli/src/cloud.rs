@@ -16,8 +16,7 @@ impl Options {
             Some("list") => "list",
             Some("attach") => "attach",
             Some("park") => "park",
-            Some("stop") => "stop",
-            _ => return Err("cloud requires list, attach, park or stop".into()),
+            _ => return Err("cloud requires list, attach or park".into()),
         };
         let cloud = if operation == "list" {
             None
@@ -26,7 +25,7 @@ impl Options {
                 args.next()
                     .and_then(|value| value.into_string().ok())
                     .filter(|value| !value.is_empty() && !value.starts_with('-'))
-                    .ok_or("cloud attach, park and stop require a cloud ID from cloud list")?,
+                    .ok_or("cloud attach and park require a cloud ID from cloud list")?,
             )
         };
         // The same shape that the request queue accepts, so a malformed ID makes no plan.
@@ -83,12 +82,12 @@ mod tests {
     }
     #[test]
     fn direct_commands_call_the_cloud_list_tool() {
-        let options = parse(&["stop", "cloud-1", "-o", "-"]).unwrap();
+        let options = parse(&["park", "cloud-1", "-o", "-"]).unwrap();
         let plan: horizon_browser_cli::Plan = serde_json::from_value(options.plan()).unwrap();
         assert_eq!(plan.steps[0].tool, "cloud_list");
         assert_eq!(
             json!(plan.steps[0].arguments),
-            json!({"operation": "stop", "cloud": "cloud-1"})
+            json!({"operation": "park", "cloud": "cloud-1"})
         );
         assert_eq!(options.output, Some(PathBuf::from("-")));
         let list: horizon_browser_cli::Plan = serde_json::from_value(parse(&["list"]).unwrap().plan()).unwrap();
@@ -103,9 +102,11 @@ mod tests {
             vec!["attach"],
             vec!["park", "--output", "-"],
             vec!["list", "c"],
-            vec!["stop", "c", "--output"],
+            vec!["park", "c", "--output"],
             vec!["list", "-o", "-", "-o", "-"],
-            vec!["stop", "a/b"],
+            vec!["park", "a/b"],
+            // The bulk stop of idle clouds was removed.
+            vec!["stop", "c"],
             vec!["park", &long],
         ] {
             assert!(parse(&args).is_err());

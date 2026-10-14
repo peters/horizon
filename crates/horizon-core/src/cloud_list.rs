@@ -120,23 +120,6 @@ pub struct CloudFacts {
     pub line: String,
     /// What the worker bills each hour now, when its provider reports a rate.
     pub hourly_rate: Option<Rate>,
-    /// A stop of the worker can start now: its card offers Stop.
-    pub stoppable: bool,
-    /// `working` is known: for a parked cloud, a status read without error covers
-    /// each parked terminal.
-    pub known: bool,
-}
-
-impl CloudFacts {
-    /// An idle cloud that a bulk stop offers: its worker runs and can stop now, it is
-    /// known that no agent works on it, and it does not wait for the user.
-    #[must_use]
-    pub fn idle(&self) -> bool {
-        self.stoppable
-            && self.known
-            && !self.working
-            && matches!(self.condition, Condition::Ready | Condition::Idle | Condition::Parked)
-    }
 }
 
 /// An hourly rate as the cloud list shows it, as a cloud card does: `$0.690/h`, or
@@ -154,38 +137,6 @@ pub fn rates_text(rates: &[Rate]) -> String {
         .map(|rate| rate_text(*rate))
         .collect::<Vec<_>>()
         .join(" + ")
-}
-
-/// What stopping the workers of `clouds` saves each hour, said before the stop is
-/// confirmed, with one sum per currency. A worker without a reported rate makes the
-/// sums lower bounds, which are rounded down so that they never say more than the sums.
-#[must_use]
-pub fn saving_text<'a>(clouds: impl IntoIterator<Item = &'a CloudFacts>) -> String {
-    let (mut rates, mut unknown) = (Vec::new(), 0_usize);
-    for cloud in clouds {
-        match cloud.hourly_rate {
-            Some(rate) => rates.push(rate),
-            None => unknown += 1,
-        }
-    }
-    let known = rates.len();
-    let sums = cost::sum_by_currency(rates);
-    let without = |count: usize| {
-        if count == 1 {
-            "1 worker reports no rate".to_owned()
-        } else {
-            format!("{count} workers report no rate")
-        }
-    };
-    match (known, unknown) {
-        (0, 0) => String::new(),
-        (0, _) => "Saving unknown".to_owned(),
-        (_, 0) => format!("Saves {}", rates_text(&sums)),
-        _ => {
-            let floored: Vec<Rate> = sums.into_iter().map(Rate::floored).collect();
-            format!("Saves at least {}; {}", rates_text(&floored), without(unknown))
-        }
-    }
 }
 
 /// One row of the cloud list.
@@ -409,57 +360,7 @@ mod tests {
             working,
             line: format!("{condition:?}"),
             hourly_rate: rate,
-            stoppable: true,
-            known: true,
         }
-    }
-
-    #[test]
-    fn a_bulk_stop_offers_only_idle_clouds_that_can_stop_now() {
-        for (condition, idle) in [
-            (Condition::Failed, false),
-            (Condition::Attention, false),
-            (Condition::Busy, false),
-            (Condition::Ready, true),
-            (Condition::Idle, true),
-            (Condition::Parked, true),
-            (Condition::Stopped, false),
-        ] {
-            assert_eq!(cloud(condition, false, None).idle(), idle, "{condition:?}");
-        }
-        assert!(!cloud(Condition::Ready, true, None).idle(), "an agent works on it");
-        assert!(
-            !cloud(Condition::Parked, true, None).idle(),
-            "an agent works on the worker"
-        );
-        let mut blocked = cloud(Condition::Ready, false, None);
-        blocked.stoppable = false;
-        assert!(!blocked.idle(), "its card does not offer Stop");
-        let mut unread = cloud(Condition::Parked, false, None);
-        unread.known = false;
-        assert!(!unread.idle(), "no read covers each parked terminal");
-    }
-
-    #[test]
-    fn the_saving_of_a_bulk_stop_adds_up_the_reported_rates() {
-        let rated = [
-            cloud(Condition::Ready, false, Some(0.0121)),
-            cloud(Condition::Parked, false, Some(0.24)),
-        ];
-        assert_eq!(saving_text(&rated), "Saves $0.252/h");
-        let unknown = cloud(Condition::Ready, false, None);
-        assert_eq!(
-            saving_text([&rated[0], &unknown]),
-            "Saves at least $0.012/h; 1 worker reports no rate"
-        );
-        // A lower bound is rounded down: $0.0129/h is at least $0.012/h, not $0.013/h.
-        let below = cloud(Condition::Ready, false, Some(0.0129));
-        assert_eq!(
-            saving_text([&below, &unknown, &unknown]),
-            "Saves at least $0.012/h; 2 workers report no rate"
-        );
-        assert_eq!(saving_text([&unknown, &unknown]), "Saving unknown");
-        assert_eq!(saving_text(&[]), "");
     }
 
     fn euros(hourly: f64) -> Rate {
@@ -474,13 +375,6 @@ mod tests {
         let hetzner = priced(Condition::Ready, false, Some(euros(0.0240)));
         let other = priced(Condition::Ready, false, Some(euros(0.01229)));
         let runpod = cloud(Condition::Parked, false, Some(0.69));
-        assert_eq!(saving_text([&hetzner, &runpod]), "Saves €0.0240/h + $0.690/h");
-        let unknown = cloud(Condition::Ready, false, None);
-        // A lower bound is rounded down in each currency's decimals.
-        assert_eq!(
-            saving_text([&hetzner, &other, &unknown]),
-            "Saves at least €0.0362/h; 1 worker reports no rate"
-        );
         let row = Row::of(&[hetzner.clone(), runpod.clone(), other], false, None);
         assert_eq!(rates_text(row.hourly_rate.as_deref().unwrap()), "€0.0363/h + $0.690/h");
         let rows = [row, Row::of(&[runpod], false, None)];
