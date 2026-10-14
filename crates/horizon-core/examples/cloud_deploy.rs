@@ -50,9 +50,7 @@ fn run_args(args: &[String]) -> cloud_runtime::Result<()> {
         return Err(cloud_runtime::Error::Invalid(USAGE));
     }
     let mut settings = Settings::load(&PathBuf::from(&args[1]))?;
-    if !matches!(args[0].as_str(), "plan-deploy" | "deploy" | "prepare-image") {
-        recorded_host(&mut settings, &PathBuf::from(&args[2]))?;
-    }
+    recorded_host(&mut settings, &args)?;
     let cancel = Cancellation::default();
     if args[0] == "reconcile" && (3..=4).contains(&args.len()) {
         return reconcile(args, &settings, &cancel);
@@ -606,11 +604,15 @@ fn offers(path: &std::path::Path, requirements: Option<&str>) -> cloud_runtime::
     Ok(())
 }
 
-/// Narrows `settings` to the Docker host that the cloud recorded under `root` runs on, as
-/// a cloud card's placement does, so a machine with several saved hosts reaches it. The
-/// record is only read: the command takes the lock itself.
-fn recorded_host(settings: &mut Settings, root: &std::path::Path) -> cloud_runtime::Result<()> {
-    let Ok(bytes) = std::fs::read(root.join("deployment.json")) else {
+/// Narrows `settings` to the Docker host that the cloud recorded under its state root
+/// runs on, as a cloud card's placement does, so a machine with several saved hosts
+/// reaches it. A command that creates a cloud names no state root. The record is only
+/// read: the command takes the lock itself.
+fn recorded_host(settings: &mut Settings, args: &[String]) -> cloud_runtime::Result<()> {
+    if matches!(args[0].as_str(), "plan-deploy" | "deploy" | "prepare-image") {
+        return Ok(());
+    }
+    let Ok(bytes) = std::fs::read(PathBuf::from(&args[2]).join("deployment.json")) else {
         return Ok(());
     };
     let record: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| cloud_runtime::Error::Json)?;
