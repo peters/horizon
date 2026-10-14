@@ -49,7 +49,7 @@ fn run_args(args: &[String]) -> cloud_runtime::Result<()> {
     if args.len() < 3 {
         return Err(cloud_runtime::Error::Invalid(USAGE));
     }
-    let mut settings = recorded_host(Settings::load(&PathBuf::from(&args[1]))?, &args)?;
+    let mut settings = recorded_host(Settings::load(&PathBuf::from(&args[1]))?, args)?;
     let cancel = Cancellation::default();
     if args[0] == "reconcile" && (3..=4).contains(&args.len()) {
         return reconcile(args, &settings, &cancel);
