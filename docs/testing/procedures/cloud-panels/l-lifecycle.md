@@ -882,16 +882,35 @@ Use `smoke-sib` on RunPod. Its profile has a `build` section. In the steps,
    was not tracked). It does not list `smoke-ignored.log`. It shows the warning about
    a public registry.
 
-5. Run the harness plan for the same cloud.
+5. In the fixture terminal, run the harness plan for `smoke-sib`. `<cloud-id>` is the
+   cloud ID of `smoke-sib`, as in L03.
 
    ```sh
-   <run>/bin/cloud_deploy plan-rebuild <home>/.horizon/cloud/settings.json <state-root> <profile>
+   <run>/bin/cloud_deploy plan-rebuild <home>/.horizon/cloud/settings.json <home>/.horizon/cloud/<cloud-id> runpod-build
    ```
 
    Result: The output has one `Uncommitted file:` line for each file of step 4 and a
-   line with the plan token.
+   line with the plan token. Record the token as `<token>`.
 
-6. Add a line to `<context>/smoke-new.txt`. Click **Rebuild and restart**.
+6. Run the harness rebuild without a token.
+
+   ```sh
+   <run>/bin/cloud_deploy rebuild <home>/.horizon/cloud/settings.json <home>/.horizon/cloud/<cloud-id> runpod-build
+   ```
+
+   Result: The command stops at once and tells you to pass the token. Nothing is
+   built, and the worker does not restart.
+
+7. Add a line to `<context>/smoke-new.txt`. Run the harness rebuild with `<token>`.
+
+   ```sh
+   <run>/bin/cloud_deploy rebuild <home>/.horizon/cloud/settings.json <home>/.horizon/cloud/<cloud-id> runpod-build <token>
+   ```
+
+   Result: The command stops at once and says that the checkout differs from the
+   printed plan. Nothing is built, and the worker does not restart.
+
+8. On the card, click **Rebuild and restart** in the confirmation of step 4.
 
    Result: The card shows **Rebuild refused:** and says that the uncommitted files
    are not the confirmed ones. The worker does not restart. The card offers
@@ -900,33 +919,38 @@ Use `smoke-sib` on RunPod. Its profile has a `build` section. In the steps,
    > **CAUTION:** THIS STEP PUSHES AN IMAGE AND RESTARTS THE WORKER. The image goes to
    > the registry of the profile. Use only synthetic file contents.
 
-7. On the card, click **Rebuild image & restart…**, then **Rebuild and restart**.
+9. On the card, click **Rebuild image & restart…**, then **Rebuild and restart**.
    Wait until the card shows **Ready**.
 
    Result: The card shows the build, the push and the image switch.
 
-8. Examine the card.
+10. Examine the card.
 
-   Result: The card shows `Image: built from <commit> plus uncommitted changes`, where
-   `<commit>` is the first 12 characters of `git -C <repo> rev-parse HEAD`.
+    Result: The card shows `Image: built from <commit> plus uncommitted changes`,
+    where `<commit>` is the first 12 characters of `git -C <repo> rev-parse HEAD`.
 
-9. In a Shell panel of `smoke-sib`, show the marker.
-
-   ```sh
-   cat /etc/horizon-smoke-uncommitted
-   ```
-
-   Result: The panel shows `synthetic-uncommitted-marker`.
-
-10. On this computer, show the label of the new image.
+11. In a Shell panel of `smoke-sib`, show the marker.
 
     ```sh
-    docker image inspect --format '{{ index .Config.Labels "io.horizon.worker.uncommitted" }}' <image>
+    cat /etc/horizon-smoke-uncommitted
     ```
 
-    Result: The label names the commit and a 64-character `files_sha256`.
+    Result: The panel shows `synthetic-uncommitted-marker`.
 
-11. Discard the changes of steps 1 and 2.
+12. On this computer, show the label of each local image that a rebuild built from
+    uncommitted files.
+
+    ```sh
+    export DOCKER_HOST=unix://<docker-socket>
+    for image in $(docker image ls --filter label=io.horizon.worker.uncommitted --format '{{.Repository}}:{{.Tag}}'); do
+      echo "$image $(docker image inspect --format '{{ index .Config.Labels "io.horizon.worker.uncommitted" }}' "$image")"
+    done
+    ```
+
+    Result: A line with the tag `horizon-<cloud-id>-<operation>` of `<build-repository>`
+    shows a label that names the commit of step 10 and a 64-character `files_sha256`.
+
+13. Discard the changes of steps 1 and 2.
 
     ```sh
     git -C <repo> checkout -- .; rm -f <repo>/<context>/smoke-new.txt <repo>/<context>/smoke-ignored.log
@@ -935,12 +959,21 @@ Use `smoke-sib` on RunPod. Its profile has a `build` section. In the steps,
 
     Result: `git -C <repo> status --short` shows nothing.
 
-    > **CAUTION:** THIS STEP RESTARTS THE WORKER.
+14. Run the harness plan of step 5 again.
 
-12. On the card, click **Rebuild image & restart…**, then **Rebuild and restart**.
-    Wait until the card shows **Ready**.
+    Result: The output has no `Uncommitted file:` line. Record the new token as
+    `<clean-token>`.
 
-    Result: The card does not show `plus uncommitted changes`.
+    > **CAUTION:** THIS STEP PUSHES AN IMAGE AND RESTARTS THE WORKER.
+
+15. Run the harness rebuild with `<clean-token>`. Wait until the card shows **Ready**.
+
+    ```sh
+    <run>/bin/cloud_deploy rebuild <home>/.horizon/cloud/settings.json <home>/.horizon/cloud/<cloud-id> runpod-build <clean-token>
+    ```
+
+    Result: The command builds, pushes and switches the worker. The card does not
+    show `plus uncommitted changes`.
 
 ## 7. Pass criteria
 
@@ -958,7 +991,8 @@ Use `smoke-sib` on RunPod. Its profile has a `build` section. In the steps,
   not relaunch.
 - A rebuild takes uncommitted settings and uncommitted recipe files. The confirmation
   lists each uncommitted file and never an ignored file. A secret file name and a file
-  changed after the confirmation refuse the rebuild. The card names an image built
+  changed after the confirmation refuse the rebuild. The harness rebuild refuses a
+  missing token with uncommitted files and a stale token, and accepts the printed one. The card names an image built
   from uncommitted changes until a rebuild from the commit only.
 - The rebuild of `smoke-hd` is refused with `storage.container_gb`, and its
   server stays.
