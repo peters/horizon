@@ -31,6 +31,8 @@ const RETRY: Duration = Duration::from_secs(30);
 const PROMPT_SETTLE: Duration = Duration::from_secs(15);
 const PROMPT_QUIET: Duration = Duration::from_secs(3);
 const AGENT: &str = "Native test agent";
+/// How often Horizon tries to open the desktop viewer before it gives the task without it.
+const DESKTOP_TRIES: u8 = 4;
 
 impl HorizonApp {
     /// Each frame: follows the native tests of every Upkeep this board holds.
@@ -306,9 +308,12 @@ impl HorizonApp {
                 .get(&card)
                 .is_some_and(|runtime| runtime.desktop.is_some())
         {
-            // The task waits for the viewer, so that the person can watch the test.
+            // The task waits for the viewer, so that the person can watch the test, but not
+            // for a viewer that keeps failing.
             if native.desktop_after.is_none_or(|after| now >= after) {
-                native.desktop_shown = self.cloud_add_panel(ctx, card, PanelKind::Device, None);
+                native.desktop_tries += 1;
+                native.desktop_shown =
+                    self.cloud_add_panel(ctx, card, PanelKind::Device, None) || native.desktop_tries >= DESKTOP_TRIES;
                 native.desktop_after = Some(now + PROMPT_SETTLE);
             }
             if !native.desktop_shown {

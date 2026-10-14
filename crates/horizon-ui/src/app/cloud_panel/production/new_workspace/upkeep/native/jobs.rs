@@ -52,7 +52,7 @@ pub(super) fn load(ctx: &egui::Context, cloud_id: &str, native: &mut Native, now
 
 /// Saves the ledger when it changed and no save is under way, and again a while after a save
 /// failed. Returns whether the ledger on disk is the one in memory, or `None` while a save of
-/// it is under way.
+/// it is under way or waits to be tried again.
 pub(super) fn save(
     ctx: &egui::Context,
     cloud_id: &str,
@@ -75,7 +75,7 @@ pub(super) fn save(
     }
     if let Some(after) = native.save_after.filter(|after| now < *after) {
         ctx.request_repaint_after(after - now);
-        return Some(false);
+        return None;
     }
     if !native.dirty {
         return Some(native.stored);

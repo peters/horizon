@@ -190,10 +190,14 @@ fn a_failed_save_of_the_ledger_is_tried_again_after_a_while() {
         ..Native::default()
     };
     let now = Instant::now();
-    assert_eq!(save(&ctx, "upkeep", &ledger, &mut native, now), Some(false));
+    assert_eq!(
+        save(&ctx, "upkeep", &ledger, &mut native, now),
+        None,
+        "a launch waits for the next save"
+    );
     assert!(native.dirty, "the ledger on disk is older than the one in memory");
     assert!(native.saving.is_none(), "the next save waits");
-    assert_eq!(save(&ctx, "upkeep", &ledger, &mut native, now + RETRY / 2), Some(false));
+    assert_eq!(save(&ctx, "upkeep", &ledger, &mut native, now + RETRY / 2), None);
     assert!(native.saving.is_none() && native.dirty);
     assert_eq!(native.save_after, Some(now + RETRY));
 }

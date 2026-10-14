@@ -132,10 +132,11 @@ pub(in crate::app) struct Native {
     /// The report of a test that ended, kept until its cloud can be closed: a cloud that
     /// deploys or saves cannot close yet.
     pub(in crate::app) ending: Option<Report>,
-    /// The desktop viewer of the test cloud opened.
+    /// The desktop viewer of the test cloud opened, or Horizon stopped trying.
     pub(in crate::app) desktop_shown: bool,
     /// After a failed try to open the desktop viewer, when to try again.
     pub(in crate::app) desktop_after: Option<Instant>,
+    pub(in crate::app) desktop_tries: u8,
     /// When the task's Enter goes to the agent panel.
     pub(in crate::app) submit_at: Option<Instant>,
     pub(in crate::app) probing: Option<Receiver<Result<Probed, String>>>,
@@ -159,6 +160,7 @@ impl Native {
         self.agent_after = None;
         self.desktop_shown = false;
         self.desktop_after = None;
+        self.desktop_tries = 0;
         self.submit_at = None;
         self.next_probe = None;
         self.probing = None;

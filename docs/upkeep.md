@@ -542,7 +542,8 @@ its desktop show next to the board.
    cloud **Test NAME #NUMBER** on Hetzner with the default profile of the repository
    at that commit.
 4. When the cloud is ready, Horizon opens the panel **Native test agent** (Codex, or
-   Claude when the profile has no Codex) and the desktop viewer. When the agent
+   Claude when the profile has no Codex) and the desktop viewer. The task waits for
+   the viewer; after four failed tries, 15 seconds apart, it goes without it. When the agent
    panel has been open for 15 seconds and shows no new output, Horizon pastes the
    task into it: read `AGENTS.md`, run its native qualification on the worker
    desktop `:99`, and write the evidence to `/workspace/home/native-test`. The
@@ -561,8 +562,9 @@ its desktop show next to the board.
    `blocked`, `refused` or `expired`), a message, and for the newest two reports
    the report of the agent and the names of the evidence files.
 
-Horizon keeps the tests of each Upkeep in `~/.horizon/upkeep/<cloud>/native.json`.
-After a restart, it continues the test that ran, or ends it at its time limit.
+Horizon keeps the tests of each Upkeep in `~/.horizon/upkeep/<cloud>/native.json`
+and saves it again 30 seconds after a failed save. After a restart, it continues the
+test that ran, or ends it at its time limit.
 
 ### Trust boundary of the test cloud
 
