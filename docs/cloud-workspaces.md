@@ -1454,9 +1454,9 @@ agent or the provider account can stop a worker.
 If the provider reports that the worker runs, the card shows the original
 failure. Horizon records a stop that the provider confirms as an ordinary stopped
 cloud. Nothing resumes it automatically. If the record already showed the stop,
-the card shows **Stopped**. You can also choose **Check provider** at any time. A
-profile without `idle_stop_minutes` never stops by itself. Shared workers and
-profiles with hosted devices do not support idle stop.
+the card shows **Stopped**. You can also choose **Check provider** at any time.
+Without `idle_stop_minutes`, a worker stops only with **Stop** or at an agent's
+request. Shared workers and profiles with hosted devices do not support idle stop.
 
 An agent can stop its worker when its task is done, such as when its pull request
 is merged. A worker image built from the current worker bootstrap offers this on
@@ -1473,7 +1473,8 @@ one-line reason. The worker identifies the requesting agent session itself,
 refuses callers outside a Claude, Codex or Grok session (including shell sessions), and
 refuses while another agent session printed output in the last two minutes, while
 the container is busy, or when it cannot check its sessions or CPU use; the calling agent's own
-output does not count. The reason and the requesting agent are kept on the
+output does not count. When Horizon takes a recorded request, it checks again and
+then counts the output of every agent session, the caller's too. The reason and the requesting agent are kept on the
 workspace volume, and after a resume the cloud card shows them, for example
 "Stopped by claude 2 h ago: PR 12 merged". A redeployed cloud starts without the
 previous worker's reason. Resume
