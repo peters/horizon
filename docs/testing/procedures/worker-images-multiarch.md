@@ -87,10 +87,20 @@ image of its own architecture.
    Result: The media type is an image index. The index has `linux/amd64` and
    `linux/arm64`.
 
-4. Do the same for the helper reference in the summary of
+4. Do this command with the same reference:
+
+   ```
+   docker buildx imagetools inspect --raw <reference> > index.json
+   shasum -a 256 index.json
+   ```
+
+   Result: The hash is the same as the digest after `@sha256:` in the reference.
+
+5. Do steps 3 and 4 for the helper reference in the summary of
    **Publish worker helpers index**.
 
-   Result: The index has `linux/amd64` and `linux/arm64`.
+   Result: The index has `linux/amd64` and `linux/arm64`, and the hash is the same
+   as its digest.
 
 ### 6.3 W03 — Each engine pulls its own architecture
 
@@ -119,10 +129,23 @@ image of its own architecture.
    Result: The command exits with status 0. It prints the same markers as the
    summary of **Publish CPU base worker index**.
 
+### 6.4 W04 — A published tag is not replaced
+
+> **CAUTION:** THIS TASK RUNS THE PUBLISHING WORKFLOW AGAIN.
+> If the tag guard is defective, the run replaces the published images and moves
+> the `main` and `cpu` tags.
+
+1. Open the run of task W02. Select **Re-run all jobs**.
+
+   Result: Each **Publish worker helpers** job stops in the step **Publish** with
+   `already exists; a published tag is never replaced`. No index job runs. The
+   `main` and `cpu` tags do not move.
+
 ## 7. Pass criteria
 
 - W01 and W02 pass.
 - W03 passes on both architectures.
+- W04 passes.
 - No image tag moved in a run where a check failed.
 
 ## 8. Cleanup
@@ -135,7 +158,7 @@ image of its own architecture.
 
    Result: Docker removes the image.
 
-2. Remove the temporary Docker configuration directory.
+2. Remove `index.json` and the temporary Docker configuration directory.
 
    Result: No login or temporary file stays.
 
