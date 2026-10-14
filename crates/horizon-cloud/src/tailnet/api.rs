@@ -122,6 +122,23 @@ pub(super) fn remove(store: &Store, id: &str, keys: &impl Credentials) -> Result
     recover(store, keys)
 }
 
+pub(super) fn forget_removed_binding(store: &Store, id: &str) -> Result<()> {
+    if store.load()?.tailnets.iter().any(|network| network.id == id)
+        || store.read::<Pending>(JOURNAL, 192 * 1024)?.is_some()
+    {
+        return Err(Error::Storage);
+    }
+    let mut current = records(store)?;
+    match current.bindings.get(id) {
+        None => Ok(()),
+        Some(Binding::Disabled) => {
+            current.bindings.remove(id);
+            write(&store.root.join(METADATA), &current)
+        }
+        Some(Binding::Active { .. }) => Err(Error::Storage),
+    }
+}
+
 impl Store {
     /// Reports only the source kind; saved values never return to callers.
     /// # Errors

@@ -94,6 +94,10 @@ R01 belongs to the authorized desktop lane and must stay separate in the evidenc
 
    Result: API rotation preserves auth keys. Auth-key rotation preserves API bindings.
    Saved-network removal cleans both exact bindings. Existing catalog data stays readable.
+   Committed catalog deletion prunes only the removed network's disabled record.
+   An interrupted deletion keeps its journal until metadata cleanup succeeds.
+   Repeated create/delete cycles do not exhaust API metadata; saved-network
+   tombstones and sibling bindings remain intact.
 
 2. Run the core tailnet adapter tests.
 

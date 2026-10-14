@@ -23,6 +23,11 @@ Recovery discards the new slot before commit, or retires the old slot after comm
 Cleanup acts only on the exact recorded accounts of the saved local tailnet.
 A failure cannot authorize cleanup of another tailnet's slot.
 An explicit removal suppresses staged fallback, also after uncertain cleanup.
+The disabled record remains while the saved tailnet still exists. After catalog
+deletion commits, its recovery journal prunes only that removed tailnet's disabled
+record. Metadata cleanup failures keep the deletion journal for retry. Active
+bindings, pending API changes and sibling records cannot be discarded as part of
+this pruning. Completed deletions do not accumulate permanent tombstones.
 
 ## Staged credentials
 

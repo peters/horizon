@@ -366,3 +366,30 @@ fn maximum_valid_drafts_remain_readable_after_json_escaping_and_storage() {
     );
     assert!(ApiCredential::decode(&vec![b' '; 16 * 1024 + 1]).is_err());
 }
+
+#[test]
+fn tombstone_pruning_preserves_saved_active_or_pending_bindings() {
+    for blocked in ["saved", "active", "pending"] {
+        let (root, store, keys) = fixture();
+        if blocked == "active" {
+            save(&store, "work", &draft(ApiCredentialKind::PersonalToken), &keys).unwrap();
+        } else {
+            remove(&store, "work", &keys).unwrap();
+        }
+        if blocked != "saved" {
+            std::fs::write(root.path().join("tailnets.json"), br#"{"tailnets":[]}"#).unwrap();
+        }
+        if blocked == "pending" {
+            write(
+                &root.path().join(JOURNAL),
+                &pending(Records::default(), records(&store).unwrap(), "work", None),
+            )
+            .unwrap();
+        }
+        let metadata = std::fs::read(root.path().join(METADATA)).unwrap();
+        let count = keys.count();
+        assert!(matches!(forget_removed_binding(&store, "work"), Err(Error::Storage)));
+        assert_eq!(std::fs::read(root.path().join(METADATA)).unwrap(), metadata);
+        assert_eq!(keys.count(), count);
+    }
+}

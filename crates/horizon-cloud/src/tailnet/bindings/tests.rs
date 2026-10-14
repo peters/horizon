@@ -74,6 +74,129 @@ fn auth_and_api_rotations_are_independent_and_network_removal_cleans_both() {
     assert!(keys.values.borrow().is_empty());
     assert_eq!(api_keys.count(), 0);
     assert!(store.load().unwrap().tailnets.is_empty());
+    assert_eq!(
+        std::fs::read(root.path().join("tailnet-api-bindings.json")).unwrap(),
+        b"{\n  \"bindings\": {}\n}"
+    );
+}
+
+#[test]
+fn repeated_saved_network_deletion_does_not_exhaust_api_metadata() {
+    use super::super::api;
+    let (root, store, keys) = fixture();
+    let api_keys = api::tests::Keys::default();
+    for index in 0..1_200 {
+        let id = format!("network-{index:056}");
+        store.save_with(Some(&id), "Work", KEY, &keys).unwrap();
+        store.delete_with(&id, &keys, &api_keys).unwrap();
+        assert_eq!(
+            std::fs::metadata(root.path().join("tailnet-api-bindings.json"))
+                .unwrap()
+                .len(),
+            20
+        );
+    }
+    assert!(store.load().unwrap().tailnets.is_empty());
+    assert!(keys.values.borrow().is_empty());
+    assert_eq!(api_keys.count(), 0);
+}
+
+#[test]
+fn deletion_recovery_prunes_only_committed_removed_api_tombstone() {
+    use super::super::api::{self, ApiCredential, ApiCredentialKind, ApiCredentialStatus};
+    for boundary in 0..4 {
+        let (root, store, keys) = fixture();
+        let api_keys = api::tests::Keys::default();
+        for id in ["removed", "disabled", "active"] {
+            store.save_with(Some(id), "Work", KEY, &keys).unwrap();
+        }
+        api::remove(&store, "disabled", &api_keys).unwrap();
+        api::save(
+            &store,
+            "active",
+            &ApiCredential::personal_token("tskey-api-synthetic-only").unwrap(),
+            &api_keys,
+        )
+        .unwrap();
+        let siblings = std::fs::read(root.path().join("tailnet-api-bindings.json")).unwrap();
+        api::remove(&store, "removed", &api_keys).unwrap();
+        let before = store.records().unwrap();
+        let mut after = before.clone();
+        after.tailnets.retain(|network| network.id != "removed");
+        let retired = after.slots.remove("removed").unwrap();
+        let pending = Pending {
+            before,
+            after,
+            created: None,
+            retired: Some(retired.clone()),
+        };
+        write(&root.path().join("tailnets.pending.json"), &pending).unwrap();
+        if boundary >= 1 {
+            write(&root.path().join("tailnets.json"), &pending.after).unwrap();
+        }
+        if boundary >= 2 {
+            keys.delete(&retired).unwrap();
+        }
+        if boundary >= 3 {
+            api::forget_removed_binding(&store, "removed").unwrap();
+        }
+        let restarted = Store::new(root.path().into());
+        restarted.recover_with(&keys).unwrap();
+        restarted.recover_with(&keys).unwrap();
+        if boundary == 0 {
+            assert_eq!(
+                api::status(&restarted, "removed", &api_keys).unwrap(),
+                ApiCredentialStatus::Missing
+            );
+            assert!(restarted.credential_slot("removed").is_ok());
+        } else {
+            assert!(matches!(restarted.credential_slot("removed"), Err(Error::Missing)));
+            assert_eq!(
+                std::fs::read(root.path().join("tailnet-api-bindings.json")).unwrap(),
+                siblings
+            );
+        }
+        assert_eq!(
+            api::status(&restarted, "disabled", &api_keys).unwrap(),
+            ApiCredentialStatus::Missing
+        );
+        assert_eq!(
+            api::status(&restarted, "active", &api_keys).unwrap(),
+            ApiCredentialStatus::Stored(ApiCredentialKind::PersonalToken)
+        );
+        assert_eq!(api_keys.count(), 1);
+        assert!(!root.path().join("tailnets.pending.json").exists());
+    }
+}
+
+#[test]
+fn failed_tombstone_cleanup_retains_committed_deletion_for_retry() {
+    use super::super::api;
+    let (root, store, keys) = fixture();
+    let api_keys = api::tests::Keys::default();
+    store.save_with(Some("work"), "Work", KEY, &keys).unwrap();
+    api::remove(&store, "work", &api_keys).unwrap();
+    let before = store.records().unwrap();
+    let pending = Pending {
+        retired: Some(before.slot("work").unwrap()),
+        before,
+        after: Records::default(),
+        created: None,
+    };
+    write(&root.path().join("tailnets.pending.json"), &pending).unwrap();
+    write(&root.path().join("tailnets.json"), &pending.after).unwrap();
+    let metadata = root.path().join("tailnet-api-bindings.json");
+    let tombstone = std::fs::read(&metadata).unwrap();
+    std::fs::write(&metadata, b"invalid synthetic metadata").unwrap();
+    assert!(matches!(store.recover_with(&keys), Err(Error::Storage)));
+    assert!(root.path().join("tailnets.pending.json").exists());
+    assert!(store.load().unwrap().tailnets.is_empty());
+    std::fs::write(&metadata, tombstone).unwrap();
+    store.recover_with(&keys).unwrap();
+    store.recover_with(&keys).unwrap();
+    assert!(!root.path().join("tailnets.pending.json").exists());
+    assert_eq!(std::fs::metadata(metadata).unwrap().len(), 20);
+    assert!(keys.values.borrow().is_empty());
 }
 
 #[test]

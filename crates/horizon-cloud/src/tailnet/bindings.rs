@@ -151,6 +151,7 @@ impl Store {
         };
         pending.validate()?;
         let current = self.records()?;
+        let committed_deletion = current == pending.after && pending.created.is_none();
         let obsolete = if current == pending.after {
             pending.retired
         } else if current == pending.before {
@@ -162,6 +163,13 @@ impl Store {
         write(&self.root.join("tailnets.json"), &current)?;
         if let Some(slot) = obsolete {
             keys.delete(&slot)?;
+        }
+        if committed_deletion {
+            for network in &pending.before.tailnets {
+                if !current.tailnets.iter().any(|saved| saved.id == network.id) {
+                    super::api::forget_removed_binding(self, &network.id)?;
+                }
+            }
         }
         std::fs::remove_file(self.root.join("tailnets.pending.json")).map_err(|_| Error::Storage)?;
         sync_directory(&self.root)

@@ -23,6 +23,9 @@ Report these failures:
 - A status read migrates the staged binding or starts a new mutation. Completing
   an exact already recorded recovery remains allowed.
 - The docs claim stored presence proves scope, expiry or API validity.
+- Saved-tailnet deletion leaves permanent API tombstones, or recovery prunes a
+  disabled record before catalog deletion commits. Metadata cleanup failure must
+  retain the deletion journal; active/pending or sibling bindings must survive.
 
 These limits are deliberate:
 
