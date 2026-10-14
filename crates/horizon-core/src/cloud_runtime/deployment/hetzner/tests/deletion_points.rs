@@ -60,6 +60,7 @@ pub(super) fn act_on(
             server_types: vec!["cx33".into()],
         },
         registries: None,
+        verified_pull: std::cell::RefCell::default(),
     };
     act(&compute, &store, &mut state);
     task.join().unwrap();

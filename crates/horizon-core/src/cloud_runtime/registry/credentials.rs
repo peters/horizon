@@ -31,7 +31,14 @@ impl Material {
             base64::engine::general_purpose::STANDARD
                 .encode(Zeroizing::new(format!("{}:{}", auth.username, secret.as_str())).as_bytes()),
         );
-        let config = tempfile::Builder::new().prefix("horizon-registry-").tempdir()?;
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("horizon-registry-");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            builder.permissions(std::fs::Permissions::from_mode(0o700));
+        }
+        let config = builder.tempdir()?;
         let mut file = tempfile::NamedTempFile::new_in(config.path())?;
         let host = docker_auth_key(repository);
         serde_json::to_writer(

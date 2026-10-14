@@ -64,3 +64,17 @@ A bound destination can use a different registry from the source Git service.
 The contract accepts nested project paths and explicit registry ports.
 GitLab account connection and project discovery are future work.
 The current task does not add those operations.
+
+## Bound CPU worker pulls
+
+An exact Container registry binding takes precedence over the legacy CPU-provider login.
+Before allocation, the read-only grant must verify the worker's immutable image digest.
+The provider adapter retains that image identity and the verified material in memory.
+A local credential-file change cannot substitute another login in host user data.
+Missing verification or a different immutable digest stops allocation before provider contact.
+Unbound images retain the existing legacy-provider behavior.
+Temporary registry Docker directories are private at creation on Unix.
+These checks prove the immutable image read at that moment; they cannot guarantee future issuer availability.
+
+This prerequisite retains the existing Container registry journal requirement for a configured RunPod account.
+A host-only journal is a required follow-up before portable publishing activates on a Hetzner-only machine.

@@ -34,7 +34,27 @@ pub(in crate::cloud_runtime::deployment) fn provision(
     cloud::supported(spec)?;
     // Only a request that can still create a server needs the pull login.
     let login = if state.operation == CreateState::Prepared {
-        super::pull_login(&compute.settings, compute.registries.as_ref(), &spec.profile.image)?
+        let bound = compute
+            .registries
+            .as_ref()
+            .map(|config| config.select(&spec.profile.image))
+            .transpose()?
+            .flatten()
+            .is_some();
+        match compute.verified_pull.borrow_mut().take() {
+            Some(verified) if verified.image == spec.image_digest => Some(verified.login),
+            Some(_) => {
+                return Err(Error::Invalid(
+                    "The verified pull grant belongs to another immutable image",
+                ));
+            }
+            None if bound => {
+                return Err(Error::Invalid(
+                    "Verify this cloud's read-only image grant before allocation",
+                ));
+            }
+            None => super::pull_login(&compute.settings, compute.registries.as_ref(), &spec.profile.image)?,
+        }
     } else {
         None
     };

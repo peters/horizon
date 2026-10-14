@@ -30,3 +30,7 @@ These limits are deliberate:
 - GitLab account connection and project discovery are outside this task.
 
 Do not request the deferred launch or UI integration as fixes to this policy prerequisite.
+
+For CPU host grants, require current verification of the exact immutable digest.
+Reject a reread of mutable credential files that substitutes unverified material in user data.
+Reject a publishing credential sent to a worker or an allocation after missing verification.

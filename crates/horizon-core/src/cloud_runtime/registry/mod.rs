@@ -120,6 +120,26 @@ impl Config {
 }
 
 impl Binding {
+    /// The exact read-only grant for a worker host. Publishing material stays local.
+    pub(in crate::cloud_runtime) fn host_login(&self) -> Result<horizon_cloud::host::RegistryLogin> {
+        self.validate()?;
+        if !self.read_only_confirmed {
+            return Err(Error::Invalid(
+                "Confirm that the worker pull credential is repository-scoped and read-only",
+            ));
+        }
+        let material = Material::load(&self.pull, &self.repository, None)?;
+        self.host_login_with(&material.secret)
+    }
+
+    fn host_login_with(&self, secret: &str) -> Result<horizon_cloud::host::RegistryLogin> {
+        Ok(horizon_cloud::host::RegistryLogin {
+            server: credentials::registry_authority(&self.repository),
+            username: self.pull.username.clone(),
+            password: horizon_cloud::Credential::new(secret.to_owned())?,
+        })
+    }
+
     fn validate(&self) -> Result<()> {
         if repository(&self.repository)? != self.repository || !self.repository.contains('/') {
             return Err(Error::Invalid(
@@ -198,6 +218,16 @@ pub struct Prepared {
 }
 
 impl Prepared {
+    /// The read-only material verified for this exact immutable image, pinned in memory.
+    pub(in crate::cloud_runtime) fn host_login(&self) -> Result<horizon_cloud::host::RegistryLogin> {
+        if !self.verified {
+            return Err(Error::Invalid(
+                "Verify the worker's exact image with its read-only grant before allocation",
+            ));
+        }
+        self.binding.host_login_with(&self.pull.secret)
+    }
+
     /// # Errors
     /// Validates explicit grants, expiry, secret separation and source isolation before a build.
     pub fn for_image(settings: &Settings, image: &str, source: Option<&Path>, building: bool) -> Result<Option<Self>> {
