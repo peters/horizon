@@ -353,11 +353,30 @@ fn head_resolves(git: &Path, head: &str, guarded: &[PathBuf]) -> bool {
         return false;
     }
     small_file(&git.join(name), guarded).is_some_and(|value| !value.trim().is_empty())
-        || small_file(&git.join("packed-refs"), guarded).is_some_and(|packed| {
-            packed
-                .lines()
-                .any(|line| line.split_once(' ').is_some_and(|(_, listed)| listed.trim() == name))
-        })
+        || packed_ref(&git.join("packed-refs"), name, guarded)
+}
+
+/// The most bytes of `packed-refs` read while looking for one ref: a repository with very
+/// many tags keeps them all there.
+const PACKED_REFS: u64 = 64 * 1024 * 1024;
+
+/// Whether `packed-refs` at `path` lists the ref `name`, read line by line from a regular
+/// file reached without entering a guarded folder.
+fn packed_ref(path: &Path, name: &str, guarded: &[PathBuf]) -> bool {
+    use std::io::{BufRead as _, Read as _};
+    let Some(place) = resolved(path, guarded) else {
+        return false;
+    };
+    if !std::fs::symlink_metadata(&place).is_ok_and(|meta| meta.is_file()) {
+        return false;
+    }
+    let Ok(file) = std::fs::File::open(&place) else {
+        return false;
+    };
+    std::io::BufReader::new(file.take(PACKED_REFS))
+        .lines()
+        .map_while(Result::ok)
+        .any(|line| line.split_once(' ').is_some_and(|(_, listed)| listed.trim() == name))
 }
 
 /// The `url` of `[remote "origin"]` in a Git config.
@@ -561,5 +580,23 @@ mod tests {
         )
         .unwrap();
         assert!(super::read(&repo, &[]).unwrap().complete, "a packed ref counts");
+    }
+
+    #[test]
+    fn a_ref_in_a_large_packed_refs_is_found() {
+        use std::fmt::Write as _;
+        let home = tempfile::tempdir().unwrap();
+        let git = home.path().join(".git");
+        fs::create_dir_all(&git).unwrap();
+        let mut packed = (0..8000).fold(String::new(), |mut text, n| {
+            let _ = writeln!(
+                text,
+                "0123456789abcdef0123456789abcdef01234567 refs/tags/release-{n:05}"
+            );
+            text
+        });
+        packed.push_str("0123456789abcdef0123456789abcdef01234567 refs/heads/main\n");
+        fs::write(git.join("packed-refs"), packed).unwrap();
+        assert!(super::head_resolves(&git, "ref: refs/heads/main", &[]));
     }
 }

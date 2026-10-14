@@ -35,6 +35,9 @@ struct Plan {
 /// How long a link must stand still before its access is looked up.
 const SETTLE: Duration = Duration::from_millis(500);
 
+/// How long Continue waits after a link was typed for the search to find a checkout of it.
+const SCAN_WAIT: Duration = Duration::from_secs(5);
+
 /// A finished clone: where it is, and what to tell about keeping the token, if that was asked.
 struct Cloned {
     path: PathBuf,
@@ -400,8 +403,10 @@ impl State {
         };
         // Nothing is cloned before the link has been looked up, unless it is already on disk.
         let looked_up = self.probed.as_deref() == Some(remote.url.as_str()) && self.probe.is_none();
-        // Until the search for checkouts is done, a checkout of it may still turn up.
-        if self.finder.scanning() && self.plan(&remote).existing.is_none() {
+        // While the search for checkouts runs, a checkout of it may still turn up; Continue
+        // waits for it a few seconds after the link was typed, not for the whole search.
+        let waiting = self.changed.is_some_and(|at| at.elapsed() < SCAN_WAIT);
+        if waiting && self.finder.scanning() && self.plan(&remote).existing.is_none() {
             return Err("Looking for this repository on this computer…");
         }
         if !looked_up && self.plan(&remote).existing.is_none() {
