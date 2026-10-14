@@ -44,6 +44,7 @@ fn chain() -> Chain {
 
 fn user() -> horizon_cloud::github::User {
     horizon_cloud::github::User {
+        id: 1,
         login: "octo-cat".into(),
         name: "Octo Cat".into(),
         email: "7+octo-cat@users.noreply.github.com".into(),

@@ -141,10 +141,12 @@ pub(super) fn device_chain(
     runner: &Runner<'_>,
     prompt: fn(String, String, SystemTime) -> Prompt,
 ) -> std::result::Result<Chain, Ended> {
+    runner.cancel.check().map_err(super::Error::from)?;
     let mut code = match scope {
         Some(scope) => client.start_device_with_scope(client_id, scope)?,
         None => client.start_device(client_id)?,
     };
+    runner.cancel.check().map_err(super::Error::from)?;
     (runner.emit)(Event::GitHub(prompt(
         code.user_code.clone(),
         code.verification_uri.clone(),
@@ -155,7 +157,9 @@ pub(super) fn device_chain(
         if SystemTime::now() >= code.expires_at {
             return Err(GitHubError::Expired.into());
         }
-        match client.poll_device(client_id, &mut code)? {
+        let answer = client.poll_device(client_id, &mut code)?;
+        runner.cancel.check().map_err(super::Error::from)?;
+        match answer {
             Poll::Granted(chain) => return Ok(chain),
             Poll::Pending | Poll::SlowDown(_) => {}
         }

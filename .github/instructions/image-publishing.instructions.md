@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-cloud/src/image_publishing.rs,crates/horizon-cloud/src/image_publishing/**,crates/horizon-core/src/cloud_runtime/image_publishing.rs,crates/horizon-core/src/cloud_runtime/image_publishing/**"
+applyTo: "crates/horizon-cloud/src/image_publishing.rs,crates/horizon-cloud/src/image_publishing/**,crates/horizon-core/src/cloud_runtime/github/publish/publication.rs,crates/horizon-core/src/cloud_runtime/github/publish/publication/**"
 ---
 
 # Image destination boundary
@@ -17,6 +17,9 @@ Report these failures:
 - Equal repository names from different source identities or profiles produce the same automatic package name.
 - Unbounded or malformed source names escape the destination checks.
 - Secret material enters serialized destination metadata.
+- A prepared publication accepts a different immutable provider account ID.
+- One operation replaces another operation's Docker credentials.
+- A temporary publishing login changes the host's shared Docker configuration.
 
 These limits are deliberate:
 

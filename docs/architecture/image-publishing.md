@@ -5,6 +5,29 @@ The destination policy is a reusable module in `horizon-cloud`.
 It does not authenticate, send network requests or publish an image.
 The launch pipeline does not use automatic destinations yet.
 
+## Host publication preparation
+
+The host has an operation preparation helper in `github::publish::publication`.
+It authenticates the publishing account and returns non-secret account metadata with a private Docker configuration.
+The account metadata contains the provider's immutable user ID and its login name.
+The helper rejects another user ID, including a reused login. Letter case does not change the account.
+An account rename is refused because it could change the selected namespace.
+
+The operation owns its temporary Docker configuration until it finishes.
+It writes only its authenticated publishing login there, not into the host's shared Docker configuration.
+A later sign-in or another publication cannot replace that operation's credentials.
+The temporary configuration is removed when the operation is dropped.
+On Unix, the directory is created with mode 0700 and its login file uses mode 0600.
+Cancellation is checked before local work, after the token lookup and before the result is returned.
+Credentials are neither printable nor serializable through this helper.
+Expected account metadata is untrusted and must pass validation before the login is prepared.
+The helper can renew the same account's operation login before a push. A long build must
+call this renewal checkpoint; preparation alone does not guarantee token validity through
+a later push. The helper refuses another current account without replacing its private login.
+It does not supply an account-switch UI or per-account storage. The launch integration must
+provide an explicit sign-in path for a recorded account before activation.
+This helper has no launch caller yet. The launch integration follows separately.
+
 ## Destination identity
 
 A destination contains an explicit registry repository and a non-secret publisher identity.

@@ -53,6 +53,16 @@ pub(super) fn current(
     client_id: &str,
     client_secret: Option<&dyn Fn() -> Result<Secret>>,
 ) -> std::result::Result<Option<(String, Secret)>, Kept> {
+    current_user(path, client, client_id, client_secret).map(|found| found.map(|(user, token)| (user.login, token)))
+}
+
+/// As `current`, retaining the provider's immutable account ID for publication fences.
+pub(super) fn current_user(
+    path: &Path,
+    client: &Client,
+    client_id: &str,
+    client_secret: Option<&dyn Fn() -> Result<Secret>>,
+) -> std::result::Result<Option<(horizon_cloud::github::User, Secret)>, Kept> {
     let Some(stored) = load(path) else {
         return Ok(None);
     };
@@ -77,16 +87,23 @@ pub(super) fn current(
                 chain.access_token
             }
             // Only GitHub's word that the chain is gone ends it.
-            Err(GitHubError::Revoked) => return Ok(forget(path)?),
+            Err(GitHubError::Revoked) => {
+                forget(path)?;
+                return Ok(None);
+            }
             Err(error) => return Err(kept(&error)),
         }
     } else {
-        return Ok(forget(path)?);
+        forget(path)?;
+        return Ok(None);
     };
     // The person may have revoked the app on GitHub since; ask GitHub who the token is.
     match client.user(&token) {
-        Ok(user) => Ok(Some((user.login, token))),
-        Err(GitHubError::Revoked) => Ok(forget(path)?),
+        Ok(user) => Ok(Some((user, token))),
+        Err(GitHubError::Revoked) => {
+            forget(path)?;
+            Ok(None)
+        }
         Err(error) => Err(kept(&error)),
     }
 }
