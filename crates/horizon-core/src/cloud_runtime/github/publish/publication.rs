@@ -104,6 +104,7 @@ fn with_credentials_using<T>(
             Kept::Unconfirmed => Error::Invalid("GitHub did not confirm the image-publishing permission; retry"),
             Kept::Local(error) => error,
         })?;
+    runner.cancel.check()?;
     let (user, token) = match found {
         Some(found) => found,
         None => super::sign_in_user(docker_config, client, cloud_id, runner)?,

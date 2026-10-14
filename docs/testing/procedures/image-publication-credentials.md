@@ -71,6 +71,8 @@ The tests use synthetic tokens. They do not change an installed login.
 
    Result: An already cancelled operation creates no login folder or prompt. Cancellation
    after authentication removes the prepared configuration and returns an error.
+   A cancelled revoked-token lookup makes no new sign-in request.
+   A cancelled device-code lookup displays no authorization prompt.
 
 2. Examine the permission and metadata results.
 

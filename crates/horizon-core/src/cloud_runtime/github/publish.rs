@@ -278,6 +278,7 @@ fn sign_in_user(
     cloud_id: &str,
     runner: &Runner<'_>,
 ) -> Result<(horizon_cloud::github::User, Secret)> {
+    runner.cancel.check()?;
     let say = |text: String| (runner.emit)(Event::Output(format!("GitHub: {text}")));
     let ended = || (runner.emit)(Event::GitHub(Prompt::Published { allowed: false }));
     // A Skip from an earlier attempt does not end this one.
@@ -312,6 +313,7 @@ fn sign_in_user(
             return Err(Error::Invalid(REFUSED));
         }
     };
+    runner.cancel.check()?;
     stored::save(&docker_config.join(STORE), &user.login, &chain, false)?;
     say(format!("Horizon may now publish images as {}.", user.login));
     (runner.emit)(Event::GitHub(Prompt::Published { allowed: true }));

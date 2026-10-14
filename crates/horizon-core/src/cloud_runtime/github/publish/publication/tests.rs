@@ -189,3 +189,118 @@ fn cancellation_after_authentication_returns_no_prepared_login() {
     assert!(result.is_err());
     assert!(!directory.borrow().as_ref().unwrap().exists());
 }
+
+#[test]
+fn cancellation_during_a_revoked_lookup_makes_no_sign_in_request_or_prompt() {
+    use std::io::Write as _;
+    let root = tempfile::tempdir().unwrap();
+    stored::save(
+        &root.path().join(STORE),
+        "alice",
+        &horizon_cloud::github::Chain {
+            access_token: Secret::new("synthetic-access".into()),
+            access_expires_at: SystemTime::now() + Duration::from_hours(4),
+            refresh_token: Secret::new("synthetic-refresh".into()),
+            refresh_expires_at: SystemTime::now() + Duration::from_hours(24),
+        },
+        false,
+    )
+    .unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let client = Client::loopback(listener.local_addr().unwrap()).unwrap();
+    let cancel = Cancellation::default();
+    let stop = cancel.clone();
+    let task = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        crate::cloud_runtime::github::tests::read_request(&mut stream);
+        stop.cancel();
+        write!(
+            stream,
+            "HTTP/1.1 401 Unauthorized\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+        )
+        .unwrap();
+        drop(stream);
+        listener.set_nonblocking(true).unwrap();
+        let until = std::time::Instant::now() + Duration::from_secs(2);
+        while std::time::Instant::now() < until {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    crate::cloud_runtime::github::tests::read_request(&mut stream);
+                    let body = serde_json::json!({"device_code":"synthetic-device","user_code":"WDJB-MJHT","verification_uri":"https://github.com/login/device","expires_in":900,"interval":1}).to_string();
+                    write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+                    return 2;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("{error}"),
+            }
+        }
+        1
+    });
+    let events = std::cell::RefCell::new(Vec::new());
+    let emit = |event| events.borrow_mut().push(event);
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &emit,
+        secrets: Vec::new(),
+    };
+    let result: Result<()> = with_credentials_using(root.path(), "cancel-revoked-lookup", &runner, &client, |_, _| {
+        panic!("a stopped operation must not use credentials")
+    });
+    assert!(matches!(
+        result,
+        Err(Error::Provider(horizon_cloud::CloudError::Cancelled))
+    ));
+    assert_eq!(task.join().unwrap(), 1, "no device-code request follows cancellation");
+    assert!(
+        events.borrow().is_empty(),
+        "no new authorization prompt or output follows cancellation"
+    );
+}
+
+#[test]
+fn cancellation_during_device_code_lookup_does_not_display_the_code() {
+    use std::io::Write as _;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let client = Client::loopback(listener.local_addr().unwrap()).unwrap();
+    let cancel = Cancellation::default();
+    let stop = cancel.clone();
+    let task = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        crate::cloud_runtime::github::tests::read_request(&mut stream);
+        stop.cancel();
+        let body = serde_json::json!({"device_code":"synthetic-device","user_code":"WDJB-MJHT","verification_uri":"https://github.com/login/device","expires_in":900,"interval":1}).to_string();
+        write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+    });
+    let events = std::cell::RefCell::new(Vec::new());
+    let emit = |event| events.borrow_mut().push(event);
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &emit,
+        secrets: Vec::new(),
+    };
+    let result = super::super::signin::device_chain(
+        &client,
+        CLIENT_ID,
+        Some("write:packages"),
+        "cancel-device-code",
+        &runner,
+        |user_code, verification_uri, expires_at| super::super::Prompt::Publish {
+            user_code,
+            verification_uri,
+            expires_at,
+        },
+    );
+    task.join().unwrap();
+    assert!(matches!(
+        result,
+        Err(super::super::signin::Ended::Error(Error::Provider(
+            horizon_cloud::CloudError::Cancelled
+        )))
+    ));
+    assert!(
+        events.borrow().is_empty(),
+        "a stopped lookup must not display a new code"
+    );
+}
