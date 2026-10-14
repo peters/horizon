@@ -35,8 +35,14 @@ Personal API token and OAuth client bindings stay in the desktop OS store,
 independently of enrollment auth keys. Stored presence reports kind only; it
 does not prove API validity, scope or network access. Saving does not remove
 nodes. Never pass an API secret to MCP or a worker.
-This foundation supplies host storage APIs; an API editor and UI/CLI/MCP status
-adapters follow separately. API storage does not qualify an older worker image.
+Settings > Tailnets displays nonsecret API credential status only; no API editor
+ships in this milestone. Read `cloud_companions.tailnet_api_credentials` for
+cached ready, pending or unavailable status without Settings. The CLI is
+`cloud_deploy tailnets STATE_ROOT [TAILNET_ID]`. API status does not qualify an
+older worker image. Cached status is not an OS-store watcher; use Tailnets Refresh
+for an explicit fresh read. Never pass an API secret to MCP.
+Status qualification uses the production UI, actual CLI and normal AGENT public
+MCP responses; baseline id/name evidence alone does not qualify API status.
 
 Discovery and price results do not authorize spending or lifecycle changes.
 Get explicit authorization for the exact resource before starting or stopping a worker.

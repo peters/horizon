@@ -6,6 +6,8 @@ mod choice;
 mod registry;
 #[path = "cloud_deploy/registry_mcp.rs"]
 mod registry_mcp;
+#[path = "cloud_deploy/tailnets.rs"]
+mod tailnets;
 use horizon_core::cloud_runtime::{
     self, Cancellation, Event,
     deployment::{self, replacement},
@@ -15,6 +17,8 @@ use horizon_core::cloud_runtime::{
     state::Store,
 };
 use std::{path::PathBuf, process::ExitCode};
+const USAGE: &str = "Usage: cloud_deploy tailnets STATE_ROOT [TAILNET_ID] | offers SETTINGS [REQUIREMENTS_JSON] | plan-deploy|deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--quick-start] [--worker-choice OFFER_JSON_FILE] [--plan-token PLAN_TOKEN] (deploy and prepare-image) [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|resume|reconnect|endpoint|delete|idle-check|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | plan-rebuild|rebuild SETTINGS STATE_ROOT PROFILE [PLAN_TOKEN] (rebuild only) | reconcile SETTINGS STATE_ROOT [WORKER_ID]. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume. --quick-start uses the built-in quick-start profile on the public base image for a commit without .horizon/cloud.yml. On the checked-out commit the image builds from the working copy, as in New cloud: plan-deploy lists its uncommitted files and prints the token that deploy and prepare-image then need.";
+
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -26,24 +30,29 @@ fn main() -> ExitCode {
 }
 fn run() -> cloud_runtime::Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
+    run_args(&args)
+}
+
+fn run_args(args: &[String]) -> cloud_runtime::Result<()> {
     if args.first().is_some_and(|command| command == "registry-mcp") && args.len() == 2 {
         return registry_mcp::serve(PathBuf::from(&args[1]));
     }
     if args.first().is_some_and(|command| command.starts_with("registry")) {
-        return registry::run(&args);
+        return registry::run(args);
     }
     if args.first().is_some_and(|command| command == "offers") && (2..=3).contains(&args.len()) {
         return offers(&PathBuf::from(&args[1]), args.get(2).map(String::as_str));
     }
+    if args.first().is_some_and(|command| command == "tailnets") {
+        return tailnets::run_args(args);
+    }
     if args.len() < 3 {
-        return Err(cloud_runtime::Error::Invalid(
-            "Usage: cloud_deploy offers SETTINGS [REQUIREMENTS_JSON] | plan-deploy|deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--quick-start] [--worker-choice OFFER_JSON_FILE] [--plan-token PLAN_TOKEN] (deploy and prepare-image) [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|resume|reconnect|endpoint|delete|idle-check|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | plan-rebuild|rebuild SETTINGS STATE_ROOT PROFILE [PLAN_TOKEN] (rebuild only) | reconcile SETTINGS STATE_ROOT [WORKER_ID]. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume. --quick-start uses the built-in quick-start profile on the public base image for a commit without .horizon/cloud.yml. On the checked-out commit the image builds from the working copy, as in New cloud: plan-deploy lists its uncommitted files and prints the token that deploy and prepare-image then need.",
-        ));
+        return Err(cloud_runtime::Error::Invalid(USAGE));
     }
     let mut settings = Settings::load(&PathBuf::from(&args[1]))?;
     let cancel = Cancellation::default();
     if args[0] == "reconcile" && (3..=4).contains(&args.len()) {
-        return reconcile(&args, &settings, &cancel);
+        return reconcile(args, &settings, &cancel);
     }
     if args[0] == "delete" && args.len() == 3 {
         return deployment::terminate(&PathBuf::from(&args[2]), &settings, &cancel, &print_event);
@@ -79,9 +88,9 @@ fn run() -> cloud_runtime::Result<()> {
         args[0].as_str(),
         "plan-rebuild" | "rebuild" | "continue-rebuild" | "cancel-rebuild"
     ) {
-        return rebuild(&args, settings, &cancel);
+        return rebuild(args, settings, &cancel);
     }
-    let (args, worker_choice) = choice::arguments(&args)?;
+    let (args, worker_choice) = choice::arguments(args)?;
     let (args, siblings) = sibling_bindings(&args)?;
     let (args, token) = plan_token(&args)?;
     let quick_start = args.iter().any(|arg| arg == "--quick-start");
@@ -623,4 +632,25 @@ fn idle_check(root: &std::path::Path, settings: &Settings, cancel: &Cancellation
         }
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn malformed_tailnets_arguments_never_enter_deployment_settings_loading() {
+        for values in [
+            vec!["tailnets"],
+            vec!["tailnets", "not-a-settings-file", "id", "extra"],
+            vec!["tailnets", "not-a-settings-file", "id", "extra", "another"],
+        ] {
+            assert!(matches!(
+                run_args(&values.into_iter().map(String::from).collect::<Vec<_>>()),
+                Err(cloud_runtime::Error::Invalid(
+                    "Usage: cloud_deploy tailnets STATE_ROOT [TAILNET_ID]"
+                ))
+            ));
+        }
+    }
 }

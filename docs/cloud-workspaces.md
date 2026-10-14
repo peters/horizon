@@ -138,22 +138,46 @@ state on the cloud's persistent volume. The newer signed project-session runtime
 currently refuses a tailnet until its own unprivileged runtime is qualified;
 the ordinary cloud panel's shell/agent runtime uses the isolated launcher.
 
-## Tailnet API credential storage
+## Tailnet API credential status
 
-The host store supports a personal API token or OAuth client for each saved tailnet.
-API credentials use the desktop OS-store service `horizon-cloud-tailnet-api`.
-Enrollment auth keys remain independent in `horizon-cloud-tailnets`.
-This foundation supplies host storage APIs. The Settings editor and UI/CLI/MCP
-status adapters are separate milestones; no API credential editor or new public
-credential operation ships here. A staged entry at the exact saved local tailnet
-ID is recognized by the shared resolver without another paste. Profiles that
-reuse that saved ID intentionally share the binding; a profile name does not
-isolate API credentials. Worker image
-qualification still requires marker 4; API storage does not qualify an older pin.
-Stored presence reports kind only. Saving does not test remote scope, expiry or
-API access, and does not remove tailnet nodes.
-See [the storage boundary](architecture/tailnet-api-credentials.md) and
-[the foundation test procedure](testing/procedures/tailnet-api-credential-store.md).
+Settings > Tailnets displays **Not stored**, **Personal API token stored**,
+**OAuth client stored**, **Reading…** or **Status unavailable** for each saved
+network. All reads run on background workers. This status milestone adds no
+API credential editor; the enrollment auth-key editor remains separate.
+
+Stored presence reports kind only, not expiry, scopes or remote API access.
+API credentials stay in this computer's OS-store service `horizon-cloud-tailnet-api`;
+enrollment auth keys use `horizon-cloud-tailnets`. An existing staged entry at
+its exact saved local tailnet ID is recognized without another paste.
+The same saved ID across profiles intentionally shares the API binding.
+A profile name does not isolate credentials.
+
+Read `cloud_companions.tailnet_api_credentials` for cached observations, even
+with Settings closed. While Settings is open, its pending and completed status
+also reaches this cache before MCP requests; close is not required for an update.
+Ready contains `credential.state: missing` or `stored`;
+stored entries include `credential.kind: personal_token` or `oauth`.
+Pending means a read is unfinished; unavailable means it could not be read.
+Neither means missing. Before a successful catalog read, `tailnets` can be null
+and the map empty; this is not proof that credentials are missing.
+
+The CLI is `cloud_deploy tailnets STATE_ROOT [TAILNET_ID]`:
+
+```sh
+cargo run -p horizon-core --example cloud_deploy -- tailnets STATE_ROOT
+```
+
+It returns saved ID/name items and the same map, with ready/unavailable status.
+Neither status interface imports a secret or requests node cleanup. Status can
+finish a prior recorded local binding recovery and retire exact obsolete slots;
+it submits no new credential mutation. Saving credentials through the shared
+host store does not validate remote access or remove nodes.
+Completed saved-tailnet deletion prunes only that removed ID's disabled API record.
+A failed cleanup keeps its recorded intent for retry; it does not authorize another ID.
+Worker image qualification still requires marker 4; API status does not update the pin.
+See [the boundary](architecture/tailnet-api-credentials.md),
+[the storage procedure](testing/procedures/tailnet-api-credential-store.md)
+and [the status procedure](testing/procedures/tailnet-api-status.md).
 
 ## Companion declarations
 

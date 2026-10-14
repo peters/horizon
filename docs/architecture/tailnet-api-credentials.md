@@ -1,4 +1,4 @@
-# Tailnet API credential storage boundary
+# Tailnet API credential status boundary
 
 ## Trusted authority
 
@@ -55,13 +55,42 @@ No secret enters project configuration, persisted application state, worker payl
 Callers must run filesystem and OS-store operations off the UI thread.
 MCP must not accept raw API secrets or expose saved values.
 
-## Scope of the foundation
+## Status adapters
 
-This foundation supplies host storage APIs for credential adapters.
-It adds no API editor or new public CLI/MCP credential operation. The separate
-status/editor milestones use these APIs; no interface may import/read a raw API
-credential through MCP. Worker enrollment remains auth-key based and requires a
-separately qualified marker-4 image. API storage does not update a worker pin.
+Settings > Tailnets displays API credential kind from background workers.
+The status row is read-only. This milestone adds no API credential editor.
+Filesystem and OS-store work remains off the render thread. Closing Settings
+preserves unfinished read barriers and errors; stale replies cannot restore a
+removed network's status.
+
+The CLI is `cloud_deploy tailnets STATE_ROOT [TAILNET_ID]`.
+CLI and `cloud_companions.tailnet_api_credentials` share nonsecret observations
+keyed by saved local tailnet ID. Ready contains missing/stored kind; pending and
+unavailable do not imply missing. Stored kinds are personal_token and oauth.
+MCP reads a storage-root-scoped background cache, polled without Settings.
+While Settings is open, frame polling republishes its nonsecret observations to
+that cache before MCP requests. Pending operations and their completed or failed
+status become visible without closing Settings. Snapshots copy only when their
+catalog/status revision changes. Closing Settings removes that override and
+transfers unfinished barriers before the next fresh catalog/status read.
+Known per-ID storage failures remain unavailable during that handoff and retry.
+Only a fresh result for the current saved ID replaces the failure; removed IDs and
+old successful snapshots do not survive the handoff.
+A null catalog and empty map before bootstrap are not proof of missing credentials.
+Saved local tailnet IDs identify bindings; profile names do not create new bindings.
+Using one saved ID across profiles intentionally shares its API credential.
+
+Status submits no new credential mutation or remote cleanup command. The resolver
+can finish a prior recorded binding recovery, including retirement of its exact
+obsolete OS-store slots. It does not migrate a staged value merely for status.
+No CLI or MCP operation imports an API secret or exposes a saved value.
+See [the status procedure](../testing/procedures/tailnet-api-status.md).
+
+Worker enrollment remains auth-key based and requires a separately qualified
+marker-4 image. API status does not update a worker pin.
+Completed saved-tailnet deletion also removes its exact disabled API record.
+The cache must not restore that removed ID from an older observation.
+
 Stored presence means the resolver can read and parse the OS-store entry.
 It does not test validity, expiry, selected scopes, tags or API reachability.
 Saving does not contact Tailscale, mint a token or change remote access.

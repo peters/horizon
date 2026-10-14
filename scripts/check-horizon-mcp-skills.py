@@ -143,6 +143,10 @@ def check():
                  'enrollment auth key', 'Stored presence'):
         if term not in documents.get('horizon-cloud', ''):
             errors.append(f'horizon-cloud: API credential policy missing {term}')
+    for term in ('Settings > Tailnets', 'Personal API token', 'OAuth client',
+                 'tailnet_api_credentials', 'cloud_deploy tailnets', 'pending', 'unavailable'):
+        if term not in documents.get('horizon-cloud', ''):
+            errors.append(f'horizon-cloud: API credential status parity missing {term}')
     cast_document = documents.get('horizon-cast', '')
     for name in enum_variants((ROOT / 'crates/horizon-browser-control/src/manifest/cast.rs').read_text(), 'CastSource'):
         if f'`kind: {snake_case(name)}`' not in cast_document:

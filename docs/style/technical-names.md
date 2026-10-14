@@ -54,6 +54,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | tailnet | A Tailscale network that Horizon joins with an auth key. | tailscale network, overlay |
 | auth key | A Tailscale key that starts with `tskey-auth-`. It is a secret. | token, join key |
 | API credential | A personal API token or OAuth client that the host stores for a saved tailnet. | auth key (for API access) |
+| API credential observation | Ready missing/stored kind, pending or unavailable; no credential value or validity proof. | validated credential (for stored presence) |
 | personal API token | A Tailscale API access token that starts with `tskey-api-`. It is a secret. | auth key |
 | OAuth client | A Tailscale client ID and client secret for API access. | auth key |
 | device name | The name of a worker in a tailnet. Other devices use it to reach the worker. | hostname, machine name |

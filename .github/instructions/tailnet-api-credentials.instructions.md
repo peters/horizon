@@ -1,8 +1,8 @@
 ---
-applyTo: "crates/horizon-cloud/src/tailnet.rs,crates/horizon-cloud/src/tailnet/**,crates/horizon-core/src/cloud_runtime/tailnet.rs,crates/horizon-core/src/cloud_runtime/tailnet/**"
+applyTo: "crates/horizon-cloud/src/tailnet.rs,crates/horizon-cloud/src/tailnet/**,crates/horizon-core/src/cloud_runtime/tailnet.rs,crates/horizon-core/src/cloud_runtime/tailnet/**,crates/horizon-core/examples/cloud_deploy.rs,crates/horizon-core/examples/cloud_deploy/tailnets.rs,crates/horizon-ui/src/app/tailnets.rs,crates/horizon-ui/src/app/tailnets/**,crates/horizon-ui/src/app/cloud_panel/production/companions/agent.rs,crates/horizon-ui/src/app/cloud_panel/production/companions/agent/**,crates/horizon-browser-mcp/src/server.rs"
 ---
 
-# Tailnet API credential foundation boundary
+# Tailnet API credential status boundary
 
 Read `docs/architecture/tailnet-api-credentials.md` for the guarantee and limits.
 The host and OS store are trusted. Drafts and stored bytes require bounded checks.
@@ -27,12 +27,24 @@ Report these failures:
   disabled record before catalog deletion commits. Metadata cleanup failure must
   retain the deletion journal; active/pending or sibling bindings must survive.
 
+Also report concrete inputs and wrong results when:
+
+- Status rendering performs filesystem, keychain or network work.
+- Pending reads or failures disappear when Settings closes.
+- A stale reply restores a removed network's status.
+- Settings completion leaves MCP on an older observation until Settings closes.
+- A fresh catalog/status read starts before a closed API operation barrier completes.
+- MCP status requires Settings open, reports pending/unavailable as missing,
+  or uses another root's cached catalog.
+- CLI/MCP exposes a value, imports a secret or submits a new mutation/remote cleanup.
+  Completing an exact prior recorded local binding recovery is allowed.
+
 These limits are deliberate:
 
-- The foundation supplies shared host storage APIs, not a new credential editor.
+- Status adapters are read-only; no API credential editor or import operation is present.
 - Save does not call Tailscale or validate remote scopes, expiry or tags.
 - This milestone does not record enrollment IDs or remove tailnet devices.
 - Tag selection is not proof of provider-side restriction of device deletion.
 - The OS store remains the secret authority; JSON is nonsecret binding metadata.
 
-Do not request deferred UI or runtime cleanup as fixes to the storage foundation.
+Do not request the deferred credential editor or remote node cleanup as fixes to status parity.

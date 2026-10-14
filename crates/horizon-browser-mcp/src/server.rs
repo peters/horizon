@@ -144,7 +144,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "cloud_companions",
-        description = "List the clouds in your Horizon workspace with the companion clouds their repositories declare: alias, repository, profile, whether the owner checked it on the source cloud's card, its status and target cloud ID. Use a cloud ID and alias from here with cloud_companion_ensure_ready, cloud_companion_stop and cloud_companion_uncheck. Reading starts nothing."
+        description = "List the clouds in your Horizon workspace with the companion clouds their repositories declare: alias, repository, profile, whether the owner checked it on the source cloud's card, its status and target cloud ID. Also returns saved tailnets as id/name items and cached tailnet_api_credentials keyed by saved tailnet ID: pending, unavailable, or ready with credential.state missing/stored and kind personal_token/oauth. Stored describes the credential source and does not validate remote API access. Credential values stay private. Use a cloud ID and alias from here with cloud_companion_ensure_ready, cloud_companion_stop and cloud_companion_uncheck. Reading starts nothing."
     )]
     async fn cloud_companions(&self) -> Result<Json<crate::model::HostJson>, String> {
         self.controller
