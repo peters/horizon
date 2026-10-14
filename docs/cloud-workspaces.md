@@ -1790,8 +1790,9 @@ you can give no token; then the rebuild takes the settings as it reads them.
 `cloud_deploy plan-deploy SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID` reads the
 settings as **New cloud** does, prints each uncommitted file of the image in the same
 form and then a plan token. Give it to `cloud_deploy deploy` or `prepare-image` with
-the same arguments and `--plan-token <token>`. Without uncommitted files you can give
-no token. A typed `REVISION` that is not the checked-out commit builds that commit
+the same arguments and `--plan-token <token>`. The token also covers the worker that
+`--worker-choice` selects, so a plan for one offer does not start another. Without
+uncommitted files you can give no token. A typed `REVISION` that is not the checked-out commit builds that commit
 only.
 
 ### Deployment progress

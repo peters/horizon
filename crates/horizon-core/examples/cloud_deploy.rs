@@ -108,10 +108,10 @@ fn run() -> cloud_runtime::Result<()> {
     };
     let files = uncommitted_files(&prepared, &profile)?;
     if args[0] == "plan-deploy" {
-        print_plan(&prepared.notes, &profile, files.as_ref());
+        print_plan(&prepared.notes, &profile, &settings, files.as_ref());
         return Ok(());
     }
-    let working_copy = confirm(&profile, files, token.as_deref())?;
+    let working_copy = confirm(&profile, &settings, files, token.as_deref())?;
     let mut request = deployment::Request::new(
         args[5].clone(),
         prepared.repository,
@@ -172,8 +172,41 @@ fn uncommitted_files(
     }
 }
 
+/// The plan token of a deployment: the profile, the uncommitted files and the worker
+/// choice. An offer sets the place and GPU types in `settings` without changing the
+/// profile, so another offer of the same size must not reuse the token.
+fn deploy_token(
+    profile: &horizon_core::cloud_panel::Profile,
+    settings: &Settings,
+    files: Option<&Uncommitted>,
+) -> String {
+    use sha2::Digest as _;
+    use std::fmt::Write as _;
+    let choice = serde_json::json!({
+        "placement": settings.placement,
+        "data_centers": settings.data_centers,
+        "gpu_types": settings.gpu_types,
+    });
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(repository::uncommitted::token(
+        profile,
+        files.unwrap_or(&Uncommitted::default()),
+    ));
+    hasher.update([0]);
+    hasher.update(choice.to_string());
+    hasher.finalize().iter().fold(String::new(), |mut hex, byte| {
+        let _ = write!(hex, "{byte:02x}");
+        hex
+    })
+}
+
 /// What `plan-deploy` prints: the notes, each uncommitted file and the plan token.
-fn print_plan(notes: &[String], profile: &horizon_core::cloud_panel::Profile, files: Option<&Uncommitted>) {
+fn print_plan(
+    notes: &[String],
+    profile: &horizon_core::cloud_panel::Profile,
+    settings: &Settings,
+    files: Option<&Uncommitted>,
+) {
     for note in notes {
         println!("{note}");
     }
@@ -182,7 +215,7 @@ fn print_plan(notes: &[String], profile: &horizon_core::cloud_panel::Profile, fi
     for file in files.map(Uncommitted::files).unwrap_or_default() {
         println!("Uncommitted file: {} {}", file.change.label(), file.path);
     }
-    let plan = repository::uncommitted::token(profile, files.unwrap_or(&Uncommitted::default()));
+    let plan = deploy_token(profile, settings, files);
     println!("To deploy with exactly these settings and files, pass --plan-token {plan}");
 }
 
@@ -190,10 +223,11 @@ fn print_plan(notes: &[String], profile: &horizon_core::cloud_panel::Profile, fi
 /// a plan without uncommitted files may run.
 fn confirm(
     profile: &horizon_core::cloud_panel::Profile,
+    settings: &Settings,
     files: Option<Uncommitted>,
     token: Option<&str>,
 ) -> cloud_runtime::Result<Option<repository::uncommitted::Confirmed>> {
-    let plan = repository::uncommitted::token(profile, files.as_ref().unwrap_or(&Uncommitted::default()));
+    let plan = deploy_token(profile, settings, files.as_ref());
     let confirmed = token.map_or_else(
         || files.as_ref().is_none_or(Uncommitted::is_empty),
         |token| token == plan,

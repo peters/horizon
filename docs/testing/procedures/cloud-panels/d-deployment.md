@@ -593,8 +593,12 @@ registry of `runpod-build`. Use only synthetic file contents. In the steps,
    Result: Below **Profile**, the dialog shows the warning about a public registry
    and lists `modified <dockerfile>` and `new <context>/smoke-new.txt`.
 
-3. Write a new file `<context>/.env` with the text `TOKEN=synthetic`. Do not
-   commit it.
+3. Write a file `<context>/.env` with the text `TOKEN=synthetic`. Add it to the
+   index, so that a global Git exclude file that ignores `.env` cannot hide it.
+
+   ```sh
+   git -C <repo> add -f <context>/.env
+   ```
 
    Result: `git -C <repo> status --short` shows `<context>/.env`. The dialog
    still lists the two files of step 2, because the file changes neither
@@ -607,7 +611,11 @@ registry of `runpod-build`. Use only synthetic file contents. In the steps,
    **Check again**. **Start cloud** is not available. No cloud card appears. The
    dialog does not show the text `TOKEN=synthetic`.
 
-5. Remove `<context>/.env`.
+5. Remove `<context>/.env` from the index and delete it.
+
+   ```sh
+   git -C <repo> rm -q --cached <context>/.env; rm <repo>/<context>/.env
+   ```
 
    Result: `git -C <repo> status --short` does not show `<context>/.env`. The
    dialog still shows the refusal.
@@ -617,36 +625,54 @@ registry of `runpod-build`. Use only synthetic file contents. In the steps,
    Result: The refusal goes. Below **Profile**, the dialog lists the two files of
    step 2 again.
 
-7. Add a line to `<context>/smoke-new.txt`.
-
-   Result: The dialog still lists the two files of step 2.
-
-8. Click **Start cloud**.
-
-   Result: The dialog shows that the uncommitted files changed since they were
-   listed, and lists them again. No cloud card appears.
-
-9. Run the harness plan for the same profile.
+7. Run the harness plan for the same profile.
 
    ```sh
    <run>/bin/cloud_deploy plan-deploy <home>/.horizon/cloud/settings.json <repo> runpod-build <home>/.horizon/cloud/d08-plan d08-plan
    ```
 
    Result: The output has one `Uncommitted file:` line for each file of step 1 and
-   a line with `--plan-token`. Nothing is built.
+   a line with `--plan-token`. Nothing is built. Record the token as `<token>`.
 
-   > **CAUTION:** THE NEXT STEP RENTS COMPUTE AND PUSHES AN IMAGE.
+8. Run the harness deployment without a token.
 
-10. In **New cloud**, click **Start cloud**. Wait until the card shows **Ready**.
+   ```sh
+   <run>/bin/cloud_deploy deploy <home>/.horizon/cloud/settings.json <repo> runpod-build <home>/.horizon/cloud/d08-plan d08-plan
+   ```
+
+   Result: The command stops at once and tells you to run `plan-deploy` and pass
+   the token. Nothing is built, and the provider shows no pod for `d08-plan`.
+
+9. Add a line to `<context>/smoke-new.txt`.
+
+   Result: The dialog still lists the two files of step 2.
+
+10. Run the harness deployment with `<token>`.
+
+    ```sh
+    <run>/bin/cloud_deploy deploy <home>/.horizon/cloud/settings.json <repo> runpod-build <home>/.horizon/cloud/d08-plan d08-plan --plan-token <token>
+    ```
+
+    Result: The command stops at once and says that the checkout differs from the
+    printed plan. Nothing is built, and the provider shows no pod for `d08-plan`.
+
+11. In **New cloud**, click **Start cloud**.
+
+    Result: The dialog shows that the uncommitted files changed since they were
+    listed, and lists them again. No cloud card appears.
+
+    > **CAUTION:** THE NEXT STEP RENTS COMPUTE AND PUSHES AN IMAGE.
+
+12. In **New cloud**, click **Start cloud**. Wait until the card shows **Ready**.
 
     Result: The card shows the build, the push and the worker.
 
-11. Examine the card.
+13. Examine the card.
 
     Result: The card shows `Image: built from <commit> plus uncommitted changes`,
     where `<commit>` is the first 12 characters of `git -C <repo> rev-parse HEAD`.
 
-12. In a Shell panel of `smoke-dirty`, show the marker.
+14. In a Shell panel of `smoke-dirty`, show the marker.
 
     ```sh
     cat /etc/horizon-smoke-new-cloud
@@ -655,11 +681,11 @@ registry of `runpod-build`. Use only synthetic file contents. In the steps,
     Result: The panel shows `synthetic-new-cloud-marker`. The worker's checkout has
     no `<context>/smoke-new.txt`, because the source is the committed archive.
 
-13. Write the pod and volume of `smoke-dirty` in the resource ledger.
+15. Write the pod and volume of `smoke-dirty` in the resource ledger.
 
     Result: The ledger shows the pod and the volume of `smoke-dirty` as active.
 
-14. On the card of `smoke-dirty`, click **Delete cloud resources…**.
+16. On the card of `smoke-dirty`, click **Delete cloud resources…**.
 
     Result: The card asks for confirmation and shows **Delete resources
     permanently**.
@@ -667,23 +693,23 @@ registry of `runpod-build`. Use only synthetic file contents. In the steps,
     > **CAUTION:** THE NEXT STEP DELETES THE VOLUME OF `smoke-dirty`. Its files
     > cannot come back.
 
-15. Click **Delete resources permanently**.
+17. Click **Delete resources permanently**.
 
     Result: The card shows **Deleted** and **Workspace storage cleaned up**. The
     provider shows no pod and no volume for `smoke-dirty`.
 
-16. Mark the resources of `smoke-dirty` as deleted in the resource ledger.
+18. Mark the resources of `smoke-dirty` as deleted in the resource ledger.
 
     Result: The ledger shows no active resource for `smoke-dirty`.
 
     > **CAUTION:** REMOVE ONLY `smoke-dirty`. Horizon removes the cloud and its
     > panels from the board.
 
-17. Click **Remove cloud**.
+19. Click **Remove cloud**.
 
     Result: The cloud `smoke-dirty` is not on the board.
 
-18. Discard the changes of step 1.
+20. Discard the changes of step 1.
 
     ```sh
     git -C <repo> checkout -- <dockerfile>; rm <repo>/<context>/smoke-new.txt
@@ -704,6 +730,10 @@ registry of `runpod-build`. Use only synthetic file contents. In the steps,
 - A failed image push shows on **Push image**, not on **Validate**.
 - A new cloud from an uncommitted recipe lists its files before **Start cloud**,
   refuses a list that changed, and shows `plus uncommitted changes` on its card.
+- A refused secret file blocks **Start cloud** until **Check again** reads the
+  files after the file is removed.
+- The harness deployment refuses a missing token and a token from before a file
+  changed, and builds nothing.
 - A refused push offers **Open Container registry** as its one next action. Cloud
   settings then show the repository of the profile filled in, and the empty form
   of another repository stays behind **Add another**.

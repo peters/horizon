@@ -299,12 +299,14 @@ bind of S02 alone does not change the socket that the candidate uses.
 
    Result: Without a click, **Profile** lists `local-build`.
 
-5. Make a test file that has the name of a common secret file. Then add a
-   comment line to the local file, so that the dialog reads the settings and the
-   files again.
+5. Make a test file that has the name of a common secret file, and add it to the
+   index, so that a global Git exclude file that ignores `.env` cannot hide it.
+   Then add a comment line to the local file, so that the dialog reads the
+   settings and the files again.
 
    ```sh
    printf 'SMOKE=synthetic\n' > <data-home>/smoke/app/.horizon/.env
+   git -C <data-home>/smoke/app add -f .horizon/.env
    printf '# smoke\n' >> <data-home>/smoke/app/.horizon/cloud.yml
    ```
 
@@ -312,11 +314,15 @@ bind of S02 alone does not change the socket that the candidate uses.
    common secret file. **Start cloud** is not available and says that an
    uncommitted file is refused. Do not click it.
 
-6. Remove the test file.
+6. Remove the test file from the index and delete it.
 
    ```sh
+   git -C <data-home>/smoke/app rm -q --cached .horizon/.env
    rm <data-home>/smoke/app/.horizon/.env
    ```
+
+   Result: `git -C <data-home>/smoke/app status --short` does not show
+   `.horizon/.env`.
 
 7. Expand **More options** and type `HEAD~1` in **Committed base revision**.
 

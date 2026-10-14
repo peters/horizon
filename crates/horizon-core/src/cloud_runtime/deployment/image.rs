@@ -407,11 +407,10 @@ mod tests {
             write(&repository, ".horizon/Dockerfile", "FROM scratch\nCOPY tool /\n");
             let files = collect(&repository, &request.revision, request.profile.build.as_ref().unwrap()).unwrap();
             request.working_copy = Some(Confirmed { hash: files.hash() });
-            // No Docker answers, so the build fails after the files are laid over. Its client
-            // writes its configuration below the test's own folder.
-            request.settings.docker_host = Some(format!("unix://{}", root.path().join("absent.sock").display()));
-            request.settings.docker_config = root.path().join("docker-config");
             crate::cloud_runtime::deployment::prepare(&request).unwrap();
+            // A confirmed file changes, so the build fails while the files are laid over,
+            // before Docker or the network is asked anything.
+            write(&repository, ".horizon/Dockerfile", "FROM scratch\nCOPY other /\n");
             let store = Store::lock(&request.state_root).unwrap();
             let mut state = store.load().unwrap().unwrap();
             let cancel = Cancellation::default();
@@ -420,11 +419,10 @@ mod tests {
                 emit: &|_| {},
                 secrets: Vec::new(),
             };
-            // The build fails, or Docker is not installed, as on a macOS runner.
-            assert!(matches!(
-                prepare_image(&request, &store, &runner, &mut state, None),
-                Err(Error::Command("image build") | Error::Io(_))
-            ));
+            let failed = prepare_image(&request, &store, &runner, &mut state, None)
+                .unwrap_err()
+                .to_string();
+            assert!(failed.contains("not the ones confirmed"), "{failed}");
             assert_eq!(state.uncommitted_image, None, "no image completed");
             assert_eq!(store.load().unwrap().unwrap().uncommitted_image, None);
             // A built image records its spec and the confirmed files together.
