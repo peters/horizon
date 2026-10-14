@@ -36,8 +36,8 @@ To change or check a saved host again, click **Edit** on its row. **Remove host*
 removes it from the settings. A cloud on a host that you remove or rename cannot
 stop, resume or be deleted until you save the host again under its old name.
 
-Clear **Use a Docker host for clouds** to remove your hosts from
-`cloud_offers`. The saved hosts stay in the settings, and clouds on them keep
+Clear **Use a Docker host for clouds** to remove your hosts from New cloud and
+from `cloud_offers`. The saved hosts stay in the settings, and clouds on them keep
 working. A profile that names `provider: docker-host` directly, for example in
 `cloud_deploy`, still runs on the saved host.
 
