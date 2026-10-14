@@ -410,6 +410,50 @@ class HorizonStopTests(unittest.TestCase):
         self.assertEqual(self.log.read_text(), '')
         self.assertEqual(json.loads(self.request.read_text())['reason'], 'second')
 
+    def test_a_request_whose_stop_cannot_leave_the_log_stays_until_it_does(self):
+        def cut_short():
+            self.record()
+            record = json.loads(self.request.read_text())
+            STOPD['append'](self.log, {key: record[key] for key in ('at', 'reason', 'session', 'agent')})
+            return record['at']
+        stuck = mock.patch.dict(STOPD['take'].__globals__, remove_stop=mock.Mock(return_value=False))
+        # It lapses, its session ended, or another request would replace it: with a log
+        # that cannot change, the request stays, and nothing replaces it.
+        at = cut_short()
+        self.clock += STOPD['REQUEST_SECONDS'] + 1
+        with stuck:
+            self.assertIn('lapsed', self.take()['refused'])
+            self.assertEqual(json.loads(self.request.read_text())['at'], at)
+            with self.assertRaisesRegex(Refused, 'could not be taken off the stop log'):
+                self.record(reason='second')
+        # Once the log can change, the next take clears both.
+        self.assertIn('lapsed', self.take()['refused'])
+        self.assertFalse(self.request.exists())
+        self.assertEqual(self.log.read_text(), '')
+        at = cut_short()
+        with stuck:
+            self.assertIn('ended', self.take(windows='@1 agent-c\n')['refused'])
+            self.assertTrue(self.request.exists())
+        self.assertIn('ended', self.take(windows='@1 agent-c\n')['refused'])
+        self.assertFalse(self.request.exists())
+        self.assertEqual(self.log.read_text(), '')
+        # An untake that cannot change the log keeps the request too.
+        at = cut_short()
+        self.clock += 130
+        self.assertEqual(self.take()['at'], at)
+        with stuck:
+            self.assertFalse(STOPD['untake'](at, path=self.request, log=self.log, lock=self.lock))
+        self.assertTrue(self.request.exists())
+
+    def test_a_link_in_the_logs_place_holds_no_stop(self):
+        target = self.log.parent.parent / 'elsewhere'
+        self.log.parent.mkdir(parents=True)
+        target.write_text('{"at": 7}\n')
+        self.log.symlink_to(target)
+        self.assertFalse(STOPD['logged'](self.log, 7))
+        self.assertTrue(STOPD['cleared'](self.log, 7))
+        self.assertEqual(target.read_text(), '{"at": 7}\n')
+
     def test_a_line_that_cannot_be_written_whole_leaves_the_log_as_it_was(self):
         STOPD['append'](self.log, {'at': 1})
         before = self.log.read_bytes()

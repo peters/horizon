@@ -10,6 +10,7 @@ request and record it, for Horizon to carry out the next time it reads the worke
 yet. A shared worker and a worker
 with hosted devices offer no stop: the first runs other clouds' sessions, and the second
 could not release the devices it holds once stopped."""
+import errno
 import fcntl
 import json
 import os
@@ -353,7 +354,8 @@ def refuse_over_taken(path, log, now):
                       + str(record.get('session')) + '.')
     # A lapsed take, or a take that ended before it saved the taken state, may have
     # logged the stop that this request replaces.
-    remove_stop(log, record['at'])
+    if not cleared(log, record['at']):
+        raise Refused('An earlier stop request could not be taken off the stop log; the worker keeps running.')
 
 
 def lapsed(record, now):
@@ -395,8 +397,8 @@ def take(path=REQUEST, lock=REQUEST_LOCK, log=STOP_LOG, now=time.time, output=ot
         stop = {key: record[key] for key in ('at', 'reason', 'session', 'agent')}
         if lapsed(record, now):
             # A take may have logged the stop and ended before it saved the taken state.
-            remove_stop(log, record['at'])
-            path.unlink(missing_ok=True)
+            if cleared(log, record['at']):
+                path.unlink(missing_ok=True)
             return {'refused': 'The stop request lapsed before the worker stopped.'}
         if record.get('taken') is True:
             # A take that ended between its two writes, or an untake that did, left the
@@ -411,8 +413,8 @@ def take(path=REQUEST, lock=REQUEST_LOCK, log=STOP_LOG, now=time.time, output=ot
             # Window ids restart with the tmux server: the requester's window must still be
             # its session's.
             if sessions(query).get(record['window'], record['session']) != record['session']:
-                remove_stop(log, record['at'])
-                path.unlink(missing_ok=True)
+                if cleared(log, record['at']):
+                    path.unlink(missing_ok=True)
                 return {'refused': 'The agent session that asked has ended and its window is in use again.'}
             # Every session counts now, the requester's too: it may have taken up new work.
             check_quiet(None, now, output, cores)
@@ -473,11 +475,16 @@ def tail(file):
 
 
 def logged(log, at):
-    """Whether the stop at `at` is on the stop log."""
+    """Whether the stop at `at` is on the stop log. Raises OSError when that cannot be told."""
     try:
         descriptor = open_log(log, os.O_RDONLY)
     except FileNotFoundError:
         return False
+    # A link or other file an agent put in the log's place holds none of Horizon's stops.
+    except OSError as error:
+        if error.errno in (None, errno.ELOOP, errno.ENOTDIR):
+            return False
+        raise
     with os.fdopen(descriptor, 'rb') as file:
         return any(record is not None and record.get('at') == at for _, record in tail(file)[0])
 
@@ -509,6 +516,18 @@ def remove_stop(log, at):
     return True
 
 
+def cleared(log, at):
+    """Takes the stop at `at` off the stop log and says whether the log no longer holds it.
+    A request is dropped only then: while a stop that did not happen stays on the log, so
+    does its request, and the next take tries again."""
+    remove_stop(log, at)
+    try:
+        return not logged(log, at)
+    # The log cannot be read now, as on a failing volume.
+    except OSError:
+        return False
+
+
 def untake(at, path=REQUEST, log=STOP_LOG, lock=REQUEST_LOCK):
     """Takes back the stop taken at `at`, after Horizon failed to start it: removes it from
     the stop log and then drops its request. Returns whether the log held it. A stop that
@@ -519,13 +538,8 @@ def untake(at, path=REQUEST, log=STOP_LOG, lock=REQUEST_LOCK):
             record = json.loads(path.read_text())
         except (OSError, ValueError):
             record = None
-        if isinstance(record, dict) and record.get('at') == at:
-            try:
-                kept = logged(log, at)
-            except OSError:
-                kept = True
-            if not kept:
-                path.unlink(missing_ok=True)
+        if isinstance(record, dict) and record.get('at') == at and cleared(log, at):
+            path.unlink(missing_ok=True)
         return removed
 
 

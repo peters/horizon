@@ -58,7 +58,9 @@ stays for a later take), and `{"refused": ...}` when the request no longer count
 taken within ten minutes, taken ten minutes ago without a stop (the stop then leaves the
 log again), malformed, or its agent
 session ended and its window holds another session. When Horizon cannot start the stop,
-`--untake AT` removes it from the log and drops the request. The supervisor drops a
+`--untake AT` removes it from the log and drops the request. A request is dropped only
+once its stop is off the log, so a stop that did not happen never stays on record; until
+then it stays, and no new request replaces it. The supervisor drops a
 request left from before the worker started. This works only while Horizon runs. `horizon-worker-stopd --mode`
 prints `self`, `horizon` or `none`. The supervisor keeps the worker running when the stop
 service exits; agents are then told that the worker cannot stop.
