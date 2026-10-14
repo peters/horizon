@@ -121,6 +121,9 @@ impl Draft {
         for registry in &self.registries {
             registry.validate()?;
         }
+        if self.settings.docker_hosts.len() > super::settings::MAX_DOCKER_HOSTS {
+            return Err(Error::Invalid("Save at most 16 Docker hosts"));
+        }
         let runpod = !self.runpod_key.is_empty() || self.settings.runpod_configured();
         // Saved hosts count while they are switched off, so the switch itself can be saved.
         if !runpod && !self.hetzner.enabled && self.settings.docker_hosts.is_empty() {
