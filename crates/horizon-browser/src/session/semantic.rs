@@ -294,9 +294,13 @@ impl DriverState {
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
         self.interaction_started_at.get_or_insert_with(std::time::Instant::now);
         for _ in 0..count {
-            for input in crate::semantic_keys::press_inputs(key, modifiers) {
-                self.send_semantic_input(link, event_tx, frame_slot, input)?;
-            }
+            let [down, up] = crate::semantic_keys::press_inputs(key, modifiers);
+            // A key-down that failed or timed out may still have reached the
+            // page, so the key-up is always attempted and the first failure
+            // is the one reported.
+            let pressed = self.send_semantic_input(link, event_tx, frame_slot, down);
+            let released = self.send_semantic_input(link, event_tx, frame_slot, up);
+            pressed.and(released)?;
         }
         Ok(BrowserControlValue::Accepted)
     }
