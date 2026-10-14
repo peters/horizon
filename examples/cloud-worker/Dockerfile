@@ -41,10 +41,20 @@ RUN if [ "$HORIZON_DESKTOP" = true ]; then apt-get update \
     && apt-get install -y --no-install-recommends xvfb openbox x11vnc xauth x11-utils libxtst6 fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*; fi
 ARG HORIZON_BROWSERS=
-RUN case ",$HORIZON_BROWSERS," in *,chromium,*) \
-    curl -fsSL https://dl.google.com/linux/linux_signing_key.pub -o /etc/apt/trusted.gpg.d/google.asc \
-    && echo 'deb [arch=amd64] https://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/chrome.list \
-    && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable \
+# Google publishes Chrome for amd64 only, and the Ubuntu 24.04 chromium package
+# installs a snap, which does not run in a container. On arm64 the recipe thus
+# installs the chromium of the Debian 12 security archive. The apt pin lets apt take
+# only chromium and the two libraries that Ubuntu does not have from Debian.
+RUN case ",$HORIZON_BROWSERS," in *,chromium,*) arch=$(dpkg --print-architecture) && case "$arch" in \
+    amd64) curl -fsSL https://dl.google.com/linux/linux_signing_key.pub -o /etc/apt/trusted.gpg.d/google.asc \
+        && echo 'deb [arch=amd64] https://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/chrome.list \
+        && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable;; \
+    arm64) apt-get update && apt-get install -y --no-install-recommends debian-archive-keyring \
+        && echo 'deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] https://deb.debian.org/debian bookworm main' > /etc/apt/sources.list.d/debian-chromium.list \
+        && echo 'deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] https://deb.debian.org/debian-security bookworm-security main' >> /etc/apt/sources.list.d/debian-chromium.list \
+        && printf 'Package: *\nPin: origin deb.debian.org\nPin-Priority: -1\n\nPackage: chromium chromium-common libdav1d6 libjpeg62-turbo\nPin: origin deb.debian.org\nPin-Priority: 500\n' > /etc/apt/preferences.d/debian-chromium \
+        && apt-get update && apt-get install -y --no-install-recommends chromium;; \
+    *) echo "no Chromium source for $arch" >&2; exit 1;; esac \
     && rm -rf /var/lib/apt/lists/*;; esac
 RUN case ",$HORIZON_BROWSERS," in *,firefox,*) \
     mkdir -p /etc/apt/keyrings \
@@ -52,14 +62,22 @@ RUN case ",$HORIZON_BROWSERS," in *,firefox,*) \
     && echo 'deb [signed-by=/etc/apt/keyrings/mozilla.asc] https://packages.mozilla.org/apt mozilla main' > /etc/apt/sources.list.d/mozilla.list \
     && printf 'Package: firefox*\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' > /etc/apt/preferences.d/mozilla \
     && apt-get update && apt-get install -y --no-install-recommends firefox \
-    && curl -fsSL https://github.com/mozilla/geckodriver/releases/download/v0.36.0/geckodriver-v0.36.0-linux64.tar.gz -o /tmp/geckodriver.tar.gz \
-    && echo '0bde38707eb0a686a20c6bd50f4adcc7d60d4f73c60eb83ee9e0db8f65823e04  /tmp/geckodriver.tar.gz' | sha256sum -c - \
+    && case "$(dpkg --print-architecture)" in \
+        amd64) asset=linux64 sum=0bde38707eb0a686a20c6bd50f4adcc7d60d4f73c60eb83ee9e0db8f65823e04;; \
+        arm64) asset=linux-aarch64 sum=b5fd13fc8f05ca99292700896d43fa986747a01b5fdc77f7bfc88a3707dc4241;; \
+        *) echo "no pinned geckodriver release for $(dpkg --print-architecture)" >&2; exit 1;; esac \
+    && curl -fsSL "https://github.com/mozilla/geckodriver/releases/download/v0.36.0/geckodriver-v0.36.0-$asset.tar.gz" -o /tmp/geckodriver.tar.gz \
+    && echo "$sum  /tmp/geckodriver.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/geckodriver.tar.gz -C /usr/local/bin \
     && rm -f /tmp/geckodriver.tar.gz && rm -rf /var/lib/apt/lists/*;; esac
 ARG HORIZON_BROWSERSTACK=false
 RUN if [ "$HORIZON_BROWSERSTACK" = true ]; then \
-    curl -fsSL https://www.browserstack.com/browserstack-local/BrowserStackLocal-linux-x64.zip -o /tmp/browserstack.zip \
-    && echo '0b2349bde6a33fc417597a7960903fb7a80188ea738aa3e675e2eaae07ad7442  /tmp/browserstack.zip' | sha256sum -c - \
+    case "$(dpkg --print-architecture)" in \
+        amd64) asset=x64 sum=0b2349bde6a33fc417597a7960903fb7a80188ea738aa3e675e2eaae07ad7442;; \
+        arm64) asset=arm64 sum=666c7cf9f48d4f58de13cdc62877c9f9531cf0ce871a92d39ed00ed0877d781e;; \
+        *) echo "no pinned BrowserStackLocal for $(dpkg --print-architecture)" >&2; exit 1;; esac \
+    && curl -fsSL "https://www.browserstack.com/browserstack-local/BrowserStackLocal-linux-$asset.zip" -o /tmp/browserstack.zip \
+    && echo "$sum  /tmp/browserstack.zip" | sha256sum -c - \
     && python3 -c 'import zipfile; zipfile.ZipFile("/tmp/browserstack.zip").extract("BrowserStackLocal", "/usr/local/bin")' \
     && chmod 755 /usr/local/bin/BrowserStackLocal && rm /tmp/browserstack.zip; fi
 ARG HORIZON_AGENTS=

@@ -87,21 +87,22 @@ Quick start in **New cloud** uses the public base worker image
 `ghcr.io/peters/horizon-worker-base`. Horizon pins this image by digest in
 `crates/horizon-core/src/cloud_runtime/repository/launch/quick_start.rs`. Thus each
 Horizon build starts the image that was tested with it. The `cpu` tag moves, and
-Horizon does not use it.
+Horizon does not use it. The workflow publishes the image as an index for
+`linux/amd64` and `linux/arm64`. Pin the digest of the index, not the digest of one
+architecture.
 
 The image changes only when the pin changes. Update the pin when the worker helpers,
 the worker contract or the agent CLIs in the base image must change for a release:
 
 1. Open the newest successful run of the **Worker images** workflow on `main`.
-2. In the summary of the **Publish CPU base worker** job, find the image reference
-   that has `@sha256:`.
+2. In the summary of the **Publish CPU base worker index** job, find the image
+   reference that has `@sha256:`.
 3. In `quick_start.rs`, set the value of the `image!` macro to that reference.
-4. In the log of the **Build and check** step of the same job, find the lines between
-   `Worker check report for the quick-start capabilities:` and
-   `End of the worker check report.`
+4. In the same summary, find the worker check report.
 
    Result: Each line is one contract marker, for example
-   `horizon-source-contract=1`. Do not copy the two boundary lines.
+   `horizon-source-contract=1`. The job publishes the index only when the two
+   architectures report the same markers.
 5. CAUTION: SET `CONTRACT` ONLY FROM THE REPORT OF THE NEW IMAGE. Horizon uses
    `CONTRACT` instead of a local check of the pinned image. A wrong value lets
    Horizon accept an image that the worker refuses when it starts.
