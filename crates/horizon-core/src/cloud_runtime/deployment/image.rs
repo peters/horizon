@@ -132,7 +132,7 @@ pub(super) fn prepare_image(
     let build_root = tempfile::tempdir_in(store.root())?;
     let source = if let Some(build) = &state.profile.build {
         let source = repository::snapshot(&state.repository, &state.revision, build_root.path(), runner)?;
-        working_copy(request, state, build, &source, runner)?;
+        working_copy(state, build, &source, runner)?;
         source
     } else {
         state.repository.clone()
@@ -207,18 +207,12 @@ pub(super) fn prepare_image(
 }
 
 /// Lays the uncommitted files that a person confirmed in New cloud, as the record holds
-/// their hash, over `snapshot`. Also without confirmed files, so one added since is refused.
-fn working_copy(
-    request: &Request,
-    state: &Deployment,
-    build: &Build,
-    snapshot: &Path,
-    runner: &Runner<'_>,
-) -> Result<()> {
-    if request.working_copy.is_none() && state.uncommitted_image.is_none() {
+/// them, over `snapshot`. Also without confirmed files, so one added since is refused.
+fn working_copy(state: &Deployment, build: &Build, snapshot: &Path, runner: &Runner<'_>) -> Result<()> {
+    let Some(confirmed) = &state.working_copy else {
         return Ok(());
-    }
-    let confirmed = state.uncommitted_image.as_ref().map(|image| image.hash.as_str());
+    };
+    let confirmed = confirmed.hash.as_deref();
     if confirmed.is_some() {
         (runner.emit)(crate::cloud_runtime::Event::Progress(Progress::activity(
             "Adding the confirmed uncommitted files to the build context",
@@ -317,7 +311,6 @@ mod tests {
                 secrets: Vec::new(),
             };
             working_copy(
-                request,
                 &state,
                 request.profile.build.as_ref().unwrap(),
                 snapshot.path(),
@@ -339,6 +332,7 @@ mod tests {
             });
             crate::cloud_runtime::deployment::prepare(&request).unwrap();
             let recorded = Store::lock(&request.state_root).unwrap().load().unwrap().unwrap();
+            assert_eq!(recorded.working_copy, request.working_copy);
             let image = recorded.uncommitted_image.unwrap();
             assert_eq!(
                 (image.revision.as_str(), image.hash.as_str()),
@@ -399,9 +393,16 @@ mod tests {
             assert_eq!(built(&request).unwrap(), "FROM scratch\n");
             write(&request.repository, ".horizon/added.sh", "echo added\n");
             assert!(matches!(built(&request), Err(Error::Invalid(message)) if message == CHANGED));
-            // A typed revision builds its commit and never reads the working copy.
-            request.working_copy = None;
-            assert_eq!(built(&request).unwrap(), "FROM scratch\n");
+            // A retry that names no confirmation, such as a reconnect, refuses it too.
+            let mut retry = request.clone();
+            retry.working_copy = None;
+            crate::cloud_runtime::deployment::prepare(&retry).unwrap();
+            assert!(matches!(built(&retry), Err(Error::Invalid(message)) if message == CHANGED));
+            // A cloud from a typed revision builds its commit and never reads the working copy.
+            let mut typed = retry.clone();
+            typed.state_root = typed.state_root.with_file_name("typed");
+            crate::cloud_runtime::deployment::prepare(&typed).unwrap();
+            assert_eq!(built(&typed).unwrap(), "FROM scratch\n");
         }
     }
 

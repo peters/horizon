@@ -37,10 +37,11 @@ context can go into the image, so a person must see each one first.
   (`creation::uncommitted`); a refusal holds back **Start**. **Start** reads
   them again and refuses a moved `HEAD` or another hash. The confirmed hash
   goes with the cloud (`CloudGroup::working_copy`, `Request::working_copy`);
-  the first deployment records it (`uncommitted_image`), and `prepare_image`
-  overlays the files with the recorded hash, also when none were listed, so a
-  file added later is refused. A later request can only repeat the recorded
-  hash. `cloud_deploy plan-deploy` prints the files and a token
+  the first deployment records it (`Deployment::working_copy`, and the hash in
+  `uncommitted_image`), and `prepare_image` overlays the recorded files, also
+  when none were listed, so a file added later is refused, also on a retry
+  that names no confirmation. Before the image is built, a later request can
+  only repeat the recorded confirmation or name none. `cloud_deploy plan-deploy` prints the files and a token
   (`uncommitted::token`) that `deploy` and `prepare-image` need while any
   file is uncommitted.
 

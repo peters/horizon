@@ -607,8 +607,8 @@ is checked; they do not mean a worker is missing or authorize a replacement.
 ## Repository setup and deployment
 
 If the selected commit has no `.horizon/cloud.yml`, and the working copy has no
-valid `.horizon/cloud.yml`, **New cloud** shows **No cloud setup
-yet**. This is not an error. The dialog then shows two choices:
+`.horizon/cloud.yml` either, **New cloud** shows **No cloud setup
+yet**. A working copy that is not valid shows its error instead. This is not an error. The dialog then shows two choices:
 
 - **Quick start** starts the repository on the base image. See
   [Quick start](#quick-start).

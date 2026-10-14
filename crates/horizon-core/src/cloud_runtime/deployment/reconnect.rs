@@ -138,7 +138,7 @@ mod tests {
         let mut deleted_hetzner = record("hetzner", "Deleted", &prepared);
         deleted_hetzner.operation = CreateState::Terminated { worker_id: "42".into() };
         let first_hetzner = record("hetzner", "Readiness", &prepared);
-        let cases = [
+        let cases = vec![
             (record("runpod", "Deleted", &prepared), None, "deleted"),
             (deleted_hetzner, Some(HELD), "deleted"),
             (stopped, None, "resume it"),
