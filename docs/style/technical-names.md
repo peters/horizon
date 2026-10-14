@@ -53,6 +53,9 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | offer | One worker type with a price from a provider catalog. | quote, SKU |
 | tailnet | A Tailscale network that Horizon joins with an auth key. | tailscale network, overlay |
 | auth key | A Tailscale key that starts with `tskey-auth-`. It is a secret. | token, join key |
+| API credential | A personal API token or OAuth client that the host stores for a saved tailnet. | auth key (for API access) |
+| personal API token | A Tailscale API access token that starts with `tskey-api-`. It is a secret. | auth key |
+| OAuth client | A Tailscale client ID and client secret for API access. | auth key |
 | device name | The name of a worker in a tailnet. Other devices use it to reach the worker. | hostname, machine name |
 | companion | A second repository that a cloud can use. | sibling repo, linked repo |
 | sibling | A companion on the same worker as the cloud. | same-worker companion |

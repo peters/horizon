@@ -686,6 +686,12 @@ key or retires the old published generation. Settings refresh retries recovery.
 The public catalog retains names/IDs only. Reading a saved key belongs solely to the private host
 `cloud_runtime::tailnet::keychain` adapter, which supplies the pinned deployment
 transport. No public callback, CLI or MCP operation can receive stored key bytes.
+`horizon-cloud::tailnet::api` owns independent desktop API bindings. Its
+`credential` leaf validates bounded zeroizing drafts and stored bytes; `records`
+owns nonsecret sidecar/journal validation. Mutations use fresh OS-store slots and
+the shared tailnet lock. Public status returns only missing or stored kind.
+The core tailnet adapter reexports these types for later host adapters; worker
+enrollment still uses its separate private auth-key path.
 `image` prepares the worker image and checks its contract before allocation;
 `source` validates and packs the committed source before allocation and transfers
 it to the ready worker; `git_credentials` and `agent_credentials` install or clear

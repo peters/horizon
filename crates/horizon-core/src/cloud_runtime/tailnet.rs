@@ -1,7 +1,9 @@
 //! Thin deployment adapter for cloud-only tailnet enrollment.
 mod keychain;
 use super::{Error, Result, WorkerContract, command::Runner, ssh::Connection, state};
-pub use horizon_cloud::tailnet::{Catalog, Selection, Store, Tailnet, valid_key};
+pub use horizon_cloud::tailnet::{
+    ApiCredential, ApiCredentialKind, ApiCredentialStatus, Catalog, Selection, Store, Tailnet, valid_key,
+};
 use sha2::{Digest, Sha256};
 use std::{path::Path, time::Duration};
 

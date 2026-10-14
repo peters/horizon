@@ -138,6 +138,10 @@ def check():
                  'quick-start pin'):
         if term not in documents.get('horizon-cloud', ''):
             errors.append(f'horizon-cloud: tagged enrollment guidance missing {term}')
+    for term in ('horizon-cloud-tailnet-api', 'personal_token', 'OAuth client',
+                 'enrollment auth key', 'Stored presence'):
+        if term not in documents.get('horizon-cloud', ''):
+            errors.append(f'horizon-cloud: API credential policy missing {term}')
     cast_document = documents.get('horizon-cast', '')
     for name in enum_variants((ROOT / 'crates/horizon-browser-control/src/manifest/cast.rs').read_text(), 'CastSource'):
         if f'`kind: {snake_case(name)}`' not in cast_document:
