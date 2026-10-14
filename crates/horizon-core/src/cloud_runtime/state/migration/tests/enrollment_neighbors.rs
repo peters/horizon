@@ -73,3 +73,36 @@ fn invalid_enrollment_version_shapes_are_not_adopted_as_neighbors() {
         assert_eq!(required(&root.join(DEPLOYMENT)).unwrap(), other);
     }
 }
+
+#[test]
+fn duplicate_neighbor_fields_cannot_replace_enrollment_or_worker_evidence() {
+    for duplicate in ["version", "tailnet_enrollment", "worker_id", "device_id"] {
+        let fixture = Fixture::new();
+        let (root, value) = neighbor(&fixture, "worker-two");
+        let encoded = serde_json::to_string(&value).unwrap();
+        let malformed = match duplicate {
+            "version" => format!("{{\"version\":1,{}", &encoded[1..]),
+            "tailnet_enrollment" => format!(
+                "{{\"tailnet_enrollment\":{{\"receipts\":[],\"attempts\":[]}},{}",
+                &encoded[1..]
+            ),
+            "worker_id" => encoded.replace(
+                "\"worker_id\":\"worker-two\"",
+                "\"worker_id\":\"worker-one\",\"worker_id\":\"worker-two\"",
+            ),
+            "device_id" => encoded.replace(
+                "\"device_id\":\"n-neighbor\"",
+                "\"device_id\":\"n-previous\",\"device_id\":\"n-neighbor\"",
+            ),
+            _ => unreachable!(),
+        };
+        assert_ne!(malformed, encoded);
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&malformed).unwrap(), value);
+        std::fs::write(root.join(DEPLOYMENT), malformed).unwrap();
+        let original = required(&fixture.root.join(DEPLOYMENT)).unwrap();
+        let other = required(&root.join(DEPLOYMENT)).unwrap();
+        assert!(fixture.migrate().is_err(), "Duplicate {duplicate} must be refused");
+        assert_eq!(required(&fixture.root.join(DEPLOYMENT)).unwrap(), original);
+        assert_eq!(required(&root.join(DEPLOYMENT)).unwrap(), other);
+    }
+}
