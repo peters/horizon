@@ -111,8 +111,14 @@ impl HorizonApp {
                 Err(error) => complete(request, Err(error)),
             }
         }
+        let mut finished = false;
         while let Ok(step) = self.upkeep.agent.finished.try_recv() {
             self.finish(ctx, step);
+            finished = true;
+        }
+        // This frame drew the dialogs and boards already: draw what the requests changed.
+        if finished {
+            ctx.request_repaint();
         }
         self.show_agent_changes();
     }
