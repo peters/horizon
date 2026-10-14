@@ -223,3 +223,39 @@ fn every_failure_of_a_worker_stopped_outside_horizon_becomes_its_stop() {
     runtime.poll_recovery();
     assert_eq!(runtime.error.as_deref(), Some("Existing worker is not running"));
 }
+
+// The check of a failure reads the settings on its own thread: a read that does not
+// return holds the check, not the card, and a failed read shows the failure as it was.
+#[cfg(unix)]
+#[test]
+fn a_held_settings_read_does_not_hold_the_card_and_a_failed_read_keeps_the_failure() {
+    use std::time::Instant;
+    let temp = tempfile::tempdir().unwrap();
+    let settings = temp.path().join("settings.json");
+    // Opening a FIFO for reading waits until a writer opens it.
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&settings)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let mut runtime = Runtime {
+        stage: Some(Stage::Ready),
+        error: Some("Local operation timed out".into()),
+        ..Runtime::default()
+    };
+    runtime.start_failure_check(temp.path().join("cloud-1"), settings.clone(), &egui::Context::default());
+    assert!(runtime.checking_provider() && runtime.error.is_none());
+    runtime.poll_recovery();
+    assert!(runtime.checking_provider(), "the read is still held");
+    // The writer closes without writing: the read ends with no settings.
+    drop(std::fs::OpenOptions::new().write(true).open(&settings).unwrap());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while runtime.checking_provider() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+        runtime.poll_recovery();
+    }
+    assert!(!runtime.checking_provider());
+    assert_eq!(runtime.error.as_deref(), Some("Local operation timed out"));
+}

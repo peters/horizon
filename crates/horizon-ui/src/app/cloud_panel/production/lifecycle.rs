@@ -100,7 +100,7 @@ impl Runtime {
     pub(super) fn start_failure_check(
         &mut self,
         state_root: std::path::PathBuf,
-        settings: Settings,
+        settings_path: std::path::PathBuf,
         ctx: &egui::Context,
     ) {
         let tx = self.hold_failure_for_check();
@@ -108,12 +108,16 @@ impl Runtime {
         let fence = super::session_record::fence(&state_root);
         std::thread::spawn(move || {
             fence.wait();
-            let result = cloud_runtime::lifecycle::check_lost_worker(
-                &state_root,
-                &settings,
-                &cloud_runtime::Cancellation::default(),
-            )
-            .and_then(|checked| checked.ok_or(cloud_runtime::Error::Invalid("The worker was not checked")));
+            // Read here, not on the UI thread: a failed read shows the failure as it was.
+            let result = Settings::load(&settings_path)
+                .and_then(|settings| {
+                    cloud_runtime::lifecycle::check_lost_worker(
+                        &state_root,
+                        &settings,
+                        &cloud_runtime::Cancellation::default(),
+                    )
+                })
+                .and_then(|checked| checked.ok_or(cloud_runtime::Error::Invalid("The worker was not checked")));
             let _ = tx.send(result);
             ctx.request_repaint();
         });
@@ -341,8 +345,8 @@ fn first_deletion_step(state: Option<&cloud_runtime::state::Deployment>) -> Stag
 
 impl HorizonApp {
     /// Asks the provider, before the card shows the failure of cloud `id`, whether it
-    /// is a stop Horizon did not make. The check shows as Checking provider. Without
-    /// settings the failure shows at once.
+    /// is a stop Horizon did not make. The check shows as Checking provider; it reads
+    /// the settings off the UI thread, and without them the failure shows as it was.
     pub(super) fn check_failure_with_provider(&mut self, id: u32, ctx: &egui::Context) {
         let Some(root) = self.cloud_prototype.root.clone() else {
             return;
@@ -357,14 +361,11 @@ impl HorizonApp {
         else {
             return;
         };
-        let (Ok(settings), Ok(state_root)) = (
-            Settings::load(&root.join("settings.json")),
-            cloud_runtime::state::cloud_directory(&root, &launch.id),
-        ) else {
+        let Ok(state_root) = cloud_runtime::state::cloud_directory(&root, &launch.id) else {
             return;
         };
         if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
-            runtime.start_failure_check(state_root, settings, ctx);
+            runtime.start_failure_check(state_root, root.join("settings.json"), ctx);
         }
     }
 
