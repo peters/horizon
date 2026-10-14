@@ -372,6 +372,14 @@ fn an_engine_that_publishes_loopback_ports_openly_is_refused() {
     }
     docker.version = Some("28.0.0-ce");
     cloud.power(&docker, true).unwrap();
+    // A request recorded before the engine changed is not created on an older one.
+    let mut retry = Cloud::new("recorded", 2);
+    retry.operation = Some(CreateState::Requested);
+    docker.version = Some("27.5.1");
+    assert!(retry.provision(&docker).is_err());
+    assert!(find(&docker, "recorded").unwrap().is_none());
+    docker.version = Some("28.1.2+dfsg1");
+    retry.provision(&docker).unwrap();
 }
 
 #[test]

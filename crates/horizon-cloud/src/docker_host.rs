@@ -138,7 +138,11 @@ impl Host {
         Ok(match self.access {
             Access::ThisPc => {
                 let mut command = Command::new(self.docker.as_deref().map_or_else(|| local_docker(), Path::new));
-                command.env("DOCKER_CONFIG", local_config).args(args);
+                // A context could name another computer's engine; only a local `DOCKER_HOST` is kept.
+                command
+                    .env("DOCKER_CONFIG", local_config)
+                    .env_remove("DOCKER_CONTEXT")
+                    .args(args);
                 command
             }
             Access::Ssh => {
