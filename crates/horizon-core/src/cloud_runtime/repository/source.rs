@@ -283,21 +283,31 @@ pub fn clone_stopped(marker: &str) -> bool {
 }
 
 /// Whether a clone into `folder` was started and not finished, from at most a few kilobytes
-/// of its marker file and without starting a process.
+/// of its marker file and without starting a process. Only a regular file is opened: a pipe
+/// in its place would wait for a writer.
 #[must_use]
 pub fn clone_stopped_in(folder: &Path) -> bool {
-    use std::io::Read as _;
-    let mut marker = String::new();
-    std::fs::File::open(folder.join(".git").join(CLONE_MARKER))
-        .and_then(|file| file.take(4096).read_to_string(&mut marker))
-        .is_ok()
-        && clone_stopped(&marker)
+    small_text(&folder.join(".git").join(CLONE_MARKER), 4096).is_some_and(|marker| clone_stopped(&marker))
 }
+
+/// The text of the regular file at `path`, links followed, read only when it is at most
+/// `limit` bytes. A pipe or device in a checkout's place is never opened, since opening it
+/// could wait for ever, and a large file is not read into memory.
+fn small_text(path: &Path, limit: u64) -> Option<String> {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > limit {
+        return None;
+    }
+    std::fs::read_to_string(path).ok()
+}
+
+/// The most bytes of a checkout's config read to find its origin.
+const CONFIG_LIMIT: u64 = 1024 * 1024;
 
 /// The address a checkout's `origin` was cloned from, read from its config file: a folder is
 /// looked at without starting a process, so a search can run while a dialog is drawn.
 fn origin_url(checkout: &Path) -> Option<String> {
-    let config = std::fs::read_to_string(common_git_dir(checkout)?.join("config")).ok()?;
+    let config = small_text(&common_git_dir(checkout)?.join("config"), CONFIG_LIMIT)?;
     let mut in_origin = false;
     for line in config.lines() {
         let line = line.trim();
@@ -320,11 +330,11 @@ fn common_git_dir(checkout: &Path) -> Option<PathBuf> {
     if dot_git.is_dir() {
         return Some(dot_git);
     }
-    let pointer = std::fs::read_to_string(&dot_git).ok()?;
+    let pointer = small_text(&dot_git, 4096)?;
     let own = checkout.join(pointer.lines().find_map(|line| line.strip_prefix("gitdir:"))?.trim());
-    match std::fs::read_to_string(own.join("commondir")) {
-        Ok(common) => Some(own.join(common.trim())),
-        Err(_) => Some(own),
+    match small_text(&own.join("commondir"), 4096) {
+        Some(common) => Some(own.join(common.trim())),
+        None => Some(own),
     }
 }
 

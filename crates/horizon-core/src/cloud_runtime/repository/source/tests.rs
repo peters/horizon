@@ -505,3 +505,20 @@ fn one_repository_is_one_server_and_path_whatever_the_transport() {
     );
     assert!(!same("https://github.com/acme/web", "https://github.com/acme/api"));
 }
+
+#[cfg(unix)]
+#[test]
+fn a_pipe_in_place_of_the_clone_marker_is_never_opened() {
+    let temp = tempfile::tempdir().unwrap();
+    let git = temp.path().join(".git");
+    std::fs::create_dir_all(&git).unwrap();
+    let made = std::process::Command::new("mkfifo")
+        .arg(git.join(CLONE_MARKER))
+        .status()
+        .is_ok_and(|status| status.success());
+    if !made {
+        return;
+    }
+    // Opening a pipe with no writer would wait for ever.
+    assert!(!clone_stopped_in(temp.path()));
+}

@@ -369,10 +369,27 @@ pub(super) fn pick(row: &Row, open: bool) -> Pick {
     }
 }
 
-/// `owner/name` of a GitHub address, in lowercase as the account lists it.
+/// `owner/name` of a GitHub address, in lowercase as the account lists it: only for the
+/// repository the account's row stands for, reached over a transport's usual port and not
+/// over another port of the same host.
 fn github_name(url: &str) -> Option<String> {
     let remote = source::parse(url)?;
-    (remote.host == "github.com").then(|| format!("{}/{}", remote.owner, remote.name).to_ascii_lowercase())
+    github_path(&remote).map(|name| name.to_ascii_lowercase())
+}
+
+/// `owner/name` of `remote` when it is a repository on GitHub itself, as written.
+fn github_path(remote: &source::Remote) -> Option<String> {
+    let name = format!("{}/{}", remote.owner, remote.name);
+    // Ports are compared over one transport only, so each transport's usual form is asked.
+    let usual = [
+        format!("https://github.com/{name}"),
+        format!("git@github.com:{name}"),
+        format!("git://github.com/{name}"),
+    ];
+    usual
+        .iter()
+        .all(|address| source::parse(address).is_some_and(|listed| source::same_repository(remote, &listed)))
+        .then_some(name)
 }
 
 /// The title a checkout is known by: where it came from, or its folder's name.
@@ -388,12 +405,17 @@ fn checkout_title(checkout: &Checkout) -> String {
         .as_deref()
         .and_then(source::parse)
         .map_or_else(folder, |remote| {
-            let path = format!("{}/{}", remote.owner, remote.name);
-            if remote.host == "github.com" {
-                path
-            } else {
-                format!("{}/{path}", remote.host)
-            }
+            github_path(&remote).unwrap_or_else(|| {
+                // A host on another port is another server, so the port is part of the title.
+                let place = remote
+                    .url
+                    .split_once("://")
+                    .and_then(|(_, rest)| rest.split('/').next())
+                    .map_or(remote.host.as_str(), |authority| {
+                        authority.rsplit('@').next().unwrap_or(authority)
+                    });
+                format!("{place}/{}/{}", remote.owner, remote.name)
+            })
         })
 }
 

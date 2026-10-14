@@ -365,7 +365,7 @@ struct Marker {
 }
 
 fn marker(folder: &Path) -> Option<Marker> {
-    parse_marker(&std::fs::read_to_string(folder.join(".git").join(MARKER)).ok()?)
+    parse_marker(&super::small_text(&folder.join(".git").join(MARKER), 4096)?)
 }
 
 /// The marker a clone keeps in its `.git` folder, under [`MARKER`], read from its text.

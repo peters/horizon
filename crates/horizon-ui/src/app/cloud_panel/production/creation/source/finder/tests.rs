@@ -384,3 +384,39 @@ fn a_stopped_clone_is_not_counted_as_on_this_computer() {
     };
     assert_eq!(finder.local_count(), 1);
 }
+
+#[test]
+fn a_github_checkout_on_another_port_is_not_the_account_s_repository() {
+    assert_eq!(
+        super::github_name("git@github.com:Acme/Web.git").as_deref(),
+        Some("acme/web")
+    );
+    assert_eq!(super::github_name("https://github.com:8443/acme/web"), None);
+    assert_eq!(super::github_name("ssh://git@github.com:2222/acme/web"), None);
+    assert_eq!(super::github_name("git://github.com:9999/acme/web"), None);
+    assert_eq!(
+        super::github_name("ssh://git@github.com/acme/web").as_deref(),
+        Some("acme/web")
+    );
+    assert_eq!(
+        super::checkout_title(&checkout("/x/web", Some("https://github.com:8443/acme/web"))),
+        "github.com:8443/acme/web"
+    );
+    assert_eq!(
+        super::checkout_title(&checkout("/x/tool", Some("https://git.example.com/team/tool"))),
+        "git.example.com/team/tool"
+    );
+    let rows = rows_for(
+        "",
+        &[checkout(
+            "/home/x/elsewhere/web",
+            Some("https://github.com:8443/acme/web"),
+        )],
+        &names(&["acme/web"]),
+    );
+    assert!(
+        rows.iter()
+            .any(|row| matches!(&row.kind, Kind::GitHub { name } if name == "acme/web")),
+        "the account's repository keeps its row"
+    );
+}
