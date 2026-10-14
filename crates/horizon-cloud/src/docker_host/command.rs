@@ -94,9 +94,7 @@ impl Docker for Engine<'_> {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = command
-            .spawn()
-            .map_err(|_| CloudError::Invalid(NOT_STARTED))?;
+        let mut child = command.spawn().map_err(|_| CloudError::Invalid(NOT_STARTED))?;
         let stdout = drain(child.stdout.take(), OUTPUT_LIMIT);
         let stderr = drain(child.stderr.take(), ERROR_LIMIT);
         let deadline = Instant::now() + timeout;
