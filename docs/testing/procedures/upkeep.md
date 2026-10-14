@@ -347,18 +347,24 @@ made-up repositories and one public pull request.
 
    Result: A shell panel on the worker opens.
 
-10. In the shell panel, type `cat /workspace/home/upkeep/runs.jsonl`.
+10. In the shell panel, type `curl -sS -m 10 https://example.com; cat /workspace/.horizon-egress/refused.jsonl`.
+
+   Result: `curl` cannot resolve `example.com`. The log shows a line with
+   `"name": "example.com"`. The worker connects only to the names of the outbound
+   allowlist ([Outbound allowlist](../../cloud-hetzner.md#outbound-allowlist)).
+
+11. In the shell panel, type `cat /workspace/home/upkeep/runs.jsonl`.
 
    Result: Within two minutes after **Ready**, the file shows exactly one run that
    started, also after the restart of steps 5 and 6. The first run does not wait for the
    next full hour. The run started an agent for each repository.
 
-11. Wait until the agent of `<second>` asks for GitHub access to it.
+12. Wait until the agent of `<second>` asks for GitHub access to it.
 
    Result: Horizon allows the request without a prompt. The cloud card shows no
    request. The agent log shows that it can reach `<second>`.
 
-12. Wait until the run ends.
+13. Wait until the run ends.
 
    Result: The board shows the pull requests of `<repo>` with their states, and
    **Latest run** shows the lines of the agent. Each pull request that the agent

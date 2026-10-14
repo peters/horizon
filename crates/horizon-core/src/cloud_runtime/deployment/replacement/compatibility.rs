@@ -77,6 +77,8 @@ fn refusal(bound: &Profile, committed: &Profile) -> Option<&'static str> {
         idle_stop_minutes: _,
         min_cuda_version,
         min_gpu_memory_gb,
+        // The host's firewall is made with the server, so a rebuild keeps the worker's.
+        egress: _,
     } = committed;
     [
         (*gpu != bound.gpu, GPU),

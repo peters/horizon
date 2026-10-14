@@ -5,6 +5,7 @@
 mod capabilities;
 pub mod companions;
 pub mod docker_host;
+mod egress;
 pub mod github;
 pub mod hetzner;
 pub mod host;
@@ -16,6 +17,7 @@ mod reason;
 mod ssh_endpoint;
 mod startup;
 pub use capabilities::{Agent, AgentApprovals, BrowserEngine, BrowserStack, Capabilities};
+pub use egress::{ALLOW_LIMIT as EGRESS_ALLOW_LIMIT, DEFAULT_ALLOW as EGRESS_DEFAULT_ALLOW, Egress};
 pub use reason::Reason;
 pub use ssh_endpoint::{SshEndpoint, SshHost};
 pub use startup::StartupMetadata;

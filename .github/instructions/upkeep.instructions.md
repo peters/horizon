@@ -79,6 +79,13 @@ The worker and its agents write every request field. Check that:
 - The decision is always `Decision::AllowTask`, never a cloud-wide allow.
 - Every other request stays on the cloud card for the person.
 
+## The worker's network
+
+`new_workspace/upkeep.rs` (`profile`) starts every Upkeep cloud with `egress`, the
+outbound allowlist of the Hetzner host (`.github/instructions/hetzner-egress.instructions.md`).
+The agent reads untrusted pull request text and runs without approvals. Check that
+no change starts an Upkeep cloud without it, or on a provider that cannot enforce it.
+
 ## Host work off the UI thread
 
 Discovery (`horizon_core::upkeep::discover`), the clone of the first repository, the

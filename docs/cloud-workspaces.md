@@ -856,7 +856,7 @@ from the committed tree and the worker gets a committed archive of the source:
 
 | Field | Comes from |
 |---|---|
-| `provider`, `cpu` or `min_cpu`, `memory_gb` or `min_memory_gb`, `gpu`, `min_cuda_version`, `min_gpu_memory_gb`, `storage`, `bootstrap`, `idle_stop_minutes` | The working copy |
+| `provider`, `cpu` or `min_cpu`, `memory_gb` or `min_memory_gb`, `gpu`, `min_cuda_version`, `min_gpu_memory_gb`, `storage`, `bootstrap`, `idle_stop_minutes`, `egress` | The working copy |
 | `default`, the set of profiles, `placement` | The working copy |
 | `image` and `capabilities` of a profile without `build` in the commit and the working copy | The working copy |
 | `build`, and the `image` and `capabilities` of a profile with `build` in the commit or the working copy | The commit. The capabilities are build arguments of the image |
@@ -1598,6 +1598,10 @@ change these fields:
 - `bootstrap.contract_version`. The worker keeps its bootstrap contract. Version 1 is
   the only version that a profile can name now.
 - A missing `build` section. Then there is no recipe to rebuild.
+
+A rebuild keeps the outbound allowlist (`egress`) of the cloud's worker, whatever the
+file says. The host sets it up when Horizon creates the server; see
+[Outbound allowlist](cloud-hetzner.md#outbound-allowlist).
 
 Horizon also refuses a profile with values that no profile can have, for example
 `idle_stop_minutes` together with hosted devices. For each change, the rebuild output

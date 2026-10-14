@@ -145,6 +145,9 @@ pub struct Profile {
     /// Least GPU memory, in GB, a GPU type must have to be offered for this profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_gpu_memory_gb: Option<u16>,
+    /// The outbound allowlist; without it the worker reaches every address. Hetzner only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress: Option<crate::Egress>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -325,6 +328,11 @@ impl Profile {
                     "Hosted devices are not available on Hetzner clouds yet",
                 ));
             }
+        } else if self.egress.is_some() {
+            return Err(ProfileError::Invalid("An egress allowlist needs a Hetzner cloud"));
+        }
+        if let Some(egress) = &self.egress {
+            egress.validate().map_err(ProfileError::Invalid)?;
         }
         if self.cpu == 0 || self.memory_gb == 0 || self.storage.container_gb == 0 || self.storage.volume_gb == 0 {
             return Err(ProfileError::Invalid("CPU, memory and storage must be positive"));

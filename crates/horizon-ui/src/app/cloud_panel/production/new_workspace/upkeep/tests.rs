@@ -234,3 +234,12 @@ fn saved_settings_are_read_again_and_sent_at_once() {
     assert!(app.upkeep.syncs["c1"].next.is_none());
     assert_eq!(app.upkeep.syncs["c1"].loop_running(), None);
 }
+
+#[test]
+fn an_upkeep_cloud_reaches_only_the_allowlist_and_never_stops_when_idle() {
+    let profile = super::profile().unwrap();
+    assert_eq!(profile.provider, horizon_core::cloud_runtime::provider::HETZNER.id);
+    assert_eq!(profile.egress, Some(horizon_core::cloud_runtime::Egress::default()));
+    assert_eq!(profile.idle_stop_minutes, None);
+    assert!(profile.validate(false).is_ok());
+}

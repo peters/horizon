@@ -52,6 +52,8 @@ profiles:
 - CPU only. Hetzner has no hourly GPUs, so `gpu: true` is refused.
 - The workspace volume must be 10 to 10,240 GB.
 - Hosted devices (`capabilities.browserstack`) are refused for now.
+- `egress` limits where the worker can connect. See
+  [Outbound allowlist](#outbound-allowlist).
 
 ## Machine settings
 
@@ -166,6 +168,87 @@ SETTINGS STATE_ROOT` runs one check from a script. Agents on a Hetzner worker
 cannot stop it with `horizon-worker-stop`. The worker image must report
 `horizon-idle-report-contract=1`; rebuild older images from the current worker
 bootstrap.
+
+## Outbound allowlist
+
+A profile with `egress` lets its worker connect only to the names on an allowlist.
+Only Hetzner workers support it, because the host of the server enforces it, outside
+the container. Upkeep clouds always use it (see [Upkeep](upkeep.md)).
+
+```yaml
+profiles:
+  upkeep:
+    provider: hetzner
+    image: registry.example.com/team/worker
+    egress:
+      allow:
+        - nuget.example.com
+        - "*.preview.example.com"
+```
+
+The allowlist has these names, and the names in `allow`:
+
+- GitHub: `github.com`, `api.github.com`, `codeload.github.com`, the content hosts
+  of GitHub (`objects`, `raw`, `release-assets`, `pkg-containers`, and for Git LFS
+  `github-cloud` and `media`, each `.githubusercontent.com`),
+  the hosts that serve the logs of Actions (`results-receiver.actions.githubusercontent.com`
+  and the storage accounts `productionresultssa0` to `productionresultssa19` of
+  `blob.core.windows.net`), `ghcr.io`, and the npm and NuGet registries of GitHub
+  Packages.
+- Rust: `index.crates.io`, `static.crates.io` and `static.rust-lang.org`.
+- npm: `registry.npmjs.org`, `registry.yarnpkg.com` and `nodejs.org`.
+- NuGet and .NET: `api.nuget.org`, `builds.dotnet.microsoft.com` and `ci.dot.net`.
+- PyPI: `pypi.org` and `files.pythonhosted.org`.
+- The model APIs: `api.openai.com`, `auth.openai.com`, `chatgpt.com`,
+  `api.anthropic.com`, `console.anthropic.com` and `platform.claude.com`.
+
+Each name is exact. `allow` takes at most 16 names: a lowercase host name, or
+`*.example.com` for every name under `example.com`. Do not allow a domain where
+other people can publish, such as the storage or the sites of a cloud provider: an
+agent could send data there.
+
+The host enforces the allowlist like this:
+
+- The container runs on its own Docker network, `horizon-egress`, without address
+  translation. A packet from the container that leaves the host has a private
+  source address, so it gets no answer.
+- The firewall of the host sends each TCP connection of the container to port 443
+  to the egress proxy on the host. The proxy reads the name in the TLS ClientHello.
+  When the name is on the allowlist, the proxy resolves the name itself and connects
+  to a public address of it. It does not use the address that the container chose,
+  and it never connects to a private, loopback or link-local address. Else it closes
+  the connection.
+- The container resolves names through the resolver of the host. The resolver
+  answers only for names on the allowlist and answers NXDOMAIN for all other names.
+- The firewall drops everything else that the container sends: other ports, UDP
+  (also QUIC), DNS to another resolver (for example `1.1.1.1`), DNS over TLS and
+  ICMP. Replies to SSH connections from outside pass.
+- The guard script installs the network and the rules before each start of the
+  container. When a step fails, the container does not start.
+- The proxy and the resolver run as services of the host. When one of them stops,
+  the container cannot connect through it. The container never gets another way
+  out. systemd starts a stopped service again after one second.
+- The proxy and the resolver write each refused name to
+  `/workspace/.horizon-egress/refused.jsonl` in the container: one JSON line with
+  the time, the name and `tls` or `dns`. Each of the two services writes at most
+  one line a minute for a name, and at most 30 lines a minute. The folder belongs to root, so an
+  agent cannot change the log. The log starts again after 256 KiB.
+- The allowlist is in `/etc/horizon-worker/egress-allow` on the host. No process in
+  the container can change it. A rebuild keeps the allowlist of the worker; a new
+  cloud gets the allowlist of its profile.
+
+The allowlist does not stop these:
+
+- Data sent to a name on the allowlist. An agent that has the credential of
+  another account can, for example, push to a repository of that account on
+  GitHub, publish a package to npm or send data to a model API. The host cannot
+  tell the services of the worker from the agents, because all of them use the same
+  network.
+- A content delivery network that sends a request to another site by the HTTP Host
+  name inside the TLS connection. The proxy checks only the name in the
+  ClientHello.
+- A tailnet. Tailscale is not on the allowlist, so a tailnet does not connect from
+  such a worker. Connect over SSH.
 
 ## Rebuilding the image
 

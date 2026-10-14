@@ -126,13 +126,7 @@ impl HorizonApp {
         if !self.active_session.as_ref().is_some_and(|session| session.persistent) {
             return Err(SAVED_SESSION.into());
         }
-        let quick = repository::launch::quick_start::builtin().map_err(|error| error.to_string())?;
-        let profile = quick
-            .profiles
-            .get(repository::launch::quick_start::PROFILE)
-            .ok_or("The quick-start profile is missing.")?;
-        let profile = creation_job::launch_profile(profile, Some(&cloud_runtime::provider::HETZNER), None)
-            .map_err(|error| format!("{error}."))?;
+        let profile = profile()?;
         let launch = CloudLaunch {
             deployment_started: false,
             id: cloud_id.to_owned(),
@@ -188,6 +182,20 @@ impl HorizonApp {
         self.mark_runtime_dirty();
         Ok(())
     }
+}
+
+/// The quick-start profile on Hetzner. The agent reads pull request text that others write:
+/// its worker reaches only GitHub, the package registries and the model APIs (docs/upkeep.md).
+fn profile() -> Result<cloud_runtime::prices::Profile, String> {
+    let quick = repository::launch::quick_start::builtin().map_err(|error| error.to_string())?;
+    let profile = quick
+        .profiles
+        .get(repository::launch::quick_start::PROFILE)
+        .ok_or("The quick-start profile is missing.")?;
+    let mut profile = creation_job::launch_profile(profile, Some(&cloud_runtime::provider::HETZNER), None)
+        .map_err(|error| format!("{error}."))?;
+    profile.egress = Some(cloud_runtime::Egress::default());
+    Ok(profile)
 }
 
 /// Makes the first repository ready on this computer and saves the choice for `cloud_id`.

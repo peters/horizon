@@ -26,6 +26,18 @@ const GUARD: &str = "/usr/local/sbin/horizon-worker-guard";
 const SETUP: &str = "/usr/local/sbin/horizon-worker-setup";
 const START: &str = "/usr/local/sbin/horizon-worker-start";
 const UNIT: &str = "/etc/systemd/system/horizon-worker.service";
+const EGRESS: &str = "/usr/local/sbin/horizon-worker-egress";
+const EGRESS_ALLOW: &str = "/etc/horizon-worker/egress-allow";
+const EGRESS_PROXY_UNIT: &str = "/etc/systemd/system/horizon-worker-egress-proxy.service";
+const EGRESS_DNS_UNIT: &str = "/etc/systemd/system/horizon-worker-egress-dns.service";
+/// The Docker network of an allowlisted worker, its bridge and the host's address on it,
+/// where the egress proxy and resolver listen. These values must match `host/egress.py`.
+const EGRESS_NETWORK: &str = "horizon-egress";
+const EGRESS_BRIDGE: &str = "horizon0";
+const EGRESS_SUBNET: &str = "172.30.0.0/24";
+const EGRESS_GATEWAY: &str = "172.30.0.1";
+const EGRESS_PROXY_PORT: u16 = 3129;
+const EGRESS_SCRIPT: &str = include_str!("host/egress.py");
 const DEVICE_PREFIX: &str = "/dev/disk/by-id/";
 
 /// A private registry the host logs in to before pulling the image.
@@ -63,6 +75,9 @@ pub struct Plan {
     pub workspace_device: String,
     /// Size of `/dev/shm` in GB, which Chromium needs beyond Docker's 64 MB default.
     pub shm_gb: u8,
+    /// The outbound allowlist; `None` lets the container reach every address but the
+    /// metadata service.
+    pub egress: Option<crate::Egress>,
 }
 
 /// Serialized in field order; `write_files` is last so the registry login can be
@@ -92,20 +107,23 @@ impl Plan {
         // Contents that may carry secrets stay in zeroizing storage until encoded.
         let environment = zeroize::Zeroizing::new(self.environment_file());
         let registry = self.registry.as_ref().map(registry_config).transpose()?;
+        let egress = self.egress.is_some();
         let (image, setup, guard, start, unit) = (
             format!("{}\n", self.image),
-            setup_script(),
-            guard_script(),
-            start_script(self.shm_gb),
-            unit(),
+            setup_script(egress),
+            guard_script(egress),
+            start_script(self.shm_gb, egress),
+            unit(egress),
         );
+        let allowlist = self.egress.as_ref().map(crate::Egress::allowlist);
+        let (proxy_unit, dns_unit) = (egress_unit("proxy"), egress_unit("dns"));
         let file = |path, permissions, content| WriteFile {
             path,
             owner: "root:root",
             permissions,
             content,
         };
-        let write_files = vec![
+        let mut write_files = vec![
             file(ENVIRONMENT_FILE, "0600", environment.as_str()),
             file(IMAGE_FILE, "0600", &image),
             file(SETUP, "0700", &setup),
@@ -113,6 +131,14 @@ impl Plan {
             file(START, "0700", &start),
             file(UNIT, "0644", &unit),
         ];
+        if let Some(allowlist) = &allowlist {
+            write_files.extend([
+                file(EGRESS_ALLOW, "0644", allowlist),
+                file(EGRESS, "0700", EGRESS_SCRIPT),
+                file(EGRESS_PROXY_UNIT, "0644", &proxy_unit),
+                file(EGRESS_DNS_UNIT, "0644", &dns_unit),
+            ]);
+        }
         let config = CloudConfig {
             ssh_pwauth: false,
             disable_root: true,
@@ -178,6 +204,9 @@ impl Plan {
             && !RegistryLogin::valid_identity(&registry.server, &registry.username)
         {
             return Err(CloudError::Invalid("Invalid registry server or username"));
+        }
+        if let Some(egress) = &self.egress {
+            egress.validate().map_err(CloudError::Invalid)?;
         }
         Ok(())
     }
@@ -366,22 +395,32 @@ fn registry_config(registry: &RegistryLogin) -> Result<zeroize::Zeroizing<String
 }
 
 /// Runs once on first boot. The worker service is enabled last, so it never
-/// starts while the host could still accept an SSH or password login.
-fn setup_script() -> String {
-    "#!/bin/sh
+/// starts while the host could still accept an SSH or password login, and after the
+/// egress services of an allowlisted worker.
+fn setup_script(egress: bool) -> String {
+    let egress = if egress {
+        "systemctl enable --now horizon-worker-egress-proxy.service horizon-worker-egress-dns.service\n"
+    } else {
+        ""
+    };
+    format!(
+        "#!/bin/sh
 set -eu
 systemctl mask --now ssh.socket ssh.service
 passwd --lock root
 systemctl daemon-reload
-systemctl enable --now horizon-worker.service
+{egress}systemctl enable --now horizon-worker.service
 "
-    .to_owned()
+    )
 }
 
 /// Runs before every container start. The metadata service serves the user data,
 /// including any registry credential, so the container must never reach it or
-/// anything else link-local.
-fn guard_script() -> String {
+/// anything else link-local. For an allowlisted worker it also puts the container on
+/// a network without address translation and installs the firewall, so the container
+/// starts only with them.
+fn guard_script(egress: bool) -> String {
+    let egress = if egress { egress_guard() } else { String::new() };
     format!(
         "#!/bin/sh
 set -eu
@@ -389,12 +428,56 @@ command -v docker >/dev/null || {{ echo 'horizon-worker: Docker is not installed
 mountpoint -q {VOLUME_MOUNT} || {{ echo 'horizon-worker: the workspace volume is not mounted' >&2; exit 1; }}
 mkdir -p {WORKSPACE}
 iptables -C DOCKER-USER -d 169.254.0.0/16 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d 169.254.0.0/16 -j DROP
+{egress}"
+    )
+}
+
+/// The firewall of an allowlisted worker. The network has no address translation, so a
+/// packet from the container that a rule missed still cannot reach the internet. The
+/// container reaches the host's resolver and, through a redirect of port 443, its TLS
+/// proxy; everything else it sends is dropped. Replies to SSH from outside pass.
+fn egress_guard() -> String {
+    let (network, bridge, gateway, port) = (EGRESS_NETWORK, EGRESS_BRIDGE, EGRESS_GATEWAY, EGRESS_PROXY_PORT);
+    format!(
+        "docker network inspect {network} >/dev/null 2>&1 || docker network create --driver bridge \\
+  --subnet {EGRESS_SUBNET} --gateway {gateway} -o com.docker.network.bridge.name={bridge} \\
+  -o com.docker.network.bridge.enable_ip_masquerade=false {network} >/dev/null
+[ \"$(docker network inspect -f '{{{{index .Options \"com.docker.network.bridge.enable_ip_masquerade\"}}}}' {network})\" = false ] || \\
+  {{ echo 'horizon-worker: the egress network translates addresses' >&2; exit 1; }}
+log={WORKSPACE}/.horizon-egress
+if [ -L \"$log\" ] || {{ [ -e \"$log\" ] && [ ! -d \"$log\" ]; }}; then rm -f \"$log\"; fi
+mkdir -p \"$log\"
+chown root:root \"$log\"
+chmod 0755 \"$log\"
+iptables -N HORIZON-EGRESS 2>/dev/null || iptables -F HORIZON-EGRESS
+iptables -A HORIZON-EGRESS -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+iptables -A HORIZON-EGRESS -j DROP
+iptables -C DOCKER-USER -i {bridge} -j HORIZON-EGRESS 2>/dev/null || iptables -I DOCKER-USER -i {bridge} -j HORIZON-EGRESS
+iptables -N HORIZON-EGRESS-IN 2>/dev/null || iptables -F HORIZON-EGRESS-IN
+iptables -A HORIZON-EGRESS-IN -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A HORIZON-EGRESS-IN -d {gateway} -p tcp --dport {port} -j ACCEPT
+iptables -A HORIZON-EGRESS-IN -d {gateway} -p udp --dport 53 -j ACCEPT
+iptables -A HORIZON-EGRESS-IN -d {gateway} -p tcp --dport 53 -j ACCEPT
+iptables -A HORIZON-EGRESS-IN -j DROP
+iptables -C INPUT -i {bridge} -j HORIZON-EGRESS-IN 2>/dev/null || iptables -I INPUT -i {bridge} -j HORIZON-EGRESS-IN
+iptables -t nat -N HORIZON-EGRESS 2>/dev/null || iptables -t nat -F HORIZON-EGRESS
+iptables -t nat -A HORIZON-EGRESS -p tcp --dport 443 -j REDIRECT --to-ports {port}
+iptables -t nat -C PREROUTING -i {bridge} -j HORIZON-EGRESS 2>/dev/null || iptables -t nat -I PREROUTING -i {bridge} -j HORIZON-EGRESS
+ip6tables -C FORWARD -i {bridge} -j DROP 2>/dev/null || ip6tables -I FORWARD -i {bridge} -j DROP
+for unit in horizon-worker-egress-proxy horizon-worker-egress-dns; do
+  systemctl is-active --quiet \"$unit\" || {{ echo \"horizon-worker: $unit is not running\" >&2; exit 1; }}
+done
 "
     )
 }
 
 /// Pulls the image once, retrying, and keeps it cached so restarts need no registry.
-fn start_script(shm_gb: u8) -> String {
+fn start_script(shm_gb: u8, egress: bool) -> String {
+    let network = if egress {
+        format!("--network {EGRESS_NETWORK} --dns {EGRESS_GATEWAY} ")
+    } else {
+        String::new()
+    };
     format!(
         "#!/bin/sh
 set -eu
@@ -405,21 +488,28 @@ until docker image inspect \"$image\" >/dev/null 2>&1 || docker pull --quiet \"$
   [ \"$attempt\" -lt 10 ] || {{ echo 'horizon-worker: the image could not be pulled' >&2; exit 1; }}
   sleep 15
 done
-exec docker run --rm --name horizon-worker --pull never -p 22:22 --shm-size {shm_gb}g \\
+exec docker run --rm --name horizon-worker --pull never {network}-p 22:22 --shm-size {shm_gb}g \\
   --log-driver local --log-opt max-size=10m --log-opt max-file=5 \\
   -v {WORKSPACE}:/workspace --env-file {ENVIRONMENT_FILE} \"$image\"
 "
     )
 }
 
-fn unit() -> String {
+fn unit(egress: bool) -> String {
+    let egress = if egress {
+        "Wants=horizon-worker-egress-proxy.service horizon-worker-egress-dns.service
+After=horizon-worker-egress-proxy.service horizon-worker-egress-dns.service
+"
+    } else {
+        ""
+    };
     format!(
         "[Unit]
 Description=Horizon worker container
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
-RequiresMountsFor={VOLUME_MOUNT}
+{egress}RequiresMountsFor={VOLUME_MOUNT}
 
 [Service]
 Environment=DOCKER_CONFIG=/root/.docker
@@ -429,6 +519,26 @@ ExecStart={START}
 ExecStop=/usr/bin/docker stop horizon-worker
 Restart=on-failure
 RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+"
+    )
+}
+
+/// One of the two egress services; it restarts at once when it stops.
+fn egress_unit(mode: &str) -> String {
+    format!(
+        "[Unit]
+Description=Horizon worker egress {mode}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 -I {EGRESS} {mode}
+Restart=always
+RestartSec=1
+NoNewPrivileges=yes
 
 [Install]
 WantedBy=multi-user.target

@@ -18,6 +18,7 @@ fn plan() -> Plan {
         }),
         workspace_device: "/dev/disk/by-id/scsi-0HC_Volume_101".into(),
         shm_gb: 2,
+        egress: None,
     }
 }
 
@@ -294,4 +295,156 @@ fn json_is_written_into_a_fixed_wiped_buffer_or_refused() {
         super::json_in_wiped(&value, 8).is_err(),
         "an oversized value fails without growing the buffer"
     );
+}
+
+#[test]
+fn a_plan_without_egress_renders_no_egress_files_or_rules() {
+    let config = parse(&plan());
+    for path in [EGRESS, EGRESS_ALLOW, EGRESS_PROXY_UNIT, EGRESS_DNS_UNIT] {
+        assert!(
+            config["write_files"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .all(|file| file["path"] != path),
+            "{path}"
+        );
+    }
+    for script in [SETUP, GUARD, START, UNIT] {
+        assert!(!content(&config, script).contains("egress"), "{script}");
+    }
+}
+
+#[test]
+fn an_allowlisted_worker_starts_only_behind_the_firewall_on_a_network_without_translation() {
+    let mut plan = plan();
+    plan.egress = Some(crate::Egress {
+        allow: ["*.test.example.no".to_owned()].into(),
+    });
+    let config = parse(&plan);
+    for (path, mode) in [
+        (EGRESS, "0700"),
+        (EGRESS_ALLOW, "0644"),
+        (EGRESS_PROXY_UNIT, "0644"),
+        (EGRESS_DNS_UNIT, "0644"),
+    ] {
+        assert_eq!(file(&config, path)["permissions"], mode, "{path}");
+        assert_eq!(file(&config, path)["owner"], "root:root", "{path}");
+    }
+    assert_eq!(content(&config, EGRESS), EGRESS_SCRIPT);
+    let allow = content(&config, EGRESS_ALLOW);
+    assert!(allow.starts_with("github.com\n") && allow.ends_with("\n*.test.example.no\n"));
+
+    // The egress services start before the worker, and the worker needs them.
+    let setup = content(&config, SETUP);
+    let services = setup.find("horizon-worker-egress-dns.service").unwrap();
+    assert!(services < setup.find("enable --now horizon-worker.service").unwrap());
+    let unit = content(&config, UNIT);
+    assert!(unit.contains("After=horizon-worker-egress-proxy.service horizon-worker-egress-dns.service"));
+    for mode in ["proxy", "dns"] {
+        let service = content(
+            &config,
+            if mode == "proxy" {
+                EGRESS_PROXY_UNIT
+            } else {
+                EGRESS_DNS_UNIT
+            },
+        );
+        assert!(service.contains(&format!("ExecStart=/usr/bin/python3 -I {EGRESS} {mode}\n")));
+        assert!(service.contains("Restart=always"));
+    }
+
+    // Every rule is in place before the guard ends; the guard stops at the first failure.
+    let guard = content(&config, GUARD);
+    assert!(guard.starts_with("#!/bin/sh\nset -eu\n"));
+    let order = [
+        "iptables -I DOCKER-USER -d 169.254.0.0/16 -j DROP",
+        "com.docker.network.bridge.enable_ip_masquerade=false horizon-egress",
+        "the egress network translates addresses",
+        "iptables -A HORIZON-EGRESS -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN",
+        "iptables -A HORIZON-EGRESS -j DROP",
+        "iptables -I DOCKER-USER -i horizon0 -j HORIZON-EGRESS",
+        "iptables -A HORIZON-EGRESS-IN -d 172.30.0.1 -p tcp --dport 3129 -j ACCEPT",
+        "iptables -A HORIZON-EGRESS-IN -d 172.30.0.1 -p udp --dport 53 -j ACCEPT",
+        "iptables -A HORIZON-EGRESS-IN -j DROP",
+        "iptables -I INPUT -i horizon0 -j HORIZON-EGRESS-IN",
+        "iptables -t nat -A HORIZON-EGRESS -p tcp --dport 443 -j REDIRECT --to-ports 3129",
+        "iptables -t nat -I PREROUTING -i horizon0 -j HORIZON-EGRESS",
+        "ip6tables -I FORWARD -i horizon0 -j DROP",
+        "systemctl is-active --quiet",
+    ];
+    let positions: Vec<usize> = order
+        .iter()
+        .map(|step| guard.find(step).unwrap_or_else(|| panic!("{step}")))
+        .collect();
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{guard}");
+    assert!(guard.contains(&format!("log={WORKSPACE}/.horizon-egress\n")));
+    assert!(guard.contains(
+        "[ \"$(docker network inspect -f '{{index .Options \"com.docker.network.bridge.enable_ip_masquerade\"}}' horizon-egress)\" = false ]"
+    ));
+
+    let start = content(&config, START);
+    assert!(start.contains("--network horizon-egress --dns 172.30.0.1 -p 22:22"));
+
+    // The script listens where the firewall sends the container, and logs where the guard
+    // made the folder.
+    for (constant, value) in [
+        ("GATEWAY", format!("'{EGRESS_GATEWAY}'")),
+        ("PROXY_PORT", EGRESS_PROXY_PORT.to_string()),
+        ("ALLOW", format!("'{EGRESS_ALLOW}'")),
+        ("LOG_DIRECTORY", format!("'{WORKSPACE}/.horizon-egress'")),
+    ] {
+        assert!(
+            EGRESS_SCRIPT.contains(&format!("\n{constant} = {value}\n")),
+            "{constant}"
+        );
+    }
+    assert!(EGRESS_SUBNET.starts_with("172.30.0."));
+}
+
+#[test]
+fn the_largest_allowlisted_plan_fits_the_user_data_limit() {
+    let mut plan = plan();
+    plan.egress = Some(crate::Egress {
+        allow: (0..crate::EGRESS_ALLOW_LIMIT)
+            .map(|n| format!("*.{0}.{0}.{0}.n{n:0>58}", "a".repeat(63)))
+            .collect(),
+    });
+    assert!(plan.egress.as_ref().unwrap().validate().is_ok());
+    let document = plan.cloud_config().unwrap();
+    // Room for the scripts to grow before the limit is a concern.
+    assert!(document.len() < USER_DATA_LIMIT - 4 * 1024, "{}", document.len());
+}
+
+#[test]
+fn an_invalid_allowlist_is_refused() {
+    let mut plan = plan();
+    plan.egress = Some(crate::Egress {
+        allow: ["*.com".to_owned()].into(),
+    });
+    assert!(matches!(plan.cloud_config(), Err(CloudError::Invalid(_))));
+}
+
+/// The live check in `docs/testing/procedures/hetzner-egress.md` renders the user data of a
+/// real allowlisted server with this test: `HORIZON_TEST_EGRESS_PLAN` names a JSON file with
+/// `image`, `device`, `public_key` and `out`.
+#[test]
+fn a_live_check_can_render_an_allowlisted_plan() {
+    let Some(path) = std::env::var_os("HORIZON_TEST_EGRESS_PLAN") else {
+        return;
+    };
+    let input: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let text = |key: &str| input[key].as_str().unwrap().to_owned();
+    let plan = Plan {
+        image: text("image"),
+        environment: BTreeMap::from([
+            ("PUBLIC_KEY".into(), text("public_key")),
+            ("HORIZON_CLOUD_OPERATION".into(), "egress-check".into()),
+        ]),
+        registry: None,
+        workspace_device: text("device"),
+        shm_gb: 1,
+        egress: Some(crate::Egress::default()),
+    };
+    std::fs::write(text("out"), plan.cloud_config().unwrap().as_bytes()).unwrap();
 }

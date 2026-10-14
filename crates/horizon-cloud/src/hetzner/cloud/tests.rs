@@ -205,6 +205,20 @@ fn the_host_plan_carries_the_worker_contract_and_its_idle_period() {
         .cloud_config()
         .unwrap();
     assert!(rendered.contains("HORIZON_IDLE_STOP_MINUTES=30"));
+    assert!(!rendered.contains("egress"));
+    spec.profile.egress = Some(crate::Egress::default());
+    let rendered = plan(&spec, "/dev/disk/by-id/scsi-0HC_Volume_9", None)
+        .unwrap()
+        .cloud_config()
+        .unwrap();
+    assert!(rendered.contains("/etc/horizon-worker/egress-allow"));
+    assert!(rendered.contains("--network horizon-egress --dns 172.30.0.1"));
+    // The allowlist stays on the host: the container's environment does not name it.
+    assert!(
+        !rendered
+            .lines()
+            .any(|line| line.starts_with("HORIZON_") && line.contains("egress"))
+    );
 }
 
 fn allowing(locations: &[&str], server_types: &[&str]) -> Policy {

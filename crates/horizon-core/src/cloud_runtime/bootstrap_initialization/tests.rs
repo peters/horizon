@@ -40,6 +40,7 @@ fn request(root: &std::path::Path) -> Request {
                 idle_stop_minutes: None,
                 min_cuda_version: None,
                 min_gpu_memory_gb: None,
+                egress: None,
             },
             public_key: fs::read_to_string(key.with_extension("pub")).unwrap().trim().to_owned(),
             registry_auth_id: None,
