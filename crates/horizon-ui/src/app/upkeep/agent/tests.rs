@@ -266,6 +266,7 @@ fn status_returns_only_parsed_fields_and_exact_pull_request_pages() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
 fn only_an_agent_panel_of_this_horizon_is_a_caller_and_it_sees_its_own_clouds() {
     let (_temp, mut app) = test_app();
     let profile = CloudConfig::parse(
