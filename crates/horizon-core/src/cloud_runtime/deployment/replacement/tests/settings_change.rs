@@ -282,7 +282,10 @@ fn a_removed_agents_session_is_reported_once_and_relaunches_when_the_agent_retur
     assert_eq!(reconnect(&store, &mut state, 0), (vec![], vec!["agent1".to_owned()]));
     assert_eq!(mark(), None);
     // The mark never hides a session that ends for another reason.
-    assert_eq!(reconnect(&store, &mut state, 3), (vec![LOST.to_owned()], vec!["agent1".to_owned()]));
+    assert_eq!(
+        reconnect(&store, &mut state, 3),
+        (vec![LOST.to_owned()], vec!["agent1".to_owned()])
+    );
     // Removed again, the session is reported again, once.
     state.profile.capabilities.agents.remove(&Agent::Codex);
     assert_eq!(reconnect(&store, &mut state, 0), (vec![ENDED.to_owned()], vec![]));
