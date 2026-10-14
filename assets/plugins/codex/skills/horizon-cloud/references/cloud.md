@@ -312,6 +312,12 @@ different currencies. The others take the `cloud` ID from `list`:
 The cloud list does not stop workers; the person stops a worker with **Stop** on
 its card.
 
+Horizon never stops an idle cloud. On Hetzner, `idle_stop_minutes` has no effect:
+the server stays billed until the person chooses **Stop**, which releases it and
+keeps the volume. A RunPod worker with `idle_stop_minutes` still stops itself
+after that idle period; the card then shows **Stopped outside Horizon** with
+**Resume worker**.
+
 From a Horizon agent panel, `horizon-browser cloud list|attach|park [CLOUD-ID]`
 calls the same tool.
 

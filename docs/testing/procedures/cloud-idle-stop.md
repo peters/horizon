@@ -12,16 +12,17 @@ owner: peters
 
 ## 1. Purpose
 
-This procedure makes sure that an idle stop on RunPod and on Hetzner shows a
-stopped cloud with its cause. The card must not show **Operation failed** for a
-stop that the owner did not start. **Resume worker** must start the cloud again.
+This procedure makes sure that a RunPod worker that stops itself after its idle
+period shows as a stopped cloud. The card must not show **Operation failed** for
+a stop that the owner did not start. **Resume worker** must start the cloud again.
+It also makes sure that Horizon does not stop an idle Hetzner cloud.
 
 ## 2. Applicability
 
 - Candidate: each candidate that changes the idle stop, the provider check or
   the cloud card status.
 - Platforms: Linux, in an isolated desktop with a live view.
-- Providers: the RunPod lane and the Hetzner lane.
+- Providers: the RunPod lane, and the Hetzner lane for task H01.
 - This procedure does not test: an agent stop with `horizon-worker-stop`, a
   shared worker, or a profile with hosted devices.
 
@@ -50,7 +51,7 @@ stop that the owner did not start. **Resume worker** must start the cloud again.
     `idle_stop_minutes: 30`.
   - `hetzner-idle`: Hetzner, an image from `examples/cloud-worker`, and
     `idle_stop_minutes: 30`.
-- A worker image that reports `horizon-idle-report-contract=1`. Build the image
+- A worker image that reports `horizon-idle-stop-contract=1`. Build the image
   from the current `examples/cloud-worker` directory.
 - The `cloud_deploy` example program, built from the candidate commit:
 
@@ -118,8 +119,8 @@ the two lanes at the same time.
 
 7. Examine the card header.
 
-   Result: The card shows **Stopped after 30 idle minutes** and
-   **Storage kept · billable**. The header button is **Resume worker**.
+   Result: The card shows **Stopped**, **Storage kept · billable** and
+   **Stopped outside Horizon**. The header button is **Resume worker**.
 
 8. Examine the card header again.
 
@@ -129,8 +130,8 @@ the two lanes at the same time.
 9. Open the **Status** tab of the card and read its output.
 
    Result: The last line starts with
-   `No agent activity for 30 minutes, so this worker stopped itself.` The line
-   ends with `Resume starts the same worker again.`
+   `The provider reports that this worker is stopped. Horizon did not stop it;`
+   The line ends with `Resume starts the same worker again.`
 
 10. Type this command in a terminal outside the fixture:
 
@@ -213,10 +214,9 @@ the two lanes at the same time.
 
 4. Examine the card header.
 
-   Result: The card does not show **Stopped after 30 idle minutes**. The
-   card does not show **Operation failed**.
+   Result: The card does not show **Operation failed**.
 
-### 6.4 H01 — Hetzner idle stop while Horizon runs
+### 6.4 H01 — A Hetzner cloud with an idle period keeps running
 
 > **CAUTION:** THIS TASK RENTS A HETZNER SERVER AND A VOLUME. Delete the cloud
 > in the cleanup if you do not need it again.
@@ -225,43 +225,21 @@ the two lanes at the same time.
 
    Result: The card shows **Ready**.
 
-2. Do not type in any panel of the cloud. Write down the time.
+2. Do not use the cloud for 35 minutes. Do not close Horizon.
 
-   Result: You have the start time of the idle period.
+   Result: The card still shows **Ready**. Horizon did not stop the cloud.
 
-3. Wait 30 minutes or more. Do not close Horizon.
+3. Choose **Stop…** on the card and confirm.
 
-   Result: After 30 to 35 minutes, the card changes.
-
-4. Examine the card header.
-
-   Result: The card shows **Stopped after 30 idle minutes** and
-   **Storage kept · billable**. The header button is **Resume worker**.
-
-5. Open the **Status** tab of the card and read its output.
-
-   Result: The last line starts with `No agent activity for <N> minutes, so
-   Horizon stopped this cloud.` `<N>` is the measured idle time. It is 30 or
-   more, because the idle watch reads the worker every few minutes.
-
-6. Type this command in a terminal outside the fixture:
-
-   ```bash
-   target/debug/examples/cloud_deploy reconcile <settings> <state root>
-   ```
-
-   Result: The command prints the provider status. The second line starts with
-   `Stopped. Resume creates a new server`.
-
-7. Click **Resume worker**.
-
-   Result: The card shows **Ready**. The checkout on the volume is the same.
+   Result: The card shows **Stopped**. The server is released and the volume
+   is kept.
 
 ## 7. Pass criteria
 
 - R01, R02, R03 and H01 show each `Result:` line.
 - No task shows **Operation failed** after a stop that the owner did not start.
-- **Resume worker** brings each cloud back to **Ready**.
+- **Resume worker** brings each RunPod cloud back to **Ready**.
+- Horizon does not stop the idle Hetzner cloud of H01.
 
 ## 8. Cleanup
 

@@ -10,12 +10,10 @@ use std::path::Path;
 
 mod outside;
 mod power;
-pub use outside::{IdleSample, StopCause, check_lost_worker, may_stop_outside, worker_stopped};
+pub use outside::{check_lost_worker, may_stop_outside};
 #[cfg(all(test, unix))]
 use power::Announce;
 pub(in crate::cloud_runtime) use power::{request_resume, request_stop};
-
-pub use super::deployment::hetzner::idle::IdleCheck;
 
 #[derive(Debug)]
 pub struct ReconciledDeployment {
@@ -192,18 +190,6 @@ pub(in crate::cloud_runtime) fn stop_locked(
     state.refuse_pending_replacement()?;
     super::providers::lifecycle(&state, settings).stop(store, &mut state, cancel, observe)?;
     Ok(state)
-}
-
-/// # Errors
-/// Reads a Hetzner cloud's idle record and stops the cloud, as Stop does, once it
-/// has been idle for its whole period. A `RunPod` worker stops itself, so its record
-/// is only read: it reports `Active` even when the worker is about to stop. Any
-/// other cloud, and a worker that keeps no record, reports `NotWatched`.
-pub fn idle_check(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<IdleCheck> {
-    match outside::sample(root, settings, cancel)? {
-        IdleCheck::NotWatched => super::deployment::hetzner::idle::check(root, settings, cancel),
-        sampled => Ok(sampled),
-    }
 }
 
 /// # Errors

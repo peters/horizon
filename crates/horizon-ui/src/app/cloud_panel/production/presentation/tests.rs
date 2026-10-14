@@ -896,3 +896,47 @@ fn show_member(app: &mut HorizonApp, local: &str) {
     app.panel_screen_rects
         .insert(id, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(10.0, 10.0)));
 }
+
+#[test]
+fn a_worker_nothing_else_reads_fails_the_card_only_after_failed_checks_in_a_row() {
+    use std::cell::Cell;
+    // Answers: fails once, answers, then fails for good.
+    let answers = [false, true, false, false, false];
+    let checks = Cell::new(0);
+    let check = || {
+        let answered = answers[checks.get()];
+        checks.set(checks.get() + 1);
+        if answered {
+            Ok(())
+        } else {
+            Err(cloud_runtime::Error::Invalid("worker gone"))
+        }
+    };
+    let failed = keep_checking(
+        &cloud_runtime::Cancellation::default(),
+        Duration::ZERO,
+        3,
+        || true,
+        check,
+    );
+    assert!(failed.is_err(), "the failure reaches the card");
+    assert_eq!(checks.get(), 5, "one lost answer is not a stop");
+    let cancel = cloud_runtime::Cancellation::default();
+    cancel.cancel();
+    let unchecked = || panic!("an ended watch checks nothing");
+    assert!(keep_checking(&cancel, Duration::ZERO, 3, || true, unchecked).is_ok());
+    // A card that is gone, as after a session switch, ends the watch.
+    let (tx, rx) = std::sync::mpsc::channel();
+    drop(rx);
+    let listening = || tx.send(Event::Watching).is_ok();
+    assert!(
+        keep_checking(
+            &cloud_runtime::Cancellation::default(),
+            Duration::ZERO,
+            3,
+            listening,
+            unchecked
+        )
+        .is_ok()
+    );
+}

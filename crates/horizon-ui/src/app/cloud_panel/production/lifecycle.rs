@@ -100,7 +100,7 @@ impl Runtime {
     pub(super) fn start_failure_check(
         &mut self,
         state_root: std::path::PathBuf,
-        settings: Settings,
+        settings_path: std::path::PathBuf,
         ctx: &egui::Context,
     ) {
         let tx = self.hold_failure_for_check();
@@ -108,26 +108,28 @@ impl Runtime {
         let fence = super::session_record::fence(&state_root);
         std::thread::spawn(move || {
             fence.wait();
-            let result = cloud_runtime::lifecycle::check_lost_worker(
-                &state_root,
-                &settings,
-                &cloud_runtime::Cancellation::default(),
-            )
-            .and_then(|checked| checked.ok_or(cloud_runtime::Error::Invalid("The worker was not checked")));
+            // Read here, not on the UI thread: a failed read shows the failure as it was.
+            let result = Settings::load(&settings_path)
+                .and_then(|settings| {
+                    cloud_runtime::lifecycle::check_lost_worker(
+                        &state_root,
+                        &settings,
+                        &cloud_runtime::Cancellation::default(),
+                    )
+                })
+                .and_then(|checked| checked.ok_or(cloud_runtime::Error::Invalid("The worker was not checked")));
             let _ = tx.send(result);
             ctx.request_repaint();
         });
     }
 
     /// Holds the failure for the provider check whose result the returned sender
-    /// carries. That check alone decides: the idle watch of the lost worker ends now,
-    /// and a check of its own that already holds the cloud makes this one wait, so no
-    /// provider check holds the cloud once the card shows the result.
+    /// carries. That check alone decides: the watch of the lost worker ends now, so no
+    /// other check holds the cloud once the card shows the result.
     pub(super) fn hold_failure_for_check(&mut self) -> std::sync::mpsc::Sender<RecoveryResult> {
         if let Some(watch) = self.cancel.take() {
             watch.cancel();
         }
-        self.idle_reports = None;
         let (tx, rx) = channel();
         self.unexplained_failure = self.error.take();
         self.recovery_receiver = Some(rx);
@@ -187,7 +189,7 @@ impl Runtime {
         }
         match result {
             Ok(recovered) => {
-                // A stopped worker, including one that stopped itself when idle, only needs Resume.
+                // A stopped worker, including one an agent on it stopped, only needs Resume.
                 let stopped = recovered.confirmed_stopped();
                 let resume = match recovered.stopped() {
                     cloud_runtime::provider::StoppedCost::WorkerKept => "Resume starts the same worker again.",
@@ -227,10 +229,10 @@ impl Runtime {
             || (self.receiver.is_some() && self.stage != Some(Stage::Ready))
     }
 
-    /// A provider check holds, or may hold, the cloud: Check provider, the check of a
-    /// failure, or the idle watch's own check.
+    /// A provider check holds, or may hold, the cloud: Check provider or the check of a
+    /// failure.
     pub(super) fn checking_provider(&self) -> bool {
-        self.recovery_receiver.is_some() || self.idle_confirming()
+        self.recovery_receiver.is_some()
     }
 
     fn start_device_release(&mut self, state_root: std::path::PathBuf, settings: Settings, ctx: &egui::Context) {
@@ -343,8 +345,8 @@ fn first_deletion_step(state: Option<&cloud_runtime::state::Deployment>) -> Stag
 
 impl HorizonApp {
     /// Asks the provider, before the card shows the failure of cloud `id`, whether it
-    /// is a stop Horizon did not make. The check shows as Checking provider. Without
-    /// settings the failure shows at once.
+    /// is a stop Horizon did not make. The check shows as Checking provider; it reads
+    /// the settings off the UI thread, and without them the failure shows as it was.
     pub(super) fn check_failure_with_provider(&mut self, id: u32, ctx: &egui::Context) {
         let Some(root) = self.cloud_prototype.root.clone() else {
             return;
@@ -359,14 +361,11 @@ impl HorizonApp {
         else {
             return;
         };
-        let (Ok(settings), Ok(state_root)) = (
-            Settings::load(&root.join("settings.json")),
-            cloud_runtime::state::cloud_directory(&root, &launch.id),
-        ) else {
+        let Ok(state_root) = cloud_runtime::state::cloud_directory(&root, &launch.id) else {
             return;
         };
         if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
-            runtime.start_failure_check(state_root, settings, ctx);
+            runtime.start_failure_check(state_root, root.join("settings.json"), ctx);
         }
     }
 
@@ -410,9 +409,6 @@ impl HorizonApp {
                 return;
             }
         };
-        // A stop the idle watch reports late must not apply to this or any later
-        // operation, a provider check included.
-        runtime.idle_reports = None;
         if action == Action::Reconcile {
             runtime.start_reconciliation(state_root, settings, ctx);
             return;

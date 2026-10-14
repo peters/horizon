@@ -160,6 +160,7 @@ bind of S02 alone does not change the socket that the candidate uses.
        image: <worker-image>
        min_cpu: 2
        min_memory_gb: 4
+       # Accepted, but Horizon does not stop an idle Hetzner cloud (task L07).
        idle_stop_minutes: 10
        storage:
          volume_gb: 10

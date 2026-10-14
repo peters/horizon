@@ -101,12 +101,6 @@ impl HorizonApp {
             ctx,
         );
         let runtime = self.cloud_prototype.production.runtimes.entry(id).or_default();
-        // The idle watch of the deployment this one replaces must not stop the worker
-        // while it prepares: a watch whose card no longer listens ends before it reads
-        // or stops anything. A refused preparation leaves the cloud unwatched until its
-        // next deployment, as before the deployment started.
-        runtime.idle_reports = None;
-        runtime.idle_confirming = false;
         runtime.preparation = Some(Pending::new(reports, siblings, then));
     }
 

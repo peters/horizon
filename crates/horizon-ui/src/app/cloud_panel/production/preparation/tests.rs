@@ -55,14 +55,6 @@ fn a_record_that_does_not_answer_never_stalls_the_frame_that_deploys() {
     let ctx = egui::Context::default();
     let pipe = stalled_record(&temp.path().join("fixture"));
 
-    // The idle watch of the deployment before listens on this channel.
-    let idle = app
-        .cloud_prototype
-        .production
-        .runtimes
-        .entry(1)
-        .or_default()
-        .listen_idle();
     let started = Instant::now();
     app.start_production_deployment(1, &ctx);
     app.poll_cloud_preparations(&ctx);
@@ -82,10 +74,6 @@ fn a_record_that_does_not_answer_never_stalls_the_frame_that_deploys() {
     assert!(
         runtime.receiver.is_none(),
         "nothing deploys before the record is prepared"
-    );
-    assert!(
-        idle.send(super::super::idle::Report::Checked).is_err(),
-        "the earlier idle watch ends before it can stop the worker"
     );
 
     writer.join().unwrap();
