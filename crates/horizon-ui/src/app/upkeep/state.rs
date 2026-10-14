@@ -2,11 +2,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, Sender};
 use std::time::Instant;
 
-use horizon_core::WorkspaceId;
+use horizon_core::upkeep::native::{Approved, Ledger, Report, Request, probe};
 use horizon_core::upkeep::worker::{Config, Signals};
+use horizon_core::{PanelId, WorkspaceId};
 
 use super::form::Form;
 
@@ -89,6 +90,8 @@ pub(in crate::app) struct Sync {
     pub(in crate::app) last: Answer,
     /// The live panel was opened in this run of Horizon: one the person closes stays closed.
     pub(in crate::app) agent_shown: bool,
+    /// The native tests of this Upkeep.
+    pub(in crate::app) native: Native,
 }
 
 impl Sync {
@@ -97,3 +100,70 @@ impl Sync {
         self.last.loop_running
     }
 }
+
+/// The native tests of one Upkeep, as the app follows them: see
+/// [`horizon_core::upkeep::native`].
+#[derive(Default)]
+pub(in crate::app) struct Native {
+    /// The saved ledger, once read.
+    pub(in crate::app) ledger: Option<Ledger>,
+    pub(in crate::app) loading: Option<Receiver<std::io::Result<Ledger>>>,
+    /// After a failed read of the ledger, when to read it again.
+    pub(in crate::app) load_after: Option<Instant>,
+    /// The ledger changed since it was last saved.
+    pub(in crate::app) dirty: bool,
+    /// The save under way; it answers whether the ledger reached the disk.
+    pub(in crate::app) saving: Option<Receiver<bool>>,
+    /// The last save reached the disk.
+    pub(in crate::app) stored: bool,
+    /// Requests that exchanges read, waiting for the ledger.
+    pub(in crate::app) intake: Option<Intake>,
+    /// The check of the request that starts now.
+    pub(in crate::app) approving: Option<Receiver<Result<(Approved, String), String>>>,
+    /// The approved test and its cloud id, which starts once a saved ledger names the cloud,
+    /// so that a restart finds the cloud.
+    pub(in crate::app) launching: Option<(Approved, String)>,
+    /// The agent panel on the test cloud, and when it opened.
+    pub(in crate::app) agent: Option<(PanelId, Instant)>,
+    /// After a failed try to open the agent panel, when to try again.
+    pub(in crate::app) agent_after: Option<Instant>,
+    /// The report of a test that ended, kept until its cloud can be closed: a cloud that
+    /// deploys or saves cannot close yet.
+    pub(in crate::app) ending: Option<Report>,
+    pub(in crate::app) desktop_shown: bool,
+    /// When the task's Enter goes to the agent panel.
+    pub(in crate::app) submit_at: Option<Instant>,
+    pub(in crate::app) probing: Option<Receiver<Result<Probed, String>>>,
+    /// The look under way is the last one, at the time limit, which copies the evidence.
+    pub(in crate::app) last_look: bool,
+    pub(in crate::app) next_probe: Option<Instant>,
+    /// The test clouds whose close this run of Horizon started, so it starts each one once.
+    pub(in crate::app) close_tried: std::collections::HashSet<String>,
+    /// The ledger changed since the worker last got its reports.
+    pub(in crate::app) undelivered: bool,
+    pub(in crate::app) delivering: Option<Receiver<Result<(), String>>>,
+    pub(in crate::app) next_delivery: Option<Instant>,
+}
+
+impl Native {
+    /// Forgets the panels and the looks of the test that ran: after it ended, or when a
+    /// session switch gives the panels new ids.
+    pub(in crate::app) fn forget_test(&mut self) {
+        self.launching = None;
+        self.agent = None;
+        self.agent_after = None;
+        self.desktop_shown = false;
+        self.submit_at = None;
+        self.next_probe = None;
+        self.probing = None;
+        self.last_look = false;
+    }
+}
+
+/// The channel from the exchanges to the native tests: the requests each exchange read.
+pub(in crate::app) type Intake = (Sender<Vec<Request>>, Receiver<Vec<Request>>);
+
+/// What one look at the test cloud found: the outcome, once its agent wrote one, with the
+/// report text and the evidence files that Horizon kept, which a look before the outcome and
+/// before the time limit does not copy.
+pub(in crate::app) type Probed = (Option<probe::Outcome>, String, Vec<String>);

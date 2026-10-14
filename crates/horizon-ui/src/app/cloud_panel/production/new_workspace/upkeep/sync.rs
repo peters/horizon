@@ -123,8 +123,9 @@ impl HorizonApp {
                 let repaint = ctx.clone();
                 let (cloud_id, state) = (cloud_id.clone(), state.clone());
                 let marker_left = sync.marker_left;
+                let intake = sync.native.intake.as_ref().map(|(tx, _)| tx.clone());
                 std::thread::spawn(move || {
-                    let exchanged = exchange(&root, &cloud_id, &revision, &state, signals, marker_left);
+                    let exchanged = exchange(&root, &cloud_id, &revision, &state, signals, marker_left, intake);
                     let _ = tx.send(exchanged);
                     repaint.request_repaint();
                 });
@@ -262,6 +263,7 @@ fn exchange(
     state: &cloud_runtime::state::Deployment,
     signals: Signals,
     marker_left: bool,
+    native: Option<std::sync::mpsc::Sender<Vec<horizon_core::upkeep::native::Request>>>,
 ) -> Exchanged {
     let connection = (|| -> Result<Connection, String> {
         let settings = Settings::load(&root.join("settings.json")).map_err(|error| error.to_string())?;
@@ -300,6 +302,12 @@ fn exchange(
     };
     let allowed = allow_chosen(&connection, &runner, cloud_id, &config);
     let answer = worker::exchange(&connection, &runner, cloud_id, revision, &config, signals)
+        .inspect(|answer| {
+            // Checked against the settings saved now, so a removed repository asks for nothing.
+            if let Some(native) = native {
+                let _ = native.send(horizon_core::upkeep::native::requests(&answer.native_requests, &config));
+            }
+        })
         .map(|answer| learned(cloud_id, &config, signals, marker_left, &answer))
         .map_err(|error| error.to_string());
     (allowed, answer)

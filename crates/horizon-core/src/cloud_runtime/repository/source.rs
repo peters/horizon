@@ -8,7 +8,7 @@ use base64::Engine;
 use horizon_cloud::Cancellation;
 mod transport;
 
-pub use transport::{Progress, Snapshot, clone, discard, probe, resumable};
+pub use transport::{Progress, Snapshot, clone, discard, fetch_commits, probe, resumable};
 
 use std::{
     io::Write,
@@ -221,16 +221,20 @@ fn clone_folder(parent: &Path, remote: &Remote) -> PathBuf {
 /// A folder name for `segment` that every platform can make: Windows reserves device names
 /// such as `CON` or `com1.txt` and drops a trailing dot, so those get a `_`.
 fn portable(segment: &str) -> String {
-    let stem = segment.split('.').next().unwrap_or(segment).to_ascii_uppercase();
-    let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || (stem.len() == 4
-            && (stem.starts_with("COM") || stem.starts_with("LPT"))
-            && stem.ends_with(|c: char| ('1'..='9').contains(&c)));
-    if device || segment.ends_with('.') {
+    if windows_device(segment) || segment.ends_with('.') {
         format!("{segment}_")
     } else {
         segment.to_owned()
     }
+}
+
+/// Whether Windows takes the file name `name` for a device, such as `CON` or `com1.txt`.
+pub(crate) fn windows_device(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.ends_with(|c: char| ('1'..='9').contains(&c)))
 }
 
 /// Where clones went before they were kept by owner, `parent/<name>` first: only searched,

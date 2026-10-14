@@ -16,8 +16,10 @@ use std::{
 use zeroize::Zeroizing;
 
 mod api;
+mod pulls;
 mod search;
 pub use api::{User, valid_repository};
+pub use pulls::PullRequest;
 #[cfg(test)]
 mod tests;
 

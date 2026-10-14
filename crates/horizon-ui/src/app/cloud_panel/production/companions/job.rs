@@ -44,7 +44,8 @@ fn run(root: PathBuf, owner: Owner, groups: &CloudGroups, action: Action, cancel
     let context = prepared.ok();
     let result = (|| {
         cancel.check()?;
-        let journal = cloud_runtime::state::cloud_directory(&root, &owner.cloud_id)?.join("companions.json");
+        let state_root = cloud_runtime::state::cloud_directory(&root, &owner.cloud_id)?;
+        let journal = state_root.join("companions.json");
         // Existing images without companion declarations need no companion protocol support.
         if !matches!(action, Action::Clear { .. })
             && context.as_ref().is_none_or(|context| context.declarations.is_empty())
@@ -52,7 +53,9 @@ fn run(root: PathBuf, owner: Owner, groups: &CloudGroups, action: Action, cancel
         {
             return Ok(None);
         }
-        let settings = Settings::load(&root.join("settings.json"))?;
+        let mut settings = Settings::load(&root.join("settings.json"))?;
+        // The worker of a test cloud runs untrusted code, as on every other path to it.
+        settings.isolate_for(&state_root);
         companions::refresh(
             &companions::Request {
                 root,

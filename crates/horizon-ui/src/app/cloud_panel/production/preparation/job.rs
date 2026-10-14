@@ -193,8 +193,9 @@ impl Input {
             )
         });
         send(Report::Record(record.map(Box::new)));
-        let settings = Settings::for_cloud(&self.settings_path, &self.launch.placement)
+        let mut settings = Settings::for_cloud(&self.settings_path, &self.launch.placement)
             .map_err(|error| Failure::Unconfigured(format!("{error}. Configure {}", self.settings_path.display())))?;
+        settings.isolate_for(&self.state_root);
         let mut request = Request::new(
             self.launch.id,
             self.repository,

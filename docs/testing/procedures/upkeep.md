@@ -2,7 +2,7 @@
 procedure: upkeep
 feature: Upkeep board, worker loop and New Upkeep (the dependency pull request agent)
 platforms: [linux]
-cost: rents compute (UPK-10 and UPK-13)
+cost: rents compute (UPK-10, UPK-13 and UPK-15)
 destructive: yes (UPK-12 deletes the cloud that UPK-10 made)
 secrets: [GitHub sign-in, Hetzner API token, ChatGPT login of Codex]
 owner: peters
@@ -23,7 +23,7 @@ board, and that **New Upkeep** starts a real Upkeep on a Hetzner cloud.
 - Platforms: Linux host.
 - UPK-01 to UPK-06 read a synthetic status document. UPK-07 runs the worker
   exchange in a local container. UPK-08 to UPK-13 use real GitHub data and a real
-  Hetzner cloud.
+  Hetzner cloud. UPK-15 uses a real pull request and a second Hetzner cloud.
 - This procedure does not test: the quality of the work of the agent, Renovate
   pull requests, or a schedule longer than one hour.
 
@@ -38,6 +38,9 @@ made-up repositories and one public pull request.
 > **CAUTION:** IN UPK-10 THE AGENT CAN PUSH TO AND MERGE PULL REQUESTS OF THE
 > REPOSITORY THAT YOU SELECT. Select only a repository where you are permitted to
 > merge Dependabot pull requests.
+
+> **CAUTION:** TASK UPK-15 RENTS A SECOND HETZNER SERVER AND A VOLUME FOR A TEST CLOUD
+> THAT RUNS THE CODE OF A PULL REQUEST. Horizon deletes them when the test ends.
 
 > **CAUTION:** DO NOT RECORD PRIVATE REPOSITORY NAMES. The repository list of New
 > Upkeep shows every repository that the GitHub App can reach. Blur or crop them in
@@ -518,9 +521,75 @@ script first in `PATH` that writes `HORIZON_BROWSER_ACTOR` and
 
     Result: The answer starts with `upkeep_unavailable`.
 
+### 6.15 UPK-15 — A native test on a test cloud
+
+Do this task before UPK-12, on the cloud of UPK-10. You need a repository `<native>`
+in the list of the Upkeep, with an open pull request `<pr>` of a bot of the Upkeep.
+The default profile of the `.horizon/cloud.yml` of `<native>` has a desktop, no GPU,
+Codex or Claude without approvals, and a build that uses only files in `.horizon`.
+Its image starts the agent past its first-run dialogs: for Claude Code, it has the
+worker tools of Horizon from #1230 or later.
+The image of the profile must be public, or Cloud settings must have a pull login
+that Hetzner can use for it. The fixture needs Docker: bind the Docker socket and
+the `docker` folder of Cloud settings into it, and set `docker_host`.
+
+> **CAUTION:** THIS TASK RENTS A SECOND HETZNER SERVER AND A VOLUME FOR THE TEST
+> CLOUD. Horizon deletes them when the test ends, and after 120 minutes at the
+> latest. Make sure in the Hetzner console that they are gone.
+
+> **CAUTION:** THE TEST CLOUD RUNS THE CODE OF `<pr>`. Use a pull request that you
+> trust to run on a cloud with the login of your agent.
+
+1. Get the head commit of `<pr>`: `gh pr view <pr> --repo <native> --json headRefOid`.
+   In the shell panel of the Upkeep cloud, write the request:
+
+   ```sh
+   mkdir -p /workspace/home/upkeep/native/requests
+   printf '{"repository": "<native>", "pull_request": <pr>, "head": "<head>", "reason": "native qualification"}' \
+     > /workspace/home/upkeep/native/requests/test.json
+   ```
+
+   Result: Within one minute, a new card **Test `<name>` #`<pr>`** shows in the Upkeep
+   workspace and starts. `/workspace/home/upkeep/native/results/` on the Upkeep worker
+   has a file for `<pr>` with the state `starting`.
+
+2. Wait until the test cloud shows **Ready**.
+
+   Result: The panel **Native test agent** opens next to the card, and the desktop
+   viewer of the test cloud opens. About 15 seconds later, Horizon pastes the task
+   into the agent panel, and the agent starts. The result file shows `running`.
+
+3. Watch the agent panel and the desktop viewer.
+
+   Result: The agent reads `AGENTS.md`, starts the application on the desktop, and
+   the desktop viewer shows it.
+
+4. Wait until the agent writes `/workspace/home/native-test/result.json` on the test
+   cloud.
+
+   Result: Within one minute, the card of the test cloud shows that it deletes the
+   cloud, and then the card closes. The result file on the Upkeep worker shows the
+   outcome of the agent (`passed`, `failed` or `blocked`), its summary, the report
+   and the names of the evidence files. The evidence is in
+   `~/.horizon/upkeep/<cloud>/native/` in the fixture home.
+
+5. Write the same request again (step 1).
+
+   Result: Nothing starts. Horizon tests one head of a pull request one time.
+
+6. Write a request with a head commit that is not the head of `<pr>`.
+
+   Result: No card shows. The result file shows `refused` and names the head of `<pr>`.
+
+7. Remove the files in `/workspace/home/upkeep/native/requests/`.
+
+8. In the Hetzner console, look for the server and the volume of the test cloud.
+
+   Result: They do not exist.
+
 ## 7. Pass criteria
 
-- UPK-01 to UPK-13 give the results above.
+- UPK-01 to UPK-13 and UPK-15 give the results above.
 
 ## 8. Cleanup
 

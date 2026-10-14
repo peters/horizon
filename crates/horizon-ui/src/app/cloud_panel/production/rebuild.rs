@@ -171,6 +171,9 @@ impl Runtime {
         let ctx = ctx.clone();
         let idle = self.listen_idle();
         std::thread::spawn(move || {
+            let mut request = request;
+            // A rebuild reconnects the worker: a test cloud gets no access then either.
+            request.settings.isolate_for(&request.state_root);
             let operation = Operation {
                 kind,
                 profile_name: &profile_name,

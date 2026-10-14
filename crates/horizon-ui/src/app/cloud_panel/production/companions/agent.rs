@@ -487,6 +487,11 @@ impl HorizonApp {
         let (source, target, alias) = (source.to_owned(), target.to_owned(), alias.to_owned());
         let ctx = ctx.clone();
         std::thread::spawn(move || {
+            let mut settings = settings;
+            if let Ok(state_root) = cloud_runtime::state::cloud_directory(&root, &target) {
+                // A resume gives the worker its access again: a test cloud gets none.
+                settings.isolate_for(&state_root);
+            }
             let emit = |event: Event| {
                 if matches!(event, Event::Output(_))
                     || (!connected && matches!(event, Event::Stage(..) | Event::Progress(_) | Event::Snapshot(_)))

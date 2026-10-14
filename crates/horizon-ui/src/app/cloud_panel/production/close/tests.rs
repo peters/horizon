@@ -475,3 +475,13 @@ fn cancel_forgets_the_failure_so_the_next_close_deletes_first() {
     assert!(!app.cloud_close_confirmation_open());
     assert!(app.cloud_prototype.production.close.failed.is_empty());
 }
+
+#[test]
+fn a_close_without_asking_leaves_the_dialog_of_another_cloud_open() {
+    let (temp, mut app) = test_app();
+    add_cloud(&mut app, temp.path(), None);
+    app.cloud_prototype.production.close.confirming = Some(7);
+    app.close_cloud_unasked(101, &egui::Context::default());
+    assert!(app.cloud_prototype.groups.0.is_empty(), "the cloud closed");
+    assert_eq!(app.cloud_prototype.production.close.confirming, Some(7));
+}

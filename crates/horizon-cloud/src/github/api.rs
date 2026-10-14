@@ -16,7 +16,7 @@ const PAGE_LIMIT: u64 = 4 * 1024 * 1024;
 /// The largest search page read, in bytes: 50 pull requests with their whole descriptions,
 /// which reach 65,536 characters each when Dependabot quotes release notes. A character
 /// takes at most six bytes in the JSON answer (`\u0001`), so a page stays under 20 MiB.
-const SEARCH_LIMIT: u64 = 24 * 1024 * 1024;
+pub(super) const SEARCH_LIMIT: u64 = 24 * 1024 * 1024;
 
 /// The account a token acts as. `email` is GitHub's private commit address, so a
 /// commit never shows the person's own address.
@@ -198,7 +198,7 @@ impl Client {
         self.request_limited(token, path, super::RESPONSE_LIMIT)
     }
 
-    fn request_limited<T: serde::de::DeserializeOwned>(
+    pub(super) fn request_limited<T: serde::de::DeserializeOwned>(
         &self,
         token: Option<&Secret>,
         path: &str,
@@ -247,7 +247,7 @@ fn valid_package(name: &str) -> bool {
         })
 }
 
-fn valid_login(login: &str) -> bool {
+pub(super) fn valid_login(login: &str) -> bool {
     (1..=39).contains(&login.len())
         && !login.starts_with('-')
         && !login.ends_with('-')

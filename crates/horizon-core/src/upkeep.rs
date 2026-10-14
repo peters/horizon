@@ -14,12 +14,18 @@ use time::format_description::well_known::Rfc3339;
 
 mod agent_change;
 #[cfg(feature = "cloud-workspaces")]
+mod checkout;
+#[cfg(feature = "cloud-workspaces")]
 mod discover;
+#[cfg(feature = "cloud-workspaces")]
+pub mod native;
 mod reader;
 #[cfg(feature = "cloud-workspaces")]
 pub mod worker;
 
 pub use agent_change::{AgentChange, AgentChangeKind, record as record_agent_change};
+#[cfg(feature = "cloud-workspaces")]
+pub use checkout::checkout;
 #[cfg(feature = "cloud-workspaces")]
 pub use discover::{Catalog, CatalogRepository, discover};
 
@@ -230,8 +236,9 @@ repository requires to be up to date; a branch that is merely behind needs no re
 review and required smoke passes for that exact head. \
 When a decision only a person can make blocks a merge, leave the pull request, mark it \
 blocked and say why.
-   - A smoke test this worker cannot run (a GPU, a native device or a test rig) is covered \
-by CI for a pure dependency update when the required CI jobs pass for the exact head.
+   - A smoke test this worker cannot run (a GPU, a physical device or a test rig) is covered \
+by CI for a pure dependency update when the required CI jobs pass for the exact head. A native \
+desktop qualification runs on a test cloud instead, as described below.
    - When a gate needs a preview deployment that CI skips for bot pull requests, open one \
 separate pull request in that repository that enables previews for bot pull requests, for a \
 person to review. Reuse an open one. The update stays blocked until it merges.

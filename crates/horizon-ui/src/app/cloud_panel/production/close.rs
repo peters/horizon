@@ -88,6 +88,15 @@ impl HorizonApp {
         close.records.insert(id, record);
     }
 
+    /// Closes the dialog when it asks about cloud `id`. A dialog about another cloud stays: a
+    /// close without asking can run while the person decides about that cloud.
+    fn dismiss_close_dialog(&mut self, id: u32) {
+        let close = &mut self.cloud_prototype.production.close;
+        if close.confirming == Some(id) {
+            close.confirming = None;
+        }
+    }
+
     /// Forgets the dialog and what an earlier attempt of cloud `id`'s close left.
     fn end_close_confirmation(&mut self, id: u32) {
         let close = &mut self.cloud_prototype.production.close;
@@ -197,6 +206,20 @@ impl HorizonApp {
         }
     }
 
+    /// Closes cloud `id` as a confirmed close does, without asking: for a cloud that Horizon
+    /// started for a task and ends itself, such as an Upkeep test cloud. A cloud with nothing
+    /// at its provider is removed; otherwise its resources are deleted and it closes once they
+    /// are gone. A close that cannot go ahead asks the person, as the dialog does.
+    pub(in crate::app::cloud_panel::production) fn close_cloud_unasked(&mut self, id: u32, ctx: &egui::Context) {
+        let record = self.close_record(id);
+        self.cloud_prototype.production.close.records.insert(id, record.clone());
+        if matches!(record, Record::Empty) {
+            self.remove_for_close(id, ctx);
+        } else {
+            self.delete_for_close(id, ctx);
+        }
+    }
+
     /// Removes cloud `id` from Horizon after its deletion failed or could not run,
     /// leaving whatever its provider still holds.
     /// An operation that started while the dialog was open keeps it open, which then shows
@@ -245,7 +268,7 @@ impl HorizonApp {
         }
         let (removed, error) = self.close_step(id, |app| app.remove_deleted_cloud(id, ctx));
         if removed {
-            self.cloud_prototype.production.close.confirming = None;
+            self.dismiss_close_dialog(id);
         } else {
             self.close_failed(id, "Could not remove the cloud", false, error);
         }
@@ -271,7 +294,7 @@ impl HorizonApp {
             })
         });
         if started {
-            self.cloud_prototype.production.close.confirming = None;
+            self.dismiss_close_dialog(id);
             self.cloud_prototype.production.close.deleting.insert(id);
         } else {
             self.close_failed(id, "Could not delete the cloud resources", true, error);

@@ -310,6 +310,15 @@ This work still runs on the UI thread. Do not copy it into new code.
   opens through `prepare_cloud_remote_panel`, as **Add panel** and the restore
   of cloud sessions do. It reads the cloud settings and the cloud record on the
   UI thread, at most once for each exchange, until the panel opens.
+- A native test of an Upkeep
+  ([`new_workspace/upkeep/native.rs`](../../crates/horizon-ui/src/app/cloud_panel/production/new_workspace/upkeep/native.rs))
+  uses the same card paths as a person. It adds the test cloud as **New cloud**
+  does, which saves the cloud board. It opens the agent panel and the desktop
+  viewer through `prepare_cloud_remote_panel`, at most once every 15 s until the
+  agent panel opens. When the test ends, it closes the cloud as the confirmed
+  close dialog does (`close_cloud_unasked`), which reads the cloud record under
+  its lock. The check of the request, the looks at the test cloud, the ledger and
+  the delivery of the reports run on worker threads.
 - Some cloud card paths read the cloud record from disk under a lock that
   they take with `try_lock`. They do not wait for the lock, but the read
   itself is file I/O.

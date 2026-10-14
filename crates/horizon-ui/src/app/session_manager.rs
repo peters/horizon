@@ -426,6 +426,9 @@ impl HorizonApp {
             self.upkeep.saved = None;
             self.upkeep.reading = None;
             self.upkeep.read_after = None;
+            for sync in self.upkeep.syncs.values_mut() {
+                sync.native.forget_test();
+            }
         }
         self.clear_workspace_rename();
         self.clear_panel_rename();

@@ -509,3 +509,112 @@ Horizon does not guarantee these items:
   read the instructions in full when they are not the default.
 - `discover` shows the agent the names of all repositories that the GitHub app reaches,
   also repositories that are not in the Upkeep.
+
+## Native qualification on a test cloud
+
+Some pull requests need a native qualification: the repository's `AGENTS.md`
+requires a person to watch the application in a Horizon native VNC Device panel,
+for example an Avalonia update. The Upkeep worker cannot do this. It runs the
+quick-start image, which does not have the toolchain of the repository. An Upkeep
+agent can thus ask Horizon for a test cloud.
+
+A test cloud is a short-lived cloud from the repository's own `.horizon` profile, on
+the head commit of the pull request, in the workspace of the Upkeep. The person can
+watch it as a local test: the agent panel of the test cloud and a Device panel on
+its desktop show next to the board.
+
+1. The agent writes a request file in `/workspace/home/upkeep/native/requests/`, a
+   JSON object with `repository`, `pull_request`, `head` (the full head commit) and
+   `reason`. The prompt of each run tells the agent how. The next exchange reads the
+   newest 8 request files of at most 4 KiB each.
+2. Horizon examines the request (see
+   [Trust boundary of the test cloud](#trust-boundary-of-the-test-cloud)). Horizon
+   starts one test cloud at a time for each Upkeep. At most 8 other requests wait,
+   in their order. Horizon tests each head of a pull request one time. When a test
+   ended without `passed` or `failed` (refused, blocked or expired), the same
+   request starts a new test after one hour, at most two tests for each head.
+3. Horizon gets the head commit into the checkout of the repository on this
+   computer, as **Start Upkeep** does for its first repository. It starts the test
+   cloud **Test NAME #NUMBER** on Hetzner with the default profile of the repository
+   at that commit.
+4. When the cloud is ready, Horizon opens the panel **Native test agent** (Codex, or
+   Claude when the profile has no Codex) and the desktop viewer. When the agent
+   panel has been open for 15 seconds and shows no new output, Horizon pastes the
+   task into it: read `AGENTS.md`, run its native qualification on the worker
+   desktop `:99`, and write the evidence to `/workspace/home/native-test`. The
+   image must start the agent past its first-run dialogs; for Claude Code, the
+   worker tools of Horizon do this since #1230. In an older image the task goes
+   into a dialog, and the test ends at the time limit as expired.
+5. Every 30 seconds, Horizon reads `result.json` in that folder. When the agent wrote
+   it, or when the time limit of 120 minutes from the start ends, Horizon copies the
+   evidence to `~/.horizon/upkeep/<cloud>/native/` on this computer and closes the
+   test cloud, which deletes its server and volume.
+6. Horizon writes a report of each test to `/workspace/home/upkeep/native/results/`
+   on the Upkeep worker, one file for each pull request, also while the test waits
+   or runs: the state (`queued`, `starting`, `running`, `passed`, `failed`,
+   `blocked`, `refused` or `expired`), a message, and for the newest two reports
+   the report of the agent and the names of the evidence files.
+
+Horizon keeps the tests of each Upkeep in `~/.horizon/upkeep/<cloud>/native.json`.
+After a restart, it continues the test that ran, or ends it at its time limit.
+
+### Trust boundary of the test cloud
+
+Untrusted input:
+
+- The request. An agent on the Upkeep worker writes it, and the agent reads text
+  from pull requests.
+- The code of the pull request. The test cloud builds and runs it.
+- The result, the report and the evidence that the agent on the test cloud writes.
+
+Horizon starts a test cloud only when all of these are true:
+
+- The repository is in the list of the Upkeep.
+- GitHub, read with the GitHub sign-in of this computer, shows the pull request as
+  open, with the head commit of the request. The head branch is in the same
+  repository, not in a fork. One of the bots of the Upkeep opened it.
+- The default profile of the repository has a desktop, no GPU, and Codex or Claude
+  without approvals.
+- The build of the profile uses only files in `.horizon`, and the pull request does
+  not change a file in `.horizon` since its branch left the base branch. Thus the
+  image that Docker builds on this computer comes from files of the base branch.
+  The code of the pull request runs only on the test cloud.
+
+Horizon guarantees these items:
+
+- The test cloud gets no GitHub access and no Git or BrowserStack credential from
+  Cloud settings. A marker in the folder of the cloud (`isolated`) keeps them away
+  for every deployment of it, also a resume or a rebuild. The cloud gets the source
+  as a pack from this computer. It gets no credential of the Upkeep. Horizon checks
+  no companion of the profile for the test cloud. Only the person can check one, on
+  the card of the cloud, so no agent can start one.
+- Horizon closes the test cloud when the qualification ends, and at the latest at
+  the time limit. When the cloud did not start, or the person closed it, the test
+  ends as blocked. When the deletion fails, the close dialog asks the person, as
+  for any cloud. Horizon starts the cloud only after the ledger on disk names it,
+  keeps it there until its card is gone, and after a restart closes it once more.
+  Horizon follows a test while the session that holds the Upkeep's cloud or the
+  test cloud is open. When the person closes the Upkeep's cloud while a test runs,
+  the test still ends in that run of Horizon; after a restart, the person closes
+  the test cloud on its card.
+- Horizon reads the result folder only as the owner of `/workspace/home`, without
+  following a link, and only regular files. It keeps at most 12 files of known
+  kinds (pictures, recordings and text) besides `result.json` and `report.md`,
+  each at most 2 MiB and 16 MiB in all. It
+  parses `result.json` into an outcome and a summary of at most 300 characters,
+  and cuts the report to 4 KiB. It removes control characters from both.
+- The request reaches no command line: Horizon uses only the repository name of the
+  Upkeep's list, the number and the full commit.
+
+Horizon does not guarantee these items:
+
+- The result is true. An agent writes it, and code of the pull request runs next to
+  that agent. Look at the evidence before you rely on a pass.
+- The code of the pull request cannot read the login of the agent on the test cloud.
+  The same is true for every cloud that runs a pull request.
+- The code of the pull request cannot send data out. The test cloud has no limit on
+  outbound connections. Thus the code can send the login of the agent anywhere. This
+  is why Horizon starts a test cloud only for a pull request that a bot of the Upkeep
+  opened in the repository itself and that does not change `.horizon`.
+- The person can watch the whole run. The Device panel shows only the desktop
+  `:99` of the test cloud.

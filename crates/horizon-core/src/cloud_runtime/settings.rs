@@ -106,6 +106,20 @@ impl Settings {
         settings.placement = Some(placement.clone());
         Ok(settings)
     }
+    /// Takes away what a cloud for untrusted code must not get, when its folder `state_root`
+    /// holds the marker that [`mark_isolated`] writes: GitHub access, and the Git and
+    /// `BrowserStack` credentials of these settings. The login of its agents, its registry pull
+    /// login and its provider stay. A marker that cannot be read counts as there.
+    pub fn isolate_for(&mut self, state_root: &Path) {
+        if std::fs::symlink_metadata(state_root.join(ISOLATED))
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        {
+            return;
+        }
+        self.github = None;
+        self.git_credentials.clear();
+        self.browserstack_credentials.clear();
+    }
     /// # Errors
     /// Validates bindings supplied through either the file or Rust interface.
     pub fn validate(&self) -> Result<()> {
@@ -344,6 +358,18 @@ pub fn validate_private_key_file(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The marker of a cloud that runs untrusted code, such as an Upkeep test cloud.
+const ISOLATED: &str = "isolated";
+
+/// Marks the cloud whose folder is `state_root` as one for untrusted code, before anything
+/// of it is deployed: see [`Settings::isolate_for`]. Blocks on the disk.
+/// # Errors
+/// The folder or the marker cannot be written.
+pub fn mark_isolated(state_root: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(state_root)?;
+    std::fs::write(state_root.join(ISOLATED), b"")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,6 +400,31 @@ mod tests {
         let settings = Settings::for_cloud(&path, &europe).unwrap();
         assert_eq!(settings.data_centers, ["EU-RO-1"]);
         assert_eq!(settings.gpu_types, ["NVIDIA RTX A5000"]);
+    }
+
+    #[test]
+    fn an_isolated_cloud_gets_no_github_access_and_no_git_or_browserstack_credentials() {
+        let root = tempfile::tempdir().unwrap();
+        let absolute = |name: &str| root.path().join(name);
+        let mut settings: Settings = serde_json::from_value(serde_json::json!({
+            "runpod_key_file": absolute("key"), "ssh_identity_file": absolute("identity"),
+            "docker_config": absolute("docker"), "registry_pull_auth_id": "pull",
+            "cpu_flavors": [], "gpu_types": [],
+            "github": {"app_id": 1, "slug": "app", "client_id": "Iv1.a", "client_secret_file": absolute("secret")},
+        }))
+        .unwrap();
+        let cloud = root.path().join("cloud");
+        settings.isolate_for(&cloud);
+        assert!(settings.github.is_some(), "an ordinary cloud keeps its GitHub access");
+        mark_isolated(&cloud).unwrap();
+        settings.isolate_for(&cloud);
+        assert!(settings.github.is_none());
+        assert!(settings.git_credentials.is_empty() && settings.browserstack_credentials.is_empty());
+        assert_eq!(
+            settings.registry_pull_auth_id.as_deref(),
+            Some("pull"),
+            "the image still pulls"
+        );
     }
 
     #[test]

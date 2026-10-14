@@ -27,6 +27,10 @@ OUTPUT_LIMIT = 3 * 1024 * 1024
 # Horizon reads times as 64-bit integers.
 TIME_LIMIT = 2 ** 62
 SESSION = re.compile(r'upkeep-[A-Za-z0-9_-]{1,90}')
+# Native test requests that the agent writes, and the reports Horizon writes back.
+NATIVE = 'native'
+REQUESTS_LIMIT = 8
+REQUEST_LIMIT = 4096
 REVISION = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
 
 
@@ -155,6 +159,66 @@ def install(payload, upkeep):
         os.close(data)
 
 
+def native_requests(upkeep):
+    """The native test requests in native/requests, newest first, so a new request is read also
+    when old ones stay: at most a few small regular files, each as the JSON object it holds.
+    Horizon checks every field again."""
+    base = folder(upkeep, NATIVE)
+    try:
+        requests = folder(base, 'requests')
+        try:
+            names = []
+            for name in os.listdir(requests):
+                if name.startswith('.') or not name.endswith('.json'):
+                    continue
+                try:
+                    names.append((os.stat(name, dir_fd=requests, follow_symlinks=False).st_mtime_ns, name))
+                except OSError:
+                    continue
+            found = []
+            for _, name in sorted(names, reverse=True):
+                if len(found) >= REQUESTS_LIMIT:
+                    break
+                data = read(requests, name, REQUEST_LIMIT + 1)
+                if data is None or len(data) > REQUEST_LIMIT:
+                    continue
+                request = native_request(data)
+                if request is not None:
+                    found.append(request)
+            return found
+        finally:
+            os.close(requests)
+    finally:
+        os.close(base)
+
+
+def native_request(data):
+    """The fields Horizon reads from one request file, each of the type Horizon expects, or
+    None. Nothing else of the file goes back, so no request can make the answer invalid."""
+    try:
+        request = json.loads(data, parse_constant=refuse_constant)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(request, dict):
+        return None
+
+    def text(key, limit):
+        value = request.get(key)
+        # A lone surrogate from a \ud800 escape is not valid JSON for Horizon.
+        return value[:limit].encode('utf-8', 'replace').decode() if isinstance(value, str) else None
+
+    number = request.get('pull_request')
+    if type(number) is not int or not 0 < number < 2 ** 31:
+        return None
+    found = {'repository': text('repository', 200), 'pull_request': number, 'head': text('head', 64),
+             'reason': text('reason', 300) or ''}
+    return found if found['repository'] and found['head'] else None
+
+
+def refuse_constant(name):
+    raise ValueError(f'{name} is not JSON that Horizon reads')
+
+
 def remove(parent, name):
     try:
         os.unlink(name, dir_fd=parent)
@@ -242,7 +306,7 @@ def run_record(line):
     return record
 
 
-def report(upkeep, loop, settled):
+def report(upkeep, loop, settled, requests=()):
     """What the board shows. Everything here comes from files that the agent can write, so
     only the fields and types that Horizon reads are sent back."""
     status = read(upkeep, 'status.json', STATUS_LIMIT)
@@ -254,7 +318,8 @@ def report(upkeep, loop, settled):
         next_run = None
     answer = {'loop': loop, 'settled': settled, 'runs': runs, 'next_run': next_run,
               'paused': read(upkeep, 'paused', 0) is not None,
-              'status': status.decode('utf-8', 'replace') if status is not None else None}
+              'status': status.decode('utf-8', 'replace') if status is not None else None,
+              'native_requests': list(requests)}
     text = json.dumps(answer, allow_nan=False)
     if len(text) > OUTPUT_LIMIT:
         answer['status'] = None
@@ -277,8 +342,13 @@ def exchange(payload):
             if read(upkeep, 'installing', 0) is not None:
                 write(upkeep, 'restart', '')
                 remove(upkeep, 'installing')
+            try:
+                requests = native_requests(upkeep)
+            except Refused:
+                # The agent's own folder: what it put there never stops the exchange.
+                requests = []
             loop, settled = keep_loop(session, HOME + '/' + FOLDER)
-            return report(upkeep, loop, settled)
+            return report(upkeep, loop, settled, requests)
         finally:
             os.close(upkeep)
     finally:
@@ -288,7 +358,9 @@ def exchange(payload):
 def main():
     payload = json.loads(base64.b64decode(sys.argv[1]))
     try:
-        print(exchange(payload))
+        reports = payload.get('native_reports')
+        # A delivery of native test reports sends deliver.py ahead of this script.
+        print(deliver(reports) if isinstance(reports, list) else exchange(payload))  # noqa: F821
     except Refused as error:
         print(f'Upkeep refused this worker: {error}.', file=sys.stderr)
         sys.exit(1)

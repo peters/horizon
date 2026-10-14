@@ -78,6 +78,9 @@ const STDOUT_LIMIT: u64 = 64 * 1024;
 /// The longest a probe may take before the host is taken to be out of reach.
 const PROBE_LIMIT: Duration = Duration::from_secs(20);
 
+/// The longest a fetch of a few commits into an existing checkout may take.
+const FETCH_LIMIT: Duration = Duration::from_mins(10);
+
 /// The longest line of Git's progress kept; a remote that never ends one cannot grow it further.
 const LINE_LIMIT: usize = 4096;
 
@@ -614,6 +617,34 @@ pub fn clone(
     progress: &Progress,
 ) -> Result<(), Failure> {
     in_steps(remote, destination, token, cancel, progress, STEPS)
+}
+
+/// Fetches exactly `commits` of `remote` into the existing checkout `checkout`, without
+/// changing a branch, a tag, the working tree or `FETCH_HEAD`. Git keeps the objects until
+/// a later garbage collection; the checkout stays as the person left it.
+///
+/// # Errors
+/// Names why the fetch failed.
+pub fn fetch_commits(
+    remote: &Remote,
+    checkout: &Path,
+    commits: &[&str],
+    token: Option<&Token>,
+    cancel: &Cancellation,
+) -> Result<(), Failure> {
+    let mut command = git(token);
+    command.args([
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--no-write-fetch-head",
+        "--no-recurse-submodules",
+        "--",
+        &remote.url,
+    ]);
+    command.args(commits).current_dir(checkout);
+    // Never `run`: its cleanup after a cancel would take locks out of the person's checkout.
+    bounded(command, remote, cancel, FETCH_LIMIT).map(drop)
 }
 
 /// [`clone`], ending after `last_step` as a lost connection would.

@@ -6,13 +6,14 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{TryRecvError, channel};
 
 use horizon_core::cloud_panel::{CloudLaunch, Placement};
-use horizon_core::cloud_runtime::{self, Cancellation, repository, settings::Settings};
+use horizon_core::cloud_runtime::{self, repository, settings::Settings};
 use horizon_core::upkeep::worker::{self, Config};
 use horizon_core::{PanelKind, PanelOptions, WorkspaceId};
 
 use super::super::{HorizonApp, creation_job};
 use crate::app::upkeep::{Prepared, Preparing};
 
+mod native;
 mod sync;
 
 /// The worker every Upkeep runs on, as its board names it.
@@ -77,6 +78,9 @@ impl HorizonApp {
     pub(in crate::app::cloud_panel) fn poll_upkeeps(&mut self, ctx: &egui::Context) {
         self.poll_upkeep_start(ctx);
         self.sync_upkeeps(ctx);
+        if let Some(saved) = self.upkeep.saved.clone() {
+            self.poll_upkeep_natives(ctx, &saved);
+        }
     }
 
     fn poll_upkeep_start(&mut self, ctx: &egui::Context) {
@@ -198,7 +202,7 @@ fn prepare(root: &Path, cloud_id: &str, config: &Config) -> Result<Prepared, Str
         return Err("Add a Hetzner project in Cloud settings first: Upkeep runs on Hetzner.".into());
     }
     let primary = config.primary().ok_or("Choose at least one repository.")?;
-    let path = checkout(root, &settings, primary)?;
+    let path = horizon_core::upkeep::checkout(root, &settings, primary)?;
     let revision = repository::resolve(&path, "HEAD").map_err(|error| format!("{error}."))?;
     let run_token = worker::save(cloud_id, config)
         .and_then(|_| worker::mark_first_run(cloud_id))
@@ -208,52 +212,6 @@ fn prepare(root: &Path, cloud_id: &str, config: &Config) -> Result<Prepared, Str
         revision,
         run_token,
     })
-}
-
-/// The checkout of `name` in `~/github/<owner>/<name>`, cloned with the GitHub sign-in
-/// when it is not there yet.
-fn checkout(root: &Path, settings: &Settings, name: &str) -> Result<PathBuf, String> {
-    let remote = repository::source::parse(name).ok_or("The first repository is not a GitHub repository.")?;
-    let parent = repository::source::default_parent(&horizon_core::dir_search::expand_tilde("~"));
-    let found = repository::source::existing(&parent, &remote).or_else(|| {
-        let spelled = repository::source::parse(&spelled(&parent, name)?)?;
-        repository::source::existing(&parent, &spelled)
-    });
-    if let Some(path) = found {
-        return Ok(path);
-    }
-    let token = match &settings.github {
-        Some(github) => cloud_runtime::github::host::current(root, github)
-            .map_err(|error| format!("{error}."))?
-            .and_then(|(_, secret)| repository::source::Token::new(&remote, secret.expose())),
-        None => None,
-    };
-    let destination = repository::source::destination(&parent, &remote);
-    repository::source::clone(
-        &remote,
-        &destination,
-        token.as_ref(),
-        &Cancellation::default(),
-        &repository::source::Progress::default(),
-    )
-    .map_err(|failure| format!("Cloning {name} failed: {failure}"))?;
-    Ok(destination)
-}
-
-/// `name` as the folders under `parent` spell it when they differ only in case: GitHub
-/// names come in lowercase, and an earlier clone keeps the spelling of its owner.
-fn spelled(parent: &Path, name: &str) -> Option<String> {
-    let (owner, repository) = name.split_once('/')?;
-    let find = |folder: &Path, wanted: &str| {
-        std::fs::read_dir(folder)
-            .ok()?
-            .filter_map(Result::ok)
-            .map(|entry| entry.file_name().to_string_lossy().into_owned())
-            .find(|found| found.eq_ignore_ascii_case(wanted))
-    };
-    let owner = find(parent, owner)?;
-    let repository = find(&parent.join(&owner), repository)?;
-    Some(format!("{owner}/{repository}"))
 }
 
 #[cfg(test)]

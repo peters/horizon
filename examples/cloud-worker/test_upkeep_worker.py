@@ -14,7 +14,10 @@ from unittest import mock
 
 WORKER = Path(__file__).resolve().parents[2] / 'crates/horizon-core/src/upkeep/worker'
 EXCHANGE = runpy.run_path(str(WORKER / 'exchange.py'))
+# As the delivery command runs it: deliver.py with the helpers of exchange.py.
+DELIVER = runpy.run_path(str(WORKER / 'deliver.py'), init_globals=EXCHANGE)
 RUN = runpy.run_path(str(WORKER / 'run.py'))
+PROBE = runpy.run_path(str(WORKER.parent / 'native' / 'probe.py'))
 SESSION = 'upkeep-45ee423d-7fb2'
 
 
@@ -51,6 +54,11 @@ class Worker:
         with mock.patch.dict(names, HOME=str(self.home), SESSIONS=str(self.sessions),
                              SESSION_DATA=str(self.data), tmux=self.tmux):
             return json.loads(EXCHANGE['exchange'](value or payload()))
+
+    def deliver(self, reports):
+        names = DELIVER['deliver'].__globals__
+        with mock.patch.dict(names, HOME=str(self.home)):
+            return json.loads(DELIVER['deliver'](reports))
 
     @property
     def upkeep(self):
@@ -98,7 +106,7 @@ class ExchangeTests(unittest.TestCase):
         self.assertTrue((binding / 'launch-requested').is_file())
         self.assertTrue((self.worker.data / SESSION).is_dir())
         self.assertEqual(answer, {'loop': True, 'settled': False, 'runs': [], 'next_run': None,
-                                  'paused': False, 'status': None})
+                                  'paused': False, 'status': None, 'native_requests': []})
         started = self.worker.calls[-1]
         self.assertEqual(started[:4], ('new-session', '-d', '-s', SESSION))
         self.assertEqual(started[-2:], (str(upkeep) + '/run.sh', SESSION))
@@ -207,6 +215,78 @@ class ExchangeTests(unittest.TestCase):
         self.assertIsNone(answer['next_run'])
         self.assertEqual(len(answer['runs']), 200)
         self.assertEqual(answer['runs'][-1], {'started_at': 299})
+
+    def test_native_requests_are_read_without_following_or_blocking_and_bounded(self):
+        requests = self.worker.upkeep / 'native' / 'requests'
+        requests.mkdir(parents=True, mode=0o700)
+        (requests / 'b.json').symlink_to(self.worker.outside)
+        os.mkfifo(requests / 'c.json')
+        (requests / 'd.json').write_text('x' * 5000)
+        (requests / 'e.json').write_text('[1]')
+        (requests / 'f.txt').write_text('{}')
+        for n in range(20):
+            old = requests / f'old{n:02}.json'
+            old.write_text(json.dumps({'repository': 'acme/web', 'pull_request': 100 + n, 'head': 'b' * 40}))
+            os.utime(old, (1_000_000 + n, 1_000_000 + n))
+        new = requests / 'zz-new.json'
+        new.write_text(json.dumps({'repository': 'acme/web', 'pull_request': 7, 'head': 'a' * 40}))
+        answer = self.worker.exchange()
+        found = answer['native_requests']
+        self.assertEqual(found[0], {'repository': 'acme/web', 'pull_request': 7, 'head': 'a' * 40, 'reason': ''},
+                         'the newest request is read, also behind many old ones')
+        self.assertEqual(len(found), 8, 'at most a few requests')
+        self.assertEqual(self.worker.outside.read_text(), 'untouched')
+
+    def test_a_malformed_native_request_never_makes_the_answer_invalid(self):
+        requests = self.worker.upkeep / 'native' / 'requests'
+        requests.mkdir(parents=True, mode=0o700)
+        base = '{"repository": "acme/web", "pull_request": 7, "head": "%s", ' % ('a' * 40)
+        for n, extra in enumerate(['"reason": "\\ud800"}', '"x": NaN}', '"x": 1e999}', '"x": ' + '[' * 200 + ']' * 200 + '}',
+                                   '"reason": 5}']):
+            (requests / f'{n}.json').write_text(base + extra)
+        (requests / 'flag.json').write_text('{"repository": "acme/web", "pull_request": true, "head": "a"}')
+        (requests / 'big.json').write_text('{"repository": "acme/web", "pull_request": 99999999999, "head": "a"}')
+        answer = self.worker.exchange()
+        json.dumps(answer, allow_nan=False)
+        found = answer['native_requests']
+        self.assertEqual(len(found), 4, found)  # NaN is refused; the other fields are dropped
+        for request in found:
+            self.assertEqual(set(request), {'repository', 'pull_request', 'head', 'reason'})
+            request['reason'].encode()
+
+    def test_a_replaced_native_folder_never_stops_the_exchange_or_the_delivery(self):
+        native = self.worker.upkeep / 'native'
+        native.mkdir(parents=True, mode=0o700)
+        (native / 'requests').symlink_to(self.worker.root)
+        self.assertEqual(self.worker.exchange()['native_requests'], [])
+        (native / 'results').mkdir(mode=0o700)
+        (native / 'results' / 'acme__web__7.json').mkdir()
+        (native / 'results' / 'acme__web__8.json').mkdir()
+        report = {'repository': 'acme/web', 'pull_request': 9, 'head': 'a' * 40, 'state': 'passed'}
+        self.worker.deliver([report, dict(report, pull_request=7)])
+        self.assertTrue((native / 'results' / 'acme__web__9.json').is_file())
+
+    def test_many_native_requests_are_bounded(self):
+        requests = self.worker.upkeep / 'native' / 'requests'
+        requests.mkdir(parents=True, mode=0o700)
+        for n in range(20):
+            (requests / f'{n}.json').write_text(json.dumps({'repository': 'acme/web', 'pull_request': n + 1, 'head': 'a' * 40}))
+        self.assertEqual(len(self.worker.exchange()['native_requests']), 8)
+
+    def test_native_reports_replace_the_earlier_ones_and_never_write_through_a_link(self):
+        report = {'repository': 'acme/web', 'pull_request': 7, 'head': 'a' * 40, 'state': 'passed'}
+        self.assertEqual(self.worker.deliver([report, {'repository': '../x', 'pull_request': 1}, 'x']),
+                         {'delivered': 3})
+        results = self.worker.upkeep / 'native' / 'results'
+        self.assertEqual(sorted(os.listdir(results)), ['acme__web__7.json'])
+        self.assertEqual(json.loads((results / 'acme__web__7.json').read_text()), report)
+        (results / 'acme__web__7.json').unlink()
+        (results / 'acme__web__7.json').symlink_to(self.worker.outside)
+        (results / 'acme__web__3.json').write_text('{}')
+        self.worker.deliver([dict(report, state='failed')])
+        self.assertEqual(self.worker.outside.read_text(), 'untouched')
+        self.assertFalse((results / 'acme__web__7.json').is_symlink())
+        self.assertEqual(sorted(os.listdir(results)), ['acme__web__7.json'], 'a report Horizon no longer sends')
 
     def test_a_run_file_of_the_agent_cannot_make_the_answer_invalid(self):
         self.worker.upkeep.mkdir(mode=0o700)
@@ -484,6 +564,66 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(log.stat().st_size, RUN['LOG_LIMIT'] // 8)
         self.assertTrue(log.read_bytes().endswith(b'end'))
 
+
+
+class NativeProbeTests(unittest.TestCase):
+    """The probe reads what the agent on a test cloud wrote without following a link, without
+    waiting on a pipe and within its limits."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.folder = self.root / 'native-test'
+        self.folder.mkdir()
+        self.outside = self.root / 'outside.png'
+        self.outside.write_bytes(b'secret')
+
+    def call(self, name, *args):
+        with mock.patch.dict(PROBE[name].__globals__, FOLDER=str(self.folder)):
+            return PROBE[name](*args)
+
+    def test_only_regular_files_with_plain_names_are_listed_and_read(self):
+        (self.folder / 'result.json').write_text('{"outcome": "passed"}')
+        (self.folder / 'report.md').write_text('| a |')
+        (self.folder / 'shot.png').write_bytes(b'png')
+        (self.folder / 'link.png').symlink_to(self.outside)
+        os.mkfifo(self.folder / 'pipe.png')
+        (self.folder / '.hidden.png').write_bytes(b'x')
+        status = self.call('status')
+        names = [entry['name'] for entry in status['files']]
+        self.assertEqual(names, ['report.md', 'result.json', 'shot.png'])
+        self.assertEqual(status['result'], '{"outcome": "passed"}')
+        self.assertEqual(self.call('read_file', 'shot.png'), 'cG5n')
+        self.assertIsNone(self.call('read_file', 'link.png'), 'a link is never followed')
+        self.assertIsNone(self.call('read_file', 'pipe.png'), 'a pipe is never waited on')
+        self.assertIsNone(self.call('read_file', '../outside.png'))
+
+    def test_the_result_and_the_report_never_take_the_place_of_evidence(self):
+        for n in range(14):
+            (self.folder / f'a-shot-{n:02}.png').write_bytes(b'png')
+        (self.folder / 'result.json').write_text('{}')
+        (self.folder / 'report.md').write_text('| a |')
+        (self.folder / 'tool.sh').write_text('#!/bin/sh')
+        names = [entry['name'] for entry in self.call('status')['files']]
+        self.assertEqual(len(names), 14)
+        self.assertIn('result.json', names)
+        self.assertIn('report.md', names)
+        self.assertNotIn('tool.sh', names)
+
+    def test_a_file_over_the_limit_takes_no_place_of_evidence(self):
+        (self.folder / 'a-recording.mp4').write_bytes(b'x' * (PROBE['FILE_LIMIT'] + 1))
+        for n in range(12):
+            (self.folder / f'b-shot-{n:02}.png').write_bytes(b'png')
+        names = [entry['name'] for entry in self.call('status')['files']]
+        self.assertEqual(names, [f'b-shot-{n:02}.png' for n in range(12)])
+
+    def test_a_linked_folder_or_a_large_file_is_not_read(self):
+        (self.folder / 'big.mp4').write_bytes(b'x' * (PROBE['FILE_LIMIT'] + 1))
+        self.assertIsNone(self.call('read_file', 'big.mp4'))
+        self.folder.rename(self.root / 'real')
+        self.folder.symlink_to(self.root / 'real')
+        self.assertEqual(self.call('status'), {'result': None, 'report': None, 'files': []})
 
 if __name__ == '__main__':
     unittest.main()

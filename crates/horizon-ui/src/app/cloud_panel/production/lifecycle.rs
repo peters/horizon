@@ -436,6 +436,9 @@ impl HorizonApp {
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let root = state_root;
+            let mut settings = settings;
+            // A resume gives the worker its access again: a test cloud gets none.
+            settings.isolate_for(&root);
             let emit = |event| {
                 let _ = tx.send(event);
                 ctx.request_repaint();

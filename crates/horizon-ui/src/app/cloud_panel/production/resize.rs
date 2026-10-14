@@ -288,6 +288,9 @@ impl HorizonApp {
         let idle = runtime.listen_idle();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
+            let mut settings = settings;
+            // A resize reconnects the worker: a test cloud gets no access then either.
+            settings.isolate_for(&root);
             let emit = |event| {
                 let _ = tx.send(event);
                 ctx.request_repaint();

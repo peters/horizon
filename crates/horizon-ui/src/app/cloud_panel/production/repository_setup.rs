@@ -21,6 +21,7 @@ mod preview;
 mod prompt;
 mod proof;
 mod run;
+pub(super) use run::{SUBMIT_DELAY, pasted};
 mod session;
 mod snapshot;
 mod untrusted;

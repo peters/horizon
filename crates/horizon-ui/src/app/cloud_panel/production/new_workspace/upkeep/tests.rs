@@ -111,15 +111,6 @@ fn an_agent_proposal_opens_new_upkeep_filled_in_for_its_workspace() {
 }
 
 #[test]
-fn an_earlier_clone_is_found_whatever_the_case_of_its_folders() {
-    let temp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(temp.path().join("Acme/Web")).unwrap();
-    assert_eq!(super::spelled(temp.path(), "acme/web").as_deref(), Some("Acme/Web"));
-    assert_eq!(super::spelled(temp.path(), "acme/api"), None);
-    assert_eq!(super::spelled(temp.path(), "other/web"), None);
-}
-
-#[test]
 fn a_start_from_another_session_adds_no_cloud() {
     let (_temp, mut app) = test_app();
     let ctx = egui::Context::default();

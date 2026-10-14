@@ -80,6 +80,12 @@ with the next exchange, and Repositories saves only the repositories that the pe
 added or removed. A board that a config file opens has no buttons. Agents reach the same
 actions through `cloud_upkeep`; the board shows each agent change below its title.
 
+When an Upkeep agent needs a native desktop qualification that its worker cannot run, it
+writes a request file on its worker, and Horizon starts a short-lived test cloud from the
+repository's own `.horizon` profile on the pull request's head, in the Upkeep workspace,
+with an agent panel and the desktop viewer. The test cloud gets no GitHub access, and
+Horizon deletes it at the result or after two hours. There is no MCP operation for it.
+
 Browser provider catalogs and browser sessions use `horizon-browser`.
 This skill does not install servers, start resources, or enable network access on load.
 

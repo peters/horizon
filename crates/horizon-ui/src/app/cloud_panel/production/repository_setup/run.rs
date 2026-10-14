@@ -117,7 +117,7 @@ pub(super) fn asked_otherwise_in(path: &std::path::Path, asked: &Asked) -> bool 
 /// Line breaks become spaces and every other control character goes, so text that
 /// quotes the agent's own files, such as a proof failure, can never end the paste
 /// early with ESC and type into the agent's terminal.
-pub(super) fn pasted(text: &str) -> Vec<u8> {
+pub(in crate::app::cloud_panel::production) fn pasted(text: &str) -> Vec<u8> {
     let clean: String = text
         .chars()
         .filter_map(|c| match c {
@@ -134,7 +134,7 @@ pub(super) fn pasted(text: &str) -> Vec<u8> {
 
 /// Enter follows a pasted message after this pause, so the terminal app takes the
 /// text as one message and the key as sending it.
-pub(super) const SUBMIT_DELAY: Duration = Duration::from_millis(150);
+pub(in crate::app::cloud_panel::production) const SUBMIT_DELAY: Duration = Duration::from_millis(150);
 
 /// Pastes `text` as one message and schedules its Enter. An Enter still waiting for an
 /// earlier message goes first, so two messages never arrive as one.

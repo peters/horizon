@@ -13,6 +13,7 @@ mod lock;
 pub use lock::{SettingsLock, settings_lock};
 
 const EXCHANGE: &str = include_str!("worker/exchange.py");
+const DELIVER: &str = include_str!("worker/deliver.py");
 const RUN: &str = include_str!("worker/run.sh");
 const SCHEDULER: &str = include_str!("worker/run.py");
 const TIMEOUT: Duration = Duration::from_secs(45);
@@ -421,6 +422,7 @@ Pull requests opened by: {authors}.\n\n\
 - The worker's Git proxy signs you in for every `https://github.com/` URL.\n\
 - If you cannot reach @@REPOSITORY@@ yet, first call the `github_access` tool for it with push access. Horizon allows it within seconds. When a call times out or reports that the request still waits, call it again: the same request comes back. Never give up because of a timeout. For a repository outside this Upkeep, such as one that holds shared rules linked from an AGENTS.md, ask with read access only; the person decides it.\n\
 - When a pull request page, a preview or an app run helps, open it in a browser panel with the horizon-browser tools so the person can watch.\n\
+- For a native desktop qualification that AGENTS.md requires and this worker cannot run, write {{\"repository\":\"@@REPOSITORY@@\",\"pull_request\":N,\"head\":\"<sha>\"}} to /workspace/home/upkeep/native/requests/<owner>__<name>__N.json. Horizon runs it on a test cloud (up to 2 h) and writes the result to native/results under that name. Merge only after `passed` for that head; quote its report in your comment.\n\
 - Keep exactly one comment of yours on each pull request you worked on. Its first line is `<!-- upkeep -->`. Find it by that marker with `gh api repos/@@REPOSITORY@@/issues/<number>/comments` and edit it with `gh api --method PATCH` instead of adding another. In one or two sentences say where the pull request stands and why: merged, waiting for checks, or blocked and on what. Never mention other repositories or their pull requests in it.\n\
 - After every change, write @@STATUS@@ again: write a temporary file next to it, then move it into place. Use this JSON, for @@REPOSITORY@@ only:\n\
   {{\"pull_requests\": [{{\"repository\": \"owner/name\", \"number\": 1, \"title\": \"...\", \"url\": \"https://github.com/owner/name/pull/1\", \"author\": \"dependabot\", \"checks\": \"passed|failed|running|none\", \"state\": \"blocked|fixing|needs_review|waiting_checks|ready|merged\", \"note\": \"one short sentence\", \"updated_at\": \"RFC 3339\"}}], \"activity\": [{{\"at\": \"RFC 3339\", \"text\": \"one short sentence\"}}]}}\n\
@@ -478,6 +480,24 @@ printf %s '{script}' | base64 -d | $launcher -I - '{payload}'"
     Ok(command)
 }
 
+/// The remote command that writes Horizon's reports of native tests to the Upkeep folder,
+/// as the account that owns it, like an exchange.
+/// # Errors
+/// Reports too long for the worker's shell.
+pub(super) fn delivery_command(reports: &[serde_json::Value]) -> Result<String> {
+    let engine = base64::engine::general_purpose::STANDARD;
+    let script = engine.encode(format!("{DELIVER}\n{EXCHANGE}"));
+    let payload = engine.encode(serde_json::json!({ "native_reports": reports }).to_string());
+    let command = format!(
+        "launcher=python3; if [ -f /run/horizon-tailnet/agent-isolation ]; then launcher='horizon-worker-tailnet agent python3'; fi; \
+printf %s '{script}' | base64 -d | $launcher -I - '{payload}'"
+    );
+    if command.len() > COMMAND_LIMIT {
+        return Err(Error::Invalid("The native test reports are too long for the worker"));
+    }
+    Ok(command)
+}
+
 /// What one exchange read back.
 #[derive(Debug)]
 pub struct Exchange {
@@ -489,6 +509,8 @@ pub struct Exchange {
     runs: Vec<serde_json::Value>,
     next_run: Option<i64>,
     pub paused: bool,
+    /// The native test requests the agent wrote, untrusted: see [`super::native::requests`].
+    pub native_requests: Vec<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -503,6 +525,8 @@ struct Raw {
     next_run: Option<i64>,
     #[serde(default)]
     paused: bool,
+    #[serde(default)]
+    native_requests: Vec<serde_json::Value>,
 }
 
 /// Runs one exchange on the worker behind `connection`.
@@ -534,6 +558,7 @@ pub fn parse(output: &str) -> Result<Exchange> {
         runs: raw.runs,
         next_run: raw.next_run,
         paused: raw.paused,
+        native_requests: raw.native_requests,
     })
 }
 

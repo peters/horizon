@@ -132,3 +132,37 @@ requests"). Check that:
   a worker, the Upkeep agent included, reaches these operations.
 - No file read or write for a request runs on the UI thread, and `status` returns only
   bounded, parsed fields of the status document.
+
+## Untrusted: native test requests, results and evidence
+
+An Upkeep agent asks for a native test with a file in `upkeep/native/requests`. Horizon
+starts a test cloud for it (`horizon_core::upkeep::native`, and
+`new_workspace/upkeep/native.rs` in the app). The request, the code of the pull request
+and everything the agent on the test cloud writes are untrusted; `docs/upkeep.md`,
+section "Trust boundary of the test cloud", describes the boundary. Check that:
+
+- `native::requests` keeps only a repository of the Upkeep's list (with the list's
+  spelling), a number in range and a full lowercase commit, and strips control
+  characters from the reason. Nothing else of a request reaches a command line.
+- `native::approve` reads the pull request from GitHub with the host's sign-in and
+  refuses one that is not open, has another head, comes from another repository, or
+  was not opened by a bot of the Upkeep. It refuses a profile without a desktop, with
+  a GPU, without Codex or Claude in auto approvals, or with a build outside
+  `.horizon`, and a pull request that changes `.horizon` since its merge base, so
+  Docker on the host builds only files of the base branch.
+- The test cloud's folder holds the `isolated` marker before its first deployment, and
+  every path that builds a deployment `Request` from cloud settings calls
+  `Settings::isolate_for`, so the cloud never gets GitHub access or Git and BrowserStack
+  credentials.
+- `probe.py` runs as the owner of `/workspace/home`, reads only regular files with plain
+  names without following links, and every read has a limit. `probe::parse_status`
+  checks names, kinds, counts and sizes again and strips control characters.
+- The fetch of the head (`repository::source::fetch_commits`) changes no ref, no
+  working tree and no `FETCH_HEAD` of the person's checkout, and never removes a lock
+  there.
+- Every network, Git and SSH step of a test, the check of the request and every read
+  or write of the ledger run on their own threads; the UI thread polls their channels.
+  The card paths that a test shares with a person (add the cloud, open its panels,
+  close it) keep the reads and writes that `docs/architecture/ui-thread.md` lists for
+  the native test under "Known UI-thread work". One test cloud runs per Upkeep, and
+  Horizon closes it at its result or at `native::TIME_LIMIT`.
