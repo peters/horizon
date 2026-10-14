@@ -259,11 +259,21 @@ def open_log(log, flags):
 
 
 def append(log, record):
-    """Adds `record` to the stop log on the workspace volume. Returns the log's earlier size."""
+    """Adds `record` to the stop log on the workspace volume. Returns the log's earlier size.
+    A line that could not be written whole leaves the log as it was, so no later line is
+    glued onto a part of it."""
     descriptor = open_log(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
-    with os.fdopen(descriptor, 'a') as file:
-        before = os.fstat(file.fileno()).st_size
-        file.write(json.dumps(record) + '\n')
+    before = os.fstat(descriptor).st_size
+    try:
+        with os.fdopen(descriptor, 'a') as file:
+            file.write(json.dumps(record) + '\n')
+    except OSError:
+        descriptor = open_log(log, os.O_WRONLY)
+        try:
+            os.ftruncate(descriptor, before)
+        finally:
+            os.close(descriptor)
+        raise
     os.sync()
     return before
 
@@ -386,6 +396,13 @@ def take(path=REQUEST, lock=REQUEST_LOCK, log=STOP_LOG, now=time.time, output=ot
             path.unlink(missing_ok=True)
             return {'refused': 'The stop request lapsed before the worker stopped.'}
         if record.get('taken') is True:
+            # A take that ended between its two writes, or an untake that did, left the
+            # log without the stop it still carries out.
+            try:
+                if not logged(log, stop['at']):
+                    append(log, stop)
+            except OSError as error:
+                return {'waiting': 'The stop could not be recorded on the workspace volume: ' + type(error).__name__}
             return stop
         try:
             # Window ids restart with the tmux server: the requester's window must still be
@@ -399,7 +416,9 @@ def take(path=REQUEST, lock=REQUEST_LOCK, log=STOP_LOG, now=time.time, output=ot
             # The worker works now, or cannot tell: the next take decides again.
             return {'waiting': str(refusal)}
         try:
-            append(log, stop)
+            # Once only, though an earlier take ended after it logged the stop.
+            if not logged(log, stop['at']):
+                append(log, stop)
         except OSError as error:
             return {'waiting': 'The stop could not be recorded on the workspace volume: ' + type(error).__name__}
         record['taken'] = True
@@ -422,38 +441,62 @@ def write_request(path, record):
     pending.replace(path)
 
 
+def newest_line(file):
+    """The lines of the open stop log, and its newest record or None."""
+    lines = file.read().splitlines(keepends=True)
+    try:
+        newest = json.loads(lines[-1]) if lines else None
+    except ValueError:
+        newest = None
+    return lines, newest if isinstance(newest, dict) else None
+
+
+def logged(log, at):
+    """Whether the stop at `at` is the newest line of the stop log."""
+    try:
+        descriptor = open_log(log, os.O_RDONLY)
+    except FileNotFoundError:
+        return False
+    with os.fdopen(descriptor, 'rb') as file:
+        _, newest = newest_line(file)
+    return newest is not None and newest.get('at') == at
+
+
 def remove_newest(log, at):
     """Removes the stop at `at` from the stop log when it is the newest line there.
-    Returns whether it was removed."""
+    Returns whether it was removed; a log that cannot be read or changed keeps it."""
     try:
         descriptor = open_log(log, os.O_RDWR)
-    # Missing, or a link an agent placed: nothing of Horizon's to take back.
+        with os.fdopen(descriptor, 'r+b') as file:
+            lines, newest = newest_line(file)
+            if newest is None or newest.get('at') != at:
+                return False
+            file.truncate(len(b''.join(lines[:-1])))
+        os.sync()
+    # Missing, a link an agent placed, or a failed write: nothing taken back.
     except OSError:
         return False
-    with os.fdopen(descriptor, 'r+b') as file:
-        lines = file.read().splitlines(keepends=True)
-        try:
-            newest = json.loads(lines[-1]) if lines else None
-        except ValueError:
-            newest = None
-        if not isinstance(newest, dict) or newest.get('at') != at:
-            return False
-        file.truncate(len(b''.join(lines[:-1])))
-    os.sync()
     return True
 
 
 def untake(at, path=REQUEST, log=STOP_LOG, lock=REQUEST_LOCK):
     """Takes back the stop taken at `at`, after Horizon failed to start it: removes it from
-    the stop log and drops its request. Returns whether the log held it."""
+    the stop log and then drops its request. Returns whether the log held it. A stop that
+    stays on the log keeps its request, so the next take gives it again."""
     with locked(lock):
+        removed = remove_newest(log, at)
         try:
             record = json.loads(path.read_text())
         except (OSError, ValueError):
             record = None
         if isinstance(record, dict) and record.get('at') == at:
-            path.unlink(missing_ok=True)
-        return remove_newest(log, at)
+            try:
+                kept = logged(log, at)
+            except OSError:
+                kept = True
+            if not kept:
+                path.unlink(missing_ok=True)
+        return removed
 
 
 def peer_pid(connection):

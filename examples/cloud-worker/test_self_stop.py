@@ -347,6 +347,44 @@ class HorizonStopTests(unittest.TestCase):
         self.assertTrue(STOPD['untake'](taken['at'], path=self.request, log=self.log, lock=self.lock))
         self.assertIsNone(STOP['last_stop'](self.log))
 
+    def test_a_take_or_untake_cut_short_never_logs_a_stop_twice_or_keeps_one_that_did_not_happen(self):
+        self.record()
+        self.clock += 130
+        record = json.loads(self.request.read_text())
+        stop = {key: record[key] for key in ('at', 'reason', 'session', 'agent')}
+        # A take that ended after it logged the stop, before it saved the taken state.
+        STOPD['append'](self.log, stop)
+        self.assertEqual(self.take(), stop)
+        self.assertEqual(len(self.log.read_text().splitlines()), 1)
+        # An untake that cannot change the log keeps the request, so the stop is given again.
+        with mock.patch.dict(STOPD['untake'].__globals__, remove_newest=mock.Mock(return_value=False)):
+            self.assertFalse(STOPD['untake'](stop['at'], path=self.request, log=self.log, lock=self.lock))
+        self.assertEqual(self.take(), stop)
+        # An untake that ended after it emptied the log: the next take logs the stop again.
+        STOPD['remove_newest'](self.log, stop['at'])
+        self.assertEqual(self.take(), stop)
+        self.assertEqual(len(self.log.read_text().splitlines()), 1)
+        self.assertTrue(STOPD['untake'](stop['at'], path=self.request, log=self.log, lock=self.lock))
+        self.assertFalse(self.request.exists())
+        self.assertEqual(self.log.read_text(), '')
+
+    def test_a_line_that_cannot_be_written_whole_leaves_the_log_as_it_was(self):
+        STOPD['append'](self.log, {'at': 1})
+        before = self.log.read_bytes()
+        real = os.fdopen
+
+        def partial(descriptor, *args, **kwargs):
+            file = real(descriptor, *args, **kwargs)
+            def write(text):
+                os.write(descriptor, text[:5].encode())
+                raise OSError('full')
+            file.write = write
+            return file
+        with mock.patch.object(STOPD['append'].__globals__['os'], 'fdopen', partial):
+            with self.assertRaises(OSError):
+                STOPD['append'](self.log, {'at': 2, 'reason': 'x' * 50})
+        self.assertEqual(self.log.read_bytes(), before)
+
     def test_a_taken_stop_lapses_from_its_take_not_from_its_request(self):
         self.record()
         self.clock += STOPD['REQUEST_SECONDS'] - 5
