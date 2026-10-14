@@ -158,6 +158,7 @@ jobs:
         run: |
           printf '%s\n' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           trap 'docker logout ghcr.io' EXIT
+          examples/cloud-worker/registry-tag.sh require-absent "$IMAGE:sha-$REVISION-$ARCH"
           docker push "$IMAGE:sha-$REVISION-$ARCH" | tee "$RUNNER_TEMP/push.log"
           digest=$(grep -oE 'digest: sha256:[0-9a-f]{64}' "$RUNNER_TEMP/push.log" | tail -n 1 | cut -d' ' -f2)
           test -n "$digest"
@@ -182,6 +183,9 @@ jobs:
       AMD64: ${{ needs.helpers.outputs.digest_amd64 }}
       ARM64: ${{ needs.helpers.outputs.digest_arm64 }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Publish
         id: publish
         env:
@@ -191,10 +195,10 @@ jobs:
           test -n "$ARM64"
           printf '%s\n' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           trap 'docker logout ghcr.io' EXIT
+          examples/cloud-worker/registry-tag.sh require-absent "$IMAGE:sha-$REVISION"
           docker buildx imagetools create --tag "$IMAGE:sha-$REVISION" --tag "$IMAGE:main" \
             "$IMAGE@$AMD64" "$IMAGE@$ARM64"
-          digest=$(docker buildx imagetools inspect "$IMAGE:sha-$REVISION" --format '{{json .Manifest}}' | jq -r .digest)
-          [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]
+          digest=$(examples/cloud-worker/registry-tag.sh digest "$IMAGE:sha-$REVISION")
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           {
             echo "Published \`$IMAGE:sha-$REVISION\` and \`$IMAGE:main\` for linux/amd64 and linux/arm64."
@@ -259,6 +263,7 @@ jobs:
         run: |
           printf '%s\n' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           trap 'docker logout ghcr.io' EXIT
+          examples/cloud-worker/registry-tag.sh require-absent "$IMAGE:sha-$REVISION-cpu-$ARCH"
           docker push "$IMAGE:sha-$REVISION-cpu-$ARCH" | tee "$RUNNER_TEMP/push.log"
           digest=$(grep -oE 'digest: sha256:[0-9a-f]{64}' "$RUNNER_TEMP/push.log" | tail -n 1 | cut -d' ' -f2)
           test -n "$digest"
@@ -286,6 +291,9 @@ jobs:
       REPORT_AMD64: ${{ needs.base.outputs.report_amd64 }}
       REPORT_ARM64: ${{ needs.base.outputs.report_arm64 }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -298,10 +306,10 @@ jobs:
           diff <(printf '%s\n' "$REPORT_AMD64") <(printf '%s\n' "$REPORT_ARM64")
           printf '%s\n' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           trap 'docker logout ghcr.io' EXIT
+          examples/cloud-worker/registry-tag.sh require-absent "$IMAGE:sha-$REVISION-cpu"
           docker buildx imagetools create --tag "$IMAGE:sha-$REVISION-cpu" --tag "$IMAGE:cpu" \
             "$IMAGE@$AMD64" "$IMAGE@$ARM64"
-          digest=$(docker buildx imagetools inspect "$IMAGE:sha-$REVISION-cpu" --format '{{json .Manifest}}' | jq -r .digest)
-          [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]
+          digest=$(examples/cloud-worker/registry-tag.sh digest "$IMAGE:sha-$REVISION-cpu")
           {
             echo "Published \`$IMAGE:sha-$REVISION-cpu\` and \`$IMAGE:cpu\` for linux/amd64 and linux/arm64."
             echo
