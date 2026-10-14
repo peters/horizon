@@ -72,6 +72,10 @@ working. A profile that names `provider: docker-host` directly, for example in
 `provider: docker-host`. Each offer has the host's name as its `id`, the largest
 size that is free now as `vcpu` and `memory_gb`, and an `estimated_total` of 0.
 A host that Horizon could not read is in `host_errors`.
+Adding, checking, switching off and removing a host are settings tasks for the
+person in Cloud settings, as the provider keys are. An agent sees the result: a
+saved host that answers is an offer, and a host that does not answer is in
+`host_errors` with the reason.
 
 A cloud on a Docker host cannot be a companion yet. Its worker is on the host's
 loopback, which the worker of another cloud cannot reach. The companion tools
