@@ -28,6 +28,8 @@ mod tests;
 mod timeline;
 mod view;
 pub(super) mod wording;
+/// The Docker whale, which the card header shows for a cloud on a Docker host.
+pub(in crate::app::cloud_panel) use super::creation::provider::docker_mark;
 #[cfg(test)]
 pub(in crate::app::cloud_panel) use cause::{ROWS as CAUSE_ROWS, expand as expand_cause};
 pub(super) use drawer::Tab;

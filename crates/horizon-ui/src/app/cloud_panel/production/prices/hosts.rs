@@ -121,6 +121,24 @@ impl State {
         self.readings().iter().find(|reading| reading.host == *host)
     }
 
+    /// Whether the first reading is still on its way, so no host is known yet.
+    pub fn first_reading(&self) -> bool {
+        self.fetched.is_none() && self.job.is_some()
+    }
+
+    /// Whether the last reading is younger than [`FRESH`], so New cloud may choose a host
+    /// by it. An older one is shown until the next reading replaces it.
+    pub fn current(&self) -> bool {
+        self.fetched
+            .as_ref()
+            .is_some_and(|fetched| fetched.at.elapsed() < FRESH)
+    }
+
+    /// Whether New cloud may offer a saved host: the last reading found one.
+    pub fn bound(&self) -> bool {
+        !self.readings().is_empty()
+    }
+
     /// Keeps what a Check of a saved host found, until the next reading. A host that is
     /// not saved as checked is left out, so nothing offers it.
     pub fn record(&mut self, reading: Reading) {
@@ -164,6 +182,14 @@ impl State {
             value: readings,
             at: std::time::Instant::now(),
         });
+    }
+
+    /// As if the last reading had grown older than [`FRESH`], for the dialog tests.
+    #[cfg(all(test, unix))]
+    pub fn outdated(&mut self) {
+        if let Some(fetched) = &mut self.fetched {
+            fetched.at = Instant::now().checked_sub(FRESH * 2).unwrap_or(fetched.at);
+        }
     }
 }
 

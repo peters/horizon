@@ -467,8 +467,9 @@ this computer's engine, or a host that Horizon reaches with `ssh` or
 `tailscale ssh`. The person adds each host in **Cloud settings > Docker host**
 with a unique name, an access (This PC, SSH or Tailscale SSH), an SSH address
 and an optional absolute docker path, and checks it read-only there. No
-secret is stored. A profile with `provider: docker-host` runs on a saved
-host; a cloud placement names the host.
+secret is stored. New cloud offers each saved host as a **YOUR HOST** card
+for CPU profiles without a build; a profile with `provider: docker-host`
+runs on a host only. A cloud placement names the host.
 
 The worker publishes its SSH only on the host's loopback, on a port that stays
 the same after a stop. Horizon reaches it through the host. Stop, resume and

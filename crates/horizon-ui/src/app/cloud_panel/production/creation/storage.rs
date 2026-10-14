@@ -13,10 +13,36 @@ pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
         return Some(reason);
     }
     let profile = form.profiles.as_ref()?.profiles.get(&form.selected_profile)?;
-    // Until New cloud offers a Docker host as a provider choice, it must not start such a
-    // profile at all, least of all on a rented provider whose offer it picked.
-    if profile.provider == horizon_core::cloud_runtime::provider::DOCKER_HOST.id {
-        return Some("New cloud cannot start a cloud on a Docker host yet.");
+    // Nothing is priced on a Docker host; several saved hosts leave the deployment no
+    // host to pick on its own.
+    if super::provider::current(form.provider, profile).kind == Kind::DockerHost {
+        if let Some(reason) = super::selector::hosts::refusal(profile) {
+            return Some(reason);
+        }
+        let readings = form.prices.hosts.readings();
+        let host = match (form.placement.data_centers.as_slice(), readings) {
+            (_, []) if form.prices.hosts.first_reading() => return Some("Reading your Docker hosts…"),
+            (_, []) => return Some("Save a Docker host in Cloud settings, and turn it on, first."),
+            ([name], _) => readings.iter().find(|reading| reading.host.name == *name),
+            (_, [only]) => Some(only),
+            _ => return Some("Choose one of your Docker hosts."),
+        };
+        if host.is_some() && !form.prices.hosts.current() {
+            return Some("Reading your Docker hosts again…");
+        }
+        let (cpu, memory_gb) = form.size.unwrap_or((profile.cpu, profile.memory_gb));
+        return match host.map(|reading| &reading.capacity) {
+            Some(Ok(capacity)) if !capacity.native() => {
+                Some("The worker image has no build for this Docker host's architecture.")
+            }
+            Some(Ok(capacity)) if !capacity.fits(cpu, memory_gb) => {
+                Some("The Docker host has too little CPU or memory free for this cloud now.")
+            }
+            Some(Err(_)) => Some("The Docker host could not be reached. Check it in Cloud settings."),
+            Some(Ok(_)) => None,
+            // Removed, renamed or no longer read: never another host in its place.
+            None => Some("The chosen Docker host is no longer saved. Choose another host or worker."),
+        };
     }
     if super::provider::current(form.provider, profile).kind == Kind::Hetzner && form.prices.hetzner.too_old() {
         return Some("Hetzner prices are over an hour old. Refresh them before starting.");
