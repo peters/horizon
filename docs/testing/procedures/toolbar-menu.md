@@ -30,7 +30,8 @@ in the toolbar in a narrow window.
   - A build or computer where cloud workspaces are not ready. Then
     **+ New cloud** is dimmed, or not in a build without cloud workspaces. The
     dimmed button takes no click and no keyboard focus, and its tooltip says why.
-    The unit tests of the toolbar cover it.
+    **Add cloud here** and **New Upkeep** in the Menu are dimmed too and say why
+    on hover. The unit tests of the toolbar and the Menu cover it.
   - **New Cloud** and **New Workspace** on the empty canvas. The canvas shows
     them only on a board without workspaces, and the fixture always has a
     workspace. The unit tests of the empty canvas cover them.
