@@ -418,8 +418,9 @@ update the pin and its result.
 The helper artifact and the base image are indexes for `linux/amd64` and
 `linux/arm64`. A Docker engine pulls the image of its own architecture from the
 index, so an ARM host, such as Docker Desktop on Apple silicon or an ARM server,
-runs the worker without emulation. Quick start uses this only when its pin is the
-digest of an index (see the
+runs the worker without emulation. This applies to a provider host that pulls the
+image by digest without a fixed platform, as the rented virtual machine below does.
+Quick start uses it only when its pin is the digest of an index (see the
 [release flow](../../docs/release-flow.md#update-the-quick-start-image)). A runner of
 each architecture builds and checks its image. A pull request that changes the
 recipes or their scripts builds and checks both architectures and pushes nothing.
