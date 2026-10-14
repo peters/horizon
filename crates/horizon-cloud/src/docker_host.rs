@@ -12,7 +12,7 @@ use crate::{CloudError, SshHost};
 use serde::{Deserialize, Serialize};
 use std::{path::Path, process::Command};
 
-pub use command::{Docker, Engine, Failure};
+pub use command::{Docker, Engine, Failure, NOT_STARTED};
 pub use worker::{Capacity, Container, Journal, Records, Route, capacity, delete, describe, find, power, provision};
 
 /// The profile's `provider` value.

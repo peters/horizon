@@ -232,8 +232,8 @@ In each command, `cloud_deploy` stands for `"$cloud_deploy"` from setup step 2.
 
 4. Type the docker path `/nonexistent/docker` and click **Check host**.
 
-   Result: The **Docker access** row shows "docker was not found on the host"
-   and the remedy to set the docker path. **Keep host** stays off.
+   Result: The **Docker access** row shows "docker was not found on this
+   computer" and the remedy to set the docker path. **Keep host** stays off.
 
 5. Clear the docker path, check again, click **Keep host**, then click
    **Save settings**.

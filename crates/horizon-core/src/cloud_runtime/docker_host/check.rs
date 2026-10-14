@@ -84,6 +84,13 @@ fn reached(host: &Host, docker: &impl Docker, row: &mut dyn FnMut(Check)) -> boo
     let remote = host.access != Access::ThisPc;
     let version = ["version", "--format", "{{.Server.Version}}"].map(str::to_owned);
     let answer = docker.docker(&version, ANSWER);
+    if let (false, Err(Failure::Error(CloudError::Invalid(docker_host::NOT_STARTED)))) = (remote, &answer) {
+        // This computer could not start the docker it was given.
+        let detail = "docker was not found on this computer".into();
+        let remedy = Some("Set the docker path, such as /usr/bin/docker, or install Docker.");
+        send(row, "Docker access", CheckState::Blocked, detail, remedy);
+        return false;
+    }
     if let Err(Failure::Error(error)) = &answer {
         let detail = match (remote, error) {
             (true, CloudError::Transport) => format!("Horizon could not sign in to {address} over {way}"),
@@ -230,6 +237,10 @@ mod tests {
             vec![Err(Failure::Refused("sh: docker: not found".into()))],
         );
         assert_eq!(rows[0].detail, "docker was not found on the host");
+        let missing = Failure::Error(CloudError::Invalid(docker_host::NOT_STARTED));
+        let (_, rows) = checked(Access::ThisPc, vec![Err(missing)]);
+        assert_eq!(states(&rows), [("Docker access", CheckState::Blocked)]);
+        assert!(rows[0].remedy.as_deref().unwrap().contains("docker path"));
         let old = r#"{"OSType":"linux","NCPU":2,"MemTotal":1073741824,"ServerVersion":"27.5.0"}"#;
         let (_, rows) = checked(Access::ThisPc, vec![Ok("27.5.0".into()), Ok(old.into())]);
         assert_eq!(rows.last().unwrap().state, CheckState::Blocked);
