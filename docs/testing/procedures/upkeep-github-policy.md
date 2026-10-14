@@ -59,7 +59,10 @@ changes that an Upkeep never needs, and that the board shows the refusals.
 
 ### 6.1 GPO-01: The refused API changes
 
-1. Run `gh release create policy-check --repo <repo> --notes x`,
+1. Note the head commit of the default branch as `<head>`
+   (`gh api repos/<repo>/commits/HEAD --jq .sha`) and the blob of the workflow file as
+   `<sha>` (`gh api repos/<repo>/contents/.github/workflows/ci.yml --jq .sha`). Run
+   `gh release create policy-check --repo <repo> --notes x`,
    `gh api -X POST repos/<repo>/statuses/<head> -f state=success -f context=ci`,
    `gh api -X PUT repos/<repo>/contents/.github/workflows/ci.yml -f message=x -f content=eA== -f sha=<sha>`
    and `gh workflow run manual.yml --repo <repo>`.
