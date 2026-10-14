@@ -154,8 +154,9 @@ shell commands, files, or other MCP servers.
   `press` takes a `key` such as `Tab`, `Shift+Tab`, `Enter`, `Escape`,
   `ArrowDown` or `Control+a` and an optional `count` (1-100), and sends trusted
   key events to the focused element: CDP `Input.dispatchKeyEvent` on local
-  Chromium, `input.performActions` on local Firefox, and classic Perform
-  Actions on Safari and remote targets. It takes no target. Printable keys are
+  Chromium, and one key-action sequence per call through `input.performActions`
+  on local Firefox or classic Perform Actions on Safari and remote targets. A
+  failed WebDriver call releases the held keys. It takes no target. Printable keys are
   audited as `printable`, never as text.
   Remote `fill` uses native Element Clear/Send Keys and reads the live field
   back before reporting completion. An empty, reverted, missing, or otherwise

@@ -25,25 +25,29 @@ to examine the keyboard focus order and the focus ring of a page.
 
 ## 3. Equipment and preconditions
 
-- A task-owned isolated desktop with a live Device panel.
-- The candidate, Chromium and Firefox.
+- The candidate `horizon-browser` binary, Chromium, Firefox and geckodriver.
 - The fixture at `docs/testing/fixtures/browser-keyboard.html`.
-- A local HTTP server that serves the fixture on a loopback address.
-- A public browser MCP server for the candidate and its private coordination root.
+- A stdio MCP client, for example a short script that sends JSON-RPC lines.
+- An empty folder for the home folder of the MCP server. It keeps the browser
+  profile and the coordination files away from your own.
 
 ## 4. Setup
 
-1. Start the isolated desktop with `scripts/device-smoke/serve.py --native-view`.
+1. In the repository root, start the fixture server:
+   `python3 -m http.server 18731 --bind 127.0.0.1 --directory docs/testing/fixtures`.
 
-   Result: The fixture reports its display and VNC endpoint.
+   Result: `http://127.0.0.1:18731/browser-keyboard.html` returns the fixture.
 
-2. Open a Device panel for that endpoint with `device_panel`.
+2. From the MCP client, start the candidate MCP server:
+   `env -u HORIZON -u HORIZON_BROWSER_ACTOR HOME=<empty folder> horizon-browser mcp --standalone --backend chromium`.
+   Remove all `CLAUDE_CODE_*` variables from its environment too.
 
-   Result: The panel shows changing frames from the isolated desktop.
+   Result: After `initialize`, `browser_list` shows one `standalone-` panel.
+   Its capabilities contain `press`.
 
-3. Open the fixture in a Chromium panel with `browser_create`.
+3. Call `browser_navigate` with that panel ID and the fixture URL from step 1.
 
-   Result: The page shows **Section one**, **Section two** and **Menu**.
+   Result: The page commits. `browser_query` for `#menu` finds the **Menu** button.
 
 ## 5. Tasks
 
@@ -51,12 +55,13 @@ to examine the keyboard focus order and the focus ring of a page.
 
 1. Send `browser_act` with `action: press` and `key: Tab`.
 
-   Result: The action completes. **Skip to content** is visible and has a red focus ring.
+   Result: The action completes.
 
 2. Read `document.activeElement.textContent` and
    `document.activeElement.matches(':focus-visible')` with `browser_evaluate`.
 
-   Result: The text is `Skip to content` and the match is `true`.
+   Result: The text is `Skip to content` and the match is `true`. The fixture
+   draws a red focus ring for `:focus-visible`.
 
 3. Send `browser_act` with `action: press`, `key: Tab` and `count: 3`.
 
@@ -108,13 +113,13 @@ to examine the keyboard focus order and the focus ring of a page.
 
 ### 5.5 K05 — Repeat in Firefox
 
-1. Close the Chromium panel with `browser_close`.
+1. Close the input of the Chromium MCP server.
 
-   Result: The panel leaves `browser_list`.
+   Result: The server stops its browser and deletes the profile.
 
-2. Open the fixture in a Firefox panel with `browser_create` and `backend: firefox`.
+2. Start the MCP server again with `--backend firefox` and navigate to the fixture URL.
 
-   Result: The page shows **Section one**, **Section two** and **Menu**.
+   Result: `browser_list` shows one Firefox panel with the `press` capability.
 
 3. Do K01 and K02 in the Firefox panel.
 
@@ -127,13 +132,17 @@ to examine the keyboard focus order and the focus ring of a page.
 
 ## 7. Cleanup
 
-1. Close each browser panel that this procedure opened with `browser_close`.
+1. Close the input of the Firefox MCP server.
 
-   Result: The panels leave `browser_list`.
+   Result: The server stops its browser and deletes the profile.
 
-2. Stop the isolated desktop.
+2. Stop the fixture server from step 1 of the setup.
 
-   Result: The fixture process stops.
+   Result: The port is free.
+
+3. Delete the empty home folder.
+
+   Result: No browser profile from this procedure remains.
 
 ## 8. Record of results
 

@@ -305,8 +305,7 @@ focus: `key` is a named key (`Tab`, `Enter`, `Escape`, `Space`, `Backspace`,
 `Delete`, `Home`, `End`, `PageUp`, `PageDown`, arrows such as `ArrowDown`,
 `F1`..`F12`) or one printable US-layout character, optionally with `Shift`,
 `Control`, `Alt` or `Meta` (`Shift+Tab`, `Control+a`), and `count: 1..100`
-repeats it. On a remote target each press is a network round trip, so give a
-large count a `timeout_millis` that covers it. It takes no ref or selector: click or fill a field first to move
+repeats it. It takes no ref or selector: click or fill a field first to move
 focus there. Local Chromium uses CDP key events, local Firefox WebDriver BiDi
 actions, and Safari and remote targets classic WebDriver actions; a real mobile
 device may ignore focus keys such as `Tab`. Audit records name non-printable

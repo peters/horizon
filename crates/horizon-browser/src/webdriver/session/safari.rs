@@ -93,6 +93,15 @@ impl InputState {
         InputDispatch::Pending
     }
 
+    fn keys_dispatch(&mut self, inputs: impl IntoIterator<Item = BrowserInput>) -> Result<InputDispatch, String> {
+        if !self.pending.is_empty() || self.buttons != 0 || !self.keys_down.is_empty() {
+            return Err("Safari input is still settling".to_string());
+        }
+        Ok(InputDispatch::Foreground(vec![
+            self.actions.key_sequence_payload(inputs),
+        ]))
+    }
+
     fn click_dispatch(&mut self, x: f64, y: f64, count: u32) -> Result<InputDispatch, String> {
         if !self.pending.is_empty() || self.buttons != 0 || !self.keys_down.is_empty() {
             return Err("Safari input is still settling".to_string());
@@ -236,6 +245,29 @@ impl Driver {
         result
     }
 
+    /// Send a key sequence as one focused action, outside the text coalescing
+    /// that user typing goes through, so each key keeps its modifiers.
+    pub(super) fn perform_safari_keys(
+        &mut self,
+        inputs: impl IntoIterator<Item = BrowserInput>,
+        event_tx: &BrowserEventSender,
+    ) -> Result<(), String> {
+        let (dispatch, handle) = {
+            let Some(state) = &mut self.safari else {
+                return Err("Safari input state unavailable".to_string());
+            };
+            (state.keys_dispatch(inputs)?, state.window_handle.clone())
+        };
+        let _ = event_tx.send(BrowserEvent::HostFocusRequested { ready: false });
+        let result = execute(dispatch, &handle, |suffix, payload| self.classic_post(suffix, payload));
+        let _ = event_tx.send(BrowserEvent::HostFocusRequested { ready: true });
+        if let Err(error) = &result {
+            tracing::warn!("WebDriver input failed: {error}");
+            self.reset_safari_input();
+        }
+        result
+    }
+
     fn reset_safari_input(&mut self) {
         let _ = self.classic_delete("actions");
         if let Some(state) = &mut self.safari {
@@ -283,6 +315,46 @@ pub(super) fn window_rect(response: &Value, width: u32, height: u32) -> (u32, u3
 mod tests {
     use super::{InputDispatch, InputState, window_rect};
     use crate::{BrowserButton, BrowserInput, BrowserKey, BrowserModifiers};
+
+    #[test]
+    fn pressed_keys_keep_their_modifiers_instead_of_coalescing_into_text() {
+        let mut state = InputState::from_window_response(&serde_json::json!({ "value": "window" }))
+            .unwrap_or_else(|error| panic!("test window handle failed: {error}"));
+        let shift = BrowserModifiers {
+            shift: true,
+            ..BrowserModifiers::none()
+        };
+        let Ok(InputDispatch::Foreground(payloads)) =
+            state.keys_dispatch(crate::semantic_keys::press_inputs(BrowserKey::Char('a'), shift))
+        else {
+            panic!("a key sequence is one focused dispatch");
+        };
+        let events = payloads[0]["actions"][0]["actions"]
+            .as_array()
+            .map(|events| {
+                events
+                    .iter()
+                    .map(|event| {
+                        (
+                            event["type"].as_str().unwrap_or_default(),
+                            event["value"].as_str().unwrap_or_default(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        assert_eq!(
+            events,
+            [
+                ("keyDown", "\u{e008}"),
+                ("keyDown", "A"),
+                ("keyUp", "A"),
+                ("keyUp", "\u{e008}")
+            ]
+        );
+        state.dispatch(BrowserInput::InsertText { text: "x".into() });
+        assert!(state.keys_dispatch(Vec::new()).is_err(), "queued typing settles first");
+    }
 
     #[test]
     fn pointer_gesture_is_replayed_only_after_release() {
