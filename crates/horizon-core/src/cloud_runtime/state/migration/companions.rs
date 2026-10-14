@@ -58,30 +58,36 @@ pub(super) fn reject_duplicate_workers(root: &Path, deployment: &Deployment) -> 
         };
         let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| Error::Json)?;
         let version = value.get("version").and_then(serde_json::Value::as_u64);
-        let other: Deployment =
-            if version == Some(1) || version == Some(u64::from(crate::cloud_runtime::siblings::RECORD_VERSION)) {
-                serde_json::from_value(value).map_err(|_| Error::Json)?
+        let other: Deployment = if version == Some(1)
+            || version == Some(u64::from(crate::cloud_runtime::siblings::RECORD_VERSION))
+            || version == Some(u64::from(super::super::ENROLLMENT_RECORD_VERSION))
+        {
+            let other: Deployment = serde_json::from_value(value).map_err(|_| Error::Json)?;
+            if !other.supported_version() {
+                return Err(Error::Invalid("Unsupported neighboring deployment version"));
+            }
+            other
+        } else {
+            let intent =
+                super::read_intent(&entry.path())?.ok_or(Error::Invalid("Unknown neighboring deployment ownership"))?;
+            if intent.complete
+                || transaction::read_optional(
+                    &entry
+                        .path()
+                        .parent()
+                        .ok_or(Error::Invalid("Missing cloud parent"))?
+                        .join(".allocations")
+                        .join(intent.allocation.to_string())
+                        .join("transaction.json"),
+                )?
+                .is_some()
+            {
+                transaction::inspect(&entry.path(), intent.allocation, &intent.identity, intent.controller)?
+                    .deployment()
             } else {
-                let intent = super::read_intent(&entry.path())?
-                    .ok_or(Error::Invalid("Unknown neighboring deployment ownership"))?;
-                if intent.complete
-                    || transaction::read_optional(
-                        &entry
-                            .path()
-                            .parent()
-                            .ok_or(Error::Invalid("Missing cloud parent"))?
-                            .join(".allocations")
-                            .join(intent.allocation.to_string())
-                            .join("transaction.json"),
-                    )?
-                    .is_some()
-                {
-                    transaction::inspect(&entry.path(), intent.allocation, &intent.identity, intent.controller)?
-                        .deployment()
-                } else {
-                    super::records(&intent)?.deployment()
-                }
-            };
+                super::records(&intent)?.deployment()
+            }
+        };
         if !owned.is_disjoint(&worker_ids(&other)) {
             return Err(Error::Invalid(
                 "Another legacy project references the same provider worker",
