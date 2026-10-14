@@ -87,6 +87,32 @@ fn keyboard_chooses_a_folder_result_and_keeps_focus_in_the_field() {
     assert!(ctx.memory(|memory| memory.has_focus(Id::new("cloud-source"))));
 }
 
+#[test]
+fn enter_with_typed_text_in_one_frame_answers_the_text_not_the_rows_before_it() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    std::fs::create_dir_all(temp.path().join("repository/.git")).unwrap();
+    open_creation(&ctx, &mut app, temp.path().join("clouds"));
+    type_text(&ctx, &mut app, &format!("{}/", temp.path().display()));
+    wait_for_text(&ctx, &mut app, "repository");
+    // A paste and Enter in one frame: the highlighted row was made for the text before it.
+    frame(
+        &ctx,
+        &mut app,
+        vec![Event::Text("plain".into()), key_event(Key::Enter, true, false)],
+        Modifiers::NONE,
+    );
+    assert!(
+        app.cloud_prototype.production.repository.is_empty(),
+        "the earlier row is not chosen"
+    );
+    assert_eq!(
+        app.cloud_prototype.production.source.input(),
+        format!("{}/plain", temp.path().display())
+    );
+}
+
 /// Opens the dialog with a link in the field, so its clone folder can be chosen.
 fn open_with_link(ctx: &egui::Context, app: &mut HorizonApp, root: std::path::PathBuf) {
     open_creation(ctx, app, root);

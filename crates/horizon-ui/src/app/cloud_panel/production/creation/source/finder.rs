@@ -1,9 +1,11 @@
 //! The one field that finds the code: words search the checkouts on this computer and the
 //! connected GitHub account's repositories at once, a path opens folders as it is typed,
 //! and a link is cloned. The results answer the arrow keys, Enter and Tab.
+mod folders;
 mod fuzzy;
 mod view;
 
+use folders::Folders;
 use horizon_core::{
     cloud_runtime::repository::source,
     dir_search::{self, Checkout},
@@ -61,9 +63,8 @@ pub(super) struct Finder {
     /// The search for checkouts started; it runs once per dialog.
     scanned: bool,
     scan: Option<Receiver<Vec<Checkout>>>,
-    /// The typed path folders were last listed for, and their answer: each folder and
-    /// whether it holds a repository.
-    lookup: Option<(String, Receiver<Folders>)>,
+    /// The listing of a typed path's folders, and the path the folders below answer.
+    lookup: folders::Lookup,
     folders_for: String,
     folders: Folders,
     /// The repository list the digest below was made for, by place and length, and the
@@ -91,50 +92,6 @@ fn digest(names: &[String]) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     names.hash(&mut hasher);
     hasher.finish()
-}
-
-/// Folders of a typed path, each with whether it holds a repository.
-/// The folders of a typed path, each with whether it holds a repository, and the typed
-/// folder itself when it ends in a separator and holds one.
-type Folders = (Option<PathBuf>, Vec<(PathBuf, bool)>);
-
-/// Lists the folders of a typed path on a thread, with whether each holds a repository,
-/// so no folder is read while a frame is drawn.
-fn spawn_folders(query: String) -> Receiver<Folders> {
-    let (sender, receiver) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let here = query
-            .ends_with(std::path::is_separator)
-            .then(|| dir_search::resolve_query_path(&query))
-            .flatten()
-            .filter(|path| path.join(".git").exists());
-        let found = dir_search::spawn_lookup(query).recv().unwrap_or_default();
-        let marked = found
-            .into_iter()
-            .map(|path| {
-                let checkout = path.join(".git").exists();
-                (path, checkout)
-            })
-            .collect();
-        let _ = sender.send((here, marked));
-    });
-    receiver
-}
-
-/// What to list for a typed path: `~`, `.` and `..` name folders whose own folders are
-/// listed, as `~/`, `./` and `../` do, and a final `/.` lists the folder before it, its
-/// hidden folders included.
-fn folder_query(typed: &str) -> String {
-    if matches!(typed, "~" | "." | "..") {
-        format!("{typed}/")
-    } else if let Some(folder) = typed
-        .strip_suffix('.')
-        .filter(|rest| rest.ends_with(std::path::is_separator))
-    {
-        folder.to_owned()
-    } else {
-        typed.to_owned()
-    }
 }
 
 /// Text that names a folder rather than a repository or a search.
@@ -185,33 +142,9 @@ impl Finder {
             }
         }
         let typed = typed.trim();
-        // A lookup for a path no longer typed is dropped, and with it its spinner.
-        if !is_path(typed) {
-            self.lookup = None;
-        }
-        if is_path(typed) {
-            if self.lookup.as_ref().is_none_or(|(asked, _)| asked != typed) && self.folders_for != typed {
-                let query = folder_query(typed);
-                self.lookup = Some((typed.to_owned(), spawn_folders(query)));
-            }
-            if let Some((asked, receiver)) = &self.lookup {
-                match receiver.try_recv() {
-                    Ok(found) => {
-                        self.folders_for.clone_from(asked);
-                        self.folders = found;
-                        self.lookup = None;
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {
-                        ctx.request_repaint_after(std::time::Duration::from_millis(50));
-                    }
-                    // A lookup that ended without an answer found nothing.
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        self.folders_for.clone_from(asked);
-                        self.folders = (None, Vec::new());
-                        self.lookup = None;
-                    }
-                }
-            }
+        if let Some((asked, found)) = self.lookup.poll(ctx, typed, &self.folders_for) {
+            self.folders_for = asked;
+            self.folders = found;
         }
     }
 
@@ -230,19 +163,13 @@ impl Finder {
 
     /// Whether the folders of a typed path are being read.
     pub fn looking(&self) -> bool {
-        self.lookup.is_some()
+        self.lookup.looking(&self.folders_for)
     }
 
     /// A checkout found on this computer of the repository `remote` names: a finished one of
     /// its own, not a worktree or a clone that stopped.
     pub fn checkout_of(&self, remote: &source::Remote) -> Option<PathBuf> {
-        let same = |origin: &str| {
-            source::parse(origin).is_some_and(|found| {
-                found.host == remote.host
-                    && found.owner.eq_ignore_ascii_case(&remote.owner)
-                    && found.name.eq_ignore_ascii_case(&remote.name)
-            })
-        };
+        let same = |origin: &str| source::parse(origin).is_some_and(|found| source::same_repository(&found, remote));
         self.checkouts
             .as_deref()?
             .iter()
@@ -589,8 +516,16 @@ impl super::State {
     pub(super) fn finder_keys(&mut self, ui: &egui::Ui, focused: bool) -> Option<PathBuf> {
         use egui::{Key, Modifiers};
         // Shift+Tab and other chords keep their own meaning, and an earlier path's rows take
-        // no keys while this path's folders are read.
-        let plain = ui.input(|input| input.modifiers.is_none());
+        // no keys while this path's folders are read. Text typed or pasted in this frame
+        // reaches the field only after these keys, so the rows would answer the text before
+        // it: the field and Continue take such a frame's keys instead.
+        let plain = ui.input(|input| {
+            input.modifiers.is_none()
+                && !input
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, egui::Event::Text(_) | egui::Event::Paste(_)))
+        });
         if !focused || !plain || !self.searching() || !self.finder.settled() || self.finder.current_rows().is_empty() {
             return None;
         }

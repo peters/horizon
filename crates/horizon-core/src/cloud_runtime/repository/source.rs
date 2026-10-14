@@ -93,6 +93,45 @@ pub fn parse(input: &str) -> Option<Remote> {
     })
 }
 
+/// Whether `a` and `b` name one repository on one server: the same host, the same path
+/// whatever its case, and over one transport the same port. A transport's usual port counts
+/// as none, so `git@github.com:acme/web` and `https://github.com/acme/web` are one
+/// repository, while `https://git.example.com:8443/team/tool` is another server's than
+/// `https://git.example.com/team/tool`. Ports of two transports are two services of one
+/// server, such as SSH on 2222 beside HTTPS, so they are not compared.
+#[must_use]
+pub fn same_repository(a: &Remote, b: &Remote) -> bool {
+    let (a_transport, a_port) = transport_and_port(&a.url);
+    let (b_transport, b_port) = transport_and_port(&b.url);
+    a.host == b.host
+        && (a_transport != b_transport || a_port == b_port)
+        && a.owner.eq_ignore_ascii_case(&b.owner)
+        && a.name.eq_ignore_ascii_case(&b.name)
+}
+
+/// The transport of an address (`http` for both `http` and `https`, `ssh` for
+/// `user@host:path` too) and the port it names, unless that is the scheme's usual one.
+fn transport_and_port(url: &str) -> (&str, Option<&str>) {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return ("ssh", None);
+    };
+    let (transport, usual) = match scheme {
+        "https" => ("http", "443"),
+        "http" => ("http", "80"),
+        "ssh" => ("ssh", "22"),
+        "git" => ("git", "9418"),
+        _ => (scheme, ""),
+    };
+    let port = rest
+        .split('/')
+        .next()
+        .and_then(|authority| authority.rsplit('@').next())
+        .and_then(|host| host.rsplit_once(':'))
+        .map(|(_, port)| port)
+        .filter(|port| *port != usual);
+    (transport, port)
+}
+
 /// A host name Git can be handed safely: dotted, and never something it would read as an option.
 fn valid_host(host: &str) -> bool {
     host.contains('.') && valid_name(host)

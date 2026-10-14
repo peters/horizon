@@ -479,3 +479,29 @@ fn a_checkout_already_under_the_parent_is_recognised_for_its_own_link_only() {
     git(&kept, &["remote", "set-url", "origin", &remote.url]);
     assert_eq!(existing(temp.path(), &remote), Some(kept));
 }
+
+#[test]
+fn one_repository_is_one_server_and_path_whatever_the_transport() {
+    let same = |a: &str, b: &str| same_repository(&parse(a).unwrap(), &parse(b).unwrap());
+    assert!(same("git@github.com:Acme/web.git", "https://github.com/acme/web"));
+    assert!(same(
+        "ssh://git@git.example.com:22/team/tool",
+        "https://git.example.com:443/team/tool"
+    ));
+    assert!(!same(
+        "https://git.example.com:8443/team/tool.git",
+        "https://git.example.com/team/tool"
+    ));
+    assert!(!same(
+        "ssh://git@git.example.com:2222/team/tool",
+        "git@git.example.com:team/tool"
+    ));
+    assert!(
+        same(
+            "ssh://git@git.example.com:2222/team/tool",
+            "https://git.example.com/team/tool"
+        ),
+        "SSH on its own port beside HTTPS"
+    );
+    assert!(!same("https://github.com/acme/web", "https://github.com/acme/api"));
+}
