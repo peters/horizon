@@ -24,7 +24,15 @@ pub(super) fn show(ui: &mut Ui, status: &Status, actions: Option<Actions>) -> Op
     let mut request = None;
     let beside = ui.available_width() >= TITLE_MIN_WIDTH + ACTIONS_WIDTH;
     ui.horizontal(|ui| {
+        // A truncated label takes all the width it is given: beside the buttons, the title
+        // gets only what they leave.
+        let title_width = if beside && actions.is_some() {
+            ui.available_width() - ACTIONS_WIDTH - ui.spacing().item_spacing.x
+        } else {
+            ui.available_width()
+        };
         ui.vertical(|ui| {
+            ui.set_max_width(title_width);
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.label(RichText::new("Upkeep").size(18.0).strong().color(theme::FG()));
             ui.add(egui::Label::new(RichText::new(summary(status)).size(12.0).color(theme::FG_SOFT())).truncate());
@@ -141,7 +149,11 @@ mod tests {
 
     /// The bounds of the title and of each button the header drew in a column `width` wide.
     fn drawn(width: f32) -> Vec<(String, Bounds)> {
-        let status: Status = serde_json::from_str(r#"{"agent":"codex","repositories":["acme/api"]}"#).unwrap();
+        let status: Status = serde_json::from_str(
+            r#"{"agent":"codex","schedule":{"every_minutes":60},"worker":{"name":"Hetzner cx23","location":"Helsinki"},
+                "repositories":["acme/api","acme/docs","acme/mobile","acme/web","acme/ops","acme/site"]}"#,
+        )
+        .unwrap();
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
         let output = ctx
@@ -165,7 +177,9 @@ mod tests {
                 continue;
             };
             // A label can name its text twice: once as a label, once as a value.
-            if ["Upkeep", "Run now", "Repositories", "Pause"].contains(&name)
+            // The summary goes by its first word.
+            let name = if name.starts_with("Codex") { "Codex" } else { name };
+            if ["Upkeep", "Codex", "Run now", "Repositories", "Pause"].contains(&name)
                 && !found.iter().any(|(held, _)| held == name)
             {
                 found.push((name.to_owned(), bounds));
@@ -176,20 +190,24 @@ mod tests {
 
     #[test]
     fn the_buttons_stay_inside_a_narrow_board_and_off_the_title() {
-        for width in [240.0, 300.0, 480.0, 520.0, 900.0] {
+        for width in [240.0, 300.0, 480.0, 520.0, 600.0, 700.0, 900.0] {
             let drawn = drawn(width);
-            assert_eq!(drawn.len(), 4, "{width} px wide: {drawn:?}");
+            assert_eq!(drawn.len(), 5, "{width} px wide: {drawn:?}");
             for (name, bounds) in &drawn {
                 assert!(
                     bounds.x0 >= -0.5 && bounds.x1 <= f64::from(width) + 0.5,
                     "{width} px wide: {name} at {bounds:?}"
                 );
             }
-            let title = drawn.iter().find(|(name, _)| name == "Upkeep").unwrap().1;
-            for (name, bounds) in drawn.iter().filter(|(name, _)| name != "Upkeep") {
-                let apart =
-                    bounds.x1 <= title.x0 || bounds.x0 >= title.x1 || bounds.y1 <= title.y0 || bounds.y0 >= title.y1;
-                assert!(apart, "{width} px wide: {name} covers the title");
+            let is_title = |name: &str| name == "Upkeep" || name == "Codex";
+            for (title_name, title) in drawn.iter().filter(|(name, _)| is_title(name)) {
+                for (name, bounds) in drawn.iter().filter(|(name, _)| !is_title(name)) {
+                    let apart = bounds.x1 <= title.x0
+                        || bounds.x0 >= title.x1
+                        || bounds.y1 <= title.y0
+                        || bounds.y0 >= title.y1;
+                    assert!(apart, "{width} px wide: {name} covers {title_name}");
+                }
             }
         }
     }

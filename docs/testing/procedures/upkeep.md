@@ -394,7 +394,18 @@ Do this task before UPK-12, on the cloud of UPK-10.
    repositories, and `/workspace/home/upkeep/config.json` on the worker lists the
    repository.
 
-7. Open a board from a config file, as in Setup step 2.
+7. Click **Repositories**. Change the selection. Click **Cancel**.
+
+   Result: The dialog closes. The board shows the same number of repositories as
+   before, and `/workspace/home/upkeep/config.json` on the worker does not change.
+
+8. Make the board approximately 330 px wide with its resize handle.
+
+   Result: The buttons show below the title. No button covers the title or goes
+   outside the board. Make the board wide again: the buttons show next to the
+   title again.
+
+9. Open a board from a config file, as in Setup step 2.
 
    Result: That board shows no buttons.
 
