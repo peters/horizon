@@ -126,7 +126,15 @@ fn caption_row(ui: &mut Ui, state: &State, rows: &[Row], typed: &str, github_cou
             count("MATCH", "MATCHES")
         };
         widgets::caption(ui, &caption);
+        // A narrow dialog keeps the caption and leaves the counts out.
+        let roomy = ui.available_width() >= 420.0;
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if !roomy {
+                if busy {
+                    ui.add(egui::Spinner::new().size(11.0));
+                }
+                return;
+            }
             let mut counts = format!("{} on this computer", state.finder.local_count());
             if state.account.is_some() {
                 let _ = write!(counts, "  ·  {github_count} on GitHub");
@@ -220,7 +228,18 @@ fn hint_row(ui: &mut Ui, state: &State, path: bool) {
 fn row_widget(ui: &mut Ui, row: &Row, highlighted: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW), Sense::CLICK);
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &row.title));
+    // A screen reader hears the name, where it is, what choosing it does, and which row the
+    // arrow keys highlight.
+    response.widget_info(|| {
+        let what = match &row.kind {
+            Kind::Local { github: true, .. } => "on GitHub and on this computer",
+            Kind::Local { .. } | Kind::Folder { checkout: true, .. } => "on this computer",
+            Kind::GitHub { .. } => "on GitHub, cloned when chosen",
+            Kind::Folder { .. } => "folder, Tab opens it",
+        };
+        let label = format!("{}, {}, {what}", row.title, row.detail);
+        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, highlighted, label)
+    });
     if !ui.is_rect_visible(rect) {
         return response;
     }

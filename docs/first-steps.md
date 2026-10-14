@@ -357,7 +357,7 @@ from `origin` before deploy. Commit and update the branch before you start.
    Result: The results list the checkouts on this computer and, with GitHub
    connected, your GitHub repositories.
 
-6. Press **Enter** on the result.
+6. If you typed a name or a path, press **Enter** on the result.
 
    Result: The results go away and the dialog reads the repository.
 

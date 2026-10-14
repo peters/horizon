@@ -45,7 +45,8 @@ takes a pasted link. It also proves the keyboard: the arrow keys, **Enter** and
     `<home>/github/acme/mobile-app` (`git@github.com:acme/mobile-app.git`, on the
     branch `feature/offline-sync`).
   - A Git checkout without `origin`: `<home>/code/dotfiles`.
-  - A Git checkout with a GitLab `origin`: `<home>/projects/gitlab-pipeline`.
+  - A Git checkout with a GitLab `origin`: `<home>/projects/gitlab-pipeline`
+    (`https://gitlab.com/acme-group/platform/gitlab-pipeline.git`).
   - A plain folder: `<home>/code/scratch`.
 - A connected GitHub App in the cloud settings of the fixture whose list, signed
   in or kept, has `acme/web`, `acme/web-board`, `acme/website-legacy` and

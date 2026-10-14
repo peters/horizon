@@ -151,7 +151,7 @@ fn checkouts_while(root: &Path, progress: &mut dyn FnMut(&[Checkout]) -> bool) -
             if found.len() >= LIMIT {
                 break;
             }
-            if let Some(checkout) = read(&child) {
+            if let Some(checkout) = read(&child, &guarded) {
                 found.push(checkout);
             } else if depth + 1 < DEPTH && !skipped {
                 let first = depth == 0
@@ -210,20 +210,35 @@ fn settled(mut found: Vec<Checkout>) -> Vec<Checkout> {
 
 /// The checkout in `path`, or `None` when it holds no repository. A worktree's `.git` is a
 /// file that names the repository's own folder, which holds its config.
-fn read(path: &Path) -> Option<Checkout> {
+fn read(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
     let dot = path.join(".git");
     let git = if dot.is_dir() {
         dot
     } else {
         let pointer = std::fs::read_to_string(&dot).ok()?;
         let named = PathBuf::from(pointer.strip_prefix("gitdir:")?.trim());
-        if named.is_absolute() { named } else { path.join(named) }
+        lexical(&if named.is_absolute() { named } else { path.join(named) })
     };
+    // A worktree whose repository lies in a guarded folder is listed, but nothing of it is
+    // read there.
+    let inside_guarded = |place: &Path| guarded.iter().any(|guarded| place.starts_with(guarded));
+    if inside_guarded(&git) {
+        return Some(Checkout {
+            path: path.to_owned(),
+            origin: None,
+            branch: None,
+            touched: None,
+        });
+    }
     let head = std::fs::read_to_string(git.join("HEAD")).unwrap_or_default();
     let branch = head.trim().strip_prefix("ref: refs/heads/").map(str::to_owned);
-    let common =
-        std::fs::read_to_string(git.join("commondir")).map_or_else(|_| git.clone(), |common| git.join(common.trim()));
-    let config = std::fs::read_to_string(common.join("config")).unwrap_or_default();
+    let common = std::fs::read_to_string(git.join("commondir"))
+        .map_or_else(|_| git.clone(), |common| lexical(&git.join(common.trim())));
+    let config = if inside_guarded(&common) {
+        String::new()
+    } else {
+        std::fs::read_to_string(common.join("config")).unwrap_or_default()
+    };
     let modified = |name: &str| std::fs::metadata(git.join(name)).and_then(|meta| meta.modified()).ok();
     Some(Checkout {
         path: path.to_owned(),
@@ -334,5 +349,17 @@ mod tests {
     fn a_link_target_is_worked_out_without_the_disk() {
         let joined = std::path::Path::new("/home/x/github/../../x/Documents/code");
         assert_eq!(super::lexical(joined), std::path::Path::new("/home/x/Documents/code"));
+    }
+
+    #[test]
+    fn a_worktree_of_a_repository_in_a_guarded_folder_is_listed_without_reading_it() {
+        let home = tempfile::tempdir().unwrap();
+        let worktree = home.path().join("code/web");
+        fs::create_dir_all(&worktree).unwrap();
+        let gitdir = home.path().join("Documents/main/.git/worktrees/web");
+        fs::write(worktree.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap();
+        let checkout = super::read(&worktree, &[home.path().join("Documents")]).unwrap();
+        assert_eq!(checkout.origin, None);
+        assert_eq!(checkout.branch, None);
     }
 }
