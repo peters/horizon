@@ -383,16 +383,16 @@ Do this task before UPK-12, on the cloud of UPK-10.
    Result: The dialog **Repositories** opens with the repositories of the Upkeep
    selected.
 
-5. Select one more repository that you are permitted to merge in. Read the line
-   next to **Save**.
+5. Clear `<second>`. Read the line next to **Save**.
 
-   Result: The line shows `1 added` and the new number of repositories.
+   Result: The line shows `1 removed` and the new number of repositories.
 
 6. Click **Save**.
 
    Result: The dialog closes. Within one minute, the board shows the new number of
-   repositories, and `/workspace/home/upkeep/config.json` on the worker lists the
-   repository.
+   repositories, and `/workspace/home/upkeep/config.json` on the worker does not
+   list `<second>`. Click **Repositories**, select `<second>` and click **Save**.
+   Within one minute, `config.json` lists `<second>` again.
 
 7. Click **Repositories**. Change the selection. Click **Cancel**.
 

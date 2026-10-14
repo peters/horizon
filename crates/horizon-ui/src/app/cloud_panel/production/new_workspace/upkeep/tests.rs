@@ -163,10 +163,18 @@ fn the_board_of_a_saved_upkeep_runs_now_and_pauses_through_its_exchange() {
         std::time::Instant::now(),
     );
     upkeep(&mut app, board).run_requested = Some(pressed);
+    // A token kept from a failed exchange may be spent on the worker already.
+    app.upkeep
+        .syncs
+        .entry("upkeep-test-board".into())
+        .or_default()
+        .signals
+        .run_token = Some(7);
     upkeep(&mut app, board).request = Some(Request::RunNow);
     app.apply_upkeep_requests(&ctx);
     let sync = &app.upkeep.syncs["upkeep-test-board"];
     assert!(sync.signals.run_now && sync.next.is_none());
+    assert_eq!(sync.signals.run_token, None, "a press gets a new token");
     assert_eq!(
         upkeep(&mut app, second).run_requested,
         Some(pressed),

@@ -268,6 +268,25 @@ pub fn first_run_pending(cloud_id: &str) -> std::io::Result<Option<u128>> {
     }
 }
 
+/// Points the marker of a first run that was not sent yet at `token`, the token of the
+/// Run now that replaced it, so a restart sends the token the worker got. Does nothing
+/// without a marker. Blocks on the disk.
+/// # Errors
+/// An invalid cloud id, or a marker that cannot be written.
+pub fn first_run_moved(cloud_id: &str, token: u128) -> std::io::Result<()> {
+    if !valid_cloud_id(cloud_id) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid cloud for Upkeep",
+        ));
+    }
+    let marker = directory(cloud_id).join(FIRST_RUN);
+    if !marker.exists() {
+        return Ok(());
+    }
+    write_atomically(&marker, &format!("{token:032x}"))
+}
+
 /// Forgets the marker once an exchange carried the first run to the worker. Blocks on the
 /// disk.
 /// # Errors

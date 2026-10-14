@@ -235,7 +235,11 @@ started also starts agents for the repositories that did not change.
   `run-now-token` already holds it. The loop records the token in
   `run-now-token` before it removes the signal and starts the run. When an
   exchange fails and Horizon does not know whether the worker got **Run now**, it
-  sends the same token again. Thus one token starts one run at most. A loop that
+  sends the same token again. A new press of **Run now** gets a new token, also
+  while an earlier one waits to be sent again. When that replaces the token of the
+  first run, the exchange writes the new token into the `first-run` marker first,
+  so a restart sends the token that the worker got. Thus one token starts one run
+  at most. A loop that
   stops after it recorded the token and before the run started loses that run;
   the next planned run follows. A loop that cannot record the token starts no
   run for it. A value that is not a token asks for a run each

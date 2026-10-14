@@ -82,7 +82,13 @@ impl HorizonApp {
     /// starts at once.
     fn signal_upkeep(&mut self, cloud: &str, run_now: bool, paused: Option<bool>) {
         let sync = self.upkeep.syncs.entry(cloud.to_owned()).or_default();
-        sync.signals.run_now |= run_now;
+        if run_now {
+            // Each press is a new request: a token kept from an exchange that failed may
+            // already be spent on the worker, which would then ignore this one. The exchange
+            // moves a first-run marker to the new token.
+            sync.signals.run_token = None;
+            sync.signals.run_now = true;
+        }
         if paused.is_some() {
             sync.signals.paused = paused;
         }

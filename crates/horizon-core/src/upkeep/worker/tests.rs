@@ -209,3 +209,11 @@ fn a_board_belongs_to_the_upkeep_whose_folder_holds_its_status() {
 fn an_update_refuses_a_cloud_that_is_not_one_folder() {
     assert!(update("../c1", |_| {}).is_err());
 }
+
+#[test]
+fn moving_a_first_run_marker_needs_one_and_a_plain_cloud() {
+    assert!(first_run_moved("../c1", 1).is_err());
+    let cloud = "upkeep-test-no-marker";
+    first_run_moved(cloud, 1).unwrap();
+    assert_eq!(first_run_pending(cloud).unwrap(), None, "no marker is made");
+}

@@ -281,6 +281,17 @@ fn exchange(
         Ok(config) => config,
         Err(error) => return (Vec::new(), Err(error.to_string())),
     };
+    // A press that gave the first run a new token moves its marker along, so a restart
+    // sends again the token that the worker got, never an older one.
+    if let Some(token) = signals.run_token.filter(|_| signals.run_now)
+        && worker::first_run_pending(cloud_id)
+            .ok()
+            .flatten()
+            .is_some_and(|marked| marked != token)
+        && let Err(error) = worker::first_run_moved(cloud_id, token)
+    {
+        tracing::warn!(cloud = %cloud_id, %error, "could not move the Upkeep first-run marker");
+    }
     let cancel = Cancellation::default();
     let runner = Runner {
         cancel: &cancel,
