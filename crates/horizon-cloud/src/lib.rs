@@ -8,6 +8,7 @@ pub mod docker_host;
 pub mod github;
 pub mod hetzner;
 pub mod host;
+pub mod image_publishing;
 pub mod offers;
 pub mod prices;
 mod profile;
