@@ -100,17 +100,18 @@ fn run() -> cloud_runtime::Result<()> {
         .get(&args[3])
         .cloned()
         .ok_or(cloud_runtime::Error::Invalid("Profile does not exist"))?;
+    // The plan token covers the profile as it is deployed, with the worker choice.
+    let profile = if let Some(path) = worker_choice {
+        choice::apply(&profile, &mut settings, &path, &cancel)?
+    } else {
+        profile
+    };
     let files = uncommitted_files(&prepared, &profile)?;
     if args[0] == "plan-deploy" {
         print_plan(&prepared.notes, &profile, files.as_ref());
         return Ok(());
     }
     let working_copy = confirm(&profile, files, token.as_deref())?;
-    let profile = if let Some(path) = worker_choice {
-        choice::apply(&profile, &mut settings, &path, &cancel)?
-    } else {
-        profile
-    };
     let mut request = deployment::Request::new(
         args[5].clone(),
         prepared.repository,
@@ -462,7 +463,16 @@ fn prepare_image(
             build,
             confirmed.hash.as_deref(),
             &snapshot,
-        )?;
+        )
+        .map_err(|error| {
+            if repository::uncommitted::changed(&error) {
+                cloud_runtime::Error::Invalid(
+                    "The uncommitted files in the image's build context changed after plan-deploy printed them. Run plan-deploy again and pass the token it prints",
+                )
+            } else {
+                error
+            }
+        })?;
     }
     let images = cloud_runtime::image::Images {
         docker_host: request.settings.docker_host.as_deref(),
