@@ -61,9 +61,32 @@ def source_inputs():
     return {name: hashlib.sha256((REPO / name).read_bytes()).hexdigest() for name in sorted(set(filter(None, names))) if (REPO / name).is_file()}
 
 
+def runtime_mounts():
+    executables = ["dbus-daemon", "gnome-keyring-daemon", "gdbus", "Xvfb", "xkbcomp", "openbox", "x11vnc"]
+    directories = ["/usr/lib/x86_64-linux-gnu", "/usr/share/X11", "/usr/share/X11/xkb"]
+    for directory in directories:
+        if not Path(directory).is_dir():
+            raise RuntimeError("native runtime directory missing: " + directory)
+    mounts = [(Path("/usr/lib/x86_64-linux-gnu"), "/usr/lib/x86_64-linux-gnu", True)]
+    for executable in executables:
+        path = Path("/usr/bin") / executable
+        if not path.is_file() or not os.access(path, os.X_OK):
+            raise RuntimeError("native runtime executable unavailable: " + str(path))
+        mounts.append((path, str(path), True))
+    mounts.append((Path("/usr/share/X11"), "/usr/share/X11", True))
+    for directory in ["/usr/share/fonts", "/usr/share/openbox", "/usr/share/vulkan/icd.d"]:
+        path = Path(directory)
+        if path.exists():
+            if not path.is_dir():
+                raise RuntimeError("native runtime directory refused: " + directory)
+            mounts.append((path, directory, True))
+    return mounts
+
+
 def start(args):
     if sys.platform != "linux" or platform.machine() != "x86_64":
         raise RuntimeError("native fixture requires Linux x86_64")
+    runtime = runtime_mounts()
     store = storage()
     base = args.evidence_dir.absolute()
     if base.resolve().is_relative_to(REPO):
@@ -94,12 +117,7 @@ def start(args):
         argv += ["--label", key + "=" + value]
     mounts = [(state, "/fixture/state", False), (base / "source", "/fixture/source", True),
               (artifacts, "/candidate", True), (binary, "/fixture/bin/tailnet-api-store-fixture", True),
-              (Path("/usr/lib/x86_64-linux-gnu"), "/usr/lib/x86_64-linux-gnu", True)]
-    for executable in ["dbus-daemon", "gnome-keyring-daemon", "gdbus", "Xvfb", "openbox", "x11vnc"]:
-        mounts.append((Path("/usr/bin") / executable, "/usr/bin/" + executable, True))
-    for directory in ["/usr/share/X11", "/usr/share/fonts", "/usr/share/openbox", "/usr/share/vulkan/icd.d"]:
-        if Path(directory).exists():
-            mounts.append((Path(directory), directory, True))
+              *runtime]
     for path, target, readonly in mounts:
         if not path.exists():
             raise RuntimeError("native runtime dependency missing")

@@ -16,8 +16,15 @@ observations require separate assessment; RPC errors and skipped tests are not p
 Requirements are Linux x86_64, Python 3, healthy Docker, a hydrated source checkout
 and Rust. Install the OS runtime dependencies listed in the
 [storage fixture](../tailnet-api-store-fixture/README.md), plus host executables
-`/usr/bin/Xvfb`, `/usr/bin/openbox` and `/usr/bin/x11vnc`. The runner mounts those
-read-only with host runtime libraries and available X11/font/Openbox/Vulkan data.
+`/usr/bin/Xvfb`, `/usr/bin/xkbcomp`, `/usr/bin/openbox` and `/usr/bin/x11vnc`.
+Xvfb invokes xkbcomp to compile its keyboard map. `/usr/share/X11` and its `xkb`
+data directory are required. The runner checks every declared executable and
+required runtime directory before freezing artifacts, building the test or
+creating a container. It mounts these tools read-only with host runtime libraries
+and available font/Openbox/Vulkan data. Inside the new container, the control
+creates `/tmp/.X11-unix` with mode `0700` before credentials or Xvfb start; it refuses
+an existing directory or symlink. This directory is private container tmpfs, never
+a host X11 socket mount. The no-GUI check uses the same host runtime preflight.
 The OS-only runtime image is the same pinned image as F05:
 
 ```sh

@@ -18,6 +18,52 @@ def module(name):
 
 
 class Controls(unittest.TestCase):
+    def test_missing_native_prerequisites_refuse_before_artifacts_build_or_docker(self):
+        run = module("run")
+        from argparse import Namespace
+        for missing in ["/usr/bin/xkbcomp", "/usr/bin/Xvfb", "/usr/share/X11/xkb"]:
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as folder:
+                evidence = Path(folder) / "not-created"
+                args = Namespace(evidence_dir=evidence, manifest=Path("unused"), target_dir=None,
+                                 check_only=False, expect_api_status=False)
+                with patch.object(run.platform, "machine", return_value="x86_64"), patch.object(run.sys, "platform", "linux"), \
+                     patch.object(Path, "is_file", lambda path: str(path) != missing), \
+                     patch.object(Path, "is_dir", lambda path: str(path) != missing), \
+                     patch.object(run.os, "access", return_value=True), \
+                     patch.object(run, "storage") as storage, patch.object(run, "freeze_artifacts") as freeze, \
+                     patch.object(run.subprocess, "check_output") as execute:
+                    with self.assertRaisesRegex(RuntimeError, missing):
+                        run.start(args)
+                    storage.assert_not_called()
+                    freeze.assert_not_called()
+                    execute.assert_not_called()
+                self.assertFalse(evidence.exists())
+
+    def test_unexecutable_native_helper_is_refused_and_xkbcomp_mount_is_readonly(self):
+        run = module("run")
+        with patch.object(Path, "is_dir", return_value=True), patch.object(Path, "is_file", return_value=True), \
+             patch.object(run.os, "access", lambda path, _: str(path) != "/usr/bin/xkbcomp"):
+            with self.assertRaisesRegex(RuntimeError, "xkbcomp"):
+                run.runtime_mounts()
+        with patch.object(Path, "is_dir", return_value=True), patch.object(Path, "is_file", return_value=True), \
+             patch.object(run.os, "access", return_value=True):
+            self.assertIn((Path("/usr/bin/xkbcomp"), "/usr/bin/xkbcomp", True), run.runtime_mounts())
+
+    def test_private_x11_directory_is_new_owned_and_never_reuses_a_socket_directory(self):
+        control = module("control")
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder) / "private-x11"
+            control.prepare_x11_directory(directory)
+            self.assertTrue(directory.is_dir())
+            self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+            with self.assertRaisesRegex(RuntimeError, "must be new"):
+                control.prepare_x11_directory(directory)
+            linked = Path(folder) / "linked-x11"
+            linked.symlink_to(directory, target_is_directory=True)
+            with self.assertRaisesRegex(RuntimeError, "must be new"):
+                control.prepare_x11_directory(linked)
+            self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+
     def test_observer_is_a_normal_agent_without_supplied_host_identity(self):
         config = module("control").document("a" * 64)
         agent = config["workspaces"][0]["terminals"][0]

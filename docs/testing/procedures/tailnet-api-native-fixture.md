@@ -39,7 +39,9 @@ It has no provider configuration or external network. No real credential is read
 
 - A hydrated checkout, Rust toolchain, Python 3 and healthy Docker on Linux x86_64.
 - OS runtime dependencies and the exact image from the
-  [checked-in README](../../../scripts/tailnet-api-status-fixture/README.md).
+  [checked-in README](../../../scripts/tailnet-api-status-fixture/README.md), including executable
+  `xkbcomp` and the X11 keyboard-map data. All declared runtime prerequisites pass
+  before artifact freezing, test build or container creation.
 - Frozen production Horizon, existing cloud_deploy and standalone horizon-device with its CLI feature.
 - A private artifact manifest and root build evidence for their consumed source inputs and hashes.
 - A new private evidence directory outside the checkout.
@@ -70,6 +72,9 @@ It has no provider configuration or external network. No real credential is read
    ```
 
    Result: Mode guards, public-response parsing and ownership checks pass without Docker, sockets or native processes.
+   Missing or unexecutable native helpers and missing keyboard-map data refuse before
+   artifacts, build or container work. The isolated X11 directory has mode `0700`;
+   existing directories and symlinks cannot be reused.
    Product and bundled skill bytes stay unchanged.
 
 ### 6.2 T02 — Real synthetic store and exact ledger
@@ -105,6 +110,8 @@ It has no provider configuration or external network. No real credential is read
    ```
 
    Result: The actual frozen candidate starts in an owned, network-disabled container with private X11 and bus state.
+   A new `/tmp/.X11-unix` directory is created with mode `0700` before credentials
+   or Xvfb start. The mounted xkbcomp compiles its keyboard map without a host socket.
    Its running executable hash matches the frozen artifact.
 
 2. Start the owned real VNC relay in a separate task terminal.

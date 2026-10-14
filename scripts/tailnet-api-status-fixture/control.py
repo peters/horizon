@@ -35,6 +35,15 @@ def fixture_class():
     return module.Fixture
 
 
+def prepare_x11_directory(path=Path("/tmp/.X11-unix")):
+    try:
+        path.mkdir(mode=0o700)
+    except FileExistsError as error:
+        raise RuntimeError("private isolated X11 directory must be new") from error
+    if path.is_symlink() or not path.is_dir() or path.stat().st_mode & 0o777 != 0o700 or path.stat().st_uid != os.getuid():
+        raise RuntimeError("private isolated X11 directory ownership refused")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sha256", required=True)
@@ -44,6 +53,8 @@ def main():
     os.umask(0o077)
     if Path("/run/dbus/system_bus_socket").exists() or os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
         raise RuntimeError("container must start without host desktop/bus")
+    if not args.check_only:
+        prepare_x11_directory()
     fixture = fixture_class()(ROOT)
     requested = {"off": False, "on": False, "stop": False}
     signal.signal(signal.SIGUSR1, lambda *_: requested.update(off=True))
