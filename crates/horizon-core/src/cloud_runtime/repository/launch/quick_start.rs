@@ -22,11 +22,12 @@ pub const IMAGE: &str = image!();
 /// profile with `--git-auth`.
 ///
 /// Horizon uses this report instead of running the check in local Docker, because
-/// nothing it could learn locally can differ: a digest names exactly one image, and
-/// the Worker images workflow runs this check, the marker check and the host key
-/// check on that image, with these capabilities, before it publishes it. The
-/// worker still runs its own check when it starts. An ignored test compares this
-/// report with the pinned image in local Docker.
+/// nothing it could learn locally can differ: a digest names exactly one index of a
+/// linux/amd64 and a linux/arm64 image, and the Worker images workflow runs this
+/// check, the marker check and the host key check on each, with these capabilities,
+/// and publishes the index only when both report the same markers. The worker still
+/// runs its own check when it starts. An ignored test compares this report with
+/// each image of the pinned index in local Docker.
 pub const CONTRACT: &str = "horizon-git-auth-contract=1
 horizon-git-auth-contract=2
 horizon-github-chain-contract=1
