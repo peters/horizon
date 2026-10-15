@@ -760,6 +760,9 @@ Cloud grouping and immutable membership live in `cloud_panel`, sharing workspace
 layout calculations. `cloud_panel/group.rs` owns one group’s geometry, membership
 and reconciliation; the parent module owns persisted types and group collection
 placement. Corner resizing of a cloud frame lives in `cloud_panel/resize.rs`.
+Saved cloud membership and recorded-worker reconnects live in
+`cloud_panel/production/restore.rs`. The parent calls this module when the active
+session changes. Restore also resets the session-local close intent.
 Cloud close confirmation and session-local close intent live in
 `cloud_panel/production/close.rs`; deletion uses the existing lifecycle and progress
 channels. `production/removal.rs` reads removal eligibility outside the UI thread.
