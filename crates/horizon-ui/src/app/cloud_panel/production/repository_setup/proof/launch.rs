@@ -13,6 +13,9 @@ pub(super) struct Copy {
     pub(super) from: PathBuf,
     /// An absolute path in the container.
     pub(super) to: String,
+    /// A folder that `from` lies in: each part of `from` below it is opened without
+    /// following a link, so a link that replaces one cannot lead out of it.
+    pub(super) within: Option<PathBuf>,
 }
 
 impl Copy {
@@ -20,7 +23,41 @@ impl Copy {
         Self {
             from: from.into(),
             to: to.into(),
+            within: None,
         }
+    }
+
+    /// As [`Copy::new`], for a `from` inside the folder `within`.
+    pub(super) fn within(within: impl Into<PathBuf>, from: impl Into<PathBuf>, to: impl Into<String>) -> Self {
+        Self {
+            within: Some(within.into()),
+            ..Self::new(from, to)
+        }
+    }
+}
+
+/// A file's content, exactly `left` bytes: a file that shrinks while it is read fails
+/// the archive instead of shifting the entries after it.
+struct Exact<R> {
+    inner: R,
+    left: u64,
+}
+
+impl<R: std::io::Read> std::io::Read for Exact<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if self.left == 0 {
+            return Ok(0);
+        }
+        let most = usize::try_from(self.left).unwrap_or(usize::MAX).min(buffer.len());
+        let read = self.inner.read(&mut buffer[..most])?;
+        if read == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "a file became shorter while it was copied",
+            ));
+        }
+        self.left -= read as u64;
+        Ok(read)
     }
 }
 
@@ -67,35 +104,165 @@ pub(super) fn create_args(run: &[std::ffi::OsString]) -> Result<Vec<std::ffi::Os
 pub(super) fn archive(copies: &[Copy], out: impl std::io::Write) -> std::io::Result<()> {
     let mut builder = tar::Builder::new(out);
     for copy in copies {
-        add(&mut builder, &copy.from, Path::new(copy.to.trim_start_matches('/')))?;
+        add(&mut builder, copy, Path::new(copy.to.trim_start_matches('/')))?;
     }
     builder.into_inner()?.flush()
 }
 
-/// Adds `from` at `inside`, a folder with everything in it.
-fn add(builder: &mut tar::Builder<impl std::io::Write>, from: &Path, inside: &Path) -> std::io::Result<()> {
-    let metadata = std::fs::symlink_metadata(from)?;
+/// The tar header of an entry Horizon copies: owned by root and readable by everyone,
+/// writable by no one else.
+fn header(kind: tar::EntryType, mode: u32, mtime: u64, size: u64) -> std::io::Result<tar::Header> {
     let mut header = tar::Header::new_gnu();
-    header.set_metadata_in_mode(&metadata, tar::HeaderMode::Complete);
+    header.set_entry_type(kind);
     header.set_uid(0);
     header.set_gid(0);
     header.set_username("root")?;
     header.set_groupname("root")?;
-    let readable = if metadata.is_dir() { 0o555 } else { 0o444 };
-    header.set_mode((header.mode()? & 0o755) | readable);
+    let readable = if kind == tar::EntryType::Directory {
+        0o555
+    } else {
+        0o444
+    };
+    header.set_mode((mode & 0o755) | readable);
+    header.set_mtime(mtime);
+    header.set_size(size);
+    Ok(header)
+}
+
+/// Adds `from` at `inside`, a folder with everything in it. Each entry is opened from
+/// its folder without following a link, so a link that replaces a folder or a file
+/// while the archive is written is copied as a link and never read through.
+#[cfg(unix)]
+fn add(builder: &mut tar::Builder<impl std::io::Write>, copy: &Copy, inside: &Path) -> std::io::Result<()> {
+    use rustix::fs::{Mode, OFlags};
+    let from = &copy.from;
+    let refused = || std::io::Error::other(format!("cannot copy {}", from.display()));
+    let directory = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
+    let (mut folder, parts) = if let Some(within) = &copy.within {
+        let below = from.strip_prefix(within).map_err(|_| refused())?;
+        (rustix::fs::open(within, directory, Mode::empty())?, below.to_owned())
+    } else {
+        let parent = from.parent().ok_or_else(refused)?;
+        let parent = if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        };
+        (
+            rustix::fs::open(parent, directory, Mode::empty())?,
+            PathBuf::from(from.file_name().ok_or_else(refused)?),
+        )
+    };
+    let mut parts: Vec<_> = parts.iter().map(std::ffi::OsStr::to_owned).collect();
+    let name = parts.pop().ok_or_else(refused)?;
+    for part in parts {
+        folder = rustix::fs::openat(&folder, &part, directory | OFlags::NOFOLLOW, Mode::empty())?;
+    }
+    add_at(builder, &folder, &name, inside)
+}
+
+#[cfg(unix)]
+fn add_at(
+    builder: &mut tar::Builder<impl std::io::Write>,
+    folder: &std::os::fd::OwnedFd,
+    name: &std::ffi::OsStr,
+    inside: &Path,
+) -> std::io::Result<()> {
+    use rustix::fs::{AtFlags, FileType, Mode, OFlags};
+    use std::os::unix::ffi::OsStrExt as _;
+    use std::os::unix::fs::MetadataExt as _;
+    let stat = rustix::fs::statat(folder, name, AtFlags::SYMLINK_NOFOLLOW)?;
+    match FileType::from_raw_mode(stat.st_mode) {
+        FileType::Symlink => {
+            let target = rustix::fs::readlinkat(folder, name, Vec::new())?;
+            let target = std::ffi::OsStr::from_bytes(target.as_bytes());
+            let mtime = u64::try_from(stat.st_mtime).unwrap_or(0);
+            let mut header = header(tar::EntryType::Symlink, 0o777, mtime, 0)?;
+            builder.append_link(&mut header, inside, target)?;
+        }
+        FileType::Directory => {
+            let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+            let sub = rustix::fs::openat(folder, name, flags, Mode::empty())?;
+            let metadata = std::fs::File::from(sub.try_clone()?).metadata()?;
+            let mtime = u64::try_from(metadata.mtime()).unwrap_or(0);
+            let mut header = header(tar::EntryType::Directory, metadata.mode(), mtime, 0)?;
+            builder.append_data(&mut header, inside, std::io::empty())?;
+            let mut names = Vec::new();
+            for entry in rustix::fs::Dir::read_from(&sub)? {
+                let entry = entry?;
+                let entry_name = entry.file_name().to_bytes();
+                if entry_name != b"." && entry_name != b".." {
+                    names.push(std::ffi::OsString::from(std::ffi::OsStr::from_bytes(entry_name)));
+                }
+            }
+            for entry in names {
+                add_at(builder, &sub, &entry, &inside.join(&entry))?;
+            }
+        }
+        FileType::RegularFile => {
+            // Without blocking: a FIFO that replaced the file since would wait for a writer.
+            let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+            let file = std::fs::File::from(rustix::fs::openat(folder, name, flags, Mode::empty())?);
+            // The size of what was opened: exactly that much goes into the archive.
+            let metadata = file.metadata()?;
+            if !metadata.is_file() {
+                return Ok(());
+            }
+            let size = metadata.len();
+            let mtime = u64::try_from(metadata.mtime()).unwrap_or(0);
+            let mut header = header(tar::EntryType::Regular, metadata.mode(), mtime, size)?;
+            builder.append_data(
+                &mut header,
+                inside,
+                Exact {
+                    inner: file,
+                    left: size,
+                },
+            )?;
+        }
+        // FIFOs, sockets and devices are left out.
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Adds `from` at `inside`, a folder with everything in it.
+#[cfg(not(unix))]
+fn add(builder: &mut tar::Builder<impl std::io::Write>, copy: &Copy, inside: &Path) -> std::io::Result<()> {
+    add_path(builder, &copy.from, inside)
+}
+
+#[cfg(not(unix))]
+fn add_path(builder: &mut tar::Builder<impl std::io::Write>, from: &Path, inside: &Path) -> std::io::Result<()> {
+    let metadata = std::fs::symlink_metadata(from)?;
+    let mtime = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |since| since.as_secs());
     let kind = metadata.file_type();
     if kind.is_symlink() {
-        header.set_size(0);
+        let mut header = header(tar::EntryType::Symlink, 0o777, mtime, 0)?;
         builder.append_link(&mut header, inside, std::fs::read_link(from)?)?;
     } else if kind.is_dir() {
-        header.set_size(0);
+        let mut header = header(tar::EntryType::Directory, 0o755, mtime, 0)?;
         builder.append_data(&mut header, inside, std::io::empty())?;
         for entry in std::fs::read_dir(from)? {
             let entry = entry?;
-            add(builder, &entry.path(), &inside.join(entry.file_name()))?;
+            add_path(builder, &entry.path(), &inside.join(entry.file_name()))?;
         }
     } else if kind.is_file() {
-        builder.append_data(&mut header, inside, std::fs::File::open(from)?)?;
+        let file = std::fs::File::open(from)?;
+        let size = file.metadata()?.len();
+        let mut header = header(tar::EntryType::Regular, 0o644, mtime, size)?;
+        builder.append_data(
+            &mut header,
+            inside,
+            Exact {
+                inner: file,
+                left: size,
+            },
+        )?;
     }
     Ok(())
 }
@@ -309,6 +476,54 @@ mod tests {
             Some("--rm".to_owned()),
             "a --rm in the container's own command stays"
         );
+    }
+
+    #[test]
+    fn a_file_that_shrinks_while_it_is_read_fails_the_archive() {
+        let mut short = Exact {
+            inner: std::io::Cursor::new(b"abc".to_vec()),
+            left: 5,
+        };
+        let mut read = Vec::new();
+        let error = std::io::Read::read_to_end(&mut short, &mut read).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
+        let mut long = Exact {
+            inner: std::io::Cursor::new(b"abcdef".to_vec()),
+            left: 3,
+        };
+        let mut read = Vec::new();
+        std::io::Read::read_to_end(&mut long, &mut read).unwrap();
+        assert_eq!(read, b"abc", "a file that grew gives what it had when opened");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_within_a_folder_never_follows_a_link_in_its_path() {
+        let cache = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(outside.path().join("1.0.0")).unwrap();
+        std::fs::write(outside.path().join("1.0.0/private.txt"), "secret").unwrap();
+        // The package id was a folder when it was checked, and is a link now.
+        std::os::unix::fs::symlink(outside.path(), cache.path().join("example")).unwrap();
+        let copy = Copy::within(
+            cache.path(),
+            cache.path().join("example/1.0.0"),
+            "/host-nuget/example/1.0.0",
+        );
+        let mut archived = Vec::new();
+        assert!(archive(&[copy], &mut archived).is_err(), "the link is not followed");
+        std::fs::create_dir_all(cache.path().join("real/2.0.0")).unwrap();
+        std::fs::write(cache.path().join("real/2.0.0/lib.dll"), "package").unwrap();
+        let copy = Copy::within(cache.path(), cache.path().join("real/2.0.0"), "/host-nuget/real/2.0.0");
+        let mut archived = Vec::new();
+        archive(&[copy], &mut archived).unwrap();
+        let mut entries = tar::Archive::new(archived.as_slice());
+        let names: Vec<String> = entries
+            .entries()
+            .unwrap()
+            .map(|entry| entry.unwrap().path().unwrap().display().to_string())
+            .collect();
+        assert_eq!(names, ["host-nuget/real/2.0.0", "host-nuget/real/2.0.0/lib.dll"]);
     }
 
     #[test]
