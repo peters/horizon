@@ -777,15 +777,11 @@ impl Run {
     pub(super) fn discard(self) {
         // Noted first, so an exit keeps them: on the pinned host and engine, else the run's.
         let pinned = self.proof.as_ref().map(Proof::daemon);
-        let on = pinned
-            .as_ref()
-            .and_then(|pinned| pinned.get())
-            .and_then(proof::Daemon::remote);
-        let docker_host = on.map_or_else(
-            || self.build_on.as_ref().map(|host| host.name.clone()),
-            |on| Some(on.name().to_owned()),
-        );
-        let engine_id = on.map(|on| on.engine_id().to_owned());
+        let known = pinned.as_ref().and_then(|pinned| pinned.get());
+        let docker_host = proof::docker_host_of(known, self.build_on.as_ref());
+        let engine_id = known
+            .and_then(proof::Daemon::remote)
+            .map(|on| on.engine_id().to_owned());
         proof::expect_removal(
             &self.repository,
             &proof::run_id(&self.status_path),

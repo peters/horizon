@@ -40,6 +40,7 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn close_forwards(
 }
 
 /// Ends every open forward, and refuses later ones when `refuse`.
+#[cfg(any(not(test), unix))]
 fn close(refuse: bool) {
     let mut open = open_forwards();
     open.closed |= refuse;
@@ -54,6 +55,9 @@ pub(in crate::app::cloud_panel::production::repository_setup) struct Forward {
     /// The session's first words on its standard error, read as they come so a talkative
     /// SSH never blocks on a full pipe; the rest is read and dropped.
     said: std::sync::Arc<std::sync::Mutex<String>>,
+    /// The session ended and was reaped, and left the registry: its group ID may belong
+    /// to another process now, so it is never signalled again.
+    ended: bool,
 }
 
 /// How much of an SSH session's standard error a forward keeps to say why it ended.
@@ -65,19 +69,29 @@ impl Forward {
     fn start(mut command: Command) -> Result<Self, String> {
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(&mut command, 0);
-        // Started and registered under the registry's lock, so an exit that closes the
-        // forwards meanwhile cannot miss this one.
-        let mut open = open_forwards();
-        if open.closed {
+        if open_forwards().closed {
             return Err("Horizon is exiting".to_owned());
         }
+        // Started without the registry's lock, which Horizon's exit takes on its own
+        // thread, then registered under it; one the exit closed the registry for meanwhile
+        // ends at once, so none outlives the exit.
         let mut child = command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|error| format!("cannot start ssh: {error}"))?;
-        open.groups.push(child.id());
+        {
+            let mut open = open_forwards();
+            if open.closed {
+                super::stream::end_group(child.id());
+                let _ = child.kill();
+                drop(open);
+                let _ = child.wait();
+                return Err("Horizon is exiting".to_owned());
+            }
+            open.groups.push(child.id());
+        }
         let said = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
         if let Some(mut pipe) = child.stderr.take() {
             let kept = std::sync::Arc::clone(&said);
@@ -93,12 +107,28 @@ impl Forward {
                 }
             });
         }
-        Ok(Self { child, said })
+        Ok(Self {
+            child,
+            said,
+            ended: false,
+        })
     }
 
     /// Whether the SSH session still runs.
     fn alive(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(None))
+        self.ended().is_none()
+    }
+
+    /// How the session ended, once it has: reaped and taken out of the registry under the
+    /// registry's lock, so the exit never signals a group ID the system gave away since.
+    fn ended(&mut self) -> Option<std::process::ExitStatus> {
+        let mut open = open_forwards();
+        let status = self.child.try_wait().ok().flatten()?;
+        if !self.ended {
+            open.groups.retain(|group| *group != self.child.id());
+            self.ended = true;
+        }
+        Some(status)
     }
 
     /// Waits until `ready` says the forward works, or fails when the session ended or
@@ -109,7 +139,7 @@ impl Forward {
             if ready() {
                 return Ok(());
             }
-            if let Ok(Some(status)) = self.child.try_wait() {
+            if let Some(status) = self.ended() {
                 // The reader takes what the session wrote last a moment after it ended.
                 std::thread::sleep(Duration::from_millis(100));
                 let text = self
@@ -133,9 +163,16 @@ impl Forward {
 
 impl Drop for Forward {
     fn drop(&mut self) {
-        open_forwards().groups.retain(|group| *group != self.child.id());
-        super::stream::end_group(self.child.id());
-        let _ = self.child.kill();
+        {
+            let mut open = open_forwards();
+            if self.ended {
+                return;
+            }
+            open.groups.retain(|group| *group != self.child.id());
+            // The group is still this session's: its leader is not reaped yet.
+            super::stream::end_group(self.child.id());
+            let _ = self.child.kill();
+        }
         let _ = self.child.wait();
     }
 }

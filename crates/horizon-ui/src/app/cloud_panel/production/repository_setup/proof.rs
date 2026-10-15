@@ -30,8 +30,8 @@ use needs::distinct_builds;
 pub(super) use needs::uses_nuget;
 pub(super) use remote::{PortForward, close_forwards};
 pub(super) use resources::{
-    Daemon, Pinned, expect_removal, keep_unremoved, preview_network, remove_now, remove_run_resources, retry_unremoved,
-    run_id, run_names,
+    Daemon, Pinned, docker_host_of, expect_removal, keep_unremoved, preview_network, remove_now, remove_run_resources,
+    retry_unremoved, run_id, run_names,
 };
 pub(super) use stream::end_group;
 

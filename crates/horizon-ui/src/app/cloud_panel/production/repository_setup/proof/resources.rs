@@ -228,12 +228,14 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_reso
     (pinned, build_on): (Option<Pinned>, Option<horizon_core::cloud_runtime::docker_host::Host>),
     wait: bool,
 ) {
-    let on_host = pinned.as_ref().and_then(|pinned| pinned.get()).and_then(Daemon::remote);
-    // The run's Docker host names where they are also when no proof pinned a daemon,
-    // as when a replacement proof failed before it reached one.
-    let docker_host = on_host
-        .map(|remote| remote.name().to_owned())
-        .or_else(|| build_on.as_ref().map(|host| host.name.clone()));
+    // A pinned daemon says where they are: on a Docker host by its name and engine, or on
+    // this computer by its socket, with no host name. Without one, as when a replacement
+    // proof failed before it reached a daemon, the run's own Docker host on another
+    // machine does.
+    let build_on = build_on.filter(|host| host.access != horizon_core::cloud_runtime::docker_host::Access::ThisPc);
+    let known = pinned.as_ref().and_then(|pinned| pinned.get());
+    let on_host = known.and_then(Daemon::remote);
+    let docker_host = docker_host_of(known, build_on.as_ref());
     let engine_id = on_host.map(|remote| remote.engine_id().to_owned());
     expect_removal(repository, run, (docker_host.as_deref(), engine_id.as_deref()));
     let (image, volume) = run_names(repository, run);
@@ -297,6 +299,20 @@ static PENDING: std::sync::Mutex<Vec<Pending>> = std::sync::Mutex::new(Vec::new(
 
 fn pending() -> std::sync::MutexGuard<'static, Vec<Pending>> {
     PENDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The Docker host a run's resources are on, by name: the pinned daemon's when there is
+/// one, none for this computer's; else the run's own Docker host on another machine.
+pub(in crate::app::cloud_panel::production::repository_setup) fn docker_host_of(
+    pinned: Option<&Daemon>,
+    build_on: Option<&horizon_core::cloud_runtime::docker_host::Host>,
+) -> Option<String> {
+    match pinned {
+        Some(daemon) => daemon.remote().map(|remote| remote.name().to_owned()),
+        None => build_on
+            .filter(|host| host.access != horizon_core::cloud_runtime::docker_host::Access::ThisPc)
+            .map(|host| host.name.clone()),
+    }
 }
 
 /// Notes that the resources of `run` in `repository` are to be removed, before any thread
@@ -719,6 +735,26 @@ fn folder_slug(repository: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pinned_daemon_says_where_a_runs_resources_are_and_this_computer_has_no_host_name() {
+        use horizon_core::cloud_runtime::docker_host::{Access, Host};
+        let host = |name: &str, access: Access| Host {
+            name: name.into(),
+            access,
+            address: (access != Access::ThisPc).then(|| format!("me@{name}")),
+            docker: None,
+        };
+        let local = Daemon {
+            host: Some("unix:///run/user/1000/docker.sock".into()),
+            remote: None,
+        };
+        let builder = host("builder", Access::Ssh);
+        assert_eq!(docker_host_of(Some(&local), Some(&builder)), None, "the pin decides");
+        assert_eq!(docker_host_of(None, Some(&builder)).as_deref(), Some("builder"));
+        assert_eq!(docker_host_of(None, Some(&host("local", Access::ThisPc))), None);
+        assert_eq!(docker_host_of(None, None), None);
+    }
 
     #[test]
     fn only_a_socket_of_this_computer_is_pinned() {
