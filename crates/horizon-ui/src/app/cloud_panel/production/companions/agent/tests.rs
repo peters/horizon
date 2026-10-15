@@ -35,6 +35,27 @@ fn operation(action: intent::Action, state: intent::State, phase: Phase) -> Oper
     }
 }
 
+/// A started Ensure Ready that has settled, as a job of Upkeep `source` reports it.
+pub(super) fn settled_start(source: &str, alias: &str) -> Submitted {
+    Submitted {
+        operation: operation(intent::Action::EnsureReady, intent::State::Succeeded, Phase::Ready),
+        context: Context {
+            source: Target {
+                scope: Scope {
+                    session_id: "session".into(),
+                    workspace_id: "workspace".into(),
+                },
+                cloud_id: source.into(),
+                declaration: Declaration::new("example/source", "dev"),
+            },
+            declarations: std::collections::BTreeMap::new(),
+            inventory: Vec::new(),
+        },
+        alias: alias.into(),
+        settings: Err("not read".into()),
+    }
+}
+
 fn deployment() -> Deployment {
     serde_json::from_value(json!({
         "version":1,"cloud_id":"target","repository":"/synthetic","revision":"a".repeat(40),
@@ -309,6 +330,7 @@ fn settled_and_confirmation_answers_start_nothing() {
                 operation,
                 context: context.clone(),
                 alias: "consumer".into(),
+                settings: Err("not read".into()),
             },
             &ctx,
         );
@@ -362,6 +384,7 @@ fn a_status_poll_never_starts_a_recorded_operation() {
         operation: operation(intent::Action::EnsureReady, intent::State::Submitted, Phase::Submitted),
         context: context.clone(),
         alias: "consumer".into(),
+        settings: Err("not read".into()),
     };
     let (answer, started) = app.answer_submitted(reads_only(&request("status")), false, "source", submitted(), &ctx);
     assert!(!started);

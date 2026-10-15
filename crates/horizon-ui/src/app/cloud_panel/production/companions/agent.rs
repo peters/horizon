@@ -80,6 +80,9 @@ struct Submitted {
     operation: Operation,
     context: Context,
     alias: String,
+    /// The settings of the target cloud's card, read with the request so that running it
+    /// on the card reads no file on the UI thread.
+    settings: Result<Settings, String>,
 }
 
 impl State {
@@ -391,6 +394,7 @@ impl HorizonApp {
             operation,
             context,
             alias,
+            settings,
         } = submitted;
         let target = operation.intent.target_cloud_id.clone();
         let mut answer = describe(source, &alias, &operation);
@@ -414,7 +418,7 @@ impl HorizonApp {
             &target,
             (&alias, stop),
             operation.intent.operation_id,
-            context,
+            (context, settings),
             ctx,
         ) {
             Ok(()) => {
@@ -434,7 +438,7 @@ impl HorizonApp {
         target: &str,
         (alias, stop): (&str, bool),
         id: OperationId,
-        context: Context,
+        (context, settings): (Context, Result<Settings, String>),
         ctx: &egui::Context,
     ) -> Result<(), String> {
         let group = self
@@ -450,12 +454,7 @@ impl HorizonApp {
             .root
             .clone()
             .ok_or("Horizon has no cloud state directory")?;
-        let settings = group
-            .remote
-            .as_ref()
-            .map(|launch| Settings::for_cloud(&root.join("settings.json"), &launch.placement))
-            .ok_or("The companion cloud has no deployment")?
-            .map_err(|error| error.to_string())?;
+        let settings = settings?;
         let owner = self
             .cloud_prototype
             .production
@@ -605,10 +604,25 @@ fn submit(
         }
         error => error.to_string(),
     })?;
+    // Read here, off the UI thread, for the card that may run the operation.
+    let settings = groups
+        .0
+        .iter()
+        .find_map(|group| {
+            group
+                .remote
+                .as_ref()
+                .filter(|launch| launch.id == operation.intent.target_cloud_id)
+        })
+        .ok_or_else(|| "The companion cloud has no deployment".to_owned())
+        .and_then(|launch| {
+            Settings::for_cloud(&root.join("settings.json"), &launch.placement).map_err(|error| error.to_string())
+        });
     Ok(Submitted {
         operation,
         context,
         alias,
+        settings,
     })
 }
 

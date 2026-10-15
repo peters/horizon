@@ -204,8 +204,10 @@ impl HorizonApp {
                 match (stop, phase) {
                     // Nothing runs for these, so nothing is left to stop.
                     (false, Phase::ConfirmationRequired | Phase::Refused | Phase::RetryRequired) => {}
+                    // A Stop sent before ended an earlier start: the next one is a new
+                    // operation, or the done Stop would be sent again and stop nothing.
                     (false, _) => {
-                        state.started.entry(key.clone()).or_insert(None);
+                        state.started.insert(key.clone(), None);
                     }
                     (true, Phase::Stopped | Phase::Refused) => {
                         state.started.remove(&key);
@@ -433,6 +435,22 @@ mod tests {
                 .upkeep
                 .inflight
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_new_start_gets_a_new_stop() {
+        let (_temp, mut app, id) = upkeep_app();
+        let ctx = egui::Context::default();
+        let key = ("upkeep".to_owned(), "youpark".to_owned());
+        let earlier = manifest::provider_usage::new_operation_id();
+        let state = &mut app.cloud_prototype.production.companions.agent.upkeep;
+        state.started.insert(key.clone(), Some(earlier));
+        let started = Box::new(super::super::tests::settled_start("upkeep", "youpark"));
+        app.finish_upkeep_companion("upkeep", "youpark", &(Ask::EnsureReady, id), Ok(started), &ctx);
+        assert_eq!(
+            app.cloud_prototype.production.companions.agent.upkeep.started[&key],
+            None
         );
     }
 

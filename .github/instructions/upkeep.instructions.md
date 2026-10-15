@@ -127,9 +127,10 @@ every field. Check that:
   again and drops any that are not an alias, `ensure_ready` or `stop`, and a UUID.
 - The source of each request is the Upkeep's own cloud; nothing from the worker names a
   cloud. Only a companion that the owner checked can start (`lifecycle::bind_selected`).
-- A request starts nothing outside a run, `run.py` removes the requests before each run
-  and each daily maintenance pass, an operation already answered as done is not sent
-  again, and one request per alias runs at a time.
+- A request starts nothing outside a run. `run.py` removes the requests before each run
+  and each daily maintenance pass, and does not start one when it cannot. An operation
+  already answered as done is not sent again (`exchange.py` leaves it out, Horizon skips
+  it), and one request per alias runs at a time.
 - Horizon's answers keep a fixed set of fields and at most 120 characters of text, for at
   most four aliases, so the remote command stays under its limit.
 - Upkeep declarations come only from the saved repository list and the committed

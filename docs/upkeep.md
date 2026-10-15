@@ -689,9 +689,11 @@ Horizon guarantees these items:
   checked. The source of each request is that cloud; the request has no field for it.
   Horizon examines the alias, the action and the operation ID again before it acts.
 - The exchange reads only regular files with a valid alias and at most 1 KiB, opened
-  without following links, and sends at most four requests.
+  without following links, and sends at most four requests, leaving out those that
+  Horizon answered as done.
 - A request outside a run starts nothing, and the loop removes the requests of earlier
-  runs when a run or the daily maintenance pass starts. A request with an operation ID that Horizon answered as done
+  runs when a run or the daily maintenance pass starts. A run or pass that cannot remove
+  them does not start. A request with an operation ID that Horizon answered as done
   is not sent again, and Horizon sends one request for each alias at a time.
 - The answers that Horizon sends back have a limited set of fields and a message of at
   most 120 characters without control characters, for at most four aliases.
