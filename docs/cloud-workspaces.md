@@ -759,7 +759,13 @@ setup with a GPU profile is proved only on a computer with an NVIDIA GPU, and th
 CI uses that GPU when the default profile asks for one. The proof
 gets the tested commit and its history as a bundle, never this computer's git
 folder, checked out on its branch with the tags in its history, as
-`actions/checkout` leaves a push build, and each setup run has its own image and volume, removed when it ends. For a .NET repository
+`actions/checkout` leaves a push build, and each setup run has its own image and volume, removed when it ends. The proof
+mounts no folder of this computer into its containers. It copies what a container
+needs into it before the container starts: the bundle, the committed tree with its
+submodules and Git LFS files, Horizon's localci, the restored .NET packages and the
+cloned Rust git dependencies. The copies are owned by `root`, so the CI's user can
+read but not change Horizon's localci and the clones. Links in the copied folders
+stay links and are never followed. For a .NET repository
 with private feeds, check **Restore private NuGet packages on this computer for
 the proof**: Horizon then runs `dotnet restore` here, with this computer's feed
 logins, copies the packages that restore used into the proof's volume for the
@@ -770,8 +776,8 @@ build files on this computer. For a Rust repository whose committed `Cargo.lock`
 dependencies on GitHub, the dialog names those repositories under **Fetch private
 Rust git dependencies on this computer for the proof**. When you check it, Horizon
 clones each named repository with plain `git clone --mirror` and this computer's
-Git login into a private folder in its own home, and the container reads each clone
-read-only in place of its GitHub address. Horizon runs no Cargo, rustup or
+Git login into a private folder in its own home, and the container reads a copy of
+each clone, owned by `root`, in place of its GitHub address. Horizon runs no Cargo, rustup or
 repository configuration on this computer for this, and clones nothing that the box
 does not name. The clones of one proof may hold at most 4 GiB on this computer; past
 that the proof stops. It is off by default, because the proof's CI can read every

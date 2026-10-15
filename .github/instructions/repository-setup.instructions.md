@@ -63,6 +63,8 @@ Horizon's exit past its time limit.
 - A path where **Use this setup** commits a setup that the proof did not test.
 - A proof container or an image that gets this computer's git folder, or a
   credential of the person, such as a Git or feed login.
+- A bind mount of a folder of this computer into a proof container, or a copy
+  that follows a link out of the folder it copies (`proof/launch.rs`).
 - Code from the repository that Horizon runs on this computer outside Docker,
   for example a build file, a Cargo step or a hook. The only exception is the
   private NuGet restore when its box is checked.

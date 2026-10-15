@@ -47,11 +47,10 @@ pub(in crate::app::cloud_panel::production::repository_setup) type Pinned =
 
 impl LocalDocker {
     /// The daemon the Docker CLI uses now, accepted only through a socket or pipe of
-    /// this computer. The proof mounts files of this computer into its containers, the
-    /// repository's bundle and snapshot and Horizon's localci, and a daemon elsewhere
-    /// would look for those paths on its own machine. A socket needs no TLS settings, so
-    /// its address alone pins it; the mount check then refuses a socket forwarded from
-    /// another machine.
+    /// this computer: a proof runs on this computer's Docker unless the person chose
+    /// another. The proof copies the files it needs into its containers and mounts none
+    /// of this computer's, so it would run the same elsewhere. A socket needs no TLS
+    /// settings, so its address alone pins it.
     pub(in crate::app::cloud_panel::production::repository_setup) fn resolve() -> Result<Self, String> {
         Self::accept(horizon_core::cloud_runtime::docker_daemon::Target::default().daemon())
     }
@@ -68,7 +67,7 @@ impl LocalDocker {
                 host: Some(endpoint.address()),
             }),
             Some(endpoint) => Err(format!(
-                "Docker here uses the daemon at {}, not a socket of this computer. Horizon's proof mounts files from this computer, so it needs Docker running on this computer through its socket: switch to a local Docker context (docker context use default) or unset DOCKER_HOST, then start the setup again.",
+                "Docker here uses the daemon at {}, not a socket of this computer. A proof on this computer runs on Docker through a socket of this computer: switch to a local Docker context (docker context use default) or unset DOCKER_HOST, then start the setup again.",
                 endpoint.address()
             )),
         }

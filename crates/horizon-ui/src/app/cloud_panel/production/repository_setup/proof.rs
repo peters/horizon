@@ -10,6 +10,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 mod bundle;
+mod launch;
 // Its only user, a UI test, runs where the setup agent is offered: on Linux.
 #[cfg(all(test, target_os = "linux"))]
 mod failed;
@@ -522,9 +523,8 @@ impl Job {
     fn build(&self, setup: &super::snapshot::Setup, log: &mut Option<std::fs::File>) -> Result<(), String> {
         // The pins first: no Docker, so a moved toolchain fails before any pull.
         self.check_pins(setup, log)?;
-        // Made before the mount check, the first command that can pull an image.
+        // Made before the first command that can pull an image.
         let (docker_config, signed_in) = self.docker_config()?;
-        self.check_mounts()?;
         let config = setup.config()?;
         // Deployment layers each same-worker companion's recipe on the image and checks
         // the layered result; this proof builds only the profiles' own images, so it
@@ -740,20 +740,21 @@ impl Job {
         if take_back {
             self.root_dirty.store(false, std::sync::atomic::Ordering::SeqCst);
         }
-        // As root, so the checkout can be handed to the worker's account after.
+        // As root, so the checkout can be handed to the worker's account after. The
+        // bundle goes into the container as a copy, so any daemon can run it.
         let mut clone = self.docker();
         clone
             .args(["run", "--rm", "--name", &self.container, "-v"])
             .arg(format!("{}:/workspace", self.volume))
-            .arg("-v")
-            .arg(format!("{}:/src.bundle:ro", bundle.display()))
             .arg("-e")
             .arg(format!("HEAD_SHA={head}"))
             .arg("-e")
             .arg(format!("HEAD_BRANCH={}", branch.unwrap_or_default()))
             .args(["--entrypoint", "sh", TOOLS, "-c"])
             .arg(CLONE);
-        let result = self.stream(clone, log);
+        let mut clone = launch::Launch::new(clone);
+        clone.copies.push(launch::Copy::new(bundle, "/src.bundle"));
+        let result = self.stream_launch(clone, log, Some(STEP_TIMEOUT), false);
         drop(folder);
         result?;
         self.hydrate(head, log)
@@ -797,52 +798,16 @@ impl Job {
         overlay
             .args(["run", "--rm", "--name", &self.container, "-v"])
             .arg(format!("{}:/workspace", self.volume))
-            .arg("-v")
-            .arg(format!("{}:/snapshot:ro", tree.display()))
             .args(["--entrypoint", "sh", TOOLS, "-c"])
             .arg("cp -a /snapshot/. /workspace/checkout/ && chown -R 10001:10001 /workspace/checkout");
-        self.stream(overlay, log)
+        let mut overlay = launch::Launch::new(overlay);
+        overlay.copies.push(launch::Copy::new(tree, "/snapshot"));
+        self.stream_launch(overlay, log, Some(STEP_TIMEOUT), false).map(|_| ())
     }
 
     /// Whether the default profile, whose image the CI runs in, asks for a GPU.
     fn wants_gpu(&self) -> bool {
         self.setup.as_ref().is_ok_and(default_wants_gpu)
-    }
-
-    /// A container of the image as the worker account on the proof's volume, with the
-    /// GPU, this computer's packages and Horizon's localci that the proof needs.
-    fn ci_container(&self) -> Result<Command, String> {
-        let mut command = self.docker();
-        command
-            .args(["run", "--rm", "--name", &self.container, "--user", "10001:10001", "-v"])
-            .arg(format!("{}:/workspace", self.volume))
-            .args(["-w", "/workspace/checkout", "-e", "HOME=/workspace/home"]);
-        // A proof with plain commands runs them with the image's shell and needs no localci.
-        if self.spec.commands.is_empty() {
-            let localci = self.trusted_localci()?;
-            command
-                .arg("-v")
-                .arg(format!("{}:{}:ro", localci.display(), localci::MOUNTED));
-        }
-        // A GPU profile is proved with a GPU or not at all: CI that passes without one
-        // says nothing about the worker that has one.
-        if self.wants_gpu() {
-            if !Path::new("/dev/nvidiactl").exists() {
-                return Err(
-                    "the default profile needs a GPU and this computer has no NVIDIA GPU, so Horizon cannot prove it here"
-                        .to_owned(),
-                );
-            }
-            command.args(["--gpus", "all"]);
-        }
-        // Packages this computer restored, private ones included, need no feed credential:
-        // NuGet reads the ones copied into the volume as a fallback folder before it asks
-        // a source.
-        if let Some(packages) = self.package_folder() {
-            command.args(["-e", &format!("RestoreAdditionalProjectFallbackFolders={packages}")]);
-        }
-        self.mount_crates(&mut command);
-        Ok(command)
     }
 
     /// Runs the CI jobs the way the agents on the worker do: the container starts the
@@ -862,34 +827,35 @@ impl Job {
             self.forget_older_records(&session, log)?;
             self.restore_in_container(&session, log)?;
         }
-        let mut command = self.ci_container()?;
-        command.args(&session);
+        let mut launch = self.ci_container()?;
+        launch.command.args(&session);
         if !self.spec.commands.is_empty() {
             // Without GitHub Actions the commands themselves are the proof, run with the
             // image's shell; a rerun on the warm volume shows what the caches save.
-            command.args([
+            launch.command.args([
                 "--entrypoint",
                 "bash",
                 &self.image,
                 "-c",
                 &commands_script(&self.spec.commands),
             ]);
-            return self.stream_within(command, log, Some(CI_TIMEOUT));
+            return self.stream_launch(launch, log, Some(CI_TIMEOUT), false).map(|_| ());
         }
-        command
+        launch
+            .command
             .arg("--entrypoint")
             .arg(
                 self.ci_localci
                     .borrow()
                     .clone()
-                    .unwrap_or_else(|| localci::MOUNTED.to_owned()),
+                    .unwrap_or_else(|| localci::IN_CONTAINER.to_owned()),
             )
             .arg(&self.image)
             .args(self.spec.localci_args(fast, head));
         if fast {
-            return self.stream_within(command, log, Some(CI_TIMEOUT));
+            return self.stream_launch(launch, log, Some(CI_TIMEOUT), false).map(|_| ());
         }
-        let report = self.stream_reporting(command, log, Some(CI_TIMEOUT))?;
+        let report = self.stream_launch(launch, log, Some(CI_TIMEOUT), true)?;
         localci::check_report(&report, &self.planned.borrow())
     }
 

@@ -200,19 +200,10 @@ impl Job {
         self.stream_inner(command, log, limit, false).map(|_| ())
     }
 
-    /// As [`Self::stream_within`] for a command that writes a report on standard output:
-    /// its standard error is the log, and its standard output, at most [`CAPTURE_LIMIT`]
-    /// bytes, is returned once it succeeded.
-    pub(super) fn stream_reporting(
-        &self,
-        command: Command,
-        log: &mut Option<std::fs::File>,
-        limit: Option<Duration>,
-    ) -> Result<Vec<u8>, String> {
-        self.stream_inner(command, log, limit, true)
-    }
-
-    fn stream_inner(
+    /// As [`Self::stream_within`]; with `report`, the command writes a report on standard
+    /// output: its standard error is the log, and its standard output, at most
+    /// [`CAPTURE_LIMIT`] bytes, is returned once it succeeded.
+    pub(super) fn stream_inner(
         &self,
         mut command: Command,
         log: &mut Option<std::fs::File>,

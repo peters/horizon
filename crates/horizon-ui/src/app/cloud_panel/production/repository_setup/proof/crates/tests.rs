@@ -217,8 +217,17 @@ fn the_container_reads_clones_read_only_and_a_longer_address_keeps_its_own() {
         notes: Vec::new(),
         trust: None,
     };
-    let args = mirrors.docker_args().join(" ");
-    assert!(args.contains("-v /private/peters/nodkey-cli.git:/opt/host-cargo-git/peters/nodkey-cli.git:ro"));
+    let (args, copies) = mirrors.container();
+    let args = args.join(" ");
+    assert_eq!(
+        copies,
+        [super::super::launch::Copy::new(
+            "/private/peters/nodkey-cli.git",
+            "/opt/host-cargo-git/peters/nodkey-cli.git"
+        )],
+        "each clone goes in as a copy, never as a mount"
+    );
+    assert!(!args.contains("-v "), "{args}");
     assert!(args.contains("GIT_CONFIG_KEY_0=url.file:///opt/host-cargo-git/peters/nodkey-cli.git.insteadOf"));
     assert!(args.contains("GIT_CONFIG_VALUE_0=https://github.com/peters/nodkey-cli"));
     assert!(args.contains("GIT_CONFIG_KEY_2=url.https://github.com/peters/nodkey-cli-extra.insteadOf"));
@@ -228,19 +237,6 @@ fn the_container_reads_clones_read_only_and_a_longer_address_keeps_its_own() {
     );
     assert!(args.contains("GIT_CONFIG_COUNT=3"));
     assert!(args.contains("CARGO_NET_GIT_FETCH_WITH_CLI=true"));
-}
-
-#[test]
-fn a_folder_with_a_colon_is_not_mounted() {
-    assert!(mountable(Path::new("/home/me/.horizon/cloud/setup-fetch/crates-1")));
-    assert!(
-        mountable(Path::new("/home/Last,First/.horizon")),
-        "a comma parts nothing"
-    );
-    assert!(!mountable(Path::new("/home/me/a:b")));
-    if cfg!(windows) {
-        assert!(mountable(Path::new(r"C:\Users\me\crates-1")));
-    }
 }
 
 // Unix only: it ages a folder through its handle, which Windows does not open.
@@ -589,9 +585,12 @@ fn git_in_the_container_trusts_clones_another_user_owns() {
         notes: Vec::new(),
         trust: Some(path.clone()),
     };
-    let args = mirrors.docker_args().join(" ");
-    assert!(args.contains(&format!("-v {}:/opt/host-cargo-git.gitconfig:ro", path.display())));
-    assert!(args.contains("-e GIT_CONFIG_SYSTEM=/opt/host-cargo-git.gitconfig"));
+    let (args, copies) = mirrors.container();
+    assert!(copies.contains(&super::super::launch::Copy::new(&path, "/opt/host-cargo-git.gitconfig")));
+    assert!(
+        args.join(" ")
+            .contains("-e GIT_CONFIG_SYSTEM=/opt/host-cargo-git.gitconfig")
+    );
 }
 
 /// The clone belongs to this computer's user and the CI runs as 10001, as in a proof.
@@ -637,10 +636,14 @@ fn cargo_s_fetch_reads_a_clone_another_user_owns() {
             notes: Vec::new(),
             trust,
         };
-        Command::new("docker")
+        // As the proof starts its containers: created, given the copies, then started.
+        let (args, copies) = mirrors.container();
+        let name = format!("horizon-mirror-test-{}", std::process::id());
+        let created = Command::new("docker")
             .args([
-                "run",
-                "--rm",
+                "create",
+                "--name",
+                &name,
                 "--user",
                 "10001:10001",
                 "--network",
@@ -648,10 +651,24 @@ fn cargo_s_fetch_reads_a_clone_another_user_owns() {
                 "--entrypoint",
                 "bash",
             ])
-            .args(mirrors.docker_args())
+            .args(args)
             .args([image.as_str(), "-c", script.as_str()])
             .output()
-            .unwrap()
+            .unwrap();
+        assert!(created.status.success(), "{}", String::from_utf8_lossy(&created.stderr));
+        let mut copy = Command::new("docker")
+            .args(["cp", "-", &format!("{name}:/")])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        super::super::launch::archive(&copies, copy.stdin.take().unwrap()).unwrap();
+        assert!(copy.wait().unwrap().success());
+        let output = Command::new("docker")
+            .args(["start", "--attach", &name])
+            .output()
+            .unwrap();
+        let _ = Command::new("docker").args(["rm", "--force", &name]).output();
+        output
     };
     let refused = fetch(None);
     assert!(

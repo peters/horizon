@@ -459,9 +459,9 @@ The result of step 2 depends on whether the host has `/dev/kvm`.
 
    Result: Before Run CI in image, Horizon clones the named repository. The CI job
    builds with the git dependency and does not ask for a credential. `docker
-   inspect` of the CI container shows one read-only mount below
-   `/opt/host-cargo-git` for each named repository, and no other mount of a Git or
-   Cargo folder of this computer. After the proof ends,
+   inspect` of the CI container shows no bind mount of a folder of this computer,
+   and `docker exec <container> ls -l /opt/host-cargo-git/<owner>` lists one clone
+   for each named repository, owned by `root`. After the proof ends,
    `~/.horizon/cloud/setup-fetch` has no `crates-*` folder.
 
 3. Add a second git dependency to `Cargo.toml`, commit `Cargo.toml` and
