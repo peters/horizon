@@ -90,7 +90,7 @@ impl super::HorizonApp {
             Ok(value) => result.tailnet_credential = Some(value),
             Err(error) => result.error = Some(error),
         }
-        self.publish_tailnet_credential_result(result);
+        self.publish_host_usage_result(result);
     }
 }
 

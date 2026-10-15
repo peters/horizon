@@ -767,14 +767,57 @@ personal destination. Every mutation compares the exact shown local override.
 Host-owned, bounded operation receipts retain the actor, host, repository and
 settings root through polling or cancellation. Cancellation is a request, not
 proof that a write did not commit; list saved state after an expired receipt.
-This prerequisite adds no public UI, CLI or MCP control and keeps automatic
-publication disabled. See docs/testing/procedures/image-destination-management.md.
+The public host adapter below uses this policy. Automatic publication remains
+disabled until final integration. See docs/testing/procedures/image-destination-management.md.
 
-Host destination adapters must resolve the live local checkout to its canonical
-Git root. A receipt bound to a subdirectory refuses before host policy or
-authentication; direct native management still normalizes checkout folders.
+Direct-root receipts require the exact canonical Git root. Public host adapters
+use the distinct launch-directory entry point: the shared worker normalizes the
+registered local directory, while receipt ownership retains that exact path.
 Cancellation during metadata selection is reported as cancellation, never as a
 successful listing with only an inline selection error.
 
 Saved pull metadata compares the registry repository without a tag or digest.
 It retains the registry port and exact path; it is not a live access check.
+
+### Public image destination management
+
+Use `cloud_image_destination` from a live local agent panel. It uses the panel's
+registered launch directory and resolves its checkout in the shared background
+worker, including subdirectories. The host supplies the settings root and source;
+never pass a root, source path, token or credential value. Remote worker and SSH
+panels cannot change desktop publishing choices. No Settings window is required.
+
+Supply a fresh lowercase UUID `operation_id` and a named build `profile` for a new
+action. Start with `action: {"operation":"list"}`. The result gives the selected
+account/destination, exact `shown_override` and existing registry choices. For
+`select`, pass a listed `destination` and the exact `shown` snapshot. For `reset`,
+pass that same `shown`. A stale snapshot refuses without replacing another choice.
+The preference stays machine-local; source YAML remains unchanged.
+
+Every action can return a pending receipt. Poll `status` with the same operation
+ID and no profile until `done` is true, then read its nested result or error.
+A receipt alone does not prove that listing or a mutation completed.
+
+Only `authenticate` starts personal publishing sign-in. Pass `shown` and set
+`switch: true` only after the person asks to change account. Show the device code
+and verification URI returned by the operation. Never collect a token yourself.
+Poll `status` with the same ID and no profile at least every ten seconds while
+sign-in runs. Thirty seconds without readback requests cancellation. `cancel`
+requests cancellation only for that owned operation. After a timeout, read status
+with the same ID; do not create another mutation. Receipts expire and disappear on
+host restart. List saved state and review it before retrying an expired operation.
+
+The normal CLI plan runner exposes the same tool and schema through
+`horizon-browser run PLAN.json`; its stdio MCP server exposes the same operation.
+Existing clouds keep their recorded publisher. Retained publication status is a
+separate follow-up outcome.
+The staging setting still defaults to false, so mutations remain disabled until
+final integration. See docs/testing/procedures/image-destination-public.md.
+
+`cloud_image_destination` operations are `list`, `select`, `reset`, `authenticate`,
+`status` and `cancel`.
+
+Management rechecks the staging setting in the same transaction as the exact
+override comparison. If it is disabled while sign-in waits, no destination
+preference commits. This does not revoke authorization already completed at the
+issuer or prove that a credential-chain write did not occur.

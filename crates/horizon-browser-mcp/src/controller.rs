@@ -20,6 +20,7 @@ pub(crate) mod cloud_list;
 pub(crate) mod companion;
 mod device;
 mod handoff;
+mod image_destination;
 pub(crate) mod provider_usage;
 mod recovery;
 mod tailnet_credential;

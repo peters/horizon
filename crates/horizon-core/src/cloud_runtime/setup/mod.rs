@@ -3,6 +3,7 @@ mod credentials;
 mod hetzner;
 mod publishing;
 mod storage;
+pub(in crate::cloud_runtime) use publishing::save_enabled_image_destination;
 pub use publishing::save_image_destination;
 #[cfg(test)]
 mod tests;

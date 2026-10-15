@@ -19,6 +19,30 @@ pub fn save_image_destination(
     destination: Option<&Selection>,
     cancel: &Cancellation,
 ) -> Result<Committed> {
+    save(root, repository, profile, shown, destination, cancel, false)
+}
+
+/// Manage a live destination only while the setting still permits the transaction.
+pub(in crate::cloud_runtime) fn save_enabled_image_destination(
+    root: &Path,
+    repository: &Path,
+    profile: &str,
+    shown: Option<&Override>,
+    destination: Option<&Selection>,
+    cancel: &Cancellation,
+) -> Result<Committed> {
+    save(root, repository, profile, shown, destination, cancel, true)
+}
+
+fn save(
+    root: &Path,
+    repository: &Path,
+    profile: &str,
+    shown: Option<&Override>,
+    destination: Option<&Selection>,
+    cancel: &Cancellation,
+    require_enabled: bool,
+) -> Result<Committed> {
     cancel.check()?;
     let repository = repository.canonicalize()?;
     if !horizon_cloud::valid_id(profile) {
@@ -42,6 +66,9 @@ pub fn save_image_destination(
         |bytes| serde_json::from_slice(bytes).map_err(|_| Error::Json),
     )?;
     settings.validate()?;
+    if require_enabled && !settings.portable_image_publishing {
+        return Err(Error::Invalid(crate::cloud_runtime::publishing::STAGED));
+    }
     let matches = |choice: &&Override| choice.repository == repository && choice.profile == profile;
     let observed = settings.image_publishing.iter().find(matches);
     if observed != shown {

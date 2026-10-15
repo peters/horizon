@@ -444,7 +444,7 @@ fn assert_credential_request_contract(tools: &Value) {
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(36));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(37));
     assert_credential_request_contract(tools);
     assert_output_schemas_describe_objects(tools);
     assert_catalog_contract(tools);
@@ -692,5 +692,122 @@ fn screenshot_refuses_standalone_without_claiming_browser() {
     assert_eq!(result["result"]["isError"], true);
     assert_eq!(std::fs::read(&path).unwrap(), before);
     assert!(manifest::read_at(&path).unwrap().owner.is_none());
+    process.close();
+}
+
+#[test]
+fn image_destination_routes_only_nonsecret_host_scoped_receipts() {
+    use horizon_browser_control::manifest::provider_usage::UsageQueue;
+    use std::time::{Duration, Instant};
+    let home = tempfile::tempdir().expect("isolated home");
+    let mut process = McpProcess::start_as(home.path(), "horizon:destination-client");
+    process.send(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"destination-fixture","version":"1"}}}));
+    process.notify(&json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
+    let tools = process.send(&json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}));
+    let tool = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "cloud_image_destination")
+        .expect("public destination tool");
+    assert_eq!(tool["inputSchema"]["additionalProperties"], false);
+    let queue = UsageQueue::new(home.path().join(".horizon"));
+    let host = std::thread::spawn(move || {
+        for expected in ["list", "status", "cancel"] {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let claimed = queue.claim("test-host").expect("claim host request");
+                if let Some(request) = claimed.first() {
+                    assert_eq!(request.actor, "horizon:destination-client");
+                    let input = request.image_destination.as_ref().expect("typed destination intent");
+                    assert!(input.valid());
+                    assert_eq!(input.operation_id, "27d497e2-1f54-4bc4-b746-ab2a3d9efad5");
+                    assert_eq!(serde_json::to_value(&input.action).unwrap()["operation"], expected);
+                    assert_eq!(input.profile.as_deref(), (expected == "list").then_some("cpu"));
+                    let mut answer = request.result(Vec::new(), None);
+                    answer.image_destination = Some(json!({
+                        "operation_id":input.operation_id,"done":false,
+                        "cancel_requested":expected=="cancel","sign_in":null,"result":null,"error":null
+                    }));
+                    queue.complete(&answer).expect("return host receipt");
+                    break;
+                }
+                assert!(Instant::now() < deadline, "no destination request reached the host");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    });
+    for (index, operation) in ["list", "status", "cancel"].into_iter().enumerate() {
+        let arguments = json!({
+            "operation_id":"27d497e2-1f54-4bc4-b746-ab2a3d9efad5",
+            "profile":(operation=="list").then_some("cpu"),"action":{"operation":operation}
+        });
+        let response=process.send(&json!({"jsonrpc":"2.0","id":3+index,"method":"tools/call","params":{"name":"cloud_image_destination","arguments":arguments}}));
+        assert_ne!(response["result"]["isError"], true, "{response}");
+        assert!(response.to_string().contains("27d497e2-1f54-4bc4-b746-ab2a3d9efad5"));
+        let answer: Value = serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(answer["cancel_requested"], operation == "cancel");
+    }
+    host.join().expect("host receipt");
+    let rejected=process.send(&json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"cloud_image_destination","arguments":{"operation_id":"27d497e2-1f54-4bc4-b746-ab2a3d9efad5","profile":"cpu","root":"/untrusted","action":{"operation":"list"}}}}));
+    assert!(
+        rejected.get("error").is_some() || rejected["result"]["isError"] == true,
+        "{rejected}"
+    );
+    assert!(
+        UsageQueue::new(home.path().join(".horizon"))
+            .claim("test-host")
+            .unwrap()
+            .is_empty()
+    );
+    process.close();
+}
+
+#[test]
+fn authentication_start_returns_the_first_prompt_through_public_stdio() {
+    use horizon_browser_control::manifest::provider_usage::{ImageDestinationAction, UsageQueue};
+    use std::time::{Duration, Instant};
+    let home = tempfile::tempdir().unwrap();
+    let mut process = McpProcess::start_as(home.path(), "horizon:prompt-client");
+    process.send(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"prompt-fixture","version":"1"}}}));
+    process.notify(&json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
+    let queue = UsageQueue::new(home.path().join(".horizon"));
+    let host = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut started = false;
+        loop {
+            for request in queue.claim("test-host").unwrap() {
+                let input = request.image_destination.as_ref().unwrap();
+                let mut result = request.result(Vec::new(), None);
+                match input.action {
+                    ImageDestinationAction::Authenticate { .. } => {
+                        assert!(!started);
+                        started = true;
+                        result.image_destination =
+                            Some(json!({"operation_id":input.operation_id,"done":false,"sign_in":null}));
+                    }
+                    ImageDestinationAction::Status {} => {
+                        assert!(started);
+                        assert!(input.profile.is_none());
+                        result.image_destination = Some(
+                            json!({"operation_id":input.operation_id,"done":false,"sign_in":{"user_code":"SYNTHETIC-CODE","verification_uri":"https://github.com/login/device","expires_at_unix":123}}),
+                        );
+                    }
+                    _ => panic!("unexpected prompt operation"),
+                }
+                let delivered = result.image_destination.as_ref().unwrap()["sign_in"].is_object();
+                queue.complete(&result).unwrap();
+                if delivered {
+                    return;
+                }
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    });
+    let response=process.send(&json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"cloud_image_destination","arguments":{"operation_id":"27d497e2-1f54-4bc4-b746-ab2a3d9efad5","profile":"cpu","action":{"operation":"authenticate","shown":null,"switch":false}}}}));
+    host.join().unwrap();
+    assert_ne!(response["result"]["isError"], true, "{response}");
+    assert!(response.to_string().contains("SYNTHETIC-CODE"));
     process.close();
 }

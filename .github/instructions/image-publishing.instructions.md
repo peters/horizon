@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/examples/cloud_deploy.rs,crates/horizon-core/examples/cloud_deploy/publishing/**,crates/horizon-core/src/cloud_panel.rs,crates/horizon-core/src/cloud_panel/launch_serde/**,crates/horizon-core/src/cloud_panel/launch_serde.rs,crates/horizon-cloud/src/image_publishing.rs,crates/horizon-cloud/src/image_publishing/**,crates/horizon-core/src/cloud_runtime/github/publish/publication.rs,crates/horizon-core/src/cloud_runtime/github/publish/publication/**,crates/horizon-core/src/cloud_runtime/publishing.rs,crates/horizon-core/src/cloud_runtime/publishing/**,crates/horizon-core/src/cloud_runtime/setup/publishing.rs,crates/horizon-core/src/cloud_runtime/setup/publishing/**,crates/horizon-core/src/cloud_runtime/settings.rs,crates/horizon-core/src/cloud_runtime/registry/**"
+applyTo: "crates/horizon-cloud-worker/src/remote.rs,crates/horizon-core/examples/cloud_deploy.rs,crates/horizon-core/examples/cloud_deploy/publishing/**,crates/horizon-core/src/cloud_panel.rs,crates/horizon-core/src/cloud_panel/launch_serde/**,crates/horizon-core/src/cloud_panel/launch_serde.rs,crates/horizon-cloud/src/image_publishing.rs,crates/horizon-cloud/src/image_publishing/**,crates/horizon-core/src/cloud_runtime/github/publish/publication.rs,crates/horizon-core/src/cloud_runtime/github/publish/publication/**,crates/horizon-core/src/cloud_runtime/publishing.rs,crates/horizon-core/src/cloud_runtime/publishing/**,crates/horizon-core/src/cloud_runtime/setup/publishing.rs,crates/horizon-core/src/cloud_runtime/setup/publishing/**,crates/horizon-core/src/cloud_runtime/settings.rs,crates/horizon-core/src/cloud_runtime/registry/**,crates/horizon-browser-control/src/manifest/image_destination.rs,crates/horizon-browser-control/src/manifest/provider_usage.rs,crates/horizon-browser-mcp/src/controller/image_destination.rs,crates/horizon-browser-mcp/src/server.rs,crates/horizon-ui/src/app/cloud_panel/image_destinations/**,crates/horizon-ui/src/app/cloud_panel/image_destinations.rs,crates/horizon-ui/src/app/browser_provider_usage.rs"
 ---
 
 # Image destination boundary
@@ -139,3 +139,16 @@ Refuse a receipt bound to a subdirectory before host policy or authentication;
 resolve agent working directories to the root in host adapters. Preserve direct
 native helper normalization of checkout subdirectories. A cancelled metadata selection must
 remain cancellation, not successful Info with only a selection_error.
+
+Public requests cannot supply source or settings authority. The host binds a typed
+LaunchOwner to the live local panel registered directory. Shared worker preparation
+resolves its root off the render thread, including subdirectories. Keep direct-root
+receipt fencing intact. Status and cancel retain the original actor, host, path and
+root. Poll active operations without user input so observation expiry and lost
+scope request cancellation. Remote/SSH panels and expired requests refuse.
+Keep CLI plan and stdio MCP behavior, both bundled guides and coverage in sync.
+
+The desktop destination adapter refuses any agent panel owned by a cloud group,
+including worker and Upkeep panels whose local metadata has no SSH connection.
+It checks this membership again while polling retained operations. A local launch
+directory alone does not establish desktop ownership.

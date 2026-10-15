@@ -3,6 +3,7 @@
 //! list request change clouds, and the host authorizes each one.
 pub use super::cloud_companion::{CompanionAction, CompanionRequest, new_operation_id};
 pub use super::cloud_list::{CloudListOperation, CloudListRequest, STOP_REMOVED};
+pub use super::image_destination::{Action as ImageDestinationAction, ImageDestinationRequest};
 use super::request_queue::{MAX_PENDING_REQUESTS, prune_at, queue_lock_path, read_json, write_private_json};
 pub use super::tailnet_credential::{CredentialOperation, CredentialRequest};
 pub use super::upkeep::{UpkeepOperation, UpkeepRequest};
@@ -46,6 +47,8 @@ pub struct UsageRequest {
     pub upkeep: Option<UpkeepRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tailnet_credential: Option<CredentialRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_destination: Option<ImageDestinationRequest>,
     claimed: bool,
 }
 
@@ -71,6 +74,8 @@ pub struct UsageResult {
     pub upkeep: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tailnet_credential: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_destination: Option<serde_json::Value>,
     pub error: Option<String>,
 }
 
@@ -88,6 +93,7 @@ impl UsageRequest {
             cloud_list: None,
             upkeep: None,
             tailnet_credential: None,
+            image_destination: None,
             error,
         }
     }
@@ -289,6 +295,29 @@ pub fn enqueue_tailnet_credential(identity: AgentIdentity<'_>, request: Credenti
     )
 }
 
+/// Queue a nonsecret operation within the live local agent's host-owned checkout.
+/// # Errors
+/// Invalid receipt or action metadata, missing host identity or unavailable queue.
+pub fn enqueue_image_destination(
+    identity: AgentIdentity<'_>,
+    request: ImageDestinationRequest,
+) -> std::io::Result<String> {
+    if !request.valid() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid image destination request",
+        ));
+    }
+    enqueue_request_at(
+        BrowserRuntimePaths::resolve().root(),
+        identity,
+        Ask {
+            image_destination: Some(request),
+            ..Ask::default()
+        },
+    )
+}
+
 fn enqueue_at(root: &Path, identity: AgentIdentity<'_>, provider: Option<String>) -> std::io::Result<String> {
     enqueue_query_at(root, identity, provider, None)
 }
@@ -320,6 +349,7 @@ struct Ask {
     cloud_list: Option<CloudListRequest>,
     upkeep: Option<UpkeepRequest>,
     tailnet_credential: Option<CredentialRequest>,
+    image_destination: Option<ImageDestinationRequest>,
 }
 
 fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std::io::Result<String> {
@@ -331,6 +361,7 @@ fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std
         cloud_list,
         upkeep,
         tailnet_credential,
+        image_destination,
     } = ask;
     if catalog.as_ref().is_some_and(|q| !q.valid()) {
         return Err(std::io::Error::new(
@@ -378,6 +409,7 @@ fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std
         cloud_list,
         upkeep,
         tailnet_credential,
+        image_destination,
     };
     write_private_json(&path(root, &request.request_id, "request"), &request)?;
     Ok(request.request_id)

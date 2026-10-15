@@ -46,6 +46,7 @@ mod cloud_companion;
 mod cloud_list;
 mod create;
 pub mod device;
+mod image_destination;
 mod ownership;
 pub mod provider_usage;
 pub mod recovery;

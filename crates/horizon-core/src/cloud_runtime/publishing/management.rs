@@ -240,7 +240,7 @@ fn manage_with(
             (shown, Some(destination))
         }
     };
-    setup::save_image_destination(
+    setup::save_enabled_image_destination(
         root,
         &prepared.repository,
         &request.profile,
