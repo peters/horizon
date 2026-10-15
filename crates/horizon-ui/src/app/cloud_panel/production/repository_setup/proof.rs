@@ -20,6 +20,7 @@ mod gate;
 mod localci;
 mod needs;
 mod preflight;
+mod remote;
 mod resources;
 mod session_env;
 mod slots;
@@ -27,9 +28,10 @@ pub(super) use session_env::arguments as session_environment;
 mod stream;
 use needs::distinct_builds;
 pub(super) use needs::uses_nuget;
+pub(super) use remote::{Forward, close_forwards};
 pub(super) use resources::{
-    LocalDocker, Pinned, expect_removal, keep_unremoved, preview_network, remove_now, remove_run_resources,
-    retry_unremoved, run_id, run_names,
+    Daemon, Pinned, expect_removal, keep_unremoved, preview_network, remove_now, remove_run_resources, retry_unremoved,
+    run_id, run_names,
 };
 pub(super) use stream::end_group;
 
@@ -167,6 +169,7 @@ impl Proof {
     /// begins once `after`, the run of the proof it replaces, has ended.
     pub(super) fn start(
         (repository, run, identity): (&Path, &str, super::untrusted::Identity),
+        build_on: Option<horizon_core::cloud_runtime::docker_host::Host>,
         (request, spec): (u64, Spec),
         log_path: PathBuf,
         (host_restore, root_dirty, host_crates): (bool, std::sync::Arc<std::sync::atomic::AtomicBool>, crates::Access),
@@ -186,6 +189,7 @@ impl Proof {
         let job = Job {
             repository: repository.to_path_buf(),
             identity,
+            build_on,
             spec,
             image: image.clone(),
             volume: volume.clone(),
@@ -201,7 +205,7 @@ impl Proof {
             sender,
             logged: std::cell::Cell::new(0),
             localci: std::cell::RefCell::new(Vec::new()),
-            daemon: resources::LocalDocker::default(),
+            daemon: resources::Daemon::default(),
             pinned: pinned.clone(),
             planned: std::cell::RefCell::new(Vec::new()),
             ci_localci: std::cell::RefCell::new(None),
@@ -360,6 +364,8 @@ struct Job {
     repository: PathBuf,
     /// Which folder the repository was when the run started.
     identity: super::untrusted::Identity,
+    /// The Docker host the person chose to build on; none for this computer.
+    build_on: Option<horizon_core::cloud_runtime::docker_host::Host>,
     spec: Spec,
     image: String,
     volume: String,
@@ -384,7 +390,7 @@ struct Job {
     localci: std::cell::RefCell<Vec<(String, TrustedLocalci)>>,
     /// The daemon of this computer every docker command of the run goes to, checked
     /// before the first one, and shared with the proof for its Stop and cleanup.
-    daemon: resources::LocalDocker,
+    daemon: resources::Daemon,
     pinned: Pinned,
     /// The .NET solutions or projects the host restored, by their path in the checkout.
     restored: std::cell::RefCell<Vec<String>>,
@@ -451,7 +457,7 @@ impl Job {
         };
         // The daemon is checked before the first docker command, and every later one
         // goes to it.
-        match resources::LocalDocker::resolve() {
+        match resources::Daemon::on(self.build_on.as_ref()) {
             Ok(daemon) => {
                 let _ = self.pinned.set(daemon.clone());
                 self.daemon = daemon;
@@ -517,7 +523,7 @@ impl Job {
             let _ = self.sender.send(Event::Waiting(holders.to_vec()));
             self.ctx.request_repaint();
         };
-        slots::take_for(self.daemon.host(), &self.repository, &self.cancel, tell)
+        slots::take_for(Some(&self.daemon.slot_key()), &self.repository, &self.cancel, tell)
     }
 
     fn build(&self, setup: &super::snapshot::Setup, log: &mut Option<std::fs::File>) -> Result<(), String> {
@@ -536,12 +542,18 @@ impl Job {
         }
         // A GPU profile is proved on a computer with an NVIDIA GPU or not at all; the CI
         // runs with it in the default profile's image.
-        if let Some((name, _)) = config.profiles.iter().find(|(_, profile)| profile.gpu)
-            && !Path::new("/dev/nvidiactl").exists()
-        {
-            return Err(format!(
-                "profile {name} needs a GPU and this computer has no NVIDIA GPU, so Horizon cannot prove this setup here"
-            ));
+        if let Some((name, _)) = config.profiles.iter().find(|(_, profile)| profile.gpu) {
+            if let Some(remote) = self.daemon.remote() {
+                return Err(format!(
+                    "profile {name} needs a GPU, and Horizon proves a GPU setup only on this computer, not on the Docker host {}: build it on This computer",
+                    remote.name()
+                ));
+            }
+            if !Path::new("/dev/nvidiactl").exists() {
+                return Err(format!(
+                    "profile {name} needs a GPU and this computer has no NVIDIA GPU, so Horizon cannot prove this setup here"
+                ));
+            }
         }
         let default_builds = config
             .profiles

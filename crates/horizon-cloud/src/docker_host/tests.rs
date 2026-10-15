@@ -712,3 +712,53 @@ fn a_command_that_outlives_its_time_is_stopped() {
     let error = engine.docker(&["0".into()], Duration::from_secs(5)).unwrap_err();
     assert!(matches!(error, Failure::Error(CloudError::Cancelled)), "{error:?}");
 }
+
+#[test]
+fn a_host_forwards_its_engine_socket_and_a_loopback_port_over_its_own_ssh() {
+    let args = |command: Command| -> Vec<String> {
+        std::iter::once(command.get_program().to_string_lossy().into_owned())
+            .chain(command.get_args().map(|arg| arg.to_string_lossy().into_owned()))
+            .collect()
+    };
+    let mut ssh = Host {
+        name: "builder".into(),
+        access: Access::Ssh,
+        address: Some("me@builder".into()),
+        docker: None,
+    };
+    let socket = args(
+        ssh.socket_forward(Path::new("/private/run/docker.sock"))
+            .unwrap()
+            .unwrap(),
+    );
+    assert_eq!(socket.first().map(String::as_str), Some("ssh"));
+    assert!(
+        socket
+            .windows(2)
+            .any(|pair| pair == ["-L", "/private/run/docker.sock:/var/run/docker.sock"])
+    );
+    assert!(socket.contains(&"ExitOnForwardFailure=yes".to_owned()));
+    assert_eq!(
+        socket.last().map(String::as_str),
+        Some("me@builder"),
+        "the address comes after --"
+    );
+    let port = args(ssh.port_forward(41000, 32768).unwrap().unwrap());
+    assert!(
+        port.windows(2)
+            .any(|pair| pair == ["-L", "127.0.0.1:41000:127.0.0.1:32768"])
+    );
+    ssh.access = Access::TailscaleSsh;
+    let tailscale = args(ssh.port_forward(41000, 32768).unwrap().unwrap());
+    assert_eq!(&tailscale[..3], ["tailscale", "ssh", "me@builder"]);
+    let this_pc = Host {
+        name: "local".into(),
+        access: Access::ThisPc,
+        address: None,
+        docker: None,
+    };
+    assert!(
+        this_pc.socket_forward(Path::new("/x.sock")).unwrap().is_none(),
+        "this computer needs no forward"
+    );
+}

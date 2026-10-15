@@ -30,22 +30,24 @@ pub(super) fn check_operations(volume: &str) -> String {
     format!("horizon-setup-check-{:08x}", hash & 0xffff_ffff)
 }
 
-/// The Docker daemon of this computer a proof uses, pinned when the proof starts: every
-/// docker command of the proof and of its cleanup goes to that daemon, so a Docker context
-/// switched meanwhile never sends one to another machine.
+/// The Docker daemon a proof uses, pinned when the proof starts: every docker command of
+/// the proof and of its cleanup goes to that daemon, so a Docker context switched
+/// meanwhile never sends one to another machine. It is this computer's, or the engine of
+/// a Docker host saved in Cloud settings, forwarded over SSH while this value lives.
 #[derive(Clone, Debug, Default)]
-pub(in crate::app::cloud_panel::production::repository_setup) struct LocalDocker {
+pub(in crate::app::cloud_panel::production::repository_setup) struct Daemon {
     /// The daemon's address; none only before a proof's run has checked it, when the run
     /// sends no docker command.
     host: Option<String>,
+    /// The Docker host whose engine `host` forwards, with the session that keeps it.
+    remote: Option<std::sync::Arc<super::remote::Remote>>,
 }
 
 /// A proof's pinned daemon, shared by the proof's run, its Stop and its cleanup; empty
 /// until the proof's run has checked it.
-pub(in crate::app::cloud_panel::production::repository_setup) type Pinned =
-    std::sync::Arc<std::sync::OnceLock<LocalDocker>>;
+pub(in crate::app::cloud_panel::production::repository_setup) type Pinned = std::sync::Arc<std::sync::OnceLock<Daemon>>;
 
-impl LocalDocker {
+impl Daemon {
     /// The daemon the Docker CLI uses now, accepted only through a socket or pipe of
     /// this computer: a proof runs on this computer's Docker unless the person chose
     /// another. The proof copies the files it needs into its containers and mounts none
@@ -53,6 +55,37 @@ impl LocalDocker {
     /// settings, so its address alone pins it.
     pub(in crate::app::cloud_panel::production::repository_setup) fn resolve() -> Result<Self, String> {
         Self::accept(horizon_core::cloud_runtime::docker_daemon::Target::default().daemon())
+    }
+
+    /// The daemon of `host`, a Docker host saved in Cloud settings, or this computer's for
+    /// none or for a host that is this computer.
+    pub(in crate::app::cloud_panel::production::repository_setup) fn on(
+        host: Option<&horizon_core::cloud_runtime::docker_host::Host>,
+    ) -> Result<Self, String> {
+        match host.filter(|host| host.access != horizon_core::cloud_runtime::docker_host::Access::ThisPc) {
+            None => Self::resolve(),
+            Some(host) => {
+                let remote = super::remote::Remote::open(host)?;
+                Ok(Self {
+                    host: Some(remote.address()),
+                    remote: Some(std::sync::Arc::new(remote)),
+                })
+            }
+        }
+    }
+
+    /// The Docker host it is on, when that is not this computer.
+    pub(in crate::app::cloud_panel::production::repository_setup) fn remote(&self) -> Option<&super::remote::Remote> {
+        self.remote.as_deref()
+    }
+
+    /// What its build slots are kept by: the Docker host's name, else this computer's
+    /// daemon address.
+    pub(in crate::app::cloud_panel::production::repository_setup) fn slot_key(&self) -> String {
+        self.remote().map_or_else(
+            || self.host.clone().unwrap_or_default(),
+            |remote| format!("docker-host:{}", remote.name()),
+        )
     }
 
     /// The daemon at `endpoint`, as [`Self::resolve`] accepts it.
@@ -65,6 +98,7 @@ impl LocalDocker {
             ),
             Some(endpoint @ (Endpoint::Socket(_) | Endpoint::Pipe(_))) => Ok(Self {
                 host: Some(endpoint.address()),
+                remote: None,
             }),
             Some(endpoint) => Err(format!(
                 "Docker here uses the daemon at {}, not a socket of this computer. A proof on this computer runs on Docker through a socket of this computer: switch to a local Docker context (docker context use default) or unset DOCKER_HOST, then start the setup again.",
@@ -103,7 +137,7 @@ const CLEANUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Where a cleanup's docker commands go and when it gives up on the rest of them.
 struct Cleanup<'a> {
-    daemon: &'a LocalDocker,
+    daemon: &'a Daemon,
     deadline: std::time::Instant,
 }
 
@@ -162,7 +196,7 @@ fn arguments<'a>(words: impl IntoIterator<Item = &'a str>) -> Vec<String> {
 /// what it started past that; its standard output when it succeeded in time. For a
 /// removal that must also run after a proof was stopped.
 pub(in crate::app::cloud_panel::production::repository_setup) fn remove_now(
-    daemon: &LocalDocker,
+    daemon: &Daemon,
     args: &[&str],
 ) -> Option<String> {
     let cleanup = Cleanup {
@@ -194,7 +228,12 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_reso
     pinned: Option<Pinned>,
     wait: bool,
 ) {
-    expect_removal(repository, run);
+    let docker_host = pinned
+        .as_ref()
+        .and_then(|pinned| pinned.get())
+        .and_then(Daemon::remote)
+        .map(|remote| remote.name().to_owned());
+    expect_removal(repository, run, docker_host.as_deref());
     let (image, volume) = run_names(repository, run);
     let resources = RunResources::new(image, volume);
     let remove = move || {
@@ -232,9 +271,12 @@ struct RunResources {
 /// they are on once a proof or cleanup knew it.
 struct Pending {
     resources: RunResources,
-    daemon: Option<LocalDocker>,
+    daemon: Option<Daemon>,
     /// A thread is removing them now.
     working: bool,
+    /// The Docker host they are on, by name, as an earlier Horizon kept them: its forward
+    /// opens again for the retry.
+    docker_host: Option<String>,
 }
 
 /// Every run whose resources are not shown gone yet: from the moment the run is let go
@@ -248,30 +290,67 @@ fn pending() -> std::sync::MutexGuard<'static, Vec<Pending>> {
 }
 
 /// Notes that the resources of `run` in `repository` are to be removed, before any thread
-/// works on them, so an exit that comes first keeps them for the next run.
-pub(in crate::app::cloud_panel::production::repository_setup) fn expect_removal(repository: &Path, run: &str) {
+/// works on them, so an exit that comes first keeps them for the next run, on
+/// `docker_host` when the run built on one.
+pub(in crate::app::cloud_panel::production::repository_setup) fn expect_removal(
+    repository: &Path,
+    run: &str,
+    docker_host: Option<&str>,
+) {
     let (image, volume) = run_names(repository, run);
     let mut pending = pending();
-    if !pending.iter().any(|known| known.resources.volume == volume) {
-        pending.push(Pending {
+    match pending.iter_mut().find(|known| known.resources.volume == volume) {
+        Some(known) => {
+            if known.docker_host.is_none() {
+                known.docker_host = docker_host.map(str::to_owned);
+            }
+        }
+        None => pending.push(Pending {
             resources: RunResources::new(image, volume),
             daemon: None,
             working: true,
-        });
+            docker_host: docker_host.map(str::to_owned),
+        }),
     }
 }
 
 /// The daemon of this computer that a cleanup without a pinned daemon goes to.
 #[cfg(not(test))]
-fn cleanup_daemon() -> Option<LocalDocker> {
-    LocalDocker::resolve().ok()
+fn cleanup_daemon() -> Option<Daemon> {
+    Daemon::resolve().ok()
 }
 
 /// A test never sends a cleanup to the Docker daemon of the computer it runs on. A daemon
 /// that does not answer would hold each dropped run for the whole cleanup timeout, and
 /// each test app's exit for its wait, which made one Windows CI run time out.
 #[cfg(test)]
-fn cleanup_daemon() -> Option<LocalDocker> {
+fn cleanup_daemon() -> Option<Daemon> {
+    None
+}
+
+/// The daemon of the Docker host `name` saved in Cloud settings, forwarded again for a
+/// retry; none when the host is no longer saved or cannot be reached now.
+#[cfg(not(test))]
+fn reopen(name: &str) -> Option<Daemon> {
+    let path = horizon_core::HorizonHome::resolve()
+        .root()
+        .join("cloud")
+        .join("settings.json");
+    let settings = horizon_core::cloud_runtime::settings::Settings::load(&path).ok()?;
+    let host = settings.docker_hosts.iter().find(|host| host.name == name)?;
+    Daemon::on(Some(host))
+        .map_err(|error| {
+            tracing::warn!(
+                host = name,
+                "cannot reach the Docker host to remove a setup run's resources: {error}"
+            )
+        })
+        .ok()
+}
+
+/// A test never reaches a Docker host.
+#[cfg(test)]
+fn reopen(_name: &str) -> Option<Daemon> {
     None
 }
 
@@ -302,28 +381,46 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn retry_unremoved
             if let (Some(image), Some(volume)) = (entry["image"].as_str(), entry["volume"].as_str())
                 && !pending.iter().any(|known| known.resources.volume == volume)
             {
+                let docker_host = entry["docker_host"].as_str().map(str::to_owned);
                 pending.push(Pending {
                     resources: RunResources::new(image.to_owned(), volume.to_owned()),
-                    daemon: entry["host"].as_str().map(|host| LocalDocker {
-                        host: Some(host.to_owned()),
-                    }),
+                    // A forwarded socket is gone with the Horizon that opened it.
+                    daemon: entry["host"]
+                        .as_str()
+                        .filter(|_| docker_host.is_none())
+                        .map(|host| Daemon {
+                            host: Some(host.to_owned()),
+                            remote: None,
+                        }),
                     working: false,
+                    docker_host,
                 });
             }
         }
     }
-    let waiting: Vec<(RunResources, Option<LocalDocker>)> = pending()
+    let waiting: Vec<(RunResources, Option<Daemon>, Option<String>)> = pending()
         .iter_mut()
         .filter(|known| !known.working)
         .map(|known| {
             known.working = true;
-            (known.resources.clone(), known.daemon.clone())
+            (known.resources.clone(), known.daemon.clone(), known.docker_host.clone())
         })
         .collect();
-    for (resources, daemon) in waiting {
-        super::super::run::keep_ending(std::thread::spawn(move || match daemon.or_else(cleanup_daemon) {
-            Some(daemon) => resources.remove_or_keep(daemon),
-            None => resources.set_waiting(None),
+    for (resources, daemon, docker_host) in waiting {
+        super::super::run::keep_ending(std::thread::spawn(move || {
+            // Resources on a Docker host are never looked for on this computer's daemon,
+            // where they are missing and would look removed.
+            // A forward that ended forwards nothing again: the host's name opens a new one.
+            let daemon = daemon.filter(|daemon| daemon.remote().is_none_or(super::remote::Remote::alive));
+            let daemon = match (daemon, docker_host) {
+                (Some(daemon), _) => Some(daemon),
+                (None, Some(name)) => reopen(&name),
+                (None, None) => cleanup_daemon(),
+            };
+            match daemon {
+                Some(daemon) => resources.remove_or_keep(daemon),
+                None => resources.set_waiting(None),
+            }
         }));
     }
 }
@@ -338,6 +435,12 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn keep_unremoved(
                 "image": known.resources.image,
                 "volume": known.resources.volume,
                 "host": known.daemon.as_ref().and_then(|daemon| daemon.host.clone()),
+                "docker_host": known
+                    .daemon
+                    .as_ref()
+                    .and_then(Daemon::remote)
+                    .map(super::remote::Remote::name)
+                    .or(known.docker_host.as_deref()),
             })
         })
         .collect();
@@ -364,18 +467,21 @@ impl RunResources {
     }
 
     /// Removes them; what a cleanup cannot show gone is logged and kept for a retry.
-    fn remove_or_keep(self, daemon: LocalDocker) {
+    fn remove_or_keep(self, daemon: Daemon) {
         {
             let mut pending = pending();
+            let docker_host = daemon.remote().map(|remote| remote.name().to_owned());
             match pending.iter_mut().find(|known| known.resources.volume == self.volume) {
                 Some(known) => {
                     known.daemon = Some(daemon.clone());
                     known.working = true;
+                    known.docker_host = docker_host.or_else(|| known.docker_host.take());
                 }
                 None => pending.push(Pending {
                     resources: self.clone(),
                     daemon: Some(daemon.clone()),
                     working: true,
+                    docker_host,
                 }),
             }
         }
@@ -392,7 +498,7 @@ impl RunResources {
     }
 
     /// Marks them as waiting for another try, on `daemon` when it is known.
-    fn set_waiting(&self, daemon: Option<LocalDocker>) {
+    fn set_waiting(&self, daemon: Option<Daemon>) {
         if let Some(known) = pending().iter_mut().find(|known| known.resources.volume == self.volume) {
             known.working = false;
             known.daemon = daemon.or_else(|| known.daemon.take());
@@ -402,7 +508,7 @@ impl RunResources {
     /// Removes them, again and again until a listing shows none left, within the
     /// cleanup's deadline; whether one did. A check stopped mid-way can still have its
     /// container appear a moment later, so a second pass always follows a pause.
-    fn remove(&self, daemon: &LocalDocker) -> bool {
+    fn remove(&self, daemon: &Daemon) -> bool {
         let cleanup = &Cleanup {
             daemon,
             deadline: std::time::Instant::now() + CLEANUP_TIMEOUT,
@@ -563,15 +669,12 @@ mod tests {
     #[test]
     fn only_a_socket_of_this_computer_is_pinned() {
         use horizon_core::cloud_runtime::docker_daemon::Endpoint;
-        let socket = LocalDocker::accept(Some(Endpoint::parse("unix:///run/user/1000/docker.sock"))).unwrap();
+        let socket = Daemon::accept(Some(Endpoint::parse("unix:///run/user/1000/docker.sock"))).unwrap();
         assert_eq!(socket.host(), Some("unix:///run/user/1000/docker.sock"));
         for refused in ["tcp://127.0.0.1:2376", "ssh://builder@build.example"] {
-            assert!(
-                LocalDocker::accept(Some(Endpoint::parse(refused))).is_err(),
-                "{refused}"
-            );
+            assert!(Daemon::accept(Some(Endpoint::parse(refused))).is_err(), "{refused}");
         }
-        assert!(LocalDocker::accept(None).is_err(), "an unknown daemon is refused");
+        assert!(Daemon::accept(None).is_err(), "an unknown daemon is refused");
     }
 
     #[test]

@@ -244,6 +244,8 @@ pub(in crate::app::cloud_panel::production) struct Run {
     pub(super) fixer: Option<Fixer>,
     /// Why the last thing asked of this run did not happen, shown with its progress.
     pub(super) notice: Option<String>,
+    /// The Docker host its proof builds on; none for this computer.
+    pub(super) build_on: Option<horizon_core::cloud_runtime::docker_host::Host>,
 }
 
 /// What the person did in the progress view.
@@ -349,6 +351,7 @@ impl Run {
             fix_panel: None,
             fixer: None,
             notice: None,
+            build_on: None,
         }
     }
 
@@ -772,7 +775,8 @@ impl Run {
     /// the same repository waits for that, so two setups never work in one folder.
     pub(super) fn discard(self) {
         // Noted before the thread starts, so an exit that comes first keeps them.
-        proof::expect_removal(&self.repository, &proof::run_id(&self.status_path));
+        let docker_host = self.build_on.as_ref().map(|host| host.name.as_str());
+        proof::expect_removal(&self.repository, &proof::run_id(&self.status_path), docker_host);
         let repository = self.repository.clone();
         keep_ending_of(&repository, std::thread::spawn(move || drop(self)));
     }

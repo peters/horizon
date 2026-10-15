@@ -179,6 +179,55 @@ impl Host {
         })
     }
 
+    /// The SSH command that forwards this host's engine socket to `local`, a socket path
+    /// of this computer in a private folder, until the command ends: Docker commands
+    /// then reach the host's engine at `unix://<local>`, as a setup proof does when it
+    /// builds on this host. None for this computer.
+    /// # Errors
+    /// As [`Host::validate`].
+    pub fn socket_forward(&self, local: &Path) -> Result<Option<Command>, CloudError> {
+        let remote = REMOTE_SOCKET.trim_start_matches("unix://");
+        self.forward(&format!("{}:{remote}", local.display()))
+    }
+
+    /// The SSH command that forwards `local_port` on this computer's loopback to
+    /// `remote_port` on this host's loopback until the command ends, as for a desktop
+    /// that a container on the host publishes there. None for this computer.
+    /// # Errors
+    /// As [`Host::validate`].
+    pub fn port_forward(&self, local_port: u16, remote_port: u16) -> Result<Option<Command>, CloudError> {
+        self.forward(&format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"))
+    }
+
+    /// An SSH session that runs nothing and keeps the local forward `spec` open. It ends
+    /// at once when the forward cannot be made, and replaces a socket left at its path.
+    fn forward(&self, spec: &str) -> Result<Option<Command>, CloudError> {
+        self.validate()?;
+        let address = self.address.as_deref().unwrap_or_default();
+        let options = [
+            "-N",
+            "-o",
+            "ExitOnForwardFailure=yes",
+            "-o",
+            "StreamLocalBindUnlink=yes",
+            "-L",
+            spec,
+        ];
+        Ok(match self.access {
+            Access::ThisPc => None,
+            Access::Ssh => {
+                let mut command = Command::new("ssh");
+                command.args(SSH_OPTIONS).args(options).arg("--").arg(address);
+                Some(command)
+            }
+            Access::TailscaleSsh => {
+                let mut command = Command::new("tailscale");
+                command.args(["ssh", address]).args(SSH_OPTIONS).args(options);
+                Some(command)
+            }
+        })
+    }
+
     /// The SSH `ProxyCommand` that reaches a worker on this host's loopback, or None
     /// for this computer, whose loopback is the worker's own. OpenSSH runs it in a
     /// POSIX shell, so a Windows controller cannot use it.
