@@ -23,8 +23,10 @@ impl<'a> SetupBoardView<'a> {
         Self { panel }
     }
 
-    /// Draws the board. Returns true when the pointer is over it, for focus tracking.
-    pub fn show(&mut self, ui: &mut Ui, _is_focused: bool) -> bool {
+    /// Draws the board. Returns true when the pointer is over it, for focus tracking. While
+    /// `interactive` is false, as under an open dialog or during a canvas pan, a press does
+    /// nothing; the board does not fade, so a pan does not make it flicker.
+    pub fn show(&mut self, ui: &mut Ui, _is_focused: bool, interactive: bool) -> bool {
         let hovered = ui.rect_contains_pointer(ui.max_rect());
         let panel_id = self.panel.id.0;
         let Some(board) = self.panel.content.setup_board_mut() else {
@@ -55,7 +57,7 @@ impl<'a> SetupBoardView<'a> {
                     }
                 });
             });
-        if request.is_some() {
+        if interactive && request.is_some() {
             board.request = request;
         }
         hovered
@@ -251,5 +253,69 @@ fn now_color(state: RowState) -> Color32 {
         RowState::Failed => theme::PALETTE_RED(),
         RowState::Ready => theme::PALETTE_GREEN(),
         RowState::Working | RowState::Stopped => theme::FG_SOFT(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_egui::DiscardTextures;
+    use egui::{Context, Event, Modifiers, Pos2, RawInput, Rect};
+    use horizon_core::{PanelId, PanelKind, PanelOptions, WorkspaceId};
+
+    /// Clicks **Set up a repository** on a drawn board and returns what the board asks.
+    fn click_new_setup(interactive: bool) -> Option<Request> {
+        let mut panel = Panel::spawn(
+            PanelId(1),
+            WorkspaceId(0),
+            PanelOptions {
+                kind: PanelKind::SetupBoard,
+                ..PanelOptions::default()
+            },
+        )
+        .unwrap();
+        let ctx = Context::default();
+        let mut run = |events| {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(760.0, 620.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    SetupBoardView::new(&mut panel).show(ui, false, interactive);
+                },
+            )
+            .discard_textures()
+        };
+        let output = run(Vec::new());
+        let at = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.text() == "Set up a repository" => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("the board's Set up a repository button");
+        for pressed in [true, false] {
+            run(vec![
+                Event::PointerMoved(at),
+                Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                },
+            ]);
+        }
+        panel.content.setup_board_mut().and_then(|board| board.request.take())
+    }
+
+    #[test]
+    fn a_board_under_an_open_dialog_takes_no_clicks() {
+        assert_eq!(click_new_setup(true), Some(Request::NewSetup));
+        assert_eq!(click_new_setup(false), None);
     }
 }
