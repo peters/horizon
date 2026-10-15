@@ -60,6 +60,9 @@ REFUSED_CHANGES = {
 # default branch. And the update of a pull request's branch, which is its head.
 CONTENTS = object()
 UPDATE = re.compile(r'pulls/(?P<number>[1-9][0-9]{0,19})/update-branch')
+# The check changes that stay: ask GitHub to run a check again. A check run that an agent
+# wrote could stand in for a required check, and the merge gate trusts them.
+CHECK_CHANGES = re.compile(r'/check-(?:runs|suites)/[1-9][0-9]{0,19}/rerequest')
 # The run and job changes that stay: start again and cancel. The approval of a run or a
 # deployment is the person's.
 RUN_CHANGES = re.compile(r'/actions/(?:runs/[1-9][0-9]{0,19}/(?:rerun|rerun-failed-jobs|cancel|force-cancel)'
@@ -247,6 +250,8 @@ def rest_refusal(policy, method, parts):
         return 'this Upkeep does not let an agent dismiss a review; only the person does.'
     if first == 'pulls' and 'reviews' in parts and not REVIEW_CHANGES.fullmatch(rest):
         return 'this Upkeep changes a review only through its plain path, such as /pulls/<number>/reviews.'
+    if first in ('check-runs', 'check-suites') and not CHECK_CHANGES.fullmatch(rest):
+        return 'this Upkeep lets an agent only ask for a check again: a check run could stand in for a required check.'
     if first == 'actions' and not RUN_CHANGES.fullmatch(rest) and not DISPATCH.fullmatch(rest):
         return 'this Upkeep lets an agent only start runs again, cancel them and start listed workflows.'
     if first == 'pulls' and 'update-branch' in parts and not UPDATE.fullmatch('/'.join(parts)):

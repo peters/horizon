@@ -279,11 +279,17 @@ class Exchange(checks.Checks):
         names = list(route.repositories) if route.kind == 'search' else [repository] if repository else []
         data = None
         if rules is not None:
+            try:
+                number = checks.merge_number(route.parts, request.method) if repository else None
+            except upkeep.Refused as refused:
+                self.upkeep_refused('merge', repository, str(refused))
             data = self.upkeep_dispatch(rules, request, route, candidate, repository)
             if upkeep.reviews(request.method, route.parts):
                 data = self.upkeep_review(request, repository)
             elif upkeep.branch_written(request.method, route.parts) is not None:
                 data = self.upkeep_branch(request, route, candidate, repository)
+            elif number is not None:
+                data = self.upkeep_merge(rules, request, repository, number, candidate)
         self.forward(request, route, candidate, names, data)
 
     def forward(self, request, route, candidate, names=(), data=None):
@@ -396,7 +402,8 @@ class Exchange(checks.Checks):
             raise elsewhere(error, named) from None
         if not candidate.usable:
             raise policy.Refused(EXPIRED)
-        if plan.mutations and self.broker.policy() is not None:
+        rules = self.broker.policy() if plan.mutations else None
+        if rules is not None:
             self.upkeep_mutations(plan)
         looked = None
         if plan.ids:
@@ -415,6 +422,8 @@ class Exchange(checks.Checks):
         if plan.ids:
             policy.check_lookup(looked, plan.ids, fresh.allowed)
         features = [('GraphQL-Features', value) for value in self.request.values('graphql-features')]
+        if rules is not None:
+            self.upkeep_merges(rules, plan, fresh, granted)
         status, reply = self.broker.call(rest.API, 'POST', '/graphql', candidate.token,
                                          plan.body(body.get('variables') or {}), features, sent=granted)
         if status == 401:

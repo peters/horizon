@@ -1,5 +1,5 @@
 ---
-applyTo: "examples/cloud-worker/horizon-worker-github-upkeep,examples/cloud-worker/horizon-worker-github-api-upkeep,examples/cloud-worker/horizon-worker-github-api,examples/cloud-worker/horizon-worker-github-api-rest,examples/cloud-worker/horizon-worker-github-git-upkeep,examples/cloud-worker/horizon-worker-github-git,examples/cloud-worker/test_github_upkeep_push.py,examples/cloud-worker/horizon-worker-github-graphql-policy,examples/cloud-worker/test_github_upkeep_policy.py,crates/horizon-core/src/upkeep/worker/policy.rs"
+applyTo: "examples/cloud-worker/horizon-worker-github-upkeep,examples/cloud-worker/horizon-worker-github-api-upkeep,examples/cloud-worker/horizon-worker-github-api,examples/cloud-worker/horizon-worker-github-api-rest,examples/cloud-worker/horizon-worker-github-git-upkeep,examples/cloud-worker/horizon-worker-github-git,examples/cloud-worker/test_github_upkeep_push.py,examples/cloud-worker/horizon-worker-github-graphql-policy,examples/cloud-worker/test_github_upkeep_policy.py,examples/cloud-worker/test_github_upkeep_gate.py,crates/horizon-core/src/upkeep/worker/policy.rs"
 ---
 
 # Trust boundary of the Upkeep policy of the worker's GitHub access
@@ -26,6 +26,16 @@ agent-writable, so nothing there is a control. Check that:
   REST review (`upkeep.reviews`), refuses a body that is not JSON with each field
   once, and refuses the `APPROVE` event in any case and spacing, also through the
   GraphQL `addPullRequestReview`. A dismissal of a review is refused.
+- A merge of a pull request (REST `PUT .../pulls/N/merge`, GraphQL `mergePullRequest`,
+  the only mutation of its document) reaches GitHub only after `gate` passed for the
+  exact head that the request names. The gate trusts
+  only GitHub's answers: `/user`, the pull request, every check run (all pages), the
+  combined status, the changed files and, when a workflow file changes, every commit's
+  author, committer and verified signature (all of them, or the `workflows` blocker
+  stays). The hard checks are never lifted; an approval counts only as the signed-in
+  account's latest decision, `APPROVED`, on the exact head, and lifts `workflows` only
+  with the line `upkeep-allow: workflows`. Its trust
+  rests on the refusal of every agent approval above.
 - A workflow dispatch passes only for a listed (repository, file) pair, resolved
   through GitHub from the ID or file name in the path, and only with the `ref` of the
   default branch that GitHub reports: on another ref, an agent could have pushed the
@@ -46,5 +56,5 @@ agent-writable, so nothing there is a control. Check that:
 
 Code that workflows run outside `.github/workflows`, pushes to other branches than
 the default one (also of workflow files, which GitHub runs for a push with the
-repository's secrets), merges (a later part adds a gate), and outbound network connections: the
+repository's secrets), merges made outside the worker, and outbound network connections: the
 worker has no outbound limit. The docs say so; do not claim otherwise.

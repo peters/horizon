@@ -546,8 +546,8 @@ these requests of every agent of the cloud:
 - A change of a file in `.github/workflows` through the contents API.
 - A release and a release asset (a release publishes the repository), a commit
   status (it could stand in for a required check), and a deployment or a repository
-  dispatch (either can start a workflow with the secrets of the repository). A check
-  run needs the token of the GitHub App installation, which the worker does not have.
+  dispatch (either can start a workflow with the secrets of the repository). A new or
+  changed check run is refused for the same reason; asking for a check again passes.
 - The approval of a run or a deployment, and any other change of Actions than
   starting a run again or cancelling it.
 - The approval of a pull request, and the dismissal of a review: only you approve.
@@ -562,10 +562,10 @@ these requests of every agent of the cloud:
   through the API: push a new branch with Git.
 
 The agent can still comment, review without approving, label, open and update pull
-requests, push to branches, start runs again and cancel them, and merge pull
-requests. The GitHub App keeps the permission `workflows: write`, because the merge
-of a Dependabot update of GitHub Actions needs it. A planned part moves the last
-step of each merge from the agent to a gate in the root service.
+requests, push to branches, start runs again and cancel them, and ask for a merge,
+which the [merge gate](#the-merge-gate) decides. The GitHub App keeps the permission
+`workflows: write`, because the merge of a Dependabot update of GitHub Actions needs
+it.
 
 Every agent of a worker, with or without an Upkeep, can read the global security
 advisories (`gh api /advisories`), which are public, for example for a safety
@@ -601,6 +601,43 @@ The policy does not stop these:
   events, with the secrets of the repository.
 - A change of code that a workflow runs, for example a build script or a local
   action in `.github/actions`. Only `.github/workflows` is protected.
+
+### The merge gate
+
+The root service, not the agent, decides the last step of a merge. A merge of a pull
+request through the API or GraphQL (`gh pr merge`) reaches GitHub only when GitHub
+shows all of these. Nothing lifts them:
+
+- A GraphQL merge is the only change of its request.
+
+- The merge names the head commit (`gh pr merge --match-head-commit <head>`), and
+  that commit is the head of the pull request now. GitHub then merges only that head.
+- The pull request is open and not a draft, and GitHub reports it ready to merge
+  (`clean`): the required checks and reviews passed, and the branch is up to date
+  where a rule requires that.
+- Every check run on the head completed as success, neutral or skipped, and the
+  commit statuses all passed.
+
+These blockers also stop a merge, until you approve that exact head:
+
+- `author`: neither a listed bot nor your account on its own `upkeep/` branch in
+  the same repository opened the pull request.
+- `no-checks`: the head has no check run and no commit status.
+- `workflows`: a file in `.github/workflows` changes, and not every commit of the
+  pull request is the work of a listed bot (the bot wrote it, and GitHub or the bot
+  committed it with a signature that GitHub verified, as for Dependabot). The agent
+  can push to a bot's branch, and `author` sees only who opened the pull request.
+
+An **Approve** review of your account on the head lifts `author` and `no-checks`,
+while it is your latest Approve or Request changes review of the pull request. It
+lifts `workflows` only when its body has the line `upkeep-allow: workflows`: a
+workflow change is the riskiest thing to merge unread. The agent works as your
+account too, but the policy refuses each approval that it tries, so an approval is
+yours. GitHub does not let an account approve its own pull request; for such a pull
+request the refusal asks you to merge it yourself.
+
+Otherwise the merge does not reach GitHub, and the refusal names the blockers and
+says "Approve to merge", or "Approve with the line upkeep-allow: workflows". The refusal shows on the board.
 
 ## Trust boundary of the shared instructions
 

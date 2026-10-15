@@ -98,6 +98,8 @@ class PolicyTests(ServiceTestCase):
     def test_the_policy_refuses_changes_that_an_upkeep_never_needs(self):
         policy = upkeep.Policy()
         refused = [('POST', 'releases'), ('PATCH', 'releases/1'), ('POST', 'releases/assets'),
+                   ('POST', 'check-runs'), ('PATCH', 'check-runs/1'), ('POST', 'check-suites'),
+                   ('PATCH', 'check-suites/preferences'), ('POST', 'check-runs/01/rerequest'),
                    ('POST', 'dispatches'), ('POST', 'deployments'), ('POST', 'statuses/' + HEAD), ('PUT', 'contents/.github/workflows/ci.yml'),
                    ('DELETE', 'contents/.github/workflows/ci.yml'), ('POST', 'actions/runs/1/approve'),
                    ('POST', 'actions/runs/1/pending_deployments'), ('DELETE', 'actions/caches'),
@@ -116,6 +118,7 @@ class PolicyTests(ServiceTestCase):
                    ('PUT', 'contents/src/main.rs'), ('PUT', 'contents/.github/dependabot.yml'),
                    ('POST', 'actions/runs/1/rerun'), ('POST', 'actions/runs/1/rerun-failed-jobs'),
                    ('POST', 'actions/runs/1/cancel'), ('POST', 'actions/jobs/1/rerun'),
+                   ('POST', 'check-runs/1/rerequest'), ('POST', 'check-suites/1/rerequest'),
                    ('PUT', 'pulls/1/merge'), ('DELETE', 'git/refs/heads/dependabot/cargo/x'),
                    ('POST', 'pulls/3/reviews'), ('PUT', 'pulls/3/reviews/8'), ('DELETE', 'pulls/3/reviews/8'),
                    ('POST', 'actions/workflows/release.yml/dispatches')]

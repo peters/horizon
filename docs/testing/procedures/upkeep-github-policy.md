@@ -3,7 +3,7 @@ procedure: upkeep-github-policy
 feature: The Upkeep policy of a worker's GitHub access (horizon-worker-github upkeep)
 platforms: [linux]
 cost: rents compute
-destructive: yes (GPO-04 deletes the cloud that the setup made)
+destructive: yes (GPO-05 deletes the cloud that the setup made)
 secrets: [GitHub sign-in of Cloud settings, Hetzner API token, ChatGPT login of Codex]
 owner: peters
 ---
@@ -13,8 +13,8 @@ owner: peters
 ## 1. Purpose
 
 This procedure proves that on an Upkeep cloud the worker's GitHub service refuses the
-changes that an Upkeep never needs, an agent's approval included, and that the board
-shows the refusals.
+changes that an Upkeep never needs, an agent's approval included, that a merge passes
+only the merge gate, and that the board shows the refusals.
 
 ## 2. Applicability
 
@@ -27,18 +27,19 @@ shows the refusals.
 ## 3. Safety
 
 > **CAUTION:** THE SETUP RENTS A HETZNER SERVER AND A VOLUME. The provider bills them
-> until GPO-04 deletes the cloud.
+> until GPO-05 deletes the cloud.
 
-> **CAUTION:** USE A TEST REPOSITORY THAT YOU OWN. The tasks push a branch and ask for
-> a workflow dispatch in it. Never use a repository with production workflows.
+> **CAUTION:** USE A TEST REPOSITORY THAT YOU OWN. The tasks push branches, merge a pull
+> request and ask for a workflow dispatch in it. Never use a repository with production workflows.
 
 ## 4. Equipment and preconditions
 
 - The persistent launcher of the [cloud panels procedure](cloud-panels.md), with Cloud
   settings that have a GitHub sign-in, a Hetzner project and the ChatGPT login of Codex.
   `<data-home>` is the host path of its private home, as that procedure defines it.
-- A test repository `<repo>` with a workflow `.github/workflows/ci.yml` and a second
-  workflow `.github/workflows/manual.yml` that has `on: workflow_dispatch`.
+- A test repository `<repo>` with a workflow `.github/workflows/ci.yml` that runs on
+  `pull_request`, and a second workflow `.github/workflows/manual.yml` that has
+  `on: workflow_dispatch`.
 
 ## 5. Setup
 
@@ -112,13 +113,34 @@ Run the commands of the tasks in the shell panel of setup step 2, in `/tmp/check
    Result: The approval fails with a reason that starts with `Horizon: this Upkeep`.
    The comment review works.
 
-### 6.3 GPO-03: The refusals are logged and shown
+### 6.3 GPO-03: The merge gate
+
+1. Wait until the checks of the pull request of GPO-02 pass, and note its head as
+   `<head>` (`gh pr view <number> --repo <repo> --json headRefOid --jq .headRefOid`).
+   Run `gh pr merge <number> --repo <repo> --squash`.
+
+   Result: The merge fails with the reason that this Upkeep merges only the head
+   commit that the merge names.
+
+2. Run `gh pr merge <number> --repo <repo> --squash --match-head-commit <head>`.
+
+   Result: The merge fails with the reason that the pull request is blocked on
+   `author`: the branch `policy-check` does not start with `upkeep/`. The pull request
+   stays open.
+
+3. In `/tmp/check`, run `git push origin HEAD:refs/heads/upkeep/policy-check`, open a
+   pull request for it as in GPO-02, wait until its checks pass, and merge it with
+   `--match-head-commit` as in step 2.
+
+   Result: GitHub merges the pull request.
+
+### 6.4 GPO-04: The refusals are logged and shown
 
 1. Type `ls -ld /workspace/.horizon-gate /workspace/.horizon-gate/refused.jsonl` and
    `cat /workspace/.horizon-gate/refused.jsonl` in the shell panel.
 
    Result: `ls` shows root as the owner of the folder (`drwxr-xr-x`) and of the file
-   (`-rw-r--r--`). The file has one line for each refusal of GPO-01 and GPO-02.
+   (`-rw-r--r--`). The file has one line for each refusal of GPO-01 to GPO-03.
 
 2. Wait one minute for the next exchange. On this computer, type
    `grep -c "The worker refused" <data-home>/.horizon/upkeep/<cloud>/status.json`.
@@ -127,21 +149,23 @@ Run the commands of the tasks in the shell panel of setup step 2, in `/tmp/check
    **Latest run** on the board shows them among the newest lines, unless the agent
    wrote newer lines since.
 
-### 6.4 GPO-04: Delete the cloud
+### 6.5 GPO-05: Delete the cloud
 
-1. Close the pull request of GPO-02, and delete the branch and the label `policy-check`.
-   Remove the Upkeep cloud from its card and confirm the deletion.
+1. Close the pull request of GPO-02, and delete the branches and the label
+   `policy-check`. Remove the Upkeep cloud from its card and confirm the deletion.
 
    Result: Hetzner shows no server or volume of the cloud.
 
 ## 7. Pass criteria
 
-- GPO-01 to GPO-04 give their results.
+- GPO-01 to GPO-05 give their results.
+- An approval that lifts a blocker is covered by the tests of the gate, because the
+  account of the worker cannot approve its own pull request.
 - No refused change reached GitHub.
 
 ## 8. Cleanup
 
-GPO-04 deletes every resource of the setup.
+GPO-05 deletes every resource of the setup.
 
 ## 9. Record of results
 
