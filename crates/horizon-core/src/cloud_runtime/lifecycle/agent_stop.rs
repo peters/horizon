@@ -7,7 +7,10 @@ use super::{Cancellation, CreateState, Error, Result, Settings, Stage, Store, mu
 use crate::cloud_runtime::{command::Runner, ssh::Connection, state::Deployment};
 use horizon_cloud::Worker;
 use serde::Deserialize;
-use std::{path::Path, time::Duration};
+use std::{
+    path::Path,
+    time::{Duration, Instant},
+};
 
 /// Prints the recorded request, or nothing on an image without the stop service.
 const TAKE: &str = "if command -v horizon-worker-stopd >/dev/null 2>&1; then exec horizon-worker-stopd --take; fi";
@@ -150,8 +153,13 @@ pub fn stop_for_agent(root: &Path, settings: &Settings, cancel: &Cancellation, s
         |worker, command| run(worker, settings, root, &Cancellation::default(), command),
         |store| stop_locked(store, settings, cancel, &observe).map(drop),
         |error| uncertain_outcome(announced.get(), pending.get(), error),
+        LOCK_PATIENCE,
     )
 }
+
+/// How long a stop for an agent waits for another operation that holds the cloud, such
+/// as another Horizon's stop for the same request, before it leaves the request to it.
+const LOCK_PATIENCE: Duration = Duration::from_secs(30);
 
 /// Whether a failed stop may still have taken effect: its last announced provider
 /// request is pending, or it was cancelled after a request was sent, which the provider
@@ -168,19 +176,20 @@ pub(super) fn stop_with(
     run: impl Fn(&Worker, &str) -> Result<String>,
     stop: impl FnOnce(&Store) -> Result<()>,
     uncertain: impl Fn(&Error) -> bool,
+    patience: Duration,
 ) -> Result<Deployment> {
     // Best effort: a worker the stop already reached cannot answer, and keeps the stop.
     let untake = |worker: &Worker| {
         let _ = run(worker, &format!("horizon-worker-stopd --untake {}", request.at));
     };
-    let store = match Store::lock(root) {
-        Ok(store) => store,
-        // Another operation holds the cloud: the request goes back to the worker it came from.
-        Err(error) => {
-            if let Some(worker) = &request.worker {
-                untake(worker);
-            }
-            return Err(error);
+    // Another operation holds the cloud, which may be another Horizon stopping it for this
+    // very request: it is waited for, and the request is left to it, not given back, so
+    // that the two cannot drop it between them.
+    let waited = Instant::now();
+    let store = loop {
+        match Store::lock(root) {
+            Err(Error::Busy) if waited.elapsed() < patience => std::thread::sleep(Duration::from_millis(250)),
+            locked => break locked?,
         }
     };
     let state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
@@ -234,16 +243,19 @@ pub(super) fn stop_with(
         agent: Some(request.agent.clone()),
         session: Some(request.session.clone()),
     });
-    store.save(&attributed)?;
+    if let Err(error) = store.save(&attributed) {
+        untake(&worker);
+        return Err(error);
+    }
     if let Err(error) = stop(&store) {
         // Only a stop that certainly did not happen gives the request back and drops the
         // attribution; one whose provider request may have taken effect keeps both.
-        if !uncertain(&error)
-            && let Some(mut now) = store.load()?
-        {
-            now.last_self_stop = earlier;
-            store.save(&now)?;
+        if !uncertain(&error) {
             untake(&worker);
+            if let Some(mut now) = store.load()? {
+                now.last_self_stop = earlier;
+                store.save(&now)?;
+            }
         }
         return Err(error);
     }
