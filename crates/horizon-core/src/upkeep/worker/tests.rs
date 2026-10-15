@@ -104,6 +104,13 @@ fn the_command_runs_as_the_agent_where_the_worker_isolates_it() {
         .collect();
     long.order.clone_from(&long.repositories);
     long.authors = (0..AUTHOR_LIMIT).map(|n| format!("{n:0>39}[bot]")).collect();
+    // The workflows travel in the policy, not in this command.
+    long.workflows = (0..policy::WORKFLOW_LIMIT)
+        .map(|n| policy::Workflow {
+            repository: long.repositories[n].clone(),
+            workflow: format!("{n:0>96}.yml"),
+        })
+        .collect();
     assert!(long.validate().is_ok());
     let longest = command("abc-123", &"a".repeat(40), &long, Signals::default()).unwrap();
     // Room for the scripts to grow before this limit is a concern.

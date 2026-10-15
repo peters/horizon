@@ -439,6 +439,11 @@ Pull requests opened by: {authors}.\n\n\
     )
 }
 
+/// A script as the worker's shell and Python read it, also from a checkout with CRLF lines.
+fn unix(script: &str) -> String {
+    script.replace("\r\n", "\n")
+}
+
 /// The remote command for one exchange. It runs as the account that owns the agent's home:
 /// through `horizon-worker-tailnet agent` where the worker isolates agents, so root never
 /// writes into a folder the agent controls.
@@ -454,18 +459,20 @@ pub fn command(cloud_id: &str, revision: &str, config: &Config, signals: Signals
         return Err(Error::Invalid("Invalid cloud for Upkeep"));
     }
     config.validate()?;
-    // The worker reads the instructions from the prompt only, so they travel once.
+    // The worker reads the instructions from the prompt only, so they travel once, and the
+    // workflows from the policy that `policy::send` sets.
     let mut worker_config = serde_json::to_value(config).map_err(|_| Error::Invalid("Invalid Upkeep settings"))?;
     if let Some(fields) = worker_config.as_object_mut() {
         fields.remove("instructions");
+        fields.remove("workflows");
     }
     let payload = serde_json::json!({
         "session": session(cloud_id),
         "revision": revision,
         "config": worker_config,
         "prompt": prompt(config),
-        "run": RUN,
-        "scheduler": SCHEDULER,
+        "run": unix(RUN),
+        "scheduler": unix(SCHEDULER),
         "run_now": match (signals.run_now, signals.run_token) {
             (false, _) => serde_json::Value::Bool(false),
             (true, None) => serde_json::Value::Bool(true),
@@ -474,7 +481,7 @@ pub fn command(cloud_id: &str, revision: &str, config: &Config, signals: Signals
         "paused": signals.paused,
     });
     let engine = base64::engine::general_purpose::STANDARD;
-    let script = engine.encode(EXCHANGE);
+    let script = engine.encode(unix(EXCHANGE));
     let payload = engine.encode(payload.to_string());
     let command = format!(
         "launcher=python3; if [ -f /run/horizon-tailnet/agent-isolation ]; then launcher='horizon-worker-tailnet agent python3'; fi; \
