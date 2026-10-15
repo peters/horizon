@@ -175,3 +175,8 @@ Also cover a retry whose existing automatic record still has no publication, suc
 as after missing sign-in. That record has no publisher to retain and must not
 adopt a later scoped override without a reviewed choice. Already bound records
 retain their original publisher regardless of current preferences.
+
+A launch that omits its image can refer to a legacy record with an explicit image
+and no publication. That record is bound to its explicit destination; automatic
+preflight must not classify it as an unbound automatic retry. Cover this through
+the actual UI preparation path and keep later local overrides out of the record.

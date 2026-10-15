@@ -203,7 +203,9 @@ impl Input {
         let new_record = record.is_none();
         let unbound_automatic = publishing_selection.is_none()
             && self.launch.profile.automatic_image()
-            && record.as_ref().is_none_or(|state| state.publication.is_none());
+            && record
+                .as_ref()
+                .is_none_or(|state| state.publication.is_none() && state.profile.automatic_image());
         send(Report::Record(record.map(Box::new)));
         let settings = Settings::for_cloud(&self.settings_path, &self.launch.placement)
             .map_err(|error| Failure::Unconfigured(format!("{error}. Configure {}", self.settings_path.display())))?;
@@ -598,6 +600,48 @@ mod tests {
             matches!(result, Err(Failure::Refused(message)) if message.contains("changed since it was shown")),
             "an automatic record without a publisher still needs review of a scoped override"
         );
+        assert_eq!(
+            std::fs::read(state_root.join("deployment.json")).unwrap(),
+            before_record
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("settings.json")).unwrap(),
+            before_settings
+        );
+        assert!(!temp.path().join("registry").exists());
+        assert!(!settings.docker_config.exists());
+    }
+
+    #[test]
+    fn an_omitted_image_retry_keeps_the_legacy_records_explicit_image() {
+        use horizon_core::cloud_runtime::{Cancellation, publishing, setup};
+        let temp = tempfile::tempdir().unwrap();
+        let repository = temp.path().join("source");
+        std::fs::create_dir(&repository).unwrap();
+        let repository = repository.canonicalize().unwrap();
+        let settings = publishing_settings(temp.path());
+        let image = "public.example/legacy/worker";
+        assert!(prepare_publishing_choice(temp.path(), &repository, &settings, None, image).is_ok());
+        let state_root = temp.path().join("fixture");
+        let before_record = std::fs::read(state_root.join("deployment.json")).unwrap();
+        setup::save_image_destination(
+            temp.path(),
+            &repository,
+            "cpu",
+            None,
+            Some(&publishing::choices(&settings).unwrap()[0]),
+            &Cancellation::default(),
+        )
+        .unwrap();
+        let scoped = Settings::load(&temp.path().join("settings.json")).unwrap();
+        let before_settings = std::fs::read(temp.path().join("settings.json")).unwrap();
+        assert!(
+            prepare_publishing_choice(temp.path(), &repository, &scoped, None, "").is_ok(),
+            "omitting the launch image must not erase the legacy record's explicit destination"
+        );
+        let retained = Store::snapshot(&state_root).unwrap().unwrap();
+        assert_eq!(retained.profile.image, image);
+        assert!(retained.publication.is_none());
         assert_eq!(
             std::fs::read(state_root.join("deployment.json")).unwrap(),
             before_record

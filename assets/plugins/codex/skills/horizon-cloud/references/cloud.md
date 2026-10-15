@@ -680,7 +680,9 @@ that choice and its named profile to the shared engine. This bridge activates no
 selector or automatic publication.
 An unstarted legacy launch with no publisher choice keeps its explicit recipe target.
 An image-omitting build keeps automatic intent.
-A durable cloud record keeps its own publishing identity.
+A durable cloud record keeps its own publishing identity. An omitted-image launch
+also keeps an explicit image already retained by a legacy record, even after a
+local destination override changes.
 Ordinary unknown legacy fields remain compatible, but mixed or downgraded
 publisher envelopes and reserved null keys are refused. Publisher choices require
 a build recipe; prebuilt launches keep their flat legacy or recipe confirmation.

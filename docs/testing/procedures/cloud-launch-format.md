@@ -101,6 +101,12 @@ settings changes or live worker actions are required.
    both the record and settings byte-identical. Already recorded publishers stay
    authoritative; no sign-in, build or allocation starts.
 
+   Run `cargo test -p horizon-ui --bin horizon an_omitted_image_retry`.
+
+   Result: An omitted-image launch can retry a legacy record that retains an
+   explicit image, even after another local destination is saved. The old image
+   remains authoritative and the record and settings stay byte-identical.
+
 2. Run the actual UI rebuild-preview regression.
 
    ```sh
