@@ -219,6 +219,7 @@ fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
     );
     let store = Store::lock(&root).unwrap();
     let mut state = cloud_runtime::state::Deployment {
+        service_admission: None,
         version: 1,
         cloud_id: "fixture".into(),
         repository: temp.path().into(),

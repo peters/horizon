@@ -1,6 +1,7 @@
 //! Durable allocation fence and per-cloud ownership lock.
 pub mod migration;
 mod replacement;
+pub mod service_admission;
 mod transaction;
 use super::{Error, Result, Stage};
 use horizon_cloud::{CreateState, Worker, WorkerSpec};
@@ -55,6 +56,8 @@ pub enum ReadyHistory {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Deployment {
     pub version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_admission: Option<service_admission::Record>,
     pub cloud_id: String,
     pub repository: PathBuf,
     pub revision: String,
@@ -147,7 +150,9 @@ impl Deployment {
     }
 
     pub(in crate::cloud_runtime) fn record_version(&self) -> u32 {
-        if self.publication.is_some() {
+        if self.service_admission.is_some() {
+            service_admission::RECORD_VERSION
+        } else if self.publication.is_some() {
             PUBLISHING_RECORD_VERSION
         } else if !self.tailnet_enrollment.is_empty() {
             ENROLLMENT_RECORD_VERSION
@@ -160,10 +165,23 @@ impl Deployment {
 
     /// Enrollment and publishing evidence fence readers that would ignore and erase it.
     pub(in crate::cloud_runtime) fn supported_version(&self) -> bool {
-        self.version == self.record_version() && self.known_version_shape()
+        self.version == self.record_version()
+            && self.known_version_shape()
+            && self
+                .service_admission
+                .as_ref()
+                .is_none_or(|record| record.valid() && record.owner().cloud_id == self.cloud_id)
     }
 
     fn known_version_shape(&self) -> bool {
+        if self.version == service_admission::RECORD_VERSION {
+            return self.service_admission.is_some()
+                && self.siblings.as_ref().is_none_or(super::siblings::Set::fits)
+                && self
+                    .publication
+                    .as_ref()
+                    .is_none_or(|record| record.validate(&self.profile).is_ok());
+        }
         if self.version == PUBLISHING_RECORD_VERSION {
             return self.publication.is_some() && self.siblings.as_ref().is_none_or(super::siblings::Set::fits);
         }
@@ -309,7 +327,12 @@ impl Store {
         if let Some(publication) = &state.publication {
             publication.validate(&state.profile)?;
         }
-        if !state.known_version_shape() {
+        if !state.known_version_shape()
+            || state
+                .service_admission
+                .as_ref()
+                .is_some_and(|record| !record.valid() || record.owner().cloud_id != state.cloud_id)
+        {
             return Err(Error::Invalid(
                 "Cloud state version does not match its enrollment evidence or siblings",
             ));
