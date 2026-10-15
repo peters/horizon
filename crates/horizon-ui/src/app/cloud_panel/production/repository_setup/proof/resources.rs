@@ -554,6 +554,15 @@ impl RunResources {
     /// cleanup's deadline; whether one did. A check stopped mid-way can still have its
     /// container appear a moment later, so a second pass always follows a pause.
     fn remove(&self, daemon: &Daemon) -> bool {
+        // A Docker host's socket can lead to another engine since the forward opened;
+        // there these resources would look gone, so they are kept for a retry.
+        if daemon.remote().is_some_and(|remote| !remote.same_engine()) {
+            tracing::warn!(
+                volume = %self.volume,
+                "the Docker host answers as another engine now; a setup run's resources stay recorded"
+            );
+            return false;
+        }
         let cleanup = &Cleanup {
             daemon,
             deadline: std::time::Instant::now() + CLEANUP_TIMEOUT,

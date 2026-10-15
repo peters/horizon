@@ -33,8 +33,10 @@ fn open_forwards() -> std::sync::MutexGuard<'static, Open> {
 /// Ends every SSH forward that is still open, as Horizon exits, and refuses any later
 /// one: a forward must not outlive the Horizon that opened it.
 pub(in crate::app::cloud_panel::production::repository_setup) fn close_forwards() {
-    // The tests of one process each exit their app, while other tests still open forwards.
-    close(cfg!(not(test)));
+    // The tests of one process each drop their app while other tests hold forwards; the
+    // registry's own test closes it.
+    #[cfg(not(test))]
+    close(true);
 }
 
 /// Ends every open forward, and refuses later ones when `refuse`.
@@ -49,7 +51,13 @@ fn close(refuse: bool) {
 /// An SSH session that keeps one forward open; it ends with this value.
 pub(in crate::app::cloud_panel::production::repository_setup) struct Forward {
     child: Child,
+    /// The session's first words on its standard error, read as they come so a talkative
+    /// SSH never blocks on a full pipe; the rest is read and dropped.
+    said: std::sync::Arc<std::sync::Mutex<String>>,
 }
+
+/// How much of an SSH session's standard error a forward keeps to say why it ended.
+const SAID_LIMIT: usize = 2048;
 
 impl Forward {
     /// Starts `command`, an SSH forward, in its own process group, so its end takes
@@ -63,14 +71,29 @@ impl Forward {
         if open.closed {
             return Err("Horizon is exiting".to_owned());
         }
-        let child = command
+        let mut child = command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|error| format!("cannot start ssh: {error}"))?;
         open.groups.push(child.id());
-        Ok(Self { child })
+        let said = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        if let Some(mut pipe) = child.stderr.take() {
+            let kept = std::sync::Arc::clone(&said);
+            std::thread::spawn(move || {
+                let mut buffer = [0_u8; 4096];
+                while let Ok(read) = std::io::Read::read(&mut pipe, &mut buffer) {
+                    if read == 0 {
+                        break;
+                    }
+                    let mut kept = kept.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let room = SAID_LIMIT.saturating_sub(kept.len()).min(read);
+                    kept.push_str(&String::from_utf8_lossy(&buffer[..room]));
+                }
+            });
+        }
+        Ok(Self { child, said })
     }
 
     /// Whether the SSH session still runs.
@@ -87,11 +110,13 @@ impl Forward {
                 return Ok(());
             }
             if let Ok(Some(status)) = self.child.try_wait() {
-                let mut text = String::new();
-                if let Some(pipe) = self.child.stderr.take() {
-                    use std::io::Read as _;
-                    let _ = pipe.take(2048).read_to_string(&mut text);
-                }
+                // The reader takes what the session wrote last a moment after it ended.
+                std::thread::sleep(Duration::from_millis(100));
+                let text = self
+                    .said
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone();
                 return Err(format!(
                     "the SSH session ended with status {}: {}",
                     status.code().unwrap_or(-1),
@@ -120,7 +145,7 @@ impl std::fmt::Debug for Forward {
         formatter
             .debug_struct("Forward")
             .field("pid", &self.child.id())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -185,6 +210,13 @@ impl Remote {
     /// reaches later.
     pub(in crate::app::cloud_panel::production::repository_setup) fn engine_id(&self) -> &str {
         &self.engine_id
+    }
+
+    /// Whether the forward reaches the engine it reached when it opened, asked now: a host
+    /// whose socket another engine took since answers with another ID, and one that does
+    /// not answer counts as another.
+    pub(in crate::app::cloud_panel::production::repository_setup) fn same_engine(&self) -> bool {
+        engine(&self.address()).is_some_and(|(id, _)| id == self.engine_id)
     }
 
     /// Whether the engine keeps ports it publishes on its loopback private: Docker before
