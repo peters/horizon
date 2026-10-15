@@ -410,9 +410,10 @@ class LoopTests(unittest.TestCase):
                                                       {'name': 'b', 'conclusion': 'SUCCESS'}]}]
         self.assertNotEqual(RUN['fingerprint'](before, ''), RUN['fingerprint'](after, ''))
         # The person's Approve is a change, also where the repository requires no review.
-        approved = [dict(before[0], reviewDecision='', latestReviews=[
+        waiting = [dict(before[0], reviewDecision='', latestReviews=[])]
+        approved = [dict(waiting[0], latestReviews=[
             {'author': {'login': 'person'}, 'state': 'APPROVED', 'submittedAt': '2026-10-15T10:00:00Z'}])]
-        self.assertNotEqual(RUN['fingerprint'](before, ''), RUN['fingerprint'](approved, ''))
+        self.assertNotEqual(RUN['fingerprint'](waiting, ''), RUN['fingerprint'](approved, ''))
         self.assertEqual(RUN['slug']('acme/b__c'), 'acme__b__c')
         self.assertFalse(RUN['REPOSITORY'].fullmatch('acme__b/c'))
 
