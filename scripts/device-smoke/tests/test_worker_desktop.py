@@ -34,6 +34,7 @@ WORKER_ENVIRONMENT = {
     'ANTHROPIC_API_KEY': 'synthetic-key-value',
     'ANTHROPIC_WORKSPACE_ID': 'synthetic-workspace',
     'ANTHROPIC_CUSTOM_HEADERS': 'anthropic-workspace-id: synthetic-workspace',
+    'CLAUDE_CODE_OAUTH_TOKEN': 'synthetic-setup-token',
     'HORIZON_HOME': '/operator/horizon-home',
     'CODEX_HOME': '/workspace/home/.codex',
     'CLAUDE_CONFIG_DIR': '/workspace/home/.claude',

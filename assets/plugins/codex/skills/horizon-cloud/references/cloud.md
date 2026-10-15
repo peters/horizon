@@ -106,6 +106,17 @@ and the renewal comes back to this computer at the next sync or connect. Never r
 `codex login` or `codex logout` on a worker: both revoke the login that every cloud
 shares. Without a sign-in, Codex asks for a sign-in in its own terminal on the worker.
 
+## Claude setup token on workers
+
+A worker image with this support gives Claude a setup token from `claude setup-token`
+when the file `/workspace/credentials/claude-oauth-token` exists: each Claude Code panel
+and each Shell panel gets it as `CLAUDE_CODE_OAUTH_TOKEN`, so Claude starts signed in
+on the person's subscription. Other agent panels do not get it. Claude prefers an
+Anthropic API key, so a cloud should not have both. An image layer cannot set
+`CLAUDE_CODE_OAUTH_TOKEN` in `session-env.d`. Older images ignore the file; the person
+rebuilds the cloud on a current image. Horizon does not yet save the token or write the
+file; that comes with Cloud settings. Never print, copy or log the token or its file.
+
 ## Source transfer errors
 
 Use relative source paths without redundant separators or `.` components in a

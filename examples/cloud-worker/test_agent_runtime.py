@@ -39,7 +39,7 @@ class AgentRuntimeTests(unittest.TestCase):
         child = '''import json, os, sys
 from pathlib import Path
 keys = ['DISABLE_AUTOUPDATER', 'HOME', 'HORIZON', 'HORIZON_BROWSER_ACTOR',
-        'HORIZON_BROWSER_HOST_INSTANCE', 'ANTHROPIC_API_KEY',
+        'HORIZON_BROWSER_HOST_INSTANCE', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN',
         'ANTHROPIC_WORKSPACE_ID', 'ANTHROPIC_CUSTOM_HEADERS', 'HORIZON_SESSION_DIR', 'HORIZON_GPU_LOCK']
 Path(os.environ['CHILD_RECEIPT']).write_text(json.dumps({
     'args': sys.argv[1:], 'env': {key: os.environ.get(key) for key in keys},
@@ -100,7 +100,7 @@ if sys.argv[1:] == ['--help']:
             'DISABLE_AUTOUPDATER': '1', 'HOME': str(self.workspace / 'home'),
             'HORIZON': None, 'HORIZON_BROWSER_ACTOR': 'horizon:cloud-test-panel',
             'HORIZON_BROWSER_HOST_INSTANCE': 'test-host', 'ANTHROPIC_API_KEY': 'synthetic-key',
-            'ANTHROPIC_WORKSPACE_ID': 'synthetic-workspace',
+            'CLAUDE_CODE_OAUTH_TOKEN': None, 'ANTHROPIC_WORKSPACE_ID': 'synthetic-workspace',
             'ANTHROPIC_CUSTOM_HEADERS': 'anthropic-workspace-id: synthetic-workspace',
             'HORIZON_SESSION_DIR': str(self.workspace / 'session-data/test-panel'),
             'HORIZON_GPU_LOCK': str(self.workspace / 'locks/gpu.lock')})
@@ -307,6 +307,18 @@ if sys.argv[1:] == ['--help']:
         config = self.claude_config()
         self.assertTrue(config['hasCompletedOnboarding'])
         self.assertNotIn('customApiKeyResponses', config)
+
+    def test_a_setup_token_worker_signs_claude_in_without_a_key(self):
+        token = 'synthetic-setup-token-' + 't' * 30
+        (self.workspace / 'credentials/anthropic-api-key').unlink()
+        (self.workspace / 'credentials/claude-oauth-token').write_text(token + '\n')
+        for agent, commands in [('claude', None), ('shell', 'claude\n')]:
+            child = self.launch(agent, commands=commands)
+            self.assertEqual(child['env']['CLAUDE_CODE_OAUTH_TOKEN'], token)
+            self.assertIsNone(child['env']['ANTHROPIC_API_KEY'])
+            self.assertNotIn(token, self.stdout + self.stderr)
+        self.assertNotIn('customApiKeyResponses', self.claude_config())
+        self.assertIsNone(self.launch('grok')['env']['CLAUDE_CODE_OAUTH_TOKEN'])
 
     def test_a_config_claude_cannot_read_is_replaced_not_fatal(self):
         (self.workspace / 'home/.claude.json').write_text('{ not json')
