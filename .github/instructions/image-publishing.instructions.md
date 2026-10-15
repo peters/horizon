@@ -121,3 +121,21 @@ of the editable image. Malformed images and images from another repository must
 clear that binding's hint without validating another one. A retired request must
 not alter current proof. Refusals survive settings closure and board-session
 switches until fresh successful verification, within the current app process.
+
+The staged destination manager and receipt owner are a shared host API, not yet
+public controls. Reject caller-supplied actor/host/root authority, cross-owner
+receipt access, ID reuse for another request, unbounded work/history, registry-secret
+or compute-key reads during listing, or a mutation that skips the exact shown-override
+fence. Listing may inspect cached sign-in metadata for identity, but must not return
+tokens, authenticate or resolve registry credentials.
+Cancellation does not prove rollback; expired receipts require listing saved state.
+
+A destination receipt ID must never become a cloud sign-in Skip key. Authentication
+attempts use independent private keys, and host-owned cancellation remains scoped
+to the receipt rather than a caller-selected cloud identifier.
+
+Receipt-backed destination operations require the host's actual canonical Git root.
+Refuse a receipt bound to a subdirectory before host policy or authentication;
+resolve agent working directories to the root in host adapters. Preserve direct
+native helper normalization of checkout subdirectories. A cancelled metadata selection must
+remain cancellation, not successful Info with only a selection_error.

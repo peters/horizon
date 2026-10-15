@@ -45,6 +45,34 @@ pub struct Draft {
     pub hetzner: HetznerDraft,
 }
 
+struct LocalSettings {
+    original: Option<Vec<u8>>,
+    settings: Settings,
+}
+
+/// Reads machine-local settings, or the standard defaults before first save.
+/// Unlike the editing draft, this reads no account or credential store.
+/// # Errors
+/// Invalid existing settings or a local file read failure.
+pub fn load_settings(root: &Path) -> Result<Settings> {
+    read_settings(root).map(|local| local.settings)
+}
+
+fn read_settings(root: &Path) -> Result<LocalSettings> {
+    let path = root.join("settings.json");
+    let original = match std::fs::read(&path) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let settings = original.as_ref().map_or_else(
+        || Ok(defaults(root)),
+        |bytes| serde_json::from_slice(bytes).map_err(|_| Error::Json),
+    )?;
+    settings.validate()?;
+    Ok(LocalSettings { original, settings })
+}
+
 impl Draft {
     /// The cloud root these settings belong to.
     #[must_use]
@@ -60,17 +88,7 @@ impl Draft {
     /// # Errors
     /// Existing malformed settings must be repaired, never silently replaced.
     pub fn load(root: &Path) -> Result<Self> {
-        let path = root.join("settings.json");
-        let original = match std::fs::read(&path) {
-            Ok(bytes) => Some(bytes),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error.into()),
-        };
-        let settings = original.as_ref().map_or_else(
-            || Ok(defaults(root)),
-            |bytes| serde_json::from_slice(bytes).map_err(|_| Error::Json),
-        )?;
-        settings.validate()?;
+        let LocalSettings { original, settings } = read_settings(root)?;
         Ok(Self {
             root: root.into(),
             original,

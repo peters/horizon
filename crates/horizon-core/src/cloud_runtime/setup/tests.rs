@@ -438,3 +438,21 @@ fn a_github_save_applies_only_while_the_settings_name_the_shown_app() {
         "a second Disconnect finds nothing to change"
     );
 }
+
+#[test]
+fn metadata_loading_uses_defaults_without_creating_settings_or_credentials() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("not-created");
+    let settings = load_settings(&path).unwrap();
+    assert_eq!(settings.docker_config, path.join("docker"));
+    assert!(!path.exists());
+}
+
+#[test]
+fn metadata_loading_refuses_malformed_existing_settings() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("settings.json");
+    std::fs::write(&path, b"{broken").unwrap();
+    assert!(load_settings(root.path()).is_err());
+    assert_eq!(std::fs::read(path).unwrap(), b"{broken");
+}

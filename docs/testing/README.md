@@ -42,6 +42,7 @@ documents that are not yet STE.
 | [cloud-agent-stop](procedures/cloud-agent-stop.md) | The agent stop of a dedicated worker without an idle period, its refusal while another agent works, and the request that Horizon takes and carries out | rents compute |
 | [cloud-idle-period](procedures/cloud-idle-period.md) | An idle period that still parses but has no effect: the New cloud and Rebuild note, no idle period on a new worker, and the reconnect of a worker created with one | rents compute |
 | [cloud-launch-format](procedures/cloud-launch-format.md) | Saved cloud launch format and publisher confirmation fences | none |
+| [image-destination-management](procedures/image-destination-management.md) | Shared destination policy and bounded host-owned receipts | none |
 | [publication-records](procedures/publication-records.md) | Retained image publisher and migration version guards | none |
 | [cloud-panels](procedures/cloud-panels.md) | Cloud panels end to end: 121 tests in 12 area files | rents compute |
 | [cloud-quick-start](procedures/cloud-quick-start.md) | Quick start on the base image for a repository without `.horizon/cloud.yml` | rents compute |

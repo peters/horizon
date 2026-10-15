@@ -249,3 +249,21 @@ An explicit provider action can retain its own active provider proof when host
 history was read successfully and is empty. A busy or unreadable host journal
 never permits that fallback. Reopening settings reads host history only; it does
 not load compute credentials to recover provider history.
+
+### Staged destination management policy
+
+The shared core destination manager reads metadata without opening the settings
+editor or loading provider credentials. It lists choices, selects an existing
+registry grant, resets a shown override or explicitly signs in to a derived
+personal destination. Every mutation compares the exact shown local override.
+Host-owned, bounded operation receipts retain the actor, host, repository and
+settings root through polling or cancellation. Cancellation is a request, not
+proof that a write did not commit; list saved state after an expired receipt.
+This prerequisite adds no public UI, CLI or MCP control and keeps automatic
+publication disabled. See docs/testing/procedures/image-destination-management.md.
+
+Host destination adapters must resolve the live local checkout to its canonical
+Git root. A receipt bound to a subdirectory refuses before host policy or
+authentication; direct native management still normalizes checkout folders.
+Cancellation during metadata selection is reported as cancellation, never as a
+successful listing with only an inline selection error.
