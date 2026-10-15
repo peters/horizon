@@ -469,6 +469,11 @@ SSH standard input, never in a command line, a log or the cloud board. Each Clau
 and each shell on the worker gets the token as `CLAUDE_CODE_OAUTH_TOKEN`. This needs a
 worker image with this change; an older image ignores the file.
 
+Before **Resume worker** starts a stopped worker, Horizon checks the setup-token file and
+the API-key files of the agents of the cloud, as a deployment does. A missing or unusable
+file stops the resume before the provider starts paid capacity, and the refusal names
+the file.
+
 Settings never keep a setup token and a Claude API key together: Claude prefers the API
 key. When you choose another sign-in, the next reconnect removes the token file from the
 worker. Horizon does not revoke the token.

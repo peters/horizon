@@ -65,7 +65,7 @@ reconnect removes it when it is not bound.
 
 1. Ask the operator to write the token to a private file.
 
-   ```sh
+   ```bash
    (umask 077; IFS= read -rs token && printf '%s\n' "$token" > ~/.horizon/cloud/credentials/claude-token-test)
    ```
 
@@ -123,7 +123,35 @@ reconnect removes it when it is not bound.
 
    Result: Claude answers. Claude does not ask you to sign in.
 
-### 6.3 T03 — A reconnect removes an unbound token from the worker
+### 6.3 T03 — Resume refuses a missing token file
+
+1. On the card of the test cloud, click **Stop worker**.
+
+   Result: The card shows that the cloud is stopped.
+
+2. Move the token file of T01 away.
+
+   ```sh
+   mv ~/.horizon/cloud/credentials/claude-token-test ~/.horizon/cloud/credentials/claude-token-test.away
+   ```
+
+   Result: The command stops with exit code 0.
+
+3. Click **Resume worker**.
+
+   Result: The card shows a refusal that names the setup-token file and says that
+   the file is missing. The card still shows that the cloud is stopped. The provider
+   console shows no started worker for this cloud.
+
+4. Move the token file back. Click **Resume worker**.
+
+   ```sh
+   mv ~/.horizon/cloud/credentials/claude-token-test.away ~/.horizon/cloud/credentials/claude-token-test
+   ```
+
+   Result: The card shows Ready.
+
+### 6.4 T04 — A reconnect removes an unbound token from the worker
 
 1. Remove the binding from the settings.
 
@@ -147,7 +175,7 @@ reconnect removes it when it is not bound.
 
 ## 7. Pass criteria
 
-- T01 to T03 give the results above.
+- T01 to T04 give the results above.
 - No screenshot, recording, log or report contains the token.
 
 ## 8. Cleanup

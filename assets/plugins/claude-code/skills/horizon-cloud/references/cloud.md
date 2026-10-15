@@ -118,7 +118,9 @@ as `CLAUDE_CODE_OAUTH_TOKEN`, so Claude starts signed in; other agent panels do 
 it, an image layer cannot set it in `session-env.d`, and an older image ignores the
 file. Settings never keep the token together with a Claude API key, which Claude would
 prefer. When the person chooses another sign-in, the next reconnect removes the file.
-Never print, copy or log the token or its file.
+A resume, like a deployment, refuses a missing or unusable setup-token or API-key file of
+the cloud's agents before the provider starts the worker; report the named file to the
+person. Never print, copy or log the token or its file.
 
 ## Source transfer errors
 
