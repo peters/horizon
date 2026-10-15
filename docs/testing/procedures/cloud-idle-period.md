@@ -121,7 +121,13 @@ In this procedure, `<state root>` is the directory of one cloud.
    Result: The last line says that the cloud is ready. The worker ID is the
    same as in step 1.
 
-4. Remove `idle_stop_minutes` from the profile, commit, and reconnect again.
+4. Stop the cloud, resume it and reconnect it with the candidate:
+
+   ```bash
+   target/debug/examples/cloud_deploy stop <settings> <state root>
+   target/debug/examples/cloud_deploy resume <settings> <state root>
+   target/debug/examples/cloud_deploy reconnect <settings> <state root>
+   ```
 
    Result: The cloud is ready again with the same worker ID.
 
