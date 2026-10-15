@@ -34,12 +34,18 @@ enum Case {
 }
 
 #[derive(serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ReceiptQualification {
+    EngineComponent,
+}
+
+#[derive(serde::Serialize)]
 struct Receipt {
     case: Case,
     passed: bool,
     production_preflight: bool,
     real_gateway_relay: bool,
-    owner_or_worker_qualification: bool,
+    qualification: ReceiptQualification,
 }
 
 fn fixture() -> Fixture {
@@ -130,7 +136,7 @@ fn emit(case: Case) {
             passed: true,
             production_preflight: true,
             real_gateway_relay: matches!(case, Case::PeerRelayAndSelfRefusal),
-            owner_or_worker_qualification: false,
+            qualification: ReceiptQualification::EngineComponent,
         })
         .expect("fixed nonsecret receipt")
     );

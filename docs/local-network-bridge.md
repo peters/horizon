@@ -249,11 +249,19 @@ a saved path, an attempt ID or a gateway receipt does not supply that authority.
 
 `Endpoint::new` accepts an IPv4 literal or DNS name and one nonzero TCP port.
 It rejects URLs, malformed names and IPv6 endpoint input before a lookup.
+The approved name and a requested name use the same case-insensitive comparison.
+Each name can have one terminal dot. A second terminal dot is refused.
 Preflight must select one unique IPv4 address. Another name, address or port fails
 before DNS or client access. The proxy connects only to the checked address.
 
-The LAN source uses the existing subnet, interface and route policy. It refuses
-this computer, destinations outside that policy and ambiguous DNS results.
+The LAN source checks the complete resolved IPv4 set before policy can filter or
+limit the answers. It applies the existing LAN policy to the single literal address
+without another lookup. Duplicate answers for that address are permitted. A second
+IPv4 address is ambiguous, including one outside the LAN or after four duplicates.
+IPv4-mapped answers use the same canonical form as the existing LAN policy.
+The existing bridge keeps its filtering and candidate limit.
+The LAN source refuses this computer and destinations outside its subnet,
+interface and route policy. It checks the network before and after DNS.
 The route check compares source addresses. It cannot detect an administrator's
 route change that preserves the same source address on another interface.
 

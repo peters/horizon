@@ -16,6 +16,13 @@ base, tailnet-node-cleanup remains off by default; #1646 owns its activation.
 Treat endpoint and SOCKS input, DNS, routes and client replies as untrusted.
 Reject malformed input before lookup. Admit only the exact captured endpoint;
 connect to its checked literal address without a second destination resolution.
+Normalize one terminal dot in both approved and requested names. Refuse another
+terminal dot or another name/port before source lookup. For LAN, check the complete
+canonical IPv4 set before policy filters or caps answers. Duplicate-only answers
+can pass; mixed LAN/outside answers or four duplicates plus another IPv4 cannot.
+Apply the existing policy to the single literal without resolving again. Cover
+initial admission, preflight-to-start changes and permanent active revocation.
+Keep the existing bridge's filtering and candidate cap unchanged.
 LAN keeps the existing route/subnet/interface policy and Self refusal.
 Tailnet requires Running kernel mode, trusted installed CLI/fixed socket,
 Self source route, direct peer address, peer StableID and normalized full name.

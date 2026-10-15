@@ -1,6 +1,6 @@
-use super::super::socks::Gate as _;
+use super::super::{Scope, scope, socks::Gate as _};
 use super::*;
-use std::sync::atomic::AtomicUsize;
+use std::{net::Ipv4Addr, sync::atomic::AtomicUsize};
 
 #[cfg(target_os = "linux")]
 mod real_kernel;
@@ -110,4 +110,145 @@ fn a_source_error_is_fixed_and_never_publishes_client_account_or_peer_values() {
         Error::SourceUnavailable.to_string(),
         "The endpoint source is unavailable"
     );
+}
+
+fn lan_scope(answers: Arc<Mutex<Vec<SocketAddr>>>, calls: Arc<AtomicUsize>) -> Scope {
+    let host = scope::tests::host(&[("192.168.1.20", Some(24))], Some("192.168.1.20"));
+    Scope {
+        network: host.current_network().unwrap(),
+        resolve: Box::new(move |name, port| {
+            assert_eq!((name, port), ("printer.local", 80));
+            calls.fetch_add(1, Ordering::Relaxed);
+            Ok(answers.lock().unwrap().clone())
+        }),
+        host: Box::new(move || Ok(host.clone())),
+        source: Box::new(|_| Some(Ipv4Addr::new(192, 168, 1, 20))),
+        rules: std::sync::RwLock::default(),
+    }
+}
+
+fn lan_prepared(answers: Arc<Mutex<Vec<SocketAddr>>>, calls: Arc<AtomicUsize>) -> Result<Prepared, Error> {
+    let endpoint = Endpoint::new("Printer.Local.", 80).unwrap();
+    let source = Source::lan_fixture(lan_scope(answers, calls));
+    let binding = source.observe(&endpoint)?;
+    Ok(Prepared {
+        attempt: Attempt::new(),
+        endpoint,
+        source,
+        binding,
+    })
+}
+
+fn ambiguous_lan_answers() -> [Vec<SocketAddr>; 3] {
+    let first = "192.168.1.50:80".parse().unwrap();
+    [
+        vec![first, "203.0.113.50:80".parse().unwrap()],
+        vec![first, "[::ffff:203.0.113.50]:80".parse().unwrap()],
+        vec![first, first, first, first, "192.168.1.60:80".parse().unwrap()],
+    ]
+}
+
+#[test]
+fn a_single_terminal_dot_is_normalized_during_actual_endpoint_admission() {
+    let address = "192.168.1.50:80".parse().unwrap();
+    let answers = Arc::new(Mutex::new(vec![address]));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let gate = Gate {
+        prepared: lan_prepared(answers, Arc::clone(&calls)).unwrap(),
+        reason: Mutex::new(None),
+    };
+    for name in ["Printer.Local.", "printer.local", "PRINTER.LOCAL."] {
+        assert_eq!(gate.admit(&Destination::Name(name.into(), 80)), Ok(vec![address]));
+    }
+    assert_eq!(calls.load(Ordering::Relaxed), 4);
+    for (name, port) in [("printer.local..", 80), ("other.local.", 80), ("printer.local.", 81)] {
+        assert!(gate.admit(&Destination::Name(name.into(), port)).is_err());
+    }
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        4,
+        "refused names must cause no source lookup"
+    );
+}
+
+#[test]
+fn complete_lan_answers_must_be_unique_before_policy_filters_or_caps_them() {
+    for answers in ambiguous_lan_answers() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let result = lan_prepared(Arc::new(Mutex::new(answers)), Arc::clone(&calls));
+        assert!(matches!(result, Err(Error::InvalidEndpoint)));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+}
+
+#[test]
+fn duplicate_only_lan_answers_bind_once_without_a_second_resolution() {
+    let address = "192.168.1.50:80".parse().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let candidate = lan_prepared(Arc::new(Mutex::new(vec![address; 8])), Arc::clone(&calls)).unwrap();
+    assert_eq!(candidate.binding.address(), address);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn ambiguity_between_preflight_and_start_never_opens_a_gateway() {
+    for ambiguous in ambiguous_lan_answers() {
+        let answers = Arc::new(Mutex::new(vec!["192.168.1.50:80".parse().unwrap()]));
+        let candidate = lan_prepared(Arc::clone(&answers), Arc::new(AtomicUsize::new(0))).unwrap();
+        *answers.lock().unwrap() = ambiguous;
+        assert!(matches!(Gateway::start(candidate), Err(Error::InvalidEndpoint)));
+    }
+}
+
+#[test]
+fn later_lan_ambiguity_revokes_admission_and_cannot_reopen_after_dns_recovers() {
+    for ambiguous in ambiguous_lan_answers() {
+        let address = "192.168.1.50:80".parse().unwrap();
+        let answers = Arc::new(Mutex::new(vec![address]));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let candidate = lan_prepared(Arc::clone(&answers), calls).unwrap();
+        let gateway = Gateway::start(candidate).unwrap();
+        let request = Destination::Name("Printer.Local.".into(), 80);
+        assert_eq!(gateway.gate.admit(&request), Ok(vec![address]));
+        *answers.lock().unwrap() = ambiguous;
+        assert!(gateway.gate.admit(&request).is_err());
+        assert_eq!(
+            gateway.status().state,
+            State::Revoked {
+                reason: Reason::SourceUnavailable
+            }
+        );
+        assert!(!gateway.gate.keeps(address));
+        *answers.lock().unwrap() = vec![address];
+        assert!(gateway.gate.admit(&request).is_err(), "a new approval is required");
+    }
+}
+
+#[test]
+fn lan_policy_is_rechecked_after_the_single_dns_lookup() {
+    let address = "192.168.1.50:80".parse().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut scope = lan_scope(Arc::new(Mutex::new(vec![address])), Arc::clone(&calls));
+    let moved = Arc::new(AtomicBool::new(false));
+    let observed = Arc::clone(&moved);
+    let original_host = scope.host;
+    scope.host = Box::new(move || {
+        let mut host = original_host()?;
+        if observed.load(Ordering::Acquire) {
+            host.route = None;
+        }
+        Ok(host)
+    });
+    let original_resolve = scope.resolve;
+    scope.resolve = Box::new(move |name, port| {
+        let answers = original_resolve(name, port);
+        moved.store(true, Ordering::Release);
+        answers
+    });
+    let source = Source::lan_fixture(scope);
+    assert_eq!(
+        source.observe(&Endpoint::new("printer.local", 80).unwrap()),
+        Err(Error::SourceUnavailable)
+    );
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
 }

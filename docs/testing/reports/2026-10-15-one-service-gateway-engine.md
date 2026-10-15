@@ -119,3 +119,51 @@ The real component receipts explicitly recorded `owner_or_worker_qualification: 
 The [Engine procedure](../procedures/one-service-gateway-engine.md) defined E01–E03 and R01/R02.
 Independent review and exact-head GitHub checks remained separate gates.
 Completed M1 delivery still required the native owner path, worker SSH, actual LAN and tailnet sharing, and public interface parity.
+
+## 7. Final review fixes and fresh real component run
+
+The first PR review found two endpoint defects. Requested names with one terminal
+dot did not use the approved name's normalization. LAN uniqueness was checked
+after policy filtered or limited the answers. Both defects are fixed. The gate
+checks the complete canonical IPv4 set before it applies the existing LAN policy
+to the single literal. The existing bridge keeps its behavior. Six regression
+cases cover normalized names, mixed and mapped answers, duplicates before another
+address, duplicate-only resolution, start and active ambiguity, permanent
+revocation, and route loss during resolution.
+
+The final enabled Core artifact SHA-256 was
+`30fa08eb0dfe8a48a748627ac169e44ea3d97e7793563bf821d4af1019f42665`.
+Its features were `cloud-workspaces,default,one-service-gateway`, with cleanup
+off and `profile.test=true`. Earlier artifact identities remain historical.
+
+The fresh enabled Core matrix passed 2,123 cases, with 23 intentional ignores:
+2,111 isolated cases and 12 exact cases with the same binary on the host. The
+focused endpoint suite passed 17 cases; its two real cases ran separately.
+Default UI passed 2,284 cases and speech UI passed 2,330 cases. Each configuration
+also passed three font and two home tests, with two intentional UI ignores.
+Required workspace and enabled-Core Clippy, formatting, maintainability and
+bundled skill checks passed. Unchanged default workspace targets and doctests
+used the complete recorded input comparison. The later test-only receipt change
+was excluded from normal and default products by feature and dep-info comparison.
+Enabled checks ran again. Advisory findings remained inherited; this was not a
+pedantic pass. No introduced or worsened warning remained.
+
+Fresh R01 and R02 passed on the final artifact in two owned kernel-mode Linux
+guests. R01 used actual full MagicDNS resolution, exact peer WhoIs, Self source
+and relay bytes with half-close. Wrong-port and Self requests were refused. R02
+observed an actual non-Self source without changing a route and received the
+production `UnsupportedSource` refusal. Both receipts reported
+`qualification: "engine_component"`.
+
+The task Auth key was revoked and confirmed invalid. Both original guest
+containers and their captured nodes were absent. The empty bridge was removed.
+The additional CPU cleanup-test consumer was absent before the task Auth alias
+was removed last. A final API read showed only the original two devices. A
+task-owned catalog lock was hardened from 0664 to 0600 under its original
+exclusive lock before qualified alias cleanup passed. Original user catalogs
+and credential slots were preserved.
+
+These tasks do not qualify actual LAN bytes, native owner admission, worker SSH
+or UI/CLI/MCP sharing. Optional SSH component preparation stopped at a read-only
+guest fixture path before extraction or SSH effects. It was not counted as a
+passing component test.

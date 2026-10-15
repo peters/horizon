@@ -82,7 +82,13 @@ A readiness check must not consume the service's one accepted connection.
    ```
 
    Result: Parser, binding, relay, half-close and receipt tests pass.
-   Real guest tests remain ignored in this command.
+   A requested name with one terminal dot matches its approved name. Another
+   terminal dot, name or port is refused before lookup. The complete LAN IPv4
+   set is checked before policy filters or limits it. Mixed LAN/outside answers
+   and four duplicates followed by another address are refused at preflight,
+   start and active admission. Active ambiguity requires new approval even after
+   DNS recovers. Duplicate-only answers use one lookup. A network change during
+   that lookup is still refused. Real guest tests remain ignored in this command.
 
 2. Record each ignored test separately.
 
@@ -97,6 +103,7 @@ A readiness check must not consume the service's one accepted connection.
    ```
 
    Result: Existing LAN scope, route, Self refusal and bridge tests pass.
+   The existing bridge still filters mixed answers and limits its candidates.
 
 2. Examine the default feature graph.
 
@@ -158,7 +165,8 @@ These checks identify owned test equipment; they do not grant application author
 
    Result: Actual name/literal preflight, relay bytes, half-close, wrong-port refusal
    and Self refusal pass through the production endpoint gate.
-   The receipt reports `owner_or_worker_qualification: false`.
+   The receipt reports `qualification: "engine_component"`.
+   It does not qualify an application owner or a worker.
 
 ### 6.5 R02 — Actual wrong-source route refusal
 

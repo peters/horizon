@@ -305,7 +305,11 @@ endpoint or gateway receipt. The feature cannot enroll a desktop client or grant
 agent access. Its tailnet source needs an existing Linux kernel-mode Tailscale
 client; userspace mode and Self as a target are refused. Actual M1 delivery still
 requires both LAN/tailnet sharing, owner controls, durable attempts, pinned worker
-SSH and UI/CLI/MCP parity. Current bridge tools retain their existing behavior.
+SSH and UI/CLI/MCP parity. An approved endpoint name and its request can have
+one terminal dot. LAN preflight checks the complete canonical IPv4 answer set
+before policy filters or limits it; another address requires refusal or revocation.
+It applies LAN policy to the single literal without a second lookup. Current
+bridge tools retain their existing filtering and candidate limit.
 
 ## Cloud cards on the canvas
 

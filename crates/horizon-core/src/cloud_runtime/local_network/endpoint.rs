@@ -83,7 +83,9 @@ impl Endpoint {
             Destination::Address(requested) => {
                 SocketAddr::new(requested.ip().to_canonical(), requested.port()) == address
             }
-            Destination::Name(name, port) => *port == self.port && name.eq_ignore_ascii_case(&self.host),
+            Destination::Name(name, port) => {
+                *port == self.port && name.strip_suffix('.').unwrap_or(name).eq_ignore_ascii_case(&self.host)
+            }
         }
     }
 }

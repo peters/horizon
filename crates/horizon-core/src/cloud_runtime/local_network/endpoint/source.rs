@@ -74,6 +74,11 @@ impl Source {
         Self::new(Backend::Fixture(Arc::new(check)))
     }
 
+    #[cfg(test)]
+    pub(super) fn lan_fixture(scope: Scope) -> Self {
+        Self::new(Backend::Lan(Arc::new(scope)))
+    }
+
     pub(super) fn cancel(&self) {
         if let Backend::Tailnet(client) = &self.backend {
             client.cancel();
@@ -87,12 +92,23 @@ impl Source {
         })?;
         match &self.backend {
             Backend::Lan(scope) => {
-                let mut addresses = scope
-                    .admit(&endpoint.destination())
+                scope.on_network().map_err(|_| Error::SourceUnavailable)?;
+                let addresses = match endpoint.destination() {
+                    Destination::Address(address) => vec![address],
+                    Destination::Name(name, port) => {
+                        (scope.resolve)(&name, port).map_err(|_| Error::SourceUnavailable)?
+                    }
+                };
+                // Check every IPv4 answer before LAN policy can filter or cap it.
+                let address = single_ipv4(
+                    addresses
+                        .into_iter()
+                        .map(|address| SocketAddr::new(address.ip().to_canonical(), address.port())),
+                )?;
+                let admitted = scope
+                    .admit(&Destination::Address(address))
                     .map_err(|_| Error::SourceUnavailable)?;
-                addresses.sort_unstable();
-                addresses.dedup();
-                let [address] = addresses.as_slice() else {
+                let [address] = admitted.as_slice() else {
                     return Err(Error::InvalidEndpoint);
                 };
                 Ok(Binding::Lan {
@@ -108,18 +124,13 @@ impl Source {
                         resolve(&self.lookups, &name, port).map_err(|_| Error::SourceUnavailable)?
                     }
                 };
-                let mut addresses: Vec<_> = addresses.into_iter().filter(SocketAddr::is_ipv4).collect();
-                addresses.sort_unstable();
-                addresses.dedup();
-                let [address] = addresses.as_slice() else {
-                    return Err(Error::InvalidEndpoint);
-                };
+                let address = single_ipv4(addresses)?;
                 let IpAddr::V4(ip) = address.ip() else {
                     return Err(Error::InvalidEndpoint);
                 };
                 if !tailnet_ip(ip)
                     || desktop.addresses.contains(&ip)
-                    || !scope::source_for(*address).is_some_and(|source| desktop.addresses.contains(&source))
+                    || !scope::source_for(address).is_some_and(|source| desktop.addresses.contains(&source))
                 {
                     return Err(Error::UnsupportedSource);
                 }
@@ -138,12 +149,22 @@ impl Source {
                     desktop: desktop.id,
                     peer: peer.id,
                     name: peer.name,
-                    address: *address,
+                    address,
                 })
             }
             #[cfg(test)]
             Backend::Fixture(check) => check(endpoint),
         }
+    }
+}
+
+fn single_ipv4(addresses: impl IntoIterator<Item = SocketAddr>) -> Result<SocketAddr, Error> {
+    let mut addresses: Vec<_> = addresses.into_iter().filter(SocketAddr::is_ipv4).collect();
+    addresses.sort_unstable();
+    addresses.dedup();
+    match addresses.as_slice() {
+        [address] => Ok(*address),
+        _ => Err(Error::InvalidEndpoint),
     }
 }
 

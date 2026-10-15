@@ -547,6 +547,8 @@ only adapts requests. The UI keeps the switch in memory only.
 
 The optional `local_network::endpoint` tree owns the one-device engine.
 `source` captures LAN/tailnet bindings; `tailnet` reads existing client metadata.
+The LAN source checks the complete canonical IPv4 answer set before it passes
+one literal to the existing `Scope` policy. The bridge keeps its current policy.
 The parent owns exact-endpoint admission, gateway receipts and relay revocation.
 Its `one-service-gateway` feature is off by default. Owner, durable and worker
 controllers must use this engine before M1-1 can complete.
