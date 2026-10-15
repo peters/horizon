@@ -138,24 +138,26 @@ pub(super) fn stop_with(
 ) -> Result<Deployment> {
     let store = Store::lock(root)?;
     let state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
-    let Some((worker_id, worker)) = watched(&state) else {
+    // Best effort: a worker the stop already reached cannot answer, and keeps the stop.
+    let untake = |worker: &Worker| {
+        let _ = run(worker, &format!("horizon-worker-stopd --untake {}", request.at));
+    };
+    let requester = state.worker.as_ref().filter(|worker| {
+        matches!(&state.operation, CreateState::Bound { worker_id } if *worker_id == request.worker_id)
+            && worker.id == request.worker_id
+    });
+    let Some((_, worker)) = watched(&state).filter(|_| requester.is_some()) else {
+        // The worker that took the request, if the cloud still has it, drops it.
+        if let Some(worker) = requester {
+            untake(worker);
+        }
         return Err(Error::Invalid(
-            "The cloud is no longer ready, so Horizon did not stop it for the agent",
+            "The cloud is no longer ready on the worker that asked, so Horizon did not stop it for the agent",
         ));
     };
     let worker = worker.clone();
-    let untake = || {
-        // Best effort: a worker the stop already reached cannot answer, and keeps the stop.
-        let _ = run(&worker, &format!("horizon-worker-stopd --untake {}", request.at));
-    };
-    if worker_id != request.worker_id {
-        untake();
-        return Err(Error::Invalid(
-            "The cloud runs another worker now, so Horizon did not stop it for the agent",
-        ));
-    }
     if let Err(error) = stop(&store) {
-        untake();
+        untake(&worker);
         return Err(error);
     }
     // The card names the agent and its reason, as after a stop the worker made itself.

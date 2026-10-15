@@ -136,16 +136,16 @@ fn a_stop_that_fails_or_a_cloud_that_changed_is_taken_back() {
     assert_eq!(*commands.borrow(), std::slice::from_ref(&untake));
     assert_eq!(stored(root.path()).stage, Stage::Ready);
     assert!(stored(root.path()).last_self_stop.is_none());
-    // The cloud runs another worker now.
+    // The cloud runs another worker now: that worker took no request.
     commands.borrow_mut().clear();
     let mut other = stop();
     other.worker_id = "41".into();
     assert!(stop_with(root.path(), &other, run, never).is_err());
-    assert_eq!(*commands.borrow(), [untake]);
-    // The cloud is no longer ready: nothing stops, and its worker is not asked.
-    commands.borrow_mut().clear();
-    let root = tempfile::tempdir().unwrap();
-    ready(root.path(), |state| state.stage = Stage::Stopped);
-    assert!(stop_with(root.path(), &stop(), run, never).is_err());
     assert!(commands.borrow().is_empty());
+    // The cloud is no longer ready on the worker that asked: nothing stops, and that
+    // worker drops the request.
+    let root = tempfile::tempdir().unwrap();
+    ready(root.path(), |state| state.stage = Stage::Provision);
+    assert!(stop_with(root.path(), &stop(), run, never).is_err());
+    assert_eq!(*commands.borrow(), [untake]);
 }

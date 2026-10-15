@@ -8,48 +8,44 @@ fn stop() -> AgentStop {
     .unwrap()
 }
 
-/// The events `run` sends for the reads `answers`; the watch is cancelled once they
-/// are all read.
+/// What `run` sends for the reads `answers`; the card stops listening once they are
+/// all read.
 fn sent(answers: Vec<cloud_runtime::Result<Requested>>) -> Vec<String> {
-    let cancel = Cancellation::default();
+    let count = answers.len();
     let answers = RefCell::new(answers.into_iter());
-    let events = RefCell::new(Vec::new());
-    let read = |cancel: &Cancellation| {
-        let answer = answers.borrow_mut().next();
-        if answers.borrow().len() == 0 && answer.is_none() {
-            cancel.cancel();
-        }
-        answer.unwrap_or(Ok(Requested::Nothing))
-    };
-    let send = |event: Event| {
+    let found = RefCell::new(Vec::new());
+    let checks = RefCell::new(0);
+    let send = |event: Found| {
         match event {
-            Event::Watching => {}
-            Event::AgentStopRequested(stop) => events.borrow_mut().push(format!("stop: {}", stop.reason)),
-            Event::Output(line) => events.borrow_mut().push(line),
-            other => panic!("unexpected {other:?}"),
+            Found::Watching => {
+                *checks.borrow_mut() += 1;
+                return *checks.borrow() <= count;
+            }
+            Found::Stop(stop) => found.borrow_mut().push(format!("stop: {}", stop.reason)),
+            Found::Log(line) => found.borrow_mut().push(line),
         }
         true
     };
-    run(&cancel, Duration::ZERO, read, &send);
-    events.into_inner()
+    run(Duration::ZERO, || answers.borrow_mut().next().unwrap(), &send);
+    found.into_inner()
 }
 
 #[test]
 fn a_taken_request_asks_the_card_to_stop_the_cloud_for_the_agent() {
-    let events = sent(vec![
+    let found = sent(vec![
         Ok(Requested::Nothing),
         Ok(Requested::Waiting("An agent session produced output".into())),
         Ok(Requested::Stop(stop())),
         // Until the stop starts, the worker gives the same request again.
         Ok(Requested::Stop(stop())),
     ]);
-    assert_eq!(events, ["stop: PR 12 merged", "stop: PR 12 merged"]);
+    assert_eq!(found, ["stop: PR 12 merged", "stop: PR 12 merged"]);
 }
 
 #[test]
 fn a_dropped_request_is_logged_and_a_failed_read_once_until_it_changes() {
     let failed = || Err(Error::Invalid("The worker's stop request is malformed"));
-    let events = sent(vec![
+    let found = sent(vec![
         Ok(Requested::Refused(
             "The stop request lapsed before the worker stopped.".into(),
         )),
@@ -62,7 +58,7 @@ fn a_dropped_request_is_logged_and_a_failed_read_once_until_it_changes() {
         failed(),
     ]);
     assert_eq!(
-        events,
+        found,
         [
             "An agent's stop request was dropped: The stop request lapsed before the worker stopped.",
             "Reading the agent's stop request failed: The worker's stop request is malformed",
@@ -72,16 +68,15 @@ fn a_dropped_request_is_logged_and_a_failed_read_once_until_it_changes() {
 }
 
 #[test]
-fn the_watch_ends_once_the_card_stops_listening() {
+fn the_reading_ends_once_the_card_stops_listening() {
     let reads = RefCell::new(0);
     run(
-        &Cancellation::default(),
         Duration::ZERO,
-        |_| {
+        || {
             *reads.borrow_mut() += 1;
             Ok(Requested::Nothing)
         },
-        &|event| !matches!(event, Event::Watching),
+        &|found| !matches!(found, Found::Watching),
     );
     assert_eq!(*reads.borrow(), 0, "nothing is read for a card that is gone");
 }
@@ -99,7 +94,7 @@ fn a_stop_request_starts_a_stop_for_that_agent() {
     app.prepare_production_clouds(&ctx);
     // A cloud that is no longer one whose agents Horizon stops, so the stop for the
     // agent refuses before any provider or worker request.
-    let state: Deployment = serde_json::from_value(serde_json::json!({
+    let state: cloud_runtime::state::Deployment = serde_json::from_value(serde_json::json!({
         "version": 1, "cloud_id": "fixture", "repository": temp.path(), "revision": "a".repeat(40),
         "profile": {"provider": "runpod", "image": "registry.example/worker", "cpu": 2, "memory_gb": 4},
         "stage": "Ready", "operation": {"state": "bound", "worker_id": "42"}, "spec": null, "worker": null,
@@ -138,8 +133,11 @@ fn a_stop_request_starts_a_stop_for_that_agent() {
     let runtime = app.cloud_prototype.production.runtimes.entry(1).or_default();
     runtime.stage = Some(cloud_runtime::Stage::Ready);
     runtime.state = Some(state);
-    runtime.receiver = Some(receiver);
-    sender.send(Event::AgentStopRequested(stop())).unwrap();
+    runtime.agent_stops = Some(receiver);
+    sender
+        .send(Found::Log("Reading the agent's stop request failed: once".into()))
+        .unwrap();
+    sender.send(Found::Stop(stop())).unwrap();
     app.prepare_production_clouds(&ctx);
     let runtime = &app.cloud_prototype.production.runtimes[&1];
     assert_eq!(runtime.operation, Some(Action::Stop));
@@ -158,6 +156,6 @@ fn a_stop_request_starts_a_stop_for_that_agent() {
     }
     assert_eq!(
         app.cloud_prototype.production.runtimes[&1].error.as_deref(),
-        Some("The cloud is no longer ready, so Horizon did not stop it for the agent")
+        Some("The cloud is no longer ready on the worker that asked, so Horizon did not stop it for the agent")
     );
 }

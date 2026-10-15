@@ -300,7 +300,7 @@ impl HorizonApp {
             let completion = complete(&root, result, &cancel, &emit);
             let _ = result_tx.send(completion.outcome);
             if let Some(state) = completion.ready {
-                super::watch_ready(&state, &settings, &root, &cancel, &tx, &ctx);
+                super::presentation::watch(&state, &settings, &root, &cancel, &tx, &ctx);
             }
             ctx.request_repaint();
         });

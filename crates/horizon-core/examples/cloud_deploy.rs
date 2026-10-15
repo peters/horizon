@@ -656,6 +656,23 @@ fn endpoint(root: &std::path::Path, settings: &Settings, cancel: &Cancellation) 
     Ok(())
 }
 
+/// Reads the agent's stop request of the cloud at `root` once, as the card does, and
+/// stops the cloud for a request the worker took.
+fn take_stop(root: &std::path::Path, settings: &Settings, cancel: &Cancellation) -> cloud_runtime::Result<()> {
+    use cloud_runtime::lifecycle::Requested;
+    match cloud_runtime::lifecycle::read_stop_request(root, settings, cancel)? {
+        Requested::Nothing => println!("No stop request"),
+        Requested::Waiting(words) => println!("Waiting: {words}"),
+        Requested::Refused(words) => println!("Dropped: {words}"),
+        Requested::Stop(stop) => {
+            println!("{} asked to stop this cloud: {}", stop.agent, stop.reason);
+            let state = cloud_runtime::lifecycle::stop_for_agent(root, settings, cancel, &stop)?;
+            println!("Stopped: {:?}", state.stage);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -675,21 +692,4 @@ mod tests {
             ));
         }
     }
-}
-
-/// Reads the agent's stop request of the cloud at `root` once, as the card does, and
-/// stops the cloud for a request the worker took.
-fn take_stop(root: &std::path::Path, settings: &Settings, cancel: &Cancellation) -> cloud_runtime::Result<()> {
-    use cloud_runtime::lifecycle::Requested;
-    match cloud_runtime::lifecycle::read_stop_request(root, settings, cancel)? {
-        Requested::Nothing => println!("No stop request"),
-        Requested::Waiting(words) => println!("Waiting: {words}"),
-        Requested::Refused(words) => println!("Dropped: {words}"),
-        Requested::Stop(stop) => {
-            println!("{} asked to stop this cloud: {}", stop.agent, stop.reason);
-            let state = cloud_runtime::lifecycle::stop_for_agent(root, settings, cancel, &stop)?;
-            println!("Stopped: {:?}", state.stage);
-        }
-    }
-    Ok(())
 }
