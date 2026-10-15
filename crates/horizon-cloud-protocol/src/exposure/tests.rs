@@ -64,6 +64,40 @@ fn named_rules_and_tailnet_mode_are_facts_without_direct_identity_authority() {
 }
 
 #[test]
+fn dns_only_rules_compare_normalized_complete_names_without_other_source_matches() {
+    let policy = request(
+        ExposureMode::Restricted,
+        vec![SourceRule::DnsName("host.test.ts.net".into())],
+    )
+    .validate()
+    .unwrap();
+    let source_ip = "192.0.2.1".parse().unwrap();
+    for name in [
+        "host.test.ts.net",
+        "HOST.Test.TS.Net",
+        "host.test.ts.net.",
+        "HOST.Test.TS.Net.",
+    ] {
+        assert!(policy.matches_tailnet(source_ip, name, &[]), "{name}");
+    }
+    for name in [
+        "host",
+        "test.ts.net",
+        "prefix.host.test.ts.net",
+        "host.test.ts.net.evil",
+        "host.test.ts.net..",
+        "host..test.ts.net",
+        "*.test.ts.net",
+        "host.test.ts.net/",
+        " host.test.ts.net",
+        "-host.test.ts.net",
+    ] {
+        assert!(!policy.matches_tailnet(source_ip, name, &[]), "{name}");
+    }
+    assert!(!policy.allows(source_ip));
+}
+
+#[test]
 fn mixed_cidr_full_dns_and_tag_rules_have_exact_or_semantics() {
     let policy = request(
         ExposureMode::Restricted,

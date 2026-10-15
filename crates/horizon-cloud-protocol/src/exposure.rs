@@ -174,7 +174,7 @@ impl ExposurePolicy {
         self.mode == ExposureMode::Restricted
             && self.sources.iter().any(|source| match source {
                 Rule::Cidr(cidr) => cidr.contains(canonical_ip(source_ip)),
-                Rule::DnsName(name) => name == full_dns,
+                Rule::DnsName(name) => dns_name(full_dns).is_ok_and(|actual| name == &actual),
                 Rule::Tag(tag) => tags.contains(tag),
             })
     }
