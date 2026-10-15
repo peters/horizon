@@ -207,3 +207,12 @@ for a redacted error while retaining compatibility for valid legacy documents.
 Recipe/profile equality is enforced before serialization as well as during
 deserialization. An inconsistent in-memory recipe emits no standalone launch
 JSON, and JSON/YAML serialization fail before it can reach an older reader.
+
+## Docker context and registry isolation
+
+On Unix, private registry configurations preserve the machine's selected daemon
+context and CLI plugin locations through the same safe builder as personal publication.
+They contain only their selected registry login. Other registry authentication,
+credential helpers and proxy settings stay out. A private configuration must not
+silently switch rootless or remote Docker to the default socket. Explicit host
+settings keep their existing precedence. The machine configuration stays unchanged.

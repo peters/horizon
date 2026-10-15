@@ -110,9 +110,17 @@ pub fn login(docker_config: &Path, image: &str, cloud_id: &str, runner: &Runner<
 /// The directory or its file cannot be written.
 pub fn build_config(docker_config: &Path) -> Result<(tempfile::TempDir, bool)> {
     let machine = std::env::var_os("DOCKER_CONFIG")
+        .filter(|value| !value.is_empty())
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".docker")));
     build_config_with(docker_config, machine.as_deref())
+}
+
+/// A private Docker configuration retaining only the machine's daemon context and plugins.
+/// It never reads a stored publication chain or copies registry logins and helpers.
+pub(in crate::cloud_runtime) fn empty_build_config() -> Result<tempfile::TempDir> {
+    let empty = private_tempdir("horizon-empty-docker-")?;
+    build_config(empty.path()).map(|(config, _)| config)
 }
 
 /// The settings of the machine's Docker configuration that hold no credentials; proxy
@@ -144,6 +152,7 @@ fn build_config_with(docker_config: &Path, machine: Option<&Path>) -> Result<(te
         None => Config(serde_json::json!({ "auths": {} })),
     };
     if let Some(machine) = machine {
+        let machine = std::path::absolute(machine)?;
         // Contexts (with any TLS files a remote context keeps) and plugins: what Docker
         // needs to reach its daemon. Never registry logins or credential helpers.
         let settings = std::fs::read(machine.join("config.json"))

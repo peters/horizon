@@ -185,11 +185,7 @@ fn prepare_with(
     }
     // The existing safe skeleton supplies daemon context and CLI plugins without logins.
     // A nonexistent chain path keeps this construction from reauthenticating another account.
-    let empty = super::private_tempdir("horizon-empty-docker-")?;
-    let machine = std::env::var_os("DOCKER_CONFIG")
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".docker")));
-    let (config, _) = super::build_config_with(empty.path(), machine.as_deref())?;
+    let config = super::empty_build_config()?;
     super::write_auth(config.path(), &account.login, &token)?;
     // The host's shared config remains intact, including credentials of another operation.
     Ok(Prepared { account, config })
