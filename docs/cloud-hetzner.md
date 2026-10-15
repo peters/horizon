@@ -149,6 +149,14 @@ effect. A Hetzner worker cannot stop its own billing: a powered-off
 server is still billed, and deleting it needs the project-wide token, which never
 leaves this computer. Stop a cloud you no longer use with **Stop** on its card.
 
+An agent on the worker can still stop the cloud when its task is done, with
+`stop_this_worker` or `horizon-worker-stop --reason`. The worker records the
+request, and Horizon reads it every 30 seconds while the cloud is ready and stops
+the cloud as **Stop** does: the server is released and the volume kept, and the card
+shows **Stopped by** the agent with its reason. This works only while Horizon runs;
+a request that Horizon does not take within ten minutes lapses. See
+[the agent stop](cloud-workspaces.md) in the cloud workspaces guide.
+
 ## Rebuilding the image
 
 **Rebuild image & restart** works as on RunPod (see [Cloud workspaces](cloud-workspaces.md#rebuilding-a-clouds-image)),

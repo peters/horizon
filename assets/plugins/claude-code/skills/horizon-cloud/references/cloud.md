@@ -328,10 +328,13 @@ its card.
 
 Horizon never stops an idle cloud, and `idle_stop_minutes` has no effect on any
 provider: Horizon gives no worker an idle period, and New cloud and Rebuild say
-so. An agent on a dedicated RunPod worker stops it with `stop_this_worker` when
-its task is done; otherwise the person chooses **Stop**, which on Hetzner releases
-the server and keeps the volume. A RunPod cloud created before this change may
-still stop itself after its old idle period until a rebuild; the card then shows
+so. An agent on a dedicated worker stops it with `stop_this_worker` when its task
+is done. A RunPod worker stops itself at once. A Hetzner or Docker host worker
+records the request, and Horizon, while it runs, takes it within 30 seconds and
+stops the cloud as **Stop** does; the card then shows **Stopped by** the agent with
+its reason. Otherwise the person chooses **Stop**, which on Hetzner releases the
+server and keeps the volume. A RunPod cloud created before the agent stop may still
+stop itself after its old idle period until a rebuild; the card then shows
 **Stopped outside Horizon** with **Resume worker**.
 
 From a Horizon agent panel, `horizon-browser cloud list|attach|park [CLOUD-ID]`

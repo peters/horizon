@@ -28,6 +28,9 @@ pub(super) enum Action {
     },
 }
 
+mod power;
+use power::power_result;
+
 #[cfg(test)]
 mod tests;
 
@@ -394,7 +397,13 @@ impl HorizonApp {
         if runtime.busy() {
             return;
         }
-        let settings = match Settings::load(&root.join("settings.json")) {
+        // A Stop for an agent's request comes with the settings it was read with.
+        let preloaded = runtime
+            .agent_stop
+            .as_ref()
+            .filter(|_| action == Action::Stop)
+            .map(|order| order.settings.clone());
+        let settings = match preloaded.map_or_else(|| Settings::load(&root.join("settings.json")), Ok) {
             Ok(settings) => settings,
             Err(error) => {
                 fail_before_start(runtime, action, error.to_string());
@@ -427,6 +436,15 @@ impl HorizonApp {
         runtime.receiver = Some(rx);
         runtime.sender = Some(tx.clone());
         begin_operation(runtime, action);
+        // A Stop for an agent's request carries it out and names the agent.
+        let agent_stop = runtime
+            .agent_stop
+            .take()
+            .filter(|_| action == Action::Stop)
+            .map(|order| order.stop);
+        if let Some(stop) = &agent_stop {
+            runtime.push_log(format!("{} asked to stop this cloud: {}", stop.agent, stop.reason));
+        }
         let cancel = cloud_runtime::Cancellation::default();
         runtime.cancel = Some(cancel.clone());
         let ctx = ctx.clone();
@@ -436,25 +454,8 @@ impl HorizonApp {
                 let _ = tx.send(event);
                 ctx.request_repaint();
             };
-            let result = match action {
-                Action::Stop => cloud_runtime::lifecycle::stop(&root, &settings, &cancel)
-                    .map(|state| Event::Stopped(Box::new(state))),
-                Action::Resume => cloud_runtime::lifecycle::resume(&root, &settings, &cancel).map(|()| Event::Resumed),
-                Action::RevokeBrowserstack => cloud_runtime::lifecycle::revoke_browserstack(&root, &settings, &cancel)
-                    .map(|state| Event::Snapshot(Box::new(state))),
-                Action::Delete => deployment::terminate(&root, &settings, &cancel, &emit).map(|()| Event::deleted()),
-                Action::Resize(_)
-                | Action::Deploy
-                | Action::Desktop
-                | Action::Remove
-                | Action::Reconcile
-                | Action::PreviewRebuild
-                | Action::Rebuild
-                | Action::ContinueRebuild
-                | Action::CancelRebuild
-                | Action::ShareLocalNetwork
-                | Action::StopSharingLocalNetwork
-                | Action::ContainerRegistry { .. } => return,
+            let Some(result) = power_result(action, agent_stop.as_ref(), &root, &settings, &cancel, &emit) else {
+                return;
             };
             if let Ok(store) = Store::lock(&root)
                 && let Ok(Some(state)) = store.load()

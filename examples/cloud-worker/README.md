@@ -48,8 +48,8 @@ Where the provider gives the worker a credential to stop itself (RunPod), the se
 checks the request and stops the worker at once. Where it does not (Hetzner, a Docker
 host), a worker started with `HORIZON_WORKER_STOP=horizon` has the service check the
 request and record it in the root-only `/run/horizon-worker/stop-request.json`, for
-Horizon to run `horizon-worker-stopd --take` when it next reads the worker. Horizon does
-not give that setting yet, so these workers offer no stop for now. `--take`
+Horizon to run `horizon-worker-stopd --take` when it next reads the worker, every 30
+seconds while the cloud is ready and no other operation runs. `--take`
 checks the request again, now counting the output of every agent session, the
 requester's too, adds the stop to the stop log and prints it. Later takes print the same
 stop until the worker stops, so an answer lost on the way to Horizon loses no stop. It

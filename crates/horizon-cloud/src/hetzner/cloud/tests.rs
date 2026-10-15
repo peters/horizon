@@ -194,6 +194,8 @@ fn the_host_plan_carries_the_worker_contract_and_its_idle_period() {
         "PUBLIC_KEY=ssh-ed25519 ",
         &format!("HORIZON_CLOUD_OPERATION={}", spec.operation_id),
         "HORIZON_WORKER_CAPABILITIES=",
+        // No credential can stop a Hetzner worker: an agent's stop is Horizon's to take.
+        "HORIZON_WORKER_STOP=horizon",
         "/dev/disk/by-id/scsi-0HC_Volume_9",
         &spec.image_digest,
     ] {
