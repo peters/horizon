@@ -103,13 +103,14 @@ fn a_claude_setup_token_is_saved_privately_with_its_date_and_replaces_the_api_ke
 
 #[test]
 fn settings_refuse_a_claude_api_key_together_with_a_setup_token() {
-    let mut settings = defaults(Path::new("/private"));
+    let root = tempfile::tempdir().unwrap();
+    let mut settings = defaults(root.path());
     settings.claude_token = Some(super::super::claude_token::ClaudeToken {
-        file: "/private/claude-token".into(),
+        file: root.path().join("claude-token"),
         saved_at: 0,
     });
     assert!(settings.validate().is_ok());
-    settings.anthropic_api_key_file = Some("/private/anthropic".into());
+    settings.anthropic_api_key_file = Some(root.path().join("anthropic"));
     assert!(settings.validate().is_err());
     settings.anthropic_api_key_file = None;
     settings.claude_token.as_mut().unwrap().file = "relative".into();

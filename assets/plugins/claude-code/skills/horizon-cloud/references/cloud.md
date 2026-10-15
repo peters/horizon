@@ -108,14 +108,17 @@ shares. Without a sign-in, Codex asks for a sign-in in its own terminal on the w
 
 ## Claude setup token on workers
 
-A worker image with this support gives Claude a setup token from `claude setup-token`
-when the file `/workspace/credentials/claude-oauth-token` exists: each Claude Code panel
-and each Shell panel gets it as `CLAUDE_CODE_OAUTH_TOKEN`, so Claude starts signed in
-on the person's subscription. Other agent panels do not get it. Claude prefers an
-Anthropic API key, so a cloud should not have both. An image layer cannot set
-`CLAUDE_CODE_OAUTH_TOKEN` in `session-env.d`. Older images ignore the file; the person
-rebuilds the cloud on a current image. Horizon does not yet save the token or write the
-file; that comes with Cloud settings. Never print, copy or log the token or its file.
+Horizon can keep a Claude setup token from `claude setup-token` for the person
+(`claude_token` in `~/.horizon/cloud/settings.json`: the path of a private file and the
+save time). Horizon counts its expiry as one year after the save. Every deployment,
+reconnect, resume and rebuild of a cloud that runs Claude writes it over SSH standard
+input to `/workspace/credentials/claude-oauth-token`, never in a command line or a log.
+On a worker image with this support, each Claude Code panel and each Shell panel gets it
+as `CLAUDE_CODE_OAUTH_TOKEN`, so Claude starts signed in; other agent panels do not get
+it, an image layer cannot set it in `session-env.d`, and an older image ignores the
+file. Settings never keep the token together with a Claude API key, which Claude would
+prefer. When the person chooses another sign-in, the next reconnect removes the file.
+Never print, copy or log the token or its file.
 
 ## Source transfer errors
 
