@@ -1,9 +1,8 @@
 use super::*;
-use crate::cloud_runtime::publishing;
 
 #[test]
 #[cfg_attr(windows, ignore = "Cloud records require Unix directory durability")]
-fn a_retained_publisher_requires_the_portable_engine_only_when_a_new_image_is_needed() {
+fn a_retained_publisher_requires_its_original_grant_only_when_a_new_image_is_needed() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path();
     let mut state: Deployment = serde_json::from_value(serde_json::json!({
@@ -32,9 +31,16 @@ fn a_retained_publisher_requires_the_portable_engine_only_when_a_new_image_is_ne
     store.save(&state).unwrap();
     let path = root.join("deployment.json");
     let before = std::fs::read(&path).unwrap();
+    let cancel = Cancellation::default();
+    let emit = |_| {};
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &emit,
+        secrets: Vec::new(),
+    };
     assert!(matches!(
-        prepare_registry(&request, &store, &mut state),
-        Err(Error::Invalid(publishing::IMAGE_PREPARATION_STAGED))
+        image::Preparation::new(&request, &store, &mut state, &runner),
+        Err(Error::Invalid(message)) if message.contains("publishing and read-only pull credentials")
     ));
     assert_eq!(std::fs::read(path).unwrap(), before);
     assert!(!root.join("absent-docker").exists());
@@ -51,7 +57,7 @@ fn a_retained_publisher_requires_the_portable_engine_only_when_a_new_image_is_ne
         startup_metadata: None,
     });
     assert!(
-        prepare_registry(&request, &store, &mut state).unwrap().is_none(),
-        "reusing an existing image must not invoke the image-build compatibility fence"
+        image::Preparation::new(&request, &store, &mut state, &runner).is_ok(),
+        "reusing an existing image does not require publishing credentials"
     );
 }

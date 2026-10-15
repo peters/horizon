@@ -177,6 +177,7 @@ fn run_action<'a>(app: &'a mut HorizonApp, ctx: &egui::Context, action: Action) 
     runtime.receiver = Some(watch_receiver);
     runtime.cancel = Some(watch.clone());
     runtime.confirmation = Confirmation::Rebuild(Preview::of(Ok(Plan {
+        publication: None,
         profile,
         changes: Vec::new(),
         notes: Vec::new(),

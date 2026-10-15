@@ -40,6 +40,7 @@ const REFUSED: &str = "GitHub did not let Horizon publish images; the output say
 pub struct Publisher<'a> {
     pub docker_config: &'a Path,
     pub cloud_id: &'a str,
+    pub prepared: Option<&'a publication::Prepared>,
 }
 
 impl Publisher<'_> {
@@ -47,7 +48,10 @@ impl Publisher<'_> {
     /// # Errors
     /// As [`login`].
     pub fn login(&self, image: &str, runner: &Runner<'_>) -> Result<()> {
-        login(self.docker_config, image, self.cloud_id, runner)
+        match self.prepared {
+            Some(prepared) => prepared.renew(self.docker_config, self.cloud_id, runner),
+            None => login(self.docker_config, image, self.cloud_id, runner),
+        }
     }
 }
 

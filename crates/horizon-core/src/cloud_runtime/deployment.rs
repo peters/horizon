@@ -60,6 +60,9 @@ pub struct Request {
     /// confirmed in New cloud. The first deployment records the confirmation, and a later
     /// one may only repeat it or name none until the image is built.
     pub working_copy: Option<repository::uncommitted::Confirmed>,
+    pub profile_name: Option<String>,
+    /// The destination shown before Start; a new build refuses changes to this selection.
+    pub publishing_selection: Option<super::publishing::Selection>,
 }
 
 impl Request {
@@ -81,6 +84,8 @@ impl Request {
             settings,
             renew_github: false,
             working_copy: None,
+            profile_name: None,
+            publishing_selection: None,
         }
     }
 }
@@ -88,11 +93,28 @@ impl Request {
 /// Saves a retryable record for an already resolved commit before persisting deployment intent.
 /// Does not invoke Git; deployment validates the committed tree before allocation.
 pub fn prepare(request: &Request) -> Result<()> {
+    prepare_record(request, false)
+}
+
+/// Records an image-only preparation without resizing a cloud that already has its image.
+/// The existing-image check and any record changes hold the same operation lock.
+/// # Errors
+/// As [`prepare`], or when a prepared worker specification already exists.
+pub fn prepare_image_record(request: &Request) -> Result<()> {
+    prepare_record(request, true)
+}
+
+fn prepare_record(request: &Request, image_only: bool) -> Result<()> {
     if !horizon_cloud::valid_id(&request.cloud_id) {
         return Err(Error::Invalid("Invalid cloud identity"));
     }
     super::providers::preflight(&request.cloud_id, &request.profile, &request.settings)?;
     let store = Store::lock(&request.state_root)?;
+    if image_only && store.load()?.is_some_and(|state| state.spec.is_some()) {
+        return Err(Error::Invalid(
+            "This cloud already has a prepared worker image; use its rebuild flow to prepare a replacement",
+        ));
+    }
     initial_state(request, &store).map(|_| ())
 }
 /// # Errors
@@ -187,13 +209,16 @@ fn deploy_with(
     }
     provider.settle(store, &mut state, cancel, observe)?;
     let started = attempt_started(&state, started);
-    let mut registry = prepare_registry(request, store, &mut state)?;
+    let publishing_runner = Runner {
+        cancel,
+        emit,
+        secrets: Vec::new(),
+    };
+    let mut preparation = image::Preparation::new(request, store, &mut state, &publishing_runner)?;
     let runner = Runner {
         cancel,
         emit,
-        secrets: registry
-            .as_ref()
-            .map_or_else(Vec::new, super::registry::Prepared::redactions),
+        secrets: preparation.redactions(),
     };
     let browser_auth = super::browser_auth::Prepared::for_repository(
         &request.settings.browserstack_credentials,
@@ -216,9 +241,9 @@ fn deploy_with(
     let pack_root = tempfile::tempdir_in(store.root())?;
     let mut packed = source::pack(&state, pack_root.path(), &runner)?;
     if state.spec.is_none() {
-        prepare_image(request, store, &runner, &mut state, registry.as_ref())?;
+        prepare_image(request, store, &runner, &mut state, &preparation)?;
     }
-    if let Some(registry) = registry.as_mut() {
+    if let Some(registry) = preparation.registry.as_mut() {
         provider.verify_registry(store, &mut state, registry, cancel, observe)?;
     }
     let spec = state
@@ -227,9 +252,14 @@ fn deploy_with(
         .ok_or(Error::Invalid("Deployment has no worker specification"))?;
     // Opt-in may be added after a definite provisioning rejection saved a spec.
     // Validate that exact digest on every path that can still allocate a worker.
-    if let Some(image) =
-        validate_allocation_image(request, &state, &spec, git_auth.is_some(), &runner, registry.as_ref())?
-    {
+    if let Some(image) = validate_allocation_image(
+        request,
+        &state,
+        &spec,
+        git_auth.is_some(),
+        &runner,
+        preparation.registry.as_ref(),
+    )? {
         packed.settle(&image, &runner)?;
     }
     state.stage = Stage::Provision;
@@ -244,20 +274,41 @@ fn deploy_with(
     begin_sessions(&mut state, store, emit)?;
     configure_agent_auth(&connection, &request.settings, &state.profile.capabilities, &runner)?;
     configure_git_auth(git_auth, request, &state, &connection, &runner)?;
-    if let Some(browser_auth) = browser_auth {
-        state.browserstack_targets.clone_from(browser_auth.targets());
-        store.arm_browserstack(&mut state)?;
-        browser_auth.install(&connection, &runner)?;
-    }
+    install_browser_auth(browser_auth, store, &mut state, &connection, &runner)?;
     // A reconnect brings back every recorded session. A running process is left
     // alone; a lost one is started again in its existing worktree.
-    if arm_recorded_session_resume(&mut state) {
-        store.save(&state)?;
-    }
-    let relaunch = |command: &str| runner.run("Session relaunch", &mut connection.command(command), RELAUNCH);
-    replacement::relaunch_sessions(store, &mut state, &contract, emit, relaunch)?;
+    resume_sessions(store, &mut state, &contract, &connection, &runner)?;
     state.timeline = Some(timeline.complete(&state, reconnected, contract.container_started));
     finish_ready(state, store, started, emit)
+}
+
+fn install_browser_auth(
+    auth: Option<super::browser_auth::Prepared>,
+    store: &Store,
+    state: &mut Deployment,
+    connection: &Connection,
+    runner: &Runner<'_>,
+) -> Result<()> {
+    if let Some(auth) = auth {
+        state.browserstack_targets.clone_from(auth.targets());
+        store.arm_browserstack(state)?;
+        auth.install(connection, runner)?;
+    }
+    Ok(())
+}
+
+fn resume_sessions(
+    store: &Store,
+    state: &mut Deployment,
+    contract: &WorkerContract,
+    connection: &Connection,
+    runner: &Runner<'_>,
+) -> Result<()> {
+    if arm_recorded_session_resume(state) {
+        store.save(state)?;
+    }
+    let relaunch = |command: &str| runner.run("Session relaunch", &mut connection.command(command), RELAUNCH);
+    replacement::relaunch_sessions(store, state, contract, runner.emit, relaunch)
 }
 
 fn prepare_registry(
@@ -265,9 +316,6 @@ fn prepare_registry(
     store: &Store,
     state: &mut Deployment,
 ) -> Result<Option<super::registry::Prepared>> {
-    if state.publication.is_some() && state.spec.is_none() {
-        return Err(Error::Invalid(super::publishing::IMAGE_PREPARATION_STAGED));
-    }
     if !state.resizable() {
         return Ok(None);
     }
@@ -288,11 +336,14 @@ fn prepare_registry(
         state.registry_generation = Some(binding.generation.clone());
         store.save(state)?;
     }
-    super::registry::Prepared::for_image(
+    super::registry::Prepared::for_image_for_provider(
         &request.settings,
         &state.profile.image,
         Some(&state.repository),
-        state.spec.is_none() && state.profile.build.is_some(),
+        state.spec.is_none()
+            && state.profile.build.is_some()
+            && state.publication.as_ref().is_none_or(|record| record.account.is_none()),
+        horizon_cloud::provider::Description::of(&state.profile).kind,
     )
 }
 
@@ -425,12 +476,15 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
     let state = if let Some(mut state) = store.load()? {
         // CPU and memory may change until a worker is requested; the image does not depend on them.
         let mut resized = state.profile.clone();
+        let requested = super::publishing::requested_profile(&state, &request.profile);
         resized.cpu = request.profile.cpu;
         resized.memory_gb = request.profile.memory_gb;
         if state.cloud_id != request.cloud_id
+            || state.publication.as_ref().is_some_and(|record|
+                request.profile_name.as_ref().is_some_and(|name| name != &record.profile))
             || state.revision != request.revision
             || state.repository != request.repository
-            || resized != request.profile
+            || resized != requested
             || (state.profile != resized && !state.accepts_next_size())
             // Until the first image is built; a rebuild records its own files later.
             || (state.spec.is_none()
@@ -449,7 +503,7 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
         }
         state
     } else {
-        Deployment {
+        let mut created = Deployment {
             version: 1,
             cloud_id: request.cloud_id.clone(),
             repository: request.repository.clone(),
@@ -477,14 +531,24 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             siblings: None,
             uncommitted_image: None,
             working_copy: request.working_copy.clone(),
+        };
+        super::publishing::bind_initial(request, &mut created)?;
+        if created.publication.is_some() {
+            store.save(&created)?;
         }
+        created
     };
-    super::providers::admit(
-        &request.settings,
-        &state.profile,
-        &request.profile.image,
-        &state.operation,
-    )?;
+    if state.publication.is_none() && state.profile.automatic_image() && !request.settings.portable_image_publishing {
+        return Err(Error::Invalid(super::publishing::STAGED));
+    }
+    if !state.profile.automatic_image() {
+        super::providers::admit(
+            &request.settings,
+            &state.profile,
+            &state.profile.image,
+            &state.operation,
+        )?;
+    }
     store.save(&state)?;
     Ok(state)
 }

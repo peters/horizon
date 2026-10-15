@@ -53,7 +53,7 @@ impl Destination {
         let name = name.strip_suffix(".git").unwrap_or(name);
         let name = component(name, 48);
         let profile = component(profile, 32);
-        let suffix: String = fingerprint.as_ref()[..6]
+        let suffix: String = fingerprint.as_ref()[..16]
             .iter()
             .flat_map(|byte| {
                 const HEX: &[u8; 16] = b"0123456789abcdef";

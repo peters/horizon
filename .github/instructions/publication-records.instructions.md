@@ -13,14 +13,28 @@ Report these failures:
 - A registry publisher carries a personal account.
 - A personal publisher lacks its matching nonsecret account metadata and namespace.
 - Invalid metadata replaces the previous saved record.
-- A legacy image-preparation factory uses a retained publisher through the older
-  credential path when an initial image or rebuild will be built.
-- The image-build compatibility fence blocks reconnect, resize or another operation
-  that only reuses an existing image.
+- Initial image or rebuild preparation bypasses the retained account or publication grant.
+- Publisher authentication blocks reconnect, resize or another operation that only reuses an existing image.
 - Deployment format 5 or paired allocation format 3 drops publisher or enrollment evidence.
 - A downgraded version or a version missing its required evidence is accepted.
 - Migration bypasses a neighboring duplicate-worker fence.
 
-The record prerequisite does not activate launch, image omission or a UI flow.
-Host publication authorization must still authenticate and compare the retained identity.
-Do not request the deferred engine or selector as a fix to this persistence prerequisite.
+The engine authenticates and compares the retained identity before each new build.
+A default-off gate keeps new automatic launches inactive until the selector and
+interface controls are complete. Publisher envelopes remain fenced until UI forwarding
+is integrated atomically. Do not request activation as a fix to this API prerequisite.
+
+Rebuild plans and preparation must reject a profile name different from the retained
+publication profile, including another profile with the same image or no image.
+
+Rebuild tokens must distinguish different retained publishers or grants with the
+same resolved image, profile and files. The locked deployment must match its
+confirmed publishing identity before credentials load or a replacement is journaled.
+
+Image-only retries must restore the saved working-copy confirmation as well as the
+profile before overlay validation and image-label calculation. A historical CLI
+request with no working-copy field must not discard the locked record's confirmation.
+
+Reconnect and resize normalize an omitted image or the original recipe image to
+the retained destination, even after a rebuild changes the recipe from explicit
+to automatic. A different explicit image must still refuse before credentials.

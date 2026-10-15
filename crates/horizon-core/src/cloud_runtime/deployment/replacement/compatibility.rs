@@ -26,16 +26,33 @@ pub(super) const BYTES_PER_GB: u64 = 1_000_000_000;
 /// settings a rebuild reads, commits: the `bound` profile with its rebuild settings.
 /// Refuses, naming the field, any other difference but the choices bound at creation,
 /// and a combination of settings that no profile may have.
-pub(super) fn next_profile(bound: &Profile, config: Option<&CloudConfig>, name: &str) -> Result<Profile> {
-    let committed = config
+pub(super) fn next_profile(
+    bound: &Profile,
+    config: Option<&CloudConfig>,
+    name: &str,
+    publication: Option<&crate::cloud_runtime::publishing::Publication>,
+) -> Result<Profile> {
+    let mut committed = config
         .ok_or(Error::Invalid(NO_CONFIG))?
         .profiles
         .get(name)
-        .ok_or(Error::Invalid(NO_PROFILE))?;
-    if let Some(reason) = refusal(bound, committed) {
+        .ok_or(Error::Invalid(NO_PROFILE))?
+        .clone();
+    if let Some(record) = publication {
+        record.validate(bound)?;
+        if record.profile != name {
+            return Err(Error::Invalid(
+                "Rebuild the cloud's recorded build profile; create a new cloud to use another profile",
+            ));
+        }
+        if committed.image == record.requested_image {
+            committed.image.clone_from(&bound.image);
+        }
+    }
+    if let Some(reason) = refusal(bound, &committed) {
         return Err(Error::Invalid(reason));
     }
-    let mut next = bound.with_rebuild_settings(committed);
+    let mut next = bound.with_rebuild_settings(&committed);
     // An idle period has no effect, so a rebuild keeps the cloud's own: a change of it
     // alone would build the same image for a changed profile.
     next.idle_stop_minutes = bound.idle_stop_minutes;
@@ -92,7 +109,7 @@ fn refusal(bound: &Profile, committed: &Profile) -> Option<&'static str> {
             (min_cuda_version, min_gpu_memory_gb) != (&bound.min_cuda_version, &bound.min_gpu_memory_gb),
             GPU_REQUIREMENTS,
         ),
-        (*image != bound.image, IMAGE),
+        (!committed.automatic_image() && *image != bound.image, IMAGE),
         (*browserstack != bound.capabilities.browserstack, HOSTED_DEVICES),
         // Version 1 is the only contract a profile may name today.
         (*contract_version != bound.bootstrap.contract_version, CONTRACT),

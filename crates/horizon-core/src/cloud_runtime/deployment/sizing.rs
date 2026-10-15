@@ -4,9 +4,10 @@ use super::{Deployment, Error, Request, Result, Settings, Store};
 /// Applies CPU and memory once the deployment fence allows it.
 pub(super) fn assign_requested_size(request: &Request, state: &mut Deployment) -> Result<bool> {
     let mut resized = state.profile.clone();
+    let requested = super::super::publishing::requested_profile(state, &request.profile);
     resized.cpu = request.profile.cpu;
     resized.memory_gb = request.profile.memory_gb;
-    if resized != request.profile || (state.profile != resized && !state.resizable()) {
+    if resized != requested || (state.profile != resized && !state.resizable()) {
         return Err(Error::Invalid(
             "Cloud is permanently bound to its repository, revision and profile",
         ));

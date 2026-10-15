@@ -25,6 +25,7 @@ documents that are not yet STE.
 
 | Procedure | Feature | Cost |
 |---|---|---|
+| [portable-build-engine](procedures/portable-build-engine.md) | Retain publisher identity through staged image preparation | none |
 | [bound-worker-pull](procedures/bound-worker-pull.md) | Exact read-only registry material for CPU hosts | none |
 | [host-pull-journal](procedures/host-pull-journal.md) | Separate direct-host and provider pull records | none |
 | [registry-docker-context](procedures/registry-docker-context.md) | Keep daemon selection with isolated registry credentials | none |

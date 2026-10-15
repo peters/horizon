@@ -9,6 +9,7 @@ pub use management::{Action, Scope, Status, Validation, manage};
 pub use needed::{Needed, Publishing, needed, repository_of};
 pub mod draft;
 mod store;
+pub(in crate::cloud_runtime) use store::ensure_outside_source;
 #[cfg(test)]
 mod tests;
 

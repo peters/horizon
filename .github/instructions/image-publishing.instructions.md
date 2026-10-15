@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/cloud_panel.rs,crates/horizon-core/src/cloud_panel/launch_serde/**,crates/horizon-core/src/cloud_panel/launch_serde.rs,crates/horizon-cloud/src/image_publishing.rs,crates/horizon-cloud/src/image_publishing/**,crates/horizon-core/src/cloud_runtime/github/publish/publication.rs,crates/horizon-core/src/cloud_runtime/github/publish/publication/**,crates/horizon-core/src/cloud_runtime/publishing.rs,crates/horizon-core/src/cloud_runtime/publishing/**,crates/horizon-core/src/cloud_runtime/setup/publishing.rs,crates/horizon-core/src/cloud_runtime/setup/publishing/**,crates/horizon-core/src/cloud_runtime/settings.rs,crates/horizon-core/src/cloud_runtime/registry/**"
+applyTo: "crates/horizon-core/examples/cloud_deploy.rs,crates/horizon-core/examples/cloud_deploy/publishing/**,crates/horizon-core/src/cloud_panel.rs,crates/horizon-core/src/cloud_panel/launch_serde/**,crates/horizon-core/src/cloud_panel/launch_serde.rs,crates/horizon-cloud/src/image_publishing.rs,crates/horizon-cloud/src/image_publishing/**,crates/horizon-core/src/cloud_runtime/github/publish/publication.rs,crates/horizon-core/src/cloud_runtime/github/publish/publication/**,crates/horizon-core/src/cloud_runtime/publishing.rs,crates/horizon-core/src/cloud_runtime/publishing/**,crates/horizon-core/src/cloud_runtime/setup/publishing.rs,crates/horizon-core/src/cloud_runtime/setup/publishing/**,crates/horizon-core/src/cloud_runtime/settings.rs,crates/horizon-core/src/cloud_runtime/registry/**"
 ---
 
 # Image destination boundary
@@ -32,7 +32,7 @@ another account is cached. Check the device result before saving its credential
 chain; a wrong account must preserve the prior stored chain. Preparation and
 renewal share this guard. A renamed matching account must fail before a futile
 device prompt, with a specific rename explanation. Explicit selection must not silently reuse a cached
-account. This prerequisite does not wire these helpers into launches or UI.
+account. The engine calls preparation and renewal. Visible account selection follows separately.
 
 These limits are deliberate:
 
@@ -66,8 +66,7 @@ Existing provider journals retain their original path and account identity. Dire
 provider journals have separate operation locks, but the first material pin is one
 generation-wide transaction. Report in-place pull changes accepted through another scope,
 provider mutation state accepted in a host journal, or publishing secrets sent to a worker.
-The deployment caller remains unchanged in this prerequisite; provider-aware launch wiring
-follows separately. Local checks cannot revoke a credential already installed on a host.
+Initial-build and rebuild callers choose the helper from their actual provider kind. Local checks cannot revoke a credential already installed on a host.
 
 Check the actual host journal directory against the canonical source, not only its
 parent registry root. Refuse source aliases before creating any journal. Missing
@@ -78,10 +77,20 @@ Coordination files retain their inode, resolve parent aliases, contain no secret
 and refuse symlinks, wrong owners, broad permissions and extra hard links.
 Existing roots with no pending intent must not require a readable parent.
 
+The staged engine records new destinations before building, authenticates the
+retained account or exact publication grant on each new build, and renews personal
+operation credentials immediately before push. Reusing a worker image requires no
+publisher authentication. Report a retry/rebuild that adopts a new host preference,
+loads another publishing grant, or accepts a confirmation token for another selection.
+New automatic launches stay behind the default-off stage; the saved-launch envelope
+reader remains fenced until actual UI forwarding is delivered with it. Do not ask
+this API prerequisite to activate the selector or update development image pins.
+
 Registry credential isolation must preserve the selected Unix Docker context and
 plugin locations without copying another registry login, a credential helper or
 proxy credentials. Resolve relative machine configuration paths before linking
-contexts or plugins. Keep explicit daemon-host precedence. Temporary config creation
+contexts or plugins; an empty `DOCKER_CONFIG` uses the home fallback. Apply the same
+safe skeleton during preflight login. Keep explicit daemon-host precedence. Temporary config creation
 must not read a stored personal publication chain to prepare a registry-bound login.
 
 Host-only management must not load a compute key or create provider registry IDs.

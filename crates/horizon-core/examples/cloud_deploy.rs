@@ -2,6 +2,8 @@
 #![forbid(unsafe_code)]
 #[path = "cloud_deploy/choice.rs"]
 mod choice;
+#[path = "cloud_deploy/publishing.rs"]
+mod publishing;
 #[path = "cloud_deploy/registry.rs"]
 mod registry;
 #[path = "cloud_deploy/registry_mcp.rs"]
@@ -49,7 +51,7 @@ fn run_args(args: &[String]) -> cloud_runtime::Result<()> {
     if args.len() < 3 {
         return Err(cloud_runtime::Error::Invalid(USAGE));
     }
-    let mut settings = recorded_host(Settings::load(&PathBuf::from(&args[1]))?, args);
+    let settings = recorded_host(Settings::load(&PathBuf::from(&args[1]))?, args);
     let cancel = Cancellation::default();
     if args[0] == "reconcile" && (3..=4).contains(&args.len()) {
         return reconcile(args, &settings, &cancel);
@@ -90,6 +92,10 @@ fn run_args(args: &[String]) -> cloud_runtime::Result<()> {
     ) {
         return rebuild(args, settings, &cancel);
     }
+    launch(args, settings, &cancel)
+}
+
+fn launch(args: &[String], mut settings: Settings, cancel: &Cancellation) -> cloud_runtime::Result<()> {
     let (args, worker_choice) = choice::arguments(args)?;
     let (args, siblings) = sibling_bindings(&args)?;
     let (args, token) = plan_token(&args)?;
@@ -102,7 +108,7 @@ fn run_args(args: &[String]) -> cloud_runtime::Result<()> {
     {
         return Err(cloud_runtime::Error::Invalid("Invalid deployment arguments"));
     }
-    let prepared = launch_config(&args[2], args.get(6), quick_start, &cancel)?;
+    let prepared = launch_config(&args[2], args.get(6), quick_start, cancel)?;
     let profile = prepared
         .config
         .profiles
@@ -111,16 +117,42 @@ fn run_args(args: &[String]) -> cloud_runtime::Result<()> {
         .ok_or(cloud_runtime::Error::Invalid("Profile does not exist"))?;
     // The plan token covers the profile as it is deployed, with the worker choice.
     let profile = if let Some(path) = worker_choice {
-        choice::apply(&profile, &mut settings, &path, &cancel)?
+        choice::apply(&profile, &mut settings, &path, cancel)?
     } else {
         profile
     };
     let files = uncommitted_files(&prepared, &profile)?;
+    let image_selection = publishing::selection(
+        &prepared.repository,
+        &args[3],
+        &profile,
+        &settings,
+        &PathBuf::from(&args[4]),
+        &args[5],
+        cancel,
+    )?;
     if args[0] == "plan-deploy" {
-        print_plan(&prepared.notes, &profile, &settings, files.as_ref());
+        print_plan(&prepared, &profile, &settings, &image_selection, files.as_ref());
         return Ok(());
     }
-    let working_copy = confirm(&profile, &settings, files, token.as_deref())?;
+    let working_copy = confirm(&profile, &settings, &image_selection, files, token.as_deref())?;
+    let request = deployment_request(prepared, profile, settings, &args, working_copy, image_selection);
+    if args[0] == "prepare-image" {
+        prepare_image(&request, cancel, &print_event)?;
+    } else {
+        deployment::deploy_with_siblings(&request, &siblings, cancel, &print_event)?;
+    }
+    Ok(())
+}
+
+fn deployment_request(
+    prepared: repository::launch::Prepared,
+    profile: horizon_core::cloud_panel::Profile,
+    settings: Settings,
+    args: &[String],
+    working_copy: Option<repository::uncommitted::Confirmed>,
+    image_selection: cloud_runtime::publishing::Selection,
+) -> deployment::Request {
     let mut request = deployment::Request::new(
         args[5].clone(),
         prepared.repository,
@@ -130,12 +162,9 @@ fn run_args(args: &[String]) -> cloud_runtime::Result<()> {
         settings,
     );
     request.working_copy = working_copy;
-    if args[0] == "prepare-image" {
-        prepare_image(&request, &cancel, &print_event)?;
-    } else {
-        deployment::deploy_with_siblings(&request, &siblings, &cancel, &print_event)?;
-    }
-    Ok(())
+    request.profile_name = Some(args[3].clone());
+    request.publishing_selection = Some(image_selection);
+    request
 }
 
 /// The repository, revision and configuration a `deploy` or `prepare-image` launches, read
@@ -188,6 +217,7 @@ fn deploy_token(
     profile: &horizon_core::cloud_panel::Profile,
     settings: &Settings,
     files: Option<&Uncommitted>,
+    image_selection: &cloud_runtime::publishing::Selection,
 ) -> String {
     use sha2::Digest as _;
     use std::fmt::Write as _;
@@ -195,6 +225,7 @@ fn deploy_token(
         "placement": settings.placement,
         "data_centers": settings.data_centers,
         "gpu_types": settings.gpu_types,
+        "image_destination": image_selection,
     });
     let mut hasher = sha2::Sha256::new();
     hasher.update(repository::uncommitted::token(
@@ -211,12 +242,14 @@ fn deploy_token(
 
 /// What `plan-deploy` prints: the notes, each uncommitted file and the plan token.
 fn print_plan(
-    notes: &[String],
+    prepared: &repository::launch::Prepared,
     profile: &horizon_core::cloud_panel::Profile,
     settings: &Settings,
+    image_selection: &cloud_runtime::publishing::Selection,
     files: Option<&Uncommitted>,
 ) {
-    for note in notes {
+    publishing::show(image_selection);
+    for note in &prepared.notes {
         println!("{note}");
     }
     // An image can be pushed to a public registry, so each file is listed before a
@@ -224,7 +257,7 @@ fn print_plan(
     for file in files.map(Uncommitted::files).unwrap_or_default() {
         println!("Uncommitted file: {} {}", file.change.label(), file.path);
     }
-    let plan = deploy_token(profile, settings, files);
+    let plan = deploy_token(profile, settings, files, image_selection);
     println!("To deploy with exactly these settings and files, pass --plan-token {plan}");
 }
 
@@ -233,10 +266,11 @@ fn print_plan(
 fn confirm(
     profile: &horizon_core::cloud_panel::Profile,
     settings: &Settings,
+    image_selection: &cloud_runtime::publishing::Selection,
     files: Option<Uncommitted>,
     token: Option<&str>,
 ) -> cloud_runtime::Result<Option<repository::uncommitted::Confirmed>> {
-    let plan = deploy_token(profile, settings, files.as_ref());
+    let plan = deploy_token(profile, settings, files.as_ref(), image_selection);
     let confirmed = token.map_or_else(
         || files.as_ref().is_none_or(Uncommitted::is_empty),
         |token| token == plan,
@@ -412,7 +446,10 @@ fn rebuild(args: &[String], settings: Settings, cancel: &Cancellation) -> cloud_
         .load()?
         .ok_or(cloud_runtime::Error::Invalid("No cloud deployment"))?;
     if let ("plan-rebuild", Some(profile), 4) = (args[0].as_str(), args.get(3), args.len()) {
-        let plan = replacement::plan(&state.repository, &state.profile, profile, cancel)?;
+        let plan = replacement::plan_for_cloud(&state, profile, cancel)?;
+        if let Some(publication) = &plan.publication {
+            publishing::show(&publishing::retained(publication)?);
+        }
         for note in &plan.notes {
             println!("{note}");
         }
@@ -428,30 +465,32 @@ fn rebuild(args: &[String], settings: Settings, cancel: &Cancellation) -> cloud_
             println!("Uncommitted file: {} {}", file.change.label(), file.path);
         }
         println!(
-            "To rebuild with exactly these settings and files, pass {} to rebuild",
+            "To rebuild with exactly these settings, publishing identity and files, pass {} to rebuild",
             plan.token()
         );
         return Ok(());
     }
     let request = deployment::Request::new(
-        state.cloud_id,
-        state.repository,
-        state.revision,
-        state.profile,
+        state.cloud_id.clone(),
+        state.repository.clone(),
+        state.revision.clone(),
+        state.profile.clone(),
         root,
         settings,
     );
     match (args[0].as_str(), args.get(3)) {
         ("rebuild", Some(profile)) if matches!(args.len(), 4 | 5) => {
-            // The token confirms what plan-rebuild printed: the settings and the uncommitted
-            // files. Without one, only a plan without uncommitted files may run.
-            let plan = replacement::plan(&request.repository, &request.profile, profile, cancel)?;
+            // The token confirms the retained publisher as well as settings and files.
+            // Legacy clean rebuilds without publication metadata keep their existing shortcut.
+            let plan = replacement::plan_for_cloud(&state, profile, cancel)?;
             let confirmed = args
                 .get(4)
-                .map_or(plan.uncommitted.is_empty(), |token| *token == plan.token());
+                .map_or(plan.publication.is_none() && plan.uncommitted.is_empty(), |token| {
+                    *token == plan.token()
+                });
             if !confirmed {
                 return Err(cloud_runtime::Error::Invalid(
-                    "The checkout differs from the printed plan, or has uncommitted files and no token was given. Run plan-rebuild, check what it prints, and pass the token it prints",
+                    "The rebuild settings, publishing identity or files differ from the printed plan, or a required confirmation token is missing. Run plan-rebuild, check what it prints, and pass the token it prints",
                 ));
             }
             replacement::rebuild(&request, profile, Some(&plan), cancel, &print_event)
@@ -468,11 +507,18 @@ fn prepare_image(
     cancel: &Cancellation,
     emit: &dyn Fn(Event),
 ) -> cloud_runtime::Result<()> {
-    let mut registry = cloud_runtime::registry::Prepared::for_image(
+    let preparation = publishing::prepare_image(request, cancel, emit)?;
+    let mut resolved = request.clone();
+    resolved.profile = preparation.profile.clone();
+    resolved.working_copy.clone_from(&preparation.working_copy);
+    let request = &resolved;
+    let publication = preparation.publication.as_ref();
+    let mut registry = cloud_runtime::registry::Prepared::for_image_for_provider(
         &request.settings,
         &request.profile.image,
         Some(&request.repository),
-        request.profile.build.is_some(),
+        request.profile.build.is_some() && publication.is_none(),
+        horizon_cloud::provider::Description::of(&request.profile).kind,
     )?;
     let git_auth =
         cloud_runtime::git_auth::Prepared::for_repository(&request.settings.git_credentials, &request.repository)?;
@@ -519,16 +565,22 @@ fn prepare_image(
     }
     let images = cloud_runtime::image::Images {
         docker_host: request.settings.docker_host.as_deref(),
-        isolated_registry: registry.is_some(),
-        docker_config: registry
-            .as_ref()
-            .map_or(request.settings.docker_config.as_path(), |registry| {
-                registry.docker_config(request.profile.build.is_some())
-            }),
+        isolated_registry: registry.is_some() || publication.is_some(),
+        docker_config: publication.map_or_else(
+            || {
+                registry
+                    .as_ref()
+                    .map_or(request.settings.docker_config.as_path(), |registry| {
+                        registry.docker_config(request.profile.build.is_some())
+                    })
+            },
+            |publication| publication.docker_config(),
+        ),
         runner: &runner,
-        publisher: registry.is_none().then_some(cloud_runtime::github::publish::Publisher {
+        publisher: (registry.is_none() || publication.is_some()).then_some(cloud_runtime::github::publish::Publisher {
             docker_config: &request.settings.docker_config,
             cloud_id: &request.cloud_id,
+            prepared: publication,
         }),
     };
     let context = cloud_runtime::image::Context {

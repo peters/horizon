@@ -53,15 +53,15 @@ Status qualification uses the production UI, actual CLI and normal AGENT public
 MCP responses; baseline id/name evidence alone does not qualify API status.
 
 Machine-local destination preference helpers retain a checkout/profile scope and
-nonsecret account or exact registry grant metadata. They do not change launch or
-profile parsing yet. A saved preference is not proof of authentication or registry
+nonsecret account or exact registry grant metadata. The staged launch engine uses
+that choice before image work; new automatic launches stay off until the selector is complete. A saved preference is not proof of authentication or registry
 permission. Keep these settings outside repository files and use the shared
 transactional save helper to preserve other windows' choices.
 
 Image publication credentials belong on the host. An operation preparation helper
 retains the authenticated provider account ID and owns a separate temporary Docker
-login. It has no launch caller yet; existing launch behavior and explicit `image`
-requirements remain. Never copy publication credentials to a worker or repository.
+login. The engine retains its account and renews the operation login before push.
+Prebuilt profiles still require an explicit image; build-profile omission is staged. Never copy publication credentials to a worker or repository.
 
 
 The staged publication helper can recover a retained account even when another
@@ -70,8 +70,8 @@ and checks it before saving a new credential chain. A wrong account preserves
 the previous chain and private operation login. A renamed matching account is
 refused before a futile prompt because its recorded namespace cannot change.
 Explicit account selection starts
-a new device sign-in. These are host helpers without a launch or selector caller;
-no automatic publishing, visible control or account switch is activated.
+a new device sign-in. Launch preparation uses retained-account recovery; a visible
+selector and account switch remain separate from this staged API.
 
 Discovery and price results do not authorize spending or lifecycle changes.
 Get explicit authorization for the exact resource before starting or stopping a worker.
@@ -82,8 +82,8 @@ A CPU cloud with an exact Container registry binding uses that read-only grant i
 of the legacy provider pull login. Allocation requires verification of its immutable
 image digest. The host keeps the verified material; a file change cannot replace it.
 No publishing credential reaches the worker. Unbound images keep their legacy behavior.
-The existing Container registry journal still requires a configured RunPod account in
-this prerequisite; it does not yet qualify private bindings on a Hetzner-only host.
+Initial image and rebuild preparation select a host-only journal for direct hosts,
+without a RunPod key. Provider registry operations keep their original account scope.
 See `docs/testing/procedures/bound-worker-pull.md` for synthetic checks.
 
 Failed cloud cards diagnose output from the failed step's current visit only.
@@ -145,10 +145,9 @@ identity without activating a publishing flow. Records contain no credentials an
 prove no current registry permission. Deployment format 5 and paired allocation
 format 3 prevent older readers from erasing that identity; migration retains the
 original enrollment and worker ownership evidence. Invalid or downgraded records
-are refused. Existing launches do not create publication records yet.
-Legacy preparation refuses to build a new image for a retained publisher until
-the portable engine enforces its identity. Reusing an existing image, including
-reconnect and resize, does not invoke that image-build fence.
+are refused. New staged API launches retain their choice before image work.
+A retry or rebuild must authorize that same account or publication grant. Reusing
+an existing image, including reconnect and resize, needs no publishing login.
 See docs/testing/procedures/publication-records.md.
 
 
@@ -173,6 +172,35 @@ Enabled backend cleanup also refuses normal card removal while its locked record
 
 See docs/architecture/tailnet-node-cleanup.md and docs/testing/procedures/tailnet-node-cleanup.md.
 
+### Staged portable build engine
+
+The development `cloud_deploy` helper prints destination/account metadata in its
+plan and retains it in the confirmation token. Retry and rebuild keep the original
+publisher; a changed preference cannot redirect a cloud. Personal write credentials
+stay host-only and are renewed before push. A private image needs a separate verified
+read-only pull grant. New automatic launches remain off until the complete UI,
+public destination controls and saved-launch bridge are delivered. Do not enable a
+partial user flow or remove explicit development image pins in this stage.
+See docs/testing/procedures/portable-build-engine.md.
+
+A retained publishing record also fixes the rebuild profile name. A request for
+another profile is refused even when that profile names the same destination or
+omits its image. Recipe edits within the recorded profile still rebuild to the
+recorded destination.
+
+This staged engine is supported through the development CLI only. Desktop
+creation, saved publisher-envelope restoration and retained-publication rebuild
+previews wait for the atomic UI bridge. Keep the setting off for desktop use;
+a staged CLI record is not evidence that the desktop path is qualified.
+
+A rebuild confirmation also snapshots the exact retained publication. Its token
+covers the publisher account or grant even when the resolved image and files are
+identical. The locked execution compares that identity before reading credentials;
+a changed or missing publisher confirmation requires a fresh plan. Legacy plans
+without a retained publication keep their existing token format. The development
+CLI displays the recorded destination and account with the rebuild plan. A retained
+publisher requires that printed token even when the working copy is clean.
+
 ### Host-only pull preparation prerequisite
 
 The provider-aware registry helper can prepare a direct-host pull grant without a
@@ -183,8 +211,8 @@ before mkdir, with parent syncs before a
 child or pull identity is pinned. Interrupted creation is recovered first; existing
 roots with no pending intent do not require a readable parent. Both scopes pin the same
 read-only identity for each generation. Rotate the generation when that identity
-changes. Existing deployment callers are unchanged; portable launch wiring follows
-separately. This helper does not prove a live registry pull or revoke an installed
+changes. Initial image and rebuild callers choose the helper for their provider.
+This helper does not prove a live registry pull or revoke an installed
 host credential. See docs/testing/procedures/host-pull-journal.md.
 
 On Unix, private registry credentials preserve the machine's Docker context and plugin

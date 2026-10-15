@@ -118,6 +118,7 @@ pub enum SubmoduleHistory {
 #[serde(deny_unknown_fields)]
 pub struct Profile {
     pub provider: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub image: String,
     // Stored workers keep their wire keys; repository YAML can name the minimums explicitly.
     #[serde(alias = "min_cpu")]
@@ -276,6 +277,12 @@ impl CloudConfig {
     }
 }
 impl Profile {
+    /// A build whose publishing destination the host selects before preparing its image.
+    #[must_use]
+    pub fn automatic_image(&self) -> bool {
+        self.image.is_empty() && self.build.is_some()
+    }
+
     /// `self` with the settings an image rebuild may change taken from `next`: the
     /// agents, browsers, desktop and agent approvals of `capabilities`, the readiness
     /// timeout, the idle period and the build section. The provider, size, storage, GPU
@@ -366,7 +373,7 @@ impl Profile {
                 return Err(ProfileError::Invalid("min_gpu_memory_gb must be between 1 and 1024"));
             }
         }
-        if !valid_image(&self.image) {
+        if !self.automatic_image() && !valid_image(&self.image) {
             return Err(ProfileError::Invalid("Invalid registry image reference"));
         }
         if let Some(build) = &self.build

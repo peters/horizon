@@ -8,7 +8,7 @@ use crate::cloud_runtime::{
     command::Runner,
     deployment::{Request, hetzner, image, storage},
     image::{Context, Images},
-    publishing, registry,
+    registry,
     repository::{
         self,
         launch::quick_start,
@@ -124,6 +124,7 @@ pub(super) struct Live<'a> {
     /// Holds the registry generation lock until the provider update is sent.
     registry: RefCell<Option<registry::Prepared>>,
     generation: Option<String>,
+    publication: Option<crate::cloud_runtime::github::publish::publication::Prepared>,
     git_auth: bool,
 }
 
@@ -137,9 +138,6 @@ impl<'a> Live<'a> {
         cancel: &'a Cancellation,
         emit: &'a dyn Fn(Event),
     ) -> Result<Self> {
-        if building && state.publication.is_some() {
-            return Err(Error::Invalid(publishing::IMAGE_PREPARATION_STAGED));
-        }
         let settings = &request.settings;
         let binding = settings
             .registries
@@ -152,8 +150,23 @@ impl<'a> Live<'a> {
                 "Private image registry binding is missing; restore or rotate it before retrying",
             ));
         }
-        let registry =
-            registry::Prepared::for_image(settings, &state.profile.image, Some(&state.repository), building)?;
+        let publishing_runner = Runner {
+            cancel,
+            emit,
+            secrets: Vec::new(),
+        };
+        let publication = if building {
+            crate::cloud_runtime::publishing::authorize(state, settings, &publishing_runner)?
+        } else {
+            None
+        };
+        let registry = registry::Prepared::for_image_for_provider(
+            settings,
+            &state.profile.image,
+            Some(&state.repository),
+            building && state.publication.as_ref().is_none_or(|record| record.account.is_none()),
+            Description::of(&state.profile).kind,
+        )?;
         let (provider, server) = match Description::of(&state.profile).rebuild {
             Rebuild::InPlace => (Some(RunPod::new(settings.credential()?)), None),
             Rebuild::NewServer => (None, Some(Released::new(settings, cancel))),
@@ -171,6 +184,7 @@ impl<'a> Live<'a> {
             },
             registry: RefCell::new(registry),
             generation: binding.map(|binding| binding.generation.clone()),
+            publication,
             git_auth: siblings::git_grants(&settings.git_credentials, state)?.is_some(),
         })
     }
@@ -185,16 +199,24 @@ impl<'a> Live<'a> {
     fn images<'s>(&'s self, registry: Option<&'s registry::Prepared>, building: bool) -> Images<'s> {
         Images {
             docker_host: self.request.settings.docker_host.as_deref(),
-            isolated_registry: registry.is_some(),
-            docker_config: registry.map_or(self.request.settings.docker_config.as_path(), |registry| {
-                registry.docker_config(building)
-            }),
+            isolated_registry: registry.is_some() || self.publication.is_some(),
+            docker_config: self.publication.as_ref().map_or_else(
+                || {
+                    registry.map_or(self.request.settings.docker_config.as_path(), |registry| {
+                        registry.docker_config(building)
+                    })
+                },
+                |publication| publication.docker_config(),
+            ),
             runner: &self.runner,
             // A bound image repository publishes with its own credential.
-            publisher: (building && registry.is_none()).then_some(crate::cloud_runtime::github::publish::Publisher {
-                docker_config: &self.request.settings.docker_config,
-                cloud_id: &self.request.cloud_id,
-            }),
+            publisher: (building && (registry.is_none() || self.publication.is_some())).then_some(
+                crate::cloud_runtime::github::publish::Publisher {
+                    docker_config: &self.request.settings.docker_config,
+                    cloud_id: &self.request.cloud_id,
+                    prepared: self.publication.as_ref(),
+                },
+            ),
         }
     }
 
