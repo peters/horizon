@@ -594,6 +594,9 @@ need no storage: the `Journal` a caller persists for a cloud (volume, location,
 SSH key, released server, delete intent), the placement `Policy` and its fitting
 rules, the host plan, the pull-login check, the worker view of a server and the
 checks that a server and its volume hold each other where the policy allows.
+`hetzner::servers::deletion` keeps exact recorded-server deletion separate from
+server creation and power operations. It preserves the existing ownership checks,
+action waits, announcements and termination persistence.
 `hetzner::cloud::provision` is the provisioning sequence: it validates and renders
 everything before the first request, and hands every record it needs to the
 caller's `Records` before the provider request that record guards.
