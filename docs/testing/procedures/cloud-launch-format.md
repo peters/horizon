@@ -78,3 +78,7 @@ reads and forward the retained choice atomically.
 
 Record candidate, toolchain, commands, logs, new/reused results and CI in the PR.
 No native GIF is needed because the change has no visible UI behavior.
+
+Recipe/profile equality is enforced before serialization as well as during
+deserialization. An inconsistent in-memory recipe emits no standalone launch
+JSON, and JSON/YAML serialization fail before it can reach an older reader.

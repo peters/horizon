@@ -3,11 +3,27 @@ use super::{CloudLaunch, Placement};
 use crate::cloud_runtime::publishing::Selection;
 use serde::{Deserialize, Deserializer, Serialize, de::IgnoredAny};
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 #[serde(untagged)]
 pub(super) enum Wire {
     Reviewed(Reviewed),
     Legacy(Body),
+}
+
+impl Serialize for Wire {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let body = match self {
+            Self::Reviewed(reviewed) => &reviewed.launch,
+            Self::Legacy(body) => body,
+        };
+        if body.recipe_mismatch() {
+            return Err(serde::ser::Error::custom("Invalid image launch recipe confirmation"));
+        }
+        match self {
+            Self::Reviewed(reviewed) => reviewed.serialize(serializer),
+            Self::Legacy(body) => body.serialize(serializer),
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -31,6 +47,12 @@ pub(super) struct Body {
     profile: horizon_cloud::Profile,
     #[serde(default, skip_serializing_if = "Placement::is_default")]
     placement: Placement,
+}
+
+impl Body {
+    fn recipe_mismatch(&self) -> bool {
+        matches!(&self.publishing_selection, Some(Selection::Recipe { image }) if image != &self.profile.image)
+    }
 }
 
 #[derive(Default, Deserialize)]
@@ -97,10 +119,7 @@ impl TryFrom<Wire> for CloudLaunch {
             }
             _ => return Err("Unsupported or incomplete reviewed image launch; use a compatible application"),
         };
-        if body.reserved.version
-            || body.reserved.launch
-            || matches!(&body.publishing_selection, Some(Selection::Recipe { image }) if image != &body.profile.image)
-        {
+        if body.reserved.version || body.reserved.launch || body.recipe_mismatch() {
             return Err("Invalid or downgraded image launch confirmation");
         }
         let Body {

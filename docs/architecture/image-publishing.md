@@ -134,3 +134,7 @@ Malformed launch bodies deliberately return a generic decode error rather than
 repeating rejected field values. Saved state is untrusted and an invalid field
 can contain accidentally pasted private text. This trades field-level diagnostics
 for a redacted error while retaining compatibility for valid legacy documents.
+
+Recipe/profile equality is enforced before serialization as well as during
+deserialization. An inconsistent in-memory recipe emits no standalone launch
+JSON, and JSON/YAML serialization fail before it can reach an older reader.

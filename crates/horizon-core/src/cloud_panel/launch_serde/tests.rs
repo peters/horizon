@@ -135,3 +135,23 @@ fn malformed_saved_fields_do_not_echo_their_values_in_decode_errors() {
         .to_string();
     assert!(!error.contains("synthetic-private-marker"));
 }
+
+#[test]
+fn inconsistent_recipe_confirmations_are_refused_before_serialization() {
+    let mut changed_profile = recipe();
+    changed_profile.profile.image = "registry.example/team/different".into();
+    let mut changed_confirmation = recipe();
+    changed_confirmation.publishing_selection = Some(Selection::Recipe {
+        image: "registry.example/team/different".into(),
+    });
+    for launch in [changed_profile, changed_confirmation] {
+        assert!(serde_json::to_value(&launch).is_err());
+        assert!(serde_yaml::to_string(&launch).is_err());
+        let mut json = Vec::new();
+        assert!(serde_json::to_writer(&mut json, &launch).is_err());
+        assert!(
+            json.is_empty(),
+            "the launch serializer emitted a partial recipe before validation"
+        );
+    }
+}

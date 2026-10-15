@@ -45,3 +45,7 @@ reader that silently discards reviewed publishing intent. Preserve legacy flat
 encodings and exact-image recipe confirmations, including JSON/YAML compatibility.
 Unknown ordinary legacy keys stay compatible; reserved envelope keys may not hide
 inside a flat body, even when null. No publication is activated by this prerequisite.
+
+Recipe/profile equality is enforced before serialization as well as during
+deserialization. An inconsistent in-memory recipe emits no standalone launch
+JSON, and JSON/YAML serialization fail before it can reach an older reader.
