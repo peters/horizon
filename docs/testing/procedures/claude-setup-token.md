@@ -67,9 +67,13 @@ that Claude on the worker starts signed in.
 2. Make sure that **Claude** is selected. Select **Setup token**.
 
    Result: The card shows the choices **API key**, **Setup token** and **Sign in on
-   the worker**. The field shows **Paste setup token**. The text below the field
-   tells you to run `claude setup-token`. The card status is **Needs a key**. The
-   banner says "Paste the Claude setup token, or choose another sign-in."
+   the worker**. The text below the field tells you to run `claude setup-token`.
+
+   - On a computer without a saved token: the field shows **Paste setup token**.
+     The card status is **Needs a key**. The banner says "Paste the Claude setup
+     token, or choose another sign-in."
+   - On a computer with a saved token: Claude shows **Saved on this computer** with
+     **Replace**. Click **Replace**. The field then shows **Paste setup token**.
 
 > **CAUTION:** THE OPERATOR PASTES THE TOKEN. Do not type the token with a device
 > action, because characters can change.

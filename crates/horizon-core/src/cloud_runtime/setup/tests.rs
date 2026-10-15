@@ -102,7 +102,7 @@ fn a_claude_setup_token_is_saved_privately_with_its_date_and_replaces_the_api_ke
 }
 
 #[test]
-fn a_token_typed_before_another_sign_in_was_chosen_neither_blocks_nor_is_saved() {
+fn input_typed_before_another_sign_in_was_chosen_neither_blocks_nor_is_saved() {
     let root = tempfile::tempdir().unwrap();
     let mut draft = prepared(root.path());
     draft.settings.default_agents = vec![Agent::Claude];
@@ -114,6 +114,15 @@ fn a_token_typed_before_another_sign_in_was_chosen_neither_blocks_nor_is_saved()
     assert!(saved.claude_token.is_none() && saved.anthropic_api_key_file.is_none());
     let raw = std::fs::read_to_string(root.path().join("settings.json")).unwrap();
     assert!(!raw.contains("synthetic"));
+    // The other way: a key typed under API key does not block a setup token.
+    let mut draft = Draft::load(root.path()).unwrap();
+    draft.anthropic_auth = Authentication::ApiKey;
+    *draft.anthropic_key = "synthetic key".into();
+    assert!(draft.validate().is_err());
+    draft.anthropic_auth = Authentication::Token;
+    *draft.claude_token = "synthetic-setup-token".into();
+    let saved = draft.save().unwrap();
+    assert!(saved.claude_token.is_some() && saved.anthropic_api_key_file.is_none());
 }
 
 #[test]

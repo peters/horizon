@@ -189,7 +189,8 @@ impl Draft {
                 self.settings.anthropic_api_key_file.as_ref(),
             ),
         ] {
-            if !value.is_empty() || (self.selected_agents().contains(&agent) && mode == Authentication::ApiKey) {
+            // A key typed under another choice is not saved, so it is not checked either.
+            if mode == Authentication::ApiKey && (!value.is_empty() || self.selected_agents().contains(&agent)) {
                 validate_input(value, saved)?;
             }
         }
