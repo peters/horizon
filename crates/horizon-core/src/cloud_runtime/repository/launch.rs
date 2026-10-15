@@ -79,12 +79,31 @@ pub fn prepare_with_configuration(
         Configuration::QuickStart => (quick_start::config(&repository, &revision, runner)?, Vec::new()),
     };
     let config = creatable(config)?;
+    let mut notes = notes;
+    notes.extend(
+        config
+            .profiles
+            .iter()
+            .filter_map(|(name, profile)| idle_period_note(name, profile)),
+    );
     Ok(Prepared {
         repository,
         revision,
         config,
         notes,
         working_copy,
+    })
+}
+
+/// The note New cloud and Rebuild show for a profile that still sets an idle period,
+/// which has no effect.
+#[must_use]
+pub fn idle_period_note(name: &str, profile: &horizon_cloud::Profile) -> Option<String> {
+    profile.idle_stop_minutes.map(|_| {
+        format!(
+            "idle_stop_minutes in profile {name} has no effect: no cloud stops when idle. \
+             An agent on the worker stops it when its task is done, or choose Stop."
+        )
     })
 }
 
@@ -219,13 +238,13 @@ pub fn ready_profiles(root: &Path, config: &CloudConfig, cancel: &super::super::
         .collect()
 }
 
-/// Whether New cloud offers `provider` for `profile`: a Docker host only for a profile
-/// written for one without a build, and no other provider for such a profile.
+/// Whether New cloud offers `provider` for `profile`: a Docker host for a CPU profile
+/// without a build, and no other provider for a profile written for a Docker host.
 fn offered(provider: &horizon_cloud::provider::Description, profile: &horizon_cloud::Profile) -> bool {
-    let docker = profile.provider == super::super::provider::DOCKER_HOST.id;
-    (provider.kind == horizon_cloud::provider::Kind::DockerHost) == docker
+    let host = provider.kind == horizon_cloud::provider::Kind::DockerHost;
+    (host || profile.provider != super::super::provider::DOCKER_HOST.id)
         && provider.supports(profile)
-        && !(docker && profile.build.is_some())
+        && !(host && profile.build.is_some())
 }
 
 /// Check the existing worker identity without creating or replacing it.
@@ -459,21 +478,23 @@ mod tests {
         settings(serde_json::json!({"token_file": token.path(), "server_types": ["cx33"], "locations": ["hel1"]}));
         // Hetzner runs CPU clouds only.
         assert_eq!(ready_profiles(temp.path(), &config, &cancel), ["dev"]);
-        // A saved Docker host, with no credential, readies the profiles written for it.
-        let docker_host = serde_json::json!({
-            "runpod_key_file": temp.path().join("no-runpod-key"), "ssh_identity_file": key,
-            "docker_config": temp.path().join("docker.json"), "cpu_flavors": [], "gpu_types": [],
-            "docker_hosts": [{"name": "this-pc", "access": "this-pc"}]
-        });
-        std::fs::write(temp.path().join("settings.json"), docker_host.to_string()).unwrap();
-        assert!(
-            ready_profiles(temp.path(), &config, &cancel).is_empty(),
-            "New cloud runs RunPod profiles on RunPod"
-        );
+        // A saved Docker host, with no credential, readies the CPU profiles, also those
+        // written for it, until it is switched off.
+        let docker_host = |off: bool| {
+            let settings = serde_json::json!({
+                "runpod_key_file": temp.path().join("no-runpod-key"), "ssh_identity_file": key,
+                "docker_config": temp.path().join("docker.json"), "cpu_flavors": [], "gpu_types": [],
+                "docker_hosts": [{"name": "this-pc", "access": "this-pc"}], "docker_hosts_off": off
+            });
+            std::fs::write(temp.path().join("settings.json"), settings.to_string()).unwrap();
+        };
         let mut local = config.profiles["dev"].clone();
         local.provider = "docker-host".into();
         config.profiles.insert("local".into(), local);
-        assert_eq!(ready_profiles(temp.path(), &config, &cancel), ["local"]);
+        docker_host(false);
+        assert_eq!(ready_profiles(temp.path(), &config, &cancel), ["dev", "local"]);
+        docker_host(true);
+        assert!(ready_profiles(temp.path(), &config, &cancel).is_empty());
     }
 
     #[test]
@@ -556,6 +577,28 @@ mod tests {
         assert_eq!(read(temp.path()).unwrap().config.profiles["dev"].cpu, 8);
         std::fs::write(&path, "uncommitted-invalid-marker").unwrap();
         assert_eq!(read(temp.path()).unwrap().config.profiles["dev"].cpu, 8);
+    }
+    #[test]
+    fn new_cloud_notes_that_an_idle_period_has_no_effect() {
+        let temp = tempfile::tempdir().unwrap();
+        repository(temp.path());
+        assert!(read(temp.path()).unwrap().notes.is_empty());
+        std::fs::write(
+            temp.path().join(".horizon/cloud.yml"),
+            format!("{CONFIG}    idle_stop_minutes: 30\n"),
+        )
+        .unwrap();
+        git(temp.path(), &["add", "."]);
+        commit(temp.path());
+        let prepared = read(temp.path()).unwrap();
+        assert_eq!(prepared.config.profiles["dev"].idle_stop_minutes, Some(30));
+        assert_eq!(
+            prepared.notes,
+            [
+                "idle_stop_minutes in profile dev has no effect: no cloud stops when idle. An agent on the worker \
+              stops it when its task is done, or choose Stop."
+            ]
+        );
     }
     #[test]
     fn committed_configuration_is_not_emitted_to_progress_logs() {

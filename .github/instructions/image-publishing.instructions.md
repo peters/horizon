@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-cloud/src/image_publishing.rs,crates/horizon-cloud/src/image_publishing/**,crates/horizon-core/src/cloud_runtime/github/publish/publication.rs,crates/horizon-core/src/cloud_runtime/github/publish/publication/**"
+applyTo: "crates/horizon-cloud/src/image_publishing.rs,crates/horizon-cloud/src/image_publishing/**,crates/horizon-core/src/cloud_runtime/github/publish/publication.rs,crates/horizon-core/src/cloud_runtime/github/publish/publication/**,crates/horizon-core/src/cloud_runtime/publishing.rs,crates/horizon-core/src/cloud_runtime/publishing/**,crates/horizon-core/src/cloud_runtime/setup/publishing.rs,crates/horizon-core/src/cloud_runtime/setup/publishing/**,crates/horizon-core/src/cloud_runtime/settings.rs"
 ---
 
 # Image destination boundary
@@ -21,6 +21,12 @@ Report these failures:
 - One operation replaces another operation's Docker credentials.
 - A temporary publishing login changes the host's shared Docker configuration.
 
+- A local save overwrites another window's account at the same destination URI.
+- A selection accepts a changed publication grant while it still names the same repository.
+- Package naming sends URL credentials to metadata or output events.
+- Pull rotation changes the publication grant identity.
+- A preference for one checkout or profile changes another scope.
+
 These limits are deliberate:
 
 - This prerequisite supplies a reusable policy contract. It does not enable automatic launches.
@@ -34,3 +40,5 @@ Do not request the deferred launch or UI integration as fixes to this policy pre
 For CPU host grants, require current verification of the exact immutable digest.
 Reject a reread of mutable credential files that substitutes unverified material in user data.
 Reject a publishing credential sent to a worker or an allocation after missing verification.
+
+The local preference helpers do not authenticate metadata, change profile parsing or activate automatic launches.

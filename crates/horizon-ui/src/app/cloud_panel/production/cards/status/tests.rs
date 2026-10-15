@@ -793,9 +793,10 @@ fn header_texts(status: &Status) -> Vec<String> {
             };
             let spend = super::super::strip::Spend {
                 line: String::new(),
+                outlook: None,
                 explanation: String::new(),
             };
-            super::super::strip::show(ui, header, status, &indicators, &spend, false, None);
+            super::super::strip::show(ui, header.into(), status, &indicators, &spend, false, None);
         })
         .discard_textures();
     output

@@ -79,8 +79,6 @@ pub struct Description {
     pub creatable: bool,
     /// The workspace volume sizes a CPU cloud can have there, in GB, inclusive.
     pub cpu_volume_gb: (u32, u32),
-    /// Who stops a worker there after `idle_stop_minutes` without activity.
-    pub idle_stop: IdleStop,
     /// The provider's site, as a card names it, such as `runpod.io`.
     pub site: &'static str,
     /// Whether the provider pulls private images with a registry auth it stores
@@ -103,19 +101,6 @@ pub enum Rebuild {
     Unsupported,
 }
 
-/// Who stops an idle worker on a provider.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IdleStop {
-    /// Nobody: a profile there may not set `idle_stop_minutes`.
-    Unsupported,
-    /// The worker itself, with a credential the provider gives it for its own billing.
-    Worker,
-    /// Nobody, though a profile there may set `idle_stop_minutes`: the provider gives
-    /// the worker no credential that could stop it, and Horizon does not stop an idle
-    /// cloud, so the setting has no effect.
-    Ignored,
-}
-
 pub const RUNPOD: Description = Description {
     kind: Kind::RunPod,
     id: "runpod",
@@ -128,7 +113,6 @@ pub const RUNPOD: Description = Description {
     stopped: StoppedCost::WorkerKept,
     choices: &[Choice::GpuType, Choice::Region, Choice::VolumeTiers],
     creatable: true,
-    idle_stop: IdleStop::Worker,
     registry_auth: true,
     rebuild: Rebuild::InPlace,
     site: "runpod.io",
@@ -150,8 +134,6 @@ pub const HETZNER: Description = Description {
     stopped: StoppedCost::ServerDeleted,
     choices: &[Choice::ServerTypeFallback],
     creatable: crate::offers::HETZNER_DEPLOYABLE,
-    // The project token must never reach a worker, so it cannot stop itself.
-    idle_stop: IdleStop::Ignored,
     registry_auth: false,
     rebuild: Rebuild::NewServer,
     site: "hetzner.com",
@@ -175,8 +157,6 @@ pub const DOCKER_HOST: Description = Description {
     stopped: StoppedCost::WorkerKept,
     choices: &[],
     creatable: true,
-    // Horizon stops nobody's own machine; the worker itself cannot stop its container.
-    idle_stop: IdleStop::Unsupported,
     registry_auth: false,
     rebuild: Rebuild::Unsupported,
     site: "your own machine",
@@ -228,9 +208,7 @@ impl Description {
         };
         let (smallest, largest) = self.cpu_volume_gb;
         let volume = u32::from(profile.storage.volume_gb);
-        candidate.validate(false).is_ok()
-            && (profile.gpu || (smallest..=largest).contains(&volume))
-            && (self.idle_stop != IdleStop::Unsupported || profile.idle_stop_minutes.is_none())
+        candidate.validate(false).is_ok() && (profile.gpu || (smallest..=largest).contains(&volume))
     }
 
     /// The providers among `configured` a cloud of `profile` can choose from, in the
@@ -332,29 +310,14 @@ mod tests {
     }
 
     #[test]
-    fn a_profile_with_an_idle_period_is_offered_only_where_someone_stops_the_worker() {
-        let mut profile: Profile = serde_json::from_value(serde_json::json!({
-            "provider": "runpod", "image": "registry.example/worker", "cpu": 4, "memory_gb": 8,
-            "storage": {"container_gb": 20, "volume_gb": 50}
-        }))
-        .unwrap();
-        let unsupported = Description {
-            idle_stop: IdleStop::Unsupported,
-            ..HETZNER
-        };
-        assert!(RUNPOD.supports(&profile) && HETZNER.supports(&profile) && unsupported.supports(&profile));
+    fn an_idle_period_has_no_effect_so_every_provider_offers_its_profile() {
+        let mut profile = profile(false);
         profile.idle_stop_minutes = Some(30);
-        assert_eq!(
-            (RUNPOD.idle_stop, HETZNER.idle_stop),
-            (IdleStop::Worker, IdleStop::Ignored)
-        );
-        assert!(RUNPOD.supports(&profile) && HETZNER.supports(&profile));
-        assert!(!unsupported.supports(&profile));
-        assert!(!DOCKER_HOST.supports(&profile));
+        assert!(RUNPOD.supports(&profile) && HETZNER.supports(&profile) && DOCKER_HOST.supports(&profile));
     }
 
     #[test]
-    fn a_docker_host_offers_cpu_clouds_without_rent_rebuild_or_idle_stop() {
+    fn a_docker_host_offers_cpu_clouds_without_rent_or_rebuild() {
         let (cpu, gpu) = (profile(false), profile(true));
         assert_eq!(by_id("docker-host"), Some(&DOCKER_HOST));
         assert!(DOCKER_HOST.supports(&cpu) && !DOCKER_HOST.supports(&gpu));

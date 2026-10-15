@@ -35,7 +35,8 @@ documents that are not yet STE.
 | [chromecast-live-progressive](procedures/chromecast-live-progressive.md) | Chromecast live cast, progressive transport | none |
 | [cloud-agent-browser](procedures/cloud-agent-browser.md) | Browser tools of an agent panel in a cloud with agent isolation | rents compute |
 | [cloud-agent-panel-start](procedures/cloud-agent-panel-start.md) | Agent panel start in a cloud, host instance and browser runtime root owner | rents compute |
-| [cloud-idle-stop](procedures/cloud-idle-stop.md) | A RunPod worker's own idle stop, the stopped card, and no idle stop on Hetzner | rents compute |
+| [cloud-agent-stop](procedures/cloud-agent-stop.md) | The agent stop of a dedicated worker without an idle period, its refusal while another agent works, and the request for Horizon | rents compute |
+| [cloud-idle-period](procedures/cloud-idle-period.md) | An idle period that still parses but has no effect: the New cloud and Rebuild note, no idle period on a new worker, and the reconnect of a worker created with one | rents compute |
 | [cloud-panels](procedures/cloud-panels.md) | Cloud panels end to end: 121 tests in 12 area files | rents compute |
 | [cloud-quick-start](procedures/cloud-quick-start.md) | Quick start on the base image for a repository without `.horizon/cloud.yml` | rents compute |
 | [cloud-settings-replace-key](procedures/cloud-settings-replace-key.md) | Cloud settings saved keys | none |
@@ -45,8 +46,9 @@ documents that are not yet STE.
 | [companion-clouds](procedures/companion-clouds.md) | Companion clouds, agent access to the SSH alias, the key and the catalog | rents compute |
 | [connect-github](procedures/connect-github.md) | Connect GitHub: the GitHub card, per-cloud sign-in in both modes, reconnect, skip and access requests | rents compute |
 | [device-type-multi-chunk](procedures/device-type-multi-chunk.md) | `horizon-device` text input in several `type` actions | none |
-| [docker-host-provider](procedures/docker-host-provider.md) | Clouds on an existing Docker host: create, stop, resume, delete, owned resources, the Cloud settings card and Check, and `cloud_offers` | none |
+| [docker-host-provider](procedures/docker-host-provider.md) | Clouds on an existing Docker host: create, stop, resume, delete, owned resources, the Cloud settings card and Check, the New cloud host card, the cloud card and `cloud_offers` | none |
 | [github-app-tokens](procedures/github-app-tokens.md) | GitHub App user tokens: device sign-in, renewal, refusal and expiry | none |
+| [local-image-preferences](procedures/local-image-preferences.md) | Machine-local image destinations, source identity and transactional save | none |
 | [local-network-bridge-agent-access](procedures/local-network-bridge-agent-access.md) | Local Network Bridge, agent access on the worker | rents compute |
 | [new-cloud-catalog-refresh](procedures/new-cloud-catalog-refresh.md) | New cloud dialog, background price refresh and layout height | none |
 | [new-cloud-source-search](procedures/new-cloud-source-search.md) | New cloud source field: search over checkouts and GitHub repositories, folder paths and links | none |
@@ -58,6 +60,9 @@ documents that are not yet STE.
 | [tailnet-tagged-enrollment](procedures/tailnet-tagged-enrollment.md) | Marker 4 and one-time enrollment/resume tag checks; optional real-tailnet lane needs separate authorization | rents compute (optional R01 only) |
 | [tailnet-marker4-rollout](procedures/tailnet-marker4-rollout.md) | Immutable CPU pin, strict private storage, provider scope and unsupported RunPod modes | rents compute |
 | [tailnet-api-credential-store](procedures/tailnet-api-credential-store.md) | Desktop API storage foundation, staged entries and independent auth keys | none |
+| [tailnet-node-api](procedures/tailnet-node-api.md) | Unwired desktop exact-node HTTP transport and binding tests | offline none; authorized task-node deletion only |
+| [tailnet-api-removal](procedures/tailnet-api-removal.md) | Native owner API credential removal with CLI/MCP requests | none |
+| [tailnet-api-entry](procedures/tailnet-api-entry.md) | Masked owner API entry/replacement with metadata-only CLI/MCP requests | none |
 | [tailnet-api-status](procedures/tailnet-api-status.md) | Nonsecret API credential status in Settings, CLI and cached MCP discovery | none |
 | [vnc-recording](procedures/vnc-recording.md) | Device panel video | none |
 | [worker-github-chain](procedures/worker-github-chain.md) | Worker GitHub access with a token chain that refreshes on the worker | none |
@@ -68,3 +73,6 @@ documents that are not yet STE.
 |---|---|---|
 | [2026-10-05-cloud-panels](reports/2026-10-05-cloud-panels.md) | [cloud-panels](procedures/cloud-panels.md) | 2026-10-05 |
 | [2026-10-14-tailnet-receipt-capture](reports/2026-10-14-tailnet-receipt-capture.md) | [ledger](procedures/tailnet-enrollment-ledger.md), [capture](procedures/tailnet-receipt-capture.md) | 2026-10-14 |
+| [2026-10-14-tailnet-api-removal](reports/2026-10-14-tailnet-api-removal.md) | [tailnet-api-removal](procedures/tailnet-api-removal.md) | 2026-10-14 |
+| [2026-10-15-tailnet-node-api-first-live](reports/2026-10-15-tailnet-node-api-first-live.md) | [tailnet-node-api](procedures/tailnet-node-api.md) | 2026-10-15 |
+| [2026-10-15-tailnet-node-api-final-live](reports/2026-10-15-tailnet-node-api-final-live.md) | [tailnet-node-api](procedures/tailnet-node-api.md) | 2026-10-15 |

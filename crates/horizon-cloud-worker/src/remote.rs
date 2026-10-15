@@ -442,6 +442,8 @@ fn host_only_refusal(
 ) -> Option<&'static str> {
     if request.cloud_list.is_some() {
         Some("cloud_list_unavailable: requires a Horizon agent panel")
+    } else if request.tailnet_credential.is_some() {
+        Some("tailnet_credential_unavailable: requires the desktop owner")
     } else if request.upkeep.is_some() {
         Some("upkeep_unavailable: requires a Horizon agent panel on the person's computer")
     } else {
@@ -465,6 +467,12 @@ mod tests {
                 .extend(extra.as_object().unwrap().clone());
             serde_json::from_value::<horizon_browser_control::manifest::provider_usage::UsageRequest>(value).unwrap()
         };
+        let credential = request(
+            serde_json::json!({"tailnet_credential": {"operation":"remove","tailnet_id":"work","request_id":"00000000-0000-0000-0000-000000000002"}}),
+        );
+        assert!(
+            host_only_refusal(&credential).is_some_and(|error| error.starts_with("tailnet_credential_unavailable"))
+        );
         let upkeep = request(serde_json::json!({"upkeep": {"operation": "add", "repositories": ["acme/web"]}}));
         assert!(host_only_refusal(&upkeep).is_some_and(|error| error.starts_with("upkeep_unavailable")));
         let list = request(serde_json::json!({"cloud_list": {"operation": "list"}}));

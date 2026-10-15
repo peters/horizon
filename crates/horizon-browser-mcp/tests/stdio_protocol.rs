@@ -419,9 +419,24 @@ fn assert_resize_contract(tools: &Value) {
     assert!(resize["description"].as_str().unwrap().contains("CSS pixels"));
 }
 
+fn assert_credential_request_contract(tools: &Value) {
+    let credential = listed_tool(tools, "tailnet_api_credential");
+    let arguments = credential["inputSchema"]["properties"]
+        .as_object()
+        .expect("metadata arguments");
+    assert_eq!(arguments.len(), 3);
+    assert!(credential["inputSchema"].to_string().contains("set_personal_token"));
+    assert!(credential["inputSchema"].to_string().contains("set_oauth"));
+    for name in ["operation", "request_id", "tailnet_id"] {
+        assert!(arguments.contains_key(name));
+    }
+    assert_eq!(credential["inputSchema"]["additionalProperties"], false);
+}
+
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(34));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(35));
+    assert_credential_request_contract(tools);
     assert_output_schemas_describe_objects(tools);
     assert_catalog_contract(tools);
     assert_device_panel_contract(tools);

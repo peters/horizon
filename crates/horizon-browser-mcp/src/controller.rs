@@ -22,6 +22,7 @@ mod device;
 mod handoff;
 pub(crate) mod provider_usage;
 mod recovery;
+mod tailnet_credential;
 pub(crate) mod upkeep;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);

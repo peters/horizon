@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 
 use horizon_core::browser::manifest::{
     self,
-    provider_usage::{ProviderUsageSummary, UsageQueue, UsageRequest},
+    provider_usage::{ProviderUsageSummary, UsageQueue, UsageRequest, UsageResult},
 };
 use horizon_core::browser::remote::RemoteProviderProfile;
 use horizon_core::browser::remote_usage::ProviderUsageMonitor;
@@ -13,6 +13,8 @@ use super::{HorizonApp, browser_requests::actor_panel};
 #[derive(Default)]
 pub(super) struct UsageHostState {
     pending: Vec<PendingUsage>,
+    #[cfg(feature = "cloud-workspaces")]
+    pub(in crate::app) tailnet_credentials: super::tailnets::requests::Requests,
 }
 
 struct PendingUsage {
@@ -21,6 +23,27 @@ struct PendingUsage {
 }
 
 impl HorizonApp {
+    pub(in crate::app) fn publish_tailnet_credential_result(&mut self, result: UsageResult) {
+        self.browser_create_host.io.write(move || {
+            if let Err(error) = manifest::provider_usage::complete_provider_usage(&result) {
+                tracing::warn!(kind = ?error.kind(), "could not answer an API credential request");
+            }
+        });
+    }
+
+    #[cfg(feature = "cloud-workspaces")]
+    fn poll_tailnet_credential_requests(&mut self) {
+        self.browser_create_host
+            .provider_usage
+            .tailnet_credentials
+            .poll(manifest::now_millis());
+        if let Some(editor) = &mut self.settings {
+            editor
+                .tailnet_status_state()
+                .discard_cancelled_api_draft(&self.browser_create_host.provider_usage.tailnet_credentials);
+        }
+    }
+
     pub(super) fn poll_provider_usage(&mut self) -> bool {
         self.poll_provider_usage_queue(&UsageQueue::default())
     }
@@ -33,7 +56,13 @@ impl HorizonApp {
                 Vec::new()
             }
         };
+        #[cfg(feature = "cloud-workspaces")]
+        self.poll_tailnet_credential_requests();
         for request in requests {
+            if request.tailnet_credential.is_some() {
+                self.answer_tailnet_credential(&request);
+                continue;
+            }
             if request.cloud_companion.is_some() {
                 self.queue_cloud_companion(request);
                 continue;
@@ -120,6 +149,17 @@ impl HorizonApp {
             }
         }
         changed
+    }
+}
+
+impl HorizonApp {
+    #[cfg(not(feature = "cloud-workspaces"))]
+    fn answer_tailnet_credential(&mut self, request: &UsageRequest) {
+        let result = request.result(
+            Vec::new(),
+            Some("tailnet_credential_unavailable: cloud support is disabled".into()),
+        );
+        self.publish_tailnet_credential_result(result);
     }
 }
 

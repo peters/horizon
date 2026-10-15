@@ -22,7 +22,9 @@ pub(in super::super) fn show(ui: &mut Ui, form: &mut Production) {
             let editable = form.pending_creation.is_none() && !form.launch.submitted && form.launch.watch.is_none();
             if let Some(profile) = profile(form).cloned() {
                 let provider = provider::current(form.provider, &profile);
-                if provider.placement == ProviderPlacement::DataCenters {
+                if provider.kind == Kind::DockerHost {
+                    super::hosts::summary(ui, form, &profile);
+                } else if provider.placement == ProviderPlacement::DataCenters {
                     worker(ui, form, &profile);
                     ui.add_enabled_ui(editable, |ui| storage(ui, form));
                     cost(ui, form);

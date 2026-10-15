@@ -183,7 +183,10 @@ fn a_build_profile_takes_everything_but_the_source_from_the_working_copy_on_the_
     assert!(prepared.config.source.is_default(), "the source is a committed archive");
     assert_eq!(
         prepared.notes,
-        ["Uncommitted changes to source are not used until you commit them."]
+        [
+            "Uncommitted changes to source are not used until you commit them.".to_owned(),
+            super::super::idle_period_note("dev", profile).unwrap(),
+        ]
     );
     // A working copy that drops the recipe runs its image without a build.
     write(

@@ -1,43 +1,32 @@
 use super::*;
 
+const LEGACY: &str = "HORIZON_IDLE_STOP_MINUTES";
+
 #[test]
-fn dedicated_workers_receive_their_idle_period() {
+fn no_worker_receives_an_idle_period() {
     let mut spec = spec();
-    assert!(
-        create_body(&spec)["env"]
-            .get(crate::IDLE_STOP_ENVIRONMENT_KEY)
-            .is_none()
-    );
     spec.profile.idle_stop_minutes = Some(30);
-    assert_eq!(create_body(&spec)["env"][crate::IDLE_STOP_ENVIRONMENT_KEY], "30");
+    assert!(create_body(&spec)["env"].get(LEGACY).is_none());
     spec.profile.gpu = true;
-    assert_eq!(create_body(&spec)["env"][crate::IDLE_STOP_ENVIRONMENT_KEY], "30");
+    assert!(create_body(&spec)["env"].get(LEGACY).is_none());
 }
 
+// A pod created before the agent stop carries its idle period; it still reconnects,
+// whether or not its profile still sets one.
 #[test]
-fn initialized_workers_never_receive_an_idle_period() {
-    let mut spec = spec();
-    spec.profile.idle_stop_minutes = Some(30);
-    spec.startup_metadata = Some(crate::StartupMetadata::new("{}".into()).unwrap());
-    assert!(
-        create_body(&spec)["env"]
-            .get(crate::IDLE_STOP_ENVIRONMENT_KEY)
-            .is_none()
-    );
-}
-
-#[test]
-fn a_worker_must_report_exactly_its_recorded_idle_period() {
+fn an_existing_pod_that_carries_an_idle_period_still_verifies() {
     let verify = |spec: &WorkerSpec, env: Value| {
         let mut value = worker(spec);
         value["env"] = env;
         wire::worker(value).unwrap().verify(spec)
     };
     let mut spec = spec();
-    assert!(verify(&spec, json!({})).is_ok());
-    assert!(verify(&spec, json!({crate::IDLE_STOP_ENVIRONMENT_KEY: "30"})).is_err());
-    spec.profile.idle_stop_minutes = Some(30);
-    assert!(verify(&spec, json!({crate::IDLE_STOP_ENVIRONMENT_KEY: "30"})).is_ok());
-    assert!(verify(&spec, json!({})).is_err());
-    assert!(verify(&spec, json!({crate::IDLE_STOP_ENVIRONMENT_KEY: "45"})).is_err());
+    for minutes in [None, Some(30)] {
+        spec.profile.idle_stop_minutes = minutes;
+        assert!(verify(&spec, json!({})).is_ok());
+        assert!(verify(&spec, json!({LEGACY: "30"})).is_ok());
+        assert!(verify(&spec, json!({LEGACY: "45"})).is_ok());
+    }
+    // The identity it carries still counts.
+    assert!(verify(&spec, json!({LEGACY: "30", "HORIZON_CLOUD_OPERATION": "another"})).is_err());
 }

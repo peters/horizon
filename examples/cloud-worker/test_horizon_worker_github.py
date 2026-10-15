@@ -108,7 +108,7 @@ class ServiceTestCase(unittest.TestCase):
     def answer(self, request, now, who=None):
         def identify():
             if who is None:
-                raise agents.idle.Refused('no session')
+                raise agents.stopd.Refused('no session')
             return who
         return agents.answer(request, self.store, self.book, now, identify)
 

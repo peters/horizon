@@ -145,7 +145,7 @@ Hetzner off requires a RunPod key again.
 ## Idle stop
 
 Horizon does not stop an idle Hetzner cloud, and `idle_stop_minutes` has no
-effect on Hetzner. A Hetzner worker cannot stop its own billing: a powered-off
+effect. A Hetzner worker cannot stop its own billing: a powered-off
 server is still billed, and deleting it needs the project-wide token, which never
 leaves this computer. Stop a cloud you no longer use with **Stop** on its card.
 

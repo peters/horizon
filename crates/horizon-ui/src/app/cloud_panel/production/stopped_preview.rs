@@ -70,7 +70,7 @@ fn seed_stopped(app: &mut HorizonApp, delay: Duration, ctx: &egui::Context) -> b
 
 fn preview_launch() -> Option<(CloudLaunch, Deployment)> {
     let config = CloudConfig::parse(
-        "version: 1\ndefault: stopped\nprofiles:\n  stopped:\n    provider: hetzner\n    image: example.invalid/worker\n    cpu: 2\n    memory_gb: 4\n    gpu: false\n    idle_stop_minutes: 30\n",
+        "version: 1\ndefault: stopped\nprofiles:\n  stopped:\n    provider: hetzner\n    image: example.invalid/worker\n    cpu: 2\n    memory_gb: 4\n    gpu: false\n",
     )
     .ok()?;
     let profile = config.profiles.get("stopped")?.clone();

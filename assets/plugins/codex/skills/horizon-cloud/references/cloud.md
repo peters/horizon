@@ -4,7 +4,7 @@
 
 The host Horizon browser MCP (`horizon --browser-mcp`) provides `cloud_offers`,
 `cloud_list`, `cloud_upkeep`, `cloud_companions`, `cloud_companion_ensure_ready`,
-`cloud_companion_stop`, `cloud_companion_uncheck`, and `cloud_companion_operation`. Host operations require the owning Horizon to run.
+`cloud_companion_stop`, `cloud_companion_uncheck`, `cloud_companion_operation`, and `tailnet_api_credential`. Host operations require the owning Horizon to run.
 
 On a configured worker, `horizon-cloud-worker companions mcp` provides
 `cloud_companions_list`, `cloud_companion_inspect`, and `cloud_offers`.
@@ -143,7 +143,8 @@ Stored presence reports only missing or stored credential kind. It does not prov
 validity, expiry, scopes, tags or API access. Locked or malformed storage returns
 an error. Saving does not contact Tailscale, record an enrollment receipt or remove
 nodes. The foundation supplies shared storage APIs for host credential adapters.
-No API credential editor ships in this milestone. Status interfaces return kind only.
+The native owner can enter, replace or remove the exact API binding.
+Credential drafts start empty and masked. Status returns kind only.
 Worker enrollment still needs marker 4; storing an API credential does not enable
 a selected tailnet on an older quick-start pin.
 
@@ -163,8 +164,8 @@ No automatic node cleanup exists in this storage milestone.
 ### Credential status parity
 
 Settings > Tailnets displays Not stored, Personal API token stored, OAuth client
-stored, Reading… or Status unavailable. The row is read-only; no API credential
-editor ships in this milestone. Enrollment auth-key editing remains independent.
+stored, Reading… or Status unavailable. Owner setup buttons never reveal saved values.
+Enrollment auth-key editing remains independent.
 
 The CLI is `cloud_deploy tailnets STATE_ROOT [TAILNET_ID]`.
 CLI and `cloud_companions` return `tailnet_api_credentials` keyed by saved local
@@ -293,9 +294,13 @@ sessions continue on the worker. **Parked** holds a cloud
 with parked terminals or a stopped worker. **This PC** holds workspaces without a
 cloud. Each row shows a status dot and one status line, for example the last line
 of a parked agent. A **Parked** row is compact: its status line is the hover and
-accessibility text of its dot. A group header shows the hourly cost of its running
-workers, with one sum per currency: RunPod bills in US dollars and Hetzner in euros
-net of VAT. A click on a row goes to its workspace, and a parked cloud then attaches.
+accessibility text of its dot. A group header shows what its running workers cost
+a day, with one sum per currency, for example `€0.58/day + $16.56/day`: RunPod
+bills in US dollars and Hetzner in euros net of VAT. The header of a billing cloud
+card shows its run and its cost a day, and when there is room the cost a week and a
+month and what it adds by the end of the month (UTC) if it keeps running. A day is
+24 hours and a month 730. A click on a row goes to its workspace, and a parked cloud
+then attaches.
 To find a cloud for the person, name its workspace and its group.
 
 `cloud_list` reads and acts on the clouds in your own workspace only.
@@ -312,11 +317,13 @@ different currencies. The others take the `cloud` ID from `list`:
 The cloud list does not stop workers; the person stops a worker with **Stop** on
 its card.
 
-Horizon never stops an idle cloud. On Hetzner, `idle_stop_minutes` has no effect:
-the server stays billed until the person chooses **Stop**, which releases it and
-keeps the volume. A RunPod worker with `idle_stop_minutes` still stops itself
-after that idle period; the card then shows **Stopped outside Horizon** with
-**Resume worker**.
+Horizon never stops an idle cloud, and `idle_stop_minutes` has no effect on any
+provider: Horizon gives no worker an idle period, and New cloud and Rebuild say
+so. An agent on a dedicated RunPod worker stops it with `stop_this_worker` when
+its task is done; otherwise the person chooses **Stop**, which on Hetzner releases
+the server and keeps the volume. A RunPod cloud created before this change may
+still stop itself after its old idle period until a rebuild; the card then shows
+**Stopped outside Horizon** with **Resume worker**.
 
 From a Horizon agent panel, `horizon-browser cloud list|attach|park [CLOUD-ID]`
 calls the same tool.
@@ -463,8 +470,9 @@ this computer's engine, or a host that Horizon reaches with `ssh` or
 `tailscale ssh`. The person adds each host in **Cloud settings > Docker host**
 with a unique name, an access (This PC, SSH or Tailscale SSH), an SSH address
 and an optional absolute docker path, and checks it read-only there. No
-secret is stored. A profile with `provider: docker-host` runs on a saved
-host; a cloud placement names the host.
+secret is stored. New cloud offers each saved host as a **YOUR HOST** card
+for CPU profiles without a build; a profile with `provider: docker-host`
+runs on a host only. A cloud placement names the host.
 
 The worker publishes its SSH only on the host's loopback, on a port that stays
 the same after a stop. Horizon reaches it through the host. Stop, resume and
@@ -520,3 +528,63 @@ The worker image runs natively on x86 hosts. ARM64 can use an explicit emulation
 Enrollment receipts are allocation metadata, separate from the displayed device name. The bounded ledger preserves exact IDs and uncertain capture attempts through worker replacement. It adds no new MCP operation or cleanup authority; the node-cleanup activation is a separate outcome. See docs/architecture/tailnet-enrollment-receipts.md and docs/testing/procedures/tailnet-enrollment-ledger.md.
 
 The receipt-capture adapter reads only the worker's actual tagged Self.ID via pinned root SSH and the existing userspace daemon socket, persists it before readiness and records uncertain attempts before enrollment. It binds the existing allocation request and saved tailnet ID to the owning cloud root. Worker agents cannot query this private root lane. No API secret is sent to a worker and no API editor or node-delete operation is activated by this adapter.
+
+The desktop NodeApi SDK prerequisite can request only an exact encoded device ID supplied by a trusted controller; it does not itself authenticate owner/workspace authority or persist cleanup confirmation. It is not wired to cloud deletion or public UI/CLI/MCP mutations. Missing managed slots and disabled API bindings never resurrect staged credentials; all404 remains unconfirmed. API values stay on the desktop. See docs/architecture/tailnet-node-api.md and docs/testing/procedures/tailnet-node-api.md.
+
+## Owner API credential management
+
+`tailnet_api_credential` operations are `set_personal_token`, `set_oauth`, `remove`, `status`, and `cancel`.
+The tool takes only `operation`, `tailnet_id` and `request_id`. Use an exact saved
+ID from `cloud_companions` and generate the UUID before submission. Set and remove
+return pending_owner. They do not authorize a write or open Settings. For Set, the
+person selects Enter requested API credential on that exact row, enters an empty
+masked draft of the requested kind, and selects Save API credential. The request
+locks the kind; it accepts no token, client ID, client secret or stored reference.
+The owner can discard a draft or decline the request without saving. The person selects
+Approve API credential removal on that exact row in Settings > Tailnets, or
+Decline request. Direct native removal also needs an explicit owner click.
+
+Status and cancel require the original caller, saved ID and UUID. Requests are
+volatile, bounded to32entries, and pending approval expires after15minutes. Cancel
+refuses running writes. Applied means the local Store transaction completed;
+failed, interrupted or timed-out work does not prove rollback. Terminal results
+remain readable for15minutes after host receipt, also after catalog-row removal.
+The old approval deadline cannot discard a newly completed result. Read status
+and refresh nonsecret kind after uncertainty; do not submit a new request blindly.
+
+CLI parity uses `horizon-browser run PLAN.json` from a normal Horizon AGENT panel:
+
+```json
+{"version":1,"steps":[{"id":"remove","tool":"tailnet_api_credential","arguments":{"operation":"remove","tailnet_id":"SAVED-ID","request_id":"dff44c5a-d077-4eaf-8092-615849346347"}}]}
+```
+
+Removal preserves the saved network and enrollment auth key. It suppresses staged
+API fallback and removes only the exact registered API binding. The credential is
+desktop-global: a workspace actor cannot approve its own request. Sharing a saved
+ID intentionally shares its binding. Set and replacement preserve the enrollment
+auth key too. Direct native entry can choose Personal API token or OAuth client;
+changing that source clears every draft field. Cancel, expiry, changed targets and
+Settings close discard unsaved drafts. Storage-root changes clear drafts before
+rendering while retaining owned writes; draft discard does not cancel a request.
+Saved values never fill a draft. Secrets
+are zeroizing and masked, with no undo history. Secret import/getter, remote API
+validation and automatic node cleanup are not supplied. No provider action is needed.
+
+Reader failures and native write failures remain separate. A successful status
+read does not erase a failed save or removal, or prove rollback. Settings close retains
+each pending job's kind, result and failure. Use the bound request receipt for the
+Store outcome; observed kind alone does not prove the request applied.
+
+Close Settings before changing an unprovisioned cloud’s tailnet in Connections.
+While Settings owns store operations, cached selection stays visible and those
+selection controls are disabled.
+
+An entry CLI plan uses the same normal AGENT transport, with metadata only:
+
+```json
+{"version":1,"steps":[{"id":"entry","tool":"tailnet_api_credential","arguments":{"operation":"set_oauth","tailnet_id":"SAVED-ID","request_id":"dff44c5a-d077-4eaf-8092-615849346347"}}]}
+```
+
+The person supplies the values in the native host. Never add them to the plan,
+MCP arguments, agent conversation or worker configuration. Applied proves local
+Store completion, not remote validity, scope or node-removal authority.

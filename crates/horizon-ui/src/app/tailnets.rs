@@ -1,5 +1,6 @@
 //! Cloud-only named networks. Settings never reads a saved key back into the form.
 mod api_credentials;
+pub(in crate::app) mod requests;
 pub(in crate::app) use api_credentials::Observation as ApiCredentialObservation;
 
 use crate::theme;
@@ -20,10 +21,17 @@ struct DiscoveryVersion {
 }
 
 struct SettingsDiscovery {
+    root: PathBuf,
     version: DiscoveryVersion,
     catalog: Option<Catalog>,
     observations: BTreeMap<String, ApiCredentialObservation>,
     fallback: ApiCredentialObservation,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SettingsScope {
+    Current,
+    Changed,
 }
 
 pub(super) struct State {
@@ -32,6 +40,7 @@ pub(super) struct State {
     catalog_loaded: bool,
     catalog_revision: u64,
     settings_discovery: Option<SettingsDiscovery>,
+    settings_scope: SettingsScope,
     selections: BTreeMap<String, Option<String>>,
     receiver: Option<Receiver<Result<Catalog, String>>>,
     initialized: bool,
@@ -52,6 +61,7 @@ impl Default for State {
             catalog_loaded: false,
             catalog_revision: 0,
             settings_discovery: None,
+            settings_scope: SettingsScope::Current,
             selections: BTreeMap::new(),
             receiver: None,
             initialized: false,
@@ -67,8 +77,22 @@ impl Default for State {
     }
 }
 impl State {
+    fn settings_scope_changed(&self) -> bool {
+        self.settings_scope == SettingsScope::Changed
+    }
+
+    pub(in crate::app) fn discard_cancelled_api_draft(&mut self, requests: &requests::Requests) {
+        self.api_credentials.discard_cancelled_draft(requests);
+    }
+
     pub(in crate::app) fn api_credential_observation(&self, id: &str) -> ApiCredentialObservation {
+        if self.settings_scope_changed() {
+            return ApiCredentialObservation::Unavailable;
+        }
         if let Some(discovery) = &self.settings_discovery {
+            if discovery.root != self.root {
+                return ApiCredentialObservation::Unavailable;
+            }
             return discovery.observations.get(id).copied().unwrap_or(discovery.fallback);
         }
         if self.api_credentials.row_error(id).is_some() {
@@ -82,21 +106,43 @@ impl State {
     }
 
     pub(in crate::app) fn cached_catalog_at(&self, root: &Path) -> Option<&Catalog> {
-        if self.root != root {
+        if self.root != root || self.settings_scope_changed() {
             return None;
         }
-        self.settings_discovery
-            .as_ref()
-            .and_then(|discovery| discovery.catalog.as_ref())
-            .or_else(|| self.catalog_loaded.then_some(&self.catalog))
+        if let Some(discovery) = &self.settings_discovery {
+            return if discovery.root == self.root {
+                discovery.catalog.as_ref()
+            } else {
+                None
+            };
+        }
+        self.catalog_loaded.then_some(&self.catalog)
+    }
+
+    pub(super) fn reopen_settings(&mut self, editor: &mut Self) {
+        if self.root != editor.root {
+            return;
+        }
+        // Move the single IO owner, not a snapshot of its pending writers or errors.
+        std::mem::swap(self, editor);
+        std::mem::swap(&mut self.selections, &mut editor.selections);
+        editor.settings_discovery = None;
+        self.observe_settings_cached(editor);
     }
 
     pub(in crate::app) fn observe_settings(&mut self, editor: &mut Self, ctx: &egui::Context) {
-        if self.root != editor.root {
-            self.settings_discovery = None;
+        if self.root != editor.root || editor.settings_scope_changed() {
+            editor.settings_scope = SettingsScope::Changed;
+            editor.api_credentials.suspend_refresh();
+            editor.poll(ctx);
+            self.observe_settings_cached(editor);
             return;
         }
         editor.poll(ctx);
+        self.observe_settings_cached(editor);
+    }
+
+    fn observe_settings_cached(&mut self, editor: &Self) {
         let pending = !editor.initialized
             || editor.receiver.is_some()
             || !editor.reload_barriers.is_empty()
@@ -105,16 +151,29 @@ impl State {
             catalog: editor.catalog_revision,
             api: editor.api_credentials.revision(),
             pending,
-            failed: editor.failed,
+            failed: editor.failed || editor.settings_scope_changed(),
         };
         if self
             .settings_discovery
             .as_ref()
-            .is_some_and(|discovery| discovery.version == version)
+            .is_some_and(|discovery| discovery.root == editor.root && discovery.version == version)
         {
             return;
         }
         let catalog = editor.cached_catalog_at(&editor.root).cloned();
+        // Selection rendering reads this passive catalog; all IO stays with Settings.
+        if self.root != editor.root || editor.settings_scope_changed() {
+            self.catalog = Catalog::default();
+            self.catalog_loaded = false;
+        } else if let Some(catalog) = &catalog {
+            self.catalog.clone_from(catalog);
+            self.catalog_loaded = true;
+        }
+        self.catalog_revision = editor.catalog_revision;
+        self.initialized = editor.initialized && !editor.settings_scope_changed() && self.root == editor.root;
+        self.failed = version.failed;
+        self.message.clone_from(&editor.message);
+        self.settings_error.clone_from(&editor.settings_error);
         let observations = catalog.as_ref().map_or_else(BTreeMap::new, |catalog| {
             catalog
                 .tailnets
@@ -123,10 +182,11 @@ impl State {
                 .collect()
         });
         self.settings_discovery = Some(SettingsDiscovery {
+            root: editor.root.clone(),
             version,
             catalog,
             observations,
-            fallback: if pending {
+            fallback: if pending && !editor.settings_scope_changed() {
                 ApiCredentialObservation::Pending
             } else {
                 ApiCredentialObservation::Unavailable
@@ -146,6 +206,9 @@ impl State {
         });
     }
     pub(super) fn poll(&mut self, ctx: &egui::Context) {
+        if self.settings_discovery.is_some() {
+            return;
+        }
         self.api_credentials.poll(ctx);
         if let Some(receiver) = &self.receiver {
             match receiver.try_recv() {
@@ -156,7 +219,9 @@ impl State {
                             self.catalog = catalog;
                             self.catalog_loaded = true;
                             self.catalog_revision = self.catalog_revision.wrapping_add(1);
-                            self.api_credentials.refresh(ctx, &self.root, &self.catalog);
+                            if !self.settings_scope_changed() {
+                                self.api_credentials.refresh(ctx, &self.root, &self.catalog);
+                            }
                             if self
                                 .edit
                                 .as_ref()
@@ -200,6 +265,7 @@ impl State {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         if !self.initialized
+            && !self.settings_scope_changed()
             && self.receiver.is_none()
             && self.reload_barriers.is_empty()
             && !self.api_credentials.busy()
@@ -209,6 +275,9 @@ impl State {
         }
     }
     pub(super) fn refresh(&mut self, ctx: &egui::Context) {
+        if self.settings_discovery.is_some() || self.settings_scope_changed() {
+            return;
+        }
         if self.receiver.is_some() || !self.reload_barriers.is_empty() {
             self.initialized = false;
             return;
@@ -219,11 +288,20 @@ impl State {
             store.recover().and_then(|()| store.load()).map_err(|e| e.to_string())
         });
     }
-    pub(super) fn settings(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn settings(&mut self, ui: &mut egui::Ui, requests: &mut requests::Requests) {
         self.poll(ui.ctx());
         ui.label(egui::RichText::new("Tailnets").size(24.0).strong().color(theme::FG()));
         ui.label(egui::RichText::new("Private networks for your clouds").color(theme::FG_SOFT()));
         ui.add_space(20.0);
+        if self.settings_scope_changed() {
+            ui.colored_label(
+                theme::PALETTE_RED(),
+                "Tailnet storage changed. Close Settings and open it again.",
+            );
+            self.status(ui);
+            self.api_credentials.status(ui);
+            return;
+        }
         let networks = self
             .cached_catalog_at(&self.root)
             .map_or_else(Vec::new, |catalog| catalog.tailnets.clone());
@@ -273,6 +351,15 @@ impl State {
                         );
                         let observation = self.api_credential_observation(&network.id);
                         self.api_credentials.row(ui, &network.id, observation);
+                        self.api_credentials.manage(
+                            ui,
+                            &requests::Target {
+                                root: self.root.clone(),
+                                id: network.id.clone(),
+                                name: network.name.clone(),
+                            },
+                            requests,
+                        );
                     });
                 ui.add_space(8.0);
             }
@@ -378,7 +465,17 @@ impl State {
         });
     }
     pub(super) fn ready(&self) -> bool {
-        self.initialized && self.receiver.is_none() && self.reload_barriers.is_empty() && !self.failed
+        if let Some(discovery) = &self.settings_discovery {
+            return discovery.root == self.root
+                && discovery.catalog.is_some()
+                && !discovery.version.pending
+                && !discovery.version.failed;
+        }
+        !self.settings_scope_changed()
+            && self.initialized
+            && self.receiver.is_none()
+            && self.reload_barriers.is_empty()
+            && !self.failed
     }
     #[cfg(test)]
     pub(in crate::app) fn for_root_fixture(root: PathBuf) -> Self {
@@ -412,6 +509,9 @@ impl State {
         }
     }
     fn status(&self, ui: &mut egui::Ui) {
+        if let Some(error) = self.api_credentials.write_error() {
+            ui.colored_label(theme::PALETTE_RED(), error);
+        }
         if let Some(error) = self.api_credentials.read_error() {
             ui.colored_label(theme::PALETTE_RED(), error);
         }
@@ -544,7 +644,10 @@ impl State {
             return;
         }
         let changed = ui
-            .add_enabled_ui(!busy && self.receiver.is_none(), |ui| self.choice(ui, &mut selected))
+            .add_enabled_ui(
+                !busy && self.receiver.is_none() && self.settings_discovery.is_none(),
+                |ui| self.choice(ui, &mut selected),
+            )
             .inner;
         if changed {
             let (root, id) = (root.to_path_buf(), id.to_owned());

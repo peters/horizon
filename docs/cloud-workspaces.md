@@ -142,8 +142,19 @@ the ordinary cloud panel's shell/agent runtime uses the isolated launcher.
 
 Settings > Tailnets displays **Not stored**, **Personal API token stored**,
 **OAuth client stored**, **Reading…** or **Status unavailable** for each saved
-network. All reads run on background workers. This status milestone adds no
-API credential editor; the enrollment auth-key editor remains separate.
+network. All reads run on background workers. API entry and replacement use the
+masked native controls below; the enrollment auth-key editor remains separate.
+
+Set API credential and Replace API credential start an empty masked draft.
+Choose Personal API token or OAuth client, enter the values and select Save API
+credential. Changing the source clears all fields. Discard credential draft and
+Settings close discard unsaved values. Current stored values are never loaded.
+
+An agent requests set_personal_token or set_oauth with `tailnet_api_credential`,
+the exact saved ID and its request UUID. It sends no values. The person chooses
+Enter requested API credential on that row and explicitly saves the requested
+kind. Requests do not open Settings or grant write authority. CLI plans and MCP
+use the same native-owner route; no secret getter/import or node cleanup is added.
 
 Stored presence reports kind only, not expiry, scopes or remote API access.
 API credentials stay in this computer's OS-store service `horizon-cloud-tailnet-api`;
@@ -627,11 +638,12 @@ CPU availability is queried for the requested vCPU count and Pod product; a posi
 catalog answer is not a reservation. Configured compute preferences are tried in
 order only after a definite rejection. Ambiguous creation responses remain fenced.
 
-The optional worker-local idle-stop watcher retains its separate GraphQL stop call.
-It uses the provider-injected Pod-scoped credential, which the live qualification
-for #966 found was refused by REST and accepted by GraphQL. This migration changes
-the shared account-credential adapter; it does not put account credentials inside
-workers or remove that independently qualified idle-stop path.
+The worker's stop service, which stops a worker at an agent's request, keeps its
+separate GraphQL stop call. It uses the provider-injected Pod-scoped credential,
+which the live qualification for #966 found was refused by REST and accepted by
+GraphQL. This migration changes the shared account-credential adapter; it does not
+put account credentials inside workers or remove that independently qualified stop
+path.
 
 CPU workspaces use network storage and require an account with no Serverless
 endpoints. Profiles select `storage.volume_tier: STANDARD` (the default) or
@@ -1331,10 +1343,10 @@ The sidebar groups the workspaces by what they need from you:
 | **This PC** | A workspace without a cloud. |
 
 Each group header shows how many workspaces it has. At the right of the header
-line, a summary in secondary text shows the hourly rate of the running workers of
-the group, **no local cost** for **Parked**, and **live** for **This PC**. The rate
-has one sum for each currency, for example `€0.0240/h + $0.690/h`: Hetzner bills in
-euros net of VAT and RunPod in US dollars. The
+line, a summary in secondary text shows what the running workers of the group
+cost a day, **no local cost** for **Parked**, and **live** for **This PC**. The
+cost has one sum for each currency, for example `€0.58/day + $16.56/day`: Hetzner
+bills in euros net of VAT and RunPod in US dollars. The
 summary never wraps. When the sidebar is narrow, it shows fewer parts, and then a
 shortened first part. Hover over it to see all of it. If no part fits on the
 narrowest sidebar, the header does not show the summary. A screen reader still
@@ -1419,17 +1431,18 @@ attempts that reach readiness inspect fresh provider data; this does not change
 panel eligibility for a cached Ready record when an earlier preflight fails. This capacity check does not itself prove that files
 survive a provider restart; persistence still needs a live recovery test.
 
-Stop ends the processes on the worker. The storage can stay billable. Idle stop
-is off by default. To use it, set `idle_stop_minutes` (10 to 1440) in a profile.
-A dedicated worker then stops after that time without agent activity. The worker
-is active while an agent terminal prints output. The worker is also active while
-its container uses half a CPU core or more, so a quiet build keeps it on.
-
-On RunPod, the worker stops itself. It uses a provider credential that applies
-only to that worker. The stop also occurs when this computer is offline. The
-worker never deletes anything. Horizon itself never stops an idle cloud: on
-Hetzner, which gives a worker no credential that can stop it, `idle_stop_minutes`
-has no effect.
+Stop ends the processes on the worker. The storage can stay billable. No cloud
+stops when idle. `idle_stop_minutes` (10 to 1440) still parses, so an older
+`.horizon/cloud.yml` keeps working, but it has no effect: Horizon gives no worker
+an idle period, and **New cloud** and **Rebuild** show a note for a profile that
+sets one. Instead, an agent stops its worker when its task is done (see below). A
+RunPod cloud created before this change still carries its period in
+`HORIZON_IDLE_STOP_MINUTES`; it reconnects as before, and its image stops it when
+idle until a rebuild moves it to a current image, which has no idle stop. Such a
+worker is active while an agent terminal prints output, or while its container uses
+half a CPU core or more. It stops itself with a provider credential that applies
+only to that worker, also when this computer is offline, and never deletes
+anything.
 
 For each RunPod cloud, Horizon asks the provider for the status of the worker in
 these conditions:
@@ -1444,24 +1457,32 @@ During this check, the card shows **Checking provider**. If the provider reports
 that the worker stopped, the card shows **Stopped** · **Storage kept · billable** ·
 **Stopped outside Horizon** with **Resume worker**, and logs `The provider reports
 that this worker is stopped. Horizon did not stop it; …`. It does not show
-**Operation failed**. Horizon cannot tell the cause: the worker's idle stop, an
-agent or the provider account can stop a worker.
+**Operation failed**. Horizon cannot tell the cause: an agent, the idle stop of a
+worker created before this change, or the provider account can stop a worker.
 
 If the provider reports that the worker runs, the card shows the original
 failure. Horizon records a stop that the provider confirms as an ordinary stopped
 cloud. Nothing resumes it automatically. If the record already showed the stop,
-the card shows **Stopped**. You can also choose **Check provider** at any time. A
-profile without `idle_stop_minutes` never stops by itself. Shared workers and
-profiles with hosted devices do not support idle stop.
+the card shows **Stopped**. You can also choose **Check provider** at any time.
+A worker created now stops only with **Stop** or at an agent's request.
 
-On RunPod, the same opt-in lets an agent stop its worker when its task is done, such as when
-its pull request is merged, without this computer. Agents get a
+An agent can stop its worker when its task is done, such as when its pull request
+is merged. A worker image built from the current worker bootstrap offers this on
+every dedicated RunPod worker, with no idle period, and has no idle stop of its
+own; it reports `horizon-agent-stop-contract=1`. Older images offer it only to a
+worker with an idle period. On RunPod the worker stops itself, without this computer.
+A worker on Hetzner or a Docker host has no credential that can stop it. Started
+with `HORIZON_WORKER_STOP=horizon`, it records the request for Horizon to carry
+out; Horizon does not give that setting or take such requests yet, so these
+workers offer no agent stop. Shared workers and profiles
+with hosted devices offer no agent stop. Agents get a
 `stop_this_worker` MCP tool (or run `horizon-worker-stop --reason "..."`) with a
 one-line reason. The worker identifies the requesting agent session itself,
 refuses callers outside a Claude, Codex or Grok session (including shell sessions), and
 refuses while another agent session printed output in the last two minutes, while
 the container is busy, or when it cannot check its sessions or CPU use; the calling agent's own
-output does not count. The reason and the requesting agent are kept on the
+output does not count. When Horizon takes a recorded request, it checks again and
+then counts the output of every agent session, the caller's too. The reason and the requesting agent are kept on the
 workspace volume, and after a resume the cloud card shows them, for example
 "Stopped by claude 2 h ago: PR 12 merged". A redeployed cloud starts without the
 previous worker's reason. Resume
@@ -1599,7 +1620,6 @@ file:
 - `capabilities`: the agents, the browsers, the desktop and `agent_approvals`. For
   example, you can add the agent `codex` to a cloud that has only `claude`.
 - `bootstrap.readiness_seconds`, the readiness timeout.
-- `idle_stop_minutes`.
 - The `build` section: `context`, `dockerfile` and `platform`.
 
 Horizon refuses the rebuild when the profile is different from the profile of the
@@ -1616,7 +1636,8 @@ change these fields:
 - A missing `build` section. Then there is no recipe to rebuild.
 
 Horizon also refuses a profile with values that no profile can have, for example
-`idle_stop_minutes` together with hosted devices. For each change, the rebuild output
+`idle_stop_minutes` outside 10 to 1440. A changed `idle_stop_minutes` is no change:
+it has no effect, and Rebuild says so. For each change, the rebuild output
 shows a line that starts with `Profile change:`, for example `Profile change: Adds
 agent codex`. Before Horizon builds, it checks the API key file of each agent in the
 new profile, not only of an added agent, as each deployment does. A reconnect of the
@@ -1679,7 +1700,7 @@ cloud instead releases its server and starts a new one, with a new server ID and
 address, on the same workspace volume; see
 [Hetzner](cloud-hetzner.md#rebuilding-the-image). On either provider `/workspace`
 (worktrees, agent logins, SSH host keys) survives; the container disk is reset and
-running processes end. The worker gets the new capabilities and idle stop in its
+running processes end. The worker gets the new capabilities in its
 environment: the pod update sends them on RunPod, and the new server gets them on
 Hetzner. The cloud's profile changes only when the worker runs the new image. Until
 then, and after a cancelled rebuild, the cloud keeps its previous profile. After
@@ -1813,6 +1834,22 @@ the same arguments and `--plan-token <token>`. The token also covers the worker 
 `--worker-choice` selects, so a plan for one offer does not start another. Without
 uncommitted files you can give no token. A typed `REVISION` that is not the checked-out commit builds that commit
 only.
+
+### What a cloud costs
+
+While a worker bills, the header of its card shows the cost of the current run
+and the cost a day, for example `€0.06 run · €0.58/day`. When the header has room,
+a second line shows the cost a week and a month, and what the worker adds by the
+end of the month if it keeps running:
+`€4.03/wk · €17.52/mo · +€9.89 by Oct 31 if left running`. A narrow card keeps
+only the first line. Hover over the cost to see the hourly rate, the cost a year
+and what the worker adds by the end of the year.
+
+A day is 24 hours, a week 168, a month 730 and a year 8,760, as Hetzner counts
+them. The end of a month and of a year is midnight UTC. The amounts are compute
+only: storage, a primary IPv4 address, traffic and VAT are not in them. Hetzner
+caps a month at the monthly price of the server type, so a full month can cost
+less than 730 hours. A stopped or deleted worker shows no daily cost.
 
 ### Deployment progress
 

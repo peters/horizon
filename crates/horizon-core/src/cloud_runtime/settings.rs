@@ -23,6 +23,9 @@ pub struct Settings {
     pub registry_pull_auth_id: Option<String>,
     #[serde(default)]
     pub registries: Option<super::registry::Config>,
+    /// Local image destinations scoped to a canonical checkout and named profile.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub image_publishing: Vec<super::publishing::Override>,
     pub cpu_flavors: Vec<String>,
     pub gpu_types: Vec<String>,
     #[serde(default)]
@@ -154,6 +157,13 @@ impl Settings {
         }
         for binding in &self.git_credentials {
             binding.validate()?;
+        }
+        let mut scopes = std::collections::BTreeSet::new();
+        for choice in &self.image_publishing {
+            choice.validate_scope()?;
+            if !scopes.insert((&choice.repository, &choice.profile)) {
+                return Err(Error::Invalid("Keep one image destination per checkout and profile"));
+            }
         }
         let mut names = std::collections::BTreeSet::new();
         for host in &self.docker_hosts {

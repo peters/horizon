@@ -1,7 +1,9 @@
 //! First-use machine settings. Secret values never enter repository configuration.
 mod credentials;
 mod hetzner;
+mod publishing;
 mod storage;
+pub use publishing::save_image_destination;
 #[cfg(test)]
 mod tests;
 
@@ -342,6 +344,7 @@ fn defaults(root: &Path) -> Settings {
         docker_hosts_off: false,
         registry_pull_auth_id: None,
         registries: None,
+        image_publishing: Vec::new(),
         cpu_flavors: vec!["cpu3c".into()],
         gpu_types: vec!["NVIDIA RTX A6000".into()],
         data_centers: Vec::new(),

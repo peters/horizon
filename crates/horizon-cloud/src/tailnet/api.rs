@@ -1,8 +1,10 @@
 //! Desktop-only API credential bindings, independent of worker enrollment keys.
 mod credential;
+mod node;
 mod records;
 use super::{Error, Result, Store, keychain, sync_directory, write};
 pub use credential::{ApiCredential, ApiCredentialKind, ApiCredentialStatus};
+pub use node::{NodeApi, NodeDeletion, RetentionReason};
 use records::{Binding, Pending, Records};
 use std::collections::BTreeSet;
 use zeroize::Zeroizing;
@@ -56,22 +58,32 @@ pub(super) fn recover(store: &Store, keys: &impl Credentials) -> Result<()> {
 }
 
 pub(super) fn status(store: &Store, id: &str, keys: &impl Credentials) -> Result<ApiCredentialStatus> {
+    Ok(
+        resolved(store, id, keys)?.map_or(ApiCredentialStatus::Missing, |credential| {
+            ApiCredentialStatus::Stored(credential.kind())
+        }),
+    )
+}
+
+// Every caller holds the same Store lock. Neither this result nor secret material
+// is public; status and irreversible requests use the same managed/tombstone rules.
+fn resolved(store: &Store, id: &str, keys: &impl Credentials) -> Result<Option<ApiCredential>> {
     recover(store, keys)?;
     store.require_tailnet(id)?;
     let records = records(store)?;
     let (slot, expected) = match records.bindings.get(id) {
-        Some(Binding::Disabled) => return Ok(ApiCredentialStatus::Missing),
+        Some(Binding::Disabled) => return Ok(None),
         Some(Binding::Active { slot, kind }) => (slot.as_str(), Some(*kind)),
         None => (id, None),
     };
     let Some(bytes) = keys.read(slot)? else {
-        return Ok(ApiCredentialStatus::Missing);
+        return Ok(None);
     };
     let credential = ApiCredential::decode(&bytes)?;
     if expected.is_some_and(|kind| kind != credential.kind()) {
         return Err(Error::InvalidApiCredential);
     }
-    Ok(ApiCredentialStatus::Stored(credential.kind()))
+    Ok(Some(credential))
 }
 
 pub(super) fn save(store: &Store, id: &str, credential: &ApiCredential, keys: &impl Credentials) -> Result<()> {

@@ -410,10 +410,16 @@ fn the_confirmation_reads_what_the_latest_commit_changes_and_only_a_confirmed_re
             "Removes agent grok",
             "Removes browser chromium",
             "Removes the desktop",
-            "Idle stop off → 30 min",
         ]
     );
-    assert_eq!(plan.profile.idle_stop_minutes, Some(30));
+    // An idle period has no effect: the cloud keeps its own, it is no change, and the
+    // plan says so.
+    assert_eq!(plan.profile.idle_stop_minutes, None);
+    assert!(
+        plan.notes
+            .iter()
+            .any(|note| note.contains("idle_stop_minutes in profile") && note.contains("no effect"))
+    );
     assert!(
         app.cloud_prototype.production.runtimes[&1].rebuild.is_none(),
         "reading starts nothing"
@@ -433,7 +439,6 @@ fn the_saved_profile_follows_the_settings_a_rebuild_bound() {
     let saved = app.cloud_prototype.groups.0[0].remote.as_ref().unwrap().profile.clone();
     let mut bound = saved.clone();
     bound.capabilities.agents.pop_first();
-    bound.idle_stop_minutes = Some(30);
     bound.bootstrap.readiness_seconds = 1800;
     let mut state = deployment(temp.path(), true, Phase::None);
     state.profile = bound.clone();

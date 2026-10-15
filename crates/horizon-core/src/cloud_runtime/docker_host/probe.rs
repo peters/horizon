@@ -180,14 +180,12 @@ fn profile_checks(result: &mut Probe, profile: Option<&Profile>) {
             if known { "Pinned worker image has a published contract" } else { "Worker image needs registry and worker-contract validation before allocation" },
             (!known).then_some("Configure image pull access and a local Docker builder for contract validation. Arbitrary images need Horizon's worker services."));
     }
-    if profile.is_some_and(|profile| {
-        profile.gpu || profile.capabilities.browserstack.is_some() || profile.idle_stop_minutes.is_some()
-    }) {
+    if profile.is_some_and(|profile| profile.gpu || profile.capabilities.browserstack.is_some()) {
         result.check(
             "Profile capabilities",
             CheckState::Blocked,
-            "This provider supports CPU workers without hosted devices or idle stop",
-            Some("Select a CPU profile without hosted devices or idle stop."),
+            "This provider supports CPU workers without hosted devices",
+            Some("Select a CPU profile without hosted devices."),
         );
     }
 }

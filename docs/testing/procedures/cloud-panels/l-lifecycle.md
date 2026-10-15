@@ -390,7 +390,7 @@ Use `smoke-r`. It is a RunPod CPU cloud.
 11. Wait 15 minutes.
 
     Result: The card of `smoke-x` still shows **Ready**. The profile sets
-    `idle_stop_minutes: 10`, but Horizon does not stop an idle cloud.
+    `idle_stop_minutes: 10`, which has no effect.
 
 12. Click **Stop…** on the card of `smoke-x` and confirm.
 
@@ -776,7 +776,7 @@ and its profile `runpod-build`. The profile of the cloud must have `agents: [cla
 and no `idle_stop_minutes` at the start.
 
 1. In `<repo>`, add `codex` to `capabilities.agents` of the profile of the cloud.
-   Add `idle_stop_minutes: 30`. Do not commit the change.
+   Add `idle_stop_minutes: 30`, which has no effect. Do not commit the change.
 
    Result: `git -C <repo> status --short` shows `.horizon/cloud.yml` as modified.
 
@@ -787,8 +787,9 @@ and no `idle_stop_minutes` at the start.
 
 3. On the card, click **Rebuild image & restart…**.
 
-   Result: The confirmation lists `Adds agent codex` and `Idle stop off → 30 min`
-   under `This rebuild changes the cloud's settings:`. If the build context of the
+   Result: The confirmation lists `Adds agent codex` under `This rebuild changes
+   the cloud's settings:`, and no idle stop change. It shows the note that
+   `idle_stop_minutes` has no effect. If the build context of the
    profile holds the two files, the confirmation lists `modified .horizon/cloud.yml`
    and `new uncommitted.txt` under the warning about a public registry.
 
@@ -801,8 +802,7 @@ and no `idle_stop_minutes` at the start.
 
 5. Click **Rebuild and restart**. Wait until the card shows **Ready**.
 
-   Result: The card keeps the notes `Profile change: Adds agent codex` and
-   `Profile change: Idle stop off → 30 min`.
+   Result: The card keeps the note `Profile change: Adds agent codex`.
 
 6. Examine the **Machine** tab.
 
@@ -833,7 +833,7 @@ and no `idle_stop_minutes` at the start.
 
 10. On the card, click **Rebuild image & restart…**.
 
-    Result: The confirmation lists `Removes agent codex` and `Idle stop 30 min → off`.
+    Result: The confirmation lists `Removes agent codex`.
 
     > **CAUTION:** THIS STEP RESTARTS THE WORKER. The Codex session ends.
 
@@ -1074,8 +1074,8 @@ Use `smoke-sib` on RunPod. Its profile has a `build` section. In the steps,
 - `smoke-hb` rebuilds on Hetzner at the same commit, although its profile names
   RunPod and other storage values. A changed `image` gives a refusal that names the
   field.
-- A rebuild adds and removes the agent `codex` and changes the idle stop on RunPod
-  and on Hetzner. The confirmation lists each change before the rebuild starts. An
+- A rebuild adds and removes the agent `codex` on RunPod and on Hetzner, and an
+  idle period is no change. The confirmation lists each change before the rebuild starts. An
   added agent has its credential. A session of a removed agent is reported once and
   does not relaunch. A later reconnect does not report it again.
 - If Cloud settings has an Anthropic API-key file, a rebuild that adds `codex` while

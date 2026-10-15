@@ -18,7 +18,9 @@ Use synthetic local state. Send no Tailscale request and allocate no worker.
 ## 2. Applicability
 
 - The candidate includes the merged API storage foundation and this status change.
-- The Settings row is read only. There is no API credential editor or secret import.
+- This procedure tests status. Owner entry uses [tailnet-api-entry](tailnet-api-entry.md).
+  Owner removal uses [tailnet-api-removal](tailnet-api-removal.md).
+- Status returns no saved values and accepts no secret import.
 - Stored presence does not prove remote validity, scope or tailnet access.
 - Pending, unavailable and missing are separate observations.
 - Cached status is not continuous OS-store monitoring.

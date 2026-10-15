@@ -35,14 +35,28 @@ Personal API token and OAuth client bindings stay in the desktop OS store,
 independently of enrollment auth keys. Stored presence reports kind only; it
 does not prove API validity, scope or network access. Saving does not remove
 nodes. Never pass an API secret to MCP or a worker.
-Settings > Tailnets displays nonsecret API credential status only; no API editor
-ships in this milestone. Read `cloud_companions.tailnet_api_credentials` for
-cached ready, pending or unavailable status without Settings. The CLI is
+Settings > Tailnets displays nonsecret API credential status and supplies masked
+owner entry, replacement and removal. Saved values never fill a draft.
+Read `cloud_companions.tailnet_api_credentials` for cached ready, pending or
+unavailable status without Settings. The CLI is
 `cloud_deploy tailnets STATE_ROOT [TAILNET_ID]`. API status does not qualify an
 older worker image. Cached status is not an OS-store watcher; use Tailnets Refresh
 for an explicit fresh read. Never pass an API secret to MCP.
+Use `tailnet_api_credential` to request `set_personal_token`, `set_oauth` or `remove`
+for an exact saved tailnet ID and caller-chosen UUID request ID. Set requests carry
+kind metadata only; the person enters values and selects Save in Settings. The person fulfills
+it in Settings > Tailnets; requests never open Settings or authorize a write.
+Read `status` with the same IDs after a lost answer. `cancel` cancels only a pending
+request; a running transaction remains uncertain until its result arrives.
+Credentials are desktop-global, so a workspace agent cannot approve its own request.
 Status qualification uses the production UI, actual CLI and normal AGENT public
 MCP responses; baseline id/name evidence alone does not qualify API status.
+
+Machine-local destination preference helpers retain a checkout/profile scope and
+nonsecret account or exact registry grant metadata. They do not change launch or
+profile parsing yet. A saved preference is not proof of authentication or registry
+permission. Keep these settings outside repository files and use the shared
+transactional save helper to preserve other windows' choices.
 
 Image publication credentials belong on the host. An operation preparation helper
 retains the authenticated provider account ID and owns a separate temporary Docker
@@ -101,3 +115,5 @@ This skill does not install servers, start resources, or enable network access o
 Cloud records can retain exact worker device IDs and unresolved capture attempts across stop, deletion and redeploy. They bind saved tailnet, provider, worker and allocation request identity in the owning locked cloud record. Selected deployments and reconnects capture the private root daemon Self.ID before readiness. This adds no node deletion operation. Typed reasons for the later cleanup integration distinguish missing device identity, missing desktop API access and offline access; keep uncertain records and never delete by hostname/tag guesses. API credentials stay on the desktop.
 
 The receipt-capture adapter reads only the worker's actual tagged Self.ID via pinned root SSH and the existing userspace daemon socket, persists it before readiness and records uncertain attempts before enrollment. It binds the existing allocation request and saved tailnet ID to the owning cloud root. Worker agents cannot query this private root lane. No API secret is sent to a worker and no API editor or node-delete operation is activated by this adapter.
+
+The desktop SDK also has an unwired exact-device HTTP prerequisite. It keeps API credentials on the desktop and returns typed retained reasons for missing/offline/denied/unverified404 outcomes. It does not enable automatic cloud node cleanup or add a UI/CLI/MCP deletion operation. See docs/architecture/tailnet-node-api.md and docs/testing/procedures/tailnet-node-api.md.

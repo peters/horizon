@@ -24,7 +24,8 @@ the cloud's own container and volume.
   host that you reach with SSH. The remote host can be Linux or macOS with
   Docker Desktop.
 - Tasks D1 to D5 use the `cloud_deploy` example and a settings file. Tasks D6
-  and D7 use the Cloud settings card and the MCP tools in an isolated Horizon.
+  to D9 use the Cloud settings card, New cloud, the cloud card and the MCP
+  tools in an isolated Horizon.
 
 ## 3. Safety
 
@@ -48,7 +49,7 @@ the cloud's own container and volume.
 - For task D3: a remote host that `ssh <host> true` reaches without a
   password prompt. On that host, the SSH user has access to Docker, and
   `docker` is at a known absolute path.
-- For tasks D6 and D7: the isolated Horizon desktop of
+- For tasks D6 to D9: the isolated Horizon desktop of
   [the device-smoke runbook](../../../scripts/device-smoke/README.md#horizon-inside-a-native-vnc-device-panel).
 - Network access to `ghcr.io` to pull the public worker base image.
 
@@ -74,7 +75,7 @@ the cloud's own container and volume.
    profiles:
      local:
        provider: docker-host
-       image: ghcr.io/peters/horizon-worker-base@sha256:f28a0ceb76b559b299000b440a26951bc70a820003d3911c4e130174bef944ec
+       image: ghcr.io/peters/horizon-worker-base@sha256:a3abdf1800d95adccdf93438208a206d2353f9a6fe69c4529faea791f73230f7
        cpu: 2
        memory_gb: 4
        gpu: false
@@ -242,7 +243,59 @@ In each command, `cloud_deploy` stands for `"$cloud_deploy"` from setup step 2.
    When you open Cloud settings again, the row shows the architecture, the
    Docker version and the free CPUs and memory.
 
-### 6.7 D7: Agents
+### 6.7 D7: Start a cloud on the host from New cloud
+
+1. Open **New cloud** for `$T/repo` and select the profile `local`.
+
+   Result: Only the **YOUR HOST** card shows, with the Docker whale, **No
+   rent**, the free capacity and **Fits**. The card is selected. The summary
+   shows "Docker host this-pc" and no Hetzner text.
+
+2. Add a profile `gpu-test` with `provider: runpod` and `gpu: true` to the
+   working copy of `$T/repo/.horizon/cloud.yml`, and select it.
+
+   Result: No host card shows. New cloud says that Docker hosts run CPU clouds
+   only.
+
+3. Remove `gpu-test`. Set `cpu: 512` in the profile `local` and select it.
+
+   Result: The host card shows **Too little free now** and you cannot click
+   it. **Start cloud** stays off.
+
+4. Add `build: {context: ., dockerfile: Dockerfile}` to the profile `local`
+   and select it.
+
+   Result: The host card shows **Cannot run this profile**, and below it the
+   reason: a Docker host runs public images only.
+
+5. Restore the profile `local` and select it. Keep New cloud open. In a
+   terminal, add `"docker_hosts_off": true` to `.horizon/cloud/settings.json`
+   in the home of the isolated Horizon, as another Horizon would save it, and
+   wait 5 seconds.
+
+   Result: The host stays chosen in the summary. **Start cloud** is off and
+   says to save a Docker host and turn it on. No rented worker is chosen in
+   its place.
+
+6. Remove `"docker_hosts_off": true` again and wait 5 seconds. Click
+   **Start cloud**.
+
+   Result: The cloud card shows the Docker whale in place of the cloud mark,
+   and the cloud becomes ready.
+
+### 6.8 D8: The cloud card on a host
+
+1. Open **Manage** on the card.
+
+   Result: **Rebuild image & restart…** is off, with "Rebuild is not supported
+   on a Docker host yet".
+
+2. Stop, resume and delete the cloud with the card.
+
+   Result: Each step ends without an error. After the delete, the counts of
+   setup step 6 are the same again.
+
+### 6.9 D9: Agents
 
 1. Ask `cloud_offers` with `{"min_vcpu": 2}` from an agent panel in the
    isolated Horizon.
@@ -261,7 +314,7 @@ In each command, `cloud_deploy` stands for `"$cloud_deploy"` from setup step 2.
 
 ## 7. Pass criteria
 
-- Tasks D1, D2, D4, D5, D6 and D7 pass.
+- Tasks D1, D2, D4, D5, D6, D7, D8 and D9 pass.
 - Task D3 passes, and SSH reaches the worker through the host with the pinned
   worker host key.
 

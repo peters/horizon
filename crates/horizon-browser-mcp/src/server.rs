@@ -216,6 +216,20 @@ impl HorizonBrowserMcp {
     }
 
     #[tool(
+        name = "tailnet_api_credential",
+        description = "Request native owner setup or removal of a desktop-global saved tailnet API credential. set_personal_token, set_oauth and remove create only a pending owner request. The person enters an empty masked draft and explicitly saves the requested kind, or approves removal of that exact request in Settings > Tailnets. No secret is accepted from the agent; replacing a binding requires the same native owner choice. Does not open Settings. Supply the exact saved tailnet_id from cloud_companions and a caller-chosen UUID request_id. Poll status with the same IDs; cancel stops only a pending request. Requests expire after 15 minutes, are volatile and are scoped to the original calling agent and host. Running writes cannot be cancelled. No credential values, paths, OS references, owner grants or automatic node deletion. Applied means the local store transaction finished, not that remote API access was tested."
+    )]
+    async fn tailnet_api_credential(
+        &self,
+        Parameters(input): Parameters<horizon_browser_control::manifest::provider_usage::CredentialRequest>,
+    ) -> Result<Json<crate::model::HostJson>, String> {
+        self.controller
+            .tailnet_api_credential(input)
+            .await
+            .map(|value| Json(crate::model::HostJson(value)))
+    }
+
+    #[tool(
         name = "cloud_list",
         description = "The cloud list of the Horizon sidebar for the clouds in your workspace. operation list (the default) returns each cloud's ID, name, group (needs_you, cloud or parked), status line, hourly rate and whether an agent works on it. attach moves the person's view to the cloud, as a click on its row does; its terminals attach when the cloud stays in view. park parks the terminals of a cloud that is out of view now instead of after the grace period; a cloud in view is refused, because it attaches again. Requires the running Horizon."
     )]
@@ -881,6 +895,7 @@ mod tests {
                 "cloud_offers",
                 "cloud_upkeep",
                 "device_panel",
+                "tailnet_api_credential",
             ]
         );
         let schemas = serde_json::to_string(&server.tool_router.list_all()).unwrap_or_default();
@@ -896,6 +911,28 @@ mod tests {
         assert!(!schemas.contains("browser_ws"));
         assert!(!schemas.contains("manifest_path"));
         assert!(!schemas.contains("cdp_endpoint"));
+    }
+
+    #[test]
+    fn credential_setup_schema_contains_only_owner_request_metadata() {
+        let server = HorizonBrowserMcp::new(BrowserController::with_actor("agent"));
+        let tools = server.tool_router.list_all();
+        let tool = tools.iter().find(|tool| tool.name == "tailnet_api_credential").unwrap();
+        let encoded_schema = serde_json::to_string(tool.input_schema.as_ref()).unwrap();
+        assert!(encoded_schema.contains("set_personal_token"));
+        assert!(encoded_schema.contains("set_oauth"));
+        let properties = tool.input_schema.get("properties").unwrap().as_object().unwrap();
+        assert_eq!(
+            properties
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            ["operation", "request_id", "tailnet_id"].into()
+        );
+        assert_eq!(
+            tool.input_schema.get("additionalProperties"),
+            Some(&serde_json::json!(false))
+        );
     }
 
     #[test]

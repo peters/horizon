@@ -128,6 +128,10 @@ impl HorizonApp {
             self.casting.refresh_pairings();
             let content = self.load_or_generate_config_yaml();
             let editing_config = Config::from_yaml(&content).ok();
+            #[cfg(feature = "cloud-workspaces")]
+            let mut tailnets = super::tailnets::State::default();
+            #[cfg(feature = "cloud-workspaces")]
+            self.cloud_prototype.reopen_tailnets(&mut tailnets);
             self.settings = Some(SettingsEditor {
                 original: content.clone(),
                 buffer: content,
@@ -138,7 +142,7 @@ impl HorizonApp {
                 portable_profile: remote_browsers::PortableProfilePanel::new(&self.config_path),
                 provider_usage: remote_usage::UsagePanels::default(),
                 #[cfg(feature = "cloud-workspaces")]
-                tailnets: super::tailnets::State::default(),
+                tailnets,
                 #[cfg(target_os = "linux")]
                 remote_devices: remote_devices::RemoteDevicesPanel::default(),
             });
@@ -232,6 +236,8 @@ impl HorizonApp {
                 &mut self.speech_model_info_cache,
                 &mut self.remote_browser_credentials,
                 &mut self.browser_create_host.remote_allocations,
+                #[cfg(feature = "cloud-workspaces")]
+                &mut self.browser_create_host.provider_usage.tailnet_credentials,
             );
         }
         #[cfg(target_os = "linux")]
@@ -427,6 +433,7 @@ fn render_settings_panel(
     model_info_cache: &mut speech::SpeechModelInfoCache,
     credentials: &mut CredentialWorkbench,
     allocations: &mut horizon_core::browser::remote_recovery::RemoteAllocations,
+    #[cfg(feature = "cloud-workspaces")] requests: &mut super::tailnets::requests::Requests,
 ) {
     let viewport_width = util::viewport_local_rect(ui).width();
     let default_width = settings_panel_default_width(viewport_width);
@@ -454,7 +461,7 @@ fn render_settings_panel(
                 SettingsTab::Tailnets => {
                     egui::ScrollArea::vertical()
                         .max_height(available.y)
-                        .show(ui, |ui| editor.tailnets.settings(ui));
+                        .show(ui, |ui| editor.tailnets.settings(ui, requests));
                 }
                 SettingsTab::Yaml => {
                     yaml_editor::render(ui, config_path, &mut editor.buffer, available);
