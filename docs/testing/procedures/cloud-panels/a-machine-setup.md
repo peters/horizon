@@ -212,7 +212,8 @@ setting must open a repair form.
 2. Select **Codex** and **Claude**.
 
    Result: The card shows a sign-in choice for each agent: **API key**, and
-   **ChatGPT sign-in** for Codex or **Subscription login** for Claude.
+   **ChatGPT sign-in** for Codex, or **Setup token** and **Sign in on the worker**
+   for Claude.
 
 3. For Claude, select **API key**.
 
@@ -587,9 +588,9 @@ Do this task after D01. It uses the cloud `smoke-a`.
 
    Result: The command shows that the file does not exist.
 
-9. In Cloud settings, select **Subscription login** for Claude.
+9. In Cloud settings, select **Sign in on the worker** for Claude.
 
-   Result: The Claude section shows **Subscription login**.
+   Result: The Claude section shows **Sign in on the worker**.
 
 10. Click **Save settings**.
 

@@ -327,15 +327,17 @@ that are known only at the end.
 
 Missing account settings open a repair form without losing the title or target
 workspace. Enter the compute API key and choose how the profile's agents sign in:
-an API key, **ChatGPT sign-in** for Codex or subscription login for Claude.
+an API key, **ChatGPT sign-in** for Codex, or **Setup token** or **Sign in on the
+worker** for Claude.
 **Save and start** continues the submitted launch. Opening registry setup from
 New cloud uses **Save and return** instead: the form remains open even when compute
 and SSH are ready. Saving or cancelling returns to New cloud for a fresh publishing
 review without submitting a launch. A dedicated
 SSH identity is created when needed and keys stay in private machine-local files.
-Blank replacement fields preserve saved keys. Subscription login for Claude happens
+Blank replacement fields preserve saved keys. **Sign in on the worker** for Claude happens
 through the actual agent on the worker; worker readiness does not prove authentication.
-See [Sign in with ChatGPT for Codex](#sign-in-with-chatgpt-for-codex).
+See [Sign in with ChatGPT for Codex](#sign-in-with-chatgpt-for-codex) and
+[Claude with a setup token](#claude-with-a-setup-token).
 Open **Menu > Cloud settings** in the toolbar to change machine defaults without
 launching. **Menu > Fit all clouds** shows every cloud on the canvas.
 
@@ -450,12 +452,18 @@ before. A bound OpenAI API key takes precedence over the ChatGPT login.
 ### Claude with a setup token
 
 A setup token signs Claude in on your Claude subscription for one year. Claude on the
-worker then needs no sign-in of its own. To make one, run `claude setup-token` on a
-computer where you use Claude Code.
+worker then needs no sign-in of its own.
 
-Horizon keeps the token like the agent API keys: in a private file (0600), for all
-workspaces on this computer. `settings.json` keeps only the absolute path of the file
-and the time that the token was saved, in seconds since 1970:
+1. On a computer where you use Claude Code, run `claude setup-token` and sign in.
+   The command shows the token.
+2. In **Cloud settings**, choose **Setup token** for Claude and paste the token.
+3. Click **Save settings**.
+
+**Cloud settings** then shows the day that you saved the token and the day that it runs
+out. Horizon keeps the token like the agent API keys: in a private file (0600) under
+`~/.horizon/cloud/credentials`, for all workspaces on this computer. `settings.json`
+keeps only the absolute path of the file and the time that the token was saved, in
+seconds since 1970:
 
 ```json
 {

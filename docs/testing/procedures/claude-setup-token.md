@@ -1,6 +1,6 @@
 ---
 procedure: claude-setup-token
-feature: Claude with a setup token (token saved in the settings, given to each cloud)
+feature: Claude with a setup token (Cloud settings choice, token given to each cloud)
 platforms: [linux, macos]
 cost: rents compute
 destructive: yes
@@ -12,17 +12,17 @@ owner: peters
 
 ## 1. Purpose
 
-This procedure proves that a Claude setup token bound in the settings goes to each
-cloud that runs Claude, so that Claude on the worker starts signed in, and that a
-reconnect removes it when it is not bound.
+This procedure proves that Cloud settings keeps a Claude setup token like an agent API
+key, shows the day that it runs out, and gives it to each cloud that runs Claude, so
+that Claude on the worker starts signed in.
 
 ## 2. Applicability
 
-- Candidate: a Horizon build that reads `claude_token` in the settings, and a worker
-  image that reads `/workspace/credentials/claude-oauth-token`.
+- Candidate: a Horizon build with **Setup token** for Claude in Cloud settings, and a
+  worker image built from the same commit or later.
 - Platforms: Linux and macOS. Provider: RunPod or Hetzner.
-- This procedure does not test: the Cloud settings form, the end of a token after one
-  year, or a token that Claude refuses. Unit tests cover the expiry date.
+- This procedure does not test: the end of a token after one year, or a token that
+  Claude refuses. Unit tests cover the expiry date.
 
 ## 3. Safety
 
@@ -58,41 +58,57 @@ reconnect removes it when it is not bound.
 
 ## 6. Tasks
 
-### 6.1 T01 — Bind the token in the settings
+### 6.1 T01 — The settings ask for a token
 
-> **CAUTION:** ONLY THE OPERATOR PASTES THE TOKEN. Do not type the token with a device
+1. Open **Menu › Cloud settings**.
+
+   Result: The Coding agents card shows **Claude**.
+
+2. Make sure that **Claude** is selected. Select **Setup token**.
+
+   Result: The card shows the choices **API key**, **Setup token** and **Sign in on
+   the worker**. The field shows **Paste setup token**. The text below the field
+   tells you to run `claude setup-token`. The card status is **Needs a key**. The
+   banner says "Paste the Claude setup token, or choose another sign-in."
+
+> **CAUTION:** THE OPERATOR PASTES THE TOKEN. Do not type the token with a device
 > action, because characters can change.
 
-1. Ask the operator to write the token to a private file.
+3. Ask the operator to paste the token.
 
-   ```bash
-   (umask 077; IFS= read -rs token && printf '%s\n' "$token" > ~/.horizon/cloud/credentials/claude-token-test)
-   ```
+   Result: The field shows a masked value. The card status is **Unsaved key**.
 
-   The Bash built-in `read -s` turns off the echo of the terminal while the operator
-   pastes.
+### 6.2 T02 — Save the token
 
-   Result: The operator pastes the token, then types Enter. The terminal does not
-   show the token.
+1. Click **Save settings**.
 
-2. Bind the file as the Claude setup token, with the time now.
+   Result: The dialog closes.
 
-   ```sh
-   cd ~/.horizon/cloud && jq --arg file "$HOME/.horizon/cloud/credentials/claude-token-test" --argjson now "$(date +%s)" '.claude_token = {file: $file, saved_at: $now} | .anthropic_api_key_file = null' settings.json > settings.new && chmod 600 settings.new && mv settings.new settings.json
-   ```
-
-   Result: The command stops with exit code 0.
-
-3. Look at the saved settings.
+2. Look at the saved settings.
 
    ```sh
    jq '{claude_token, anthropic_api_key_file}' ~/.horizon/cloud/settings.json
    ```
 
-   Result: `claude_token.file` is the path of step 1. `anthropic_api_key_file` is
-   `null`. The output does not contain the token.
+   Result: `claude_token.file` is a path under `~/.horizon/cloud/credentials`.
+   `claude_token.saved_at` is the time of the save, in seconds since 1970.
+   `anthropic_api_key_file` is `null`. The output does not contain the token. Write
+   down the path of `claude_token.file` for the cleanup.
 
-### 6.2 T02 — A cloud starts Claude signed in
+3. Look at the mode of the token file. Do not show its contents.
+
+   ```sh
+   ls -l "$(jq -r .claude_token.file ~/.horizon/cloud/settings.json)" | cut -c1-10
+   ```
+
+   Result: The output is `-rw-------`, on Linux and on macOS.
+
+4. Open **Menu › Cloud settings** again.
+
+   Result: Claude shows **Setup token** and **Saved on this computer**. The text
+   below says "Saved <today>. Runs out about <today one year later>."
+
+### 6.3 T03 — A cloud starts Claude signed in
 
 > **CAUTION:** THIS TASK RENTS COMPUTE AND SENDS THE SETUP TOKEN TO THE WORKER. Use
 > a test cloud.
@@ -123,16 +139,16 @@ reconnect removes it when it is not bound.
 
    Result: Claude answers. Claude does not ask you to sign in.
 
-### 6.3 T03 — Resume refuses a missing token file
+### 6.4 T04 — Resume refuses a missing token file
 
 1. On the card of the test cloud, click **Stop worker**.
 
    Result: The card shows that the cloud is stopped.
 
-2. Move the token file of T01 away.
+2. Move the token file away. Use the path that you wrote down in T02 step 2.
 
    ```sh
-   mv ~/.horizon/cloud/credentials/claude-token-test ~/.horizon/cloud/credentials/claude-token-test.away
+   mv <path of T02 step 2> <path of T02 step 2>.away
    ```
 
    Result: The command stops with exit code 0.
@@ -146,18 +162,15 @@ reconnect removes it when it is not bound.
 4. Move the token file back. Click **Resume worker**.
 
    ```sh
-   mv ~/.horizon/cloud/credentials/claude-token-test.away ~/.horizon/cloud/credentials/claude-token-test
+   mv <path of T02 step 2>.away <path of T02 step 2>
    ```
 
    Result: The card shows Ready.
 
-### 6.4 T04 — A reconnect removes an unbound token from the worker
+### 6.5 T05 — Another sign-in removes the token from the worker
 
-1. Remove the binding from the settings.
-
-   ```sh
-   cd ~/.horizon/cloud && jq 'del(.claude_token)' settings.json > settings.new && chmod 600 settings.new && mv settings.new settings.json
-   ```
+1. In Cloud settings, select **Sign in on the worker** for Claude. Click **Save
+   settings**.
 
    Result: `jq .claude_token ~/.horizon/cloud/settings.json` shows `null`.
 
@@ -175,7 +188,7 @@ reconnect removes it when it is not bound.
 
 ## 7. Pass criteria
 
-- T01 to T04 give the results above.
+- T01 to T05 give the results above.
 - No screenshot, recording, log or report contains the token.
 
 ## 8. Cleanup
@@ -195,10 +208,11 @@ reconnect removes it when it is not bound.
    Result: `jq '{claude_token, anthropic_api_key_file}' ~/.horizon/cloud/settings.json`
    shows the values from before setup step 2.
 
-3. Remove the token file of T01.
+3. Remove the token file that T02 saved. Use the path that you wrote down in T02
+   step 2. Do not show the contents of the file.
 
    ```sh
-   rm ~/.horizon/cloud/credentials/claude-token-test
+   rm <path of T02 step 2>
    ```
 
    Result: The file does not exist.
