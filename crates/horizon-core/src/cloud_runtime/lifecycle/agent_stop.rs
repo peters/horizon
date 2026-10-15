@@ -120,7 +120,11 @@ pub fn read_stop_request(root: &Path, settings: &Settings, cancel: &Cancellation
 
 /// As `read_stop_request`, with the worker command given.
 pub(super) fn read_with(root: &Path, run: impl Fn(&Worker, &str) -> Result<String>) -> Result<Requested> {
-    let Some(worker) = Store::lock(root)?
+    // A cloud removed meanwhile has no folder, and a read must not make one again.
+    if !root.try_exists()? {
+        return Ok(Requested::Nothing);
+    }
+    let Some(worker) = Store::lock_existing(root)?
         .load()?
         .as_ref()
         .and_then(watched)
