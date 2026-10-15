@@ -69,17 +69,22 @@ pub struct WorkerSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub startup_metadata: Option<crate::StartupMetadata>,
 }
+/// Worker environment variable that has a dedicated worker without a stop credential
+/// record an agent's stop request for Horizon (`horizon-worker-stopd --take`).
+pub const STOP_ENVIRONMENT_KEY: &str = "HORIZON_WORKER_STOP";
 impl WorkerSpec {
     #[must_use]
     pub fn name(&self) -> String {
         format!("horizon-cloud-{}", self.operation_id)
     }
     /// The environment a provider that runs the worker image itself gives its
-    /// container. Nothing in it is secret.
+    /// container. Nothing in it is secret. Such a worker holds no credential that can
+    /// stop it, so a dedicated one records an agent's stop request for Horizon to take
+    /// (`HORIZON_WORKER_STOP=horizon`).
     /// # Errors
     /// Fails only if the capabilities cannot be serialized.
     pub fn container_environment(&self) -> Result<BTreeMap<String, String>, CloudError> {
-        let environment = BTreeMap::from([
+        let mut environment = BTreeMap::from([
             ("PUBLIC_KEY".to_owned(), self.public_key.clone()),
             ("HORIZON_CLOUD_OPERATION".to_owned(), self.operation_id.clone()),
             (
@@ -88,6 +93,9 @@ impl WorkerSpec {
                     .map_err(|_| CloudError::Invalid("Worker capabilities cannot be described"))?,
             ),
         ]);
+        if self.startup_metadata.is_none() {
+            environment.insert(STOP_ENVIRONMENT_KEY.to_owned(), "horizon".to_owned());
+        }
         Ok(environment)
     }
     /// # Errors

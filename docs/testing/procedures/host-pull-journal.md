@@ -58,7 +58,7 @@ They do not revoke a credential installed on a worker.
    Missing private ancestors are created before the generation pin.
    Interrupted ancestor creation is recovered before a child is created.
    Existing roots work without read permission on their parent.
-   A coordination symlink cannot change an existing private file.
+   A coordination symlink or hard link cannot change an existing private file.
    A host grant refuses provider registry creation.
    Changed pull material requires a new generation in either order of first use.
    Concurrent first use cannot pin two identities for one generation.
@@ -67,7 +67,14 @@ They do not revoke a credential installed on a worker.
 
 ### 6.2 HJ-02 — Complete qualification
 
-1. Run the applicable full local matrix.
+1. Examine `registry/directory/unix.rs` or record a syscall trace of the synthetic tests.
+
+   Result: The pending intent and its parent directory entry are synced before mkdir.
+   The new directory and its parent are synced before the pending intent is cleared.
+   Recovery syncs the parent before a child proceeds.
+   A syscall trace checks ordering, not physical power-loss recovery.
+
+2. Run the applicable full local matrix.
 
    Result: Existing scope, secret separation, immutable-image, expiry and provider checks pass.
    Blocking and strict checks pass. Record advisory results separately.

@@ -64,6 +64,8 @@ impl HorizonApp {
                         sync.allowed.drain(..excess);
                         match answer {
                             Ok(answer) => {
+                                // A Run now that the exchange held back waits for the next one.
+                                requeue(&mut sync.signals, held_back(sync.sent, answer.run_held));
                                 sync.marker_left = answer.marker_left;
                                 sync.last = answer;
                             }
@@ -298,9 +300,37 @@ fn exchange(
         emit: &|_| {},
         secrets: Vec::new(),
     };
+    // The policy goes first: the loop that the exchange keeps running starts no agent on a
+    // worker without it. When the worker does not take it, the exchange still goes, so the
+    // worker gets the loop that checks for it, but a Run now waits for an exchange that sets
+    // it: it is not spent on a run that starts no agent.
+    let held = match worker::policy::send(&connection, &runner, cloud_id, &config) {
+        Ok(()) => None,
+        Err(error) => {
+            tracing::warn!(cloud = %cloud_id, %error, "the worker did not take the Upkeep policy of its GitHub access");
+            signals.run_now.then_some(())
+        }
+    };
+    let delivered = if held.is_some() {
+        Signals {
+            run_now: false,
+            run_token: None,
+            ..signals
+        }
+    } else {
+        signals
+    };
     let allowed = allow_chosen(&connection, &runner, cloud_id, &config);
-    let answer = worker::exchange(&connection, &runner, cloud_id, revision, &config, signals)
-        .map(|answer| learned(cloud_id, &config, signals, marker_left, &answer))
+    let answer = worker::exchange(&connection, &runner, cloud_id, revision, &config, delivered)
+        .map(|answer| {
+            let waits = still_held(held.is_some(), answer.paused);
+            // A spent Run now counts as delivered, so its first-run marker goes too.
+            let counted = if held.is_some() && !waits { signals } else { delivered };
+            Answer {
+                run_held: waits,
+                ..learned(cloud_id, &config, counted, marker_left, &answer)
+            }
+        })
         .map_err(|error| error.to_string());
     (allowed, answer)
 }
@@ -327,6 +357,7 @@ fn learned(cloud_id: &str, config: &Config, signals: Signals, marker_left: bool,
         settled: answer.loop_running && answer.settled,
         running: answer.running(),
         marker_left,
+        run_held: false,
     }
 }
 
@@ -362,6 +393,21 @@ fn allow_chosen(connection: &Connection, runner: &Runner<'_>, cloud_id: &str, co
         }
     }
     applied
+}
+
+/// Whether a Run now that the policy held back still waits. A paused worker drops a Run
+/// now, as it would have dropped this one, so a Resume never starts it later.
+fn still_held(held: bool, paused: bool) -> bool {
+    held && !paused
+}
+
+/// The Run now of `sent` when an exchange held it back, else nothing.
+fn held_back(sent: Signals, held: bool) -> Signals {
+    if held {
+        Signals { paused: None, ..sent }
+    } else {
+        Signals::default()
+    }
 }
 
 /// Puts back the signals of a failed exchange: the worker may not have them. One the board
@@ -436,6 +482,41 @@ mod tests {
             },
         );
         assert_eq!(pending.paused, Some(false), "the later choice of the board wins");
+    }
+
+    #[test]
+    fn a_run_now_held_back_goes_again_and_a_delivered_pause_does_not() {
+        let sent = Signals {
+            run_now: true,
+            paused: Some(true),
+            ..Signals::default()
+        }
+        .with_run_token();
+        let mut pending = Signals::default();
+        requeue(&mut pending, held_back(sent, true));
+        assert_eq!(
+            (pending.run_now, pending.run_token, pending.paused),
+            (true, sent.run_token, None)
+        );
+        let mut pending = Signals::default();
+        requeue(&mut pending, held_back(sent, false));
+        assert_eq!(pending, Signals::default());
+    }
+
+    #[test]
+    fn a_paused_worker_spends_a_held_run_now_so_a_resume_does_not_start_it() {
+        let sent = Signals {
+            run_now: true,
+            paused: Some(true),
+            ..Signals::default()
+        }
+        .with_run_token();
+        // The policy failed and the worker reports the pause: nothing waits for a Resume.
+        let mut pending = Signals::default();
+        requeue(&mut pending, held_back(sent, still_held(true, true)));
+        pending.paused = Some(false);
+        assert!(!pending.run_now && pending.run_token.is_none());
+        assert!(still_held(true, false) && !still_held(false, false));
     }
 
     #[test]

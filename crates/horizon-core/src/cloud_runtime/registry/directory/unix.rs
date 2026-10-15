@@ -55,6 +55,7 @@ fn ensure_with(root: &Path, private: bool, created: &mut impl FnMut(&Path) -> Re
         // never unlinked: contenders must coordinate through the same inode.
         intent.set_len(1)?;
         intent.sync_all()?;
+        File::open(&parent)?.sync_all()?;
         std::fs::DirBuilder::new().mode(0o700).create(&root)?;
         created(&root)?;
     }

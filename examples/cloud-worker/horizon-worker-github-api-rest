@@ -88,9 +88,11 @@ class Route:
     are the granted repositories that a search is limited to."""
 
     def __init__(self, host, kind, access=None, repository=None, repository_id=None, repositories=(),
-                 token=True):
+                 token=True, parts=()):
         self.host, self.kind, self.access, self.token = host, kind, access, token
         self.repository, self.repository_id, self.repositories = repository, repository_id, tuple(repositories)
+        # The decoded segments of a repository path after OWNER/NAME or ID.
+        self.parts = list(parts)
 
 
 def split(target):
@@ -147,7 +149,8 @@ def repository_route(host, method, owner, name, rest):
         raise Refused(403, 'this worker does not let an agent reach %s on %s/%s: the repository\'s access, '
                            'hooks, keys, secrets, variables, environments and runners stay with the person.'
                       % (rest, owner, name))
-    return Route(host, 'repository', 'read' if method in READS else 'push', repository=owner + '/' + name)
+    return Route(host, 'repository', 'read' if method in READS else 'push', repository=owner + '/' + name,
+                 parts=parts_of(rest))
 
 
 def route(method, host, target):
@@ -167,7 +170,7 @@ def route(method, host, target):
                                    'hooks, keys, secrets, variables, environments and runners stay with the person.'
                               % match['rest'])
             return Route(host, 'repository', 'read' if method in READS else 'push',
-                         repository_id=match['id'])
+                         repository_id=match['id'], parts=parts_of(match['rest']))
         if (match := SEARCH.fullmatch(path)):
             if method not in READS:
                 raise Refused(405, 'a search is a GET.')
@@ -189,7 +192,8 @@ def route(method, host, target):
                            'repository\'s own paths, searches in granted repositories and GraphQL.' % path)
     if host == UPLOADS:
         if (match := ASSETS.fullmatch(path)) and method == 'POST':
-            return Route(host, 'repository', 'push', repository=match['owner'] + '/' + match['name'])
+            return Route(host, 'repository', 'push', repository=match['owner'] + '/' + match['name'],
+                         parts=['releases', 'assets'])
         raise Refused(403, 'this worker sends only release asset uploads to uploads.github.com.')
     if CONTENT.fullmatch(host):
         if method not in READS:

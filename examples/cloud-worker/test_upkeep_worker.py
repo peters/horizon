@@ -98,7 +98,7 @@ class ExchangeTests(unittest.TestCase):
         self.assertTrue((binding / 'launch-requested').is_file())
         self.assertTrue((self.worker.data / SESSION).is_dir())
         self.assertEqual(answer, {'loop': True, 'settled': False, 'runs': [], 'next_run': None,
-                                  'paused': False, 'status': None})
+                                  'paused': False, 'refused': [], 'status': None})
         started = self.worker.calls[-1]
         self.assertEqual(started[:4], ('new-session', '-d', '-s', SESSION))
         self.assertEqual(started[-2:], (str(upkeep) + '/run.sh', SESSION))
@@ -232,6 +232,40 @@ class ExchangeTests(unittest.TestCase):
                 self.worker.exchange(value)
             (self.worker.upkeep / name).rmdir()
 
+    def test_refusals_that_root_logged_reach_the_board_and_nothing_else(self):
+        gate = self.worker.root / 'gate'
+        gate.mkdir()
+        (gate / 'refused.jsonl').write_text('\n'.join([
+            json.dumps({'at': 300, 'kind': 'api', 'reason': 'later'}),
+            json.dumps({'at': 200, 'kind': 'merge', 'repository': 'acme/web', 'reason': 'no merge.\x1b[2J'}),
+            'not json', json.dumps({'at': -1, 'kind': 'api', 'reason': 'x'}), json.dumps(['x']),
+            json.dumps({'at': 100, 'name': 'no reason'}), json.dumps({'at': 150, 'kind': [1], 'reason': 'odd'})]))
+        names = EXCHANGE['exchange'].__globals__
+        logs = ((str(gate), 'refused.jsonl'),)
+        with mock.patch.dict(names, REFUSALS=logs, REFUSALS_OWNER=os.getuid()):
+            refused = self.worker.exchange()['refused']
+        self.assertEqual(refused, [
+            {'at': 150, 'text': 'The worker refused a GitHub change: odd'},
+            {'at': 200, 'text': 'The worker refused a merge on acme/web: no merge.[2J'},
+            {'at': 300, 'text': 'The worker refused a GitHub change: later'}])
+        # The last 20 lines come back also at their longest.
+        longest = [json.dumps({'at': 1000 + n, 'kind': 'merge', 'repository': 'a' * 39 + '/' + 'b' * 100,
+                               'reason': '\u00e9' * 300}) for n in range(25)]
+        (gate / 'refused.jsonl').write_text('\n'.join(longest) + '\n')
+        with mock.patch.dict(names, REFUSALS=logs, REFUSALS_OWNER=os.getuid()):
+            self.assertEqual([entry['at'] for entry in self.worker.exchange()['refused']], list(range(1005, 1025)))
+        # A folder of another account, a link or a pipe gives nothing.
+        with mock.patch.dict(names, REFUSALS=logs, REFUSALS_OWNER=os.getuid() + 1):
+            self.assertEqual(self.worker.exchange()['refused'], [])
+        (gate / 'refused.jsonl').unlink()
+        os.mkfifo(gate / 'refused.jsonl')
+        with mock.patch.dict(names, REFUSALS=logs, REFUSALS_OWNER=os.getuid()):
+            self.assertEqual(self.worker.exchange()['refused'], [])
+        (gate / 'refused.jsonl').unlink()
+        (gate / 'refused.jsonl').symlink_to(self.worker.outside)
+        with mock.patch.dict(names, REFUSALS=logs, REFUSALS_OWNER=os.getuid()):
+            self.assertEqual(self.worker.exchange()['refused'], [])
+
     def test_a_status_too_large_to_send_back_is_left_out(self):
         self.worker.upkeep.mkdir(mode=0o700)
         (self.worker.upkeep / 'status.json').write_bytes(b'\x01' * EXCHANGE['STATUS_LIMIT'])
@@ -318,8 +352,11 @@ class LoopTests(unittest.TestCase):
                 (directory / folder).mkdir()
             policy = directory / 'agent-approvals'
             policy.write_text('auto\n')
+            guard = directory / 'github-upkeep-policy'
+            guard.write_text('1\n')
             names = RUN['Job'].__init__.__globals__
-            with mock.patch.dict(names, DIR=str(directory), REFRESH=0.05, APPROVALS=str(policy)), \
+            with mock.patch.dict(names, DIR=str(directory), REFRESH=0.05, APPROVALS=str(policy), GUARD=str(guard),
+                                 GUARD_OWNER=os.getuid()), \
                     mock.patch('os.geteuid', return_value=10001), \
                     mock.patch.dict(os.environ, PATH=f'{tools}:{os.environ["PATH"]}'):
                 job = RUN['Job']('acme/web')
@@ -370,8 +407,11 @@ class SchedulerTests(unittest.TestCase):
             (tools / name).chmod(0o700)
         policy = self.root / 'agent-approvals'
         policy.write_text('auto\n')
+        self.guard = self.root / 'github-upkeep-policy'
+        self.guard.write_text('1\n')
         names = RUN['run_once'].__globals__
-        for patch in (mock.patch.dict(names, DIR=str(self.dir), APPROVALS=str(policy), REFRESH=0.05),
+        for patch in (mock.patch.dict(names, DIR=str(self.dir), APPROVALS=str(policy), REFRESH=0.05,
+                                      GUARD=str(self.guard), GUARD_OWNER=os.getuid()),
                       mock.patch.dict(os.environ, PATH=f'{tools}:{os.environ["PATH"]}'),
                       mock.patch('os.geteuid', return_value=10001)):
             patch.start()
@@ -401,6 +441,20 @@ class SchedulerTests(unittest.TestCase):
         self.pulls.write_text(pulls)
         self.assertTrue(self.run_once())
         self.assertEqual(self.agents_started(), 8)
+
+    def test_no_agent_starts_where_root_did_not_limit_the_github_access(self):
+        self.guard.unlink()
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertFalse(RUN['run_once']({'repositories': ['acme/web']}, True))
+        self.assertIn('does not limit the GitHub access', output.getvalue())
+        self.assertEqual(self.agents_started(), 0)
+        self.guard.symlink_to(self.root / 'agent-approvals')
+        self.assertFalse(RUN['guarded']())
+        self.guard.unlink()
+        self.guard.write_text('1\n')
+        with mock.patch.dict(RUN['run_once'].__globals__, GUARD_OWNER=os.getuid() + 1):
+            self.assertFalse(RUN['guarded']())
+        self.assertTrue(RUN['guarded']())
 
     def test_a_profile_without_codex_starts_no_agent(self):
         (self.root / 'codex-disabled').touch()

@@ -20,11 +20,13 @@ stop credential, the worker must record the request for Horizon to take.
 ## 2. Applicability
 
 - Candidate: each candidate that changes `horizon-worker-stopd`,
-  `horizon-worker-stop`, the supervisor or the worker check.
+  `horizon-worker-stop`, the supervisor, the worker check, or how Horizon takes
+  an agent's stop request.
 - Platforms: Linux. The worker image is amd64.
-- Providers: RunPod for tasks A01 to A03, Hetzner for task A04.
+- Providers: RunPod for tasks A01 to A03, Hetzner for tasks A04 and A05.
 - This procedure does not test: the idle stop of an older image, a shared
-  worker, a profile with hosted devices, or the stop of a request by Horizon.
+  worker, a profile with hosted devices, or a Docker host. A Docker host takes
+  requests as Hetzner does.
 
 ## 3. Safety
 
@@ -181,11 +183,10 @@ horizon-worker-tailnet agent tmux -L horizon-cloud
 > **CAUTION:** THIS TASK RENTS A HETZNER SERVER AND A VOLUME.
 
 1. Deploy a cloud with the profile `hetzner-agent` and open an SSH connection
-   to the worker as root. Do setup steps 5.3 and 5.4, but type
-   `export HORIZON_WORKER_STOP=horizon` before you start the service. Horizon
-   does not give this setting yet.
+   to the worker as root. Do setup steps 5.3 and 5.4.
 
-   Result: `horizon-worker-stopd --mode` prints `horizon`.
+   Result: The worker environment has `HORIZON_WORKER_STOP=horizon`.
+   `horizon-worker-stopd --mode` prints `horizon`.
 
 2. Do steps 6.2.1 and 6.2.3 with only the session `smoke-a`.
 
@@ -210,9 +211,46 @@ horizon-worker-tailnet agent tmux -L horizon-cloud
    Result: The output is `true`. The stop log does not have the record.
    `horizon-worker-stopd --take` prints `null`.
 
+### 6.5 A05 — Horizon stops a Hetzner cloud for its agent
+
+> **CAUTION:** THIS TASK RENTS A HETZNER SERVER AND A VOLUME.
+
+1. Start the [local device smoke fixture](../../../scripts/device-smoke/README.md)
+   with `--native-view` and the frozen candidate. Give the fixture home a cloud
+   settings file with the Hetzner token. Watch the fixture in a native VNC
+   Device panel and start a recorder on its display.
+
+   Result: The Device panel shows the candidate.
+
+2. In the candidate, make a new cloud with the profile `hetzner-agent`.
+
+   Result: The card shows **Ready**.
+
+3. Open an SSH connection to the worker as root. Do setup step 5.3 and steps
+   6.2.1 and 6.2.3 with only the session `smoke-a`. Do not type in any panel of
+   the cloud.
+
+   Result: `/var/tmp/stop-a.txt` says that Horizon stops the worker the next
+   time it checks.
+
+4. Wait three minutes. Do not close the candidate.
+
+   Result: The card logs `claude asked to stop this cloud: smoke: task done`,
+   shows **Stopping**, and then **Stopped** with
+   `Stopped by claude just now: smoke: task done`. The SSH connection closes.
+
+5. List the servers of the Hetzner project through its API.
+
+   Result: The server of the cloud is gone. Its volume remains.
+
+6. Click **Resume worker** on the card.
+
+   Result: The card shows **Ready** on a new server. The card still names the
+   agent's stop until the next stop.
+
 ## 7. Pass criteria
 
-- A01 to A04 show each `Result:` line.
+- A01 to A05 show each `Result:` line.
 - No profile of this run sets `idle_stop_minutes`.
 - The worker never stops while another agent session prints output.
 

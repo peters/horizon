@@ -1,5 +1,14 @@
 # Cloud MCP reference
 
+The staged publication helper can recover a retained account even when another
+account is cached: it requests device sign-in for the recorded immutable identity
+and checks it before saving a new credential chain. A wrong account preserves
+the previous chain and private operation login. A renamed matching account is
+refused before a futile prompt because its recorded namespace cannot change.
+Explicit account selection starts
+a new device sign-in. These are host helpers without a launch or selector caller;
+no automatic publishing, visible control or account switch is activated.
+
 ## Servers and offer inspection
 
 The host Horizon browser MCP (`horizon --browser-mcp`) provides `cloud_offers`,
@@ -319,10 +328,13 @@ its card.
 
 Horizon never stops an idle cloud, and `idle_stop_minutes` has no effect on any
 provider: Horizon gives no worker an idle period, and New cloud and Rebuild say
-so. An agent on a dedicated RunPod worker stops it with `stop_this_worker` when
-its task is done; otherwise the person chooses **Stop**, which on Hetzner releases
-the server and keeps the volume. A RunPod cloud created before this change may
-still stop itself after its old idle period until a rebuild; the card then shows
+so. An agent on a dedicated worker stops it with `stop_this_worker` when its task
+is done. A RunPod worker stops itself at once. A Hetzner or Docker host worker
+records the request, and Horizon, while it runs, takes it within 30 seconds and
+stops the cloud as **Stop** does; the card then shows **Stopped by** the agent with
+its reason. Otherwise the person chooses **Stop**, which on Hetzner releases the
+server and keeps the volume. A RunPod cloud created before the agent stop may still
+stop itself after its old idle period until a rebuild; the card then shows
 **Stopped outside Horizon** with **Resume worker**.
 
 From a Horizon agent panel, `horizon-browser cloud list|attach|park [CLOUD-ID]`
@@ -369,6 +381,17 @@ get `upkeep_unavailable`.
   finishes. `resume` starts them again. Each answers `requested`: the worker gets it
   with the next exchange of Horizon, and `status` shows when it applied. Get explicit
   authorization from the person before `remove`, `pause` and `resume`.
+
+On the worker of an Upkeep, a root service limits what every agent of the cloud can
+change on GitHub, also when the agent follows instructions in pull request text. It
+refuses, among others, workflow file changes through the API, releases, commit
+statuses, an agent's approval of a pull request, auto-merge, and a workflow dispatch
+that the person did not list in `workflows` of `~/.horizon/upkeep/<cloud>/upkeep.json`
+(no dialog yet). Its reason starts with `Horizon: this Upkeep`: report it as a
+blocker for the person, never as missing access, and do not ask for more access to go
+around it. The board shows the refusals among the activity lines. A worker image
+without this service starts no Upkeep agent; the person rebuilds the cloud on a
+current image. `docs/upkeep.md` lists every refusal and what it does not stop.
 
 ## GitHub access
 
@@ -603,7 +626,8 @@ publisher envelopes and reserved null keys are refused.
 The provider-aware registry helper can prepare a direct-host pull grant without a
 RunPod key. It stores host records separately from provider registry records and
 refuses provider registry creation from a host grant. Both journal paths must stay
-outside the source. New private directories use locked pending intents and parent syncs before a
+outside the source. New private directories sync locked pending intents and their directory entries
+before mkdir, with parent syncs before a
 child or pull identity is pinned. Interrupted creation is recovered first; existing
 roots with no pending intent do not require a readable parent. Both scopes pin the same
 read-only identity for each generation. Rotate the generation when that identity

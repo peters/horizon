@@ -48,8 +48,8 @@ Where the provider gives the worker a credential to stop itself (RunPod), the se
 checks the request and stops the worker at once. Where it does not (Hetzner, a Docker
 host), a worker started with `HORIZON_WORKER_STOP=horizon` has the service check the
 request and record it in the root-only `/run/horizon-worker/stop-request.json`, for
-Horizon to run `horizon-worker-stopd --take` when it next reads the worker. Horizon does
-not give that setting yet, so these workers offer no stop for now. `--take`
+Horizon to run `horizon-worker-stopd --take` when it next reads the worker, every 30
+seconds while the cloud is ready and no other operation runs. `--take`
 checks the request again, now counting the output of every agent session, the
 requester's too, adds the stop to the stop log and prints it. Later takes print the same
 stop until the worker stops, so an answer lost on the way to Horizon loses no stop. It
@@ -1621,6 +1621,29 @@ the request for `allow-task`; `task` in the list is `false` for such a request.
 outcomes print JSON and exit with status 0. `read` and `push` keep the meaning
 described above: `permissions.push` reports your account's access, and the
 GitHub App's own permissions still limit what the token can do.
+
+**The Upkeep policy.** On the cloud of an Upkeep, Horizon sets a policy as root
+before each exchange, over SSH stdin:
+
+```bash
+horizon-worker-github upkeep <<< '{"version":1,"session":"upkeep-<cloud>","repositories":["owner/name"],
+  "bots":["app/dependabot"],"workflows":[{"repository":"owner/name","workflow":"release.yml"}]}'
+# {"session":"upkeep-<cloud>","repositories":["owner/name"],"bots":["dependabot[bot]"],
+#  "workflows":[{"repository":"owner/name","workflow":"release.yml"}]}
+```
+
+- The session is `upkeep-` and up to 90 letters, digits, `-` and `_`. There are 1
+  to 50 repositories, each listed one time, ignoring case; at most 20 bots and 20
+  workflows, each workflow in a listed repository. Unknown fields are refused, and
+  so is a worker without agent isolation.
+- Root first writes `/run/horizon-worker/github-upkeep-policy`, which names the
+  SHA-256 of the new policy; the loop of Upkeep starts no agent without it. Then the
+  policy is stored root-only next to the chain, as `upkeep.json`, on the volume and
+  on tmpfs. A copy that cannot be read, or that the marker does not name (a write
+  failed), counts as the strictest policy, and so does a marker without a copy.
+- While the policy is set, the API broker refuses what
+  [What the agent can do on GitHub](../../docs/upkeep.md#what-the-agent-can-do-on-github)
+  lists, and logs each refusal in `/workspace/.horizon-gate/refused.jsonl`.
 
 **Status and removal.** Horizon runs these as root:
 

@@ -1,4 +1,5 @@
 //! UI actions and progress for real deployments. Provider/build/session work lives in core.
+mod agent_stops;
 mod capabilities;
 pub(super) mod cards;
 mod close;
@@ -294,6 +295,16 @@ pub(super) struct Runtime {
     /// The worker stopped without an operation the owner started, as the provider
     /// confirmed.
     stopped_outside: bool,
+    /// The agent request that the Stop starting now carries out (`agent_stops`).
+    agent_stop: Option<agent_stops::Order>,
+    /// What the reading of agents' stop requests of this ready cloud found; dropping it
+    /// ends the reading.
+    agent_stops: Option<std::sync::mpsc::Receiver<agent_stops::Found>>,
+    /// The agent request this card gave back, by its time, so that it is never carried
+    /// out later.
+    given_back: Option<u64>,
+    /// The agent request, by its time, whose Stop this card started last.
+    stopping_for: Option<u64>,
     /// A failure of a ready or reconnecting cloud, held while the provider check that
     /// may explain it as a stop runs.
     unexplained_failure: Option<String>,
@@ -550,6 +561,8 @@ impl HorizonApp {
         let mut finished = Vec::new();
         let mut removed = Vec::new();
         let mut resumed = Vec::new();
+        let mut agent_stops = Vec::new();
+        let mut became_ready = Vec::new();
         for (&id, runtime) in &mut self.cloud_prototype.production.runtimes {
             runtime.repaint_context.get_or_insert_with(|| ctx.clone());
             let events: Vec<_> = runtime
@@ -607,6 +620,9 @@ impl HorizonApp {
                         runtime.error = None;
                         runtime.stopped_outside = false;
                         finished.push(id);
+                        // A stop the earlier reading found was the earlier worker's.
+                        runtime.agent_stops = None;
+                        became_ready.push(id);
                     }
                     Event::Failed(error, at) => {
                         runtime.show_failure(error, at);
@@ -614,6 +630,7 @@ impl HorizonApp {
                     }
                 }
             }
+            agent_stops.extend(runtime.poll_agent_stops().map(|stop| (id, stop)));
             runtime.poll_release_and_repaint(ctx);
         }
         self.report_failed_session_saves();
@@ -623,6 +640,8 @@ impl HorizonApp {
         self.reconcile_sharing(ctx);
         self.finish_closing_clouds(ctx);
         self.reconnect_resumed(resumed, ctx);
+        self.watch_agent_stops(became_ready, ctx);
+        self.stop_clouds_for_agents(agent_stops, ctx);
         self.remove_closed_cloud_browsers(removed);
         self.sync_bound_profiles();
         self.sync_cloud_members();

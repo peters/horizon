@@ -27,6 +27,13 @@ Report these failures:
 - Pull rotation changes the publication grant identity.
 - A preference for one checkout or profile changes another scope.
 
+Retained-account recovery must prompt for the original immutable account when
+another account is cached. Check the device result before saving its credential
+chain; a wrong account must preserve the prior stored chain. Preparation and
+renewal share this guard. A renamed matching account must fail before a futile
+device prompt, with a specific rename explanation. Explicit selection must not silently reuse a cached
+account. This prerequisite does not wire these helpers into launches or UI.
+
 These limits are deliberate:
 
 - This prerequisite supplies a reusable policy contract. It does not enable automatic launches.
@@ -64,7 +71,7 @@ follows separately. Local checks cannot revoke a credential already installed on
 
 Check the actual host journal directory against the canonical source, not only its
 parent registry root. Refuse source aliases before creating any journal. Missing
-private ancestors use a locked, recoverable pending intent before creation and
+private ancestors sync a locked pending intent and its parent directory entry before creation and
 must be durable before their children or generation pins. Existing ancestors with
 an unfinished intent must wait or finish the parent sync before proceeding.
 Coordination files retain their inode, resolve parent aliases, contain no secrets

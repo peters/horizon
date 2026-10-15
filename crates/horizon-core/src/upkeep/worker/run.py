@@ -26,6 +26,9 @@ import time
 
 DIR = '/workspace/home/upkeep'
 APPROVALS = '/run/horizon-worker/agent-approvals'
+# Root writes it when Horizon set the Upkeep policy of the worker's GitHub access.
+GUARD = '/run/horizon-worker/github-upkeep-policy'
+GUARD_OWNER = 0
 HOST_INSTANCE = '/run/horizon-worker/browser-host-instance'
 # What the merged status may hold, so it stays far below what the exchange reads (1 MiB).
 PULL_REQUESTS = 300
@@ -98,6 +101,16 @@ def approvals():
             return 'auto' if policy.read() == 'auto\n' else 'ask'
     except OSError:
         return 'ask'
+
+
+def guarded():
+    """Whether root set the Upkeep policy of this worker's GitHub access, which refuses the
+    changes that an Upkeep never needs. An older worker image has no such policy."""
+    try:
+        info = os.stat(GUARD, follow_symlinks=False)
+    except OSError:
+        return False
+    return stat.S_ISREG(info.st_mode) and info.st_uid == GUARD_OWNER
 
 
 def session_environment():
@@ -351,12 +364,13 @@ class Job:
     def attempt(self, template):
         # A run can last hours: each agent starts under the policy and with the session
         # environment of its own moment, as a panel would.
-        environment = session_environment() if approvals() == 'auto' else None
+        environment = session_environment() if approvals() == 'auto' and guarded() else None
         if environment is None or not codex_enabled(environment):
             self.code = None
             with open(self.log, 'a') as log:
-                log.write('\nThe worker asks before an agent runs a command, refused its session '
-                          'environment, or does not enable Codex; this agent did not start.\n')
+                log.write('\nThe worker asks before an agent runs a command, does not limit its GitHub '
+                          'access, refused its session environment, or does not enable Codex; this agent '
+                          'did not start.\n')
             return
         prompt = (template.replace('@@REPOSITORY@@', self.repository)
                   .replace('@@STATUS@@', DIR + '/status.d/' + self.slug + '.json'))
@@ -526,6 +540,10 @@ def run_once(cfg, forced):
     if approvals() != 'auto':
         print('This worker asks before an agent runs a command (agent approvals: ask), and an Upkeep '
               'agent has nobody to ask. Upkeep starts no agent. Use a worker with auto approvals.', flush=True)
+        return False
+    if not guarded():
+        print('This worker does not limit the GitHub access of an agent, so Upkeep starts no agent. '
+              'Rebuild the cloud on a current worker image with agent isolation.', flush=True)
         return False
     if session_environment() is None:
         return False

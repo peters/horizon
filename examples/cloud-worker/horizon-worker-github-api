@@ -36,6 +36,8 @@ agents = common.load_sibling('horizon-worker-github-agents', 'horizon_worker_git
 relay = common.load_sibling('horizon-worker-github-http', 'horizon_worker_github_http')
 gitproxy = common.load_sibling('horizon-worker-github-git', 'horizon_worker_github_git')
 rest = common.load_sibling('horizon-worker-github-api-rest', 'horizon_worker_github_api_rest')
+upkeep = common.load_sibling('horizon-worker-github-upkeep', 'horizon_worker_github_upkeep')
+checks = common.load_sibling('horizon-worker-github-api-upkeep', 'horizon_worker_github_api_upkeep')
 policy = rest.policy
 graphql = policy.graphql
 
@@ -141,9 +143,15 @@ class Schema:
 class Broker:
     """The broker's shared state: the token store and the schema."""
 
-    def __init__(self, store, environ, static=None):
+    def __init__(self, store, environ, static=None, log=None):
         self.store, self.environ, self.static = store, environ, static
         self.schema = Schema()
+        # Where the refusals of the Upkeep policy go for the board.
+        self.log = log or upkeep.shared_log(upkeep.log_directory(store))
+
+    def policy(self):
+        """The Upkeep policy of the cloud, read for each request, or None."""
+        return upkeep.load(self.store, common)
 
     def candidates(self, pid=None):
         found, problem = candidates(self.store, time.time(), self.static, pid)
@@ -238,7 +246,7 @@ def graphql_refused(output, message):
     relay.refuse(output, 200, message, 'application/json; charset=utf-8', text)
 
 
-class Exchange:
+class Exchange(checks.Checks):
     """One request on one connection; updates `record` in place, so the log keeps what
     happened also when the connection ends early."""
 
@@ -262,19 +270,32 @@ class Exchange:
         self.record.update(request=route.kind, host=host)
         if route.kind == 'graphql':
             return self.graphql(request)
+        rules = self.broker.policy() if route.kind == 'repository' else None
+        reason = upkeep.rest_refusal(rules, request.method, route.parts)
+        if reason is not None:
+            self.upkeep_refused('api', route.repository, reason)
         candidate, repository = choose(self.broker, route, self.pid, lambda: self.record.update(granted=True))
         self.record['repository'] = repository
         names = list(route.repositories) if route.kind == 'search' else [repository] if repository else []
-        self.forward(request, route, candidate, names)
+        data = None
+        if rules is not None:
+            data = self.upkeep_dispatch(rules, request, route, candidate, repository)
+            if upkeep.reviews(request.method, route.parts):
+                data = self.upkeep_review(request, repository)
+        self.forward(request, route, candidate, names, data)
 
-    def forward(self, request, route, candidate, names=()):
+    def forward(self, request, route, candidate, names=(), data=None):
+        """Relays the request; `data` is its body when the broker read it already."""
         fields = [(name, value) for name, value in request.fields if name in REQUEST_FIELDS]
         secrets = ()
         if candidate is not None:
             secrets = (candidate.token,)
             fields.append(('Authorization', 'token ' + candidate.token))
-        relay.continue_if_asked(request, self.output)
-        pieces = relay.from_client(relay.body(request))
+        if data is None:
+            relay.continue_if_asked(request, self.output)
+            pieces, length = relay.from_client(relay.body(request)), request.length
+        else:
+            pieces, length = [data], len(data)
         destination = Destination(route.host, self.broker.environ)
         connection = destination.connect(TIMEOUT)
         try:
@@ -288,7 +309,7 @@ class Exchange:
                                    'github_access tool.' % ', '.join(names))
             try:
                 response = relay.send(connection, destination, request.method, request.target, fields,
-                                      pieces, request.length,
+                                      pieces, length,
                                       sent=lambda: self.record.update(granted=candidate is not None))
             except (OSError, http.client.HTTPException):
                 self.record['outcome'] = 'unreachable'
@@ -373,6 +394,8 @@ class Exchange:
             raise elsewhere(error, named) from None
         if not candidate.usable:
             raise policy.Refused(EXPIRED)
+        if plan.mutations and self.broker.policy() is not None:
+            self.upkeep_mutations(plan)
         looked = None
         if plan.ids:
             # The ID lookup carries the token too: checked again right before it.

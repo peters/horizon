@@ -8,8 +8,12 @@ use super::{
 use horizon_cloud::WorkerStatus;
 use std::path::Path;
 
+mod agent_stop;
 mod outside;
 mod power;
+pub use agent_stop::{
+    AgentStop, Requested, give_back_stop_request, read_stop_request, stop_for_agent, takes_stop_requests,
+};
 pub use outside::{check_lost_worker, may_stop_outside};
 #[cfg(all(test, unix))]
 use power::Announce;

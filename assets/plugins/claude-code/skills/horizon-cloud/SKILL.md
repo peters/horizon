@@ -63,6 +63,16 @@ retains the authenticated provider account ID and owns a separate temporary Dock
 login. It has no launch caller yet; existing launch behavior and explicit `image`
 requirements remain. Never copy publication credentials to a worker or repository.
 
+
+The staged publication helper can recover a retained account even when another
+account is cached: it requests device sign-in for the recorded immutable identity
+and checks it before saving a new credential chain. A wrong account preserves
+the previous chain and private operation login. A renamed matching account is
+refused before a futile prompt because its recorded namespace cannot change.
+Explicit account selection starts
+a new device sign-in. These are host helpers without a launch or selector caller;
+no automatic publishing, visible control or account switch is activated.
+
 Discovery and price results do not authorize spending or lifecycle changes.
 Get explicit authorization for the exact resource before starting or stopping a worker.
 Keep credentials in Horizon. Do not send keys, tokens, endpoints, or raw provider
@@ -132,7 +142,8 @@ The desktop SDK also has an unwired exact-device HTTP prerequisite. It keeps API
 The provider-aware registry helper can prepare a direct-host pull grant without a
 RunPod key. It stores host records separately from provider registry records and
 refuses provider registry creation from a host grant. Both journal paths must stay
-outside the source. New private directories use locked pending intents and parent syncs before a
+outside the source. New private directories sync locked pending intents and their directory entries
+before mkdir, with parent syncs before a
 child or pull identity is pinned. Interrupted creation is recovered first; existing
 roots with no pending intent do not require a readable parent. Both scopes pin the same
 read-only identity for each generation. Rotate the generation when that identity

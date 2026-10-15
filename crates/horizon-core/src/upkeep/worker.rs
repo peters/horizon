@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use crate::cloud_runtime::{Error, Result, command::Runner, ssh::Connection};
 
 mod lock;
+pub mod policy;
+mod refusals;
 pub use lock::{SettingsLock, settings_lock};
 
 const EXCHANGE: &str = include_str!("worker/exchange.py");
@@ -93,6 +95,9 @@ pub struct Config {
     /// side, such as the deployments a shared procedure orders.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub order: Vec<String>,
+    /// Workflows that an agent may start with a dispatch; the worker refuses every other.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workflows: Vec<policy::Workflow>,
 }
 
 impl Config {
@@ -114,13 +119,14 @@ impl Config {
         self.repositories.len() - before
     }
 
-    /// Removes `names`, ignoring case, from the repositories and the order. Returns how many
-    /// repositories were removed.
+    /// Removes `names`, ignoring case, from the repositories, the order and the workflows.
+    /// Returns how many repositories were removed.
     pub fn remove(&mut self, names: &[String]) -> usize {
         let before = self.repositories.len();
         let removed = |held: &String| names.iter().any(|name| name.trim().eq_ignore_ascii_case(held));
         self.repositories.retain(|held| !removed(held));
         self.order.retain(|held| !removed(held));
+        self.workflows.retain(|held| !removed(&held.repository));
         before - self.repositories.len()
     }
 
@@ -159,6 +165,7 @@ impl Config {
         {
             return Err(Error::Invalid("An Upkeep bot is not a GitHub login"));
         }
+        policy::validate(self)?;
         if self.agent != AGENT {
             return Err(Error::Invalid("Upkeep runs Codex only"));
         }
@@ -421,6 +428,7 @@ Pull requests opened by: {authors}.\n\n\
 - The worker's Git proxy signs you in for every `https://github.com/` URL.\n\
 - If you cannot reach @@REPOSITORY@@ yet, first call the `github_access` tool for it with push access. Horizon allows it within seconds. When a call times out or reports that the request still waits, call it again: the same request comes back. Never give up because of a timeout. For a repository outside this Upkeep, such as one that holds shared rules linked from an AGENTS.md, ask with read access only; the person decides it.\n\
 - When a pull request page, a preview or an app run helps, open it in a browser panel with the horizon-browser tools so the person can watch.\n\
+- When the worker refuses a request, its reason starts with `Horizon: this Upkeep`. Do not look for another way around it: mark the pull request blocked with that reason.\n\
 - Keep exactly one comment of yours on each pull request you worked on. Its first line is `<!-- upkeep -->`. Find it by that marker with `gh api repos/@@REPOSITORY@@/issues/<number>/comments` and edit it with `gh api --method PATCH` instead of adding another. In one or two sentences say where the pull request stands and why: merged, waiting for checks, or blocked and on what. Never mention other repositories or their pull requests in it.\n\
 - After every change, write @@STATUS@@ again: write a temporary file next to it, then move it into place. Use this JSON, for @@REPOSITORY@@ only:\n\
   {{\"pull_requests\": [{{\"repository\": \"owner/name\", \"number\": 1, \"title\": \"...\", \"url\": \"https://github.com/owner/name/pull/1\", \"author\": \"dependabot\", \"checks\": \"passed|failed|running|none\", \"state\": \"blocked|fixing|needs_review|waiting_checks|ready|merged\", \"note\": \"one short sentence\", \"updated_at\": \"RFC 3339\"}}], \"activity\": [{{\"at\": \"RFC 3339\", \"text\": \"one short sentence\"}}]}}\n\
@@ -429,6 +437,11 @@ Pull requests opened by: {authors}.\n\n\
         instructions = config.instructions.trim(),
         checkouts = config.checkouts.instructions(),
     )
+}
+
+/// A script as the worker's shell and Python read it, also from a checkout with CRLF lines.
+fn unix(script: &str) -> String {
+    script.replace("\r\n", "\n")
 }
 
 /// The remote command for one exchange. It runs as the account that owns the agent's home:
@@ -446,18 +459,20 @@ pub fn command(cloud_id: &str, revision: &str, config: &Config, signals: Signals
         return Err(Error::Invalid("Invalid cloud for Upkeep"));
     }
     config.validate()?;
-    // The worker reads the instructions from the prompt only, so they travel once.
+    // The worker reads the instructions from the prompt only, so they travel once, and the
+    // workflows from the policy that `policy::send` sets.
     let mut worker_config = serde_json::to_value(config).map_err(|_| Error::Invalid("Invalid Upkeep settings"))?;
     if let Some(fields) = worker_config.as_object_mut() {
         fields.remove("instructions");
+        fields.remove("workflows");
     }
     let payload = serde_json::json!({
         "session": session(cloud_id),
         "revision": revision,
         "config": worker_config,
         "prompt": prompt(config),
-        "run": RUN,
-        "scheduler": SCHEDULER,
+        "run": unix(RUN),
+        "scheduler": unix(SCHEDULER),
         "run_now": match (signals.run_now, signals.run_token) {
             (false, _) => serde_json::Value::Bool(false),
             (true, None) => serde_json::Value::Bool(true),
@@ -466,7 +481,7 @@ pub fn command(cloud_id: &str, revision: &str, config: &Config, signals: Signals
         "paused": signals.paused,
     });
     let engine = base64::engine::general_purpose::STANDARD;
-    let script = engine.encode(EXCHANGE);
+    let script = engine.encode(unix(EXCHANGE));
     let payload = engine.encode(payload.to_string());
     let command = format!(
         "launcher=python3; if [ -f /run/horizon-tailnet/agent-isolation ]; then launcher='horizon-worker-tailnet agent python3'; fi; \
@@ -489,6 +504,8 @@ pub struct Exchange {
     runs: Vec<serde_json::Value>,
     next_run: Option<i64>,
     pub paused: bool,
+    /// Refusals that root logged on the worker, each `{at, text}`.
+    refused: Vec<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -503,6 +520,8 @@ struct Raw {
     next_run: Option<i64>,
     #[serde(default)]
     paused: bool,
+    #[serde(default)]
+    refused: Vec<serde_json::Value>,
 }
 
 /// Runs one exchange on the worker behind `connection`.
@@ -534,6 +553,7 @@ pub fn parse(output: &str) -> Result<Exchange> {
         runs: raw.runs,
         next_run: raw.next_run,
         paused: raw.paused,
+        refused: raw.refused,
     })
 }
 
@@ -595,7 +615,7 @@ impl Exchange {
             "repositories": config.repositories,
             "runs": runs.into_iter().map(|(_, run)| run).collect::<Vec<_>>(),
             "pull_requests": reported.get("pull_requests").cloned().unwrap_or_else(|| serde_json::json!([])),
-            "activity": reported.get("activity").cloned().unwrap_or_else(|| serde_json::json!([])),
+            "activity": self.activity(&reported, rfc3339),
         })
     }
 }

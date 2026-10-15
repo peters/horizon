@@ -5,7 +5,8 @@ granted repositories, so Git never holds the token. Agents never hold the refres
 still gets an access token for a granted repository until the API broker replaces that. Never
 prints a token. Root
 operations: install (JSON on stdin), serve (started by horizon-worker-supervise), status,
-clear, requests and decide. Agents run `mcp` for the github_access tool."""
+clear, requests, decide and upkeep (the Upkeep policy, JSON on stdin). Agents run `mcp` for the
+github_access tool."""
 import contextlib
 import http.client
 import importlib.machinery
@@ -42,6 +43,7 @@ agents = common.load_sibling('horizon-worker-github-agents', 'horizon_worker_git
 gitproxy = common.load_sibling('horizon-worker-github-git', 'horizon_worker_github_git')
 broker = common.load_sibling('horizon-worker-github-api', 'horizon_worker_github_api')
 mcp = common.load_sibling('horizon-worker-github-mcp', 'horizon_worker_github_mcp')
+upkeep = common.load_sibling('horizon-worker-github-upkeep', 'horizon_worker_github_upkeep')
 auth = common.auth
 GIT_AUTH = common.GIT_AUTH
 Store = common.Store
@@ -499,9 +501,9 @@ def main(argv):
         # The agent's own process: it asks the root service over the socket.
         mcp.serve_mcp()
         return 0
-    if not (len(argv) == 1 and operation in ('install', 'serve', 'status', 'clear', 'requests')
+    if not (len(argv) == 1 and operation in ('install', 'serve', 'status', 'clear', 'requests', 'upkeep')
             or len(argv) == 3 and operation == 'decide' and argv[2] in agents.DECISIONS):
-        print('Usage: horizon-worker-github install|serve|status|clear|requests|mcp\n'
+        print('Usage: horizon-worker-github install|serve|status|clear|requests|upkeep|mcp\n'
               '       horizon-worker-github decide ID allow-cloud|allow-task|deny', file=sys.stderr)
         return 2
     if os.geteuid() != 0:
@@ -525,6 +527,15 @@ def main(argv):
         print_json(agents.requests_report(agents.Book(store.runtime), store.load()[0]))
     elif operation == 'decide':
         print_json(agents.decide(store, agents.Book(store.runtime), argv[1], argv[2]))
+    elif operation == 'upkeep':
+        # The Upkeep policy from Horizon; see horizon-worker-github-upkeep. Only under agent
+        # isolation does the agent account stay out of this root-only file.
+        if not common.AGENT_ISOLATION.exists():
+            raise ValueError('An Upkeep policy requires agent isolation')
+        source = sys.stdin.buffer.read(upkeep.MAX_POLICY + 1)
+        if len(source) > upkeep.MAX_POLICY:
+            raise ValueError('Upkeep policy is too large')
+        print_json(upkeep.install(store, common, source.decode()))
     else:
         clear(store)
     return 0
