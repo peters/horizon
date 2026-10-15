@@ -88,5 +88,10 @@ The UI preserves an earlier precise API failure only for the same displayed save
 A retained Ready connection watch does not prevent explicit RemoveAnyway, while busy operations and the lifecycle lock still refuse it.
 
 Cleanup Retry reads saved settings on the background operation worker.
-The card stays busy while that read waits. Cancellation is checked before the read and again before cleanup dispatch; invalid settings report an operation failure without provider or node work. A preflight failure restores Deleted before normal event polling reports the error, so pending cleanup and Retry remain available. A later Retry uses the same background read.
+The card stays busy while that read waits. Cancellation checks run before the read and before cleanup dispatch. Invalid settings prevent provider and node work. A later Retry uses the same background read.
+
+The UI keeps a display context for Retry from recorded pending cleanup or legacy missing identity. A failure alone never clears this context. Settings errors, cancellation, invalid launch identity and lifecycle lock contention retain Deleted, the current error and Retry through normal event polling. A legacy context also retains the manual missing-ID explanation when a later error replaces its text. An empty Deleted snapshot does not prove that legacy cleanup is complete.
+A fresh Deleted snapshot with pending recorded receipts replaces Legacy display context with Recorded. It removes the obsolete legacy explanation and keeps Retry.
+
+New authoritative lifecycle facts clear obsolete display context. These include a non-Deleted Stage, Ready, successful Deleted completion, Stopped or Resumed. A fresh snapshot also clears it when its stage is not Deleted or its recorded ledger confirms all node cleanup. The display context, cached snapshot and error text supply no deletion or removal authority. The original locked Store and current durable evidence remain the sole authority for Delete, node requests, normal removal and redeploy.
 The explicit-discard warning also examines the raw saved-record reason, so a restored legacy cloud with no captured device ID receives it before any retry.

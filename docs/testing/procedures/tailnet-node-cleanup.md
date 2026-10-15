@@ -142,6 +142,7 @@ Never pass a secret through an argument, environment variable, worker or log.
 
    ```bash
    RUSTFLAGS="-D warnings" cargo test --locked --offline -p horizon-ui --features cloud-workspaces node_cleanup
+   RUSTFLAGS="-D warnings" cargo test --locked --offline -p horizon-ui --features cloud-workspaces cleanup_retry
    ```
 
    Result: Normal Remove and automatic close retain the original pending card and exact-ID failure.
@@ -151,13 +152,25 @@ Never pass a secret through an argument, environment variable, worker or log.
    Only a matching displayed saved-tailnet/device pair retains its previous API detail.
    A delayed Retry settings read leaves UI frames responsive and keeps the operation busy.
    Cancellation or malformed settings prevent provider/node dispatch.
-   Normal event polling restores Deleted, clears busy state and retains the error and Retry.
+   Normal event polling retains the Retry display context through every failure.
+   Recorded and legacy cases retain Deleted, the error and Retry after settings failure, cancellation or lifecycle lock contention.
+   Invalid launch identity also retains these controls without a settings read or dispatch.
+   A later generic error does not hide the legacy missing-ID explanation.
+   An empty Deleted snapshot does not settle legacy cleanup.
    A second delayed Retry stays responsive. Both attempts preserve the saved record.
+   Authoritative Stage, Ready and settled recorded snapshots clear obsolete display context.
+   The locked Store still refuses removal of its unresolved record after the display context clears.
    Opening Close directly after a legacy restore still shows the explicit-discard warning.
 
 2. In the isolated desktop, open Manage for the original pending cloud.
 
    Result: Retry node cleanup is available. The card and existing cloud_list read show attention without a new MCP delete grant.
+   The isolated settings-failure case starts with Manage open and valid owned settings.
+   A settings error retains Deleted and Retry. Exact settings restoration permits another asynchronous Retry.
+   During the isolated lock-contention case, only the original task record lock stays held during Retry.
+   The busy error retains Deleted and Retry. A later Retry starts after that exact lock releases.
+   Recorded pending cleanup and legacy missing identity have the same failure-retention checks.
+   The evidence preserves all original deployment and selection bytes before fixture cleanup.
 
 > **CAUTION:** RETRY ONLY THE EXACT TASK-OWNED NODE CLEANUP.
 > Retry can remove its recorded node. Keep the original cloud record and unrelated devices.

@@ -35,12 +35,60 @@ use power::power_result;
 #[cfg(test)]
 mod tests;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CleanupRetry {
+    Recorded,
+    Legacy,
+}
+
+impl CleanupRetry {
+    fn remember(runtime: &Runtime) -> Option<Self> {
+        if runtime.stage != Some(Stage::Deleted) || !super::cards::node_cleanup_pending(runtime) {
+            return None;
+        }
+        Some(
+            if runtime
+                .state
+                .as_ref()
+                .is_none_or(|state| state.tailnet_enrollment.is_empty())
+            {
+                Self::Legacy
+            } else {
+                Self::Recorded
+            },
+        )
+    }
+}
+
 impl Runtime {
+    fn refresh_cleanup_retry(&mut self, state: &cloud_runtime::state::Deployment) {
+        if state.stage != Stage::Deleted {
+            self.cleanup_retry = None;
+        } else if !state.tailnet_enrollment.is_empty() {
+            self.cleanup_retry = self
+                .cleanup_retry
+                .filter(|_| state.tailnet_enrollment.cleanup_pending())
+                .map(|_| CleanupRetry::Recorded);
+        }
+    }
+
+    pub(super) fn observe_cleanup_retry(&mut self, event: &Event) {
+        if matches!(event, Event::Stage(stage, _) if *stage != Stage::Deleted)
+            || matches!(
+                event,
+                Event::Deleted(_) | Event::Ready(..) | Event::Stopped(_) | Event::Resumed
+            )
+        {
+            self.cleanup_retry = None;
+        }
+    }
+
     /// Takes the saved record a report carries. While an image is built, pushed or
     /// switched, the record still says Validate for a new deployment and Ready for a
     /// rebuild of a running cloud, so neither replaces Build locally, Push image or
     /// Replace image of the live attempt: a failure there stays on that step.
     pub(super) fn adopt_snapshot(&mut self, state: cloud_runtime::state::Deployment) {
+        self.refresh_cleanup_retry(&state);
         let image_step = matches!(self.stage, Some(Stage::Build | Stage::Push | Stage::Replace));
         if !(image_step && matches!(state.stage, Stage::Validate | Stage::Ready)) {
             self.stage = Some(state.stage);
@@ -66,6 +114,15 @@ impl Runtime {
     /// Shows the failure an operation reported. Whether it may be a stop Horizon did
     /// not make is decided now, while a resize that failed still shows as running.
     pub(super) fn show_failure(&mut self, error: String, at: std::time::Instant) {
+        if self.stage == Some(Stage::Deleted)
+            && error == cloud_runtime::tailnet::receipt::ManualCleanupReason::DeviceIdentityUnavailable.message()
+        {
+            self.cleanup_retry = Some(CleanupRetry::Legacy);
+        }
+        if self.cleanup_retry.is_some() {
+            self.progress.stage(Stage::Deleted, at);
+            self.stage = Some(Stage::Deleted);
+        }
         self.progress.finish(at);
         self.error = Some(error);
         self.failure_needs_check = self.failure_may_be_a_stop();
@@ -173,6 +230,9 @@ impl Runtime {
             )),
         };
         self.recovery_receiver = None;
+        if let Ok(recovered) = &result {
+            self.refresh_cleanup_retry(&recovered.state);
+        }
         // A check Horizon started for a failure: a confirmed stop replaces the
         // failure, and anything else shows the failure as it was.
         if let Some(failure) = self.unexplained_failure.take() {
@@ -322,13 +382,6 @@ fn checked_settings(
     Ok(settings)
 }
 
-fn report_settings_failure(cleanup_retry: bool, error: &cloud_runtime::Error, emit: &dyn Fn(Event)) {
-    if cleanup_retry {
-        emit(Event::stage(Stage::Deleted));
-    }
-    emit(Event::failed(error.to_string()));
-}
-
 /// A worker operation that failed its preflight is still that operation's failure: it
 /// gets its own attempt, so the status names it and diagnosis ignores earlier output.
 fn fail_before_start(runtime: &mut Runtime, action: Action, error: String) {
@@ -340,11 +393,20 @@ fn fail_before_start(runtime: &mut Runtime, action: Action, error: String) {
     if matches!(action, Action::Stop | Action::Resume | Action::Delete) && !runtime.connected_ready() {
         begin_operation(runtime, action);
     }
-    runtime.error = Some(error);
+    if runtime.cleanup_retry.is_some() {
+        runtime.show_failure(error, std::time::Instant::now());
+    } else {
+        runtime.error = Some(error);
+    }
 }
 
 /// Resets what the card shows for a newly started worker operation.
 fn begin_operation(runtime: &mut Runtime, action: Action) {
+    runtime.cleanup_retry = if action == Action::Delete {
+        CleanupRetry::remember(runtime)
+    } else {
+        None
+    };
     if action == Action::Delete {
         // Until core reports its first step, the step it will start with stands
         // in, so Cancel shows only when that step can still be cancelled.
@@ -491,11 +553,10 @@ impl HorizonApp {
                 let _ = tx.send(event);
                 ctx.request_repaint();
             };
-            let cleanup_retry = settings.is_none();
             let settings = match checked_settings(settings, &settings_path, &cancel) {
                 Ok(settings) => settings,
                 Err(error) => {
-                    report_settings_failure(cleanup_retry, &error, &emit);
+                    emit(Event::failed(error.to_string()));
                     return;
                 }
             };

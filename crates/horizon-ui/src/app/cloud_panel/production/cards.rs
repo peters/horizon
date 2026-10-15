@@ -97,6 +97,12 @@ fn deleted_runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runt
         return None;
     }
     if node_cleanup_pending(runtime) {
+        if runtime.cleanup_retry == Some(super::lifecycle::CleanupRetry::Legacy) {
+            let reason = cloud_runtime::tailnet::receipt::ManualCleanupReason::DeviceIdentityUnavailable.message();
+            if runtime.error.as_deref() != Some(reason) {
+                ui.label(reason);
+            }
+        }
         ui.label(
             "This cloud is marked Deleted. Recorded tailnet nodes still need removal; credentials stay on this desktop.",
         );
@@ -133,10 +139,11 @@ fn deleted_runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runt
 }
 
 pub(super) fn node_cleanup_pending(runtime: &super::Runtime) -> bool {
-    runtime
-        .state
-        .as_ref()
-        .is_some_and(|state| state.tailnet_enrollment.cleanup_pending())
+    runtime.cleanup_retry == Some(super::lifecycle::CleanupRetry::Legacy)
+        || runtime
+            .state
+            .as_ref()
+            .is_some_and(|state| state.tailnet_enrollment.cleanup_pending())
         || runtime.error.as_deref().is_some_and(|reason| {
             reason.starts_with("Tailnet node cleanup is unconfirmed for saved tailnet ")
                 || reason == cloud_runtime::tailnet::receipt::ManualCleanupReason::DeviceIdentityUnavailable.message()

@@ -132,3 +132,59 @@ Both finalized public recordings fully decoded: 474 and 137 frames, matching the
 After this proof, pending and legacy cards were explicitly discarded and the confirmed card was normally removed. Public cloud-list replies showed 3 → 2 → 1 → 0. The extra legacy files were removed under their original ownership, exact-byte and lock checks. The original fixture reported normal application exit 0, an empty synthetic catalog/credential service, stopped children and an expired target. The viewer closed, the original relay exited 0, and an independent check proved the exact container absent on the same healthy daemon.
 
 Section 7's unrelated valid-settings, legacy-close and resize scenarios retain their original tested executable. The unchanged default-CLI C03 is reused under its recorded dependency/input comparison; no new paid run or current account-state observation is claimed. Exact-head GitHub checks and Copilot review remain separate merge gates. M1 and M2 are incomplete.
+
+
+## 9. Legacy and locked-record Retry failures
+
+The correction after head `80a79bc6b5b90500a6d3aa8d5ed00e08dadcb2db` kept one display context separate from the latest error.
+The locked Store remained the authority for cleanup and removal.
+The checked input tree had SHA-256 `19e554fe34404896be68038a5255a3b049446487a4cbd8176cf649483f6fd24a`.
+The normal UI and its MCP child both used executable SHA-256 `f50d8c8edfd0d32976257a456402019141a5e3812420cb76b0a2838d7fa81260`.
+Its actual profile had `test=false`; Core included `tailnet-node-cleanup`.
+
+New local checks passed: five focused regressions, 2,282 default UI tests, 2,328 speech UI tests and five integrations per UI tier.
+Each full UI tier kept two intentional ignores.
+Blocking and strict Clippy, formatting, maintainability and skill checks passed.
+Captured and selected legacy records survived repeated malformed and cancelled FIFO reads through normal polling.
+Held Store locks and invalid launch identities retained Deleted and Retry.
+Fresh lifecycle facts cleared obsolete context; a fresh captured pending receipt replaced the legacy explanation.
+The original Store still refused removal after cached display facts changed.
+Unchanged non-UI tests and default-CLI C03 results were reused after exact input comparison.
+Fresh advisory checks retained eleven inherited UI findings and two dependency findings; no new finding appeared.
+
+The new Native run used public displayed-frame and recording evidence in an isolated desktop.
+A real lock on the original captured record caused Busy; Deleted and Retry remained visible.
+The owned lock session then released its lock and exited successfully.
+Two malformed-settings retries retained the error and Retry.
+Exact settings restoration permitted another Retry, which retained the original missing-API reason.
+The three original deployment/selection pairs stayed byte-exact during this captured flow.
+
+Ordinary Remove on the legacy card refused the unresolved original Store record.
+It displayed the missing-device-ID explanation and made Retry available.
+Two malformed-settings retries retained both the current error and the separate manual explanation.
+Exact settings restoration permitted another Retry, which returned the missing-ID explanation again.
+All three deployment/selection pairs stayed byte-exact throughout these affected legacy checks.
+
+Before the legacy checks, one separate owner Redeploy attempt failed at a missing-file preflight.
+That path reserialized only the legacy deployment record, from 1,648 to 2,007 bytes, with explicit serde defaults.
+Its original values, Deleted stage and absent worker stayed unchanged; the other five files stayed byte-exact.
+The evidence retained both byte sequences and the semantic difference.
+The affected legacy checks used the resulting original record; no file restoration or fabricated event supplied their result.
+This preparatory attempt was not a Retry byte-preservation pass.
+
+The owner discarded the pending and legacy cards and removed the confirmed card normally.
+Public cloud-list reads showed 3, 2, 1 and 0 cards.
+The exact legacy extra files passed hash, inode and lock checks before nonrecursive fixture cleanup.
+The app exited with code 0; the synthetic catalog and credential service were empty.
+Owned children stopped, the CLI target expired, the public viewer closed and the original relay exited with code 0.
+An independent healthy-daemon inventory proved the original container absent.
+No real provider, API credential or user device changed in this Native run.
+
+The new GIF used both complete current recording ranges in order at 4× speed.
+It contained 436 frames at 6 fps, with a 1,000×625 image and a 72.67-second duration.
+Its 1,833,086 bytes had SHA-256 `757c6637ca8367df6b703f38f9ddea3ac4e8c4a205e6d0e998c74d919b8afb42`.
+Both source videos fully decoded, with 571 and 1,805 frames, equal to the public encoded counts.
+The encoders reported no failure. Representative captured and legacy states passed visual review.
+The public image contained generic synthetic data only.
+The earlier GIF retained its original executable identity for resize, Close and removal evidence.
+All earlier limits in this report still apply; GitHub checks and review of the next pushed head remained separate gates.

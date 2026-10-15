@@ -240,6 +240,8 @@ pub(super) struct Runtime {
     sender: Option<std::sync::mpsc::Sender<Event>>,
     cancel: Option<horizon_core::cloud_runtime::Cancellation>,
     stage: Option<Stage>,
+    /// Display context only; locked saved records still decide cleanup and removal.
+    cleanup_retry: Option<lifecycle::CleanupRetry>,
     progress: progress::Timeline,
     /// The stages the deployment started here never runs; its record says so once saved.
     launched_skips: &'static [Stage],
@@ -326,6 +328,7 @@ impl Runtime {
 
     fn observe(&mut self, event: &Event) {
         self.observe_rebuild(event);
+        self.observe_cleanup_retry(event);
         if matches!(event, Event::Ready(..)) {
             self.sharing.ready_again();
         }
