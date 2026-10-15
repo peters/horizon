@@ -1476,7 +1476,9 @@ Horizon starts it with `HORIZON_WORKER_STOP=horizon`: the worker records the
 request, and while the cloud is ready and no other operation runs, Horizon reads it
 every 30 seconds (`horizon-worker-stopd --take`) and then stops the cloud as **Stop**
 does. The card shows `<agent> asked to stop this cloud: <reason>`, then **Stopped
-by <agent>** with the reason. This works only while Horizon runs: a request that
+by <agent>** with the reason. While another operation of the cloud runs, or one
+of its dialogs is open, Horizon gives the request back to the worker, which drops
+it; the agent may ask again. This works only while Horizon runs: a request that
 Horizon does not take within ten minutes lapses, and the worker keeps running. A
 worker created before this change has no such setting and offers no agent stop: a
 Hetzner cloud gets it with its next server, after Stop and Resume or a rebuild, and

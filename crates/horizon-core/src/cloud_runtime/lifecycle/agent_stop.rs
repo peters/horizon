@@ -138,6 +138,15 @@ pub(super) fn stop_with(
 ) -> Result<Deployment> {
     let store = Store::lock(root)?;
     let state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
+    // Another Horizon on this computer already stopped the cloud for this request.
+    if state.stop_requested
+        && state
+            .last_self_stop
+            .as_ref()
+            .is_some_and(|stopped| stopped.at == request.at)
+    {
+        return Ok(state);
+    }
     // Best effort: a worker the stop already reached cannot answer, and keeps the stop.
     let untake = |worker: &Worker| {
         let _ = run(worker, &format!("horizon-worker-stopd --untake {}", request.at));
@@ -170,6 +179,28 @@ pub(super) fn stop_with(
     });
     store.save(&state)?;
     Ok(state)
+}
+
+/// Gives the request `stop` back to the worker that took it, when Horizon will not
+/// carry it out now, as while another operation holds the cloud: the worker drops it,
+/// and the agent may ask again.
+/// # Errors
+/// Reports a busy cloud and a worker that cannot be reached.
+pub fn give_back_stop_request(root: &Path, settings: &Settings, cancel: &Cancellation, stop: &AgentStop) -> Result<()> {
+    let state = Store::lock(root)?
+        .load()?
+        .ok_or(Error::Invalid("No cloud deployment"))?;
+    let Some(worker) = state.worker.as_ref().filter(|worker| worker.id == stop.worker_id) else {
+        return Ok(());
+    };
+    run(
+        worker,
+        settings,
+        root,
+        cancel,
+        &format!("horizon-worker-stopd --untake {}", stop.at),
+    )
+    .map(drop)
 }
 
 /// Runs `command` on `worker` over its pinned connection.

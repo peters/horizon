@@ -121,6 +121,16 @@ fn a_stop_for_the_agent_stops_the_cloud_and_names_the_agent() {
 }
 
 #[test]
+fn a_cloud_another_horizon_already_stopped_for_the_request_is_that_stop() {
+    let root = tempfile::tempdir().unwrap();
+    ready(root.path(), |_| {});
+    let unread = |_: &Worker, _: &str| -> Result<String> { panic!("the worker is not asked") };
+    stop_with(root.path(), &stop(), unread, stops).unwrap();
+    let again = stop_with(root.path(), &stop(), unread, never).unwrap();
+    assert_eq!(again.stage, Stage::Stopped);
+}
+
+#[test]
 fn a_stop_that_fails_or_a_cloud_that_changed_is_taken_back() {
     let untake = format!("horizon-worker-stopd --untake {}", stop().at);
     let commands = RefCell::new(Vec::new());

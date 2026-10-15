@@ -159,3 +159,26 @@ fn a_stop_request_starts_a_stop_for_that_agent() {
         Some("The cloud is no longer ready on the worker that asked, so Horizon did not stop it for the agent")
     );
 }
+
+#[test]
+fn a_cloud_with_an_open_dialog_gives_the_request_back_instead_of_stopping() {
+    use crate::app::test_support::test_app;
+    let (_temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    app.prepare_production_clouds(&ctx);
+    let runtime = app.cloud_prototype.production.runtimes.entry(1).or_default();
+    runtime.stage = Some(cloud_runtime::Stage::Ready);
+    runtime.confirmation = Confirmation::Delete;
+    app.stop_clouds_for_agents(vec![(1, stop())], &ctx);
+    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    assert_eq!(runtime.operation, None, "no Stop starts");
+    assert!(
+        matches!(runtime.confirmation, Confirmation::Delete),
+        "the dialog stays open"
+    );
+    assert!(runtime.agent_stop.is_none());
+    assert!(runtime.logs.iter().any(|line| {
+        line.text
+            .starts_with("claude asked to stop this cloud, but another operation")
+    }));
+}
