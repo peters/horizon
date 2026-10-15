@@ -217,7 +217,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "tailnet_api_credential",
-        description = "Request native owner removal of a desktop-global saved tailnet API credential. The remove operation creates only a pending owner request; no removal occurs until the person explicitly approves that exact request in Settings > Tailnets. Set and replacement are not supported. Does not open Settings. Supply the exact saved tailnet_id from cloud_companions and a caller-chosen UUID request_id. Poll status with the same IDs; cancel stops only a pending request. Requests expire after 15 minutes, are volatile and are scoped to the original calling agent and host. Running writes cannot be cancelled. No credential values, paths, OS references, owner grants or automatic node deletion. Applied means the local store transaction finished, not that remote API access was tested."
+        description = "Request native owner setup or removal of a desktop-global saved tailnet API credential. set_personal_token, set_oauth and remove create only a pending owner request. The person enters an empty masked draft and explicitly saves the requested kind, or approves removal of that exact request in Settings > Tailnets. No secret is accepted from the agent; replacing a binding requires the same native owner choice. Does not open Settings. Supply the exact saved tailnet_id from cloud_companions and a caller-chosen UUID request_id. Poll status with the same IDs; cancel stops only a pending request. Requests expire after 15 minutes, are volatile and are scoped to the original calling agent and host. Running writes cannot be cancelled. No credential values, paths, OS references, owner grants or automatic node deletion. Applied means the local store transaction finished, not that remote API access was tested."
     )]
     async fn tailnet_api_credential(
         &self,
@@ -919,8 +919,8 @@ mod tests {
         let tools = server.tool_router.list_all();
         let tool = tools.iter().find(|tool| tool.name == "tailnet_api_credential").unwrap();
         let encoded_schema = serde_json::to_string(tool.input_schema.as_ref()).unwrap();
-        assert!(!encoded_schema.contains("set_personal_token"));
-        assert!(!encoded_schema.contains("set_oauth"));
+        assert!(encoded_schema.contains("set_personal_token"));
+        assert!(encoded_schema.contains("set_oauth"));
         let properties = tool.input_schema.get("properties").unwrap().as_object().unwrap();
         assert_eq!(
             properties

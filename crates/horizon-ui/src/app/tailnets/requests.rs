@@ -117,8 +117,11 @@ impl Requests {
                     return Err("tailnet_credential_running: the write cannot be cancelled");
                 }
                 Operation::Status | Operation::Cancel => {}
-                operation @ Operation::Remove if operation == entry.action && entry.target == target => {}
-                Operation::Remove => return Err("tailnet_credential_request_conflict"),
+                operation @ (Operation::Remove | Operation::SetPersonalToken | Operation::SetOauth)
+                    if operation == entry.action && entry.target == target => {}
+                Operation::Remove | Operation::SetPersonalToken | Operation::SetOauth => {
+                    return Err("tailnet_credential_request_conflict");
+                }
             }
             return Ok(receipt(&request.request_id, entry));
         }
@@ -141,6 +144,12 @@ impl Requests {
         self.entries.insert(request.request_id.clone(), entry);
         Ok(answer)
     }
+    pub(super) fn is_pending(&self, id: &str, target: &Target) -> bool {
+        self.entries
+            .get(id)
+            .is_some_and(|entry| entry.phase == Phase::PendingOwner && entry.target == *target)
+    }
+
     pub(super) fn pending(&self, target: &Target) -> Vec<(String, String, Operation)> {
         self.entries
             .iter()
@@ -190,6 +199,36 @@ mod tests {
             request_id: "dff44c5a-d077-4eaf-8092-615849346347".into(),
         }
     }
+    #[test]
+    fn set_kind_is_owner_bound_and_cancellation_or_expiry_invalidates_the_draft() {
+        let mut requests = Requests::default();
+        let input = request(Operation::SetPersonalToken);
+        requests.answer("agent", &input, target(), 0).unwrap();
+        assert!(requests.is_pending(&input.request_id, &target()));
+        assert!(
+            requests
+                .approve(&input.request_id, &target(), Operation::SetOauth, 1)
+                .is_none()
+        );
+        let mut renamed = target();
+        renamed.name = "Renamed".into();
+        assert!(!requests.is_pending(&input.request_id, &renamed));
+        requests
+            .answer("agent", &request(Operation::Cancel), target(), 1)
+            .unwrap();
+        assert!(!requests.is_pending(&input.request_id, &target()));
+        let mut expires = request(Operation::SetOauth);
+        expires.request_id = "00000000-0000-0000-0000-000000000003".into();
+        requests.answer("agent", &expires, target(), 2).unwrap();
+        requests.poll(LIFETIME + 2);
+        assert!(!requests.is_pending(&expires.request_id, &target()));
+        assert!(
+            requests
+                .approve(&expires.request_id, &target(), Operation::SetOauth, LIFETIME + 2)
+                .is_none()
+        );
+    }
+
     #[test]
     fn submission_is_only_pending_and_cannot_be_read_or_cancelled_by_another_actor() {
         let mut requests = Requests::default();

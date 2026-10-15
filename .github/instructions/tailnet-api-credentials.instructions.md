@@ -61,13 +61,16 @@ Also report:
 - A workspace actor, same UID, tool argument or pending request itself authorizes a global binding write.
 - An unknown root/ID, changed name, different operation or expired/cancelled request reaches the write worker.
 - One actor reads, cancels or retargets another actor's request.
-- A removal starts without an exact native owner decision, or a request opens Settings.
+- A save or removal starts without an exact native owner decision, or a request opens Settings.
 - A running write is reported cancelled, or matching kind is treated as proof of completion.
 - Settings close loses the operation result or lets stale status replace its completion.
 - A write result received after the original retention deadline disappears before its caller can read it.
 - Catalog deletion makes an original caller's retained request result unreadable, or result recovery authorizes a new write.
-- The public schema accepts Set/replace, raw secret values or a secret getter.
-- Standalone workers or feature-disabled hosts accept desktop removal requests.
+- A Set request accepts secret values, client IDs/secrets or stored references instead of kind metadata only.
+- A saved value enters the native draft, undo restores a cleared value, or cancel/expiry/target change/storage-root suspension/Settings close retains an unsaved secret.
+- A requested kind changes before Save, or the worker accepts a different saved target or request operation.
+- The public schema exposes secret import or a secret getter.
+- Standalone workers or feature-disabled hosts accept desktop credential-management requests.
 
 Worker receipt capture has its own boundary. API credential management grants no
 remote node cleanup authority.

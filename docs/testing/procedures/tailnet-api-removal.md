@@ -13,8 +13,8 @@ owner: peters
 ## 1. Purpose
 
 Test API removal through native UI, the actual CLI plan runner and public MCP.
-Make sure the exact saved network and enrollment key survive. Set, replacement
-and node cleanup are outside this outcome.
+Make sure the exact saved network and enrollment key survive. Entry/replacement
+has its own [procedure](tailnet-api-entry.md). Node cleanup remains separate.
 
 ## 2. Applicability
 
@@ -212,9 +212,9 @@ Use a completed report to establish the result for the exact tested inputs.
 
    Result: The native UI shows the removal failure after completion. Failure does not guarantee rollback or preservation of the API credential.
 
-12. Submit Set operations without secret arguments, then unknown secret/root/reference fields.
+12. Submit unknown secret/root/reference fields on a supported metadata operation.
 
-   Result: The actual CLI/public schema refuses them before an owner request or store mutation.
+   Result: The actual CLI/public schema refuses those fields before an owner request or store mutation.
 
 ### 6.3 R03 — Failure ownership and close transitions
 

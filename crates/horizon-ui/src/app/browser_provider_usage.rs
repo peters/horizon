@@ -37,6 +37,11 @@ impl HorizonApp {
             .provider_usage
             .tailnet_credentials
             .poll(manifest::now_millis());
+        if let Some(editor) = &mut self.settings {
+            editor
+                .tailnet_status_state()
+                .discard_cancelled_api_draft(&self.browser_create_host.provider_usage.tailnet_credentials);
+        }
     }
 
     pub(super) fn poll_provider_usage(&mut self) -> bool {

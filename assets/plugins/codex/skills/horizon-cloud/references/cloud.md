@@ -143,8 +143,8 @@ Stored presence reports only missing or stored credential kind. It does not prov
 validity, expiry, scopes, tags or API access. Locked or malformed storage returns
 an error. Saving does not contact Tailscale, record an enrollment receipt or remove
 nodes. The foundation supplies shared storage APIs for host credential adapters.
-The native owner can remove an existing API binding. There is no API entry or
-replacement control in this outcome. Status returns kind only.
+The native owner can enter, replace or remove the exact API binding.
+Credential drafts start empty and masked. Status returns kind only.
 Worker enrollment still needs marker 4; storing an API credential does not enable
 a selected tailnet on an older quick-start pin.
 
@@ -529,12 +529,16 @@ Enrollment receipts are allocation metadata, separate from the displayed device 
 
 The receipt-capture adapter reads only the worker's actual tagged Self.ID via pinned root SSH and the existing userspace daemon socket, persists it before readiness and records uncertain attempts before enrollment. It binds the existing allocation request and saved tailnet ID to the owning cloud root. Worker agents cannot query this private root lane. No API secret is sent to a worker and no API editor or node-delete operation is activated by this adapter.
 
-## Owner API credential removal
+## Owner API credential management
 
-`tailnet_api_credential` operations are `remove`, `status`, and `cancel`.
+`tailnet_api_credential` operations are `set_personal_token`, `set_oauth`, `remove`, `status`, and `cancel`.
 The tool takes only `operation`, `tailnet_id` and `request_id`. Use an exact saved
-ID from `cloud_companions` and generate the UUID before submission. Remove returns
-pending_owner. It does not authorize deletion or open Settings. The person selects
+ID from `cloud_companions` and generate the UUID before submission. Set and remove
+return pending_owner. They do not authorize a write or open Settings. For Set, the
+person selects Enter requested API credential on that exact row, enters an empty
+masked draft of the requested kind, and selects Save API credential. The request
+locks the kind; it accepts no token, client ID, client secret or stored reference.
+The owner can discard a draft or decline the request without saving. The person selects
 Approve API credential removal on that exact row in Settings > Tailnets, or
 Decline request. Direct native removal also needs an explicit owner click.
 
@@ -555,14 +559,30 @@ CLI parity uses `horizon-browser run PLAN.json` from a normal Horizon AGENT pane
 Removal preserves the saved network and enrollment auth key. It suppresses staged
 API fallback and removes only the exact registered API binding. The credential is
 desktop-global: a workspace actor cannot approve its own request. Sharing a saved
-ID intentionally shares its binding. Set/replace, secret import/getter, API
+ID intentionally shares its binding. Set and replacement preserve the enrollment
+auth key too. Direct native entry can choose Personal API token or OAuth client;
+changing that source clears every draft field. Cancel, expiry, changed targets and
+Settings close discard unsaved drafts. Storage-root changes clear drafts before
+rendering while retaining owned writes; draft discard does not cancel a request.
+Saved values never fill a draft. Secrets
+are zeroizing and masked, with no undo history. Secret import/getter, remote API
 validation and automatic node cleanup are not supplied. No provider action is needed.
 
-Reader failures and native removal failures remain separate. A successful status
-read does not erase a failed removal or prove rollback. Settings close retains
+Reader failures and native write failures remain separate. A successful status
+read does not erase a failed save or removal, or prove rollback. Settings close retains
 each pending job's kind, result and failure. Use the bound request receipt for the
 Store outcome; observed kind alone does not prove the request applied.
 
 Close Settings before changing an unprovisioned cloud’s tailnet in Connections.
 While Settings owns store operations, cached selection stays visible and those
 selection controls are disabled.
+
+An entry CLI plan uses the same normal AGENT transport, with metadata only:
+
+```json
+{"version":1,"steps":[{"id":"entry","tool":"tailnet_api_credential","arguments":{"operation":"set_oauth","tailnet_id":"SAVED-ID","request_id":"dff44c5a-d077-4eaf-8092-615849346347"}}]}
+```
+
+The person supplies the values in the native host. Never add them to the plan,
+MCP arguments, agent conversation or worker configuration. Applied proves local
+Store completion, not remote validity, scope or node-removal authority.
