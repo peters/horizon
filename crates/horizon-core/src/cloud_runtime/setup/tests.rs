@@ -64,6 +64,60 @@ fn credentials_are_required_only_for_selected_api_agents() {
 }
 
 #[test]
+fn a_claude_setup_token_is_saved_privately_with_its_date_and_replaces_the_api_key() {
+    let root = tempfile::tempdir().unwrap();
+    let mut draft = prepared(root.path());
+    draft.settings.default_agents = vec![Agent::Claude];
+    draft.anthropic_auth = Authentication::ApiKey;
+    *draft.anthropic_key = "synthetic-anthropic-key".into();
+    draft.save().unwrap();
+    let mut draft = Draft::load(root.path()).unwrap();
+    draft.anthropic_auth = Authentication::Token;
+    let error = draft.validate().unwrap_err().to_string();
+    assert!(error.contains("claude setup-token"), "{error}");
+    *draft.claude_token = "synthetic setup token".into();
+    assert!(draft.validate().is_err(), "a token is one line without spaces");
+    *draft.claude_token = " synthetic-setup-token\n".into();
+    let before = time::OffsetDateTime::now_utc().unix_timestamp();
+    let saved = draft.save().unwrap();
+    let token = saved.claude_token.clone().unwrap();
+    assert!(saved.anthropic_api_key_file.is_none());
+    assert!((before..=before + 60).contains(&token.saved_at));
+    assert_eq!(token.expires_at() - token.saved_at, 365 * 24 * 60 * 60);
+    assert_eq!(std::fs::read_to_string(&token.file).unwrap(), "synthetic-setup-token");
+    let raw = std::fs::read_to_string(root.path().join("settings.json")).unwrap();
+    assert!(!raw.contains("synthetic"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&token.file).unwrap().permissions().mode() & 0o077, 0);
+    }
+    // Reopened, the saved token is kept with its date until another one is pasted.
+    let reopened = Draft::load(root.path()).unwrap();
+    assert!(reopened.anthropic_auth == Authentication::Token && reopened.claude_token.is_empty());
+    assert_eq!(reopened.save().unwrap().claude_token, Some(token));
+    let mut other = Draft::load(root.path()).unwrap();
+    other.anthropic_auth = Authentication::Subscription;
+    assert!(other.save().unwrap().claude_token.is_none());
+}
+
+#[test]
+fn settings_refuse_a_claude_api_key_together_with_a_setup_token() {
+    let root = tempfile::tempdir().unwrap();
+    let mut settings = defaults(root.path());
+    settings.claude_token = Some(super::super::claude_token::ClaudeToken {
+        file: root.path().join("claude-token"),
+        saved_at: 0,
+    });
+    assert!(settings.validate().is_ok());
+    settings.anthropic_api_key_file = Some(root.path().join("anthropic"));
+    assert!(settings.validate().is_err());
+    settings.anthropic_api_key_file = None;
+    settings.claude_token.as_mut().unwrap().file = "relative".into();
+    assert!(settings.validate().is_err());
+}
+
+#[test]
 fn failed_or_stale_save_preserves_previous_settings_and_new_secrets_are_removed() {
     let root = tempfile::tempdir().unwrap();
     let saved = prepared(root.path()).save().unwrap();

@@ -18,7 +18,8 @@ pub(super) mod storage;
 #[cfg(all(test, unix))]
 mod tests;
 
-use agent_credentials::{configure_agent_auth, validate_agent_auth};
+use agent_credentials::configure_agent_auth;
+pub(in crate::cloud_runtime) use agent_credentials::validate_agent_auth;
 pub use deletion::terminate;
 use git_credentials::configure_git_auth;
 use image::{prepare_image, validate_allocation_image};

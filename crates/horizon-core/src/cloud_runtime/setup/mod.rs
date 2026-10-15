@@ -21,6 +21,9 @@ use zeroize::Zeroizing;
 pub enum Authentication {
     ApiKey,
     Subscription,
+    /// Claude only: a token from `claude setup-token`, which lasts a year and needs no
+    /// sign-in on the worker.
+    Token,
 }
 
 /// Editable credentials are deliberately neither serializable nor debug-printable.
@@ -34,6 +37,8 @@ pub struct Draft {
     pub runpod_key: Zeroizing<String>,
     pub openai_key: Zeroizing<String>,
     pub anthropic_key: Zeroizing<String>,
+    /// A new Claude setup token, typed while `anthropic_auth` is `Token`.
+    pub claude_token: Zeroizing<String>,
     /// `Subscription` signs Codex in with this computer's `ChatGPT` login, Claude in its own
     /// terminal on the worker.
     pub openai_auth: Authentication,
@@ -94,7 +99,11 @@ impl Draft {
             original,
             profile_agents: None,
             openai_auth: authentication(settings.openai_api_key_file.as_ref()),
-            anthropic_auth: authentication(settings.anthropic_api_key_file.as_ref()),
+            anthropic_auth: if settings.claude_token.is_some() {
+                Authentication::Token
+            } else {
+                authentication(settings.anthropic_api_key_file.as_ref())
+            },
             chatgpt: super::codex_login::account(&super::codex_login::home(root)).unwrap_or_else(|error| {
                 tracing::warn!(%error, "could not read the ChatGPT login for Codex");
                 None
@@ -112,6 +121,7 @@ impl Draft {
             runpod_key: Zeroizing::new(String::new()),
             openai_key: Zeroizing::new(String::new()),
             anthropic_key: Zeroizing::new(String::new()),
+            claude_token: Zeroizing::new(String::new()),
         })
     }
 
@@ -182,6 +192,15 @@ impl Draft {
                 validate_input(value, saved)?;
             }
         }
+        if !self.claude_token.is_empty()
+            || (self.selected_agents().contains(&Agent::Claude) && self.anthropic_auth == Authentication::Token)
+        {
+            let saved = self.settings.claude_token.as_ref().map(|token| &token.file);
+            validate_input(&self.claude_token, saved).map_err(|error| match error {
+                Error::Invalid(_) => Error::Invalid("Paste the token that claude setup-token printed, on one line"),
+                error => error,
+            })?;
+        }
         Ok(())
     }
 
@@ -209,11 +228,19 @@ impl Draft {
                 "anthropic",
             ),
         ] {
-            if mode == Authentication::Subscription {
+            if mode != Authentication::ApiKey {
                 *binding = None;
             } else if !value.trim().is_empty() {
                 *binding = Some(write.secret(name, value)?);
             }
+        }
+        if self.anthropic_auth != Authentication::Token {
+            self.settings.claude_token = None;
+        } else if !self.claude_token.trim().is_empty() {
+            self.settings.claude_token = Some(super::claude_token::ClaudeToken {
+                file: write.secret("claude-token", &self.claude_token)?,
+                saved_at: time::OffsetDateTime::now_utc().unix_timestamp(),
+            });
         }
         self.settings.hetzner = self.hetzner.save(self.settings.hetzner.as_ref(), &mut write)?;
         if !self.settings.ssh_identity_file.exists() && self.settings.ssh_identity_file == default_identity(&self.root)
@@ -370,6 +397,7 @@ fn defaults(root: &Path) -> Settings {
         anthropic_api_key_file: None,
         openai_api_key_file: None,
         anthropic_workspace_id: None,
+        claude_token: None,
         git_credentials: Vec::new(),
         browserstack_credentials: Vec::new(),
         hetzner: None,

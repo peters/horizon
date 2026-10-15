@@ -212,7 +212,13 @@ pub fn ready_profiles(root: &Path, config: &CloudConfig, cancel: &super::super::
     }
     let agents = [
         ("codex", settings.openai_api_key_file),
-        ("claude", settings.anthropic_api_key_file),
+        // Settings never bind both of Claude's files.
+        (
+            "claude",
+            settings
+                .anthropic_api_key_file
+                .or(settings.claude_token.map(|token| token.file)),
+        ),
     ]
     .map(|(agent, path)| {
         let needed = config

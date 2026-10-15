@@ -222,6 +222,8 @@ pub(in crate::cloud_runtime) fn resume_locked(
     if state.stage == Stage::Stopping {
         return Err(Error::Invalid("Reconcile the pending stop before resuming"));
     }
+    // Before the provider starts paid capacity: the reconnect after it would refuse anyway.
+    super::deployment::validate_agent_auth(settings, &state.profile.capabilities, false)?;
     super::providers::lifecycle(&state, settings).resume(store, &mut state, cancel, observe)
 }
 
@@ -567,5 +569,41 @@ mod tests {
         drop(store);
         let error = reconcile(&root, &settings, None, &cancel).unwrap_err().to_string();
         assert!(error.contains("identities differ"), "{error}");
+    }
+
+    #[test]
+    fn resume_refuses_a_missing_setup_token_before_the_provider_starts_the_worker() {
+        let root = tempfile::tempdir().unwrap();
+        let state: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"runpod-cloud","repository":"/synthetic","revision":"a".repeat(40),
+            "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8,
+                "capabilities":{"agents":["claude"]}},
+            "stage":"Stopped","operation":{"state":"bound","worker_id":"worker1"},
+            "spec":null,"worker":null,"sessions":[],"stop_requested":true
+        }))
+        .unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        store.save(&state).unwrap();
+        drop(store);
+        let before = std::fs::read(root.path().join("deployment.json")).unwrap();
+        // The RunPod key is missing too: a resume that reached the provider would fail on it.
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "runpod_key_file":root.path().join("missing-runpod"),"ssh_identity_file":"/missing",
+            "docker_config":"/missing","cpu_flavors":[],"gpu_types":[],
+            "claude_token":{"file":root.path().join("missing-token"),"saved_at":0}
+        }))
+        .unwrap();
+        let error = resume(root.path(), &settings, &Cancellation::default()).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                Error::AgentCredential {
+                    kind: "setup-token file",
+                    ..
+                }
+            ),
+            "{error}"
+        );
+        assert_eq!(std::fs::read(root.path().join("deployment.json")).unwrap(), before);
     }
 }

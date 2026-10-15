@@ -40,6 +40,10 @@ pub struct Settings {
     pub openai_api_key_file: Option<PathBuf>,
     #[serde(default)]
     pub anthropic_workspace_id: Option<String>,
+    /// Claude's token from `claude setup-token`, given to the worker as
+    /// `CLAUDE_CODE_OAUTH_TOKEN`; never together with the API key. Omitted until one is saved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_token: Option<super::claude_token::ClaudeToken>,
     /// Explicit opt-in per local repository; never loaded from repository YAML.
     #[serde(default)]
     pub git_credentials: Vec<super::git_auth::Binding>,
@@ -149,6 +153,16 @@ impl Settings {
             return Err(Error::Invalid(
                 "Agent credential bindings must use absolute machine-local paths",
             ));
+        }
+        if let Some(token) = &self.claude_token {
+            if !token.file.is_absolute() {
+                return Err(Error::Invalid(
+                    "Agent credential bindings must use absolute machine-local paths",
+                ));
+            }
+            if self.anthropic_api_key_file.is_some() {
+                return Err(Error::Invalid("Give Claude an API key or a setup token, not both"));
+            }
         }
         if self.anthropic_workspace_id.as_ref().is_some_and(|id| {
             !id.starts_with("wrkspc_") || id.len() > 100 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')

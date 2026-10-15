@@ -444,6 +444,44 @@ current access ends.
 Without a sign-in, Codex on a new cloud asks you to sign in in its own terminal, as
 before. A bound OpenAI API key takes precedence over the ChatGPT login.
 
+### Claude with a setup token
+
+A setup token signs Claude in on your Claude subscription for one year. Claude on the
+worker then needs no sign-in of its own. To make one, run `claude setup-token` on a
+computer where you use Claude Code.
+
+Horizon keeps the token like the agent API keys: in a private file (0600), for all
+workspaces on this computer. `settings.json` keeps only the absolute path of the file
+and the time that the token was saved, in seconds since 1970:
+
+```json
+{
+  "claude_token": { "file": "/private/claude-token", "saved_at": 1792065600 }
+}
+```
+
+Horizon counts the expiry as one year after `saved_at`. Horizon cannot read the real
+expiry from the token. A token that was made before it was saved runs out earlier.
+
+Every deployment, reconnect, resume and rebuild of a cloud that runs Claude gives the
+token to the worker as `/workspace/credentials/claude-oauth-token`. The token goes over
+SSH standard input, never in a command line, a log or the cloud board. Each Claude panel
+and each shell on the worker gets the token as `CLAUDE_CODE_OAUTH_TOKEN`. This needs a
+worker image with this change; an older image ignores the file.
+
+Before **Resume worker** starts a stopped worker, Horizon checks the setup-token file and
+the API-key files of the agents of the cloud, as a deployment does. A missing or unusable
+file stops the resume before the provider starts paid capacity, and the refusal names
+the file.
+
+Settings never keep a setup token and a Claude API key together: Claude prefers the API
+key. When you choose another sign-in, the next reconnect removes the token file from the
+worker. Horizon does not revoke the token.
+
+Trust boundary: the token gives access to your Claude subscription. Each process on the
+worker that runs as the agent user can read it, as it can read an API key. Horizon does
+not check that the token is valid before it sends it.
+
 ### Connect GitHub
 
 **Cloud settings › GitHub › Connect GitHub** gives clouds GitHub access as you,
