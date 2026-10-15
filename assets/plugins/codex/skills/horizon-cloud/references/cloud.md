@@ -108,11 +108,15 @@ shares. Without a sign-in, Codex asks for a sign-in in its own terminal on the w
 
 ## Claude setup token on workers
 
-Horizon can keep a Claude setup token from `claude setup-token` for the person
-(`claude_token` in `~/.horizon/cloud/settings.json`: the path of a private file and the
-save time). Horizon counts its expiry as one year after the save. Every deployment,
-reconnect, resume and rebuild of a cloud that runs Claude writes it over SSH standard
-input to `/workspace/credentials/claude-oauth-token`, never in a command line or a log.
+The person can save a Claude setup token from `claude setup-token` in **Cloud settings >
+Coding agents > Claude > Setup token**. Only the person pastes it; agents never type,
+read or ask for it. Horizon keeps it in a private file (`claude_token` in
+`~/.horizon/cloud/settings.json` holds the path and the save time) and shows the save
+day and "Runs out about" one year later: an estimate from the save day, because Horizon
+cannot read the real expiry from the token.
+Every deployment, reconnect, resume and rebuild of a cloud that runs Claude writes it
+over SSH standard input to `/workspace/credentials/claude-oauth-token`, never in a
+command line or a log.
 On a worker image with this support, each Claude Code panel and each Shell panel gets it
 as `CLAUDE_CODE_OAUTH_TOKEN`, so Claude starts signed in; other agent panels do not get
 it, an image layer cannot set it in `session-env.d`, and an older image ignores the

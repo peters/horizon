@@ -102,6 +102,21 @@ fn a_claude_setup_token_is_saved_privately_with_its_date_and_replaces_the_api_ke
 }
 
 #[test]
+fn a_token_typed_before_another_sign_in_was_chosen_neither_blocks_nor_is_saved() {
+    let root = tempfile::tempdir().unwrap();
+    let mut draft = prepared(root.path());
+    draft.settings.default_agents = vec![Agent::Claude];
+    draft.anthropic_auth = Authentication::Token;
+    *draft.claude_token = "synthetic setup token".into();
+    assert!(draft.validate().is_err());
+    draft.anthropic_auth = Authentication::Subscription;
+    let saved = draft.save().unwrap();
+    assert!(saved.claude_token.is_none() && saved.anthropic_api_key_file.is_none());
+    let raw = std::fs::read_to_string(root.path().join("settings.json")).unwrap();
+    assert!(!raw.contains("synthetic"));
+}
+
+#[test]
 fn settings_refuse_a_claude_api_key_together_with_a_setup_token() {
     let root = tempfile::tempdir().unwrap();
     let mut settings = defaults(root.path());

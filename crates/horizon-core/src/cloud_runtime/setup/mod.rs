@@ -193,8 +193,9 @@ impl Draft {
                 validate_input(value, saved)?;
             }
         }
-        if !self.claude_token.is_empty()
-            || (self.selected_agents().contains(&Agent::Claude) && self.anthropic_auth == Authentication::Token)
+        // A token typed under another choice is not saved, so it is not checked either.
+        if self.anthropic_auth == Authentication::Token
+            && (!self.claude_token.is_empty() || self.selected_agents().contains(&Agent::Claude))
         {
             let saved = self.settings.claude_token.as_ref().map(|token| &token.file);
             validate_input(&self.claude_token, saved).map_err(|error| match error {
