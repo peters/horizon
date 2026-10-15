@@ -27,7 +27,11 @@ agent-writable, so nothing there is a control. Check that:
   once, and refuses the `APPROVE` event in any case and spacing, also through the
   GraphQL `addPullRequestReview`. A dismissal of a review is refused.
 - A workflow dispatch passes only for a listed (repository, file) pair, resolved
-  through GitHub from the ID or file name in the path.
+  through GitHub from the ID or file name in the path, and only with the `ref` of the
+  default branch that GitHub reports: on another ref, an agent could have pushed the
+  workflow file.
+- A review change in any other spelling than the plain one (`REVIEW_CHANGES`) is
+  refused, so none goes around the approval and dismissal checks.
 - No token reaches a log, a refusal text or a subprocess argument.
 
 ## Not covered

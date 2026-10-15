@@ -415,7 +415,8 @@ Upkeep. The dialog does not show them yet:
 ```
 
 A listed workflow runs with the secrets of its repository, and the agent chooses
-its inputs. List only workflows that you let the agent start. The shared
+its inputs. It starts only on the default branch, so it runs the workflow file of
+that branch, not a version that an agent pushed to another branch. List only workflows that you let the agent start. The shared
 instructions of the repositories decide when the agent starts one.
 
 The policy does not stop these:

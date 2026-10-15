@@ -279,7 +279,7 @@ class Exchange(checks.Checks):
         names = list(route.repositories) if route.kind == 'search' else [repository] if repository else []
         data = None
         if rules is not None:
-            self.upkeep_dispatch(rules, request, route, candidate, repository)
+            data = self.upkeep_dispatch(rules, request, route, candidate, repository)
             if upkeep.reviews(request.method, route.parts):
                 data = self.upkeep_review(request, repository)
         self.forward(request, route, candidate, names, data)

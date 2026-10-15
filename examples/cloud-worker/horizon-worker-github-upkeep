@@ -8,8 +8,8 @@ for every agent of the cloud:
   repository, start code with its secrets, stand in for a check or for the person's approval:
   file changes under .github/workflows, releases and their assets, commit statuses, deployments,
   repository dispatches, approvals of runs and deployments, approvals and dismissals of reviews, and
-  auto-merge. A workflow dispatch passes only for a workflow that the person listed. Runs can
-  be started again or cancelled.
+  auto-merge. A workflow dispatch passes only for a workflow that the person listed, on the
+  default branch. Runs can be started again or cancelled.
 
 Each refusal also goes to a log that root owns and the exchange of Upkeep reads for the board.
 A module that horizon-worker-github loads, not a command."""
@@ -59,6 +59,9 @@ DISPATCH = re.compile(r'/actions/workflows/(?P<workflow>[^/]{1,256})/dispatches'
 # A new review, and the submission of a pending one: either can approve, as their body says.
 REVIEW = re.compile(r'/pulls/[1-9][0-9]{0,19}/reviews(?:/[1-9][0-9]{0,19}/events)?')
 DISMISSAL = re.compile(r'/pulls/[1-9][0-9]{0,19}/reviews/[1-9][0-9]{0,19}/dismissals')
+# Every review change in its plain spelling; any other spelling is refused, so none goes
+# around the checks above.
+REVIEW_CHANGES = re.compile(r'/pulls/[1-9][0-9]{0,19}/reviews(?:/[1-9][0-9]{0,19}(?:/events|/dismissals)?)?')
 APPROVAL = 'this Upkeep does not let an agent approve a pull request; only the person approves.'
 
 
@@ -232,6 +235,8 @@ def rest_refusal(policy, method, parts):
         return 'this Upkeep does not let an agent change workflow files.'
     if DISMISSAL.fullmatch(rest):
         return 'this Upkeep does not let an agent dismiss a review; only the person does.'
+    if first == 'pulls' and 'reviews' in parts and not REVIEW_CHANGES.fullmatch(rest):
+        return 'this Upkeep changes a review only through its plain path, such as /pulls/<number>/reviews.'
     if first == 'actions' and not RUN_CHANGES.fullmatch(rest) and not DISPATCH.fullmatch(rest):
         return 'this Upkeep lets an agent only start runs again, cancel them and start listed workflows.'
     return None

@@ -102,7 +102,9 @@ class PolicyTests(ServiceTestCase):
                    ('DELETE', 'contents/.github/workflows/ci.yml'), ('POST', 'actions/runs/1/approve'),
                    ('POST', 'actions/runs/1/pending_deployments'), ('DELETE', 'actions/caches'),
                    ('DELETE', 'actions/runs/1'), ('POST', 'actions/workflows/1/enable'),
-                   ('PUT', 'pulls/3/reviews/8/dismissals')]
+                   ('PUT', 'pulls/3/reviews/8/dismissals'), ('POST', 'pulls/3/reviews/'),
+                   ('POST', 'pulls/03/reviews'), ('POST', 'pulls/3/reviews/8/events/'),
+                   ('PUT', 'pulls/3/reviews/8/dismissals/'), ('DELETE', 'pulls/3/reviews/08')]
         for method, path in refused:
             self.assertIsNotNone(upkeep.rest_refusal(policy, method, path.split('/')), (method, path))
         allowed = [('GET', 'git/trees/x'), ('POST', 'issues/1/comments'), ('POST', 'labels'),
@@ -111,7 +113,8 @@ class PolicyTests(ServiceTestCase):
                    ('POST', 'actions/runs/1/rerun'), ('POST', 'actions/runs/1/rerun-failed-jobs'),
                    ('POST', 'actions/runs/1/cancel'), ('POST', 'actions/jobs/1/rerun'),
                    ('PUT', 'pulls/1/merge'), ('DELETE', 'git/refs/heads/dependabot/cargo/x'),
-                   ('POST', 'pulls/3/reviews'), ('POST', 'actions/workflows/release.yml/dispatches')]
+                   ('POST', 'pulls/3/reviews'), ('PUT', 'pulls/3/reviews/8'), ('DELETE', 'pulls/3/reviews/8'),
+                   ('POST', 'actions/workflows/release.yml/dispatches')]
         for method, path in allowed:
             self.assertIsNone(upkeep.rest_refusal(policy, method, path.split('/')), (method, path))
         self.assertIsNone(upkeep.rest_refusal(None, 'POST', ['releases']))
@@ -191,12 +194,22 @@ class UpkeepBrokerTests(BrokerTestCase):
         self.assertEqual(status, 403)
         self.assertIn('listed', json.loads(payload)['message'])
         self.assertIn('"kind": "dispatch"', self.log.read_text())
+        self.api.answers['/repos/example/project'] = {'default_branch': 'main'}
+        target = '/repos/example/project/actions/workflows/release.yml/dispatches'
         with mock.patch.object(upkeep, 'check_dispatch') as check:
-            status, _, _ = self.send('POST', '/repos/example/project/actions/workflows/release.yml/dispatches',
-                                     body={'ref': 'main'})
-        self.assertEqual(status, 200)
-        self.assertEqual(check.call_args.args[1:],
-                         ('example/project', '/repos/example/project/actions/workflows/release.yml'))
+            for ref in ('main', 'refs/heads/main'):
+                status, _, _ = self.send('POST', target, body={'ref': ref, 'inputs': {'a': 'b'}})
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(self.api.seen[-1][-1]), {'ref': ref, 'inputs': {'a': 'b'}})
+            self.assertEqual(check.call_args.args[1:],
+                             ('example/project', '/repos/example/project/actions/workflows/release.yml'))
+            # On another ref, the workflow file could be one that an agent pushed.
+            before = len(self.api.seen)
+            for body in ({'ref': 'upkeep/x'}, {'ref': 'refs/tags/main'}, {}, b'{"ref": "x", "ref": "main"}'):
+                status, _, payload = self.send('POST', target, body=body)
+                self.assertEqual(status, 403, body)
+                self.assertIn('this Upkeep', json.loads(payload)['message'])
+            self.assertFalse(any(path == target for _, _, path, *_ in self.api.seen[before:]))
 
     def test_auto_merge_is_refused_for_an_upkeep(self):
         reply = self.graphql('mutation($id: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $id}) '
