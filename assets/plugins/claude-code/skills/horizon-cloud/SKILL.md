@@ -278,7 +278,9 @@ Use `cloud_image_destination` from a live local agent panel. It uses the panel's
 registered launch directory and resolves its checkout in the shared background
 worker, including subdirectories. The host supplies the settings root and source;
 never pass a root, source path, token or credential value. Remote worker and SSH
-panels cannot change desktop publishing choices. No Settings window is required.
+panels cannot change desktop publishing choices. Admission and retained-operation
+polling check both saved and live cloud membership, including session restoration.
+No Settings window is required.
 
 Supply a fresh lowercase UUID `operation_id` and a named build `profile` for a new
 action. Start with `action: {"operation":"list"}`. The result gives the selected

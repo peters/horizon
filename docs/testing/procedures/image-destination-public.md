@@ -73,6 +73,12 @@ result or error before sending the next mutation.
 
 ### 6.2 IP-02 — Local host ownership
 
+Run `cargo test -p horizon-ui --bin horizon cloud_membership`.
+
+Result: Saved cloud membership refuses new operations before live groups are
+restored. Both saved and live membership invalidate retained operation owners;
+cancellation settles without changing source or credentials.
+
 1. Run the shared manager and actual host adapter tests.
 
    ```sh

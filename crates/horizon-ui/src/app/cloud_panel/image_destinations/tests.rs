@@ -271,3 +271,86 @@ fn cloud_group_members_cannot_manage_desktop_destinations() {
     assert_eq!(std::fs::read(f.root.join("settings.json")).unwrap(), before);
     assert!(!f.root.join("github-publishing").exists());
 }
+
+#[test]
+#[cfg_attr(windows, ignore = "Local agent fixture uses a POSIX shell")]
+fn saved_cloud_membership_refuses_admission_before_live_groups_are_restored() {
+    let mut f = fixture();
+    let ctx = egui::Context::default();
+    let panel = f.app.board.panel(f.panel).unwrap();
+    let mut group = horizon_core::cloud_panel::CloudGroup::new(
+        1,
+        "restored worker".into(),
+        "workspace".into(),
+        f.source.clone(),
+        [0.0, 0.0],
+    );
+    group.panels.push(panel.local_id.clone());
+    f.app.board.cloud_groups.0.push(group);
+    assert!(f.app.cloud_prototype.groups.0.is_empty());
+    let before = std::fs::read(f.root.join("settings.json")).unwrap();
+    for operation in ["list", "reset", "authenticate"] {
+        let id = manifest::provider_usage::new_operation_id();
+        let action = match operation {
+            "list" => json!({"operation":"list"}),
+            "reset" => json!({"operation":"reset","shown":null}),
+            _ => json!({"operation":"authenticate","shown":null,"switch":false}),
+        };
+        let input = request(&f.actor, &id, Some("cpu"), action);
+        let result = f.app.image_destination_result(&input, &ctx);
+        assert!(
+            result
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("local agent checkout")),
+            "saved cloud membership must refuse before work starts"
+        );
+    }
+    assert!(!f.app.browser_create_host.provider_usage.image_destinations.running());
+    assert_eq!(std::fs::read(f.root.join("settings.json")).unwrap(), before);
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "Local agent fixture uses a POSIX shell")]
+fn restored_or_live_cloud_membership_cancels_retained_destination_operations() {
+    use horizon_core::cloud_runtime::publishing::operations::Owner;
+    for saved in [false, true] {
+        let mut f = fixture();
+        let ctx = egui::Context::default();
+        let id = manifest::provider_usage::new_operation_id();
+        let input = request(&f.actor, &id, Some("cpu"), json!({"operation":"list"}));
+        let started = f.app.image_destination_result(&input, &ctx);
+        assert!(started.error.is_none());
+        assert_eq!(started.image_destination.unwrap()["done"], false);
+        let mut group = horizon_core::cloud_panel::CloudGroup::new(
+            1,
+            "worker".into(),
+            "workspace".into(),
+            f.source.clone(),
+            [0.0, 0.0],
+        );
+        group.panels.push(f.app.board.panel(f.panel).unwrap().local_id.clone());
+        if saved {
+            f.app.board.cloud_groups.0.push(group);
+        } else {
+            f.app.cloud_prototype.groups.0.push(group);
+        }
+        f.app.poll_image_destination_operations(&ctx);
+        let owner = Owner {
+            actor: f.actor.clone(),
+            host: manifest::host_instance().into(),
+            root: f.root.clone(),
+            repository: f.source.clone(),
+        };
+        let manager = &mut f.app.browser_create_host.provider_usage.image_destinations;
+        assert!(
+            manager.status(&owner, &id).unwrap().cancel_requested,
+            "membership must invalidate a retained owner before restoration copies it"
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !manager.status(&owner, &id).unwrap().done {
+            assert!(Instant::now() < deadline, "cancelled metadata operation must settle");
+            std::thread::yield_now();
+        }
+    }
+}

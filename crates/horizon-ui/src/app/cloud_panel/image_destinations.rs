@@ -15,7 +15,12 @@ fn repository<'a>(board: &'a Board, groups: &CloudGroups, actor: &str) -> Option
     if panel.remote_workspace().is_some()
         || panel.cloud_wait().is_some()
         || panel.ssh_connection.is_some()
-        || groups.0.iter().any(|group| group.panels.contains(&panel.local_id))
+        || board
+            .cloud_groups
+            .0
+            .iter()
+            .chain(&groups.0)
+            .any(|group| group.panels.contains(&panel.local_id))
     {
         return None;
     }
