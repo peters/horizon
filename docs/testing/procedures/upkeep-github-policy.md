@@ -139,7 +139,8 @@ Run the commands of the tasks in the shell panel of setup step 2, in `/tmp/check
    `gh pr merge <new number> --repo <repo> --squash --match-head-commit <head>`.
 
    Result: The merge fails with the reason that this Upkeep merges only into the default
-   branch. Close the new pull request with `gh pr close <new number> --repo <repo>`.
+   branch. The reason names the default branch and `policy-base`. Close the new pull
+   request with `gh pr close <new number> --repo <repo>`.
 
 5. In `/tmp/check`, run `git push origin HEAD:refs/heads/upkeep/policy-check`, open a
    pull request for it as in GPO-02, wait until its checks pass, and merge it with

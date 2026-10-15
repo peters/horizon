@@ -88,6 +88,9 @@ class GateTests(unittest.TestCase):
             fake.pull.update(change)
             self.refused(fake, 'not an open pull request')
         # A pull request on another branch could move to the default branch after the gate.
+        fake = Fake(reviews=approved)
+        fake.pull['base'] = {'sha': BASE, 'ref': 'release', 'repo': {'default_branch': 'develop'}}
+        self.refused(fake, 'only into the default branch develop, and #7 is on release.')
         for base in ({'sha': BASE, 'ref': 'release', 'repo': {'default_branch': 'main'}},
                      {'sha': BASE, 'ref': 'main', 'repo': {}}, {'sha': BASE}):
             fake = Fake(reviews=approved)

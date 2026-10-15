@@ -170,9 +170,10 @@ def check(rules, call, repository, number, head):
     # Every other branch is the agent's to write, and a pull request on one can move to the
     # default branch after the gate read it: GitHub moves it when its base branch is deleted.
     target = pull.get('base') or {}
-    branch = target.get('ref')
-    if not isinstance(branch, str) or branch != (target.get('repo') or {}).get('default_branch'):
-        raise upkeep.Refused('this Upkeep merges only into the default branch, and #%d is on %s.' % (number, branch))
+    branch, default = target.get('ref'), (target.get('repo') or {}).get('default_branch')
+    if not isinstance(branch, str) or branch != default:
+        raise upkeep.Refused('this Upkeep merges only into the default branch %s, and #%d is on %s.'
+                             % (default, number, branch))
     if pull.get('mergeable_state') not in CLEAN:
         raise upkeep.Refused('GitHub reports #%d as %s, not ready to merge: a required check or review is '
                              'missing, or the branch is behind or in conflict.' % (number, pull.get('mergeable_state')))
