@@ -48,6 +48,9 @@ Have the current public Hetzner OpenAPI specification for the API check.
    use one numeric server; selectors, foreign targets, changed IDs and ownership
    refuse before mutation. Delete refuses attached firewalls. Reconciliation
    follows pagination and rejects ambiguity. Invalid rules and action batches fail.
+   Effective-rule counts use numeric network prefixes, so equivalent IPv6
+   spellings share one prefix. Inbound and outbound count separately. More than
+   500 distinct directional prefixes fail before provider I/O.
 
 3. Run applicable default/enabled checks and required lint tiers, formatting,
    maintainability and bundled skill coverage on the stable inputs.

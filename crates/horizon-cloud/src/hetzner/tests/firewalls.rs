@@ -256,3 +256,45 @@ fn effective_rule_prefixes_combine_across_ports_but_count_each_direction() {
     assert_eq!(requests.len(), 2, "501 directional prefixes refuse before I/O");
     assert_eq!(request_body(&requests[1])["rules"], json!(repeated));
 }
+
+#[test]
+fn equivalent_ipv6_spellings_share_the_same_effective_network_prefix() {
+    let repeated: Vec<_> = (0..6)
+        .map(|spelling| Rule {
+            port: Some((20000 + spelling).to_string()),
+            source_ips: (0..100)
+                .map(|prefix| match spelling {
+                    0 => format!("2001:db8:{prefix:x}::/64"),
+                    1 => format!("2001:0db8:{prefix:x}::/64"),
+                    2 => format!("2001:db8:{prefix:04x}::/64"),
+                    3 => format!("2001:db8:{prefix:x}:0::/64"),
+                    4 => format!("2001:db8:{prefix:x}:0:0:0:0:0/64"),
+                    _ => format!("2001:0DB8:{prefix:04X}:0000:0000:0000:0000:0000/64"),
+                })
+                .collect(),
+            ..rule()
+        })
+        .collect();
+    let (h, requests, task) = provider(vec![
+        (200, server()),
+        (201, json!({"firewall":firewall(false),"actions":[]})),
+    ]);
+    h.create_exposure_firewall_once(&scope(), &repeated, &Cancellation::default())
+        .unwrap();
+    let distinct: Vec<_> = (0..6)
+        .map(|group| Rule {
+            source_ips: (0..100)
+                .map(|prefix| format!("2001:db8:{:x}::/64", group * 100 + prefix))
+                .collect(),
+            ..rule()
+        })
+        .collect();
+    assert!(matches!(
+        h.create_exposure_firewall_once(&scope(), &distinct, &Cancellation::default()),
+        Err(CloudError::Invalid(_))
+    ));
+    task.join().unwrap();
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 2, "600 distinct prefixes refuse before I/O");
+    assert_eq!(request_body(&requests[1])["rules"], json!(repeated));
+}

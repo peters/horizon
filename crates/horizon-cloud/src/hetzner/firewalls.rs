@@ -80,7 +80,7 @@ impl Rule {
         !sources.is_empty()
             && sources.len() <= 100
             && other.is_empty()
-            && sources.iter().all(|ip| valid_cidr(ip))
+            && sources.iter().all(|ip| cidr(ip).is_some())
             && self
                 .description
                 .as_ref()
@@ -374,7 +374,9 @@ fn valid_rules(rules: &[Rule]) -> Result<(), CloudError> {
                 Direction::In => (true, &r.source_ips),
                 Direction::Out => (false, &r.destination_ips),
             };
-            sources.iter().map(move |s| (inbound, s))
+            sources
+                .iter()
+                .filter_map(move |s| cidr(s).map(|prefix| (inbound, prefix)))
         })
         .collect();
     if rules.len() > 50 || effective.len() > 500 || rules.iter().any(|r| !r.valid()) {
@@ -382,20 +384,21 @@ fn valid_rules(rules: &[Rule]) -> Result<(), CloudError> {
     }
     Ok(())
 }
-fn valid_cidr(text: &str) -> bool {
-    let Some((address, bits)) = text.split_once('/') else {
-        return false;
+fn cidr(text: &str) -> Option<(std::net::IpAddr, u8)> {
+    let (address, bits) = text.split_once('/')?;
+    let bits = bits.parse::<u8>().ok()?;
+    let network = match address.parse::<std::net::IpAddr>().ok()? {
+        std::net::IpAddr::V4(address) if bits <= 32 => {
+            let mask = if bits == 0 { 0 } else { u32::MAX << (32 - bits) };
+            std::net::IpAddr::V4((u32::from(address) & mask).into())
+        }
+        std::net::IpAddr::V6(address) if bits <= 128 => {
+            let mask = if bits == 0 { 0 } else { u128::MAX << (128 - bits) };
+            std::net::IpAddr::V6((u128::from(address) & mask).into())
+        }
+        _ => return None,
     };
-    let Ok(address) = address.parse::<std::net::IpAddr>() else {
-        return false;
-    };
-    let Ok(bits) = bits.parse::<u8>() else {
-        return false;
-    };
-    match address {
-        std::net::IpAddr::V4(_) => bits <= 32,
-        std::net::IpAddr::V6(_) => bits <= 128,
-    }
+    Some((network, bits))
 }
 fn valid_port(text: &str) -> bool {
     let port = |s: &str| s.parse::<u16>().ok().filter(|v| *v > 0);
