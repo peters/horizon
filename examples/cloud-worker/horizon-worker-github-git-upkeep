@@ -1,0 +1,198 @@
+"""The Upkeep checks of the worker's Git proxy (horizon-worker-github-git): a push of an Upkeep
+names only branches, and never the default branch, which changes only through a merged pull
+request. Only the commands at the start of a push are read first; the pack follows as it
+arrives. A mixin of the proxy's Exchange, which provides `store`, `environ`, `output`, `record`
+and `started`. A module that horizon-worker-github loads, not a command."""
+import contextlib
+import http.client
+import importlib.machinery
+import importlib.util
+import itertools
+import json
+from pathlib import Path
+import re
+import sys
+
+
+def load_common():
+    name = 'horizon_worker_github_common'
+    if name not in sys.modules:
+        loader = importlib.machinery.SourceFileLoader(
+            name, str(Path(__file__).resolve().with_name('horizon-worker-github-common')))
+        module = importlib.util.module_from_spec(importlib.util.spec_from_loader(name, loader))
+        sys.modules[name] = module
+        loader.exec_module(module)
+    return sys.modules[name]
+
+
+common = load_common()
+relay = common.load_sibling('horizon-worker-github-http', 'horizon_worker_github_http')
+upkeep = common.load_sibling('horizon-worker-github-upkeep', 'horizon_worker_github_upkeep')
+Refused = upkeep.Refused
+
+PREFIX = 'Horizon: '
+# The commands of a push come first; a push whose commands need more is refused.
+MAX_COMMANDS_READ = 1 << 20
+MAX_COMMANDS = 100
+MAX_REPLY = 1 << 20
+SHA = re.compile(r'[0-9a-f]{40}')
+SHALLOW = re.compile(rb'shallow [0-9a-f]{40}\n?')
+LENGTH = re.compile(rb'[0-9a-fA-F]{4}')
+
+
+class Incomplete(Refused):
+    """The commands of a push have not all arrived yet."""
+
+
+def refusal(status, message):
+    return relay.Refusal(status, PREFIX + message)
+
+
+def pkt_lines(data):
+    """The pkt-lines of `data` up to the first flush."""
+    lines, at = [], 0
+    while True:
+        if at + 4 > len(data):
+            raise Incomplete('the push ended before its commands did.')
+        if not LENGTH.fullmatch(data[at:at + 4]):
+            raise Refused('the push is not in the Git protocol that the worker reads.')
+        size = int(data[at:at + 4], 16)
+        if size == 0:
+            return lines
+        if size < 4:
+            raise Refused('the push has commands that the worker does not read.')
+        if len(lines) >= MAX_COMMANDS:
+            raise Refused('the push names more than %d refs; push fewer at a time.' % MAX_COMMANDS)
+        if at + size > len(data):
+            raise Incomplete('the push ended before its commands did.')
+        lines.append(data[at + 4:at + size])
+        at += size
+
+
+def refs(data):
+    """The refs that the commands of a receive-pack request update. Raises Incomplete before
+    the commands end, and Refused for commands that the worker does not read."""
+    lines = [line for line in pkt_lines(data) if not SHALLOW.fullmatch(line)]
+    found = []
+    for line in lines:
+        parts = line.partition(b'\0')[0].rstrip(b'\n').decode('utf-8', 'replace').split(' ')
+        if len(parts) != 3 or not SHA.fullmatch(parts[0]) or not SHA.fullmatch(parts[1]):
+            raise Refused('the push has commands that the worker does not read.')
+        found.append(parts[2])
+    return found
+
+
+def check_refs(found, default):
+    """Refuses a push of anything but branches, and a push to the default branch `default`."""
+    for ref in found:
+        if not ref.startswith('refs/heads/') or ref == 'refs/heads/':
+            raise Refused('this Upkeep lets an agent push branches only, not %s.' % ref[:200])
+        if ref == 'refs/heads/' + default:
+            raise Refused('this Upkeep changes the default branch %s only through a merged pull request: push '
+                          'another branch and open one.' % default[:200])
+
+
+def pkt(data):
+    return b'%04x' % (len(data) + 4) + data
+
+
+def push_report(head, reason):
+    """The answer of receive-pack that rejects every ref of the push `head` with `reason`, in
+    the side band when the push asked for it, or None when the push asked for no report."""
+    try:
+        lines = [line for line in pkt_lines(head) if not SHALLOW.fullmatch(line)]
+    except Refused:
+        return None
+    if not lines:
+        return None
+    capabilities = lines[0].partition(b'\0')[2].split()
+    if b'report-status' not in capabilities and b'report-status-v2' not in capabilities:
+        return None
+    text = ' '.join(reason.split())[:900].encode()
+    report = pkt(b'unpack ok\n')
+    for line in lines:
+        report += pkt(b'ng %s %s\n' % (line.partition(b'\0')[0].rstrip(b'\n').split(b' ')[-1], text))
+    report += b'0000'
+    if b'side-band-64k' in capabilities or b'side-band' in capabilities:
+        return pkt(b'\x02' + text + b'\n') + pkt(b'\x01' + report) + b'0000'
+    return report
+
+
+def default_branch(environ, token, repository):
+    """The default branch of `repository`, as GitHub's API reports it to `token`."""
+    _, base, loopback = common.github_bases(environ)
+    destination = relay.Upstream('api.github.com')
+    if loopback:
+        address, port = base.removeprefix('http://').split(':')
+        target = relay.Upstream(address, int(port), tls=False)
+    else:
+        target = destination
+    connection = target.connect(60)
+    try:
+        fields = [('Authorization', 'token ' + token), ('Accept', 'application/vnd.github+json'),
+                  ('User-Agent', 'horizon-worker-github')]
+        response = relay.send(connection, destination, 'GET', '/repos/' + repository, fields, [], 0)
+        payload = response.read(MAX_REPLY + 1)
+    except (OSError, http.client.HTTPException):
+        raise Refused('this worker could not reach GitHub to check the push; try again.') from None
+    finally:
+        connection.close()
+    try:
+        branch = json.loads(payload).get('default_branch') if response.status == 200 else None
+    except (ValueError, AttributeError):
+        branch = None
+    if not isinstance(branch, str) or not branch:
+        raise Refused('GitHub did not say which branch of %s is the default; try again.' % repository)
+    return branch
+
+
+class Checks:
+    """The Git proxy's checks for a cloud with an Upkeep policy."""
+
+    def checked_push(self, request, repository, chosen):
+        """(pieces, length) of a push whose commands the Upkeep policy allows, or None when it
+        refused the push to Git itself."""
+        if request.field('content-encoding'):
+            self.refuse_push(repository, 'a compressed push cannot be examined.')
+        if chosen.token is None:
+            raise refusal(403, chosen.refusal or '%s has no GitHub grant on this worker.' % repository)
+        relay.continue_if_asked(request, self.output)
+        pieces = relay.from_client(relay.body(request))
+        head = b''
+        found = None
+        try:
+            for piece in pieces:
+                head += piece
+                with contextlib.suppress(Incomplete):
+                    found = refs(head)
+                    break
+                if len(head) > MAX_COMMANDS_READ:
+                    raise Refused('the push has commands that the worker does not read.')
+            if found is None:
+                found = refs(head)
+            check_refs(found, default_branch(self.environ, chosen.token, repository))
+        except Refused as refused:
+            # Git reads the answer only after it sent the whole push.
+            with contextlib.suppress(relay.Refusal, relay.ClientGone, OSError, ValueError):
+                for _ in pieces:
+                    pass
+            self.refuse_push(repository, str(refused), head)
+            return None
+        return itertools.chain([head], pieces), request.length
+
+    def refuse_push(self, repository, reason, head=b''):
+        """Logs the refusal for the board. Git shows it as the reason of each rejected ref
+        when the push asked for a report; else the push gets a 403."""
+        upkeep.shared_log(upkeep.log_directory(self.store)).refused('push', repository, reason)
+        report = push_report(head, PREFIX + reason)
+        if report is None:
+            raise refusal(403, reason)
+        self.started = True
+        self.output.write(relay.head(200, [('Content-Type', 'application/x-git-receive-pack-result'),
+                                           ('Content-Length', str(len(report)))]) + report)
+        self.output.flush()
+        self.record['outcome'] = 'refused'
+
+
+if __name__ == '__main__':
+    raise SystemExit('horizon-worker-github-git-upkeep is a module of horizon-worker-github, not a command.')

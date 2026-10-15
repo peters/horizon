@@ -10,6 +10,9 @@ for every agent of the cloud:
   repository dispatches, approvals of runs and deployments, approvals and dismissals of reviews, and
   auto-merge. A workflow dispatch passes only for a workflow that the person listed, on the
   default branch. Runs can be started again or cancelled.
+- The default branch changes only through a merged pull request: the broker refuses a file
+  change or a reference change of it and a merge of branches, and the Git proxy a push to it
+  or of a tag (horizon-worker-github-git-upkeep).
 
 Each refusal also goes to a log that root owns and the exchange of Upkeep reads for the board.
 A module that horizon-worker-github loads, not a command."""
@@ -50,7 +53,12 @@ REFUSED_CHANGES = {
     'deployments': 'a deployment can start a workflow with the secrets of the repository',
     'dispatches': 'a repository dispatch can start a workflow with the secrets of the repository',
     'statuses': 'a commit status could stand in for a required check',
+    'merges': 'a merge of branches goes around a pull request and its checks',
+    'merge-upstream': 'a merge of branches goes around a pull request and its checks',
 }
+# A file change through the contents API, whose branch its body names; without one, the
+# default branch.
+CONTENTS = object()
 # The run and job changes that stay: start again and cancel. The approval of a run or a
 # deployment is the person's.
 RUN_CHANGES = re.compile(r'/actions/(?:runs/[1-9][0-9]{0,19}/(?:rerun|rerun-failed-jobs|cancel|force-cancel)'
@@ -240,6 +248,21 @@ def rest_refusal(policy, method, parts):
         return 'this Upkeep changes a review only through its plain path, such as /pulls/<number>/reviews.'
     if first == 'actions' and not RUN_CHANGES.fullmatch(rest) and not DISPATCH.fullmatch(rest):
         return 'this Upkeep lets an agent only start runs again, cancel them and start listed workflows.'
+    if parts[:2] == ['git', 'refs'] and (method == 'POST' or len(parts) < 4 or parts[2] != 'heads' or '' in parts):
+        return 'this Upkeep lets an agent change only existing branches through the API; push a new branch with Git.'
+    return None
+
+
+def branch_written(method, parts):
+    """The branch that `method` on the repository path `parts` changes without a pull request,
+    for the broker to refuse the default branch: CONTENTS for a file change, whose body names
+    the branch, the name for a change of a branch's reference, or None."""
+    if method in ('GET', 'HEAD'):
+        return None
+    if parts[:1] == ['contents'] and len(parts) > 1:
+        return CONTENTS
+    if parts[:3] == ['git', 'refs', 'heads'] and len(parts) > 3:
+        return '/'.join(parts[3:])
     return None
 
 

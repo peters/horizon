@@ -392,6 +392,12 @@ these requests of every agent of the cloud:
 - Auto-merge (a merge that GitHub makes later, unchecked).
 - A workflow dispatch, unless the person listed that workflow of that repository in
   the settings of the Upkeep.
+- A change of the default branch without a pull request: a Git push to it, a file
+  change in it through the contents API (whose branch is the default one unless the
+  request names another), a change of its reference, and a merge of branches through
+  the API. The default branch changes only when a pull request merges.
+- A push of a tag or of any other ref than a branch, and the creation of a reference
+  through the API: push a new branch with Git.
 
 The agent can still comment, review without approving, label, open and update pull
 requests, push to branches, start runs again and cancel them, and merge pull
@@ -424,8 +430,9 @@ instructions of the repositories decide when the agent starts one.
 
 The policy does not stop these:
 
-- A Git push, also one that changes `.github/workflows` or pushes a tag, and the
-  same change through the Git data API (blobs, trees, commits and references).
+- A push to another branch than the default one, also one that changes
+  `.github/workflows`. GitHub runs the workflows of a pushed branch for its `push`
+  events, with the secrets of the repository.
 - A change of code that a workflow runs, for example a build script or a local
   action in `.github/actions`. Only `.github/workflows` is protected.
 

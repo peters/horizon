@@ -52,6 +52,9 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
     def do_PATCH(self):
         self.answer()
 
+    def do_PUT(self):
+        self.answer()
+
     def do_DELETE(self):
         self.answer()
 

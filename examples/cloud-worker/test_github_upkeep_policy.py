@@ -104,7 +104,10 @@ class PolicyTests(ServiceTestCase):
                    ('DELETE', 'actions/runs/1'), ('POST', 'actions/workflows/1/enable'),
                    ('PUT', 'pulls/3/reviews/8/dismissals'), ('POST', 'pulls/3/reviews/'),
                    ('POST', 'pulls/03/reviews'), ('POST', 'pulls/3/reviews/8/events/'),
-                   ('PUT', 'pulls/3/reviews/8/dismissals/'), ('DELETE', 'pulls/3/reviews/08')]
+                   ('PUT', 'pulls/3/reviews/8/dismissals/'), ('DELETE', 'pulls/3/reviews/08'),
+                   ('POST', 'merges'), ('POST', 'merge-upstream'), ('POST', 'git/refs'),
+                   ('PATCH', 'git/refs/tags/v1'), ('DELETE', 'git/refs/tags/v1'), ('PATCH', 'git/refs/notes/x'),
+                   ('PATCH', 'git/refs/heads'), ('PATCH', 'git/refs/heads/x/')]
         for method, path in refused:
             self.assertIsNotNone(upkeep.rest_refusal(policy, method, path.split('/')), (method, path))
         allowed = [('GET', 'git/trees/x'), ('POST', 'issues/1/comments'), ('POST', 'labels'),
@@ -123,6 +126,14 @@ class PolicyTests(ServiceTestCase):
                                    ('PUT', 'pulls/3/reviews/8', False), ('POST', 'pulls/3/reviews/8/comments', False),
                                    ('GET', 'pulls/3/reviews', False)]:
             self.assertEqual(upkeep.reviews(method, path.split('/')), read, path)
+        for method, path, branch in [('PUT', 'contents/src/a.rs', upkeep.CONTENTS),
+                                     ('DELETE', 'contents/a', upkeep.CONTENTS),
+                                     ('PATCH', 'git/refs/heads/release/1', 'release/1'),
+                                     ('DELETE', 'git/refs/heads/main', 'main'), ('GET', 'contents/a', None),
+                                     ('POST', 'git/trees', None), ('PUT', 'pulls/1/merge', None)]:
+            self.assertIs(upkeep.branch_written(method, path.split('/')), branch, path) if branch is None \
+                or branch is upkeep.CONTENTS else self.assertEqual(upkeep.branch_written(method, path.split('/')),
+                                                                   branch)
         self.assertTrue(upkeep.approves(' approve'))
         self.assertFalse(upkeep.approves('COMMENT') or upkeep.approves(None))
 
@@ -210,6 +221,34 @@ class UpkeepBrokerTests(BrokerTestCase):
                 self.assertEqual(status, 403, body)
                 self.assertIn('this Upkeep', json.loads(payload)['message'])
             self.assertFalse(any(path == target for _, _, path, *_ in self.api.seen[before:]))
+
+    def test_the_default_branch_changes_only_through_a_pull_request(self):
+        self.api.answers['/repos/example/project'] = {'default_branch': 'main'}
+        before = len(self.api.seen)
+        for method, target, body in [('PUT', '/repos/example/project/contents/src/a.rs', {'content': 'eA=='}),
+                                     ('PUT', '/repos/example/project/contents/src/a.rs',
+                                      {'content': 'eA==', 'branch': 'refs/heads/main'}),
+                                     ('DELETE', '/repos/example/project/contents/a', {'sha': 'x', 'branch': 'main'}),
+                                     ('PUT', '/repos/example/project/contents/a', {'branch': 7}),
+                                     ('PATCH', '/repos/example/project/git/refs/heads/main', {'sha': HEAD}),
+                                     ('POST', '/repos/example/project/merges', {'base': 'main', 'head': 'x'})]:
+            status, _, payload = self.send(method, target, body=body)
+            self.assertEqual(status, 403, (method, target, body))
+            self.assertIn('this Upkeep', json.loads(payload)['message'])
+        self.assertFalse(any(path.startswith('/repos/example/project/') and path != '/repos/example/project'
+                             for _, _, path, *_ in self.api.seen[before:]))
+        # Another branch passes, with the body as sent.
+        for method, target, body in [('PUT', '/repos/example/project/contents/src/a.rs',
+                                      {'content': 'eA==', 'branch': 'upkeep/x'}),
+                                     ('DELETE', '/repos/example/project/git/refs/heads/dependabot/cargo/x', None)]:
+            status, _, _ = self.send(method, target, body=body)
+            self.assertEqual(status, 200, target)
+            self.assertEqual(self.api.seen[-1][2], target)
+            self.assertEqual(json.loads(self.api.seen[-1][-1] or b'null'), body)
+        # A repository whose default branch GitHub does not say is refused.
+        self.api.answers['/repos/example/project'] = {}
+        status, _, _ = self.send('PUT', '/repos/example/project/contents/a', body={'branch': 'upkeep/x'})
+        self.assertEqual(status, 403)
 
     def test_auto_merge_is_refused_for_an_upkeep(self):
         reply = self.graphql('mutation($id: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $id}) '
