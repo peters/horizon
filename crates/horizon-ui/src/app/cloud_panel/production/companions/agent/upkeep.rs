@@ -243,7 +243,7 @@ impl HorizonApp {
                         state.started.remove(&key);
                     }
                     // Neither shows that the companion stopped.
-                    (true, Phase::Refused | Phase::RetryRequired) => state.stop_failed(&key),
+                    (true, Phase::Refused | Phase::RetryRequired) => state.stop_failed(&key, id),
                     (true, _) => {}
                 }
                 (answer, started)
@@ -260,7 +260,7 @@ impl HorizonApp {
                 }
                 // Any other failure, such as a declaration that is gone, may not pass.
                 if *action == Ask::Stop && !busy {
-                    state.stop_failed(&key);
+                    state.stop_failed(&key, id);
                 }
                 (failure(*action, id, &error, tracked), false)
             }
@@ -292,10 +292,15 @@ fn action_name(action: Ask) -> &'static str {
 }
 
 impl State {
-    /// A Stop of companion `key` that a run started did not stop it: a later Stop, with a
-    /// new operation ID, tries again, a few times.
-    fn stop_failed(&mut self, key: &(String, String)) {
-        let Some(started) = self.started.get_mut(key) else {
+    /// Horizon's own Stop `id` of companion `key` that a run started did not stop it: a later
+    /// Stop, with a new operation ID, tries again, a few times. A Stop of the agent's own
+    /// leaves the count alone, so that its requests never use up Horizon's attempts.
+    fn stop_failed(&mut self, key: &(String, String), id: &str) {
+        let Some(started) = self
+            .started
+            .get_mut(key)
+            .filter(|started| started.stop.as_deref() == Some(id))
+        else {
             return;
         };
         started.refused += 1;
@@ -560,7 +565,19 @@ mod tests {
         let key = ("upkeep".to_owned(), "youpark".to_owned());
         let state = &mut app.cloud_prototype.production.companions.agent.upkeep;
         state.started.insert(key.clone(), Started::default());
+        // The agent's own Stops, which a run sends at an exchange's pace, never use up the
+        // attempts of Horizon's.
+        for _ in 0..STOP_ATTEMPTS {
+            let agents = manifest::provider_usage::new_operation_id();
+            let gone = Err("Companion declaration is missing".to_owned());
+            app.finish_upkeep_companion("upkeep", "youpark", &(Ask::Stop, agents), gone, &ctx);
+        }
+        let state = &mut app.cloud_prototype.production.companions.agent.upkeep;
+        assert_eq!(state.started[&key].refused, 0);
         for attempt in 1..STOP_ATTEMPTS {
+            // As `cleanup` names Horizon's Stop.
+            let state = &mut app.cloud_prototype.production.companions.agent.upkeep;
+            state.started.get_mut(&key).unwrap().stop = Some(id.clone());
             // A Stop that needs a new request counts as one too.
             let phase = if attempt % 2 == 0 {
                 Phase::Refused
@@ -578,6 +595,8 @@ mod tests {
         assert!(!app.cloud_prototype.production.companions.agent.holds("upkeep"));
         // A Stop that fails before it is recorded, such as for a declaration that is gone,
         // counts as well.
+        let state = &mut app.cloud_prototype.production.companions.agent.upkeep;
+        state.started.get_mut(&key).unwrap().stop = Some(id.clone());
         let gone = Err("Companion declaration is missing".to_owned());
         app.finish_upkeep_companion("upkeep", "youpark", &(Ask::Stop, id.clone()), gone, &ctx);
         assert!(
