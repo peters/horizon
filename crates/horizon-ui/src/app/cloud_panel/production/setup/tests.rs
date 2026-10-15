@@ -412,7 +412,7 @@ fn registry_setup_rotation_and_status_share_the_machine_policy() {
             .registry_status
             .as_ref()
             .unwrap()
-            .starts_with("Not prepared")
+            .starts_with("Provider registry access: Not prepared")
     );
     let draft = app.cloud_prototype.production.setup.draft.as_mut().unwrap();
     assert!(draft.registries[0].pull_secret.is_empty());
@@ -517,6 +517,7 @@ fn a_registry_result_keeps_or_drops_the_proof_for_the_current_grant_only() {
         repository: binding.repository.clone(),
         generation: generation.into(),
         verified,
+        fresh: false,
     };
     state.record_registry(outcome("an-older-generation", Some(validation())));
     assert!(state.verified.is_empty());
@@ -747,3 +748,5 @@ fn settings_open_at_their_final_size_and_position() {
         app.cancel_cloud_accounts();
     }
 }
+
+mod host_pull;

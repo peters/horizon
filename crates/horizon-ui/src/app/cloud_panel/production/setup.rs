@@ -58,6 +58,7 @@ struct Loaded {
     ssh_ready: bool,
     /// Saved validation results, read from each binding's journal without asking a provider.
     verified: dashboard::Verified,
+    refused_pull: Option<String>,
     /// The image repository of the cloud these settings were opened for, and its state
     /// when no binding covers it.
     needed: Option<(String, Option<horizon_core::cloud_runtime::registry::Needed>)>,
@@ -68,8 +69,9 @@ struct RegistryOutcome {
     message: String,
     repository: String,
     generation: String,
-    /// The validation saved for this pull grant while its provider access is active.
+    /// The action's saved host check or validation with active provider access.
     verified: Option<horizon_core::cloud_runtime::registry::Validation>,
+    fresh: bool,
 }
 
 enum Completion {
@@ -86,6 +88,7 @@ pub(in crate::app::cloud_panel) struct State {
     continue_creation: bool,
     edits: fields::Edits,
     verified: dashboard::Verified,
+    refused_pulls: std::collections::BTreeSet<String>,
     ssh_ready: Option<bool>,
     required_agents: Option<Vec<horizon_core::cloud_runtime::setup::Agent>>,
     receiver: Option<Receiver<Completion>>,
@@ -102,17 +105,35 @@ pub(in crate::app::cloud_panel) struct State {
 }
 
 impl State {
+    fn reset_form(&mut self) {
+        *self = Self {
+            refused_pulls: std::mem::take(&mut self.refused_pulls),
+            ..Self::default()
+        };
+    }
+
+    fn current_registry_generation(&self, repository: &str, generation: &str) -> bool {
+        self.draft.as_ref().is_some_and(|draft| {
+            draft.registries.iter().any(|registry| {
+                registry
+                    .original
+                    .as_ref()
+                    .is_some_and(|binding| binding.repository == repository && binding.generation == generation)
+            })
+        })
+    }
+
     /// Shows what a registry action found and keeps the proof, or drops it, for that grant.
     fn record_registry(&mut self, outcome: RegistryOutcome) {
         self.registry_status = Some(outcome.message);
-        let current = self.draft.as_ref().is_some_and(|draft| {
-            draft.registries.iter().any(|registry| {
-                registry.original.as_ref().is_some_and(|binding| {
-                    binding.repository == outcome.repository && binding.generation == outcome.generation
-                })
-            })
-        });
+        let current = self.current_registry_generation(&outcome.repository, &outcome.generation);
         if !current {
+            return;
+        }
+        if outcome.fresh && outcome.verified.is_some() {
+            self.refused_pulls.remove(&outcome.repository);
+        } else if self.refused_pulls.contains(&outcome.repository) {
+            self.verified.remove(&outcome.repository);
             return;
         }
         match outcome.verified {
@@ -256,7 +277,9 @@ impl HorizonApp {
         self.cloud_prototype.production.creating = false;
         self.cloud_prototype.production.pending_creation = None;
         let (sender, receiver) = channel();
+        let refused_pulls = std::mem::take(&mut self.cloud_prototype.production.setup.refused_pulls);
         self.cloud_prototype.production.setup = State {
+            refused_pulls,
             open: true,
             continue_creation,
             required_agents: required_agents.clone(),
@@ -273,6 +296,11 @@ impl HorizonApp {
                     let ssh_ready = cloud_runtime_ssh_valid(&draft.settings.ssh_identity_file);
                     let configured = draft.validate().is_ok() && ssh_ready;
                     let mut verified = saved_validations(&draft);
+                    let refused_pull = cloud
+                        .as_ref()
+                        .filter(|(_, pull)| *pull)
+                        .and_then(|(image, _)| horizon_core::cloud_runtime::registry::repository_of(image))
+                        .map(str::to_owned);
                     let needed =
                         cloud.and_then(|(image, pull)| needed::of_cloud(&draft.settings, &image, pull, &mut verified));
                     Completion::Loaded(Box::new(Loaded {
@@ -280,6 +308,7 @@ impl HorizonApp {
                         configured,
                         ssh_ready,
                         verified,
+                        refused_pull,
                         needed,
                     }))
                 }
@@ -321,11 +350,16 @@ impl HorizonApp {
                     configured,
                     ssh_ready,
                     verified,
+                    refused_pull,
                     needed,
                 } = *loaded;
                 state.draft = Some(Box::new(draft));
                 state.ssh_ready = Some(ssh_ready);
                 state.verified = verified;
+                state.refused_pulls.extend(refused_pull);
+                state
+                    .verified
+                    .retain(|repository, _| !state.refused_pulls.contains(repository));
                 state.needed = needed::Needed::new(needed);
                 configured && state.continue_creation
             }
@@ -347,7 +381,7 @@ impl HorizonApp {
             }
         };
         if proceed {
-            *state = State::default();
+            state.reset_form();
             self.cloud_prototype.production.launch.accounts_checked = true;
             self.add_mock_cloud(ctx);
         }
@@ -449,7 +483,7 @@ impl HorizonApp {
     fn manage_cloud_registry(&mut self, ctx: &Context, action: horizon_core::cloud_runtime::registry::Action) {
         let state = &mut self.cloud_prototype.production.setup;
         let Some(draft) = &state.draft else { return };
-        if !draft.runpod_key.is_empty() {
+        if action.scope() == horizon_core::cloud_runtime::registry::Scope::Provider && !draft.runpod_key.is_empty() {
             state.error = Some("Clear or save the unsaved compute key before managing provider access.".into());
             return;
         }
@@ -458,12 +492,50 @@ impl HorizonApp {
         state.registry_cancel = Some(cancellation.clone());
         state.error = None;
         state.registry_status = None;
+        let affected_repository = match &action {
+            horizon_core::cloud_runtime::registry::Action::Verify { image }
+            | horizon_core::cloud_runtime::registry::Action::VerifyPull { image } => {
+                horizon_core::cloud_runtime::registry::repository_of(image).map(str::to_owned)
+            }
+            horizon_core::cloud_runtime::registry::Action::PullStatus { repository, generation }
+            | horizon_core::cloud_runtime::registry::Action::Status { repository, generation }
+            | horizon_core::cloud_runtime::registry::Action::Reconcile { repository, generation }
+            | horizon_core::cloud_runtime::registry::Action::Revoke { repository, generation } => state
+                .current_registry_generation(repository, generation)
+                .then(|| repository.clone()),
+        };
+        if let Some(repository) = affected_repository {
+            state.verified.remove(&repository);
+            if matches!(
+                action,
+                horizon_core::cloud_runtime::registry::Action::Verify { .. }
+                    | horizon_core::cloud_runtime::registry::Action::VerifyPull { .. }
+            ) {
+                state.refused_pulls.insert(repository);
+            }
+        }
         let (sender, receiver) = channel();
         state.receiver = Some(receiver);
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let result = horizon_core::cloud_runtime::registry::manage(&settings, &action, &cancellation)
-                .map(|status| registry_outcome(&status, &action))
+                .map(|status| {
+                    let mut outcome = registry_outcome(&status, &action);
+                    if !outcome.fresh && status.scope == horizon_core::cloud_runtime::registry::Scope::Provider {
+                        outcome.verified =
+                            match cached_pull_validation(&settings, &status.repository, &status.generation) {
+                                Ok(Some(saved)) => Some(saved),
+                                Ok(None) => outcome.verified,
+                                Err(_) => {
+                                    outcome
+                                        .message
+                                        .push_str(" Host pull history is unavailable; validate pull access again.");
+                                    None
+                                }
+                            };
+                    }
+                    outcome
+                })
                 .map_err(|error| error.to_string());
             let _ = sender.send(Completion::Registry(result));
             ctx.request_repaint();
@@ -473,7 +545,7 @@ impl HorizonApp {
     fn cancel_cloud_accounts(&mut self) {
         let resume_creation = self.cloud_prototype.production.setup.continue_creation
             && self.cloud_prototype.production.launch.workspace.is_some();
-        self.cloud_prototype.production.setup = State::default();
+        self.cloud_prototype.production.setup.reset_form();
         if resume_creation {
             let form = &mut self.cloud_prototype.production;
             form.launch.submitted = false;
@@ -520,13 +592,16 @@ fn registry_outcome(
     status: &horizon_core::cloud_runtime::registry::Status,
     action: &horizon_core::cloud_runtime::registry::Action,
 ) -> RegistryOutcome {
-    use horizon_core::cloud_runtime::registry::{Action, State};
-    let label = match status.state {
-        State::Prepared => "Not prepared",
-        State::Requested { .. } => "Creation uncertain; reconcile before retrying",
-        State::Bound(_) => "Active",
-        State::Revoking(_) => "Revocation pending; reconcile again",
-        State::Revoked => "Revoked",
+    use horizon_core::cloud_runtime::registry::{Action, Scope, State};
+    let label = match (status.scope, &status.state) {
+        (Scope::Host, State::Prepared) => {
+            if status.validation.is_some() {
+                "Pull check saved"
+            } else {
+                "Not checked"
+            }
+        }
+        _ => provider_registry_label(&status.state),
     };
     let message = status.validation.as_ref().map_or_else(
         || {
@@ -544,40 +619,69 @@ fn registry_outcome(
             )
         },
     );
-    // Only active provider access counts as verified; revoking it undoes the proof.
-    let verified = matches!(status.state, State::Bound(_))
-        .then(|| status.validation.clone())
-        .flatten()
-        .filter(|_| !matches!(action, Action::Revoke { .. }));
+    // A host check is historical pull validation; provider access additionally needs its binding.
+    let verified = matches!(
+        (status.scope, &status.state),
+        (Scope::Host, State::Prepared) | (Scope::Provider, State::Bound(_))
+    )
+    .then(|| status.validation.clone())
+    .flatten()
+    .filter(|_| !matches!(action, Action::Revoke { .. }));
+    let scope = if status.scope == Scope::Host {
+        "Host pull access"
+    } else {
+        "Provider registry access"
+    };
     RegistryOutcome {
-        message,
+        message: format!("{scope}: {message}"),
         repository: status.repository.clone(),
         generation: status.generation.clone(),
         verified,
+        fresh: matches!(action, Action::Verify { .. } | Action::VerifyPull { .. }),
     }
 }
 
-/// Each binding's saved validation, from its journal; nothing is sent to a provider.
+fn provider_registry_label(state: &horizon_core::cloud_runtime::registry::State) -> &'static str {
+    use horizon_core::cloud_runtime::registry::State;
+    match state {
+        State::Prepared => "Not prepared",
+        State::Requested { .. } => "Creation uncertain; reconcile before retrying",
+        State::Bound(_) => "Active",
+        State::Revoking(_) => "Revocation pending; reconcile again",
+        State::Revoked => "Revoked",
+    }
+}
+
+/// Each binding's saved host pull validation; no compute credential is loaded.
 fn saved_validations(draft: &Draft) -> dashboard::Verified {
-    use horizon_core::cloud_runtime::registry::{Action, manage};
     let mut found = dashboard::Verified::new();
-    let Some(config) = &draft.settings.registries else {
-        return found;
-    };
-    for binding in &config.bindings {
-        let action = Action::Status {
-            repository: binding.repository.clone(),
-            generation: binding.generation.clone(),
-        };
-        let cancellation = horizon_core::cloud_runtime::Cancellation::default();
-        if let Ok(outcome) =
-            manage(&draft.settings, &action, &cancellation).map(|status| registry_outcome(&status, &action))
-            && let Some(validation) = outcome.verified
-        {
-            found.insert(binding.repository.clone(), validation);
+    if let Some(config) = &draft.settings.registries {
+        for binding in &config.bindings {
+            if let Ok(Some(validation)) =
+                cached_pull_validation(&draft.settings, &binding.repository, &binding.generation)
+            {
+                found.insert(binding.repository.clone(), validation);
+            }
         }
     }
     found
+}
+
+// Host history never opens the provider journal or reads its compute credential.
+// A fresh verification displays the action's own scoped result.
+fn cached_pull_validation(
+    settings: &horizon_core::cloud_runtime::settings::Settings,
+    repository: &str,
+    generation: &str,
+) -> horizon_core::cloud_runtime::Result<Option<horizon_core::cloud_runtime::registry::Validation>> {
+    use horizon_core::cloud_runtime::registry::{Action, manage};
+    let cancellation = horizon_core::cloud_runtime::Cancellation::default();
+    let host = Action::PullStatus {
+        repository: repository.into(),
+        generation: generation.into(),
+    };
+    let status = manage(settings, &host, &cancellation)?;
+    Ok(registry_outcome(&status, &host).verified)
 }
 
 fn cloud_runtime_ssh_valid(path: &std::path::Path) -> bool {

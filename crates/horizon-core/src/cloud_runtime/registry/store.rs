@@ -53,20 +53,18 @@ impl Journal {
     }
 
     pub fn open_host(config: &Config, binding: &Binding, fingerprint: &str) -> Result<Self> {
-        config.validate()?;
-        let mut journal = Self::open_scoped(
-            config,
-            binding,
-            &binding.generation,
-            "direct-host",
-            &config.root.join("hosts"),
-        )?;
+        let mut journal = Self::open_host_generation(config, binding, &binding.generation)?;
+        journal.check_fingerprint(config, Some(fingerprint))?;
+        Ok(journal)
+    }
+
+    pub fn open_host_generation(config: &Config, binding: &Binding, generation: &str) -> Result<Self> {
+        let journal = Self::open_scoped(config, binding, generation, "direct-host", &config.root.join("hosts"))?;
         if !matches!(journal.state(), State::Prepared) {
             return Err(Error::Invalid(
                 "A direct host pull journal cannot contain provider registry state",
             ));
         }
-        journal.check_fingerprint(config, Some(fingerprint))?;
         Ok(journal)
     }
 

@@ -47,6 +47,8 @@ pub(super) fn card(
             );
         }
         needed::block(ui, needed, &mut accounts.registries);
+        let provider_available =
+            compute_saved && accounts.saved_credentials.contains(&accounts.settings.runpod_key_file);
         let credentials = &accounts.saved_credentials;
         for (index, draft) in accounts.registries.iter_mut().enumerate() {
             let entry = ui.push_id(index, |ui| {
@@ -65,7 +67,7 @@ pub(super) fn card(
                     ui,
                     draft,
                     verified,
-                    compute_saved,
+                    provider_available,
                     (saved_pull, saved_publish, publishing_open),
                     &mut action,
                 );
@@ -220,7 +222,7 @@ fn management(
         caption(
             ui,
             &format!(
-                "Verified image: {}. Scope: {}. Expiry: {}.",
+                "Saved pull check (host or active provider): {}. Scope: {}. Expiry: {}.",
                 validation.image,
                 validation.scope,
                 validation.expires_at.as_deref().unwrap_or("Unknown")
@@ -233,8 +235,7 @@ fn management(
         &mut draft.validation_image,
         "ghcr.io/team/worker@sha256:…",
     );
-    let manageable = compute_saved && draft.is_saved();
-    ui.add_enabled_ui(manageable, |ui| {
+    ui.add_enabled_ui(draft.is_saved(), |ui| {
         ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(
@@ -243,58 +244,37 @@ fn management(
                 )
                 .clicked()
             {
-                *action = Some(Action::Verify {
+                *action = Some(Action::VerifyPull {
                     image: draft.validation_image.clone(),
                 });
             }
-            if ui.add(chrome_button("Status").min_size(vec2(84.0, 32.0))).clicked() {
-                *action = Some(Action::Status {
-                    repository: saved.repository.clone(),
-                    generation: saved.generation.clone(),
-                });
-            }
-            if ui.add(chrome_button("Reconcile").min_size(vec2(84.0, 32.0))).clicked() {
-                *action = Some(Action::Reconcile {
-                    repository: saved.repository.clone(),
-                    generation: saved.generation.clone(),
-                });
-            }
             if ui
-                .add(danger_button("Revoke pull binding").min_size(vec2(140.0, 32.0)))
+                .add(chrome_button("Last pull check").min_size(vec2(112.0, 32.0)))
                 .clicked()
             {
-                *action = Some(Action::Revoke {
+                *action = Some(Action::PullStatus {
                     repository: saved.repository.clone(),
                     generation: saved.generation.clone(),
                 });
             }
         });
-        for generation in &saved.retired {
-            ui.horizontal_wrapped(|ui| {
-                caption(ui, &format!("Previous: {generation}"));
-                if ui
-                    .add(chrome_button("Reconcile previous").min_size(vec2(120.0, 28.0)))
-                    .clicked()
-                {
-                    *action = Some(Action::Reconcile {
-                        repository: saved.repository.clone(),
-                        generation: generation.clone(),
-                    });
-                }
-                if ui
-                    .add(danger_button("Revoke previous").min_size(vec2(112.0, 28.0)))
-                    .clicked()
-                {
-                    *action = Some(Action::Revoke {
-                        repository: saved.repository.clone(),
-                        generation: generation.clone(),
-                    });
-                }
-            });
-        }
+        caption(
+            ui,
+            "This check needs no compute account and creates no provider access.",
+        );
+        egui::CollapsingHeader::new("Provider registry access").show(ui, |ui| {
+            caption(
+                ui,
+                "Only needed for providers that manage registry bindings. Direct hosts use the pull check above.",
+            );
+            ui.add_enabled_ui(compute_saved, |ui| provider_controls(ui, draft, saved, action));
+        });
     });
     if !draft.is_saved() {
-        caption(ui, "Save changes before managing provider access.");
+        caption(
+            ui,
+            "Save changes before checking pull access or managing provider access.",
+        );
     }
     caption(
         ui,
@@ -302,4 +282,67 @@ fn management(
          revocation. Revocation removes provider pull access; revoke the token at its issuer separately. \
          Running workers are unchanged.",
     );
+}
+
+fn provider_controls(ui: &mut Ui, draft: &Draft, saved: &Binding, action: &mut Option<Action>) {
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .add_enabled(
+                !draft.validation_image.is_empty(),
+                primary_button("Prepare provider access").min_size(vec2(148.0, 32.0)),
+            )
+            .clicked()
+        {
+            *action = Some(Action::Verify {
+                image: draft.validation_image.clone(),
+            });
+        }
+        if ui
+            .add(chrome_button("Provider status").min_size(vec2(84.0, 32.0)))
+            .clicked()
+        {
+            *action = Some(Action::Status {
+                repository: saved.repository.clone(),
+                generation: saved.generation.clone(),
+            });
+        }
+        if ui.add(chrome_button("Reconcile").min_size(vec2(84.0, 32.0))).clicked() {
+            *action = Some(Action::Reconcile {
+                repository: saved.repository.clone(),
+                generation: saved.generation.clone(),
+            });
+        }
+        if ui
+            .add(danger_button("Revoke provider access").min_size(vec2(140.0, 32.0)))
+            .clicked()
+        {
+            *action = Some(Action::Revoke {
+                repository: saved.repository.clone(),
+                generation: saved.generation.clone(),
+            });
+        }
+    });
+    for generation in &saved.retired {
+        ui.horizontal_wrapped(|ui| {
+            caption(ui, &format!("Previous: {generation}"));
+            if ui
+                .add(chrome_button("Reconcile previous").min_size(vec2(120.0, 28.0)))
+                .clicked()
+            {
+                *action = Some(Action::Reconcile {
+                    repository: saved.repository.clone(),
+                    generation: generation.clone(),
+                });
+            }
+            if ui
+                .add(danger_button("Revoke previous").min_size(vec2(112.0, 28.0)))
+                .clicked()
+            {
+                *action = Some(Action::Revoke {
+                    repository: saved.repository.clone(),
+                    generation: generation.clone(),
+                });
+            }
+        });
+    }
 }

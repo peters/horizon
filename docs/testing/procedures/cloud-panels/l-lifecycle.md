@@ -1119,11 +1119,11 @@ to 12 revoke it while the fixture runs.
    > **CAUTION:** REVOKE ONLY THE `<build-repository>` ENTRY OF THIS RUN. A worker
    > that needs this credential cannot pull its image after a restart.
 
-5. On the `<build-repository>` entry, click **Revoke pull binding**.
+5. In **Provider registry access** on the `<build-repository>` entry, click **Revoke provider access**.
 
    Result: The entry shows that the provider pull credential is revoked.
 
-6. Write the status action for `<build-repository>` as in A08 step 13.
+6. Write the provider status action for `<build-repository>` as in A08 step 15.
 
    Result: `<data-home>/smoke/registry-status.json` names `<build-repository>` and its generation.
 

@@ -1,6 +1,6 @@
 # Private registry bindings
 
-Open **Menu > Cloud settings > Private container images**. Add the exact image
+Open **Menu > Cloud settings > Container registry**. Add the exact image
 repository, for example `ghcr.io/example-team/worker`, and separate publishing and
 worker-pull logins. Publishing is optional for existing images. Confirm that the
 pull grant is read-only and limited to the intended repository. Expiry is optional
@@ -10,9 +10,15 @@ Saving writes private, immutable credential files under the machine's cloud acco
 directory. Settings contain file references and generation identities, never tokens.
 Saving does not publish, allocate compute or transfer credentials. Reopen settings,
 enter an existing immutable `repository@sha256:...` image and select **Validate pull
-access**. This checks pull access and then prepares the named provider pull binding.
-Only that pull credential is sent to the provider. Publishing credentials remain
-local. Validation and deployment share the same policy.
+access**. This checks the immutable image with the pull login and saves a host pull
+check. It needs no compute account and creates no provider access. **Last pull check**
+reads that saved result without a network request.
+
+For a provider that manages registry bindings, expand **Provider registry access**
+and select **Prepare provider access**. This checks the image and prepares the named
+provider pull binding. Only that pull credential is sent to the provider. Publishing
+credentials remain local. **Provider status** reads that provider journal. Direct
+hosts use the host pull check instead. Validation and deployment share the same policy.
 
 For GHCR, use a dedicated classic token with only `read:packages`, authorized for
 the organization's package and SSO policy where required. Broader or unobservable
@@ -62,11 +68,12 @@ Existing worker specifications keep their original identity; fresh allocations u
 the validated current generation. Do not retire access still needed by an existing
 worker's future restart. Horizon does not mutate running workers during rotation.
 
-**Revoke pull binding** removes provider access for that exact generation. It does
+**Revoke provider access**, under **Provider registry access**, removes provider access
+for that exact generation. It does
 not revoke the token at its issuer or remove credentials a running process already
 holds. Revoke the issuer token separately when appropriate. A revoked current
-generation stays blocked even if an older settings snapshot is used; rotate to
-establish new access.
+generation stays blocked for that provider even if an older settings snapshot is
+used; rotate to establish new provider access. The separate host check is unchanged.
 
 Uncertain creation never repeats its POST. **Reconcile** can recover a uniquely
 named binding; an empty listing leaves uncertain creation fenced. Uncertain deletion
@@ -100,11 +107,17 @@ Import uses the same private settings transaction and rotation rules as the form
 Action JSON is one of:
 
 ```json
+{"operation":"verify_pull","image":"ghcr.io/example-team/worker@sha256:<64-hex-digits>"}
+{"operation":"pull_status","repository":"ghcr.io/example-team/worker","generation":"<saved-generation>"}
 {"operation":"verify","image":"ghcr.io/example-team/worker@sha256:<64-hex-digits>"}
 {"operation":"status","repository":"ghcr.io/example-team/worker","generation":"<saved-generation>"}
 {"operation":"reconcile","repository":"ghcr.io/example-team/worker","generation":"<saved-generation>"}
 {"operation":"revoke","repository":"ghcr.io/example-team/worker","generation":"<saved-generation>"}
 ```
+
+`verify_pull` and `pull_status` use the host journal without reading a compute key.
+`verify`, `status`, `reconcile` and `revoke` use the provider journal and require its
+original compute credential. Only `verify` prepares provider access.
 
 For MCP, configure the built helper as a stdio server with arguments
 `registry-mcp /private/cloud/settings.json`. Its `cloud_registry` tool accepts the
@@ -113,9 +126,10 @@ secrets, settings paths or provider endpoints. Configure/import bindings through
 form or CLI first. No UI needs to be open. Cancellation preserves pending mutation
 journals; use status/reconcile to inspect an interrupted operation.
 
-Status includes the generation, provider state, last validated image, scope proof,
+Status includes the generation, action scope (`host` or `provider`), state, last validated image, scope proof,
 configured pull expiry even before verification, observed expiry and verification timestamp. It is historical evidence,
-not a guarantee that the issuer has not revoked the token since. Deployment validates
+not a guarantee that the issuer has not revoked the token since. Host state stays
+`Prepared`; its validation field shows whether a pull check was saved. Deployment validates
 again. Docker with buildx and network access to the registry are required for image
 validation. The helper uses the workspace's existing MCP/runtime dependencies only
 for its development executable; no new runtime dependency is added to horizon-core.
@@ -124,3 +138,8 @@ Deployment retries retain the selected private registry generation. Removing its
 binding cannot switch a prepared private image to ambient authentication: restore
 or rotate the binding before retrying. Existing worker reconciliation does not
 require the removed local credential.
+
+An explicit provider action can retain its own active provider proof when host
+history was read successfully and is empty. A busy or unreadable host journal
+never permits that fallback. Reopening settings reads host history only; it does
+not load compute credentials to recover provider history.
