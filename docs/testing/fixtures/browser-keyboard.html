@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Keyboard fixture</title>
+<title>Keyboard and zoom fixture</title>
 <style>
   :root { font: 16px/1.4 system-ui, sans-serif; color: #1b1f24; background: #f6f8fa; }
   body { margin: 0; }
@@ -13,7 +13,8 @@
   header { display: flex; gap: 16px; padding: 16px; background: #fff; border-bottom: 1px solid #d0d7de; }
   main { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding: 16px; }
   .card { padding: 16px; background: #fff; border: 1px solid #d0d7de; border-radius: 8px; }
-  #status { padding: 0 16px; font-family: ui-monospace, monospace; }
+  #status, #layout { padding: 0 16px; font-family: ui-monospace, monospace; }
+  @media (max-width: 640px) { main { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -24,6 +25,7 @@
   <button type="button" id="menu">Menu</button>
 </header>
 <p id="status">focus: none</p>
+<p id="layout">width: <span id="width"></span> CSS px · columns: <span id="columns"></span></p>
 <main id="content" tabindex="-1">
   <section class="card" id="one"><h2>One</h2><label>Name <input id="name"></label></section>
   <section class="card" id="two"><h2>Two</h2><button type="button" id="save">Save</button></section>
@@ -31,6 +33,13 @@
 </main>
 <script>
   const status = document.getElementById('status');
+  function layout() {
+    document.getElementById('width').textContent = window.innerWidth;
+    document.getElementById('columns').textContent =
+      getComputedStyle(document.querySelector('main')).gridTemplateColumns.split(' ').length;
+  }
+  window.addEventListener('resize', layout);
+  layout();
   document.addEventListener('focusin', (event) => {
     const element = event.target;
     status.textContent = 'focus: ' + (element.id || element.textContent.trim());

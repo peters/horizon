@@ -21,6 +21,9 @@ pub const MAX_CLICK_COUNT: u32 = 3;
 pub const DEFAULT_PRESS_COUNT: u32 = 1;
 /// Most consecutive presses of one key chord in a single action.
 pub const MAX_PRESS_COUNT: u32 = 100;
+/// Page zoom bounds in percent, as browsers offer them.
+pub const MIN_ZOOM_PERCENT: u32 = 25;
+pub const MAX_ZOOM_PERCENT: u32 = 500;
 /// Most host files one `set_files` action attaches.
 pub const MAX_ATTACHMENT_FILES: usize = 32;
 /// Maximum bytes in one remote file-transfer envelope.
@@ -105,6 +108,13 @@ pub enum BrowserControlAction {
     /// Pin the content viewport in CSS pixels; `None` resumes host sizing.
     Resize {
         viewport: Option<[u32; 2]>,
+        timeout_millis: u64,
+    },
+    /// Zoom the page like the browser's zoom level: the CSS viewport becomes
+    /// the unzoomed viewport divided by `percent / 100`, and the panel
+    /// magnifies the frame. `None` resets to 100 percent.
+    Zoom {
+        percent: Option<u32>,
         timeout_millis: u64,
     },
     Navigate {
@@ -259,6 +269,10 @@ impl BrowserControlAction {
                 viewport,
                 timeout_millis,
             } => validate_resize(*viewport, *timeout_millis),
+            Self::Zoom {
+                percent,
+                timeout_millis,
+            } => validate_zoom(*percent, *timeout_millis),
             Self::Navigate {
                 url, timeout_millis, ..
             } => {
@@ -296,15 +310,7 @@ impl BrowserControlAction {
                 target,
                 delta_x,
                 delta_y,
-            } => {
-                if let Some(target) = target {
-                    validate_target(target)?;
-                }
-                if !delta_x.is_finite() || !delta_y.is_finite() {
-                    return Err("scroll delta must be finite");
-                }
-                Ok(())
-            }
+            } => validate_scroll(target.as_ref(), *delta_x, *delta_y),
             Self::SetFiles { target, paths, sources } => {
                 validate_attachments(target, paths, sources, AttachmentAction::SetFiles)
             }
@@ -357,6 +363,7 @@ impl BrowserControlAction {
             Self::Input { input } => Some(BrowserCommand::Input(input.clone())),
             Self::Orientation { .. }
             | Self::Resize { .. }
+            | Self::Zoom { .. }
             | Self::Snapshot { .. }
             | Self::Query { .. }
             | Self::WaitForSelector { .. }
@@ -389,6 +396,37 @@ fn validate_resize(viewport: Option<[u32; 2]>, timeout_millis: u64) -> Result<()
     }
     if !(1..=60_000).contains(&timeout_millis) {
         return Err("resize timeout must be between 1 and 60000 ms");
+    }
+    Ok(())
+}
+
+/// The CSS viewport of an unzoomed `size` at `percent` page zoom: each axis
+/// divided by `percent / 100`, rounded, and at least one pixel.
+#[must_use]
+pub fn zoomed_viewport(size: [u32; 2], percent: u32) -> [u32; 2] {
+    let percent = u64::from(percent.max(1));
+    size.map(|axis| {
+        let scaled = (u64::from(axis) * 100 + percent / 2) / percent;
+        u32::try_from(scaled).unwrap_or(u32::MAX).max(1)
+    })
+}
+
+fn validate_scroll(target: Option<&BrowserTarget>, delta_x: f64, delta_y: f64) -> Result<(), &'static str> {
+    if let Some(target) = target {
+        validate_target(target)?;
+    }
+    if !delta_x.is_finite() || !delta_y.is_finite() {
+        return Err("scroll delta must be finite");
+    }
+    Ok(())
+}
+
+fn validate_zoom(percent: Option<u32>, timeout_millis: u64) -> Result<(), &'static str> {
+    if percent.is_some_and(|percent| !(MIN_ZOOM_PERCENT..=MAX_ZOOM_PERCENT).contains(&percent)) {
+        return Err("zoom must be between 25 and 500 percent");
+    }
+    if !(1..=60_000).contains(&timeout_millis) {
+        return Err("zoom timeout must be between 1 and 60000 ms");
     }
     Ok(())
 }
@@ -705,6 +743,30 @@ mod tests {
         }
     }
     use crate::BrowserButton;
+
+    #[test]
+    fn zoom_actions_bound_the_percent_and_timeout() {
+        for (percent, valid) in [
+            (None, true),
+            (Some(24), false),
+            (Some(MIN_ZOOM_PERCENT), true),
+            (Some(200), true),
+            (Some(MAX_ZOOM_PERCENT), true),
+            (Some(501), false),
+        ] {
+            let action = BrowserControlAction::Zoom {
+                percent,
+                timeout_millis: 1_000,
+            };
+            assert_eq!(action.validate().is_ok(), valid, "{percent:?}");
+            assert!(action.to_command().is_none());
+        }
+        let late = BrowserControlAction::Zoom {
+            percent: Some(200),
+            timeout_millis: 0,
+        };
+        assert!(late.validate().is_err());
+    }
 
     #[test]
     fn press_actions_bound_their_count_and_decode_with_defaults() {

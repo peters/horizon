@@ -106,6 +106,7 @@ impl FileChooserHandle {
                     | crate::BrowserControlAction::Back
                     | crate::BrowserControlAction::Forward
                     | crate::BrowserControlAction::Resize { .. }
+                    | crate::BrowserControlAction::Zoom { .. }
                     | crate::BrowserControlAction::Orientation { .. }
             )
     }

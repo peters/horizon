@@ -14,15 +14,37 @@ use super::{BrowserEventSender, DriverState, VIEWPORT_CAPTURE_DELAY};
 
 pub(crate) const MEASURE_VIEWPORT: &str = "[window.innerWidth, window.innerHeight]";
 
+/// Page zoom of a fresh session, in percent.
+pub(crate) const DEFAULT_ZOOM_PERCENT: u32 = 100;
+
+/// Largest CSS viewport axis a zoomed-out page gets, the `browser_resize`
+/// limit; a 25 percent zoom of a large panel would otherwise ask the engine
+/// for frames of tens of thousands of pixels.
+const MAX_ZOOMED_AXIS: u32 = 8000;
+
+/// What one pending viewport action changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ViewportChange {
+    /// Pin the unzoomed CSS viewport; `None` resumes host sizing.
+    Resize(Option<[u32; 2]>),
+    /// Page zoom in percent; `None` resets it.
+    Zoom(Option<u32>),
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ViewportPolicy {
     host: [u32; 2],
     explicit: Option<[u32; 2]>,
+    zoom_percent: u32,
 }
 
 impl ViewportPolicy {
     pub(crate) const fn new(host: [u32; 2]) -> Self {
-        Self { host, explicit: None }
+        Self {
+            host,
+            explicit: None,
+            zoom_percent: DEFAULT_ZOOM_PERCENT,
+        }
     }
 
     pub(crate) fn follow_host(&mut self, size: [u32; 2]) -> bool {
@@ -33,24 +55,58 @@ impl ViewportPolicy {
         self.explicit.is_none()
     }
 
-    pub(crate) fn target(self, requested: Option<[u32; 2]>) -> [u32; 2] {
-        requested.unwrap_or(self.host)
+    /// The CSS viewport the page gets: the pin or the host size, divided by
+    /// the zoom, as a browser's zoom level divides its window. Only a pinned
+    /// or zoomed viewport is bounded; the host letterboxes it through the
+    /// frame override, while an unpinned 100 percent page keeps the panel size.
+    pub(crate) fn applied(self) -> [u32; 2] {
+        let unbounded = self.unbounded();
+        if self.overrides_frame() {
+            unbounded.map(|axis| axis.min(MAX_ZOOMED_AXIS))
+        } else {
+            unbounded
+        }
+    }
+
+    fn overrides_frame(self) -> bool {
+        self.explicit.is_some() || self.zoom_percent != DEFAULT_ZOOM_PERCENT
+    }
+
+    fn unbounded(self) -> [u32; 2] {
+        crate::zoomed_viewport(self.explicit.unwrap_or(self.host), self.zoom_percent)
+    }
+
+    /// The viewport the driver sets in place of the panel size, which the host
+    /// letterboxes and maps input onto; `None` while the page follows the panel.
+    pub(crate) fn frame_override(self) -> Option<[u32; 2]> {
+        self.overrides_frame().then(|| self.applied())
     }
 
     pub(crate) fn rebind_target(self, bound: Option<&str>, current: Option<&str>) -> Option<[u32; 2]> {
-        self.explicit.filter(|_| current.is_some() && bound != current)
+        self.frame_override().filter(|_| current.is_some() && bound != current)
     }
 
-    pub(crate) fn commit(&mut self, requested: Option<[u32; 2]>) {
-        self.explicit = requested;
+    pub(crate) fn with(self, change: ViewportChange) -> Self {
+        match change {
+            ViewportChange::Resize(explicit) => Self { explicit, ..self },
+            ViewportChange::Zoom(percent) => Self {
+                zoom_percent: percent.unwrap_or(DEFAULT_ZOOM_PERCENT),
+                ..self
+            },
+        }
+    }
+
+    pub(crate) fn commit(&mut self, change: ViewportChange) {
+        *self = self.with(change);
     }
 }
 
 #[derive(Debug)]
 pub(crate) struct PendingResize {
     pub(crate) request: AgentAction,
-    pub(crate) requested: Option<[u32; 2]>,
+    pub(crate) change: ViewportChange,
     pub(crate) target: [u32; 2],
+    zoom_percent: u32,
     pub(crate) bound_session: Option<String>,
     deadline: Instant,
     next_poll: Instant,
@@ -63,15 +119,21 @@ impl PendingResize {
             .action
             .validate()
             .map_err(|message| BrowserControlFailure::new("invalid_input", message))?;
-        let BrowserControlAction::Resize {
-            viewport,
-            timeout_millis,
-        } = request.action
-        else {
-            return Err(BrowserControlFailure::new(
-                "invalid_action_state",
-                "expected viewport resize",
-            ));
+        let (change, timeout_millis) = match request.action {
+            BrowserControlAction::Resize {
+                viewport,
+                timeout_millis,
+            } => (ViewportChange::Resize(viewport), timeout_millis),
+            BrowserControlAction::Zoom {
+                percent,
+                timeout_millis,
+            } => (ViewportChange::Zoom(percent), timeout_millis),
+            _ => {
+                return Err(BrowserControlFailure::new(
+                    "invalid_action_state",
+                    "expected viewport resize or zoom",
+                ));
+            }
         };
         let queued_millis = u64::try_from(crate::navigation::now_millis().saturating_sub(request.requested_at_millis))
             .unwrap_or_default();
@@ -79,11 +141,19 @@ impl PendingResize {
         if remaining == 0 {
             return Err(resize_timeout());
         }
+        let next = policy.with(change);
+        if next.unbounded() != next.applied() {
+            return Err(BrowserControlFailure::new(
+                "invalid_input",
+                "the zoomed viewport would exceed 8000 CSS pixels per axis; zoom in further first, or pin a smaller size instead of following the panel",
+            ));
+        }
         let now = Instant::now();
         Ok(Self {
             request: request.clone(),
-            requested: viewport,
-            target: policy.target(viewport),
+            change,
+            target: next.applied(),
+            zoom_percent: next.zoom_percent,
             bound_session: None,
             deadline: now + Duration::from_millis(remaining),
             next_poll: now,
@@ -145,9 +215,17 @@ impl PendingResize {
             return Ok(None);
         }
         if self.measured_epoch.is_some_and(|measured| measured != epoch) {
-            return Ok(Some(BrowserControlValue::Viewport {
-                requested: self.requested,
-                applied,
+            return Ok(Some(match self.change {
+                ViewportChange::Resize(requested) => BrowserControlValue::Viewport {
+                    requested,
+                    applied,
+                    zoom_percent: self.zoom_percent,
+                },
+                ViewportChange::Zoom(requested) => BrowserControlValue::Zoom {
+                    requested,
+                    applied: requested.unwrap_or(DEFAULT_ZOOM_PERCENT),
+                    viewport: applied,
+                },
             }));
         }
         self.measured_epoch = Some(epoch);
@@ -176,7 +254,7 @@ impl DriverState {
         }
         match PendingResize::new(request, self.viewport_policy) {
             Ok(pending) => {
-                self.finish_pending_resize("viewport_superseded", "a newer resize replaced this request");
+                self.finish_pending_resize("viewport_superseded", "a newer viewport change replaced this request");
                 self.pending_resize = Some(pending);
             }
             Err(error) => self.complete_agent_action(request, Err(error)),
@@ -237,7 +315,7 @@ impl DriverState {
         if !pending.poll_due() || self.session_id.is_none() {
             return Ok(None);
         }
-        let target = self.viewport_policy.target(pending.requested);
+        let target = self.viewport_policy.with(pending.change).applied();
         if pending.target != target {
             pending.bound_session = None;
             pending.target = target;
@@ -258,8 +336,8 @@ impl DriverState {
             }
             result.map_err(|error| BrowserControlFailure::new("viewport_failed", error.to_string()))?;
             pending.measured_epoch = None;
-            self.viewport_policy.commit(pending.requested);
-            frame_slot.set_viewport_override(pending.requested);
+            self.viewport_policy.commit(pending.change);
+            frame_slot.set_viewport_override(self.viewport_policy.frame_override());
             self.commit_viewport(width, height, event_tx);
             self.semantic.invalidate();
             self.pending_viewport_capture_at = Some(Instant::now() + VIEWPORT_CAPTURE_DELAY);
@@ -309,28 +387,108 @@ mod tests {
         let mut first = ViewportPolicy::new([1280, 800]);
         let mut second = ViewportPolicy::new([640, 480]);
         for target in [[1440, 900], [820, 1180], [390, 844]] {
-            first.commit(Some(target));
+            first.commit(ViewportChange::Resize(Some(target)));
             assert!(!first.follow_host([900, 600]));
             assert_eq!(first.explicit, Some(target));
             assert!(second.follow_host([640, 480]));
             assert_eq!(second.explicit, None);
         }
         assert!(!first.follow_host([0, 0]));
-        assert_eq!(first.target(None), [900, 600]);
-        first.commit(None);
+        assert_eq!(first.with(ViewportChange::Resize(None)).applied(), [900, 600]);
+        first.commit(ViewportChange::Resize(None));
         assert!(first.follow_host([1024, 768]));
+    }
+
+    #[test]
+    fn zoom_divides_the_pin_or_the_host_size_and_publishes_an_override() {
+        let mut policy = ViewportPolicy::new([1280, 800]);
+        assert_eq!(policy.frame_override(), None);
+        policy.commit(ViewportChange::Zoom(Some(200)));
+        assert_eq!(policy.applied(), [640, 400]);
+        assert_eq!(policy.frame_override(), Some([640, 400]));
+        assert!(policy.follow_host([1000, 700]), "a zoom still follows the panel");
+        assert_eq!(policy.applied(), [500, 350]);
+        assert_eq!(policy.rebind_target(Some("first"), Some("rebound")), Some([500, 350]));
+        policy.commit(ViewportChange::Resize(Some([1280, 800])));
+        assert!(!policy.follow_host([900, 600]));
+        assert_eq!(policy.applied(), [640, 400], "the pin is the unzoomed window");
+        policy.commit(ViewportChange::Zoom(Some(400)));
+        assert_eq!(policy.applied(), [320, 200]);
+        policy.commit(ViewportChange::Zoom(Some(25)));
+        assert_eq!(policy.applied(), [5120, 3200]);
+        policy.commit(ViewportChange::Resize(Some([2400, 800])));
+        assert_eq!(policy.applied(), [8000, 3200], "a zoomed-out axis stays within 8000");
+        policy.commit(ViewportChange::Resize(Some([1280, 800])));
+        policy.commit(ViewportChange::Zoom(Some(300)));
+        assert_eq!(policy.applied(), [427, 267], "rounded to the nearest pixel");
+        policy.commit(ViewportChange::Zoom(None));
+        assert_eq!(
+            policy.frame_override(),
+            Some([1280, 800]),
+            "the pin stays after a zoom reset"
+        );
+        policy.commit(ViewportChange::Resize(None));
+        assert_eq!(policy.frame_override(), None);
+        assert_eq!(policy.applied(), [900, 600]);
+        assert!(policy.follow_host([8100, 600]));
+        assert_eq!(
+            policy.applied(),
+            [8100, 600],
+            "an unpinned 100 percent page keeps the panel size"
+        );
+        policy.commit(ViewportChange::Zoom(Some(100)));
+        assert_eq!(policy.frame_override(), None);
+        assert_eq!(policy.applied(), [8100, 600]);
+    }
+
+    #[test]
+    fn zoom_completes_with_the_applied_percent_and_measured_viewport() {
+        let zoom = AgentAction {
+            action_id: "zoom".into(),
+            actor: "agent".into(),
+            requested_at_millis: crate::navigation::now_millis(),
+            action: BrowserControlAction::Zoom {
+                percent: Some(200),
+                timeout_millis: 2000,
+            },
+        };
+        let mut pending = PendingResize::new(&zoom, ViewportPolicy::new([1280, 800])).unwrap();
+        assert_eq!(pending.target, [640, 400]);
+        assert_eq!(pending.observe(json!([1280, 800]), 1).unwrap(), None);
+        assert_eq!(pending.observe(json!([640, 400]), 1).unwrap(), None);
+        assert_eq!(
+            pending.observe(json!([640, 400]), 2).unwrap(),
+            Some(BrowserControlValue::Zoom {
+                requested: Some(200),
+                applied: 200,
+                viewport: [640, 400],
+            })
+        );
+        let mut far_out = zoom;
+        far_out.action = BrowserControlAction::Zoom {
+            percent: Some(25),
+            timeout_millis: 2000,
+        };
+        assert!(PendingResize::new(&far_out, ViewportPolicy::new([1920, 1080])).is_ok());
+        assert_eq!(
+            PendingResize::new(&far_out, ViewportPolicy::new([2400, 1080]))
+                .unwrap_err()
+                .code,
+            "invalid_input",
+            "9600 CSS pixels exceed the bound"
+        );
     }
 
     #[test]
     fn committed_pin_rebinds_after_acknowledgement_and_stops_after_reset() {
         let mut policy = ViewportPolicy::new([900, 600]);
-        policy.commit(Some([390, 844]));
+        policy.commit(ViewportChange::Resize(Some([390, 844])));
         assert_eq!(policy.rebind_target(Some("first"), None), None);
         assert_eq!(policy.rebind_target(Some("first"), Some("first")), None);
         assert_eq!(policy.rebind_target(Some("first"), Some("rebound")), Some([390, 844]));
         assert!(!policy.follow_host([800, 700]));
         assert_eq!(policy.rebind_target(None, Some("rebound")), Some([390, 844]));
-        policy.commit(None);
+        policy.commit(ViewportChange::Resize(None));
         assert_eq!(policy.rebind_target(Some("first"), Some("rebound")), None);
     }
 
@@ -344,7 +502,8 @@ mod tests {
             pending.observe(json!([390, 844]), 2).unwrap(),
             Some(BrowserControlValue::Viewport {
                 requested: Some([390, 844]),
-                applied: [390, 844]
+                applied: [390, 844],
+                zoom_percent: 100,
             })
         );
         assert_eq!(pending.observe(json!(null), 2).unwrap_err().code, "invalid_result");
@@ -372,7 +531,8 @@ mod tests {
             pending.observe(json!([900, 600]), 2).unwrap(),
             Some(BrowserControlValue::Viewport {
                 requested: None,
-                applied: [900, 600]
+                applied: [900, 600],
+                zoom_percent: 100,
             })
         );
         for size in [[0, 844], [390, 319], [8001, 844]] {

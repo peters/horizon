@@ -417,6 +417,15 @@ fn assert_resize_contract(tools: &Value) {
         );
     }
     assert!(resize["description"].as_str().unwrap().contains("CSS pixels"));
+    let zoom = listed_tool(tools, "browser_zoom");
+    for field in ["panel_id", "percent", "reset", "timeout_millis"] {
+        assert!(
+            zoom["inputSchema"]["properties"].get(field).is_some(),
+            "zoom schema lacks {field}"
+        );
+    }
+    let description = zoom["description"].as_str().unwrap();
+    assert!(description.contains("25-500") && description.contains("unsupported_backend"));
 }
 
 fn assert_credential_request_contract(tools: &Value) {
@@ -435,7 +444,7 @@ fn assert_credential_request_contract(tools: &Value) {
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(35));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(36));
     assert_credential_request_contract(tools);
     assert_output_schemas_describe_objects(tools);
     assert_catalog_contract(tools);
@@ -637,6 +646,7 @@ fn resize_result_fixture(
                         horizon_browser::BrowserControlValue::Viewport {
                             requested: Some([390, 844]),
                             applied: [390, 844],
+                            zoom_percent: 100,
                         },
                     ),
                 };

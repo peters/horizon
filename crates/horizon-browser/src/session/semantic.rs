@@ -68,9 +68,9 @@ impl DriverState {
                 "orientation_unsupported",
                 "local browsers use browser_resize instead of device orientation",
             )),
-            BrowserControlAction::Resize { .. } => Err(BrowserControlFailure::new(
+            BrowserControlAction::Resize { .. } | BrowserControlAction::Zoom { .. } => Err(BrowserControlFailure::new(
                 "invalid_action_state",
-                "resize is observed from the driver loop",
+                "resize and zoom are observed from the driver loop",
             )),
             BrowserControlAction::Snapshot { max_nodes } => {
                 self.semantic_snapshot(link, event_tx, frame_slot, *max_nodes)

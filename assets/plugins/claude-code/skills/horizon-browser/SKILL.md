@@ -277,6 +277,22 @@ clears the pin. A timeout/failure may follow a backend mutation: inspect the
 page or retry rather than assuming no change. `browser_video` max_width and
 codec alignment affect encoding only. Reacquire semantic refs after resizing.
 
+For a zoom or reflow check (for example "zoom to 200 percent, nothing
+clipped"), inspect the panel's `zoom` capability, then call `browser_zoom` with
+`panel_id` and `percent` (25-500), or `reset: true` for 100. Local Chromium and
+Firefox support it; Safari and remote sessions return `unsupported_backend`.
+The page lays out in a CSS viewport of the panel size, or the `browser_resize`
+pin, divided by the zoom, and the panel magnifies the frame, as a browser zoom
+level does; `devicePixelRatio` does not change, so resolution media queries and
+`srcset` do not follow the zoom. The result gives `requested_percent`,
+`applied_percent` and the measured `css_viewport`. Resize and zoom combine: pin
+1280x800 and zoom 400 for a 320 CSS pixel reflow check; `browser_resize` then
+reports `zoom_percent`. A zoom whose CSS viewport would exceed 8000 pixels per
+axis is refused with `invalid_input`; if the panel grows later, the zoomed
+viewport stops at 8000 pixels on that axis. The zoom survives navigation until reset
+or session replacement. Judge clipping from `browser_screenshot` and from
+`document.documentElement.scrollWidth` against its `clientWidth`.
+
 `browser_remote_allocations` operations are `list` and `reconcile`.
 For capacity retained after a remote panel disappears, use
 `browser_remote_allocations` with `operation: list`, then `operation: reconcile`
