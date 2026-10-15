@@ -161,6 +161,13 @@ impl HorizonApp {
             Refusal::Busy => "Another controller owns this cloud operation".into(),
             Refusal::Unreadable(message) => message,
         };
+        let previous = self
+            .cloud_prototype
+            .production
+            .runtimes
+            .get(&id)
+            .and_then(|runtime| runtime.error.as_deref());
+        let message = retained_cleanup_reason(previous, message);
         self.cloud_removal_error(id, message.clone());
         if origin != Origin::Direct {
             if origin == Origin::AfterDelete {
@@ -178,5 +185,20 @@ fn record(snapshot: Snapshot) -> Record {
         Snapshot::Holds => Record::Holds,
         Snapshot::Busy => Record::Busy,
         Snapshot::Unreadable(message) => Record::Unreadable(message),
+    }
+}
+
+/// Retains API detail only for the same displayed node pair, never removal authority.
+pub(super) fn retained_cleanup_reason(previous: Option<&str>, current: String) -> String {
+    if current.starts_with("Tailnet node cleanup is unconfirmed for saved tailnet ")
+        && let Some(previous) = previous
+        && let Some((pair, _)) = current.split_once(": ")
+        && previous
+            .split_once(": ")
+            .is_some_and(|(previous_pair, _)| pair == previous_pair)
+    {
+        previous.into()
+    } else {
+        current
     }
 }

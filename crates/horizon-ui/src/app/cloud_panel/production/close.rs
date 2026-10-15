@@ -7,6 +7,15 @@ use super::{HorizonApp, Runtime, Stage, cards::wording, lifecycle::Action};
 pub(super) use decisions::{Origin, RemovalStart};
 use offer::{Failure, Primary, Record};
 
+fn pending_tailnet_cleanup(runtime: &Runtime, reason: Option<&str>) -> bool {
+    super::cards::node_cleanup_pending(runtime)
+        || reason.is_some_and(|reason| {
+            reason.starts_with("Tailnet node cleanup is unconfirmed for saved tailnet ")
+                || reason
+                    == super::cloud_runtime::tailnet::receipt::ManualCleanupReason::DeviceIdentityUnavailable.message()
+        })
+}
+
 #[derive(Default)]
 pub(super) struct State {
     confirming: Option<u32>,
@@ -179,7 +188,7 @@ impl HorizonApp {
                     }
                     _ => {}
                 }
-                paint_reason(ui, offer.reason.as_deref(), close.records.get(&id), runtime.busy());
+                paint_reason(ui, &offer, close.records.get(&id), runtime);
                 if let Some(remains) = &remains {
                     ui.add_space(8.0);
                     ui.label(remains);
@@ -284,6 +293,9 @@ impl HorizonApp {
         if runtime.error.is_none() && !went_ahead {
             runtime.error = earlier;
             return (went_ahead, None);
+        }
+        if !went_ahead && let Some(current) = runtime.error.take() {
+            runtime.error = Some(decisions::retained_cleanup_reason(earlier.as_deref(), current));
         }
         (went_ahead, runtime.error.clone())
     }
@@ -442,17 +454,19 @@ impl HorizonApp {
     }
 }
 
-fn paint_reason(ui: &mut egui::Ui, reason: Option<&str>, record: Option<&Record>, busy: bool) {
-    let Some(reason) = reason else {
-        return;
-    };
-    if matches!(record, Some(Record::Checking)) && !busy {
-        ui.horizontal(|ui| {
-            ui.spinner();
-            ui.label(reason);
-        });
-    } else {
-        ui.colored_label(crate::theme::PALETTE_RED(), reason);
+fn paint_reason(ui: &mut egui::Ui, offer: &offer::Offer, record: Option<&Record>, runtime: &Runtime) {
+    if let Some(reason) = offer.reason.as_deref() {
+        if matches!(record, Some(Record::Checking)) && !runtime.busy() {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(reason);
+            });
+        } else {
+            ui.colored_label(crate::theme::PALETTE_RED(), reason);
+        }
+    }
+    if pending_tailnet_cleanup(runtime, offer.reason.as_deref()) && offer.remove_anyway {
+        ui.label("Tailnet node cleanup is still unconfirmed. Removing this card keeps its original record but hides its retry controls.");
     }
 }
 

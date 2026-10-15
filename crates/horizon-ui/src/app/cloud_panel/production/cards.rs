@@ -88,9 +88,21 @@ fn deleted_runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runt
         ui.colored_label(egui::Color32::LIGHT_RED, error);
     }
     if runtime.receiver.is_some() || runtime.preparation.is_some() {
-        ui.label("Redeploying cloud…");
+        ui.label(if runtime.operation == Some(Action::Delete) {
+            "Finishing tailnet node cleanup…"
+        } else {
+            "Redeploying cloud…"
+        });
         progress_output(ui, id, runtime);
         return None;
+    }
+    if node_cleanup_pending(runtime) {
+        ui.label(
+            "This cloud is marked Deleted. Recorded tailnet nodes still need removal; credentials stay on this desktop.",
+        );
+        if ui.add(action_button("Retry node cleanup")).clicked() {
+            return Some(Action::Delete);
+        }
     }
     if runtime.confirmation == Confirmation::Redeploy {
         ui.label("Redeploy this cloud? A new worker and managed workspace storage will be allocated. Files from the deleted worker are gone.");
@@ -118,6 +130,17 @@ fn deleted_runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runt
         ui.add(section::row_button(ui, danger_button("Remove cloud"))).clicked()
     })
     .then_some(Action::Remove)
+}
+
+pub(super) fn node_cleanup_pending(runtime: &super::Runtime) -> bool {
+    runtime
+        .state
+        .as_ref()
+        .is_some_and(|state| state.tailnet_enrollment.cleanup_pending())
+        || runtime.error.as_deref().is_some_and(|reason| {
+            reason.starts_with("Tailnet node cleanup is unconfirmed for saved tailnet ")
+                || reason == cloud_runtime::tailnet::receipt::ManualCleanupReason::DeviceIdentityUnavailable.message()
+        })
 }
 
 /// Manage's lifecycle actions. Sharing and the desktop viewer are in Connections, which

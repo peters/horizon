@@ -38,6 +38,29 @@ fn has(texts: &[String], wanted: &str) -> bool {
 }
 
 #[test]
+fn deleted_resources_keep_manual_node_message_and_offer_cleanup_retry() {
+    let ctx = egui::Context::default();
+    let mut runtime = ready_bound_runtime();
+    runtime.stage = Some(Stage::Deleted);
+    runtime.operation = Some(Action::Delete);
+    runtime.error = Some("Tailnet node n-exact needs manual removal; API is offline".into());
+    runtime.state.as_mut().unwrap().tailnet_enrollment = serde_json::from_value(serde_json::json!({"receipts":[{
+        "tailnet_id":"work","provider":"runpod","worker_id":"worker1",
+        "allocation_request_id":"delete-fixture","device_id":"n-exact"
+    }]}))
+    .unwrap();
+    let texts = action_texts(&ctx, &mut runtime);
+    assert!(has(&texts, "Retry node cleanup"));
+    assert!(has(&texts, "Tailnet node n-exact"));
+    runtime.error = Some(super::super::super::DELETED_RESOURCES_MESSAGE.into());
+    let ledger = &mut runtime.state.as_mut().unwrap().tailnet_enrollment;
+    ledger.confirm_removed(&ledger.receipts()[0].clone()).unwrap();
+    assert!(!has(&action_texts(&ctx, &mut runtime), "Retry node cleanup"));
+    runtime.operation = Some(Action::Deploy);
+    assert!(!has(&action_texts(&ctx, &mut runtime), "Retry node cleanup"));
+}
+
+#[test]
 fn deletion_replaces_deployment_actions_with_its_steps_and_total_time() {
     use horizon_core::cloud_runtime::{Cancellation, progress::Progress};
     use std::time::{Duration, Instant};
