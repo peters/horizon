@@ -187,3 +187,22 @@ fn ssh_uri_home_paths_keep_their_user_scope() {
         assert!(remote(invalid).is_err());
     }
 }
+
+#[test]
+fn ipv6_scp_paths_keep_at_signs_out_of_username_detection() {
+    let explicit = remote("git@[2001:db8::1]:team/project@v2.git").unwrap();
+    assert_eq!(
+        explicit,
+        remote("ssh://git@[2001:db8::1]/~/team/project@v2.git").unwrap()
+    );
+    assert_ne!(explicit, remote("git@[2001:db8::1]:team/project@other.git").unwrap());
+    assert!(remote("[2001:db8::1]:team/project@v2.git").unwrap().is_none());
+    assert_eq!(
+        remote("[2001:db8::1]:/team/project@v2.git").unwrap(),
+        Some("ssh://[2001:db8::1]/team/project@v2".into())
+    );
+    assert_eq!(
+        remote("git@git.example:team/project@v2.git").unwrap(),
+        remote("ssh://git@git.example/~/team/project@v2.git").unwrap()
+    );
+}

@@ -172,7 +172,8 @@ fn decode_ssh(value: &str) -> Result<String> {
 }
 
 fn scp(origin: &str) -> Option<(&str, &str)> {
-    let host = origin.rsplit_once('@').map_or(origin, |(_, host)| host);
+    let prefix = origin.split(':').next().unwrap_or(origin);
+    let host = prefix.rfind('@').map_or(origin, |at| &origin[at + 1..]);
     let colon = if host.starts_with('[') {
         let end = host.find(']')?;
         let colon = origin.len() - host.len() + end + 1;
