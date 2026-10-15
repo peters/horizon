@@ -3,6 +3,8 @@
 #![forbid(unsafe_code)]
 pub mod bootstrap;
 pub mod companion;
+#[cfg(feature = "exposure-gate")]
+pub mod exposure;
 mod identity;
 pub mod inspection;
 pub mod local_network;

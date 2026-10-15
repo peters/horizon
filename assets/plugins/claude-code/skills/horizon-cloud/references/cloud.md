@@ -626,6 +626,20 @@ Enrollment receipts are allocation metadata, separate from the displayed device 
 
 One-device admission records retain original owner scope, worker, attempt, checked endpoint and phase as metadata. Nonempty admission selects deployment v6 and allocation v4. An absent field keeps the earlier encodings. Decoding a record or reading `Store::snapshot` grants no owner approval or runtime authority. Preserve Armed and Attached uncertainty. No record constructor recreates a gateway. This storage prerequisite adds no UI, CLI or MCP sharing operation. See docs/architecture/one-device-admission-records.md and docs/testing/procedures/one-device-admission-records.md.
 
+### Exposure policy facts
+
+The optional Protocol `exposure-gate` feature provides bounded policy and route
+comparison types. It is off by default and adds no UI, CLI or MCP exposure action.
+A missing mode is Off. Restricted policy needs a nonempty list of valid CIDRs,
+full tailnet DNS names or exact tags. All rules must pass validation. Management
+and reserved ports remain blocked targets. Named matches and URLs do not prove
+membership, owner approval, TLS or public readiness. HTTPS route facts require
+explicit Public policy and port 443, 8443 or 10000; refusal never selects raw TCP.
+The M2 eight-hour constant does not expire M1 one-device sharing. Worker, provider,
+owner and public interface qualification remain required for the full feature.
+See docs/architecture/exposure-policy.md and docs/testing/procedures/exposure-policy.md.
+
+
 The receipt-capture adapter reads only the worker's actual tagged Self.ID via pinned root SSH and the existing userspace daemon socket, persists it before readiness and records uncertain attempts before enrollment. It binds the existing allocation request and saved tailnet ID to the owning cloud root. Worker agents cannot query this private root lane. No API secret is sent to a worker and no API editor or node-delete operation is activated by this adapter.
 
 The desktop NodeApi SDK sends only the encoded ID supplied by a trusted controller. It grants no owner authority itself. Its Core integration is behind default-off `tailnet-node-cleanup` and requires cloud-workspaces. Default UI/CLI behavior stays unchanged. An explicitly enabled controller requires original provider absence, saves exact-group confirmation before another request and refuses normal removal while its locked record remains pending. Unknown attempts stay manual and receive no API request. Different saved-tailnet bindings stay independent. Redeploy uses the same locked completion check before key validation, journal release or history reset; unresolved or selected legacy missing-ID state must finish cleanup first. Confirmed receipts remain recorded and genuinely fresh or None/no-evidence clouds can reopen. With cleanup enabled, an initial Docker capacity failure keeps never-requested Prepared through deletion and retries; volume-only preparation is not enrollment. Any observed container must persist Requested, including final verification after two earlier absences. Both SDK lookups use the same observation path. Final-only discovery followed by absence on retry, lost replies and legacy stop/resume/readiness or port history stay manual.
