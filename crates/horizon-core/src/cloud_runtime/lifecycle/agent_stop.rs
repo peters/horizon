@@ -219,7 +219,10 @@ pub(super) fn stop_with(
     if let Err(error) = stop(&store) {
         // Only a stop that certainly did not happen gives the request back and drops the
         // attribution; one whose provider request may have taken effect keeps both.
+        // A cancelled request may still be carried out by the provider that received it.
+        let cancelled = matches!(error, Error::Provider(horizon_cloud::CloudError::Cancelled));
         if !uncertain()
+            && !cancelled
             && let Some(mut now) = store.load()?
         {
             now.last_self_stop = earlier;
