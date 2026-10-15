@@ -53,6 +53,8 @@ fn server(responses: Vec<(Duration, Vec<u8>)>) -> (HttpTransport, mpsc::Receiver
                     Err(error) => panic!("fixture accept failed: {error}"),
                 }
             };
+            // Windows inherits the listener's nonblocking mode on accepted sockets.
+            stream.set_nonblocking(false).unwrap();
             stream.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
             let mut request = Vec::new();
             while !request.ends_with(b"\r\n\r\n") {

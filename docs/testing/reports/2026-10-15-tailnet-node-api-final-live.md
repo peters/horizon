@@ -19,8 +19,8 @@ caller ownership nor provider deletion and does not update the enrollment ledger
 
 The applicable required local matrix passed on 1,738 recorded inputs. Default
 coverage accounts for workspace feature unification, integrations, doctests and
-example compilation. Cloud tests passed 471 with one ignored; twelve Node HTTP
-tests passed. Default UI passed 2,221 with two ignored. Speech UI passed 2,267
+example compilation. Cloud tests passed 471 with one ignored; all ten Node API
+unit tests passed. Default UI passed 2,221 with two ignored. Speech UI passed 2,267
 with two ignored, plus three font and two home tests.
 
 Blocking and strict Clippy and repository/skill checks passed. Fourteen independent
