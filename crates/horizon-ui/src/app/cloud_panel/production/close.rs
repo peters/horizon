@@ -1,13 +1,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+mod decisions;
 mod offer;
 
 use super::{HorizonApp, Runtime, Stage, cards::wording, lifecycle::Action};
+pub(super) use decisions::{Origin, RemovalStart};
 use offer::{Failure, Primary, Record};
 
 #[derive(Default)]
 pub(super) struct State {
     confirming: Option<u32>,
+    jobs: super::removal::Jobs,
+    owners: BTreeMap<u32, super::removal::Owner>,
+    removing: BTreeMap<u32, decisions::Origin>,
+    generation: u64,
     deleting: BTreeSet<u32>,
     /// Per cloud, what stopped its close: the dialog then asks again with the reason.
     failed: BTreeMap<u32, Failure>,
@@ -20,6 +26,17 @@ pub(super) struct State {
 }
 
 impl State {
+    pub(super) fn reset(&mut self) {
+        self.jobs.reset();
+        let jobs = std::mem::take(&mut self.jobs);
+        let generation = self.generation;
+        *self = Self {
+            jobs,
+            generation,
+            ..Self::default()
+        };
+    }
+
     /// A confirmed close is deleting this cloud's resources.
     pub(in crate::app::cloud_panel) fn closing(&self, id: u32) -> bool {
         self.deleting.contains(&id)
@@ -54,23 +71,17 @@ impl HorizonApp {
     /// The × of a cloud: its close always offers to delete its resources first, so a
     /// failure from an earlier close, possibly since retried from the card, is forgotten.
     pub(in crate::app::cloud_panel) fn request_cloud_close(&mut self, id: u32) {
-        let record = self.close_record(id);
+        if let Some(previous) = self.cloud_prototype.production.close.confirming {
+            self.end_close_confirmation(previous);
+        }
+        if !self.pin_removal_owner(id) {
+            return;
+        }
         let close = &mut self.cloud_prototype.production.close;
         close.failed.remove(&id);
-        close.records.insert(id, record);
+        close.records.insert(id, Record::Checking);
         close.confirming = Some(id);
-        close.record_read = Some(std::time::Instant::now());
-    }
-
-    /// What the saved record of cloud `id` holds now.
-    fn close_record(&self, id: u32) -> Record {
-        match self.cloud_holds_resources(id) {
-            Ok(Some(false)) => Record::Empty,
-            Ok(Some(true)) => Record::Holds,
-            Ok(None) => Record::Unreadable("No saved deployment record".into()),
-            Err(super::cloud_runtime::Error::Busy) => Record::Busy,
-            Err(error) => Record::Unreadable(error.to_string()),
-        }
+        close.record_read = None;
     }
 
     /// The record of cloud `id` is read again while its dialog is open and this instance
@@ -78,34 +89,50 @@ impl HorizonApp {
     /// instance starts, and offers the close again when that operation ends.
     fn reread_close_record(&mut self, id: u32, ctx: &egui::Context) {
         let production = &self.cloud_prototype.production;
-        if production.runtimes.get(&id).is_some_and(Runtime::busy) {
+        if production.runtimes.get(&id).is_some_and(Runtime::busy)
+            || production.close.jobs.pending(id)
+            || production.close.removing.contains_key(&id)
+        {
             return;
         }
-        // At most once a second: each read takes the lock and reads the record from disk.
         let second = std::time::Duration::from_secs(1);
         ctx.request_repaint_after(second);
         if production.close.record_read.is_some_and(|read| read.elapsed() < second) {
             return;
         }
-        let record = self.close_record(id);
+        let Some(owner) = production.close.owners.get(&id).cloned() else {
+            return;
+        };
         let close = &mut self.cloud_prototype.production.close;
         close.record_read = Some(std::time::Instant::now());
-        close.records.insert(id, record);
+        close.jobs.request(owner, super::removal::Purpose::Display, ctx);
     }
 
     /// Forgets the dialog and what an earlier attempt of cloud `id`'s close left.
     fn end_close_confirmation(&mut self, id: u32) {
+        self.restore_closing_panels(id);
         let close = &mut self.cloud_prototype.production.close;
-        close.confirming = None;
+        close.deleting.remove(&id);
+        close.jobs.cancel(id);
+        close.owners.remove(&id);
+        close.removing.remove(&id);
+        if close.confirming == Some(id) {
+            close.confirming = None;
+        }
         close.failed.remove(&id);
         close.records.remove(&id);
         close.record_read = None;
     }
 
     pub(in crate::app::cloud_panel) fn render_cloud_close_confirmation(&mut self, ctx: &egui::Context) {
+        self.poll_cloud_removals(ctx);
         let Some(id) = self.cloud_prototype.production.close.confirming else {
             return;
         };
+        if !self.removal_owner_matches(id) {
+            self.end_close_confirmation(id);
+            return;
+        }
         self.reread_close_record(id, ctx);
         let Some((group, launch)) = self
             .cloud_prototype
@@ -152,9 +179,7 @@ impl HorizonApp {
                     }
                     _ => {}
                 }
-                if let Some(reason) = &offer.reason {
-                    ui.colored_label(crate::theme::PALETTE_RED(), reason);
-                }
+                paint_reason(ui, offer.reason.as_deref(), close.records.get(&id), runtime.busy());
                 if let Some(remains) = &remains {
                     ui.add_space(8.0);
                     ui.label(remains);
@@ -208,52 +233,11 @@ impl HorizonApp {
     /// the operation. A record that cannot be locked keeps the cloud, and the dialog asks
     /// again with the reason.
     fn remove_cloud_anyway(&mut self, id: u32, ctx: &egui::Context) {
-        if self
-            .cloud_prototype
-            .production
-            .runtimes
-            .get(&id)
-            .is_some_and(Runtime::busy)
-        {
-            return;
-        }
-        self.end_close_confirmation(id);
-        let Some(index) = self.cloud_prototype.groups.0.iter().position(|group| group.issue == id) else {
-            return;
-        };
-        // Held until the cloud is discarded, so no operation of another controller runs
-        // meanwhile. Without the lock, one may be under way.
-        let _record = match self.lock_cloud_record(id) {
-            Ok(record) => record,
-            Err(error) => {
-                self.close_failed(id, "Could not remove the cloud", true, Some(error.to_string()));
-                return;
-            }
-        };
-        if let Some(launch) = &self.cloud_prototype.groups.0[index].remote {
-            tracing::warn!(cloud = %launch.id, "removed from Horizon while its provider resources may remain");
-        }
-        self.discard_cloud(index, ctx);
+        self.begin_cloud_removal(id, decisions::Origin::Anyway, ctx);
     }
 
-    /// Removes cloud `id`, which has nothing at its provider. A removal the saved record
-    /// refuses keeps the dialog open, now offering to delete what it holds.
     fn remove_for_close(&mut self, id: u32, ctx: &egui::Context) {
-        if self
-            .cloud_prototype
-            .production
-            .runtimes
-            .get(&id)
-            .is_some_and(Runtime::busy)
-        {
-            return;
-        }
-        let (removed, error) = self.close_step(id, |app| app.remove_deleted_cloud(id, ctx));
-        if removed {
-            self.cloud_prototype.production.close.confirming = None;
-        } else {
-            self.close_failed(id, "Could not remove the cloud", false, error);
-        }
+        self.begin_cloud_removal(id, decisions::Origin::Close, ctx);
     }
 
     /// Starts deleting the resources of cloud `id`; the cloud closes once they are gone.
@@ -311,10 +295,12 @@ impl HorizonApp {
             return;
         }
         let error = error.filter(|error| error != super::DELETED_RESOURCES_MESSAGE);
-        let record = self.close_record(id);
+        if !self.cloud_prototype.production.close.owners.contains_key(&id) {
+            self.pin_removal_owner(id);
+        }
         let close = &mut self.cloud_prototype.production.close;
-        close.records.insert(id, record);
-        close.record_read = Some(std::time::Instant::now());
+        close.records.insert(id, Record::Checking);
+        close.record_read = None;
         close
             .failed
             .insert(id, Failure::new(what, deletion_tried, error.as_deref()));
@@ -343,6 +329,9 @@ impl HorizonApp {
         }
         self.cloud_prototype.production.runtimes.remove(&id);
         let close = &mut self.cloud_prototype.production.close;
+        close.jobs.cancel(id);
+        close.owners.remove(&id);
+        close.removing.remove(&id);
         close.failed.remove(&id);
         close.records.remove(&id);
         close.deleting.remove(&id);
@@ -425,7 +414,9 @@ impl HorizonApp {
             })
             .collect();
         for id in finished {
-            self.cloud_prototype.production.close.deleting.remove(&id);
+            if self.cloud_prototype.production.close.removing.contains_key(&id) {
+                continue;
+            }
             if self
                 .cloud_prototype
                 .production
@@ -433,16 +424,9 @@ impl HorizonApp {
                 .get(&id)
                 .is_some_and(|runtime| runtime.stage == Some(Stage::Deleted))
             {
-                // The saved record is checked again by removal; a stale UI snapshot cannot discard resources.
-                // Returned first, while the panels still exist and drop their disposal marker:
-                // removal then closes them, or declines while the record still holds resources
-                // and leaves the cloud, with its panels, as it was.
-                self.restore_closing_panels(id);
-                let (removed, error) = self.close_step(id, |app| app.remove_deleted_cloud(id, ctx));
-                if !removed {
-                    self.close_failed(id, "Could not remove the cloud", true, error);
-                }
+                self.begin_cloud_removal(id, decisions::Origin::AfterDelete, ctx);
             } else {
+                self.cloud_prototype.production.close.deleting.remove(&id);
                 // The deletion stopped short: the cloud stays, with its failure in the header,
                 // and the dialog asks again, now offering to remove it anyway.
                 self.restore_closing_panels(id);
@@ -454,6 +438,45 @@ impl HorizonApp {
                     .and_then(|runtime| runtime.error.clone());
                 self.close_failed(id, "Could not delete the cloud resources", true, error);
             }
+        }
+    }
+}
+
+fn paint_reason(ui: &mut egui::Ui, reason: Option<&str>, record: Option<&Record>, busy: bool) {
+    let Some(reason) = reason else {
+        return;
+    };
+    if matches!(record, Some(Record::Checking)) && !busy {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(reason);
+        });
+    } else {
+        ui.colored_label(crate::theme::PALETTE_RED(), reason);
+    }
+}
+
+#[cfg(test)]
+impl HorizonApp {
+    /// Waits only in tests that previously expected a synchronous record decision.
+    pub(in crate::app::cloud_panel::production) fn settle_cloud_removals(&mut self) {
+        self.settle_cloud_removals_at(&egui::Context::default());
+    }
+
+    pub(in crate::app::cloud_panel::production) fn settle_cloud_removals_at(&mut self, ctx: &egui::Context) {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            self.poll_cloud_removals(ctx);
+            if let Some(id) = self.cloud_prototype.production.close.confirming
+                && self.removal_owner_matches(id)
+            {
+                self.reread_close_record(id, ctx);
+            }
+            if self.cloud_prototype.production.close.jobs.idle() {
+                return;
+            }
+            assert!(std::time::Instant::now() < until, "cloud removal did not settle");
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
 }
