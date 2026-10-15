@@ -421,7 +421,8 @@ instructions of the repositories decide when the agent starts one.
 
 The policy does not stop these:
 
-- A Git push, also one that changes `.github/workflows` or pushes a tag.
+- A Git push, also one that changes `.github/workflows` or pushes a tag, and the
+  same change through the Git data API (blobs, trees, commits and references).
 - A change of code that a workflow runs, for example a build script or a local
   action in `.github/actions`. Only `.github/workflows` is protected.
 

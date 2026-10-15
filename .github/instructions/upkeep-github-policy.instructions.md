@@ -37,5 +37,5 @@ agent-writable, so nothing there is a control. Check that:
 ## Not covered
 
 Code that workflows run outside `.github/workflows`, Git pushes (also of
-workflow files and tags), merges (a later part adds a gate), and outbound network connections: the
+workflow files and tags) and the same changes through the Git data API, merges (a later part adds a gate), and outbound network connections: the
 worker has no outbound limit. The docs say so; do not claim otherwise.
