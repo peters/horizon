@@ -78,6 +78,12 @@ In this procedure, `<state root>` is the directory of one cloud.
 
    Result: The dialog shows no note about `idle_stop_minutes`.
 
+3. Put `idle_stop_minutes: 30` back in the profile, commit, and close **New
+   cloud**.
+
+   Result: The profile `idle` sets `idle_stop_minutes: 30` again for tasks I02
+   and I03.
+
 ### 6.2 I02 — A new worker gets no idle period
 
 > **CAUTION:** THIS TASK RENTS A RUNPOD WORKER.
