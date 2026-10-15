@@ -247,3 +247,30 @@ fn a_cloud_whose_close_dialog_is_open_gives_the_request_back() {
     assert_eq!(runtime.operation, None, "no Stop starts");
     assert_eq!(runtime.given_back, Some(stop().at));
 }
+
+#[test]
+fn an_agent_stop_that_ends_no_longer_skips_its_request() {
+    use std::time::Instant;
+    let state: cloud_runtime::state::Deployment = serde_json::from_value(serde_json::json!({
+        "version": 1, "cloud_id": "fixture", "repository": "/fixture", "revision": "a".repeat(40),
+        "profile": {"provider": "hetzner", "image": "registry.example/worker", "cpu": 2, "memory_gb": 4},
+        "stage": "Stopped", "operation": {"state": "bound", "worker_id": "42"}, "spec": null,
+        "sessions": [], "stop_requested": true
+    }))
+    .unwrap();
+    // A Stop for the request that failed: if the worker still holds the request, a later
+    // read finds it again, and it must be given back, not left alone during a person's Stop.
+    let mut failed = Runtime {
+        stopping_for: Some(stop().at),
+        ..Runtime::default()
+    };
+    failed.show_failure("The provider refused the stop".into(), Instant::now());
+    assert_eq!(failed.stopping_for, None);
+    // A Stop for the request that finished.
+    let mut finished = Runtime {
+        stopping_for: Some(stop().at),
+        ..Runtime::default()
+    };
+    finished.show_finished_stop(state);
+    assert_eq!(finished.stopping_for, None);
+}

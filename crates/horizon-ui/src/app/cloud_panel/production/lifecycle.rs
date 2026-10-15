@@ -68,6 +68,9 @@ impl Runtime {
         self.progress.finish(at);
         self.error = Some(error);
         self.failure_needs_check = self.failure_may_be_a_stop();
+        // A failed Stop no longer carries out its agent's request: if the worker gives the
+        // same request again, it is given back, not taken for a later Stop.
+        self.stopping_for = None;
     }
 
     /// Whether the failure just reported can be a stop Horizon did not make: the
