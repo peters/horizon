@@ -1,5 +1,6 @@
 //! Dismissing a completed deletion cancels its automatic close, including blocked reads.
 use super::*;
+use horizon_core::cloud_runtime::Error;
 use std::{
     sync::mpsc,
     time::{Duration, Instant},
@@ -41,8 +42,8 @@ fn dismissing_a_blocked_after_delete_check_keeps_the_cloud_and_panels() {
         );
         let bytes = serde_json::to_vec(&deleted).unwrap();
         let (permit, permitted) = mpsc::channel();
+        let (ready, reader_ready) = mpsc::channel();
         let release = std::thread::spawn(move || {
-            let explicit = permitted.recv_timeout(Duration::from_secs(5)).is_ok();
             let mut writer = None;
             until(|| {
                 writer = std::fs::OpenOptions::new()
@@ -52,6 +53,8 @@ fn dismissing_a_blocked_after_delete_check_keeps_the_cloud_and_panels() {
                     .ok();
                 writer.is_some()
             });
+            let _ = ready.send(());
+            let explicit = permitted.recv_timeout(Duration::from_secs(5)).is_ok();
             writer.as_mut().unwrap().write_all(&bytes).unwrap();
             drop(writer);
             std::fs::remove_file(&record).unwrap();
@@ -60,7 +63,8 @@ fn dismissing_a_blocked_after_delete_check_keeps_the_cloud_and_panels() {
         });
         let ctx = egui::Context::default();
         app.finish_closing_clouds(&ctx);
-        until(|| matches!(Store::lock(&path), Err(horizon_core::cloud_runtime::Error::Busy)));
+        reader_ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(matches!(Store::lock(&path), Err(Error::Busy)));
         app.request_cloud_close(101);
         for _ in 0..2 {
             let _ = ctx
