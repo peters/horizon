@@ -122,10 +122,13 @@ the card. On a current worker image, the worker also does this by itself while n
 runs, and starts the loop again after a container restart. Once a day, after the repositories' agents, the loop runs one daily maintenance
 agent for the whole Upkeep that does the "Daily maintenance" tasks of the shared
 instructions the repositories' AGENTS.md link; its read request for that shared
-repository waits on the card too. See `docs/upkeep.md` for its limits and trust
-boundaries. From an agent panel in its workspace, `cloud_upkeep` reads the Upkeep,
-proposes repositories or a new Upkeep for the person to confirm, and removes, pauses,
-resumes or runs it (see the Upkeep section of [the cloud reference](references/cloud.md)).
+repository waits on the card too. Pull requests that Upkeep agents open use an
+`upkeep/` branch and the `upkeep` label; the loop finds them and carries them through
+the same gates. The default instructions ask for the checks that each repository's
+`AGENTS.md` makes apply to a change, and no more. See `docs/upkeep.md` for its limits
+and trust boundaries. From an agent panel in its workspace, `cloud_upkeep` reads the
+Upkeep, proposes repositories or a new Upkeep for the person to confirm, and removes,
+pauses, resumes or runs it (see the Upkeep section of [the cloud reference](references/cloud.md)).
 
 The board of an Upkeep has **Run now**, **Pause** / **Resume** and **Repositories**.
 They are the person's controls in the Horizon UI: Run now and Pause go to the worker

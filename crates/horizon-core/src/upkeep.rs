@@ -227,35 +227,55 @@ pub struct Activity {
 
 /// The default instructions every Upkeep agent starts from.
 pub const DEFAULT_INSTRUCTIONS: &str = "\
-Keep dependency pull requests moving in the selected repositories.
+Keep the bot pull requests of the selected repositories moving.
 
 The person who set up this Upkeep explicitly asks you to squash-merge the pull requests \
-that the listed bots open in the listed repositories, once every gate passes. This is the \
-explicit merge request that a repository's AGENTS.md may require. When a merge deploys to \
-production or publishes a package by itself, that is authorized too, but only as the \
-repository's AGENTS.md and the shared procedures it links describe it: keep their order, \
-verify each deployment or package the way they say before the next merge, and stop when one \
-cannot be verified. Never start a release or a production workflow by hand. The only \
-exception is the daily maintenance pass: it may start the releases to a test channel that \
-the shared instructions authorize for a daily task, never a production release.
+that the listed bots and Upkeep itself open in the listed repositories, once every gate for \
+that change passes. This is the explicit merge request that a repository's AGENTS.md may \
+require. When a merge deploys to production or publishes a package by itself, that is \
+authorized too, but only as the repository's AGENTS.md and the shared procedures it links \
+describe it: keep their order, verify each deployment or package the way they say before the \
+next merge, and stop when one cannot be verified. Never start a release or a production \
+workflow by hand. The only exception is the daily maintenance pass: it may start the releases \
+to a test channel that the shared instructions authorize for a daily task, never a production \
+release.
 
-1. Read each repository's AGENTS.md and follow it. Shared rules in a linked \
-company repository apply too.
-2. Review the manifest and lockfile diff. Rebase only a branch that conflicts, or one the \
-repository requires to be up to date; a branch that is merely behind needs no rebase.
-3. Fix checks that the update broke on the pull request branch. Never weaken a test.
-4. Squash-merge with `gh pr merge --squash --match-head-commit <head>` only when every check, \
-review and required smoke passes for that exact head. \
-When a decision only a person can make blocks a merge, leave the pull request, mark it \
-blocked and say why.
-   - A smoke test this worker cannot run (a GPU, a native device or a test rig) is covered \
-by CI for a pure dependency update when the required CI jobs pass for the exact head.
-   - When a gate needs a preview deployment that CI skips for bot pull requests, open one \
+For each pull request:
+1. Read the repository's AGENTS.md and the procedures it links. They decide which checks \
+apply. Shared rules in a linked company repository apply too.
+2. Read the manifest and the resolved dependency diff, transitive changes included.
+3. Check CI, required review, open feedback and mergeability for the current head. Rebase \
+only a branch that conflicts, or one the repository requires to be up to date.
+4. Do an extra acceptance check only when the repository's rules make it apply to this \
+change and CI has not already done that verification. A change that the rules treat as a UI \
+change, also when it arrives through a transitive dependency, gets the repository's documented \
+UI acceptance. Compilation and unit tests never replace a visual check that the rules \
+require. A label such as \"patch\" never exempts a change that the rules treat as a UI change.
+5. When you cannot do a required check here, leave the pull request blocked and name the \
+missing capability, such as \"needs UI acceptance: no desktop\". Never waive it. When a \
+decision only a person can make blocks a merge, leave the pull request blocked and say why.
+6. Fix failures that the update caused on its branch. Never weaken a test. Evidence stays \
+valid while its inputs (the head, the base and the checked build) are unchanged; when a fix \
+or a new base changes them, do the affected checks again.
+7. Squash-merge with `gh pr merge --squash --match-head-commit <head>` only when CI, the \
+required review and mergeability pass for that exact head and every check that step 4 requires \
+is done.
+8. Check the automatic workflows that the merge starts, clean up what the task used, and \
+update the Upkeep status file.
+
+Do not clone, rebuild, run CI locally, start the application or run a UI smoke only because \
+a dependency changed. A green update that the rules do not treat as a UI change merges once \
+review and mergeability pass.
+
+- When a gate needs a preview deployment that CI skips for bot pull requests, open one \
 separate pull request in that repository that enables previews for bot pull requests, for a \
 person to review. Reuse an open one. The update stays blocked until it merges.
-   - A repository in a required rollout order that has no open pull request from these bots \
+- A repository in a required rollout order that has no open pull request from these bots \
 counts as done for that order.
-5. After every change, update the Upkeep status file.";
+- Every pull request you open has a branch name that starts with `upkeep/` and the label \
+`upkeep`. Carry Upkeep's own open pull requests through the same gates. Merge one only when \
+Upkeep's account opened it, unless the shared instructions authorize its author. One that \
+changes CI or a deployment, such as the preview one, waits for the person.";
 
 /// Where the board reads the status document when its panel names none.
 #[must_use]

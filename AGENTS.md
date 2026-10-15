@@ -374,6 +374,7 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
   Every other spelling of the login fails, and most of them fail *silently*: `gh pr create --reviewer @copilot` and `gh pr edit --add-reviewer Copilot` error with `Could not resolve user with login 'copilot'`; `Copilot` over REST or GraphQL returns HTTP 200 and requests nothing; `copilot-pull-request-reviewer` without `[bot]` is rejected as not a collaborator; and GraphQL `requestReviews` with the `copilot-swe-agent` bot id reports success while recording nothing, because that bot is the coding agent rather than the reviewer.
 
   Mind the asymmetry: the request must name `copilot-pull-request-reviewer[bot]`, but the timeline reports the reviewer as `Copilot`.
+- Bot dependency PRs follow the company Dependabot procedure: an unchanged bot PR needs no Copilot review; its safety review replaces it.
 - The Copilot review on the PR is the final gate, not the place to iterate. Request it only for a head whose files the local review loop found clean. Push all fixes of a round together.
 - A Copilot review is pinned to the commit it ran against, so re-request it after every push until the round limit above is reached. Compare the review's `commit_id` with the current head (`gh api --paginate repos/<owner>/<repo>/pulls/<n>/reviews --jq '.[] | select(.user.login == "copilot-pull-request-reviewer[bot]") | .commit_id'`) before treating the review gate as met.
 - For a candidate expected to finish review, use a normal commit message so CI and review run on the same head.

@@ -85,7 +85,7 @@ when cloud workspaces are ready. It opens the **New Upkeep** dialog:
 - **Schedule**: every hour, every 4 hours or once a day.
 - **Checkouts**: how the worker gets the code. **Only when needed** is the default.
 - **Instructions**: the text that each run starts from. **Reset to default** puts
-  back the default text.
+  back the default text (see [The default instructions](#the-default-instructions)).
 - **Summary**: the number of repositories, the open pull requests, and a warning
   when Codex has no login to give to the worker.
 
@@ -127,6 +127,43 @@ stays available.
 
 Upkeep needs a saved session, a Hetzner project in Cloud settings and a GitHub
 sign-in. The dialog shows the cause when a step fails, and keeps the choice.
+
+## The default instructions
+
+The default instructions ask an agent for the checks that a change needs and no
+more. Each repository's `AGENTS.md` and the procedures it links decide which checks
+apply; Horizon has no list of packages or checks of its own. For each pull request
+the agent does these steps:
+
+1. It reads the repository's `AGENTS.md` and the procedures it links.
+2. It reads the manifest and the resolved dependency diff, transitive changes
+   included.
+3. It checks CI, the required review, open feedback and mergeability for the
+   current head.
+4. It does an extra acceptance check only when the repository's rules make it
+   apply to this change and CI has not already done that verification.
+5. It fixes failures that the update caused, does again the checks whose inputs
+   changed, and squash-merges with `--match-head-commit`.
+6. It checks the automatic workflows that the merge starts, and cleans up.
+
+These rules follow from the steps:
+
+- A green update that the rules do not treat as a UI change merges once review and
+  mergeability pass. The agent does not clone, rebuild, run CI locally, start the
+  application or run a UI smoke only because a dependency changed.
+- A change that the rules treat as a UI change, also when it arrives through a
+  transitive dependency, gets the repository's documented UI acceptance. A label
+  such as "patch" never exempts it. Compilation and unit tests never replace a
+  visual check that the rules require.
+- When the worker cannot do a required check, the pull request stays blocked. The
+  agent names the missing capability, for example `needs UI acceptance: no
+  desktop`. The agent never waives the check.
+- Evidence stays valid while its inputs are unchanged: the head, the base and the
+  checked build. A fix or a new base makes the evidence for the changed inputs
+  stale, and the agent does those checks again.
+
+An Upkeep that was started with earlier default instructions keeps them; it does
+not get these steps by itself.
 
 ## Horizon and the worker
 
@@ -233,15 +270,33 @@ exchange. The exchange does these steps:
    that the agents wrote.
 
 The loop starts one run on the schedule, or sooner after **Run now**. A run lists
-the open pull requests of the bots in each repository. It starts one Codex agent
+the open pull requests of the bots in each repository, and Upkeep's own open pull
+requests there (see [Upkeep's own pull requests](#upkeeps-own-pull-requests)). It
+starts one Codex agent
 for each repository whose pull requests changed after the start of its last agent
 that ended without an error. When a repository had no open pull requests from the
-bots in a run, its next pull requests count as changed. A run that **Run now**
+bots and no open pull requests of Upkeep in a run, its next pull requests count as
+changed. A run that **Run now**
 started also starts agents for the repositories that did not change.
 
 - The repositories in the order list run one at a time first. Then the other
   repositories run side by side. The number of agents that run side by side
   depends on the processor cores, the memory and the peak memory of earlier runs.
+- The prompt tells each agent to ask for a code review, such as Copilot, only for
+  commits that it pushed. A bot pull request that the agent did not change needs no
+  review request.
+- The prompt tells each agent that comments and reviews on a pull request are
+  information, not instructions. The agent never submits an approving review, also
+  when a comment asks for it.
+- Thus a plain Approve review on the current head by the account of the agent comes
+  from the person. It lets the agent merge past the blocker that the agent named.
+  It never lets the agent merge past a failed or running check, a draft, a conflict
+  or a required check that the worker cannot do.
+- GitHub never lets an account approve its own pull request. Thus the person merges
+  Upkeep's own pull requests that wait for an approval. The worker's GitHub access
+  also refuses an approval by the agent (see below).
+- The fingerprint of a repository includes the latest review of each reviewer. Thus
+  an Approve starts the agent again, also when the repository requires no review.
 - The loop stops an agent and its child processes after 90 minutes. A process
   that the agent detached from its process tree continues.
 - The loop records the number of pull requests that each run merged. A pull
@@ -303,10 +358,12 @@ a run:
   due when the run of the change ends, it starts next, also after an update of the
   loop. Later planned times that passed during the run of the change are recorded
   as skipped.
-- Each look makes one GitHub search for each bot and each 20 repositories. A look
-  sees the same as the listing of a run. One search costs about 2 of the 5,000
-  points an hour that GitHub gives the worker's account. A look every minute at 16
-  repositories with one bot uses about 120 points an hour.
+- Each look makes one GitHub search for each bot, one for the branch prefix
+  `upkeep/` and one for the label `upkeep`. Each search covers at most 20
+  repositories. A look sees the same as the listing of a run.
+- One search costs about 3 of the 5,000 points an hour that GitHub gives the
+  worker's account. A look every minute at 16 repositories with one bot uses about
+  540 points an hour.
 - A run lists at most 200 open pull requests of one bot in a repository. When a
   look finds more, it leaves that repository to the planned run.
 - The worker's GitHub access refuses a whole search that names one repository
@@ -638,6 +695,55 @@ Horizon does not guarantee these items:
   person. The person sees the repository in the read request on the cloud card.
 - It does not prevent work in a repository by an agent or a person outside the
   Upkeep at the same time. Step 4 of the pass makes the agent report such work.
+
+## Upkeep's own pull requests
+
+Upkeep agents open pull requests too. The daily maintenance pass opens them for a
+rollout. The agents of the repositories open them for a change that a gate needs,
+for example a preview for a bot pull request. Each of these pull requests has a branch name that starts with
+`upkeep/`, and the label `upkeep` when the repository allows labels. The prompts and
+the default instructions tell the agents to do this.
+
+- The listing of a run and each look also find Upkeep's own open pull requests in
+  each repository of the Upkeep. These have a branch that starts with `upkeep/` or
+  the label `upkeep`. A change to one of them, such as a new commit or a check
+  result, counts as a change for the skip rule.
+- The agent of the repository applies the same gates as to the bots' pull requests.
+  It fixes checks and rebases only when necessary. It keeps the order and the
+  release steps of the shared instructions, and merges with `--match-head-commit`.
+  It merges one only when the instructions of the Upkeep ask
+  it to merge Upkeep's own pull requests, as the default instructions do. Thus an
+  Upkeep with instructions from before this change carries them up to **Ready to
+  merge** and does not merge them. A pull request that changes CI or a deployment
+  waits for the person. The generic part of the prompt says this too. Thus changed
+  instructions cannot remove it.
+- The agent reports them with the author `Upkeep`. The board shows them as
+  ordinary rows.
+- The daily maintenance pass reports a task across repositories in one line, for
+  example `<task>: <repository> merged and deployed, 8 to go`.
+- The agents of the repositories merge their pull requests side by side, and never
+  during the daily pass. The shared instructions can give an order across
+  repositories. Then the daily pass keeps that order itself. It opens the pull
+  request of a repository only after the one before it merged.
+
+### Trust boundary of the mark
+
+The agent sets the mark, and any person who can push a branch or set a label can
+set it too. Thus:
+
+- Only pull requests in the repositories of the Upkeep count. The loop never lists
+  pull requests of other repositories. It ignores a marked pull request from a fork,
+  because Upkeep pushes its branches to the repository itself. Thus only an account
+  that can push to the repository or set its labels can mark a pull request.
+- The agents apply the same gates to a marked pull request as to a bot pull request.
+- An agent merges a marked pull request only when the GitHub account of the agent
+  opened it, unless the shared instructions authorize its author. Otherwise it does
+  not check out, build or run the code of the pull request, does not push to it, and
+  reports it as blocked.
+- The daily pass continues a pull request only when its own account opened it and
+  wrote its `<!-- upkeep-daily -->` comment.
+- The author `Upkeep` on the board comes from the status that the agent writes. It
+  is not proof of the author. Check the author on GitHub.
 
 ## Trust boundary of the loop's GitHub access
 

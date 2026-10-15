@@ -77,7 +77,8 @@ PAGES = 10
 SEARCH = '''query($q: String!, $after: String) {
   search(query: $q, type: ISSUE, first: 100, after: $after) {
     pageInfo { hasNextPage endCursor }
-    nodes { ... on PullRequest { repository { nameWithOwner } state number headRefOid reviewDecision mergeable
+    nodes { ... on PullRequest { repository { nameWithOwner } state isCrossRepository number headRefOid
+      reviewDecision mergeable latestReviews(first: 100) { nodes { author { login } state submittedAt } }
       commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
         __typename
         ... on CheckRun { name status conclusion checkSuite { workflowRun { workflow { name } } } }
@@ -333,16 +334,24 @@ class Refused(Exception):
     grant."""
 
 
+# Upkeep's own pull requests: a branch that starts with upkeep/, or the label upkeep.
+MARKED = ('head:upkeep/', 'label:upkeep')
+
+
 def open_pull_requests(repository, authors):
-    """The open pull requests from `authors` with what decides whether they moved: head,
-    checks, review and mergeability. None when the repository cannot be read yet. Raises
+    """The open pull requests from `authors` and Upkeep's own, once each, with what decides
+    whether they moved: head, checks, review and mergeability. None when the repository cannot
+    be read yet. A marked pull request from a fork is never Upkeep's own: Upkeep pushes its
+    branches to the repository itself, so anyone could name a fork branch upkeep/. Raises
     Limited when GitHub refused a listing for a rate limit."""
-    found = []
-    for author in authors:
+    found, numbers = [], set()
+    queries = [['--author', author] for author in authors] + [['--search', marked] for marked in MARKED]
+    for query in queries:
         try:
             result = subprocess.run(
-                ['gh', 'pr', 'list', '--repo', repository, '--author', author, '--state', 'open',
-                 '--limit', str(LISTED), '--json', 'number,headRefOid,statusCheckRollup,reviewDecision,mergeable'],
+                ['gh', 'pr', 'list', '--repo', repository, *query, '--state', 'open',
+                 '--limit', str(LISTED), '--json',
+                 'number,headRefOid,statusCheckRollup,reviewDecision,mergeable,latestReviews,isCrossRepository'],
                 capture_output=True, text=True, timeout=60)
             if result.returncode != 0 and RATE_LIMITED.search(result.stderr or ''):
                 raise Limited(repository)
@@ -351,7 +360,12 @@ def open_pull_requests(repository, authors):
             page = None
         if not isinstance(page, list):
             return None
-        found += [pr for pr in page if isinstance(pr, dict)]
+        for pr in page:
+            if query[0] == '--search' and (not isinstance(pr, dict) or pr.get('isCrossRepository') is not False):
+                continue
+            if isinstance(pr, dict) and pr.get('number') not in numbers:
+                numbers.add(pr.get('number'))
+                found.append(pr)
     return found
 
 
@@ -378,21 +392,25 @@ def flat(node):
             checks.append({'context': check.get('context') or '', 'state': check.get('state') or ''})
     return {'number': node.get('number'), 'headRefOid': node.get('headRefOid') or '',
             'statusCheckRollup': checks, 'reviewDecision': node.get('reviewDecision') or '',
+            'latestReviews': [{'author': {'login': dig(review, 'author', 'login') or ''},
+                               'state': dig(review, 'state') or '', 'submittedAt': dig(review, 'submittedAt') or ''}
+                              for review in dig(node, 'latestReviews', 'nodes') or []],
             'mergeable': node.get('mergeable') or ''}
 
 
-def query(repositories, author):
-    return ' '.join(['is:pr', 'is:open', f'author:{author}'] + [f'repo:{repository}' for repository in repositories])
+def query(repositories, qualifier):
+    return ' '.join(['is:pr', 'is:open', qualifier] + [f'repo:{repository}' for repository in repositories])
 
 
-def search(repositories, author):
-    """The open pull requests from `author` in `repositories`, by repository, from one
-    search. None when the search failed or found too many, and None for a repository with
+def search(repositories, qualifier):
+    """The open pull requests that `qualifier` finds in `repositories`, by repository, from
+    one search; a marked one only from the repository itself, as open_pull_requests lists
+    them. None when the search failed or found too many, and None for a repository with
     more than a run's listing takes. Raises Limited when GitHub refused it for a rate
     limit, and Refused when the worker's GitHub access did."""
     names = {repository.lower(): repository for repository in repositories}
     found = {repository: [] for repository in repositories}
-    command = ['gh', 'api', 'graphql', '-f', f'query={SEARCH}', '-f', f'q={query(repositories, author)}']
+    command = ['gh', 'api', 'graphql', '-f', f'query={SEARCH}', '-f', f'q={query(repositories, qualifier)}']
     after = None
     for _ in range(PAGES):
         try:
@@ -410,8 +428,11 @@ def search(repositories, author):
         for node in page['nodes']:
             repository = names.get(str(dig(node, 'repository', 'nameWithOwner')).lower())
             # The search can still find a pull request that merged or closed a moment ago.
-            if repository is not None and dig(node, 'state') == 'OPEN':
-                found[repository].append(flat(node))
+            if repository is None or dig(node, 'state') != 'OPEN':
+                continue
+            if qualifier in MARKED and dig(node, 'isCrossRepository') is not False:
+                continue
+            found[repository].append(flat(node))
         after = dig(page, 'pageInfo', 'endCursor')
         if not dig(page, 'pageInfo', 'hasNextPage'):
             # The planned run sees the same as its own listing; a look would see more.
@@ -419,12 +440,12 @@ def search(repositories, author):
     return None
 
 
-def groups(repositories, author):
+def groups(repositories, qualifier):
     """`repositories` in groups of at most SEARCHED, each with a query that the worker's
     GitHub access accepts."""
     group = []
     for repository in repositories:
-        if group and (len(group) == SEARCHED or len(query(group + [repository], author)) > SEARCH_LENGTH):
+        if group and (len(group) == SEARCHED or len(query(group + [repository], qualifier)) > SEARCH_LENGTH):
             yield group
             group = []
         group.append(repository)
@@ -433,21 +454,21 @@ def groups(repositories, author):
 
 
 def searched(repositories, authors, apart):
-    """The open pull requests from `authors` in `repositories`, by repository, from a few
-    searches for all of them instead of a listing for each; None for a repository whose
-    search failed. The worker's GitHub access refuses a whole search that names one
-    repository it does not grant, so the repositories of a refused search go into `apart`:
-    each is searched on its own until that works, then with the others again. Raises
-    Limited when GitHub refused a search for a rate limit."""
+    """The open pull requests from `authors` and Upkeep's own in `repositories`, once each, by
+    repository, from a few searches for all of them instead of a listing for each; None for a
+    repository whose search failed. The worker's GitHub access refuses a whole search that
+    names one repository it does not grant, so the repositories of a refused search go into
+    `apart`: each is searched on its own until that works, then with the others again.
+    Raises Limited when GitHub refused a search for a rate limit."""
     found = {repository: [] for repository in repositories}
     alone = [repository for repository in repositories if repository in apart]
-    for author in authors:
-        # A repository whose search failed for one author is not searched for the others.
+    for qualifier in [f'author:{author}' for author in authors] + list(MARKED):
+        # A repository whose search failed for one query is not searched for the others.
         together = [repository for repository in repositories if repository not in alone and found[repository] is not None]
         lone = [repository for repository in alone if found[repository] is not None]
-        for group in [*groups(together, author), *([repository] for repository in lone)]:
+        for group in [*groups(together, qualifier), *([repository] for repository in lone)]:
             try:
-                pulls = search(group, author)
+                pulls = search(group, qualifier)
             except Refused:
                 apart.update(group if len(group) > 1 else ())
                 pulls = None
@@ -459,7 +480,8 @@ def searched(repositories, authors, apart):
                 if listed is None:
                     found[repository] = None
                 elif found[repository] is not None:
-                    found[repository] += listed
+                    numbers = {pr.get('number') for pr in found[repository]}
+                    found[repository] += [pr for pr in listed if pr.get('number') not in numbers]
     apart.difference_update(repository for repository in alone if found[repository] is not None)
     return found
 
@@ -478,7 +500,12 @@ def fingerprint(pull_requests, template):
         checks = sorted(json.dumps([str(check.get('workflowName')), str(check.get('name') or check.get('context')),
                                     str(check.get('conclusion') or check.get('state') or check.get('status'))])
                         for check in pr.get('statusCheckRollup') or [] if isinstance(check, dict))
-        state.append([pr.get('number'), pr.get('headRefOid'), checks, pr.get('reviewDecision'), pr.get('mergeable')])
+        # Each reviewer's latest review, so an Approve counts also where no review is required.
+        reviews = sorted(json.dumps([str(dig(review, 'author', 'login')), str(dig(review, 'state')),
+                                     str(dig(review, 'submittedAt'))])
+                         for review in pr.get('latestReviews') or [] if isinstance(review, dict))
+        state.append([pr.get('number'), pr.get('headRefOid'), checks, pr.get('reviewDecision'), pr.get('mergeable'),
+                      reviews])
     return hashlib.sha256(json.dumps([state, template]).encode()).hexdigest()
 
 

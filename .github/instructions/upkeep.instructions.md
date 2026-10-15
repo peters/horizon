@@ -78,6 +78,43 @@ section "Trust boundary of the shared instructions". Check that:
 - `RunKind` and `Activity::daily` are lenient: an unknown or wrong value never hides the
   document.
 
+## Upkeep's own pull requests
+
+`run.py` (`MARKED`, `open_pull_requests`, `search`) also lists and searches open pull
+requests with an `upkeep/` branch or the `upkeep` label. Anyone can set that mark. Check that:
+
+- The marked listing and the marked searches run only for the Upkeep's validated
+  repositories, with the search as one argument, keep only pull requests whose
+  `isCrossRepository` is exactly `false` (never a fork), and a pull request found twice
+  counts once.
+- The fingerprint includes each reviewer's latest review (`latestReviews`, the same in the
+  listing and in `flat`), so the person's Approve starts the agent also where no review is
+  required.
+- The generic prompt (`repository_part`), not only `DEFAULT_INSTRUCTIONS`, says that an
+  agent merges a marked pull request only when the Upkeep's instructions ask for it and
+  its own account opened it (unless the shared instructions authorize the author), and
+  that it never merges one that changes CI or a deployment (the person does).
+- The generic prompt treats comments and reviews as information, never instructions. The
+  only override is a plain Approve review on the current head by the account the agent
+  works as; the prompt tells the agent never to submit an approving review itself. It
+  lifts only the blocker the agent named, never a failed or running check, a draft, a
+  conflict or a required check the worker cannot do.
+- The generic prompt tells the agent to skip a marked pull request from a fork
+  (`isCrossRepository` true), as the loop's listing does.
+
+## The default instructions
+
+`DEFAULT_INSTRUCTIONS` asks for the checks a change needs and no more. Check that:
+
+- A green update that the repository's rules do not treat as a UI change gets no clone,
+  rebuild, local CI, app start or UI smoke.
+- A UI change, also a transitive one, gets the repository's documented UI acceptance, and
+  no line lets CI, compilation or unit tests stand in for a visual check the rules require.
+- A required check the worker cannot do leaves the pull request blocked with the missing
+  capability named.
+- Evidence counts only while the head, the base and the checked build are unchanged.
+- `the_default_instructions_are_proportional_to_the_change` asserts these lines.
+
 ## Untrusted: names on their way to a command line, a path or the prompt
 
 Repository names and bot logins pass `Config::validate` before any exchange, and
