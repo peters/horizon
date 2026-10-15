@@ -689,7 +689,7 @@ pub fn delete(
     if !journal.deleting {
         record(journal, records, |next| next.deleting = true)?;
     }
-    if let Some(container) = find(docker, operation_id)? {
+    if let Some(container) = find_for_delete(docker, operation_id, operation, records)? {
         call(
             docker,
             &format!("container rm --force --volumes {}", container.id),
@@ -699,7 +699,7 @@ pub fn delete(
     if volume(docker, operation_id)? {
         call(docker, &format!("volume rm {}", volume_name(operation_id)), QUICK)?;
     }
-    if find(docker, operation_id)?.is_some() || volume(docker, operation_id)? {
+    if find_for_delete(docker, operation_id, operation, records)?.is_some() || volume(docker, operation_id)? {
         return Err(CloudError::Invalid(
             "The Docker host did not remove the worker and its volume",
         ));
@@ -710,4 +710,19 @@ pub fn delete(
     };
     save(operation, CreateState::Terminated { worker_id }, records)?;
     record(journal, records, |next| *next = Journal::default())
+}
+
+fn find_for_delete(
+    docker: &impl Docker,
+    operation_id: &str,
+    operation: &mut CreateState,
+    records: &mut impl Records,
+) -> Result<Option<Container>, CloudError> {
+    let found = find(docker, operation_id)?;
+    // Every positive observation, including final verification, retains worker
+    // uncertainty before removal or an error can leave the next retry with absence.
+    if found.is_some() && *operation == CreateState::Prepared {
+        save(operation, CreateState::Requested, records)?;
+    }
+    Ok(found)
 }

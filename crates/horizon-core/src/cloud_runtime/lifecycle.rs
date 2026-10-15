@@ -59,7 +59,12 @@ pub fn can_remove(store: &Store, state: &Deployment) -> Result<bool> {
     if !matches!(state.operation, CreateState::Prepared | CreateState::Terminated { .. }) {
         return Ok(false);
     }
-    Ok(!super::providers::retained(store, state)?)
+    if super::providers::retained(store, state)? {
+        return Ok(false);
+    }
+    #[cfg(feature = "tailnet-node-cleanup")]
+    super::tailnet::cleanup::require_complete(store, state)?;
+    Ok(true)
 }
 
 /// Whether a cloud whose record holds no deployment may be removed. A provider journal
@@ -237,6 +242,51 @@ mod mutation_tests;
 mod tests {
     use super::*;
     use crate::cloud_runtime::state::{OperationId, REPLACEMENT_PENDING, ReplacementImage};
+
+    #[cfg(not(feature = "tailnet-node-cleanup"))]
+    #[test]
+    fn disabled_node_cleanup_preserves_deleted_retry_and_removal_behavior() {
+        use crate::cloud_runtime::tailnet::receipt::{
+            AllocationRequestId, CaptureAttempt, DeviceId, EnrollmentProvider, TailnetId, WorkerId,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("cloud");
+        let store = Store::lock(&root).unwrap();
+        let mut state: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"cloud","repository":"/synthetic","revision":"a",
+            "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8},
+            "stage":"Deleted","operation":{"state":"terminated","worker_id":"worker"},
+            "worker":null,"spec":null,"sessions":[]
+        }))
+        .unwrap();
+        let attempt = CaptureAttempt {
+            attempt_id: horizon_cloud_protocol::OperationId::generate(),
+            tailnet_id: TailnetId::new("work").unwrap(),
+            provider: EnrollmentProvider::new(horizon_cloud::provider::Kind::RunPod),
+            worker_id: WorkerId::new("worker").unwrap(),
+            allocation_request_id: AllocationRequestId::new("cloud").unwrap(),
+        };
+        state.tailnet_enrollment.arm(attempt.clone()).unwrap();
+        state
+            .tailnet_enrollment
+            .record(attempt.attempt_id, DeviceId::new("n-exact").unwrap())
+            .unwrap();
+        store.save(&state).unwrap();
+        assert!(can_remove(&store, &state).unwrap());
+        let saved = std::fs::read(root.join("deployment.json")).unwrap();
+        drop(store);
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "runpod_key_file":"/synthetic/missing","ssh_identity_file":"/synthetic/missing",
+            "docker_config":"/synthetic/missing","registry_pull_auth_id":null,"cpu_flavors":[],"gpu_types":[]
+        }))
+        .unwrap();
+        // Disabled cleanup preserves the original missing-spec refusal, not an API retry.
+        assert!(matches!(
+            super::super::deployment::terminate(&root, &settings, &Cancellation::default(), &|_| {}),
+            Err(Error::Invalid("No worker was requested"))
+        ));
+        assert_eq!(std::fs::read(root.join("deployment.json")).unwrap(), saved);
+    }
 
     #[test]
     fn a_hetzner_stop_is_confirmed_by_its_released_server_being_gone_without_a_worker() {

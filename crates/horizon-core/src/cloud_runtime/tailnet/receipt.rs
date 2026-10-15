@@ -124,6 +124,8 @@ pub struct EnrollmentReceipt {
     pub worker_id: WorkerId,
     pub allocation_request_id: AllocationRequestId,
     pub device_id: DeviceId,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub node_deleted: bool,
 }
 
 /// A retained device is an explicit manual outcome until desktop cleanup is available.
@@ -218,6 +220,29 @@ impl EnrollmentLedger {
         &self.attempts
     }
 
+    #[must_use]
+    pub fn cleanup_pending(&self) -> bool {
+        !self.attempts.is_empty() || self.receipts.iter().any(|entry| !entry.node_deleted)
+    }
+
+    /// Retain the exact identity after a confirmed API response.
+    /// # Errors
+    /// Rejects stale/foreign receipts or oversized confirmations without changing evidence.
+    pub fn confirm_removed(&mut self, receipt: &EnrollmentReceipt) -> Result<(), Error> {
+        if !self.receipts.contains(receipt) {
+            return Err(Error::Conflict);
+        }
+        let mut next = self.clone();
+        for current in &mut next.receipts {
+            if current.tailnet_id == receipt.tailnet_id && current.device_id == receipt.device_id {
+                current.node_deleted = true;
+            }
+        }
+        next.validate()?;
+        *self = next;
+        Ok(())
+    }
+
     /// The caller must save the deployment under its ownership lock before enrollment.
     /// # Errors
     /// Refuses reusing an attempt ID for another worker or exceeding the ledger bounds.
@@ -258,8 +283,15 @@ impl EnrollmentLedger {
             worker_id: attempt.worker_id,
             allocation_request_id: attempt.allocation_request_id,
             device_id,
+            node_deleted: false,
         };
-        if !next.receipts.contains(&receipt) {
+        if !next.receipts.iter().any(|prior| {
+            prior.tailnet_id == receipt.tailnet_id
+                && prior.provider == receipt.provider
+                && prior.worker_id == receipt.worker_id
+                && prior.allocation_request_id == receipt.allocation_request_id
+                && prior.device_id == receipt.device_id
+        }) {
             next.receipts.push(receipt);
         }
         next.validate()?;
@@ -475,5 +507,24 @@ pub(in crate::cloud_runtime) mod tests {
         value["receipts"][0]["hostname"] = serde_json::json!("display-only");
         assert!(serde_json::from_value::<EnrollmentLedger>(value).is_err());
         assert!(serde_json::from_str::<EnrollmentLedger>("{\"receipts\":[],\"receipts\":[]}").is_err());
+    }
+
+    #[test]
+    fn confirmed_receipt_round_trips_without_losing_identity_or_downgrading_on_repeated_capture() {
+        let mut ledger = populated();
+        let receipt = ledger.receipts()[0].clone();
+        ledger.confirm_removed(&receipt).unwrap();
+        let before = ledger.clone();
+        assert_eq!(ledger.confirm_removed(&receipt), Err(Error::Conflict));
+        assert_eq!(ledger, before);
+        let current = attempt("old-worker");
+        ledger.arm(current.clone()).unwrap();
+        ledger.record(current.attempt_id, receipt.device_id.clone()).unwrap();
+        assert_eq!(ledger.receipts().len(), 1);
+        assert!(ledger.receipts()[0].node_deleted);
+        assert_eq!(ledger.receipts()[0].device_id, receipt.device_id);
+        let encoded = serde_json::to_vec(&ledger).unwrap();
+        assert_eq!(serde_json::from_slice::<EnrollmentLedger>(&encoded).unwrap(), ledger);
+        assert_eq!(ledger.attempts(), before.attempts());
     }
 }

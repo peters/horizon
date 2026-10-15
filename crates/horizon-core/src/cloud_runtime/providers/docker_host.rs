@@ -136,6 +136,7 @@ struct Saved<'a> {
     observe: Observer<'a>,
     pending: bool,
     failed: Option<Error>,
+    never_requested: bool,
 }
 
 impl Saved<'_> {
@@ -165,7 +166,16 @@ impl docker_host::Records for Saved<'_> {
     }
 
     fn operation(&mut self, operation: &CreateState) -> std::result::Result<(), CloudError> {
-        self.state.operation = operation.clone();
+        // The SDK's synthetic deletion ID is not evidence that a worker existed.
+        // Keep this distinction in every durable save, including interrupted deletes.
+        self.state.operation = if self.never_requested
+            && self.state.operation == CreateState::Prepared
+            && matches!(operation, CreateState::Terminated { .. })
+        {
+            CreateState::Prepared
+        } else {
+            operation.clone()
+        };
         let saved = self.store.save(self.state);
         self.keep(saved)
     }
@@ -202,6 +212,7 @@ impl Compute for DockerHost<'_> {
             observe,
             pending: false,
             failed: None,
+            never_requested: false,
         };
         let provisioned = docker_host::provision(&engine, host, spec, &mut operation, &mut journal, &mut saved);
         let pending = saved.pending;
@@ -390,6 +401,22 @@ impl Lifecycle for DockerHost<'_> {
         let committed = Cancellation::default();
         let engine = engine(host, store, &committed, &journal);
         let cloud_id = state.cloud_id.clone();
+        #[cfg(feature = "tailnet-node-cleanup")]
+        let never_requested = if state.operation == CreateState::Prepared && journal.port.is_none() {
+            if docker_host::find(&engine, &cloud_id)?.is_some() {
+                // Retain unexpected worker evidence before removal, even if deletion
+                // or its final saves fail and the next lookup finds nothing.
+                state.operation = CreateState::Requested;
+                store.save(state)?;
+                false
+            } else {
+                true
+            }
+        } else {
+            false
+        };
+        #[cfg(not(feature = "tailnet-node-cleanup"))]
+        let never_requested = false;
         let mut operation = state.operation.clone();
         let mut saved = Saved {
             store,
@@ -397,6 +424,7 @@ impl Lifecycle for DockerHost<'_> {
             observe: super::super::mutation::IGNORE,
             pending: true,
             failed: None,
+            never_requested,
         };
         let deleted = docker_host::delete(&engine, host, &cloud_id, &mut operation, &mut journal, &mut saved);
         saved.finish(deleted)

@@ -18,7 +18,7 @@ Make sure uncertain responses retain the ID without automatic cloud cleanup.
 ## 2. Applicability
 
 Use the candidate with the NodeApi SDK addition.
-The SDK is not connected to cloud deletion, UI, CLI or MCP.
+This procedure tests SDK transport only, not its owning cloud-delete integration.
 This procedure does not qualify automatic cleanup or native owner approval.
 No visible UI change or native GIF applies to this prerequisite.
 
@@ -83,7 +83,7 @@ A direct call with an unexamined ID does not qualify this boundary.
 3. Run the required repository matrix on the stable candidate.
 
    Result: Blocking and strict checks pass. Advisory results remain separate.
-   Existing callers compile without automatic Core, UI, CLI or MCP cleanup.
+   SDK tests do not qualify automatic Core, UI, CLI or MCP cleanup.
 
 ### 6.2 N02 — First-head and final-head real inputs
 

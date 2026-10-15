@@ -1,5 +1,7 @@
 //! Thin deployment adapter for cloud-only tailnet enrollment.
 mod capture;
+#[cfg(feature = "tailnet-node-cleanup")]
+pub mod cleanup;
 mod keychain;
 pub mod receipt;
 use super::{Error, Result, WorkerContract, command::Runner, ssh::Connection, state};

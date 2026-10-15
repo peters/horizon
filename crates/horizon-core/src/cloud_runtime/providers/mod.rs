@@ -3,6 +3,8 @@
 //! deployment record, its lock and what a found or terminated worker means for it.
 //! Adding a provider means one implementation here and its description in
 //! `horizon_cloud::provider`.
+#[cfg(feature = "tailnet-node-cleanup")]
+mod deletion;
 mod docker_host;
 mod hetzner;
 mod runpod;
@@ -15,6 +17,9 @@ use super::{
 };
 use horizon_cloud::runpod::recovery::Reconciliation;
 use horizon_cloud::{Profile, provider::Kind};
+
+#[cfg(feature = "tailnet-node-cleanup")]
+pub(super) use deletion::confirmed as deletion_confirmed;
 
 /// What a provider does for a cloud's lifecycle.
 pub(super) trait Lifecycle {

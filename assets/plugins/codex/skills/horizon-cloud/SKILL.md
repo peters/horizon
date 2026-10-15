@@ -167,7 +167,11 @@ can consume the retained choice; it activates no selector or image publication.
 Ordinary unknown legacy fields remain compatible, but mixed or downgraded
 publisher envelopes and reserved null keys are refused.
 
-The desktop SDK also has an unwired exact-device HTTP prerequisite. It keeps API credentials on the desktop and returns typed retained reasons for missing/offline/denied/unverified404 outcomes. It does not enable automatic cloud node cleanup or add a UI/CLI/MCP deletion operation. See docs/architecture/tailnet-node-api.md and docs/testing/procedures/tailnet-node-api.md.
+The desktop NodeApi SDK uses exact recorded IDs and desktop-only API credentials. Core integration is behind the default-off `tailnet-node-cleanup` feature and requires cloud-workspaces. Default UI and CLI builds do not automatically remove nodes. With the feature enabled, the original owner Delete controller calls the SDK only after provider deletion; missing, denied, offline and unverified404 results retain exact IDs. Unknown attempts remain manual. Redeploy refuses unresolved node cleanup before releasing storage journals or resetting prior-worker history. Confirmed receipts remain recorded; fresh clouds and None without enrollment can reopen. Stop and companion MCP grants remain unchanged; no MCP cloud-delete operation is added.
+
+Enabled backend cleanup also refuses normal card removal while its locked record remains pending. Dedicated retry presentation, precise close errors, the explicit owner discard warning and default activation belong to the final UI outcome; they are not supplied by this backend prerequisite.
+
+See docs/architecture/tailnet-node-cleanup.md and docs/testing/procedures/tailnet-node-cleanup.md.
 
 ### Host-only pull preparation prerequisite
 
