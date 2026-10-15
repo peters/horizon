@@ -643,3 +643,17 @@ refuse. This prerequisite also refuses those envelopes until the launch engine
 can consume the retained choice; it activates no selector or image publication.
 Ordinary unknown legacy fields remain compatible, but mixed or downgraded
 publisher envelopes and reserved null keys are refused.
+
+### Host-only pull preparation prerequisite
+
+The provider-aware registry helper can prepare a direct-host pull grant without a
+RunPod key. It stores host records separately from provider registry records and
+refuses provider registry creation from a host grant. Both journal paths must stay
+outside the source. New private directories sync locked pending intents and their directory entries
+before mkdir, with parent syncs before a
+child or pull identity is pinned. Interrupted creation is recovered first; existing
+roots with no pending intent do not require a readable parent. Both scopes pin the same
+read-only identity for each generation. Rotate the generation when that identity
+changes. Existing deployment callers are unchanged; portable launch wiring follows
+separately. This helper does not prove a live registry pull or revoke an installed
+host credential. See docs/testing/procedures/host-pull-journal.md.

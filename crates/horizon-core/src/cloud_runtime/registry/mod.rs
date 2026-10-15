@@ -1,6 +1,7 @@
 //! Machine-local image grants. Publishing and worker pulling never share a binding.
 pub use horizon_cloud::runpod::registry::State;
 mod credentials;
+mod directory;
 mod management;
 mod needed;
 mod preflight;
@@ -220,6 +221,7 @@ pub struct Prepared {
     pull: Material,
     journal: Journal,
     verified: bool,
+    direct_host: bool,
     docker_host: Option<String>,
 }
 
@@ -251,6 +253,20 @@ impl Prepared {
     /// # Errors
     /// Validates explicit grants, expiry, secret separation and source isolation before a build.
     pub fn for_image(settings: &Settings, image: &str, source: Option<&Path>, building: bool) -> Result<Option<Self>> {
+        Self::for_image_for_provider(settings, image, source, building, horizon_cloud::provider::Kind::RunPod)
+    }
+
+    /// Private image preparation for the selected provider. Direct hosts use no compute API key.
+    /// # Errors
+    /// Invalid scopes, expiry, source isolation, secret separation or failed private persistence.
+    pub fn for_image_for_provider(
+        settings: &Settings,
+        image: &str,
+        source: Option<&Path>,
+        building: bool,
+        provider: horizon_cloud::provider::Kind,
+    ) -> Result<Option<Self>> {
+        let direct_host = provider != horizon_cloud::provider::Kind::RunPod;
         let Some(config) = &settings.registries else {
             return Ok(None);
         };
@@ -263,6 +279,12 @@ impl Prepared {
             ));
         }
         let source = source.map(Path::canonicalize).transpose()?;
+        if let Some(source) = &source {
+            store::ensure_outside_source(&config.root, source)?;
+            if direct_host {
+                store::ensure_outside_source(&config.root.join("hosts"), source)?;
+            }
+        }
         let pull = Material::load(&binding.pull, &binding.repository, source.as_deref())?;
         credentials::ensure_separate(&binding.pull, &pull, binding.publish.as_ref(), source.as_deref())?;
         let publish = binding
@@ -282,12 +304,13 @@ impl Prepared {
                 "Publishing and worker pulling must use different credentials",
             ));
         }
-        if let Some(source) = &source {
-            store::ensure_outside_source(&config.root, source)?;
-        }
         let login_identity =
             credentials::fingerprint(format!("{}\0{}", binding.pull.username, pull.fingerprint).as_bytes());
-        let journal = Journal::open(config, binding, settings, Some(&login_identity))?;
+        let journal = if direct_host {
+            Journal::open_host(config, binding, &login_identity)?
+        } else {
+            Journal::open(config, binding, settings, Some(&login_identity))?
+        };
         if matches!(journal.state(), State::Revoking(_) | State::Revoked) {
             return Err(Error::Invalid(
                 "Worker pull binding is revoked; rotate it before deploying",
@@ -299,6 +322,7 @@ impl Prepared {
             pull,
             journal,
             verified: false,
+            direct_host,
             docker_host: settings.docker_host.clone(),
         }))
     }
@@ -378,6 +402,11 @@ impl Prepared {
         observe: super::mutation::Observer<'_>,
     ) -> Result<String> {
         use super::mutation::State as Mutation;
+        if self.direct_host {
+            return Err(Error::Invalid(
+                "A direct host pull grant cannot create provider registry access",
+            ));
+        }
         self.observe_pending(observe)?;
         if !self.verified {
             return Err(Error::Invalid(

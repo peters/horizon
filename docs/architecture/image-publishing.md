@@ -152,8 +152,25 @@ Unbound images retain the existing legacy-provider behavior.
 Temporary registry Docker directories are private at creation on Unix.
 These checks prove the immutable image read at that moment; they cannot guarantee future issuer availability.
 
-This prerequisite retains the existing Container registry journal requirement for a configured RunPod account.
-A host-only journal is a required follow-up before portable publishing activates on a Hetzner-only machine.
+The provider-aware preparation helper stores direct-host pull records under the private registry root's `hosts` directory.
+It does not read a RunPod key or create provider registry IDs. Existing RunPod records keep their original path and account binding.
+Both the registry root and its actual host journal directory are checked against the canonical source before credential preparation or journal creation.
+This includes an existing `hosts` checkout and a host directory alias into the source.
+Private directory creation uses a stable per-user coordination file in the parent directory.
+It holds that file's lock and syncs the pending bit and its parent directory entry before creating a directory. It syncs the
+new directory and its parent before clearing the bit or allowing a child or generation pin.
+An existing ancestor with a pending intent waits for the creator or completes the parent sync
+after an interruption. Ancestor aliases resolve before the shared coordination file is selected.
+The files stay in place to preserve lock identity; they contain only a zero- or one-byte intent,
+not credentials. No-follow opens, ownership, private permissions and link-count checks protect them.
+Existing roots with no pending intent do not require read permission on their parent.
+The two journals retain separate operation locks, but one generation-wide first-use transaction pins their shared pull identity.
+A changed pull username or secret requires a new generation, including when the other journal was used first.
+Malformed records and a direct-host record with provider mutation state are refused.
+
+This is a preparation prerequisite. Active deployment callers still use the existing provider journal;
+the portable launch integration must select the provider-aware helper before activation.
+Local validation does not revoke a pull credential already installed on a host.
 
 The verified CPU pull material retains the earliest configured or issuer-observed expiry.
 An elapsed known expiry stops allocation before provider contact.
