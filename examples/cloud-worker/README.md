@@ -1642,9 +1642,9 @@ horizon-worker-github upkeep <<< '{"version":1,"session":"upkeep-<cloud>","repos
   policy is stored root-only next to the chain, as `upkeep.json`, on the volume and
   on tmpfs. A copy that cannot be read, or that the marker does not name (a write
   failed), counts as the strictest policy, and so does a marker without a copy.
-- While the policy is set, the API broker refuses what
+- While the policy is set, the API broker and the Git proxy refuse what
   [What the agent can do on GitHub](../../docs/upkeep.md#what-the-agent-can-do-on-github)
-  lists, and logs each refusal in `/workspace/.horizon-gate/refused.jsonl`.
+  lists, and log each refusal in `/workspace/.horizon-gate/refused.jsonl`.
 
 **Status and removal.** Horizon runs these as root:
 

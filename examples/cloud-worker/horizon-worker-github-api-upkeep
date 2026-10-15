@@ -31,6 +31,8 @@ PREFIX = 'Horizon: '
 # A review is read in full to find its event, and a dispatch to find its ref.
 MAX_REVIEW = 1 << 20
 MAX_DISPATCH = 65536
+# A file change is read in full to find its branch.
+MAX_CONTENTS = 32 << 20
 
 
 def refusal(status, message):
@@ -74,22 +76,54 @@ class Checks:
         workflow = upkeep.dispatched(route.parts, request.method)
         if workflow is None:
             return None
-        def get(path):
-            status, reply = self.broker.call(rest.API, 'GET', path, candidate.token,
-                                             sent=lambda: self.record.update(granted=True))
-            return reply if status == 200 and isinstance(reply, dict) else {}
-        found = get('/repos/%s/actions/workflows/%s' % (repository, urllib.parse.quote(workflow, safe='')))
+        found = self.github_get(candidate, '/repos/%s/actions/workflows/%s'
+                                % (repository, urllib.parse.quote(workflow, safe='')))
         try:
             upkeep.check_dispatch(rules, repository, found.get('path'))
         except upkeep.Refused as refused:
             self.upkeep_refused('dispatch', repository, str(refused))
         body, data = self.upkeep_body(request, repository, 'dispatch', MAX_DISPATCH)
-        default = get('/repos/%s' % repository).get('default_branch')
+        default = self.github_get(candidate, '/repos/%s' % repository).get('default_branch')
         ref = body.get('ref') if isinstance(body, dict) else None
         if not isinstance(default, str) or not default or ref not in (default, 'refs/heads/' + default):
             self.upkeep_refused('dispatch', repository, 'this Upkeep starts a listed workflow only on the default '
                                                         'branch of its repository.')
         return data
+
+    def upkeep_branch(self, request, route, candidate, repository):
+        """Refuses a change of the default branch without a pull request: a file change through
+        the contents API, whose branch is the default one unless its body names another, the
+        update of a pull request whose head is that branch, or a change of the branch's
+        reference. Returns the body of a file change, which is then sent
+        as read, or None."""
+        branch = upkeep.branch_written(request.method, route.parts)
+        if branch is None:
+            return None
+        data = None
+        if type(branch) is int:
+            pull = self.github_get(candidate, '/repos/%s/pulls/%d' % (repository, branch))
+            head = pull.get('head') if isinstance(pull.get('head'), dict) else {}
+            same = str((head.get('repo') or {}).get('full_name') or '').lower() == repository.lower()
+            # A head in a fork is not this repository's default branch.
+            branch = head.get('ref') if same or not head else 'fork:' + str(head.get('ref'))
+            branch = branch if isinstance(branch, str) else ''
+        elif branch is upkeep.CONTENTS:
+            body, data = self.upkeep_body(request, repository, 'api', MAX_CONTENTS)
+            branch = body.get('branch') if isinstance(body, dict) else None
+            if branch is not None and not isinstance(branch, str):
+                self.upkeep_refused('api', repository, 'this Upkeep reads the branch of a file change only as text.')
+            branch = (branch or '').removeprefix('refs/heads/')
+        default = self.github_get(candidate, '/repos/%s' % repository).get('default_branch')
+        if not isinstance(default, str) or not default or branch in ('', default):
+            self.upkeep_refused('api', repository, 'this Upkeep changes the default branch only through a merged '
+                                                   'pull request: change another branch and open one.')
+        return data
+
+    def github_get(self, candidate, path):
+        """GitHub's JSON object at `path`, read with the token of `candidate`, or {}."""
+        status, reply = self.broker.call(rest.API, 'GET', path, candidate.token,
+                                         sent=lambda: self.record.update(granted=True))
+        return reply if status == 200 and isinstance(reply, dict) else {}
 
     def upkeep_review(self, request, repository):
         """Reads a new or submitted review and refuses an approval. Returns the body, which is

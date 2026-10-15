@@ -18,7 +18,7 @@ WORKER_SCRIPTS = (
     'horizon-worker-github-git', 'horizon-worker-github-http', 'horizon-worker-github-api',
     'horizon-worker-github-api-rest', 'horizon-worker-github-graphql', 'horizon-worker-github-graphql-policy',
     'horizon-worker-github-tasks', 'horizon-worker-github-mcp', 'horizon-worker-github-upkeep',
-    'horizon-worker-github-api-upkeep',
+    'horizon-worker-github-api-upkeep', 'horizon-worker-github-git-upkeep',
     'horizon-worker-gh-repository',
     'horizon-worker-browserstack',
 )

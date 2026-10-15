@@ -1,5 +1,5 @@
 ---
-applyTo: "examples/cloud-worker/horizon-worker-github-upkeep,examples/cloud-worker/horizon-worker-github-api-upkeep,examples/cloud-worker/horizon-worker-github-api,examples/cloud-worker/horizon-worker-github-api-rest,examples/cloud-worker/horizon-worker-github-graphql-policy,examples/cloud-worker/test_github_upkeep_policy.py,crates/horizon-core/src/upkeep/worker/policy.rs"
+applyTo: "examples/cloud-worker/horizon-worker-github-upkeep,examples/cloud-worker/horizon-worker-github-api-upkeep,examples/cloud-worker/horizon-worker-github-api,examples/cloud-worker/horizon-worker-github-api-rest,examples/cloud-worker/horizon-worker-github-git-upkeep,examples/cloud-worker/horizon-worker-github-git,examples/cloud-worker/test_github_upkeep_push.py,examples/cloud-worker/horizon-worker-github-graphql-policy,examples/cloud-worker/test_github_upkeep_policy.py,crates/horizon-core/src/upkeep/worker/policy.rs"
 ---
 
 # Trust boundary of the Upkeep policy of the worker's GitHub access
@@ -32,10 +32,19 @@ agent-writable, so nothing there is a control. Check that:
   workflow file.
 - A review change in any other spelling than the plain one (`REVIEW_CHANGES`) is
   refused, so none goes around the approval and dismissal checks.
+- The default branch changes only through a merged pull request. The Git proxy reads
+  the commands at the start of a push (`horizon-worker-github-git-upkeep`, `refs`) and
+  refuses any ref that is not a branch and the default branch that GitHub reports;
+  commands it cannot read are refused, never passed. The broker refuses `merges`,
+  `merge-upstream`, the creation of a reference, a tag reference, a change of the
+  default branch's reference, a contents write whose body names the default branch
+  or no branch, and `update-branch` of a pull request whose head GitHub reports as the
+  default branch of the same repository (or does not report).
 - No token reaches a log, a refusal text or a subprocess argument.
 
 ## Not covered
 
-Code that workflows run outside `.github/workflows`, Git pushes (also of
-workflow files and tags) and the same changes through the Git data API, merges (a later part adds a gate), and outbound network connections: the
+Code that workflows run outside `.github/workflows`, pushes to other branches than
+the default one (also of workflow files, which GitHub runs for a push with the
+repository's secrets), merges (a later part adds a gate), and outbound network connections: the
 worker has no outbound limit. The docs say so; do not claim otherwise.

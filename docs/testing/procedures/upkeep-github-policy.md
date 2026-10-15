@@ -70,11 +70,15 @@ Run the commands of the tasks in the shell panel of setup step 2, in `/tmp/check
    `<sha>` (`gh api repos/<repo>/contents/.github/workflows/ci.yml --jq .sha`). Run
    `gh release create policy-check --repo <repo> --notes x`,
    `gh api -X POST repos/<repo>/statuses/<head> -f state=success -f context=ci`,
-   `gh api -X PUT repos/<repo>/contents/.github/workflows/ci.yml -f message=x -f content=eA== -f sha=<sha>`
-   and `gh workflow run manual.yml --repo <repo>`.
+   `gh api -X PUT repos/<repo>/contents/.github/workflows/ci.yml -f message=x -f content=eA== -f sha=<sha>`,
+   `gh api -X PUT repos/<repo>/contents/policy-check.txt -f message=x -f content=eA==`
+   and `gh workflow run manual.yml --repo <repo>`. In `/tmp/check`, run
+   `git commit --allow-empty -m x`, `git push origin HEAD:refs/heads/<default>` (the
+   default branch of `<repo>`), `git tag policy-check` and `git push origin policy-check`.
 
-   Result: Each command fails with a reason that starts with `Horizon: this Upkeep`.
-   GitHub has no release, no status, no change of `ci.yml` and no run.
+   Result: Each `gh` command and each `git push` fails with a reason that starts with
+   `Horizon: this Upkeep`. GitHub has no release, no status, no change of `ci.yml`, no `policy-check.txt`, no
+   run, no new commit on the default branch and no tag.
 
 2. On this computer, open `<data-home>/.horizon/upkeep/<cloud>/upkeep.json`, where `<cloud>`
    is the one folder there, the cloud of this Upkeep. Add the field
