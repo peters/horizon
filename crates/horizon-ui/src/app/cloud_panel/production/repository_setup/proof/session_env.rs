@@ -356,6 +356,7 @@ fn reserved(key: &str) -> bool {
             | "ANTHROPIC_API_KEY"
             | "ANTHROPIC_WORKSPACE_ID"
             | "ANTHROPIC_CUSTOM_HEADERS"
+            | "CLAUDE_CODE_OAUTH_TOKEN"
     ) || key.starts_with("HORIZON_")
 }
 
@@ -441,6 +442,7 @@ mod tests {
             ("bad name.env", "A=1\n"),
             ("20-x.env", "PATH=/opt\n"),
             ("20-x.env", "HORIZON_TOKEN=1\n"),
+            ("20-x.env", "CLAUDE_CODE_OAUTH_TOKEN=1\n"),
             ("20-x.env", "PATH_PREPEND=relative\n"),
             ("20-x.env", "1X=2\n"),
             ("20-x.env", "A=1\tB\n"),

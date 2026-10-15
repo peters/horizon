@@ -4,7 +4,7 @@ feature: Cloud panels smoke test, area E (panels in a cloud)
 platforms: [linux]
 cost: rents compute
 destructive: no
-secrets: [Claude API key or subscription login, Codex API key or ChatGPT sign-in, cloud SSH identity in the private home]
+secrets: [Claude API key, setup token or subscription login, Codex API key or ChatGPT sign-in, cloud SSH identity in the private home]
 owner: peters
 ---
 
@@ -373,6 +373,56 @@ real request.
 6. Do step 4 again with `<home>/smoke/empty-known-hosts` as `UserKnownHostsFile`.
 
    Result: SSH refuses the connection because it has no host key.
+
+### 6.10 E10 — Start Claude Code with a setup token on the worker
+
+Do this task only when the image of `smoke-a` is built from a candidate that reads
+`/workspace/credentials/claude-oauth-token`, and the operator has a token from
+`claude setup-token`. A reconnect removes the file again unless Cloud settings
+bind the token.
+
+> **CAUTION:** ONLY THE OPERATOR PASTES THE TOKEN. It gives access to the Claude
+> subscription of the operator for one year. Do not type it with a device action,
+> and do not show it in a screenshot or a recording.
+
+1. Open a new Shell panel as in E01 steps 1 and 2. Move the Claude API key away, if
+   there is one, because Claude prefers it to the token.
+
+   ```sh
+   mv /workspace/credentials/anthropic-api-key /workspace/credentials/anthropic-api-key.e10 2>/dev/null; true
+   ```
+
+   Result: `/workspace/credentials/anthropic-api-key` does not exist.
+
+2. Ask the operator to write the token to the token file in this Shell panel.
+
+   ```sh
+   (umask 077; cat > /workspace/credentials/claude-oauth-token)
+   ```
+
+   Result: The operator pastes the token, then types Enter and Ctrl+D. The file
+   exists with mode `-rw-------`.
+
+3. Open a new Shell panel as in E01 steps 1 and 2. Count the token variable. Do not
+   show its value.
+
+   ```sh
+   env | grep -c '^CLAUDE_CODE_OAUTH_TOKEN='
+   ```
+
+   Result: The output is `1`.
+
+4. Open a new Claude Code panel. Type the request of step 5 of H01.
+
+   Result: The agent replies `ready`. The panel shows no login prompt.
+
+5. In the Shell panel of step 3, remove the token file and put the API key back.
+
+   ```sh
+   rm /workspace/credentials/claude-oauth-token; mv /workspace/credentials/anthropic-api-key.e10 /workspace/credentials/anthropic-api-key 2>/dev/null; true
+   ```
+
+   Result: The token file does not exist. The API key file is back if step 1 moved it.
 
 ## 7. Pass criteria
 

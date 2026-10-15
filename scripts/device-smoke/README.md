@@ -309,7 +309,7 @@ The debug Horizon gets a changed environment:
   `HORIZON_BROWSER_ROOT`, `HORIZON_DEVICE_ACTOR`, `HORIZON_CLOUD_ACTOR` and
   `HORIZON_GPU_LOCK`. Without them, the debug app does not act as a worker
   client. It also removes `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID`,
-  `ANTHROPIC_CUSTOM_HEADERS` and `WAYLAND_DISPLAY`. The manifest lists the
+  `ANTHROPIC_CUSTOM_HEADERS`, `CLAUDE_CODE_OAUTH_TOKEN` and `WAYLAND_DISPLAY`. The manifest lists the
   removed names, never their values.
 - `HORIZON_AGENT_INTEGRATIONS` is `off`. The debug app does not install agent
   skills, plugins, MCP registrations or a desktop entry in `HOME`, and takes no

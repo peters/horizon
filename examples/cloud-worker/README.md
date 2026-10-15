@@ -929,6 +929,12 @@ recorded. This is true if the Shell panel opens first or after a Claude panel. A
 without a bound key or workspace starts without these variables. Other agent panels do not
 receive them.
 
+A worker with a bound Claude setup token, `/workspace/credentials/claude-oauth-token`,
+gives it to each Claude panel and each Shell panel as `CLAUDE_CODE_OAUTH_TOKEN`. Claude then
+starts signed in to the subscription of the token, with no sign-in on the worker. Horizon
+never binds a setup token together with an API key. The token is not shown in the session
+output, and other agent panels do not receive it.
+
 ## Codex background server
 
 Codex 0.156 and later start a shared background server. This server refuses a control
@@ -1031,8 +1037,8 @@ data, never shell, with one entry per line:
 already on it, from that base or an earlier line, stays where it is. `KEY` is a letter or
 `_` followed by letters, digits or `_`, at most 128 characters. The variables the worker
 sets or clears for every session are refused: `PATH`, `HOME`, `DISPLAY`, `HORIZON`, every
-`HORIZON_` variable, `DISABLE_AUTOUPDATER`, `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID`
-and `ANTHROPIC_CUSTOM_HEADERS`. The directory holds at most 64 regular files
+`HORIZON_` variable, `DISABLE_AUTOUPDATER`, `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID`,
+`ANTHROPIC_CUSTOM_HEADERS` and `CLAUDE_CODE_OAUTH_TOKEN`. The directory holds at most 64 regular files
 of at most 16 KiB each, and a value is at most 4096 characters. A line that is not one of
 the entries above, contains a control character (including tab, on any line) or breaks a
 limit is refused with its file and line; invalid UTF-8, an oversized or misnamed file, another kind of
