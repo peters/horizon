@@ -253,3 +253,34 @@ fn another_account_at_the_same_uri_is_not_overwritten_by_a_stale_window() {
         43
     );
 }
+
+#[test]
+fn duplicate_scopes_are_refused_before_replacement_or_default_restore() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = root.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let (mut settings, _) = fixture(root.path());
+    let shown = Override {
+        repository: repo.canonicalize().unwrap(),
+        profile: "cpu".into(),
+        destination: "ghcr.io/builder/worker".into(),
+        account: Some(crate::cloud_runtime::github::publish::publication::Account {
+            id: 42,
+            login: "builder".into(),
+        }),
+        binding: None,
+    };
+    let replacement = shown.selection(&settings).unwrap();
+    let mut other = shown.clone();
+    other.account.as_mut().unwrap().id = 43;
+    settings.image_publishing = vec![shown.clone(), other];
+    let before = serde_json::to_vec(&settings).unwrap();
+    let path = root.path().join("settings.json");
+    std::fs::write(&path, &before).unwrap();
+    for next in [None, Some(&replacement)] {
+        assert!(
+            save_image_destination(root.path(), &repo, "cpu", Some(&shown), next, &Cancellation::default()).is_err()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+}

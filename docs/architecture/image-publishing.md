@@ -41,7 +41,7 @@ An automatic preview uses the existing private sign-in chain reader to get its c
 This cached name does not prove authentication. The caller runs this read on a worker thread.
 These metadata helpers do not authenticate an account or prove registry permission.
 
-The source adapter reads the origin with bounded, cancellable Git commands on a worker thread.
+The source adapter reads the origin, including included local configuration files, with bounded, cancellable Git commands on a worker thread.
 It removes URL credentials before package naming and sends no remote text to output events.
 Without a supported remote, it uses the canonical local checkout path.
 Malformed or unreadable Git configuration stops selection; it is not treated as an absent origin.
@@ -106,3 +106,6 @@ A bound destination can use a different registry from the source Git service.
 The contract accepts nested project paths and explicit registry ports.
 GitLab account connection and project discovery are future work.
 The current task does not add those operations.
+
+Preference saves validate the complete reloaded settings before looking up or replacing
+a scope. Duplicate checkout/profile entries are refused without discarding either choice.

@@ -41,6 +41,7 @@ pub fn save_image_destination(
         || Ok(super::defaults(root)),
         |bytes| serde_json::from_slice(bytes).map_err(|_| Error::Json),
     )?;
+    settings.validate()?;
     let matches = |choice: &&Override| choice.repository == repository && choice.profile == profile;
     let observed = settings.image_publishing.iter().find(matches);
     if observed != shown {

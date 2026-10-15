@@ -61,6 +61,12 @@ It tests scope separation, account identity, credential-free source naming and s
 
    Result: Early cancellation creates no settings directory or lock. Settings inside the source repository are refused before a lock.
 
+4. Examine the included-config origin fixtures and duplicate-scope save fixture.
+
+   Result: An included origin matches its direct equivalent. Direct plus included
+   origins and malformed included configuration are refused without remote output.
+   Replacing or restoring a duplicated preference refuses the file without changing it.
+
 ## 7. Pass criteria
 
 - Both commands pass on the candidate sources.

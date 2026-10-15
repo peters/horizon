@@ -73,7 +73,7 @@ fn git_config(repository: &Path) -> Command {
         .env("LC_ALL", "C")
         .arg("-C")
         .arg(repository)
-        .args(["config", "--local"]);
+        .args(["config", "--local", "--includes"]);
     command
 }
 

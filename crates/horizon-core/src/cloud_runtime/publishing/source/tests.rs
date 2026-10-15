@@ -243,3 +243,40 @@ fn malformed_git_configuration_is_refused_without_output_or_a_local_fallback() {
     ));
     assert!(events.borrow().is_empty());
 }
+
+#[test]
+fn included_origins_are_read_and_ambiguous_or_malformed_includes_are_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = root.path().join("repo");
+    let expected = target(&repo, Some("https://git.example/team/included.git"));
+    let config = repo.join(".git/config");
+    let included = repo.join(".git/origin.inc");
+    std::fs::write(
+        &included,
+        "[remote \"origin\"]\nurl = https://git.example/team/included.git\n",
+    )
+    .unwrap();
+    std::fs::write(&config, "[include]\npath = origin.inc\n").unwrap();
+    let cancel = Cancellation::default();
+    let events = std::cell::RefCell::new(Vec::new());
+    let emit = |event| events.borrow_mut().push(event);
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &emit,
+        secrets: Vec::new(),
+    };
+    assert_eq!(automatic("builder", &repo, "cpu", &runner).unwrap(), expected);
+    std::fs::write(
+        &config,
+        "[include]\npath = origin.inc\n[remote \"origin\"]\nurl = https://git.example/team/direct.git\n",
+    )
+    .unwrap();
+    assert!(automatic("builder", &repo, "cpu", &runner).is_err());
+    std::fs::write(&config, "[include]\npath = origin.inc\n").unwrap();
+    std::fs::write(&included, "[broken\n").unwrap();
+    assert!(matches!(
+        automatic("builder", &repo, "cpu", &runner),
+        Err(Error::Invalid(ORIGIN_READ))
+    ));
+    assert!(events.borrow().is_empty());
+}
