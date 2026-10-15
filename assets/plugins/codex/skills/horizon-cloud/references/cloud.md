@@ -426,7 +426,9 @@ reads or changes it, and agents work only with the repositories the cloud was gi
   access to requests for the cloud's repositories: a repository's own REST paths,
   searches with a `repo:` qualifier for each repository, and GraphQL that reads
   or changes only those repositories. Pass `-R owner/name` or work in a checkout.
-  It refuses account-wide and organization-wide requests, such as `gh api
+  It also reads the public global security advisories (`gh api /advisories`, with
+  filters such as `?ecosystem=npm&affects=name`, and `gh api /advisories/GHSA-...`)
+  without a repository grant. It refuses account-wide and organization-wide requests, such as `gh api
   user/repos`, and changes to repository settings. A refusal shows as
   `Horizon: ...` (`GraphQL: Horizon: ...` for GraphQL); for a repository the
   task needs, ask with `github_access`.

@@ -98,7 +98,11 @@ Run the commands of the tasks in the shell panel of setup step 2, in `/tmp/check
 
    Result: Each command works.
 
-3. Run `gh pr review <number> --repo <repo> --approve`, then
+3. Run `gh api '/advisories?ecosystem=pip&per_page=1' --jq '.[0].ghsa_id'`.
+
+   Result: It prints an advisory ID that starts with `GHSA-`.
+
+4. Run `gh pr review <number> --repo <repo> --approve`, then
    `gh pr review <number> --repo <repo> --comment --body x`.
 
    Result: The approval fails with a reason that starts with `Horizon: this Upkeep`.

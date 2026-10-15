@@ -399,6 +399,10 @@ requests. The GitHub App keeps the permission `workflows: write`, because the me
 of a Dependabot update of GitHub Actions needs it. A planned part moves the last
 step of each merge from the agent to a gate in the root service.
 
+Every agent of a worker, with or without an Upkeep, can read the global security
+advisories (`gh api /advisories`), which are public, for example for a safety
+review of an update.
+
 The loop starts no agent on a worker where root did not set the policy, for example
 an older worker image. Rebuild such a cloud on a current image.
 

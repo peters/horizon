@@ -1436,7 +1436,8 @@ The broker does these steps for each connection:
     of its own, and each group must close. `gh` puts the keywords of a search in
     such a group, for example `( fix bug ) repo:owner/name type:pr`. A `-` goes
     directly before a word.
-  - `GET /`, `/rate_limit` and `/meta`.
+  - `GET /`, `/rate_limit` and `/meta`, and the global security advisories
+    (`/advisories` and `/advisories/GHSA-...`), which are public.
   - `POST /graphql`, checked by the GraphQL policy below.
 - On `uploads.github.com` it accepts only a release asset upload, with `push`.
 - On `codeload.github.com` and `*.githubusercontent.com` it accepts only `GET`
