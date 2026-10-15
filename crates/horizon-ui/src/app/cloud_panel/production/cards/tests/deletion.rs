@@ -72,44 +72,20 @@ fn valid_retry_settings(root: &std::path::Path) -> Vec<u8> {
 }
 
 #[cfg(unix)]
-#[test]
-fn cleanup_retry_keeps_the_ui_responsive_during_settings_read_and_retains_failures() {
-    use std::{
-        io::Write as _,
-        os::unix::fs::OpenOptionsExt as _,
-        sync::mpsc,
-        time::{Duration, Instant},
-    };
-    for cancel_read in [false, true] {
-        let (temp, mut app) = crate::app::test_support::test_app();
-        resumable_cloud(&mut app, false);
-        app.cloud_prototype.root = Some(temp.path().to_owned());
-        let mut runtime = ready_bound_runtime();
-        runtime.stage = Some(Stage::Deleted);
-        let state = runtime.state.as_mut().unwrap();
-        state.stage = Stage::Deleted;
-        state.operation = cloud_runtime::CreateState::Terminated {
-            worker_id: "worker1".into(),
-        };
-        let cloud_root = temp.path().join("fixture");
-        cloud_runtime::state::Store::lock(&cloud_root)
-            .unwrap()
-            .save(state)
-            .unwrap();
-        let original = std::fs::read(cloud_root.join("deployment.json")).unwrap();
-        app.cloud_prototype.production.runtimes.insert(7, runtime);
-        let settings = temp.path().join("settings.json");
-        assert!(
-            std::process::Command::new("mkfifo")
-                .arg(&settings)
-                .status()
-                .unwrap()
-                .success()
-        );
-        let bytes = if cancel_read {
-            valid_retry_settings(temp.path())
-        } else {
-            b"{".to_vec()
+struct DelayedRetrySettings {
+    reading: std::sync::mpsc::Receiver<()>,
+    permit: std::sync::mpsc::Sender<()>,
+    writer: std::thread::JoinHandle<bool>,
+}
+
+#[cfg(unix)]
+impl DelayedRetrySettings {
+    fn start(settings: std::path::PathBuf, bytes: Vec<u8>) -> Self {
+        use std::{
+            io::Write as _,
+            os::unix::fs::OpenOptionsExt as _,
+            sync::mpsc,
+            time::{Duration, Instant},
         };
         let (ready, reading) = mpsc::channel();
         let (permit, permitted) = mpsc::channel();
@@ -131,45 +107,117 @@ fn cleanup_retry_keeps_the_ui_responsive_during_settings_read_and_retains_failur
             file.write_all(&bytes).unwrap();
             ui_returned
         });
+        Self {
+            reading,
+            permit,
+            writer,
+        }
+    }
+
+    fn wait_for_reader(&self) {
+        self.reading.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    }
+
+    fn finish(self) {
+        self.permit.send(()).unwrap();
+        assert!(
+            self.writer.join().unwrap(),
+            "Retry waited for settings on the UI thread"
+        );
+    }
+}
+
+#[cfg(unix)]
+fn settle_cleanup_retry(app: &mut crate::app::HorizonApp, ctx: &egui::Context, cancel_read: bool) {
+    use std::time::{Duration, Instant};
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.cloud_prototype.production.runtimes[&7].receiver.is_some() {
+        app.prepare_production_clouds(ctx);
+        assert!(
+            Instant::now() < deadline,
+            "normal app polling did not settle cleanup Retry"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let runtime = app.cloud_prototype.production.runtimes.get_mut(&7).unwrap();
+    assert!(runtime.receiver.is_none());
+    assert!(!runtime.busy());
+    assert_eq!(runtime.stage, Some(Stage::Deleted));
+    assert!(runtime.error.as_deref().unwrap().contains(if cancel_read {
+        "cancelled"
+    } else {
+        "Invalid cloud state or settings"
+    }));
+    assert!(node_cleanup_pending(runtime));
+    assert!(has(&action_texts(ctx, runtime), "Retry node cleanup"));
+}
+
+#[cfg(unix)]
+#[test]
+fn cleanup_retry_keeps_the_ui_responsive_during_settings_read_and_retains_failures() {
+    for cancel_read in [false, true] {
+        let (temp, mut app) = crate::app::test_support::test_app();
         let ctx = egui::Context::default();
-        app.apply_card_action(7, Action::Delete, &ctx);
-        reading.recv_timeout(Duration::from_secs(5)).unwrap();
-        let runtime = app.cloud_prototype.production.runtimes.get_mut(&7).unwrap();
-        assert!(runtime.busy());
-        assert!(has(&action_texts(&ctx, runtime), "Deleting cloud resources"));
-        let cancel = runtime.cancel.clone().unwrap();
-        app.apply_card_action(7, Action::Delete, &ctx);
-        if cancel_read {
-            cancel.cancel();
-            assert!(
-                app.cloud_prototype.production.runtimes[&7]
-                    .cancel
-                    .as_ref()
-                    .unwrap()
-                    .is_cancelled()
-            );
-        }
-        permit.send(()).unwrap();
-        assert!(writer.join().unwrap(), "Retry waited for settings on the UI thread");
-        let receiver = app
-            .cloud_prototype
-            .production
-            .runtimes
-            .get_mut(&7)
+        app.prepare_production_clouds(&ctx);
+        resumable_cloud(&mut app, false);
+        app.cloud_prototype.root = Some(temp.path().to_owned());
+        let mut runtime = ready_bound_runtime();
+        runtime.stage = Some(Stage::Deleted);
+        let state = runtime.state.as_mut().unwrap();
+        state.cloud_id = "fixture".into();
+        state.stage = Stage::Deleted;
+        state.operation = cloud_runtime::CreateState::Terminated {
+            worker_id: "worker1".into(),
+        };
+        state.worker = None;
+        state.tailnet_enrollment = serde_json::from_value(serde_json::json!({"receipts":[{
+            "tailnet_id":"work", "provider":"runpod", "worker_id":"worker1",
+            "allocation_request_id":"fixture", "device_id":"n-pending-fixture"
+        }]}))
+        .unwrap();
+        let cloud_root = temp.path().join("fixture");
+        cloud_runtime::state::Store::lock(&cloud_root)
             .unwrap()
-            .receiver
-            .take()
+            .save(state)
             .unwrap();
-        let event = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
-        match event {
-            cloud_runtime::Event::Failed(reason, _) => assert!(reason.contains(if cancel_read {
-                "cancelled"
+        let original = std::fs::read(cloud_root.join("deployment.json")).unwrap();
+        app.cloud_prototype.production.runtimes.insert(7, runtime);
+        let settings = temp.path().join("settings.json");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&settings)
+                .status()
+                .unwrap()
+                .success()
+        );
+        for _ in 0..2 {
+            let bytes = if cancel_read {
+                valid_retry_settings(temp.path())
             } else {
-                "Invalid cloud state or settings"
-            })),
-            other => panic!("preflight must report its failure without provider work: {other:?}"),
+                b"{".to_vec()
+            };
+            let delayed = DelayedRetrySettings::start(settings.clone(), bytes);
+            app.apply_card_action(7, Action::Delete, &ctx);
+            delayed.wait_for_reader();
+            let runtime = app.cloud_prototype.production.runtimes.get_mut(&7).unwrap();
+            assert!(runtime.busy());
+            assert!(has(&action_texts(&ctx, runtime), "Deleting cloud resources"));
+            let cancel = runtime.cancel.clone().unwrap();
+            app.apply_card_action(7, Action::Delete, &ctx);
+            if cancel_read {
+                cancel.cancel();
+                assert!(
+                    app.cloud_prototype.production.runtimes[&7]
+                        .cancel
+                        .as_ref()
+                        .unwrap()
+                        .is_cancelled()
+                );
+            }
+            delayed.finish();
+            settle_cleanup_retry(&mut app, &ctx, cancel_read);
+            assert_eq!(std::fs::read(cloud_root.join("deployment.json")).unwrap(), original);
         }
-        assert_eq!(std::fs::read(cloud_root.join("deployment.json")).unwrap(), original);
     }
 }
 

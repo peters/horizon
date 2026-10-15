@@ -322,6 +322,13 @@ fn checked_settings(
     Ok(settings)
 }
 
+fn report_settings_failure(cleanup_retry: bool, error: &cloud_runtime::Error, emit: &dyn Fn(Event)) {
+    if cleanup_retry {
+        emit(Event::stage(Stage::Deleted));
+    }
+    emit(Event::failed(error.to_string()));
+}
+
 /// A worker operation that failed its preflight is still that operation's failure: it
 /// gets its own attempt, so the status names it and diagnosis ignores earlier output.
 fn fail_before_start(runtime: &mut Runtime, action: Action, error: String) {
@@ -484,10 +491,11 @@ impl HorizonApp {
                 let _ = tx.send(event);
                 ctx.request_repaint();
             };
+            let cleanup_retry = settings.is_none();
             let settings = match checked_settings(settings, &settings_path, &cancel) {
                 Ok(settings) => settings,
                 Err(error) => {
-                    emit(Event::failed(error.to_string()));
+                    report_settings_failure(cleanup_retry, &error, &emit);
                     return;
                 }
             };

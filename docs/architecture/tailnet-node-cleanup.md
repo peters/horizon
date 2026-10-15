@@ -88,5 +88,5 @@ The UI preserves an earlier precise API failure only for the same displayed save
 A retained Ready connection watch does not prevent explicit RemoveAnyway, while busy operations and the lifecycle lock still refuse it.
 
 Cleanup Retry reads saved settings on the background operation worker.
-The card stays busy while that read waits. Cancellation is checked before the read and again before cleanup dispatch; invalid settings report an operation failure without provider or node work.
+The card stays busy while that read waits. Cancellation is checked before the read and again before cleanup dispatch; invalid settings report an operation failure without provider or node work. A preflight failure restores Deleted before normal event polling reports the error, so pending cleanup and Retry remain available. A later Retry uses the same background read.
 The explicit-discard warning also examines the raw saved-record reason, so a restored legacy cloud with no captured device ID receives it before any retry.

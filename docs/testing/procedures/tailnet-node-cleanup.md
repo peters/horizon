@@ -151,6 +151,8 @@ Never pass a secret through an argument, environment variable, worker or log.
    Only a matching displayed saved-tailnet/device pair retains its previous API detail.
    A delayed Retry settings read leaves UI frames responsive and keeps the operation busy.
    Cancellation or malformed settings prevent provider/node dispatch.
+   Normal event polling restores Deleted, clears busy state and retains the error and Retry.
+   A second delayed Retry stays responsive. Both attempts preserve the saved record.
    Opening Close directly after a legacy restore still shows the explicit-discard warning.
 
 2. In the isolated desktop, open Manage for the original pending cloud.
