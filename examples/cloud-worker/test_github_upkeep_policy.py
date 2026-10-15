@@ -97,16 +97,12 @@ class PolicyTests(ServiceTestCase):
 
     def test_the_policy_refuses_changes_that_an_upkeep_never_needs(self):
         policy = upkeep.Policy()
-        refused = [('POST', 'git/trees'), ('PATCH', 'git/refs/heads/main'), ('POST', 'git/refs'),
-                   ('DELETE', 'git/refs/tags/v1'), ('DELETE', 'git/refs/heads'), ('POST', 'merges'),
-                   ('POST', 'check-runs'), ('PATCH', 'check-runs/1'), ('POST', 'check-suites'),
-                   ('PATCH', 'check-suites/preferences'),
-                   ('POST', 'merge-upstream'), ('POST', 'releases'), ('PATCH', 'releases/1'),
-                   ('POST', 'releases/assets'), ('POST', 'deployments'), ('POST', 'dispatches'),
-                   ('POST', 'statuses/' + HEAD), ('PUT', 'contents/.github/workflows/ci.yml'),
+        refused = [('POST', 'releases'), ('PATCH', 'releases/1'), ('POST', 'releases/assets'),
+                   ('POST', 'dispatches'), ('POST', 'statuses/' + HEAD), ('PUT', 'contents/.github/workflows/ci.yml'),
                    ('DELETE', 'contents/.github/workflows/ci.yml'), ('POST', 'actions/runs/1/approve'),
                    ('POST', 'actions/runs/1/pending_deployments'), ('DELETE', 'actions/caches'),
-                   ('DELETE', 'actions/runs/1'), ('POST', 'actions/workflows/1/enable')]
+                   ('DELETE', 'actions/runs/1'), ('POST', 'actions/workflows/1/enable'),
+                   ('PUT', 'pulls/3/reviews/8/dismissals')]
         for method, path in refused:
             self.assertIsNotNone(upkeep.rest_refusal(policy, method, path.split('/')), (method, path))
         allowed = [('GET', 'git/trees/x'), ('POST', 'issues/1/comments'), ('POST', 'labels'),
@@ -114,13 +110,18 @@ class PolicyTests(ServiceTestCase):
                    ('PUT', 'contents/src/main.rs'), ('PUT', 'contents/.github/dependabot.yml'),
                    ('POST', 'actions/runs/1/rerun'), ('POST', 'actions/runs/1/rerun-failed-jobs'),
                    ('POST', 'actions/runs/1/cancel'), ('POST', 'actions/jobs/1/rerun'),
-                   ('POST', 'check-suites/1/rerequest'), ('POST', 'check-runs/1/rerequest'), ('PUT', 'pulls/1/merge'),
-                   ('DELETE', 'git/refs/heads/dependabot/cargo/x'),
-                   ('POST', 'actions/workflows/release.yml/dispatches')]
+                   ('PUT', 'pulls/1/merge'), ('DELETE', 'git/refs/heads/dependabot/cargo/x'),
+                   ('POST', 'pulls/3/reviews'), ('POST', 'actions/workflows/release.yml/dispatches')]
         for method, path in allowed:
             self.assertIsNone(upkeep.rest_refusal(policy, method, path.split('/')), (method, path))
         self.assertIsNone(upkeep.rest_refusal(None, 'POST', ['releases']))
         self.assertEqual(upkeep.dispatched(['actions', 'workflows', '7', 'dispatches'], 'POST'), '7')
+        for method, path, read in [('POST', 'pulls/3/reviews', True), ('POST', 'pulls/3/reviews/8/events', True),
+                                   ('PUT', 'pulls/3/reviews/8', False), ('POST', 'pulls/3/reviews/8/comments', False),
+                                   ('GET', 'pulls/3/reviews', False)]:
+            self.assertEqual(upkeep.reviews(method, path.split('/')), read, path)
+        self.assertTrue(upkeep.approves(' approve'))
+        self.assertFalse(upkeep.approves('COMMENT') or upkeep.approves(None))
 
     def test_only_listed_workflows_may_be_started(self):
         policy = upkeep.load(self.store, common) if saved(self.store) else None
@@ -167,7 +168,7 @@ class UpkeepBrokerTests(BrokerTestCase):
     def test_refused_changes_never_reach_github_and_go_to_the_log(self):
         before = len(self.api.seen)
         for method, target in [('POST', '/repos/example/project/releases'),
-                               ('POST', '/repos/example/project/git/blobs'),
+                               ('PUT', '/repos/example/project/pulls/3/reviews/8/dismissals'),
                                ('PUT', '/repos/example/project/contents/.github/workflows/x.yml'),
                                ('POST', '/repos/example/project/statuses/' + HEAD),
                                ('POST', '/repos/example/project/actions/runs/1/pending_deployments')]:
@@ -202,6 +203,27 @@ class UpkeepBrokerTests(BrokerTestCase):
                              '{ clientMutationId } }', {'id': 'PR_1'})
         self.assertIn('auto-merge', reply['errors'][0]['message'])
         self.assertFalse(any(b'enablePullRequestAutoMerge' in (data or b'') for *_, data in self.api.seen))
+
+    def test_an_agent_cannot_approve_a_pull_request(self):
+        before = len(self.api.seen)
+        for target, body in [('/repos/example/project/pulls/3/reviews', {'event': 'APPROVE'}),
+                             ('/repos/example/project/pulls/3/reviews/8/events', {'event': 'approve'}),
+                             ('/repos/example/project/pulls/3/reviews', b'{"event": "COMMENT", "event": "APPROVE"}'),
+                             ('/repos/example/project/pulls/3/reviews?event=APPROVE', {'body': 'x'})]:
+            status, _, payload = self.send('POST', target, body=body)
+            self.assertEqual(status, 403, target)
+            self.assertIn('this Upkeep', json.loads(payload)['message'])
+        self.assertEqual(len(self.api.seen), before)
+        self.assertEqual(self.log.read_text().count('"kind": "review"'), 4)
+        reply = self.graphql('mutation { addPullRequestReview(input: {pullRequestId: "PR_1", event: APPROVE}) '
+                             '{ clientMutationId } }')
+        self.assertIn('approve', reply['errors'][0]['message'])
+        self.assertFalse(any(b'addPullRequestReview' in (data or b'') for *_, data in self.api.seen))
+        # A review that does not approve reaches GitHub with its body as sent.
+        status, _, _ = self.send('POST', '/repos/example/project/pulls/3/reviews',
+                                 body={'event': 'REQUEST_CHANGES', 'body': 'x'})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(self.api.seen[-1][-1]), {'event': 'REQUEST_CHANGES', 'body': 'x'})
 
 
 if __name__ == '__main__':

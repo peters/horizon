@@ -21,13 +21,17 @@ agent-writable, so nothing there is a control. Check that:
   as no policy. `install` names the new policy in the marker before it writes a copy.
 - `rest_refusal` sees the decoded path segments that GitHub reads (`Route.parts`),
   for `/repos/OWNER/NAME/...`, `/repositories/ID/...` and release uploads.
-- Auto-merge (`enablePullRequestAutoMerge`) never reaches GitHub.
+- Auto-merge (`enablePullRequestAutoMerge`) never reaches GitHub, nor does an
+  approval of a pull request: the broker reads the whole body of a new or submitted
+  REST review (`upkeep.reviews`), refuses a body that is not JSON with each field
+  once, and refuses the `APPROVE` event in any case and spacing, also through the
+  GraphQL `addPullRequestReview`. A dismissal of a review is refused.
 - A workflow dispatch passes only for a listed (repository, file) pair, resolved
   through GitHub from the ID or file name in the path.
 - No token reaches a log, a refusal text or a subprocess argument.
 
 ## Not covered
 
-Code that workflows run outside `.github/workflows`, Git pushes (a later part checks
-them), merges (a later part adds a gate), and outbound network connections: the
+Code that workflows run outside `.github/workflows`, Git pushes (also of
+workflow files and tags), merges (a later part adds a gate), and outbound network connections: the
 worker has no outbound limit. The docs say so; do not claim otherwise.

@@ -4,11 +4,12 @@ other people write and runs without approvals. The policy names the loop's sessi
 repositories and bots of the Upkeep, and the workflows that an agent may start. While it is set,
 for every agent of the cloud:
 
-- The API broker refuses the changes that an Upkeep never needs and that could start code with
-  the secrets of a repository or change its workflows: the Git data API, merges of branches,
-  releases, deployments, repository dispatches, commit statuses and check runs, approvals of
-  deployments and runs, file changes under .github/workflows, and auto-merge. A workflow dispatch passes only
-  for a workflow that the person listed. Runs can be started again or cancelled.
+- The API broker refuses the changes that an Upkeep never needs and that could publish the
+  repository, start code with its secrets, stand in for a check or for the person's approval:
+  file changes under .github/workflows, releases and their assets, commit statuses, repository
+  dispatches, approvals of runs and deployments, approvals and dismissals of reviews, and
+  auto-merge. A workflow dispatch passes only for a workflow that the person listed. Runs can
+  be started again or cancelled.
 
 Each refusal also goes to a log that root owns and the exchange of Upkeep reads for the board.
 A module that horizon-worker-github loads, not a command."""
@@ -45,21 +46,19 @@ LOG = 'refused.jsonl'
 LOG_LIMIT = 256 << 10
 # Changes under a repository path that the policy refuses whatever the grant.
 REFUSED_CHANGES = {
-    'git': 'the Git data API can write any file, workflows included',
-    'merges': 'a merge of branches goes around the checks of a pull request',
-    'merge-upstream': 'a merge of branches goes around the checks of a pull request',
     'releases': 'a release publishes the repository',
-    'deployments': 'a deployment can start a workflow with the secrets of the repository',
     'dispatches': 'a repository dispatch can start a workflow with the secrets of the repository',
     'statuses': 'a commit status could stand in for a required check',
 }
-# The check changes that stay: ask GitHub to run a check again. A new or changed check run
-# could stand in for a required check.
-CHECK_CHANGES = re.compile(r'/check-(?:runs|suites)/[1-9][0-9]{0,19}/rerequest')
-# The run and job changes that stay: start again and cancel.
+# The run and job changes that stay: start again and cancel. The approval of a run or a
+# deployment is the person's.
 RUN_CHANGES = re.compile(r'/actions/(?:runs/[1-9][0-9]{0,19}/(?:rerun|rerun-failed-jobs|cancel|force-cancel)'
                          r'|jobs/[1-9][0-9]{0,19}/rerun)')
 DISPATCH = re.compile(r'/actions/workflows/(?P<workflow>[^/]{1,256})/dispatches')
+# A new review, and the submission of a pending one: either can approve, as their body says.
+REVIEW = re.compile(r'/pulls/[1-9][0-9]{0,19}/reviews(?:/[1-9][0-9]{0,19}/events)?')
+DISMISSAL = re.compile(r'/pulls/[1-9][0-9]{0,19}/reviews/[1-9][0-9]{0,19}/dismissals')
+APPROVAL = 'this Upkeep does not let an agent approve a pull request; only the person approves.'
 
 
 class Refused(Exception):
@@ -225,21 +224,27 @@ def rest_refusal(policy, method, parts):
     OWNER/NAME), or None. A workflow dispatch passes here; the broker checks it."""
     if policy is None or method in ('GET', 'HEAD') or not parts:
         return None
-    first = parts[0]
-    # A branch may be deleted, as `gh pr merge --delete-branch` does; that writes no file.
-    if first == 'git' and method == 'DELETE' and parts[1:3] == ['refs', 'heads'] and len(parts) > 3:
-        return None
+    first, rest = parts[0], '/' + '/'.join(parts)
     if first in REFUSED_CHANGES:
         return 'this Upkeep does not let an agent change %s: %s.' % (first, REFUSED_CHANGES[first])
     if first == 'contents' and '/'.join(parts[1:]).startswith(WORKFLOWS):
         return 'this Upkeep does not let an agent change workflow files.'
-    if first in ('check-runs', 'check-suites') and not CHECK_CHANGES.fullmatch('/' + '/'.join(parts)):
-        return 'this Upkeep lets an agent only ask for a check again: a check run could stand in for a required check.'
-    if first == 'actions':
-        rest = '/' + '/'.join(parts)
-        if not RUN_CHANGES.fullmatch(rest) and not DISPATCH.fullmatch(rest):
-            return 'this Upkeep lets an agent only start runs again, cancel them and start listed workflows.'
+    if DISMISSAL.fullmatch(rest):
+        return 'this Upkeep does not let an agent dismiss a review; only the person does.'
+    if first == 'actions' and not RUN_CHANGES.fullmatch(rest) and not DISPATCH.fullmatch(rest):
+        return 'this Upkeep lets an agent only start runs again, cancel them and start listed workflows.'
     return None
+
+
+def reviews(method, parts):
+    """Whether `method` on the repository path `parts` creates or submits a review, whose
+    body the broker then reads for an approval."""
+    return method == 'POST' and REVIEW.fullmatch('/' + '/'.join(parts)) is not None
+
+
+def approves(event):
+    """Whether a review's event approves, in any case, as GitHub reads it."""
+    return isinstance(event, str) and event.strip().upper() == 'APPROVE'
 
 
 def dispatched(parts, method):

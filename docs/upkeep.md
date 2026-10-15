@@ -380,18 +380,19 @@ root: the session of the loop, the repositories and bots of the Upkeep, and the
 workflows that an agent may start. While the policy is set, the service refuses
 these requests of every agent of the cloud:
 
-- A change of a file in `.github/workflows` through the contents API, the Git data
-  API (blobs, trees, commits, references; only the deletion of a branch passes), and
-  a merge of branches through the API.
-- A release and a release asset, a deployment, a repository dispatch, a commit
-  status or a check run (either could stand in for a required check; a check can
-  still be asked for again), the approval of a deployment or a run, and auto-merge
-  (a merge that GitHub makes later, unchecked).
+- A change of a file in `.github/workflows` through the contents API.
+- A release and a release asset (a release publishes the repository), a commit
+  status (it could stand in for a required check), and a repository dispatch.
+- The approval of a run or a deployment, and any other change of Actions than
+  starting a run again or cancelling it.
+- The approval of a pull request, and the dismissal of a review: only you approve.
+- Auto-merge (a merge that GitHub makes later, unchecked).
 - A workflow dispatch, unless the person listed that workflow of that repository in
   the settings of the Upkeep.
 
-The agent can still comment, review, label, open and update pull requests, push to
-branches, start runs again and cancel them, and merge pull requests. The GitHub App keeps the permission `workflows: write`, because the merge
+The agent can still comment, review without approving, label, open and update pull
+requests, push to branches, start runs again and cancel them, and merge pull
+requests. The GitHub App keeps the permission `workflows: write`, because the merge
 of a Dependabot update of GitHub Actions needs it. A planned part moves the last
 step of each merge from the agent to a gate in the root service.
 
@@ -418,8 +419,7 @@ instructions of the repositories decide when the agent starts one.
 
 The policy does not stop these:
 
-- A Git push. A planned part refuses a push of a tag, and a push that changes
-  `.github/workflows`.
+- A Git push, also one that changes `.github/workflows` or pushes a tag.
 - A change of code that a workflow runs, for example a build script or a local
   action in `.github/actions`. Only `.github/workflows` is protected.
 

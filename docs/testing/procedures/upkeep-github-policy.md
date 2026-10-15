@@ -13,7 +13,8 @@ owner: peters
 ## 1. Purpose
 
 This procedure proves that on an Upkeep cloud the worker's GitHub service refuses the
-changes that an Upkeep never needs, and that the board shows the refusals.
+changes that an Upkeep never needs, an agent's approval included, and that the board
+shows the refusals.
 
 ## 2. Applicability
 
@@ -97,13 +98,19 @@ Run the commands of the tasks in the shell panel of setup step 2, in `/tmp/check
 
    Result: Each command works.
 
+3. Run `gh pr review <number> --repo <repo> --approve`, then
+   `gh pr review <number> --repo <repo> --comment --body x`.
+
+   Result: The approval fails with a reason that starts with `Horizon: this Upkeep`.
+   The comment review works.
+
 ### 6.3 GPO-03: The refusals are logged and shown
 
 1. Type `ls -ld /workspace/.horizon-gate /workspace/.horizon-gate/refused.jsonl` and
    `cat /workspace/.horizon-gate/refused.jsonl` in the shell panel.
 
    Result: `ls` shows root as the owner of the folder (`drwxr-xr-x`) and of the file
-   (`-rw-r--r--`). The file has one line for each refusal of GPO-01.
+   (`-rw-r--r--`). The file has one line for each refusal of GPO-01 and GPO-02.
 
 2. Wait one minute for the next exchange. On this computer, type
    `grep -c "The worker refused" <data-home>/.horizon/upkeep/<cloud>/status.json`.

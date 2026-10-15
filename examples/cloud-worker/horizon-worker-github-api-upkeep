@@ -1,8 +1,10 @@
 """The Upkeep checks of the worker's API broker (horizon-worker-github-api): the policy's
-refusals and the list of workflows. A mixin of the broker's Exchange, which provides `broker`
-and `record`. A module that horizon-worker-github loads, not a command."""
+refusals, the list of workflows and the approvals of reviews. A mixin of the broker's
+Exchange, which provides `broker`, `record` and `output`. A module that horizon-worker-github
+loads, not a command."""
 import importlib.machinery
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import urllib.parse
@@ -26,10 +28,20 @@ upkeep = common.load_sibling('horizon-worker-github-upkeep', 'horizon_worker_git
 policy = rest.policy
 
 PREFIX = 'Horizon: '
+# A review is read in full to find its event.
+MAX_REVIEW = 1 << 20
 
 
 def refusal(status, message):
     return relay.Refusal(status, PREFIX + message)
+
+
+def unique(pairs):
+    """A JSON object whose fields each come once; ValueError otherwise."""
+    found = dict(pairs)
+    if len(found) != len(pairs):
+        raise ValueError('a field comes twice')
+    return found
 
 
 class Checks:
@@ -54,12 +66,34 @@ class Checks:
         except upkeep.Refused as refused:
             self.upkeep_refused('dispatch', repository, str(refused))
 
+    def upkeep_review(self, request, repository):
+        """Reads a new or submitted review and refuses an approval. Returns the body, which is
+        then sent as read."""
+        if '?' in request.target:
+            self.upkeep_refused('review', repository, 'this Upkeep reads a review only from its body, '
+                                                      'so the request has no query.')
+        relay.continue_if_asked(request, self.output)
+        data = relay.read_body(request, MAX_REVIEW)
+        try:
+            # A repeated field could mean one thing here and another on GitHub.
+            body = json.loads(data, object_pairs_hook=unique) if data else {}
+        except (ValueError, RecursionError):
+            self.upkeep_refused('review', repository, 'this Upkeep reads a review only as JSON with each field once.')
+        if isinstance(body, dict) and upkeep.approves(body.get('event')):
+            self.upkeep_refused('review', repository, upkeep.APPROVAL)
+        return data
+
     def upkeep_mutations(self, plan):
-        """Refuses auto-merge for an Upkeep."""
-        for name, _ in plan.mutations:
+        """Refuses auto-merge and the approval of a pull request for an Upkeep."""
+        for name, arguments in plan.mutations:
+            values = arguments.get('input') if isinstance(arguments.get('input'), dict) else {}
+            reason = None
             if name == 'enablePullRequestAutoMerge':
                 reason = 'this Upkeep does not let an agent turn on auto-merge.'
-                self.broker.log.refused('merge', None, reason)
+            elif name == 'addPullRequestReview' and upkeep.approves(values.get('event')):
+                reason = upkeep.APPROVAL
+            if reason is not None:
+                self.broker.log.refused('merge' if name == 'enablePullRequestAutoMerge' else 'review', None, reason)
                 raise policy.Refused(reason)
 
 
