@@ -34,12 +34,11 @@ fn command(root: &std::path::Path, plan: &std::path::Path) -> Command {
     command
 }
 
-#[test]
-fn cli_owner_request_reaches_the_shared_queue_and_returns_only_pending_metadata() {
+fn pending_metadata(operation: CredentialOperation) {
     let root = tempfile::tempdir().unwrap();
     let plan = root.path().join("plan.json");
     let request_id = "00000000-0000-0000-0000-000000000002";
-    let arguments = json!({"operation":"remove","tailnet_id":"synthetic-saved", "request_id":request_id});
+    let arguments = json!({"operation":operation,"tailnet_id":"synthetic-saved", "request_id":request_id});
     std::fs::write(
         &plan,
         serde_json::to_vec(&json!({"version":1,"steps":[{
@@ -56,7 +55,7 @@ fn cli_owner_request_reaches_the_shared_queue_and_returns_only_pending_metadata(
         if let Some(request) = requests.first() {
             assert_eq!(request.actor, "horizon:synthetic-credential-agent");
             let input = request.tailnet_credential.as_ref().unwrap();
-            assert_eq!(input.operation, CredentialOperation::Remove);
+            assert_eq!(input.operation, operation);
             assert_eq!(input.tailnet_id, "synthetic-saved");
             assert_eq!(input.request_id, request_id);
             let mut result = request.result(Vec::new(), None);
@@ -88,6 +87,18 @@ fn cli_owner_request_reaches_the_shared_queue_and_returns_only_pending_metadata(
 }
 
 #[test]
+fn cli_owner_request_reaches_the_shared_queue_and_returns_only_pending_metadata() {
+    pending_metadata(CredentialOperation::Remove);
+}
+
+#[test]
+fn cli_entry_requests_reach_the_shared_queue_as_metadata_only() {
+    for operation in [CredentialOperation::SetPersonalToken, CredentialOperation::SetOauth] {
+        pending_metadata(operation);
+    }
+}
+
+#[test]
 fn cli_refuses_secret_arguments_before_queuing_an_owner_request() {
     let root = tempfile::tempdir().unwrap();
     let plan = root.path().join("plan.json");
@@ -110,14 +121,18 @@ fn cli_refuses_secret_arguments_before_queuing_an_owner_request() {
 }
 
 #[test]
-fn cli_refuses_entry_operations_without_native_owner_entry() {
+fn cli_entry_requests_cannot_import_secrets_or_store_references() {
     let root = tempfile::tempdir().unwrap();
     let plan = root.path().join("plan.json");
     for operation in ["set_personal_token", "set_oauth"] {
-        std::fs::write(&plan, serde_json::to_vec(&json!({"version":1,"steps":[{"id":"remove","tool":"tailnet_api_credential","arguments":{"operation":operation,"tailnet_id":"synthetic-saved","request_id":"00000000-0000-0000-0000-000000000002"}}]})).unwrap()).unwrap();
-        assert!(!command(root.path(), &plan).output().unwrap().status.success());
-        let queue = UsageQueue::new(root.path().join(".horizon"));
-        assert!(queue.claim("00000000-0000-0000-0000-000000000001").unwrap().is_empty());
-        assert!(!root.path().join(".horizon/cloud").exists());
+        for field in ["token", "client_id", "client_secret", "credential_reference"] {
+            let mut arguments = json!({"operation":operation,"tailnet_id":"synthetic-saved","request_id":"00000000-0000-0000-0000-000000000002"});
+            arguments[field] = "synthetic-forbidden".into();
+            std::fs::write(&plan, serde_json::to_vec(&json!({"version":1,"steps":[{"id":"entry","tool":"tailnet_api_credential","arguments":arguments}]})).unwrap()).unwrap();
+            assert!(!command(root.path(), &plan).output().unwrap().status.success());
+            let queue = UsageQueue::new(root.path().join(".horizon"));
+            assert!(queue.claim("00000000-0000-0000-0000-000000000001").unwrap().is_empty());
+            assert!(!root.path().join(".horizon/cloud").exists());
+        }
     }
 }

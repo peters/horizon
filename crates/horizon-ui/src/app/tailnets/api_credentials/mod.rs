@@ -1,4 +1,5 @@
-//! Nonsecret background snapshots and native owner credential removal.
+//! Nonsecret snapshots and native owner credential management.
+mod editor;
 mod removal;
 use super::requests::{Requests, Target};
 use horizon_core::browser::manifest::{self, provider_usage::CredentialOperation as Operation};
@@ -36,6 +37,7 @@ pub(super) struct State {
     message: Option<String>,
     failed: bool,
     write_result: Option<Result<(), String>>,
+    editor: Option<editor::Editor>,
 }
 
 impl State {
@@ -111,6 +113,15 @@ impl State {
     }
 
     pub(super) fn refresh(&mut self, ctx: &egui::Context, root: &Path, catalog: &Catalog) {
+        if self.editor.as_ref().is_some_and(|editor| {
+            editor.target.root != root
+                || !catalog
+                    .tailnets
+                    .iter()
+                    .any(|network| network.id == editor.target.id && network.name == editor.target.name)
+        }) {
+            self.editor = None;
+        }
         self.ids = catalog.tailnets.iter().map(|network| network.id.clone()).collect();
         self.statuses.retain(|id, _| self.ids.contains(id));
         self.refresh = Some((root.into(), self.ids.iter().cloned().collect()));
@@ -119,6 +130,7 @@ impl State {
 
     pub(super) fn suspend_refresh(&mut self) {
         self.refresh = None;
+        self.editor = None;
     }
 
     fn start_refresh(&mut self, ctx: &egui::Context) {
@@ -216,6 +228,7 @@ impl State {
     }
 
     pub(super) fn reload_after(&mut self, mut viewer: Self, catalog: Option<&Catalog>) {
+        self.editor = None;
         let ids = catalog.map_or_else(
             || viewer.ids.clone(),
             |catalog| catalog.tailnets.iter().map(|network| network.id.clone()).collect(),
@@ -257,32 +270,75 @@ impl State {
         }
     }
 
+    pub(super) fn discard_cancelled_draft(&mut self, requests: &Requests) {
+        if self.editor.as_ref().is_some_and(|editor| {
+            editor
+                .request
+                .as_ref()
+                .is_some_and(|id| !requests.is_pending(id, &editor.target))
+        }) {
+            self.editor = None;
+        }
+    }
+
     pub(super) fn manage(&mut self, ui: &mut egui::Ui, target: &Target, requests: &mut Requests) {
         if self.busy() {
             return;
         }
-        let stored = matches!(
-            self.observation(&target.id),
-            Observation::Ready(ApiCredentialStatus::Stored(_))
-        );
-        if ui
-            .add_enabled(stored, egui::Button::new("Remove API credential"))
-            .clicked()
-        {
-            self.remove(ui.ctx(), target.clone(), None);
+        let kind = match self.observation(&target.id) {
+            Observation::Ready(ApiCredentialStatus::Stored(kind)) => Some(kind),
+            _ => None,
+        };
+        ui.horizontal(|ui| {
+            if ui
+                .button(if kind.is_some() {
+                    "Replace API credential"
+                } else {
+                    "Set API credential"
+                })
+                .clicked()
+            {
+                self.editor = Some(editor::Editor::new(target.clone(), kind));
+            }
+            if ui
+                .add_enabled(kind.is_some(), egui::Button::new("Remove API credential"))
+                .clicked()
+            {
+                self.remove(ui.ctx(), target.clone(), None);
+            }
+        });
+        if self.busy() {
+            return;
         }
         ui.label(
             egui::RichText::new(format!("Saved tailnet ID: {} · shared across workspaces", target.id))
                 .size(12.0)
                 .color(theme::FG_SOFT()),
         );
-        for (id, actor, _) in requests.pending(target) {
-            ui.label(format!("API credential removal requested by {actor}"));
+        for (id, actor, operation) in requests.pending(target) {
+            let requested = match operation {
+                Operation::SetPersonalToken => "Personal API token",
+                Operation::SetOauth => "OAuth client",
+                Operation::Remove => "API credential removal",
+                Operation::Status | Operation::Cancel => continue,
+            };
+            ui.label(format!("Requested by {actor}: {requested}"));
             ui.horizontal(|ui| {
-                if ui.button("Approve API credential removal").clicked()
-                    && let Some(sender) = requests.approve(&id, target, Operation::Remove, manifest::now_millis())
-                {
-                    self.remove(ui.ctx(), target.clone(), Some(sender));
+                if operation == Operation::Remove {
+                    if ui.button("Approve API credential removal").clicked()
+                        && let Some(sender) = requests.approve(&id, target, operation, manifest::now_millis())
+                    {
+                        self.remove(ui.ctx(), target.clone(), Some(sender));
+                    }
+                } else if ui.button("Enter requested API credential").clicked() {
+                    let kind = if operation == Operation::SetOauth {
+                        tailnet::ApiCredentialKind::OAuth
+                    } else {
+                        tailnet::ApiCredentialKind::PersonalToken
+                    };
+                    let mut editor = editor::Editor::new(target.clone(), Some(kind));
+                    editor.request = Some(id.clone());
+                    self.editor = Some(editor);
                 }
                 if ui.button("Decline request").clicked() {
                     requests.reject(&id, target);
@@ -292,9 +348,63 @@ impl State {
                 return;
             }
         }
+        self.show_editor(ui, target, requests);
+    }
+
+    fn show_editor(&mut self, ui: &mut egui::Ui, target: &Target, requests: &mut Requests) {
+        if self
+            .editor
+            .as_ref()
+            .is_some_and(|editor| editor.target.id == target.id && editor.target != *target)
+        {
+            self.editor = None;
+            self.write_result = Some(Err("The saved tailnet changed. Choose it again.".into()));
+        }
+        let Some(editor) = self.editor.as_mut().filter(|editor| editor.target == *target) else {
+            return;
+        };
+        if let Some(id) = &editor.request {
+            ui.label(format!("Owner entry for request {id}"));
+        }
+        let action = editor.show(ui);
+        match action {
+            Some(editor::Action::Cancel) => {
+                self.editor = None;
+            }
+            Some(editor::Action::Save) => {
+                let Some(editor) = self.editor.take() else {
+                    return;
+                };
+                let operation = if editor.kind() == tailnet::ApiCredentialKind::OAuth {
+                    Operation::SetOauth
+                } else {
+                    Operation::SetPersonalToken
+                };
+                let result = if let Some(id) = &editor.request {
+                    let Some(sender) = requests.approve(id, target, operation, manifest::now_millis()) else {
+                        self.write_result = Some(Err(
+                            "The request was cancelled, expired or changed. Nothing was saved.".into(),
+                        ));
+                        return;
+                    };
+                    Some(sender)
+                } else {
+                    None
+                };
+                self.start(ui.ctx(), TaskKind::Write, move || {
+                    let reply = editor.save();
+                    if let Some(sender) = result {
+                        let _ = sender.send(reply.is_ok());
+                    }
+                    reply
+                });
+            }
+            None => {}
+        }
     }
 
     fn remove(&mut self, ctx: &egui::Context, target: Target, result: Option<std::sync::mpsc::Sender<bool>>) {
+        self.editor = None;
         self.start(ctx, TaskKind::Write, move || {
             let reply = (|| {
                 removal::checked_store(&target)?
@@ -356,6 +466,72 @@ mod tests {
     use horizon_core::cloud_runtime::tailnet::ApiCredentialKind;
 
     mod reopen;
+
+    #[test]
+    fn cancelled_or_expired_owner_entry_discards_the_draft_without_clearing_write_errors() {
+        use horizon_core::browser::manifest::provider_usage::CredentialRequest;
+        for cancelled in [false, true] {
+            let target = Target {
+                root: "synthetic-not-opened".into(),
+                id: "work".into(),
+                name: "Synthetic".into(),
+            };
+            let request = CredentialRequest {
+                operation: Operation::SetOauth,
+                tailnet_id: "work".into(),
+                request_id: "00000000-0000-0000-0000-000000000001".into(),
+            };
+            let mut requests = Requests::default();
+            let receipt = requests.answer("agent", &request, target.clone(), 0).unwrap();
+            let mut draft = editor::Editor::new(target.clone(), Some(ApiCredentialKind::OAuth));
+            draft.request = Some(request.request_id.clone());
+            let mut state = State {
+                editor: Some(draft),
+                write_result: Some(Err("Independent write failure".into())),
+                ..State::default()
+            };
+            state.discard_cancelled_draft(&requests);
+            assert!(state.editor.is_some());
+            if cancelled {
+                requests
+                    .answer(
+                        "agent",
+                        &CredentialRequest {
+                            operation: Operation::Cancel,
+                            ..request
+                        },
+                        target,
+                        1,
+                    )
+                    .unwrap();
+            } else {
+                requests.poll(receipt["expires_at_millis"].as_i64().unwrap());
+            }
+            state.discard_cancelled_draft(&requests);
+            assert!(state.editor.is_none());
+            assert_eq!(state.write_error(), Some("Independent write failure"));
+        }
+    }
+
+    #[test]
+    fn close_discards_unsubmitted_entry_but_keeps_existing_read_write_error_ownership() {
+        let target = Target {
+            root: "synthetic-not-opened".into(),
+            id: "work".into(),
+            name: "Synthetic".into(),
+        };
+        let mut state = State {
+            editor: Some(editor::Editor::new(target, None)),
+            write_result: Some(Err("Existing write failure".into())),
+            message: Some("Existing read failure".into()),
+            failed: true,
+            ..State::default()
+        };
+        state.reload_after(State::default(), None);
+        assert!(state.editor.is_none());
+        assert_eq!(state.read_error(), Some("Existing read failure"));
+        assert_eq!(state.write_error(), Some("Existing write failure"));
+    }
 
     #[test]
     fn close_preserves_only_current_row_failures_until_a_fresh_reply_replaces_them() {

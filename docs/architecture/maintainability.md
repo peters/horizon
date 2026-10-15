@@ -715,6 +715,13 @@ plan runner invokes the same MCP operation. Background workers use the existing
 Store transaction lock instead of adding a second credential mutation engine.
 Credential request replies use the existing `HostIo` worker; the UI thread keeps
 request validation and volatile decision state.
+Tailnet API native entry uses `api_credentials/editor.rs` for zeroizing masked
+drafts and existing bounded credential constructors. The status parent owns the
+read/write job kind, independent errors and close barriers. Entry and removal
+reuse the exact-target check and existing Store lock; metadata requests use the
+same volatile owner-decision registry. Root-scope suspension discards an unsaved
+entry draft before the renderer runs while retaining owned operations and errors.
+No CLI/MCP secret channel was added.
 `image` prepares the worker image and checks its contract before allocation;
 `source` validates and packs the committed source before allocation and transfers
 it to the ready worker; `git_credentials` and `agent_credentials` install or clear

@@ -425,8 +425,8 @@ fn assert_credential_request_contract(tools: &Value) {
         .as_object()
         .expect("metadata arguments");
     assert_eq!(arguments.len(), 3);
-    assert!(!credential["inputSchema"].to_string().contains("set_personal_token"));
-    assert!(!credential["inputSchema"].to_string().contains("set_oauth"));
+    assert!(credential["inputSchema"].to_string().contains("set_personal_token"));
+    assert!(credential["inputSchema"].to_string().contains("set_oauth"));
     for name in ["operation", "request_id", "tailnet_id"] {
         assert!(arguments.contains_key(name));
     }

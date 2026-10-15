@@ -59,6 +59,7 @@ documents that are not yet STE.
 | [tailnet-marker4-rollout](procedures/tailnet-marker4-rollout.md) | Immutable CPU pin, strict private storage, provider scope and unsupported RunPod modes | rents compute |
 | [tailnet-api-credential-store](procedures/tailnet-api-credential-store.md) | Desktop API storage foundation, staged entries and independent auth keys | none |
 | [tailnet-api-removal](procedures/tailnet-api-removal.md) | Native owner API credential removal with CLI/MCP requests | none |
+| [tailnet-api-entry](procedures/tailnet-api-entry.md) | Masked owner API entry/replacement with metadata-only CLI/MCP requests | none |
 | [tailnet-api-status](procedures/tailnet-api-status.md) | Nonsecret API credential status in Settings, CLI and cached MCP discovery | none |
 | [vnc-recording](procedures/vnc-recording.md) | Device panel video | none |
 | [worker-github-chain](procedures/worker-github-chain.md) | Worker GitHub access with a token chain that refreshes on the worker | none |

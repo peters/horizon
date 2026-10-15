@@ -142,8 +142,19 @@ the ordinary cloud panel's shell/agent runtime uses the isolated launcher.
 
 Settings > Tailnets displays **Not stored**, **Personal API token stored**,
 **OAuth client stored**, **Reading…** or **Status unavailable** for each saved
-network. All reads run on background workers. This status milestone adds no
-API credential editor; the enrollment auth-key editor remains separate.
+network. All reads run on background workers. API entry and replacement use the
+masked native controls below; the enrollment auth-key editor remains separate.
+
+Set API credential and Replace API credential start an empty masked draft.
+Choose Personal API token or OAuth client, enter the values and select Save API
+credential. Changing the source clears all fields. Discard credential draft and
+Settings close discard unsaved values. Current stored values are never loaded.
+
+An agent requests set_personal_token or set_oauth with `tailnet_api_credential`,
+the exact saved ID and its request UUID. It sends no values. The person chooses
+Enter requested API credential on that row and explicitly saves the requested
+kind. Requests do not open Settings or grant write authority. CLI plans and MCP
+use the same native-owner route; no secret getter/import or node cleanup is added.
 
 Stored presence reports kind only, not expiry, scopes or remote API access.
 API credentials stay in this computer's OS-store service `horizon-cloud-tailnet-api`;

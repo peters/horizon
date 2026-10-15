@@ -35,15 +35,16 @@ Personal API token and OAuth client bindings stay in the desktop OS store,
 independently of enrollment auth keys. Stored presence reports kind only; it
 does not prove API validity, scope or network access. Saving does not remove
 nodes. Never pass an API secret to MCP or a worker.
-Settings > Tailnets displays nonsecret API credential status and supplies owner
-removal. API entry and replacement are not supported by this outcome.
+Settings > Tailnets displays nonsecret API credential status and supplies masked
+owner entry, replacement and removal. Saved values never fill a draft.
 Read `cloud_companions.tailnet_api_credentials` for cached ready, pending or
 unavailable status without Settings. The CLI is
 `cloud_deploy tailnets STATE_ROOT [TAILNET_ID]`. API status does not qualify an
 older worker image. Cached status is not an OS-store watcher; use Tailnets Refresh
 for an explicit fresh read. Never pass an API secret to MCP.
-Use `tailnet_api_credential` to request `remove`
-for an exact saved tailnet ID and caller-chosen UUID request ID. The person fulfills
+Use `tailnet_api_credential` to request `set_personal_token`, `set_oauth` or `remove`
+for an exact saved tailnet ID and caller-chosen UUID request ID. Set requests carry
+kind metadata only; the person enters values and selects Save in Settings. The person fulfills
 it in Settings > Tailnets; requests never open Settings or authorize a write.
 Read `status` with the same IDs after a lost answer. `cancel` cancels only a pending
 request; a running transaction remains uncertain until its result arrives.

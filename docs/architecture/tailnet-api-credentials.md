@@ -1,4 +1,4 @@
-# Tailnet API credential removal and status boundary
+# Tailnet API credential management and status boundary
 
 ## Trusted authority
 
@@ -58,8 +58,14 @@ MCP must not accept raw API secrets or expose saved values.
 ## Status adapters
 
 Settings > Tailnets displays API credential kind from background workers.
-The native owner can remove an API credential independently of its enrollment
-auth key. This outcome has no API entry or replacement control.
+The native owner can enter, replace or remove an API credential independently
+of its enrollment auth key. Entry starts with empty masked fields. Stored secret
+values never enter the draft. A credential-source change clears every draft field;
+password widgets clear undo history. Cancel, expiry, changed targets and Settings
+close discard unsaved zeroizing drafts.
+A changed storage root also discards the draft before rendering and suspends new
+reads/actions. Already-owned operations and their errors remain retained; this
+draft discard does not cancel an agent request or a running write.
 Filesystem and OS-store work remains off the render thread. Same-root Settings
 close/reopen transfers the single IO owner, including pending read/write jobs,
 barriers and their separate errors. Reopening does not start an independent
@@ -120,11 +126,12 @@ and [OAuth clients](https://tailscale.com/docs/features/oauth-clients).
 
 Saved tailnet credentials are desktop-global. Workspace actor authentication
 allows an agent to submit and observe its own metadata request. It grants no
-permission to remove the binding. The host derives the root and saved
+permission to change the binding. The host derives the root and saved
 ID/name from its own background catalog; public arguments contain no root,
 keychain namespace, reference, credential bytes or owner-grant field.
 
-`tailnet_api_credential` carries remove, status or cancel plus the exact saved ID and a caller-chosen UUID. The existing provider
+`tailnet_api_credential` carries set_personal_token, set_oauth, remove, status or
+cancel plus the exact saved ID and a caller-chosen UUID. The existing provider
 usage queue binds dispatch and results to its live host and original agent panel.
 The host retains a bounded volatile request registry. Submission only enters
 pending_owner and does not open Settings. CLI MCP plans use this same route.
@@ -132,7 +139,12 @@ Standalone workers and builds without cloud-workspaces refuse it.
 
 The person chooses the exact row in Settings > Tailnets. Remove requests require
 Approve API credential removal on that row. Direct native removal also needs an
-explicit owner click. Set and replacement operations are refused.
+explicit owner click. Set requests only select the requested credential kind.
+The person opens its empty masked native draft and selects Save API credential.
+Requested kind cannot change while that request is active. Discard credential
+draft drops entered values; Decline request or public cancel also invalidates the
+pending request. No agent secret or caller-supplied stored reference is accepted.
+Direct Set/Replace uses the same native editor and Store worker.
 The registry rechecks request ID, root, saved ID/name, requested operation and
 15-minute expiry before accepting the owner choice. Cancel and Decline affect
 only pending requests. Running writes cannot be cancelled. The background
@@ -150,14 +162,13 @@ Terminal results remain readable for 15 minutes after the host receives them.
 An old approval deadline cannot discard a newly received write result.
 Status and cancel use only the original request's actor, root, saved ID and UUID.
 They do not require the catalog row to survive a concurrent owner deletion.
-New removal requests still require the host's current catalog target.
+New Set and removal requests still require the host's current catalog target.
 Read barriers and frame-based Settings observation still publish the actual
 kind through CLI/MCP without requiring Settings to close.
 
 Native owner UI and the desktop OS credential store remain trusted. This is not
-a boundary against arbitrary same-user desktop code. No secret getter, CLI stdin
-import, API entry, replacement, remote validation, enrollment receipt or automatic
-node cleanup is supplied. The existing storage foundation can resolve an already
+a boundary against arbitrary same-user desktop code. No secret getter, CLI stdin import, remote validation, enrollment receipt or
+automatic node cleanup is supplied. The existing storage foundation can resolve an already
 stored or staged credential; removal disables only the exact API binding and keeps
 the saved network and enrollment auth key.
 
@@ -167,6 +178,8 @@ result cannot clear an unrelated reader failure or catalog/save error. Closing
 Settings retains each pending job's kind and its failure. The parent status area
 shows each error once; the API spinner stays in Settings. Request receipts still
 report the actual Store result independently of these messages.
+
+For native entry and replacement, use [the entry procedure](../testing/procedures/tailnet-api-entry.md).
 
 API credential request replies use the existing `HostIo` result worker in both
 the cloud-enabled host and the feature-disabled refusal branch. Request validation

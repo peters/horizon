@@ -81,6 +81,10 @@ impl State {
         self.settings_scope == SettingsScope::Changed
     }
 
+    pub(in crate::app) fn discard_cancelled_api_draft(&mut self, requests: &requests::Requests) {
+        self.api_credentials.discard_cancelled_draft(requests);
+    }
+
     pub(in crate::app) fn api_credential_observation(&self, id: &str) -> ApiCredentialObservation {
         if self.settings_scope_changed() {
             return ApiCredentialObservation::Unavailable;

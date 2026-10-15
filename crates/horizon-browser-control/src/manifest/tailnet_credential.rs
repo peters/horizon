@@ -1,10 +1,12 @@
-//! Nonsecret requests for native-owner credential removal. Actor identity is attribution,
+//! Nonsecret requests for native-owner credential setup. Actor identity is attribution,
 //! never authority to mutate a desktop-global saved binding.
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialOperation {
+    SetPersonalToken,
+    SetOauth,
     Remove,
     Status,
     Cancel,
@@ -60,10 +62,19 @@ mod tests {
         }
     }
     #[test]
-    fn entry_operations_are_refused_until_native_owner_entry_is_available() {
+    fn entry_requests_carry_only_kind_and_exact_target_metadata() {
         for operation in ["set_personal_token", "set_oauth"] {
             let request = serde_json::json!({"operation":operation,"tailnet_id":"work","request_id":uuid::Uuid::new_v4().to_string()});
-            assert!(serde_json::from_value::<CredentialRequest>(request).is_err());
+            assert!(
+                serde_json::from_value::<CredentialRequest>(request.clone())
+                    .unwrap()
+                    .valid()
+            );
+            for field in ["token", "client_id", "client_secret", "credential_reference"] {
+                let mut secret = request.clone();
+                secret[field] = "synthetic-forbidden".into();
+                assert!(serde_json::from_value::<CredentialRequest>(secret).is_err());
+            }
         }
     }
 }
