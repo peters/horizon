@@ -8,7 +8,7 @@ use crate::cloud_runtime::{
     command::Runner,
     deployment::{Request, hetzner, image, storage},
     image::{Context, Images},
-    registry,
+    publishing, registry,
     repository::{
         self,
         launch::quick_start,
@@ -137,6 +137,9 @@ impl<'a> Live<'a> {
         cancel: &'a Cancellation,
         emit: &'a dyn Fn(Event),
     ) -> Result<Self> {
+        if building && state.publication.is_some() {
+            return Err(Error::Invalid(publishing::IMAGE_PREPARATION_STAGED));
+        }
         let settings = &request.settings;
         let binding = settings
             .registries

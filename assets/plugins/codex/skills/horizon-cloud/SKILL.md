@@ -123,6 +123,20 @@ actions through `cloud_upkeep`; the board shows each agent change below its titl
 Browser provider catalogs and browser sessions use `horizon-browser`.
 This skill does not install servers, start resources, or enable network access on load.
 
+### Retained publication record prerequisite
+
+Cloud persistence can retain a recipe, resolved destination and nonsecret publisher
+identity without activating a publishing flow. Records contain no credentials and
+prove no current registry permission. Deployment format 5 and paired allocation
+format 3 prevent older readers from erasing that identity; migration retains the
+original enrollment and worker ownership evidence. Invalid or downgraded records
+are refused. Existing launches do not create publication records yet.
+Legacy preparation refuses to build a new image for a retained publisher until
+the portable engine enforces its identity. Reusing an existing image, including
+reconnect and resize, does not invoke that image-build fence.
+See docs/testing/procedures/publication-records.md.
+
+
 ### Retained enrollment evidence
 
 Cloud records can retain exact worker device IDs and unresolved capture attempts across stop, deletion and redeploy. They bind saved tailnet, provider, worker and allocation request identity in the owning locked cloud record. Selected deployments and reconnects capture the private root daemon Self.ID before readiness. This adds no node deletion operation. Typed reasons for the later cleanup integration distinguish missing device identity, missing desktop API access and offline access; keep uncertain records and never delete by hostname/tag guesses. API credentials stay on the desktop.

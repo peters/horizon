@@ -1,4 +1,5 @@
 //! Host-selected publishing intent. Repository metadata can name an image, never a credential.
+mod publication;
 mod selection;
 mod source;
 #[cfg(test)]
@@ -6,6 +7,7 @@ mod tests;
 
 use super::{Error, Result, github::publish::publication::Account, registry, settings::Settings};
 use horizon_cloud::image_publishing::{Destination, Publisher};
+pub use publication::Publication;
 pub use selection::{Selection, choices, personal, selection};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -113,3 +115,7 @@ pub(in crate::cloud_runtime) fn grant_id(binding: &registry::Binding) -> Result<
         hex
     }))
 }
+
+/// A record reader must not fall back to an older publisher when preparing a new image.
+pub(in crate::cloud_runtime) const IMAGE_PREPARATION_STAGED: &str =
+    "This cloud retains an image publisher; use the portable publishing engine to build or rebuild its image";

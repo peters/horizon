@@ -9,6 +9,20 @@ Explicit account selection starts
 a new device sign-in. These are host helpers without a launch or selector caller;
 no automatic publishing, visible control or account switch is activated.
 
+### Retained publication record prerequisite
+
+Cloud persistence can retain a recipe, resolved destination and nonsecret publisher
+identity without activating a publishing flow. Records contain no credentials and
+prove no current registry permission. Deployment format 5 and paired allocation
+format 3 prevent older readers from erasing that identity; migration retains the
+original enrollment and worker ownership evidence. Invalid or downgraded records
+are refused. Existing launches do not create publication records yet.
+Legacy preparation refuses to build a new image for a retained publisher until
+the portable engine enforces its identity. Reusing an existing image, including
+reconnect and resize, does not invoke that image-build fence.
+See docs/testing/procedures/publication-records.md.
+
+
 ## Servers and offer inspection
 
 The host Horizon browser MCP (`horizon --browser-mcp`) provides `cloud_offers`,

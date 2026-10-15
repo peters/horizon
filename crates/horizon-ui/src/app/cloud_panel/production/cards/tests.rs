@@ -57,6 +57,7 @@ fn resizing_requires_a_saved_record_without_a_requested_worker() {
         operation: horizon_core::cloud_runtime::CreateState::Requested,
         spec: None,
         registry_generation: None,
+        publication: None,
         worker: None,
         sessions: Vec::new(),
         source_ready: false,

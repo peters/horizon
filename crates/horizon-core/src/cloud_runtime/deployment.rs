@@ -265,6 +265,9 @@ fn prepare_registry(
     store: &Store,
     state: &mut Deployment,
 ) -> Result<Option<super::registry::Prepared>> {
+    if state.publication.is_some() && state.spec.is_none() {
+        return Err(Error::Invalid(super::publishing::IMAGE_PREPARATION_STAGED));
+    }
     if !state.resizable() {
         return Ok(None);
     }
@@ -456,6 +459,7 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             operation: CreateState::Prepared,
             spec: None,
             registry_generation: None,
+            publication: None,
             worker: None,
             sessions: Vec::new(),
             source_ready: false,

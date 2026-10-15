@@ -21,6 +21,8 @@ pub(super) struct Allocation {
     pub spec: Option<WorkerSpec>,
     #[serde(default)]
     pub registry_generation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication: Option<Box<crate::cloud_runtime::publishing::Publication>>,
     pub worker: Option<Worker>,
     pub stop_requested: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -35,9 +37,12 @@ pub(super) struct Allocation {
 impl Allocation {
     pub const VERSION: u32 = 1;
     const ENROLLMENT_VERSION: u32 = 2;
+    const PUBLISHING_VERSION: u32 = 3;
 
     pub(super) fn record_version(&self) -> u32 {
-        if self.tailnet_enrollment.is_empty() {
+        if self.publication.is_some() {
+            Self::PUBLISHING_VERSION
+        } else if self.tailnet_enrollment.is_empty() {
             Self::VERSION
         } else {
             Self::ENROLLMENT_VERSION
@@ -98,6 +103,7 @@ impl Records {
             operation,
             spec,
             registry_generation,
+            publication,
             worker,
             sessions,
             source_ready,
@@ -119,7 +125,9 @@ impl Records {
         } = legacy;
         Self {
             allocation: Allocation {
-                version: if tailnet_enrollment.is_empty() {
+                version: if publication.is_some() {
+                    Allocation::PUBLISHING_VERSION
+                } else if tailnet_enrollment.is_empty() {
                     Allocation::VERSION
                 } else {
                     Allocation::ENROLLMENT_VERSION
@@ -132,6 +140,7 @@ impl Records {
                 operation,
                 spec,
                 registry_generation,
+                publication,
                 worker,
                 stop_requested,
                 image_replacement,
@@ -163,7 +172,9 @@ impl Records {
     #[must_use]
     pub fn deployment(&self) -> Deployment {
         Deployment {
-            version: if self.allocation.tailnet_enrollment.is_empty() {
+            version: if self.allocation.publication.is_some() {
+                crate::cloud_runtime::state::PUBLISHING_RECORD_VERSION
+            } else if self.allocation.tailnet_enrollment.is_empty() {
                 1
             } else {
                 crate::cloud_runtime::state::ENROLLMENT_RECORD_VERSION
@@ -176,6 +187,7 @@ impl Records {
             operation: self.allocation.operation.clone(),
             spec: self.allocation.spec.clone(),
             registry_generation: self.allocation.registry_generation.clone(),
+            publication: self.allocation.publication.clone(),
             worker: self.allocation.worker.clone(),
             sessions: self.project.sessions.clone(),
             source_ready: self.project.source_ready,

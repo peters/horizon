@@ -48,7 +48,8 @@ The caller holds the cloud ownership lock and saves the complete deployment reco
 The existing store syncs the file and directory through an atomic rename.
 The capture caller saves the attempt before enrollment.
 It saves the receipt before it permits sessions or Ready.
-The store automatically writes deployment version 4 for any nonempty ledger.
+The store automatically writes deployment version 4 for any nonempty ledger,
+unless a retained publication record requires version 5. Version 5 keeps both records.
 This includes unresolved attempts and records with siblings.
 Older readers refuse this version instead of saving away unknown evidence.
 Current readers refuse evidence on an old version or an empty ledger on version 4.
@@ -62,7 +63,8 @@ Explicit empty metadata has the same meaning during legacy conversion.
 Malformed or unknown ledger fields are refused.
 
 The legacy conversion keeps the ledger with the allocation, which owns the worker.
-An allocation with evidence uses version 2; an empty allocation keeps version 1.
+An allocation with enrollment evidence uses version 2; an empty allocation keeps version 1.
+A retained publication record requires allocation version 3 and keeps enrollment evidence.
 The current paired-record reader refuses a mismatch between this version and the ledger.
 The project record does not own the node identity.
 Conversion back to the deployment retains all receipts and attempts.
