@@ -46,8 +46,9 @@ pub(in crate::app::cloud_panel::production) enum Deferred {
     Waiting,
     /// The read finished and the Start goes on with what it submitted.
     Start(Box<Submitted>),
-    /// The chosen host is no longer saved, so the Start does not go on.
-    HostGone(String),
+    /// The Starts do not go on: their host is no longer saved, or the person changed
+    /// Build on while they waited. The text says which.
+    Gone(String),
 }
 
 impl State {
@@ -106,7 +107,9 @@ impl State {
         if let Some(chosen) = self.chosen.take()
             && !std::mem::take(&mut self.start_after_read).is_empty()
         {
-            self.gone = Some(chosen);
+            self.gone = Some(format!(
+                "The Docker host {chosen} is no longer in Cloud settings. Choose where the setup builds, then start it again."
+            ));
         }
     }
 
@@ -140,8 +143,8 @@ impl State {
     /// What becomes of the deferred Starts once their read finished: one Start at a call,
     /// or once why none goes on.
     pub(in crate::app::cloud_panel::production) fn deferred(&mut self) -> Deferred {
-        if let Some(name) = self.gone.take() {
-            return Deferred::HostGone(name);
+        if let Some(reason) = self.gone.take() {
+            return Deferred::Gone(reason);
         }
         if self.waiting() {
             return Deferred::Waiting;
@@ -156,6 +159,18 @@ impl State {
     pub(in crate::app::cloud_panel::production) fn chosen(&self) -> Option<Host> {
         let chosen = self.chosen.as_ref()?;
         self.hosts.iter().find(|host| &host.name == chosen).cloned()
+    }
+
+    /// Chooses where the next setup builds. A waiting Start does not go on then: it was
+    /// submitted for the place chosen before.
+    fn choose(&mut self, pick: Option<String>) {
+        if pick == self.chosen {
+            return;
+        }
+        self.chosen = pick;
+        if !std::mem::take(&mut self.start_after_read).is_empty() {
+            self.gone = Some("Build on changed before the setup started, so it did not start. Start it again.".into());
+        }
     }
 
     /// The choice as chips under the agent chips: This computer, then each saved Docker
@@ -187,7 +202,7 @@ impl State {
                 }
             }
             if let Some(pick) = pick {
-                self.chosen = pick;
+                self.choose(pick);
             }
         });
     }
@@ -364,8 +379,35 @@ mod tests {
         state.job = Some((1, receiver));
         sender.send(Vec::new()).unwrap();
         state.refresh(None, &egui::Context::default());
-        assert!(matches!(state.deferred(), Deferred::HostGone(name) if name == "builder"));
+        assert!(matches!(state.deferred(), Deferred::Gone(reason) if reason.contains("builder")));
         assert!(state.chosen().is_none(), "the next Start builds on this computer");
+        assert!(matches!(state.deferred(), Deferred::Waiting), "it is told once");
+    }
+
+    #[test]
+    fn changing_build_on_ends_the_waiting_starts() {
+        let mut state = State {
+            hosts: vec![host("a", Access::Ssh), host("b", Access::Ssh)],
+            chosen: Some("a".into()),
+            ..State::default()
+        };
+        state.read_again();
+        assert!(state.defer_start(submitted("/work/a")).is_none());
+        state.choose(Some("a".into()));
+        assert!(matches!(state.deferred(), Deferred::Waiting), "the same place keeps it");
+        state.choose(None);
+        assert!(
+            matches!(state.deferred(), Deferred::Gone(_)),
+            "this computer does not take it over"
+        );
+        assert!(
+            state.defer_start(submitted("/work/a")).is_some(),
+            "a new Start goes on at once here"
+        );
+        state.choose(Some("b".into()));
+        assert!(state.defer_start(submitted("/work/a")).is_none());
+        state.choose(Some("a".into()));
+        assert!(matches!(state.deferred(), Deferred::Gone(_)), "nor does another host");
         assert!(matches!(state.deferred(), Deferred::Waiting), "it is told once");
     }
 
