@@ -457,10 +457,11 @@ impl Job {
         };
         // The daemon is checked before the first docker command, and every later one
         // goes to it.
-        match resources::Daemon::on(self.build_on.as_ref()) {
+        match resources::Daemon::on(self.build_on.as_ref())
+            .and_then(|daemon| resources::note_engine(&self.volume, &daemon).map(|()| daemon))
+        {
             Ok(daemon) => {
                 let _ = self.pinned.set(daemon.clone());
-                resources::note_engine(&self.volume, &daemon);
                 self.daemon = daemon;
             }
             Err(reason) => {

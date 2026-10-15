@@ -319,14 +319,38 @@ fn engines() -> std::sync::MutexGuard<'static, Vec<(String, String)>> {
     ENGINES.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Notes the engine of `daemon` for the run of `volume`, when it is on a Docker host.
-pub(in crate::app::cloud_panel::production::repository_setup) fn note_engine(volume: &str, daemon: &Daemon) {
+/// Notes the engine of `daemon` for the run of `volume`, when it is on a Docker host. A
+/// run keeps the engine its first proof used until its resources there are shown gone,
+/// so a proof that reaches another engine under the same host is refused before it
+/// pins the daemon or changes anything.
+/// # Errors
+/// Why the proof does not run on this engine.
+pub(in crate::app::cloud_panel::production::repository_setup) fn note_engine(
+    volume: &str,
+    daemon: &Daemon,
+) -> Result<(), String> {
     let Some(remote) = daemon.remote() else {
-        return;
+        return Ok(());
     };
+    note(volume, remote.engine_id()).map_err(|()| {
+        format!(
+            "the Docker host {} is another Docker engine now than the one an earlier proof of this setup used, and that proof's image and volume are still there; stop the setup to remove them, or point the host back",
+            remote.name()
+        )
+    })
+}
+
+/// Notes `engine_id` for the run of `volume`, unless another engine is noted for it.
+fn note(volume: &str, engine_id: &str) -> Result<(), ()> {
     let mut engines = engines();
-    engines.retain(|(known, _)| known != volume);
-    engines.push((volume.to_owned(), remote.engine_id().to_owned()));
+    match engines.iter().find(|(known, _)| known == volume) {
+        Some((_, known)) if known != engine_id => Err(()),
+        Some(_) => Ok(()),
+        None => {
+            engines.push((volume.to_owned(), engine_id.to_owned()));
+            Ok(())
+        }
+    }
 }
 
 fn engine_of(volume: &str) -> Option<String> {
@@ -802,6 +826,28 @@ fn folder_slug(repository: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_run_keeps_the_engine_of_its_first_proof_until_its_resources_there_are_gone() {
+        let volume = "horizon-setup-engine-test-0000";
+        assert!(note(volume, "engine-a").is_ok());
+        assert!(note(volume, "engine-a").is_ok(), "the same engine again");
+        assert!(
+            note(volume, "engine-b").is_err(),
+            "a reconnect to another engine is refused"
+        );
+        assert_eq!(
+            engine_of(volume).as_deref(),
+            Some("engine-a"),
+            "the first binding stays"
+        );
+        engines().retain(|(known, _)| known != volume);
+        assert!(
+            note(volume, "engine-b").is_ok(),
+            "once gone, a new proof may use another engine"
+        );
+        engines().retain(|(known, _)| known != volume);
+    }
 
     #[test]
     fn a_run_on_a_docker_host_that_no_proof_reached_has_nothing_to_remove_there() {
