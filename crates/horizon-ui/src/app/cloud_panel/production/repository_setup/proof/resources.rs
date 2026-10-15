@@ -343,7 +343,7 @@ fn reopen(name: &str) -> Option<Daemon> {
             tracing::warn!(
                 host = name,
                 "cannot reach the Docker host to remove a setup run's resources: {error}"
-            )
+            );
         })
         .ok()
 }

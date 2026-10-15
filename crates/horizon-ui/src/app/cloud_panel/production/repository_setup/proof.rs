@@ -526,12 +526,10 @@ impl Job {
         slots::take_for(Some(&self.daemon.slot_key()), &self.repository, &self.cancel, tell)
     }
 
-    fn build(&self, setup: &super::snapshot::Setup, log: &mut Option<std::fs::File>) -> Result<(), String> {
-        // The pins first: no Docker, so a moved toolchain fails before any pull.
-        self.check_pins(setup, log)?;
-        // Made before the first command that can pull an image.
-        let (docker_config, signed_in) = self.docker_config()?;
-        let config = setup.config()?;
+    /// Refuses a setup this proof cannot prove: same-worker companions, which deployment
+    /// layers on the image and checks there, and a GPU profile on a Docker host or on a
+    /// computer without an NVIDIA GPU.
+    fn refuse_unprovable(&self, config: &horizon_core::cloud_panel::CloudConfig) -> Result<(), String> {
         // Deployment layers each same-worker companion's recipe on the image and checks
         // the layered result; this proof builds only the profiles' own images, so it
         // does not call such a setup proved.
@@ -555,6 +553,16 @@ impl Job {
                 ));
             }
         }
+        Ok(())
+    }
+
+    fn build(&self, setup: &super::snapshot::Setup, log: &mut Option<std::fs::File>) -> Result<(), String> {
+        // The pins first: no Docker, so a moved toolchain fails before any pull.
+        self.check_pins(setup, log)?;
+        // Made before the first command that can pull an image.
+        let (docker_config, signed_in) = self.docker_config()?;
+        let config = setup.config()?;
+        self.refuse_unprovable(&config)?;
         let default_builds = config
             .profiles
             .get(&config.default)
