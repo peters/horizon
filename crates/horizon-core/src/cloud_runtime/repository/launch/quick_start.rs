@@ -244,11 +244,16 @@ mod tests {
     #[test]
     fn the_pinned_report_satisfies_the_builtin_profile_and_tagged_enrollment() {
         let checker = include_str!("../../../../../../examples/cloud-worker/horizon-worker-check");
+        // Markers the checker no longer prints, which the pinned image still reports until
+        // the pin moves to an image built from this checker.
+        let retired = ["horizon-idle-stop-contract=1", "horizon-idle-report-contract=1"];
         let lines: Vec<_> = CONTRACT.lines().collect();
         assert!(!lines.is_empty());
         for line in &lines {
             assert!(
-                line.starts_with("horizon-") && line.contains("-contract=") && checker.contains(line),
+                line.starts_with("horizon-")
+                    && line.contains("-contract=")
+                    && (checker.contains(line) || retired.contains(line)),
                 "{line} is a current checker marker"
             );
         }

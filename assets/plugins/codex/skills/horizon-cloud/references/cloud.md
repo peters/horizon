@@ -318,9 +318,11 @@ its card.
 
 Horizon never stops an idle cloud. On Hetzner, `idle_stop_minutes` has no effect:
 the server stays billed until the person chooses **Stop**, which releases it and
-keeps the volume. A RunPod worker with `idle_stop_minutes` still stops itself
-after that idle period; the card then shows **Stopped outside Horizon** with
-**Resume worker**.
+keeps the volume. A RunPod worker on an image from before the agent stop (one
+that does not report `horizon-agent-stop-contract=1`) with `idle_stop_minutes`
+still stops itself after that idle period; the card then shows **Stopped outside
+Horizon** with **Resume worker**. A current image has no idle stop: an agent on
+a dedicated RunPod worker stops it with `stop_this_worker` when its task is done.
 
 From a Horizon agent panel, `horizon-browser cloud list|attach|park [CLOUD-ID]`
 calls the same tool.

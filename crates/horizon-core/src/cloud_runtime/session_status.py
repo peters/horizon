@@ -17,7 +17,7 @@ SESSIONS = 64
 
 
 def tmux_command():
-    # The same server the sessions use; see horizon-worker-idle.
+    # The same server the sessions use; see horizon-worker-stopd.
     if os.geteuid() == 0 and Path('/run/horizon-tailnet/agent-isolation').exists():
         return ['env', '-i', 'PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/workspace/home',
                 'setpriv', '--reuid=10001', '--regid=10001', '--clear-groups',

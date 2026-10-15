@@ -28,14 +28,15 @@ if capabilities.get('browsers', []) or capabilities.get('browserstack') is not N
     servers['horizon-browser'] = {'command': '/usr/local/bin/horizon-browser', 'args': ['mcp', '--connect']}
 if capabilities.get('desktop', False):
     servers['horizon-device'] = {'command': '/usr/local/bin/horizon-device', 'args': ['--target', DEVICE_TARGET, 'mcp']}
-# Agents may stop the worker when done only where the profile opts in to stopping by itself
-# and the provider gave the worker a credential to stop with; a Hetzner worker has none
-# (Horizon stops it), so the tool could only ever refuse there.
-stops_itself = os.environ.get('HORIZON_WORKER_SELF_STOP_AVAILABLE') == '1' or bool(os.environ.get('RUNPOD_POD_ID') and os.environ.get('RUNPOD_API_KEY'))
-# The watcher serves stop requests only for a period it accepts, as horizon-worker-idle does.
-minutes = os.environ.get('HORIZON_IDLE_STOP_MINUTES', '')
-idle_period = minutes.isdigit() and 10 <= int(minutes) <= 1440
-if capabilities.get('agents', []) and idle_period and stops_itself:
+# Agents may stop the worker when done wherever the stop service offers it: with the
+# provider's credential, or through Horizon. Never on a shared worker or one with hosted
+# devices; horizon-worker-stopd decides, as it serves the requests.
+try:
+    stop_mode = (subprocess.run(['/usr/local/bin/horizon-worker-stopd', '--mode'], capture_output=True,
+                                text=True, timeout=10, check=True).stdout or '').strip()
+except (OSError, subprocess.SubprocessError):
+    stop_mode = 'none'
+if capabilities.get('agents', []) and stop_mode in ('self', 'horizon'):
     servers['horizon-worker'] = {'command': '/usr/local/bin/horizon-worker-stop', 'args': ['mcp']}
 # Agents ask the person for more GitHub access whenever the image has the GitHub service; the
 # tool says when no GitHub sign-in is installed, because the host installs one after this runs.

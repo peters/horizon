@@ -142,6 +142,18 @@ fn idle_stop_requires_its_exact_marker_only_when_requested() {
     }
     let supported = format!("{current}horizon-idle-stop-contract=1\n");
     assert!(validate(&supported, &Capabilities::default(), false, true).is_ok());
+    // An image with the agent stop has no idle stop, and its agents stop it instead.
+    let agent_stop = format!("{current}horizon-agent-stop-contract=1\n");
+    assert!(validate(&agent_stop, &Capabilities::default(), false, true).is_ok());
+    assert!(
+        validate(
+            &format!("{current}horizon-agent-stop-contract=2\n"),
+            &Capabilities::default(),
+            false,
+            true
+        )
+        .is_err()
+    );
 }
 
 #[cfg(unix)]

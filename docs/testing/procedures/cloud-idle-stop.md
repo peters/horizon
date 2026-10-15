@@ -51,8 +51,10 @@ It also makes sure that Horizon does not stop an idle Hetzner cloud.
     `idle_stop_minutes: 30`.
   - `hetzner-idle`: Hetzner, an image from `examples/cloud-worker`, and
     `idle_stop_minutes: 30`.
-- A worker image that reports `horizon-idle-stop-contract=1`. Build the image
-  from the current `examples/cloud-worker` directory.
+- A worker image that reports `horizon-idle-stop-contract=1`, such as the
+  quick start image from before the agent stop. An image built from the current
+  `examples/cloud-worker` directory has no idle stop. For its agent stop, use
+  [cloud-agent-stop](cloud-agent-stop.md).
 - The `cloud_deploy` example program, built from the candidate commit:
 
   ```bash

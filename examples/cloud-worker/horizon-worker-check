@@ -142,30 +142,6 @@ def last_self_stop():
     return False, None
 
 
-def idle_stop_supported():
-    # The watcher alone is not enough: the supervisor must declare that it starts it.
-    # Older supervisors reject the unknown option, which reports no support.
-    if not shutil.which('horizon-worker-idle'):
-        return False
-    try:
-        reply = subprocess.run(['horizon-worker-supervise', '--idle-stop-contract'],
-                               capture_output=True, timeout=10, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return reply.returncode == 0 and reply.stdout == b'horizon-idle-stop-contract=1\n'
-
-
-def idle_report_supported():
-    # Horizon stops a worker without a stop credential from this record, so it needs
-    # a watcher that keeps one; older watchers reject the unknown option.
-    try:
-        reply = subprocess.run(['horizon-worker-idle', '--report-contract'],
-                               capture_output=True, timeout=10, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return reply.returncode == 0 and reply.stdout == b'horizon-idle-report-contract=1\n'
-
-
 def helper_declares(helper, option, marker):
     # Older helpers reject the unknown option, which reports no support.
     try:
@@ -312,10 +288,13 @@ try:
         runtime.parent.mkdir(parents=True, exist_ok=True)
         pending = runtime.with_suffix('.new')
         pending.write_text(json.dumps(selected)); pending.chmod(0o600); pending.replace(runtime)
-    if idle_stop_supported():
-        print('horizon-idle-stop-contract=1')
-        if idle_report_supported():
-            print('horizon-idle-report-contract=1')
+    # The supervisor starts the stop service on every dedicated worker, and the service
+    # records a request for Horizon to take where the worker holds no stop credential. A
+    # service alone is not enough: an older supervisor would not start it.
+    if shutil.which('horizon-worker-stopd') and helper_declares(
+            'horizon-worker-stopd', '--contract', 'horizon-agent-stop-contract=1') and helper_declares(
+            'horizon-worker-supervise', '--agent-stop-contract', 'horizon-agent-stop-contract=1'):
+        print('horizon-agent-stop-contract=1')
     # Sibling repositories need the manifest helper beside the session script.
     if shutil.which('horizon-worker-siblings'):
         print('horizon-siblings-contract=1')

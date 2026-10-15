@@ -187,18 +187,18 @@ class SupervisionTests(unittest.TestCase):
         with mock.patch.dict(Supervisor.start.__globals__, AGENT_ISOLATION=isolation), \
                 mock.patch.object(subprocess, 'Popen', side_effect=popen):
             for start in [self.supervisor.start_control, *[lambda name=name: self.supervisor.start(name, ['service'])
-                                                           for name in ['xvfb', 'sshd', 'idle', 'github']]]:
+                                                           for name in ['xvfb', 'sshd', 'stop', 'github']]]:
                 with self.assertRaises(Launched):
                     start()
             isolation.unlink()
             with self.assertRaises(Launched):
                 self.supervisor.start_control()
         launcher = ['/usr/local/bin/horizon-worker-tailnet', 'agent']
-        (control, environment), xvfb, sshd, idle, github, (privileged, later) = launched
+        (control, environment), xvfb, sshd, stop, github, (privileged, later) = launched
         self.assertEqual(control, launcher + ['horizon-cloud-worker', 'serve'])
         self.assertEqual(xvfb[0], launcher + ['service'])
         self.assertEqual(sshd, (['service'], None))
-        self.assertEqual(idle, (['service'], None))
+        self.assertEqual(stop, (['service'], None), 'the stop service keeps root, as it holds the credential')
         self.assertEqual(github, (['service'], None), 'the GitHub chain service keeps root')
         self.assertEqual(privileged, ['horizon-cloud-worker', 'serve'], 'custom images without isolation')
         self.assertTrue(environment[HOST_INSTANCE_ENV])
@@ -340,13 +340,24 @@ class SupervisionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'incomplete'):
             CHECK(self.root, self.root)
 
-    def test_supervisor_declares_that_it_starts_the_idle_watcher(self):
+    def test_the_stop_service_starts_on_every_dedicated_worker_but_not_a_shared_one(self):
+        for environment, which, expected in [({}, '/usr/local/bin/horizon-worker-stopd', True),
+                                             # No idle period is needed any more.
+                                             ({'HORIZON_WORKER_STARTUP': 'shared'}, '/usr/local/bin/horizon-worker-stopd', False),
+                                             ({}, None, False)]:
+            with mock.patch.dict(os.environ, environment, clear=True), \
+                    mock.patch('shutil.which', return_value=which), \
+                    mock.patch.object(self.supervisor, 'start') as start:
+                self.supervisor.start_stop()
+            self.assertEqual(start.call_args_list == [mock.call('stop', ['horizon-worker-stopd'])], expected,
+                             (environment, which))
+        # Older Horizon versions find no idle stop in this image.
         declared = subprocess.run([sys.executable, str(Path(__file__).with_name('horizon-worker-supervise')),
                                    '--idle-stop-contract'], capture_output=True, timeout=10)
-        self.assertEqual((declared.returncode, declared.stdout), (0, b'horizon-idle-stop-contract=1\n'))
+        self.assertNotEqual(declared.returncode, 0)
 
     def test_optional_services_are_owned_and_checked_only_when_started(self):
-        for service in ('idle', 'github'):
+        for service in ('stop', 'github'):
             self.ready(False)
             self.assertNotIn(service, json.loads((self.root / 'services.json').read_text())['services'])
             child = self.start(service)
@@ -374,10 +385,12 @@ class SupervisionTests(unittest.TestCase):
                 self.assertNotIn(service, json.loads((self.root / 'services.json').read_text())['services'])
                 CHECK(self.root, self.root)
             else:
-                with self.assertRaisesRegex(ValueError, service):
-                    self.supervisor.assert_running()
-                with self.assertRaisesRegex(ValueError, 'exited'):
-                    CHECK(self.root, self.root)
+                # The worker keeps running without its stop service; agents are then told that
+                # it cannot stop.
+                self.supervisor.assert_running()
+                self.assertNotIn(service, self.supervisor.children)
+                self.assertNotIn(service, json.loads((self.root / 'services.json').read_text())['services'])
+                CHECK(self.root, self.root)
             self.supervisor.close()
 
     def test_a_route_that_cannot_be_removed_stops_the_worker(self):
