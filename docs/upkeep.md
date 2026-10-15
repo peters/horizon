@@ -139,7 +139,8 @@ these steps:
 1. As root, it sets the Upkeep policy of the worker's GitHub access, as the
    section [What the agent can do on GitHub](#what-the-agent-can-do-on-github)
    describes. When the worker refuses it, Horizon logs the cause; the loop then
-   starts no agent, and a **Run now** waits for an exchange that sets it.
+   starts no agent, and a **Run now** waits for an exchange that sets it. A paused
+   worker drops that **Run now**, as it drops any.
 2. It reads the GitHub access requests on the worker. It allows the requests of
    the loop, as the section
    [Trust boundary of the loop's GitHub access](#trust-boundary-of-the-loops-github-access)

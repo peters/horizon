@@ -255,7 +255,7 @@ class ExchangeTests(unittest.TestCase):
         with mock.patch.dict(names, REFUSALS=logs, REFUSALS_OWNER=os.getuid()):
             self.assertEqual([entry['at'] for entry in self.worker.exchange()['refused']], list(range(1005, 1025)))
         # A folder of another account, a link or a pipe gives nothing.
-        with mock.patch.dict(names, REFUSALS=logs, REFUSALS_OWNER=0):
+        with mock.patch.dict(names, REFUSALS=logs, REFUSALS_OWNER=os.getuid() + 1):
             self.assertEqual(self.worker.exchange()['refused'], [])
         (gate / 'refused.jsonl').unlink()
         os.mkfifo(gate / 'refused.jsonl')
@@ -452,7 +452,7 @@ class SchedulerTests(unittest.TestCase):
         self.assertFalse(RUN['guarded']())
         self.guard.unlink()
         self.guard.write_text('1\n')
-        with mock.patch.dict(RUN['run_once'].__globals__, GUARD_OWNER=0):
+        with mock.patch.dict(RUN['run_once'].__globals__, GUARD_OWNER=os.getuid() + 1):
             self.assertFalse(RUN['guarded']())
         self.assertTrue(RUN['guarded']())
 

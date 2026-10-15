@@ -379,6 +379,17 @@ get `upkeep_unavailable`.
   with the next exchange of Horizon, and `status` shows when it applied. Get explicit
   authorization from the person before `remove`, `pause` and `resume`.
 
+On the worker of an Upkeep, a root service limits what every agent of the cloud can
+change on GitHub, also when the agent follows instructions in pull request text. It
+refuses, among others, workflow file changes through the API, releases, commit
+statuses, an agent's approval of a pull request, auto-merge, and a workflow dispatch
+that the person did not list in `workflows` of `~/.horizon/upkeep/<cloud>/upkeep.json`
+(no dialog yet). Its reason starts with `Horizon: this Upkeep`: report it as a
+blocker for the person, never as missing access, and do not ask for more access to go
+around it. The board shows the refusals among the activity lines. A worker image
+without this service starts no Upkeep agent; the person rebuilds the cloud on a
+current image. `docs/upkeep.md` lists every refusal and what it does not stop.
+
 ## GitHub access
 
 With Connect GitHub (Horizon **Cloud settings › GitHub**), each cloud's worker holds
