@@ -1,6 +1,6 @@
 ---
 procedure: cloud-launch-format
-feature: retain reviewed image intent without changing existing launch behavior
+feature: retain and forward reviewed image intent through saved launch consumers
 platforms: [linux, macos, windows]
 cost: none
 destructive: no
@@ -17,9 +17,11 @@ of the recipe's original image when read by an incompatible application.
 
 ## 2. Applicability
 
-This is a serialization prerequisite. All production constructors retain the
-legacy `None` choice. Publisher envelopes remain refused until the engine can
-consume them. No selector, publication, credentials or compute is activated.
+All production constructors retain the legacy `None` choice until the selector
+is delivered. Compatible consumers retain version-2 metadata and forward it to
+the engine; new automatic launches remain disabled. JSON/YAML checks run on all
+listed platforms. Durable cloud-record UI preparation is supported on Unix only.
+No provider account, publication or compute is activated by these tests.
 
 ## 3. Safety
 
@@ -47,15 +49,15 @@ settings changes or live worker actions are required.
    recipe confirmation stays flat, round-trips in JSON/YAML, and preserves the
    profile image for an older reader. Ordinary unknown legacy keys are tolerated.
 
-### 6.2 LF-02 — Publisher fence
+### 6.2 LF-02 — Compatible publisher consumers
 
-1. In the same tests, encode a reviewed personal publisher.
+1. In the same tests, encode personal, automatic and registry publisher choices.
 
-   Result: It uses a version-2 envelope. Both the previous reader and this staged
-   prerequisite refuse it; neither silently falls back to the recipe image.
+   Result: Each uses a version-2 envelope and round-trips intact in a compatible
+   reader. Previous readers refuse it. No reader silently falls back to the recipe image.
 
 2. Test incomplete, unsupported, downgraded and mixed envelopes, reserved null
-   keys and a recipe confirmation naming another image.
+   keys, a publisher choice without a build recipe, and a recipe confirmation naming another image.
 
    Result: JSON and YAML refuse malformed intent before any launch can occur.
    Decode errors do not echo rejected private field values.
@@ -67,16 +69,64 @@ settings changes or live worker actions are required.
 
 ### 6.3 LF-03 — Runtime consumers
 
-1. Run the full applicable local matrix, including the core and UI test tiers.
+1. Run the actual UI preparation regression.
 
-   Result: Existing constructors explicitly use None. Stored state, lifecycle,
-   preview and UI tests retain existing behavior. There is no visible UI change.
+   ```sh
+   cargo test -p horizon-ui --bin horizon a_saved_reviewed_choice_cannot_be_replaced_by_a_new_local_preference_during_ui_preparation
+   ```
+
+   Result: A saved choice for the first registry cannot be replaced by the current
+   preference for another, or silently retained after that preference is removed.
+   Both stale cases refuse before a durable record is written. The UI forwards
+   both the named profile and full choice.
+   A legacy start without a publisher choice also retains its recipe image instead
+   of adopting a changed preference. An automatic profile without an override
+   prepares on its first Start without an empty recipe confirmation. Existing
+   durable records stay authoritative.
+   Refusal creates no deployment record, registry journal or Docker login.
+
+   Run `cargo test -p horizon-ui --bin horizon disabled_publishing_cannot_create`
+   and `cargo test -p horizon-ui --bin horizon legacy_automatic_intent_cannot`.
+
+   Result: Registry, personal and automatic choices refuse with the setting off
+   before creating a publisherless record, even with an explicit recipe image.
+   An unconfirmed automatic launch refuses a later scoped override before any
+   record. Explicit legacy images still prepare with the setting off. Settings
+   bytes remain unchanged and no authentication or registry operation starts.
+
+   Run `cargo test -p horizon-ui --bin horizon an_unbound_automatic_retry`.
+
+   Result: A first automatic preparation with no override can save an unbound
+   record. After an override is added, an unconfirmed retry refuses while keeping
+   both the record and settings byte-identical. Already recorded publishers stay
+   authoritative; no sign-in, build or allocation starts.
+
+   Run `cargo test -p horizon-ui --bin horizon an_omitted_image_retry`.
+
+   Result: An omitted-image launch can retry a legacy record that retains an
+   explicit image, even after another local destination is saved. The old image
+   remains authoritative and the record and settings stay byte-identical.
+
+2. Run the actual UI rebuild-preview regression.
+
+   ```sh
+   cargo test -p horizon-ui --bin horizon desktop_rebuild_preview_keeps_the_retained_publisher_and_profile
+   ```
+
+   Result: The preview accepts the original recipe image with its retained destination.
+   Asking for another profile refuses. It reads no credentials and starts no rebuild.
+
+3. Run the full applicable local matrix, including the core and UI test tiers.
+
+   Result: Existing constructors explicitly use None. Legacy stored state, lifecycle
+   and preview tests retain their behavior. No new visible selector is activated.
 
 ## 7. Pass criteria
 
 Applicable checks pass. Legacy encodings stay compatible and publisher intent
-cannot be silently discarded. The later engine integration must enable envelope
-reads and forward the retained choice atomically.
+cannot be silently discarded. Envelope reads, actual preparation forwarding and
+record-aware rebuild preview must be delivered atomically. Metadata never grants
+publication authority; the shared engine still validates the machine-local choice.
 
 ## 8. Cleanup
 

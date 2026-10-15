@@ -210,7 +210,7 @@ impl HorizonApp {
         let (Some(state), Confirmation::Rebuild(preview)) = (&runtime.state, &mut runtime.confirmation) else {
             return;
         };
-        let (repository, bound) = (state.repository.clone(), state.profile.clone());
+        let state = state.clone();
         let (tx, rx) = channel();
         **preview = Preview {
             reading: Some(rx),
@@ -219,8 +219,7 @@ impl HorizonApp {
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let cancel = cloud_runtime::Cancellation::default();
-            let read =
-                replacement::plan(&repository, &bound, &profile_name, &cancel).map_err(|error| error.to_string());
+            let read = replacement::plan_for_cloud(&state, &profile_name, &cancel).map_err(|error| error.to_string());
             let _ = tx.send(read);
             ctx.request_repaint();
         });

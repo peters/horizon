@@ -112,7 +112,7 @@ impl CloudGeometry {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(try_from = "launch_serde::Wire", into = "launch_serde::Wire")]
 pub struct CloudLaunch {
-    /// Reviewed image intent. The launch engine must consume this before accepting publisher envelopes.
+    /// Reviewed nonsecret image intent, forwarded intact before a cloud image build.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publishing_selection: Option<crate::cloud_runtime::publishing::Selection>,
     #[serde(default)]

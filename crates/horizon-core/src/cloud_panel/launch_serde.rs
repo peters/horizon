@@ -16,8 +16,8 @@ impl Serialize for Wire {
             Self::Reviewed(reviewed) => &reviewed.launch,
             Self::Legacy(body) => body,
         };
-        if body.recipe_mismatch() {
-            return Err(serde::ser::Error::custom("Invalid image launch recipe confirmation"));
+        if body.invalid_intent() {
+            return Err(serde::ser::Error::custom("Invalid image launch confirmation"));
         }
         match self {
             Self::Reviewed(reviewed) => reviewed.serialize(serializer),
@@ -50,8 +50,14 @@ pub(super) struct Body {
 }
 
 impl Body {
-    fn recipe_mismatch(&self) -> bool {
-        matches!(&self.publishing_selection, Some(Selection::Recipe { image }) if image != &self.profile.image)
+    fn invalid_intent(&self) -> bool {
+        match &self.publishing_selection {
+            None => false,
+            Some(Selection::Recipe { image }) => image != &self.profile.image,
+            Some(Selection::Automatic { .. } | Selection::Registry { .. } | Selection::Personal { .. }) => {
+                self.profile.build.is_none()
+            }
+        }
     }
 }
 
@@ -108,7 +114,14 @@ impl TryFrom<Wire> for CloudLaunch {
 
     fn try_from(wire: Wire) -> Result<Self, Self::Error> {
         let body = match wire {
-            // The engine integration must forward the retained choice before accepting this envelope.
+            Wire::Reviewed(Reviewed { version: 2, launch })
+                if matches!(
+                    launch.publishing_selection.as_ref(),
+                    Some(Selection::Automatic { .. } | Selection::Registry { .. } | Selection::Personal { .. })
+                ) =>
+            {
+                launch
+            }
             Wire::Legacy(body)
                 if matches!(
                     body.publishing_selection.as_ref(),
@@ -119,7 +132,7 @@ impl TryFrom<Wire> for CloudLaunch {
             }
             _ => return Err("Unsupported or incomplete reviewed image launch; use a compatible application"),
         };
-        if body.reserved.version || body.reserved.launch || body.recipe_mismatch() {
+        if body.reserved.version || body.reserved.launch || body.invalid_intent() {
             return Err("Invalid or downgraded image launch confirmation");
         }
         let Body {

@@ -41,7 +41,7 @@ documents that are not yet STE.
 | [cloud-agent-panel-start](procedures/cloud-agent-panel-start.md) | Agent panel start in a cloud, host instance and browser runtime root owner | rents compute |
 | [cloud-agent-stop](procedures/cloud-agent-stop.md) | The agent stop of a dedicated worker without an idle period, its refusal while another agent works, and the request that Horizon takes and carries out | rents compute |
 | [cloud-idle-period](procedures/cloud-idle-period.md) | An idle period that still parses but has no effect: the New cloud and Rebuild note, no idle period on a new worker, and the reconnect of a worker created with one | rents compute |
-| [cloud-launch-format](procedures/cloud-launch-format.md) | Saved cloud launch format and publisher confirmation fences | none |
+| [cloud-launch-format](procedures/cloud-launch-format.md) | Saved cloud launch format and actual publisher-intent forwarding | none |
 | [image-destination-management](procedures/image-destination-management.md) | Shared destination policy and bounded host-owned receipts | none |
 | [image-destination-public](procedures/image-destination-public.md) | Host-scoped destination actions through normal CLI plans and stdio MCP | none |
 | [publication-records](procedures/publication-records.md) | Retained image publisher and migration version guards | none |

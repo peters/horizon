@@ -1113,3 +1113,7 @@ and normal CLI/MCP routing in browser-mcp. The UI image_destinations leaf binds
 only the live panel scope. Shared publishing operations resolve a typed launch
 directory on a worker and retain bounded receipts. Live preference transactions
 recheck the staging setting beside the override comparison.
+
+The cloud-launch wire adapter preserves publisher intent in core. UI preparation
+forwards that metadata to the shared engine; UI rebuild preview passes the entire
+record so the core profile/publisher fences also govern its confirmation.

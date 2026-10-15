@@ -5,6 +5,9 @@ use horizon_cloud::{Cancellation, Profile};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+const CHANGED: &str =
+    "The image destination or publishing account changed since it was shown; review it before starting";
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Selection {
@@ -32,6 +35,57 @@ impl Selection {
             Self::Automatic { repository, .. } => repository.as_deref(),
             Self::Registry { destination } | Self::Personal { destination, .. } => Some(&destination.repository),
         }
+    }
+
+    /// Confirms a new launch still uses the destination and account shown to its caller.
+    /// Existing deployment records retain their own publication instead.
+    /// # Errors
+    /// Changed local intent, an invalid grant, cancelled lookup or repository identity failure.
+    pub fn confirm_current(
+        &self,
+        settings: &Settings,
+        repository: &Path,
+        name: &str,
+        profile: &Profile,
+        cancel: &Cancellation,
+    ) -> Result<()> {
+        cancel.check()?;
+        let current = if settings.portable_image_publishing {
+            selection(settings, repository, name, profile, cancel)?
+        } else {
+            if !matches!(self, Self::Recipe { .. }) {
+                return Err(Error::Invalid(super::STAGED));
+            }
+            Self::Recipe {
+                image: profile.image.clone(),
+            }
+        };
+        if current != *self {
+            return Err(Error::Invalid(CHANGED));
+        }
+        Ok(())
+    }
+
+    /// Confirms a legacy automatic launch has no later, unreviewed scoped override.
+    /// # Errors
+    /// Disabled publishing, changed local intent or repository identity failure.
+    pub fn confirm_automatic_intent(
+        settings: &Settings,
+        repository: &Path,
+        name: &str,
+        profile: &Profile,
+        cancel: &Cancellation,
+    ) -> Result<()> {
+        if !settings.portable_image_publishing {
+            return Err(Error::Invalid(super::STAGED));
+        }
+        if !matches!(
+            selection(settings, repository, name, profile, cancel)?,
+            Self::Automatic { .. }
+        ) {
+            return Err(Error::Invalid(CHANGED));
+        }
+        Ok(())
     }
 
     /// # Errors
