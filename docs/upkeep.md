@@ -383,7 +383,8 @@ these requests of every agent of the cloud:
 - A change of a file in `.github/workflows` through the contents API.
 - A release and a release asset (a release publishes the repository), a commit
   status (it could stand in for a required check), and a deployment or a repository
-  dispatch (either can start a workflow with the secrets of the repository).
+  dispatch (either can start a workflow with the secrets of the repository). A check
+  run needs the token of the GitHub App installation, which the worker does not have.
 - The approval of a run or a deployment, and any other change of Actions than
   starting a run again or cancelling it.
 - The approval of a pull request, and the dismissal of a review: only you approve.
@@ -404,7 +405,8 @@ The refusals go to `/workspace/.horizon-gate/refused.jsonl`, a log that only roo
 can change, at most 30 lines a minute: a refusal beyond that is refused but not
 logged. The exchange reads back the last 20 lines, and the board shows them under
 **Latest run** with the activity lines of the agent. The agent writes those lines,
-so it can push the refusals out of view on the board; the log keeps them.
+so it can push the refusals out of view on the board; the log keeps them until it
+reaches 256 KiB, when it starts again empty.
 
 The workflows that an agent may start are in `workflows` of
 `~/.horizon/upkeep/<cloud>/upkeep.json`, at most 20, each in a repository of the

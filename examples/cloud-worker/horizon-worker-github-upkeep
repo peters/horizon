@@ -169,7 +169,8 @@ def install(store, common, source, marker=MARKER):
 
 def mark(policy_digest, marker=MARKER):
     """Writes the marker that names the policy root set, by its digest. It lives on tmpfs, so
-    a container restart removes it until the policy is set, or loaded and marked, again."""
+    a container restart removes it, and no agent starts, until Horizon sets the policy again
+    with its next exchange."""
     try:
         marker.parent.mkdir(mode=0o755, parents=True)
         # Readable for the loop, which runs as the agent account; the umask keeps it private.
