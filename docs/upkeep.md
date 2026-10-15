@@ -394,8 +394,8 @@ these requests of every agent of the cloud:
   the settings of the Upkeep.
 - A change of the default branch without a pull request: a Git push to it, a file
   change in it through the contents API (whose branch is the default one unless the
-  request names another), a change of its reference, and a merge of branches through
-  the API. The default branch changes only when a pull request merges.
+  request names another), a change of its reference, the update of a pull request
+  whose head branch it is, and a merge of branches through the API. The default branch changes only when a pull request merges.
 - A push of a tag or of any other ref than a branch, and the creation of a reference
   through the API: push a new branch with Git.
 

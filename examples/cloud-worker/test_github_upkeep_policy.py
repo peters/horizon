@@ -130,7 +130,8 @@ class PolicyTests(ServiceTestCase):
                                      ('DELETE', 'contents/a', upkeep.CONTENTS),
                                      ('PATCH', 'git/refs/heads/release/1', 'release/1'),
                                      ('DELETE', 'git/refs/heads/main', 'main'), ('GET', 'contents/a', None),
-                                     ('POST', 'git/trees', None), ('PUT', 'pulls/1/merge', None)]:
+                                     ('POST', 'git/trees', None), ('PUT', 'pulls/1/merge', None),
+                                     ('PUT', 'pulls/12/update-branch', 12)]:
             self.assertIs(upkeep.branch_written(method, path.split('/')), branch, path) if branch is None \
                 or branch is upkeep.CONTENTS else self.assertEqual(upkeep.branch_written(method, path.split('/')),
                                                                    branch)
@@ -224,6 +225,12 @@ class UpkeepBrokerTests(BrokerTestCase):
 
     def test_the_default_branch_changes_only_through_a_pull_request(self):
         self.api.answers['/repos/example/project'] = {'default_branch': 'main'}
+        # A pull request from the default branch, and one that GitHub does not show.
+        self.api.answers['/repos/example/project/pulls/4'] = {
+            'head': {'ref': 'main', 'repo': {'full_name': 'Example/Project'}}}
+        self.api.answers['/repos/example/project/pulls/5'] = {}
+        self.api.answers['/repos/example/project/pulls/6'] = {
+            'head': {'ref': 'main', 'repo': {'full_name': 'fork/project'}}}
         before = len(self.api.seen)
         for method, target, body in [('PUT', '/repos/example/project/contents/src/a.rs', {'content': 'eA=='}),
                                      ('PUT', '/repos/example/project/contents/src/a.rs',
@@ -231,16 +238,19 @@ class UpkeepBrokerTests(BrokerTestCase):
                                      ('DELETE', '/repos/example/project/contents/a', {'sha': 'x', 'branch': 'main'}),
                                      ('PUT', '/repos/example/project/contents/a', {'branch': 7}),
                                      ('PATCH', '/repos/example/project/git/refs/heads/main', {'sha': HEAD}),
+                                     ('PUT', '/repos/example/project/pulls/4/update-branch', {}),
+                                     ('PUT', '/repos/example/project/pulls/5/update-branch', {}),
                                      ('POST', '/repos/example/project/merges', {'base': 'main', 'head': 'x'})]:
             status, _, payload = self.send(method, target, body=body)
             self.assertEqual(status, 403, (method, target, body))
             self.assertIn('this Upkeep', json.loads(payload)['message'])
-        self.assertFalse(any(path.startswith('/repos/example/project/') and path != '/repos/example/project'
-                             for _, _, path, *_ in self.api.seen[before:]))
+        # Only the broker's own reads reach GitHub.
+        self.assertEqual({method for method, *_ in self.api.seen[before:]}, {'GET'})
         # Another branch passes, with the body as sent.
         for method, target, body in [('PUT', '/repos/example/project/contents/src/a.rs',
                                       {'content': 'eA==', 'branch': 'upkeep/x'}),
-                                     ('DELETE', '/repos/example/project/git/refs/heads/dependabot/cargo/x', None)]:
+                                     ('DELETE', '/repos/example/project/git/refs/heads/dependabot/cargo/x', None),
+                                     ('PUT', '/repos/example/project/pulls/6/update-branch', {})]:
             status, _, _ = self.send(method, target, body=body)
             self.assertEqual(status, 200, target)
             self.assertEqual(self.api.seen[-1][2], target)

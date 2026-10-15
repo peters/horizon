@@ -92,14 +92,22 @@ class Checks:
 
     def upkeep_branch(self, request, route, candidate, repository):
         """Refuses a change of the default branch without a pull request: a file change through
-        the contents API, whose branch is the default one unless its body names another, or a
-        change of the branch's reference. Returns the body of a file change, which is then sent
+        the contents API, whose branch is the default one unless its body names another, the
+        update of a pull request whose head is that branch, or a change of the branch's
+        reference. Returns the body of a file change, which is then sent
         as read, or None."""
         branch = upkeep.branch_written(request.method, route.parts)
         if branch is None:
             return None
         data = None
-        if branch is upkeep.CONTENTS:
+        if type(branch) is int:
+            pull = self.github_get(candidate, '/repos/%s/pulls/%d' % (repository, branch))
+            head = pull.get('head') if isinstance(pull.get('head'), dict) else {}
+            same = str((head.get('repo') or {}).get('full_name') or '').lower() == repository.lower()
+            # A head in a fork is not this repository's default branch.
+            branch = head.get('ref') if same or not head else 'fork:' + str(head.get('ref'))
+            branch = branch if isinstance(branch, str) else ''
+        elif branch is upkeep.CONTENTS:
             body, data = self.upkeep_body(request, repository, 'api', MAX_CONTENTS)
             branch = body.get('branch') if isinstance(body, dict) else None
             if branch is not None and not isinstance(branch, str):

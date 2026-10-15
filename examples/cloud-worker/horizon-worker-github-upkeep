@@ -57,8 +57,9 @@ REFUSED_CHANGES = {
     'merge-upstream': 'a merge of branches goes around a pull request and its checks',
 }
 # A file change through the contents API, whose branch its body names; without one, the
-# default branch.
+# default branch. And the update of a pull request's branch, which is its head.
 CONTENTS = object()
+UPDATE = re.compile(r'pulls/(?P<number>[1-9][0-9]{0,19})/update-branch')
 # The run and job changes that stay: start again and cancel. The approval of a run or a
 # deployment is the person's.
 RUN_CHANGES = re.compile(r'/actions/(?:runs/[1-9][0-9]{0,19}/(?:rerun|rerun-failed-jobs|cancel|force-cancel)'
@@ -256,9 +257,12 @@ def rest_refusal(policy, method, parts):
 def branch_written(method, parts):
     """The branch that `method` on the repository path `parts` changes without a pull request,
     for the broker to refuse the default branch: CONTENTS for a file change, whose body names
-    the branch, the name for a change of a branch's reference, or None."""
+    the branch, the number of a pull request whose head branch an update changes, the name
+    for a change of a branch's reference, or None."""
     if method in ('GET', 'HEAD'):
         return None
+    if (match := UPDATE.fullmatch('/'.join(parts))):
+        return int(match['number'])
     if parts[:1] == ['contents'] and len(parts) > 1:
         return CONTENTS
     if parts[:3] == ['git', 'refs', 'heads'] and len(parts) > 3:

@@ -37,8 +37,9 @@ agent-writable, so nothing there is a control. Check that:
   refuses any ref that is not a branch and the default branch that GitHub reports;
   commands it cannot read are refused, never passed. The broker refuses `merges`,
   `merge-upstream`, the creation of a reference, a tag reference, a change of the
-  default branch's reference, and a contents write whose body names the default branch
-  or no branch.
+  default branch's reference, a contents write whose body names the default branch
+  or no branch, and `update-branch` of a pull request whose head GitHub reports as the
+  default branch of the same repository (or does not report).
 - No token reaches a log, a refusal text or a subprocess argument.
 
 ## Not covered
