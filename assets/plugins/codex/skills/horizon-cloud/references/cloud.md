@@ -489,7 +489,10 @@ reads or changes it, and agents work only with the repositories the cloud was gi
   another repository and starts its setup; **New cloud** opened for the first
   repository shows that setup again. One folder has one setup at a time: a second
   setup of the same folder, also through a symbolic link, is refused until the first
-  one stops.
+  one stops. The image build, the CI in the image and the fast rerun run for a few
+  setups at a time on one Docker (one for each 16 processors, one to four, or
+  `HORIZON_SETUP_BUILD_SLOTS`); a setup that waits shows **Waiting for a build slot**
+  and who builds.
 - When that proof's build fails because an organization limits OAuth apps, Horizon names
   the organization and offers the fix on GitHub; the Dockerfile is not the cause. If the
   person lets the setup agent make the fix, the agent gets one **GitHub access** browser

@@ -534,9 +534,34 @@ checked on the cloud card, and an agent panel in the same workspace.
    Result: No second agent starts. The dialog says that a setup of the folder already
    runs. The second setup still works.
 
+### 6.21 S21 — The build queue
+
+1. Close Horizon. Start it again with `HORIZON_SETUP_BUILD_SLOTS=1` in its
+   environment.
+
+   Result: Horizon starts.
+
+2. Start the setup agent on two copies of the fixture without `.horizon`, as in S20.
+
+   Result: Both agents work.
+
+3. Wait until both agents ask for a proof.
+
+   Result: One setup shows **Build image** as running. The other setup shows
+   **Build image** as pending, with **Waiting for a build slot** and the name of the
+   first copy.
+
+4. Wait until the proof of the first setup ends.
+
+   Result: The second setup starts **Build image**.
+
+5. Close Horizon and start it again without `HORIZON_SETUP_BUILD_SLOTS`.
+
+   Result: Horizon starts.
+
 ## 7. Pass criteria
 
-- S01 to S20 give the results above.
+- S01 to S21 give the results above.
 - The proof ran on this computer. Before you click **Use this setup** in S04,
   `docker images` lists `horizon-setup-ci-app-<hash>-<run>:candidate`. `<hash>` is
   six hexadecimal digits that Horizon derives from the repository's path. `<run>` is
