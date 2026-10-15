@@ -219,3 +219,40 @@ fn invalid_policy_fields_and_unknown_rule_fields_never_become_a_broader_request(
     task.join().unwrap();
     assert!(requests.lock().unwrap().is_empty());
 }
+
+#[test]
+fn effective_rule_prefixes_combine_across_ports_but_count_each_direction() {
+    let repeated: Vec<_> = (0..50)
+        .map(|index| Rule {
+            port: Some((20000 + index).to_string()),
+            source_ips: (0..100).map(|prefix| format!("198.51.{prefix}.0/24")).collect(),
+            ..rule()
+        })
+        .collect();
+    let (h, requests, task) = provider(vec![
+        (200, server()),
+        (201, json!({"firewall":firewall(false),"actions":[]})),
+    ]);
+    h.create_exposure_firewall_once(&scope(), &repeated, &Cancellation::default())
+        .unwrap();
+    let mut overflow: Vec<_> = (0..5)
+        .map(|group| Rule {
+            source_ips: (0..100).map(|prefix| format!("198.{group}.{prefix}.0/24")).collect(),
+            ..rule()
+        })
+        .collect();
+    overflow.push(Rule {
+        direction: Direction::Out,
+        source_ips: vec![],
+        destination_ips: vec![overflow[0].source_ips[0].clone()],
+        ..rule()
+    });
+    assert!(matches!(
+        h.create_exposure_firewall_once(&scope(), &overflow, &Cancellation::default()),
+        Err(CloudError::Invalid(_))
+    ));
+    task.join().unwrap();
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 2, "501 directional prefixes refuse before I/O");
+    assert_eq!(request_body(&requests[1])["rules"], json!(repeated));
+}

@@ -365,6 +365,8 @@ fn valid_actions(actions: &[Action]) -> Result<(), CloudError> {
     Ok(())
 }
 fn valid_rules(rules: &[Rule]) -> Result<(), CloudError> {
+    // Hetzner combines ports and protocols for each prefix within one direction.
+    // See https://docs.hetzner.com/cloud/firewalls/faq/#what-is-an-effective-rule.
     let effective: BTreeSet<_> = rules
         .iter()
         .flat_map(|r| {
