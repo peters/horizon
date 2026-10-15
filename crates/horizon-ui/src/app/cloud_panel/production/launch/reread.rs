@@ -143,7 +143,7 @@ pub(super) fn busy(form: &super::super::Production) -> bool {
     form.launch.submitted
         || form.pending_creation.is_some()
         || form.launch.watch.is_some()
-        || form.setup_starting.is_some()
+        || form.starting_here()
         || super::super::repository_setup::running_here(form)
 }
 

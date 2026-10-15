@@ -19,7 +19,7 @@ pub(in crate::app::cloud_panel::production) struct Starting {
     preset: horizon_core::PresetConfig,
     chosen_mode: super::Mode,
     /// The repository as the person entered it.
-    entered: String,
+    pub(super) entered: String,
     receiver: std::sync::mpsc::Receiver<Result<Prepared, String>>,
 }
 
@@ -48,16 +48,18 @@ impl HorizonApp {
             self.cloud_prototype.error = Some(super::PLATFORM_NOTE.into());
             return;
         }
-        // One setup at a time. A run still working for another repository is not stopped
-        // behind the person's back; a finished or stopped one is cleared.
+        // One setup for each folder, and runs of other repositories go on as they are. An
+        // earlier run of this repository is cleared, unless Use is committing it.
         let entered = self.cloud_prototype.production.repository.trim().to_owned();
-        if let Some(run) = self.cloud_prototype.production.setup_run.as_ref() {
-            let same = run.entered == entered || run.repository == Path::new(&entered);
-            // The setup choices say so and offer nothing to click; this guards the action.
-            if !same && !run.finished() && !run.stopped {
+        if self.cloud_prototype.production.starting_here() {
+            return;
+        }
+        if let Some(run) = self.cloud_prototype.production.run_here() {
+            if run.ending() {
                 return;
             }
-            self.cloud_repository_setup_action(ctx, Action::Stop);
+            let panel = run.panel;
+            self.cloud_repository_setup_action(ctx, panel, Action::Stop);
         }
         let presets = super::setup_choices(&self.cloud_prototype.production);
         let preset = super::chosen_preset(&self.cloud_prototype.production, &presets)
@@ -80,9 +82,6 @@ impl HorizonApp {
         let Some(preset) = preset else {
             return;
         };
-        if self.cloud_prototype.production.setup_starting.is_some() {
-            return;
-        }
         let chosen_mode = std::mem::take(&mut self.cloud_prototype.production.setup_mode);
         let agents = self.cloud_prototype.production.setup_agents.clone();
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -96,7 +95,7 @@ impl HorizonApp {
             let _ = sender.send(prepare(&folder, mode, &agents));
             wake.request_repaint();
         });
-        self.cloud_prototype.production.setup_starting = Some(Starting {
+        self.cloud_prototype.production.setup_starting.push(Starting {
             preset,
             chosen_mode,
             entered,
@@ -105,26 +104,27 @@ impl HorizonApp {
         self.cloud_prototype.error = None;
     }
 
-    /// Starts the agent once the files outside `.horizon` were read for its run.
+    /// Starts each agent once the files outside `.horizon` were read for its run.
     fn poll_cloud_setup_start(&mut self, ctx: &egui::Context) {
-        let Some(starting) = self.cloud_prototype.production.setup_starting.as_ref() else {
-            return;
-        };
-        let prepared = match starting.receiver.try_recv() {
-            Ok(prepared) => prepared,
-            Err(std::sync::mpsc::TryRecvError::Empty) => return,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                Err("Could not read the repository before the setup agent starts".to_owned())
-            }
-        };
-        let Some(starting) = self.cloud_prototype.production.setup_starting.take() else {
-            return;
-        };
-        match prepared {
-            Ok(prepared) => self.launch_cloud_repository_setup(ctx, starting, prepared),
-            Err(error) => {
-                self.cloud_prototype.production.setup_mode = starting.chosen_mode;
-                self.cloud_prototype.error = Some(error);
+        let mut index = 0;
+        while let Some(starting) = self.cloud_prototype.production.setup_starting.get(index) {
+            let prepared = match starting.receiver.try_recv() {
+                Ok(prepared) => prepared,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    index += 1;
+                    continue;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Err("Could not read the repository before the setup agent starts".to_owned())
+                }
+            };
+            let starting = self.cloud_prototype.production.setup_starting.remove(index);
+            match prepared {
+                Ok(prepared) => self.launch_cloud_repository_setup(ctx, starting, prepared),
+                Err(error) => {
+                    self.cloud_prototype.production.setup_mode = starting.chosen_mode;
+                    self.cloud_prototype.error = Some(error);
+                }
             }
         }
     }
@@ -149,6 +149,23 @@ impl HorizonApp {
             launcher,
             git_crates: crates,
         } = prepared;
+        // Two entries of one folder, such as a link and its target, still get one run.
+        if let Some(other) = self
+            .cloud_prototype
+            .production
+            .setup_runs
+            .iter()
+            .find(|run| run.repository == repository)
+        {
+            self.cloud_prototype.error = Some(format!(
+                "A setup of {} already runs. Open New cloud for {} to see it or to stop it.",
+                repository.display(),
+                other.entered
+            ));
+            self.cloud_prototype.production.setup_mode = chosen_mode;
+            run::remove_run_folder(&status);
+            return;
+        }
         let kind = preset.kind;
         // Claude and Codex take the instructions as their starting prompt; other agents get
         // them pasted once their session settles.
@@ -203,7 +220,7 @@ impl HorizonApp {
                 run.pending_prompt = pending_prompt;
                 run.outside = outside;
                 run.dotnet = dotnet;
-                self.cloud_prototype.production.setup_run = Some(run);
+                self.cloud_prototype.production.setup_runs.push(run);
                 self.cloud_prototype.error = None;
                 ctx.request_repaint();
             }
@@ -228,16 +245,24 @@ impl HorizonApp {
             .collect();
     }
 
-    /// Samples the agent's screen, delivers a pending Enter, lists the files of a
-    /// finished run and notices a setup panel that closed.
+    /// Syncs every setup run, starts the setups whose repository was read, and closes
+    /// setup panels that no run follows.
     pub(in crate::app::cloud_panel::production) fn sync_cloud_repository_setup(&mut self, ctx: &egui::Context) {
         self.close_orphaned_setup_panels(ctx);
         self.poll_cloud_setup_start(ctx);
+        for run in self.cloud_prototype.production.setup_run_panels() {
+            self.sync_cloud_setup_run(ctx, run);
+        }
+    }
+
+    /// Samples the agent's screen, delivers a pending Enter, lists the files of a
+    /// finished run and notices a setup panel that closed, for the run of `key`.
+    fn sync_cloud_setup_run(&mut self, ctx: &egui::Context, key: horizon_core::PanelId) {
         // Use waits for the agent's processes on a thread; it goes on once they ended.
-        if self.poll_cloud_setup_use(ctx) {
+        if self.poll_cloud_setup_use(ctx, key) {
             return;
         }
-        let Some(run) = self.cloud_prototype.production.setup_run.as_mut() else {
+        let Some(run) = self.cloud_prototype.production.setup_run_mut(key) else {
             return;
         };
         run.poll(ctx);
@@ -293,9 +318,9 @@ impl HorizonApp {
         let preview_report = run.sync_preview(ctx);
         let Some(panel) = self.board.panel_mut(run.panel) else {
             run.agent_panel_closed();
-            self.close_cloud_setup_fix_panel();
+            self.close_cloud_setup_fix_panel(key);
             // A live preview still opens, for example after a refused Use closed the agent.
-            self.open_cloud_setup_preview();
+            self.open_cloud_setup_preview(key);
             return;
         };
         if run.sampled.is_none_or(|at| at.elapsed() >= run::OUTPUT_EVERY) {
@@ -343,13 +368,13 @@ impl HorizonApp {
                 ctx.request_repaint_after(at - now);
             }
         }
-        self.open_cloud_setup_preview();
+        self.open_cloud_setup_preview(key);
     }
 
-    /// Opens each live preview once, as a Device panel beside the setup agent. A panel
-    /// that shows a desktop which ended, or was replaced, closes.
-    fn open_cloud_setup_preview(&mut self) {
-        let Some(run) = self.cloud_prototype.production.setup_run.as_mut() else {
+    /// Opens each live preview of the run of `key` once, as a Device panel beside its
+    /// setup agent. A panel that shows a desktop which ended, or was replaced, closes.
+    fn open_cloud_setup_preview(&mut self, key: horizon_core::PanelId) {
+        let Some(run) = self.cloud_prototype.production.setup_run_mut(key) else {
             return;
         };
         // A panel the person closed stays closed for this desktop.
@@ -368,12 +393,12 @@ impl HorizonApp {
         // The desktop counts as shown once its panel exists, so a failed creation is
         // tried again on the next frame.
         let Some(endpoint) = endpoint else {
-            if let Some(run) = self.cloud_prototype.production.setup_run.as_mut() {
+            if let Some(run) = self.cloud_prototype.production.setup_run_mut(key) {
                 run.preview_shown = None;
             }
             return;
         };
-        let Some(run) = self.cloud_prototype.production.setup_run.as_ref() else {
+        let Some(run) = self.cloud_prototype.production.setup_run(key) else {
             return;
         };
         // Beside the agent, or where the person works when the agent is gone.
@@ -402,7 +427,7 @@ impl HorizonApp {
             workspace,
         );
         if let Ok(panel) = created
-            && let Some(run) = self.cloud_prototype.production.setup_run.as_mut()
+            && let Some(run) = self.cloud_prototype.production.setup_run_mut(key)
         {
             // Never saved: after a restart its desktop is gone.
             if let Some(created) = self.board.panel_mut(panel) {
@@ -414,7 +439,8 @@ impl HorizonApp {
     }
 
     /// The setup agent's own terminal, without panel chrome, in the dialog's right
-    /// column. Clicking it gives it the keyboard, so the person talks to the agent here.
+    /// column, for the repository the dialog shows. Clicking it gives it the keyboard, so
+    /// the person talks to the agent here.
     pub(in crate::app::cloud_panel::production) fn show_cloud_setup_terminal(
         &mut self,
         ui: &mut egui::Ui,
@@ -423,8 +449,7 @@ impl HorizonApp {
         let Some((panel_id, agent)) = self
             .cloud_prototype
             .production
-            .setup_run
-            .as_ref()
+            .run_here()
             .map(|run| (run.panel, run.agent.clone()))
         else {
             return;
@@ -468,38 +493,40 @@ impl HorizonApp {
             });
     }
 
+    /// Does `action` for the run whose agent started in `key`.
     pub(in crate::app::cloud_panel::production) fn cloud_repository_setup_action(
         &mut self,
         ctx: &egui::Context,
+        key: horizon_core::PanelId,
         action: Action,
     ) {
-        let Some(run) = self.cloud_prototype.production.setup_run.as_mut() else {
+        let Some(run) = self.cloud_prototype.production.setup_run_mut(key) else {
             return;
         };
         let panel = run.panel;
+        run.notice = None;
         match action {
-            Action::Steer(text) => self.steer_cloud_setup(ctx, &text),
-            Action::Fix(fixer) => self.start_cloud_setup_fix(ctx, fixer),
+            Action::Steer(text) => self.steer_cloud_setup(ctx, key, &text),
+            Action::Fix(fixer) => self.start_cloud_setup_fix(ctx, key, fixer),
             Action::ShowFix => {
                 if let Some(browser) = run.fix_panel.filter(|browser| self.board.panel(*browser).is_some()) {
                     self.reveal_cloud_setup_panel(ctx, browser);
                 } else {
                     // The person closed it: open it again for whoever makes the fix, and show it.
                     let fixer = run.fixer.unwrap_or(Fixer::Person);
-                    self.start_cloud_setup_fix(ctx, fixer);
+                    self.start_cloud_setup_fix(ctx, key, fixer);
                     if fixer == Fixer::Agent
                         && let Some(browser) = self
                             .cloud_prototype
                             .production
-                            .setup_run
-                            .as_ref()
+                            .setup_run(key)
                             .and_then(|run| run.fix_panel)
                     {
                         self.reveal_cloud_setup_panel(ctx, browser);
                     }
                 }
             }
-            Action::ProveAgain => self.steer_cloud_setup(ctx, access::FIXED),
+            Action::ProveAgain => self.steer_cloud_setup(ctx, key, access::FIXED),
             Action::Show => {
                 self.board.set_panel_visible(panel, true);
                 let workspace = self.board.panel(panel).map(|panel| panel.workspace_id);
@@ -524,21 +551,20 @@ impl HorizonApp {
                 if self.board.panel(panel).is_some() {
                     self.close_panel(panel);
                 }
-                if let Some(run) = self.cloud_prototype.production.setup_run.take() {
+                if let Some(run) = self.cloud_prototype.production.take_setup_run(key) {
                     run.discard();
                 }
             }
-            Action::Use => self.use_cloud_repository_setup(ctx),
+            Action::Use => self.use_cloud_repository_setup(ctx, key),
         }
     }
 
-    /// Closes the run's GitHub access panel, which served this run only.
-    fn close_cloud_setup_fix_panel(&mut self) {
+    /// Closes the GitHub access panel of the run of `key`, which served that run only.
+    fn close_cloud_setup_fix_panel(&mut self, key: horizon_core::PanelId) {
         let Some(browser) = self
             .cloud_prototype
             .production
-            .setup_run
-            .as_mut()
+            .setup_run_mut(key)
             .and_then(|run| run.fix_panel.take())
         else {
             return;
@@ -548,9 +574,9 @@ impl HorizonApp {
         }
     }
 
-    /// Passes `text` to the agent as one message.
-    fn steer_cloud_setup(&mut self, ctx: &egui::Context, text: &str) {
-        let Some(run) = self.cloud_prototype.production.setup_run.as_mut() else {
+    /// Passes `text` to the agent of the run of `key` as one message.
+    fn steer_cloud_setup(&mut self, ctx: &egui::Context, key: horizon_core::PanelId, text: &str) {
+        let Some(run) = self.cloud_prototype.production.setup_run_mut(key) else {
             return;
         };
         if let Some(panel) = self.board.panel_mut(run.panel) {
@@ -568,10 +594,11 @@ impl HorizonApp {
         }
     }
 
-    /// Opens the page of the fix the proof needs in a browser panel beside the agent.
-    /// The agent works in it while the dialog shows its progress, or the person does.
-    fn start_cloud_setup_fix(&mut self, ctx: &egui::Context, fixer: Fixer) {
-        let Some(run) = self.cloud_prototype.production.setup_run.as_ref() else {
+    /// Opens the page of the fix the proof of the run of `key` needs in a browser panel
+    /// beside its agent. The agent works in it while the dialog shows its progress, or
+    /// the person does.
+    fn start_cloud_setup_fix(&mut self, ctx: &egui::Context, key: horizon_core::PanelId, fixer: Fixer) {
+        let Some(run) = self.cloud_prototype.production.setup_run(key) else {
             return;
         };
         let Some(fix) = run.proof.as_ref().and_then(|proof| proof.fix.clone()) else {
@@ -611,7 +638,9 @@ impl HorizonApp {
                     panel
                 }
                 Err(error) => {
-                    self.cloud_prototype.error = Some(error.to_string());
+                    if let Some(run) = self.cloud_prototype.production.setup_run_mut(key) {
+                        run.notice = Some(error.to_string());
+                    }
                     return;
                 }
             }
@@ -621,12 +650,12 @@ impl HorizonApp {
             .panel(browser)
             .map(|panel| panel.local_id.clone())
             .unwrap_or_default();
-        if let Some(run) = self.cloud_prototype.production.setup_run.as_mut() {
+        if let Some(run) = self.cloud_prototype.production.setup_run_mut(key) {
             run.fix_panel = Some(browser);
             run.fixer = Some(fixer);
         }
         match fixer {
-            Fixer::Agent => self.steer_cloud_setup(ctx, &fix.task(&local)),
+            Fixer::Agent => self.steer_cloud_setup(ctx, key, &fix.task(&local)),
             Fixer::Person => self.reveal_cloud_setup_panel(ctx, browser),
         }
     }
@@ -654,13 +683,13 @@ const PREVIEW_PANEL_SIZE: [f32; 2] = [1040.0, 960.0];
 const PANEL_NAME: &str = "Cloud repository setup";
 
 impl HorizonApp {
-    /// Ends the setup run, and a setup about to start, when the board they belong to
-    /// goes: a session switch restarts panel ids, so a kept id could name another panel.
+    /// Ends every setup run, and every setup about to start, when the board they belong
+    /// to goes: a session switch restarts panel ids, so a kept id could name another panel.
     pub(in crate::app) fn end_cloud_repository_setup(&mut self) {
-        if let Some(run) = self.cloud_prototype.production.setup_run.take() {
+        for run in std::mem::take(&mut self.cloud_prototype.production.setup_runs) {
             run.discard();
         }
-        if let Some(starting) = self.cloud_prototype.production.setup_starting.take() {
+        for starting in std::mem::take(&mut self.cloud_prototype.production.setup_starting) {
             // The thread preparing it may still make the run's status folder, which goes
             // once it reports. Not one of the endings a new setup waits for, since that
             // thread waits for those itself.
@@ -672,8 +701,8 @@ impl HorizonApp {
         }
     }
 
-    /// Ends the setup run as Horizon exits, and waits up to [`EXIT_WAIT`] until its agent
-    /// and proof have ended and what they made is removed, with every run already
+    /// Ends every setup run as Horizon exits, and waits up to [`EXIT_WAIT`] until their
+    /// agents and proofs have ended and what they made is removed, with every run already
     /// ending. Whatever is not shown removed by then, the run's containers, images and
     /// volume among them, is kept for Horizon's next run to remove; an agent process that
     /// outlived its kills is logged and goes when the system ends it.
@@ -700,19 +729,19 @@ impl HorizonApp {
 
     /// Closes hidden setup panels that no run follows. Setup panels are transient and
     /// never saved; this closes one an older Horizon saved before that.
-    /// It looks only when the panels or the run changed since it last looked, so a frame
+    /// It looks only when the panels or the runs changed since it last looked, so a frame
     /// without such a change costs nothing: a hidden setup panel appears only as panels
-    /// are added or a session's board loads, and stops being the run's only as the run
+    /// are added or a session's board loads, and stops being a run's only as the run
     /// ends.
     fn close_orphaned_setup_panels(&mut self, ctx: &egui::Context) {
-        let current = self.cloud_prototype.production.setup_run.as_ref().map(|run| run.panel);
+        let current = self.cloud_prototype.production.setup_run_panels();
         let looked = egui::Id::new("cloud-setup-orphan-scan");
         let now = (
             self.board.panels.len(),
             self.board.panels.last().map(|panel| panel.id),
-            current,
+            current.clone(),
         );
-        if ctx.data(|data| data.get_temp(looked)) == Some(now) {
+        if ctx.data(|data| data.get_temp(looked)).as_ref() == Some(&now) {
             return;
         }
         ctx.data_mut(|data| data.insert_temp(looked, now));
@@ -720,7 +749,7 @@ impl HorizonApp {
             .board
             .panels
             .iter()
-            .filter(|panel| panel.transient && panel.title == PANEL_NAME && Some(panel.id) != current)
+            .filter(|panel| panel.transient && panel.title == PANEL_NAME && !current.contains(&panel.id))
             .map(|panel| panel.id)
             .collect();
         for panel in orphans {
@@ -749,10 +778,11 @@ fn prepare(
         super::proof::run_id(&status),
         std::process::id()
     );
-    // One setup at a time: an earlier run still ending, as after Stop, ends first, with
-    // what an earlier cleanup could not remove.
+    // What earlier cleanups could not remove is tried again in the background. One
+    // setup for each folder: an earlier run of this repository still ending, as after
+    // Stop, ends first. Runs of other repositories go on.
     super::proof::retry_unremoved();
-    run::wait_for_ended_runs();
+    run::wait_for_ended_runs_of(&repository);
     Ok(Prepared {
         identity: super::untrusted::identity(&repository),
         outside: super::commit::outside(&repository),

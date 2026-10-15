@@ -691,6 +691,14 @@ answer a question or to change its plan. A question also shows above the steps.
 **Stop** closes the agent. **Close** keeps it working, and **New cloud** shows it
 again for the same repository.
 
+Several repositories can be set up at the same time, each with its own agent. Click
+**Close** while a setup works, open **New cloud** again, choose another repository
+and start its setup. **New cloud** shows the setup of the repository that it opens
+for, so open it for the first repository to see that setup again. One
+repository has one setup at a time: a second setup of the same folder, also through
+a link to it, is refused until the first one stops. A message about a setup, for
+example why **Use this setup** did not commit, shows under the steps of that setup.
+
 The agent reads the CI of the repository first, the GitHub Actions workflows in
 `.github/workflows`: the Linux jobs that restore, build and test, the tool versions
 they use and where those versions come from. Horizon proves GitHub Actions jobs
