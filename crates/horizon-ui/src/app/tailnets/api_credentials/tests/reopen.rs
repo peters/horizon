@@ -177,6 +177,38 @@ fn reopen_keeps_the_production_catalog_and_selected_tailnet_available_without_io
 }
 
 #[test]
+fn cloud_selection_buttons_cannot_start_a_save_on_the_passive_production_state() {
+    let root = PathBuf::from("synthetic-root-not-opened");
+    let mut production = TailnetsState {
+        root: root.clone(),
+        catalog: catalog(),
+        catalog_loaded: true,
+        initialized: true,
+        ..TailnetsState::default()
+    };
+    production.selections.insert("cloud".into(), Some("work".into()));
+    let buttons = |state: &mut TailnetsState| {
+        crate::test_egui::accesskit_labels(|ui| state.cloud(ui, &root, "cloud", false))
+            .into_iter()
+            .filter(|(label, _)| matches!(label.as_str(), "None" | "Synthetic"))
+            .collect::<Vec<_>>()
+    };
+    let active = buttons(&mut production);
+    assert_eq!(active.len(), 2);
+    assert!(active.iter().all(|(_, disabled)| !disabled));
+
+    let mut editor = TailnetsState::for_root_fixture(root.clone());
+    production.reopen_settings(&mut editor);
+    assert!(production.ready(), "The catalog remains available to read");
+    let passive = buttons(&mut production);
+    assert_eq!(passive.len(), 2);
+    assert!(passive.iter().all(|(_, disabled)| *disabled));
+    assert_eq!(production.selections["cloud"].as_deref(), Some("work"));
+    assert!(production.receiver.is_none(), "No competing selection writer starts");
+    assert!(editor.receiver.is_none());
+}
+
+#[test]
 fn root_drift_refuses_the_mirror_without_adopting_or_dropping_the_old_writer() {
     let ctx = egui::Context::default();
     let (write, pending_write) = channel();

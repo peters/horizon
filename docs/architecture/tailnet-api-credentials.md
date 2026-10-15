@@ -67,6 +67,8 @@ reader that can replace a pending write with an older stored status. While
 Settings owns these jobs, production keeps a passive nonsecret catalog/status
 mirror and cached cloud selections, without refreshing the store. Fresh reads
 wait for retained operations; stale replies cannot restore a removed network.
+The Connections drawer shows the cached selection but disables selection writes
+while Settings owns IO. Its production mirror cannot consume a competing save.
 A changed storage root blocks new editor actions and refreshes. Existing jobs
 retain their original root and may finish; their state cannot authorize another
 root. Discovery refuses the mismatch until Settings closes.

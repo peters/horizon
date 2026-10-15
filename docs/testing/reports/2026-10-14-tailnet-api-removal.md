@@ -1,135 +1,118 @@
 ---
 procedure: tailnet-api-removal
 candidate_base: 5d44a7416ed5caa54f3fa6a81803c9e3a0afeb8e
-candidate_head_at_build: e89a6309cfbaa26670beb36041160c6f1f366967
-candidate_runtime_tree: 0a5ea42d3ad38f63a295df66b7f415cd7358e6c1
-candidate_sha256: 10687a457794c46bb35a4a7b2229d10951926dba512643cc1514dae6fbd1598c
-qualification_scope: review1-native-and-current-local-matrix-pass
-date: 2026-10-14
+candidate_head_at_build: 8636873150f05c71b69f194358fd50c754fea5ec
+candidate_runtime_tree: abb5291da54d306b7e6c344917540e3234b6b8a1
+candidate_sha256: f863ad5b20a35da82b1e7cb41ab7f316f0431d37f1fe923906c1ff060090d21b
+qualification_scope: review2-native-and-current-local-matrix-pass
+date: 2026-10-15
 lanes: [linux-isolated-synthetic]
 issue: https://github.com/peters/horizon/issues/1335
 ---
 
-# Tailnet API credential removal test report, 2026-10-14
+# Tailnet API credential removal test report, 2026-10-15
 
 ## 1. Summary
 
-The fresh review-fix native run passed R01–R04 on the runtime tree above.
-Native approval removed only the selected API binding.
-Actual CLI plans and normal AGENT public MCP responses agreed.
-All three saved networks and enrollment-key bindings and contents survived.
+The fresh round-two native run passed the Connections gate and R01–R03; presentation exercised resize and Fit on the runtime tree above.
+Native approval removed only the selected API binding; actual CLI plans and ordinary AGENT public MCP agreed.
+All three saved networks and enrollment-key bindings and contents survived until deliberate fixture teardown.
 No provider allocation, Tailscale API request or host credential change occurred.
-
-The complete applicable local matrix passed on the captured inputs.
-The supplemental UI qualification closed the workspace feature-unification gap.
-It passed 2,224 UI tests, with two ignored, three font tests and two home-isolation tests.
-The actual compiler artifacts matched the full-workspace default features without an unknown or mismatched artifact.
+The applicable required local matrix passed through new affected checks and valid reused package results.
+The fixed-head GitHub checks and independent Copilot review are separate final gates.
 
 ## 2. Executable identity
 
-The run used base `5d44a741` plus Remove and its uncommitted review fixes.
-Build metadata records HEAD `e89a6309`; it does not claim a clean committed build of the later runtime tree.
-The four-product manifest records 1,731 Rust, Cargo and asset inputs.
-Its inventory SHA256 is `1bb2f363f6c1fde8f540dfc6bc6e67c8c2bd7a0c31c82e2d3124de73eedaf222`.
+The build records published HEAD `8636873150f05c71b69f194358fd50c754fea5ec` plus staged review fixes.
+It does not claim a clean committed build of the later fixed head.
+The 1,731-input inventory SHA256 is `6f72228b992d5f86c49ea618707a74cd1acdafcd0e96833ba3d189c14340a042`.
+Two UI Rust inputs and two embedded cloud references changed from the prior checked runtime.
 
-| Frozen product | SHA256 |
-|---|---|
-| Horizon | `10687a457794c46bb35a4a7b2229d10951926dba512643cc1514dae6fbd1598c` |
-| cloud_deploy | `e921aa16a1370ef65260d7eb89d07c56f7e030f5966ee08b619b37fbc1977787` |
-| horizon-device | `fe2adf0a1b710ba11d680b34bddefc244decc956131d1ef06024de81a9af68af` |
-| horizon-browser | `3be55702cdb1c2be94c282d1cf6b5d5690b29a37e72d23f49acc0c3d3253104d` |
+| Product | Qualification | SHA256 |
+|---|---|---|
+| Horizon | Newly built and frozen | `f863ad5b20a35da82b1e7cb41ab7f316f0431d37f1fe923906c1ff060090d21b` |
+| cloud_deploy | Original build reused; 826 matching closure inputs | `e921aa16a1370ef65260d7eb89d07c56f7e030f5966ee08b619b37fbc1977787` |
+| horizon-device | Original build reused; 39 matching closure inputs | `fe2adf0a1b710ba11d680b34bddefc244decc956131d1ef06024de81a9af68af` |
+| horizon-browser | Original build reused; 264 matching closure inputs | `3be55702cdb1c2be94c282d1cf6b5d5690b29a37e72d23f49acc0c3d3253104d` |
 
-The native equipment used current-SDK helper SHA256 `e52c3a60cc9daab63b836057891c67e78ab39fcbcf8e76738dee0624644191fc`.
-Only its three reviewed `cfg(test)` fixture leaves differed from the product SDK.
-Its private setup/cleanup checks do not substitute for public MCP evidence.
-The operator used normal AGENT panels and actual candidate CLI tools for public operations.
+The reused private native helper SHA256 is `e52c3a60cc9daab63b836057891c67e78ab39fcbcf8e76738dee0624644191fc`.
+Its 114 public SDK inputs and three reviewed cfg(test) fixture leaves match; dependencies, flags and features are unchanged.
+The helper retains its original build identity. Its private setup/cleanup is separate from public MCP proof.
+Root verified all current input hashes, schema and executable hashes before launch.
 
 ## 3. Fresh native results
 
 | Task | Result | Actual observation |
 |---|---|---|
-| R01 | pass | An owned 45-second Store lock delayed personal-token B removal. Native approval, close/reopen and original-owner MCP showed running. Completion reported applied and missing. Another caller's CLI and MCP status/cancel requests were refused. |
-| R02 | pass | Cancel and native Decline preserved stored OAuth C. Five malformed cases were refused through actual CLI and MCP. |
-| R03 | pass | Native C removal waited on another owned 45-second lock. The operator closed Settings, stopped the private Secret Service, then reopened Settings before lock release. The UI showed pending, then retained the write failure. |
-| R03 recovery | pass | Service restoration and Refresh made API status missing, but the write error remained. Another close/reopen retained the error. A fresh request and native approval then reported applied and cleared the write error. |
-| R04 | pass | The actual candidate window shrank, returned to its original size and used workspace Fit. Public Device frames showed the native controls. |
+| Connections gate | pass | The first provider-free synthetic card's picker was disabled while Settings owned tailnet state. Closing Settings enabled an ordinary selection of A; reopening disabled a subsequent change to B and retained the selection. |
+| R01 | pass | Native approval of B removal waited on an owned 45-second Store lock. Close/reopen retained pending work; actual owner MCP reported running before release and applied afterward. Other-caller CLI/MCP status and cancel were refused. |
+| R02 | pass | Original-owner Cancel and a fresh native Decline preserved stored OAuth C. Five malformed/unsupported cases each refused through actual CLI and MCP. |
+| R03 | pass | Direct native C removal waited on a separate 45-second lock. Settings closed, the private service stopped, and Settings reopened before release. Pending became a retained write failure. |
+| R03 recovery | pass | Restoring the service and Refresh reported missing while retaining the write error. Another close/reopen retained it; a fresh request/native approval then produced applied and cleared its own failure. |
+| R04 presentation | observed | The actual window shrank to 1,220 × 780, restored to 1,480 × 900 and used workspace Fit after restoration. The smaller-window Fit step was not repeated in this run. Public Device frames showed the controls. |
 
-An API removal failure did not prove rollback.
-Recovery finished recorded cleanup and reported missing while the failed write remained visible.
-Only a fresh owner-approved retry supplied a new successful completion.
-All three API observations were unavailable during the unfinished journal and service outage.
-They were not reported as successfully missing during that failure.
+The malformed cases were `set_personal_token`, `set_oauth`, `token`, `root` and `credential_reference`.
+These operations/extra fields were refused; no secret import or Set route was enabled.
+A receipt file named b-applied-mcp actually held running; the later actual applied receipt supplies completion proof.
+All three credential observations were unavailable during the unfinished journal/service outage.
+Read recovery reported all three missing. Missing did not prove the original failed write succeeded or rolled back.
+The fresh retry had a distinct request ID and its own applied receipt.
 
-All six actual CLI/MCP pairs had identical catalogs and credential maps.
-Their observation-time differences were:
-
-| Observation pair | Skew, seconds |
+| Exact CLI/MCP catalog/map pair | Observation skew, seconds |
 |---|---:|
-| B complete, Settings open | 1.890560 |
-| C cancelled/declined, still OAuth | 1.277239 |
-| Write failure, unavailable | 0.168383 |
-| Read recovery, write error retained | 1.436909 |
-| Fresh retry applied | 1.388485 |
-| Final Settings closed | 1.121399 |
+| B complete, Settings open | 0.414319 |
+| B complete, Settings closed | 1.388450 |
+| Outage, all unavailable | 1.075677 |
+| Recovery, missing with write error retained | 1.900383 |
+| Fresh completion, Settings open | 0.311429 |
+| Final Settings closed | 0.583475 |
 
-These skews are observation-time differences, not latency or concurrency guarantees.
-Trusted private-bus snapshots matched all three enrollment slots, item identities, contents and the saved catalog before, during and after recovery.
-Ordinary reads added `xdg:schema`; the binding and content comparisons still matched.
-The operator pinned the service owner again after restart.
+Skews compare CLI file modification time with actual MCP observer time; they do not prove atomicity or latency guarantees.
+Every observed catalog retained the same three IDs and names.
+Private-bus snapshots preserved all three Auth slots, content hashes, service/usernames and the catalog before, after recovery and finally.
+The exact synthetic expected-value comparisons also passed; no value was exposed through public operations.
 
-One floating-point scroll input was rejected before dispatch.
-A later integer input performed the intended action.
-A focus click opened an unsaved auth-key form; the operator cancelled it without saving.
-The preserved Auth snapshots show no enrollment change.
-These equipment attempts do not replace the successful operation evidence.
+## 4. Local checks and reuse
 
-## 4. Local checks and result reuse
-
-Fresh focused tests passed for reopen custody, retained write/read errors, HostIo and caller isolation.
-The supplemental commands selected thirteen workspace roots for actual workspace feature unification.
-The complete UI suite passed 2,224 tests, with two ignored; font tests passed three and home-isolation tests passed two.
-The compiler feature proofs matched 494, 495 and 495 artifacts respectively.
-They found zero unknown or mismatched artifacts against full-workspace default features.
-
-Eight recent non-UI package closures and fifteen original workspace closures retain valid passing results.
-Inverse dependency, feature and consumed-input proofs support that reuse.
-The exact speech, blocking/strict Clippy, formatting, maintainability and skill results also retain their passing status under current-input comparison.
-Together, these results cover the complete applicable local matrix.
-The earlier reduced-feature UI checks alone did not provide that coverage.
-
-All four production builds passed on the captured inputs; their bytes and native evidence remain unchanged.
-Additional feature-disabled compilation records inherited warnings separately.
-
-Advisory pedantic Clippy exited 101 on the inherited excessive-bool findings in `Description` and `GroupState`.
-Earlier compile and capacity attempts remain recorded and do not count as passes.
-Stored kind does not prove API scope, expiry or remote validity.
-Set/replacement, automatic node cleanup and non-Linux native qualification remain separate outcomes.
+Fresh checks passed: the new Connections regression; default UI 2,225 tests with two ignored; fonts three; home isolation two.
+Actual workspace-feature proofs matched 494/495/495 compiler artifacts without an unknown or mismatch.
+Fresh speech UI passed 2,271 tests with two ignored, plus three font and two home-isolation tests.
+Fresh full blocking/strict Clippy, formatting, maintainability, skill coverage and both diff checks passed.
+The other 23 non-UI package closures retain passing results through source, inverse dependency, feature and input comparison.
+Together these cover the required local matrix; this does not claim a new wholesale workspace run.
+The UI was rebuilt; the three unchanged CLI artifacts and helper were validly reused, without relabeling their original builds.
+Recorded settings include rustc1.98.1, locked/offline dependencies, jobs2, incremental0, line-tables-only debug and RUSTFLAGS=-D warnings.
+Advisory pedantic Clippy exited101 on inherited excessive-bool findings in Description and GroupState.
+The existing unknown clippy::assert_is_empty lint warning is recorded separately; no advisory pass is claimed.
+Earlier feature-disabled compatibility results remain historical and were not relabeled for changed embedded guides.
 
 ## 5. Cleanup and recordings
 
-The fresh native candidate exited normally with code zero.
-The owned synthetic service was empty; collectors and children stopped, and the native target expired.
-The owned public viewer closed and the relay exited zero.
-The ownership record reports exact container cleanup confirmed against its original healthy daemon.
+The candidate exited normally with code zero; the owned service was empty, children/collectors stopped and the target expired.
+The public viewer closed, the relay exited zero, and exact container absence was confirmed against the same healthy daemon.
+All three recordings finalized with encoder_failed false and file_limit_reached false.
 
-All three public recordings finalized with `encoder_failed: false`.
-The last two ended at the normal five-minute recording limit.
-The source recordings retain their actual dropped and repeated frame counts.
-A draft GIF uses source seconds 200–245 of `owner_flow.webm` at 2.5× speed, 6 fps and 1,000-pixel width.
-Its size is 1,392,767 bytes; SHA256 is `eb939078c46eb908037e08b318850780f463ed426ddf22a63a43c80a011c863b`.
-The operator inspected the source frames and decoded GIF contact sheet.
-Attachment upload and exact-head CI/review remain pending.
-No GIF is committed.
+| Recording | Duration, seconds | Encoded / dropped / repeated frames | Bytes |
+|---|---:|---|---:|
+| Connections | 152.697 | 1,255 / 272 / 1,001 | 11,210,646 |
+| Remove | 95.654 | 778 / 179 / 466 | 8,530,115 |
+| Failure/recovery | 215.819 | 1,773 / 386 / 1,160 | 22,737,574 |
+
+Two GIFs use real finalized recordings at 6 fps and 1,000-pixel width.
+Connections seconds 45–125 run at 3.2× for 25 seconds: 1,578,054 bytes, SHA256 `96062d06f98ad3c946ac4670103d46b02b1e9a627af7c54230f1ecae4337ab53`.
+Removal seconds 0–95 run at 5× for 19 seconds: 1,671,788 bytes, SHA256 `07ba7c57417ba035c83d075977db8d6daab39b4c8362a7040cda17d78e2d37b8`.
+Source frames and decoded GIF contact sheets were inspected. The clips show the Connections gate and actual native approval through pending to missing.
+Attachments are uploaded through the PR CLI and their downloaded hashes are checked separately; no GIF is committed.
+Equipment notes: the first input attempt hit EOF without interactive stdin; an unsupported Comma shortcut and a screenshot during active input were refused.
+Normal-exit input dispatched successfully; its later screenshot was unavailable because the container had exited as intended.
+These equipment outcomes do not supply or invalidate the separately completed behavior observations.
 
 ## 6. Evidence and historical scope
 
-Fresh native evidence: `/tmp/horizon-1335-evidence/api-remove-native-review1-main5d44-5e4cec83`.
-Its `state/native-result.json`, public RPC records, `paired-*.json`, Auth snapshots and ownership record retain the actual results.
-Current local checks: `/tmp/horizon-1335-evidence/api-credential-remove-main5d44/review1-qualification`.
-The four-product manifest is `frozen-remove-currentmain-e89a6309cfba-9b9af78d/build.json`.
-The feature-unification supplement is under `feature-unification-audit/supplemental`.
-
-Earlier Capture-8a and main-c5 runs remain historical evidence for their own source and binaries.
-Their passing results do not qualify the review-fix runtime or a later prospective main merge without an input comparison.
-The procedure uses the executed close → service off → reopen order.
-The corrected matrix record is `feature-unification-audit/supplemental/corrected-current-full-matrix-evidence.json`.
+Current native: `/tmp/horizon-1335-evidence/api-remove-native-review2-main5d44-a7b20210`.
+Its root-cleanup-proof.json and state/native-result.json confirm completed cleanup; the earlier public snapshot002 still says cleanup pending because it predates that proof.
+Public paired observations: `/tmp/horizon-1335-evidence/api-remove-r2-public-proof/summary-001.txt` and summary-002.txt, with original RPC records retained.
+Local results: `/tmp/horizon-1335-evidence/api-credential-remove-main5d44/review2-qualification/qualification.json`.
+Artifact manifest: review2-qualification/frozen-remove-currentmain-8636873150f0-bc14f20d/build.json.
+Source/reuse proofs: source-reconstruction.json, unchanged-three-products-and-native-helper-reuse-proof.json and root-pre-native-product-and-input-verification.json.
+Earlier review-one runtime0a and Capture-8a/main-c5 runs remain historical evidence for their own inputs; their skews are not current R2 results.

@@ -34,6 +34,8 @@ Also report concrete inputs and wrong results when:
 - Reopening starts an independent reader while a retained write or barrier is pending,
   or hides its completed write failure from the reopened UI.
 - The passive production mirror drops its known catalog or cached cloud selection.
+- Connections starts a selection save on the passive production mirror while
+  Settings owns IO, leaving its result unprocessed or its error hidden.
 - A root change refreshes the wrong store, allows new editor actions, or adopts
   another root's pending operation or observation.
 - Either cloud-enabled credential replies or feature-disabled refusals write

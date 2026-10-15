@@ -549,3 +549,7 @@ Reader failures and native removal failures remain separate. A successful status
 read does not erase a failed removal or prove rollback. Settings close retains
 each pending job's kind, result and failure. Use the bound request receipt for the
 Store outcome; observed kind alone does not prove the request applied.
+
+Close Settings before changing an unprovisioned cloud’s tailnet in Connections.
+While Settings owns store operations, cached selection stays visible and those
+selection controls are disabled.

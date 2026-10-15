@@ -272,27 +272,32 @@ Use a completed report to establish the result for the exact tested inputs.
 
 ### 6.4 R04 — Presentation
 
-1. Capture fresh screenshots before each native action.
+1. Open an unprovisioned synthetic cloud's **Connections** drawer with Settings open.
+
+   Result: Cached tailnet names remain visible. Selection controls are disabled;
+   they start no competing save. Close Settings before changing the cloud's selection.
+
+2. Capture fresh screenshots before each native action.
 
    Result: Input uses current geometry from the exact owned native target.
 
-2. Resize the owned native candidate window smaller.
+3. Resize the owned native candidate window smaller.
 
    Result: Native controls remain usable. The viewer shows the actual resized window.
 
-3. Select workspace Fit.
+4. Select workspace Fit.
 
    Result: The candidate workspace fits its smaller window.
 
-4. Resize the owned native candidate window larger.
+5. Resize the owned native candidate window larger.
 
    Result: The viewer shows the actual enlarged window.
 
-5. Select workspace Fit again.
+6. Select workspace Fit again.
 
    Result: The candidate workspace fits its larger window.
 
-6. Record a short GIF from real video for the PR attachment.
+7. Record a short GIF from real video for the PR attachment.
 
    Result: The GIF shows owner approval and missing status. Do not commit it in the repository.
 

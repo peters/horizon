@@ -640,7 +640,10 @@ impl State {
             return;
         }
         let changed = ui
-            .add_enabled_ui(!busy && self.receiver.is_none(), |ui| self.choice(ui, &mut selected))
+            .add_enabled_ui(
+                !busy && self.receiver.is_none() && self.settings_discovery.is_none(),
+                |ui| self.choice(ui, &mut selected),
+            )
             .inner;
         if changed {
             let (root, id) = (root.to_path_buf(), id.to_owned());
