@@ -19,6 +19,7 @@ fn legacy() -> Value {
 
 fn selected() -> CloudLaunch {
     let mut launch: CloudLaunch = serde_json::from_value(legacy()).unwrap();
+    launch.profile.build = Some(serde_json::from_value(json!({"context":".","dockerfile":"Dockerfile"})).unwrap());
     launch.publishing_selection = Some(Selection::Personal {
         destination: horizon_cloud::image_publishing::Destination::automatic_github(
             "synthetic-user",
@@ -34,6 +35,23 @@ fn selected() -> CloudLaunch {
     launch
 }
 
+fn publisher_choices() -> [Selection; 3] {
+    [
+        selected().publishing_selection.unwrap(),
+        Selection::Automatic {
+            login: None,
+            repository: None,
+        },
+        Selection::Registry {
+            destination: horizon_cloud::image_publishing::Destination::bound(
+                "registry.example/team/worker".into(),
+                "synthetic-grant".into(),
+            )
+            .unwrap(),
+        },
+    ]
+}
+
 #[test]
 fn legacy_launches_keep_their_flat_encoding() {
     let mut value = legacy();
@@ -43,14 +61,18 @@ fn legacy_launches_keep_their_flat_encoding() {
 }
 
 #[test]
-fn publisher_choices_are_fenced_until_launch_can_consume_them() {
-    let launch = selected();
-    let value = serde_json::to_value(&launch).unwrap();
-    assert_eq!(value["version"], 2);
-    assert_eq!(value["launch"]["publishing_selection"]["account"]["id"], 17);
-    assert!(serde_json::from_value::<CloudLaunch>(value.clone()).is_err());
+fn reviewed_publisher_choices_round_trip_without_downgrading_for_older_readers() {
+    let personal = selected();
+
+    for selection in publisher_choices() {
+        let mut launch = personal.clone();
+        launch.publishing_selection = Some(selection);
+        let value = serde_json::to_value(&launch).unwrap();
+        assert_eq!(value["version"], 2);
+        assert_eq!(serde_json::from_value::<CloudLaunch>(value.clone()).unwrap(), launch);
+        assert!(serde_json::from_value::<PreviousLaunch>(value).is_err());
+    }
     assert!(serde_json::from_value::<PreviousLaunch>(legacy()).is_ok());
-    assert!(serde_json::from_value::<PreviousLaunch>(value).is_err());
 }
 
 #[test]
@@ -66,6 +88,8 @@ fn incomplete_and_downgraded_choices_are_refused() {
     let mut downgraded = value;
     downgraded["version"] = json!(1);
     assert!(serde_json::from_value::<CloudLaunch>(downgraded).is_err());
+    let wrapped_recipe = json!({"version":2,"launch":serde_json::to_value(recipe()).unwrap()});
+    assert!(serde_json::from_value::<CloudLaunch>(wrapped_recipe).is_err());
 }
 
 fn recipe() -> CloudLaunch {
@@ -89,12 +113,14 @@ fn recipe_confirmations_stay_flat_and_preserve_the_image_for_older_readers() {
 }
 
 #[test]
-fn yaml_keeps_recipe_confirmations_but_refuses_publisher_envelopes() {
+fn yaml_retains_reviewed_publisher_choices_and_keeps_legacy_recipes_flat() {
     let launch = recipe();
     let yaml = serde_yaml::to_string(&launch).unwrap();
     assert_eq!(serde_yaml::from_str::<CloudLaunch>(&yaml).unwrap(), launch);
-    let yaml = serde_yaml::to_string(&selected()).unwrap();
-    assert!(serde_yaml::from_str::<CloudLaunch>(&yaml).is_err());
+    let selected = selected();
+    let yaml = serde_yaml::to_string(&selected).unwrap();
+    assert_eq!(serde_yaml::from_str::<CloudLaunch>(&yaml).unwrap(), selected);
+    assert!(serde_yaml::from_str::<PreviousLaunch>(&yaml).is_err());
 }
 
 #[test]
@@ -152,6 +178,27 @@ fn inconsistent_recipe_confirmations_are_refused_before_serialization() {
         assert!(
             json.is_empty(),
             "the launch serializer emitted a partial recipe before validation"
+        );
+    }
+}
+
+#[test]
+fn publisher_intent_without_a_build_cannot_be_saved_or_restored_as_a_prebuilt_launch() {
+    for selection in publisher_choices() {
+        let mut launch = selected();
+        launch.publishing_selection = Some(selection);
+        let mut value = serde_json::to_value(&launch).unwrap();
+        launch.profile.build = None;
+        value["launch"]["profile"].as_object_mut().unwrap().remove("build");
+        assert!(serde_json::from_value::<CloudLaunch>(value.clone()).is_err());
+        assert!(serde_yaml::from_str::<CloudLaunch>(&serde_yaml::to_string(&value).unwrap()).is_err());
+        assert!(serde_json::to_value(&launch).is_err());
+        assert!(serde_yaml::to_string(&launch).is_err());
+        let mut bytes = Vec::new();
+        assert!(serde_json::to_writer(&mut bytes, &launch).is_err());
+        assert!(
+            bytes.is_empty(),
+            "a refused publisher launch must emit no partial metadata"
         );
     }
 }

@@ -192,9 +192,32 @@ impl Input {
                 state.siblings.is_some(),
             )
         });
+        // An unstarted legacy launch retains an explicit recipe until a durable record exists.
+        let publishing_selection = self.launch.publishing_selection.or_else(|| {
+            (record.is_none() && !self.launch.profile.automatic_image()).then(|| {
+                cloud_runtime::publishing::Selection::Recipe {
+                    image: self.launch.profile.image.clone(),
+                }
+            })
+        });
+        let new_record = record.is_none();
         send(Report::Record(record.map(Box::new)));
         let settings = Settings::for_cloud(&self.settings_path, &self.launch.placement)
             .map_err(|error| Failure::Unconfigured(format!("{error}. Configure {}", self.settings_path.display())))?;
+        if new_record
+            && settings.portable_image_publishing
+            && let Some(shown) = &publishing_selection
+        {
+            shown
+                .confirm_current(
+                    &settings,
+                    &self.repository,
+                    &self.launch.profile_name,
+                    &self.launch.profile,
+                    &horizon_core::cloud_runtime::Cancellation::default(),
+                )
+                .map_err(|error| Failure::Refused(error.to_string()))?;
+        }
         let mut request = Request::new(
             self.launch.id,
             self.repository,
@@ -204,6 +227,8 @@ impl Input {
             settings,
         );
         request.renew_github = self.renew_github;
+        request.profile_name = Some(self.launch.profile_name);
+        request.publishing_selection = publishing_selection;
         request.working_copy = self.working_copy;
         deployment::prepare(&request).map_err(|error| Failure::Refused(error.to_string()))?;
         send(Report::Prepared {
@@ -289,6 +314,119 @@ mod tests {
         while store.wait_runtime_state_durable("session", generation, std::time::Duration::ZERO) != Ok(()) {
             assert!(std::time::Instant::now() < deadline, "it is written once it can be");
             std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    fn publishing_settings(root: &std::path::Path) -> Settings {
+        let mut settings: Settings = serde_json::from_value(serde_json::json!({
+            "runpod_key_file":root.join("missing-key"),"ssh_identity_file":root.join("missing-identity"),
+            "docker_config":root.join("absent-docker"),"cpu_flavors":[],"gpu_types":[]
+        }))
+        .unwrap();
+        settings.portable_image_publishing = true;
+        settings.registries = Some(
+            serde_json::from_value(serde_json::json!({
+                "root":root.join("registry"),"bindings":[
+                    {"repository":"registry.example/team/first","generation":"first","read_only_confirmed":true,
+                     "pull":{"username":"reader","secret_file":root.join("first-pull"),"expires_at":null},
+                     "publish":{"username":"writer","secret_file":root.join("first-push"),"expires_at":null}},
+                    {"repository":"registry.example/team/second","generation":"second","read_only_confirmed":true,
+                     "pull":{"username":"reader","secret_file":root.join("second-pull"),"expires_at":null},
+                     "publish":{"username":"writer","secret_file":root.join("second-push"),"expires_at":null}}
+                ]
+            }))
+            .unwrap(),
+        );
+        settings
+    }
+
+    #[test]
+    fn a_saved_reviewed_choice_cannot_be_replaced_by_a_new_local_preference_during_ui_preparation() {
+        use super::super::super::session_record;
+        use horizon_core::{
+            cloud_panel::Placement,
+            cloud_runtime::{Cancellation, publishing, setup},
+        };
+        let temporary = tempfile::tempdir().unwrap();
+        let repository = temporary.path().join("source");
+        let root = temporary.path().join("cloud");
+        std::fs::create_dir(&repository).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        let repository = repository.canonicalize().unwrap();
+        let settings = publishing_settings(&root);
+        let choices = publishing::choices(&settings).unwrap();
+        let settings_path = root.join("settings.json");
+        std::fs::write(&settings_path, serde_json::to_vec(&settings).unwrap()).unwrap();
+        setup::save_image_destination(
+            &root,
+            &repository,
+            "cpu",
+            None,
+            Some(&choices[1]),
+            &Cancellation::default(),
+        )
+        .unwrap();
+        for (publishing_selection, image) in [
+            (Some(choices[0].clone()), ""),
+            (None, "registry.example/team/first"),
+            (None, ""),
+            (Some(choices[0].clone()), ""),
+        ] {
+            let automatic = publishing_selection.is_none() && image.is_empty();
+            if automatic {
+                std::fs::write(&settings_path, serde_json::to_vec(&settings).unwrap()).unwrap();
+            }
+            let before = std::fs::read(&settings_path).unwrap();
+            let profile = serde_json::from_value(serde_json::json!({
+                "provider":"runpod", "image":image, "cpu":2, "memory_gb":4,
+                "build":{"context":".","dockerfile":"Dockerfile"}
+            }))
+            .unwrap();
+            let launch = horizon_core::cloud_panel::CloudLaunch {
+                publishing_selection,
+                deployment_started: false,
+                id: "fixture".into(),
+                revision: "a".repeat(40),
+                profile_name: "cpu".into(),
+                placement: Placement::default(),
+                profile,
+            };
+            let launch = serde_json::from_value(serde_json::to_value(launch).unwrap()).unwrap();
+            let state_root = root.join(if automatic { "automatic" } else { "fixture" });
+            let input = Input {
+                launch,
+                repository: repository.clone(),
+                state_root: state_root.clone(),
+                settings_path: settings_path.clone(),
+                first: None,
+                fence: session_record::fence(&state_root),
+                renew_github: false,
+                working_copy: None,
+            };
+            let prepared = std::cell::RefCell::new(None);
+            let result = input.run(&|report| {
+                if let Report::Prepared { request, .. } = report {
+                    prepared.replace(Some(request));
+                }
+            });
+            if automatic {
+                assert!(
+                    result.is_ok(),
+                    "an automatic profile keeps automatic intent on first Start"
+                );
+                let request = prepared.into_inner().unwrap();
+                assert!(request.profile.automatic_image());
+                assert!(request.publishing_selection.is_none(), "no empty recipe confirmation");
+                assert!(Store::snapshot(&state_root).unwrap().unwrap().publication.is_none());
+            } else {
+                assert!(
+                    matches!(result,Err(Failure::Refused(message)) if message.contains("changed since it was shown"))
+                );
+                assert!(!state_root.join("deployment.json").exists());
+            }
+            assert_eq!(std::fs::read(&settings_path).unwrap(), before);
+            assert!(!root.join("registry").exists());
+            assert!(!settings.docker_config.exists());
         }
     }
 }

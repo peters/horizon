@@ -34,6 +34,26 @@ impl Selection {
         }
     }
 
+    /// Confirms a new launch still uses the destination and account shown to its caller.
+    /// Existing deployment records retain their own publication instead.
+    /// # Errors
+    /// Changed local intent, an invalid grant, cancelled lookup or repository identity failure.
+    pub fn confirm_current(
+        &self,
+        settings: &Settings,
+        repository: &Path,
+        name: &str,
+        profile: &Profile,
+        cancel: &Cancellation,
+    ) -> Result<()> {
+        if selection(settings, repository, name, profile, cancel)? != *self {
+            return Err(Error::Invalid(
+                "The image destination or publishing account changed since it was shown; review it before starting",
+            ));
+        }
+        Ok(())
+    }
+
     /// # Errors
     /// A stale publishing grant or malformed bound destination.
     pub fn check_binding(&self, settings: &Settings) -> Result<()> {

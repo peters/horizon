@@ -109,7 +109,7 @@ engine consumes these preferences, authenticates the selected account and record
 its destination before building. It checks the shown selection again before using
 credentials. Existing explicit-image records retain their original image and do not
 inherit a later preference. A new automatic launch remains refused while the staging
-gate is off. The visible selector, public destination controls and saved-launch bridge
+gate is off. The visible selector and public destination controls
 are delivered separately before activation.
 
 ## Destination identity
@@ -193,15 +193,17 @@ Saved cloud launch confirmations retain their image intent in a conditional wire
 format. Existing launches with no reviewed choice keep their flat encoding.
 An explicit recipe-image confirmation also stays flat and must match the exact
 profile image. Publisher choices use a version-2 envelope that older readers
-refuse. This prerequisite also refuses those envelopes until the launch engine
-can consume the retained choice; it activates no selector or image publication.
+refuse. Compatible readers retain the full choice, and desktop preparation forwards
+that choice and its named profile to the shared engine. This bridge activates no
+selector or automatic publication.
 Ordinary unknown legacy fields remain compatible, but mixed or downgraded
-publisher envelopes and reserved null keys are refused.
+publisher envelopes and reserved null keys are refused. A publisher choice without
+a build recipe is invalid and cannot be saved or restored as a prebuilt launch.
 
 Cloud-launch JSON and YAML are untrusted. A parser must not silently lose a
 reviewed publisher and then launch the recipe's original target. The envelope
-requires a compatible consumer; this prerequisite fails closed for publisher
-choices until engine forwarding is wired in the same change that enables reads.
+requires a compatible consumer; reads and actual UI request forwarding are wired
+atomically. The engine rechecks the shown choice against machine-local policy.
 Recipe confirmations carry no alternative publisher and retain identical image
 semantics for old readers. Runtime constructors initialize the new field to None,
 so ordinary saved launches remain unchanged. The reviewed choice adds no credential or source-repository URL; it carries
@@ -216,6 +218,13 @@ Recipe/profile equality is enforced before serialization as well as during
 deserialization. An inconsistent in-memory recipe emits no standalone launch
 JSON, and JSON/YAML serialization fail before it can reach an older reader.
 
+An unstarted legacy launch without a publisher choice forwards its explicit recipe
+image as its intent until a durable deployment exists. An image-omitting build keeps
+automatic intent; it must not forward an empty recipe confirmation. A changed local override cannot
+silently replace that image or create a record for the replacement. Existing
+records remain authoritative; a missing launch choice does not replace their
+retained publishing identity with a recipe confirmation.
+
 ## Staged engine and development CLI
 
 The engine keeps a false-by-default `portable_image_publishing` setting until the
@@ -226,8 +235,9 @@ account metadata, includes that choice in the confirmation token, and reads a sa
 cloud without creating state. Execution rechecks the choice. A changed preference
 cannot redirect a retained cloud; a missing original grant stops before building.
 
-The default-off stage does not enable saved publisher envelopes in the desktop.
-Version-2 reads and actual UI request forwarding remain one later atomic change.
+Version-2 reads, actual UI preparation forwarding and retained-publication rebuild
+previews share the same metadata contract. The default-off stage still prevents
+new automatic launches from bypassing the unfinished destination selector.
 Git hosting and registry hosting remain independent; no GitLab sign-in or project
 discovery is added. A missing read-only grant for a private personal package stops
 before build and names the recorded destination. A publisher's write token never
@@ -243,10 +253,15 @@ another profile is refused even when that profile names the same destination or
 omits its image. Recipe edits within the recorded profile still rebuild to the
 recorded destination.
 
-This staged engine is supported through the development CLI only. Desktop
-creation, saved publisher-envelope restoration and retained-publication rebuild
-previews wait for the atomic UI bridge. Keep the setting off for desktop use;
-a staged CLI record is not evidence that the desktop path is qualified.
+Before creating a new record, desktop preparation confirms a saved choice against
+the current shared selection policy, including a removed override. Automatic intent
+without an override remains valid. Existing records skip this preference preflight.
+
+Desktop preparation now preserves saved publisher choices, and rebuild previews
+use the cloud's retained publication and profile. New automatic desktop launches
+remain disabled until the destination selector and public destination controls
+are complete. Keep the setting off for ordinary desktop use; metadata forwarding
+is not authorization to publish or proof of a qualified new-cloud selector.
 
 A rebuild confirmation also snapshots the exact retained publication. Its token
 covers the publisher account or grant even when the resolved image and files are

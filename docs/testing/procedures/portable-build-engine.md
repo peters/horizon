@@ -19,7 +19,8 @@ credentials. Keep new automatic launches disabled until the complete user flow i
 
 Use a supported Unix host and Docker with buildx. The development CLI exercises the
 shared engine. This procedure creates no compute resource and changes no installed login.
-The desktop publisher envelope remains fenced until its UI bridge is delivered.
+Desktop preparation forwards saved publisher metadata, but new automatic desktop
+launches remain disabled until the selector and public destination controls are complete.
 
 ## 3. Safety
 
@@ -200,10 +201,11 @@ The rebuild regression also supplies another named profile with the same image
 and with an omitted image. Both must refuse before using its different Dockerfile;
 matching-profile recipe edits keep the recorded destination.
 
-This staged engine is supported through the development CLI only. Desktop
-creation, saved publisher-envelope restoration and retained-publication rebuild
-previews wait for the atomic UI bridge. Keep the setting off for desktop use;
-a staged CLI record is not evidence that the desktop path is qualified.
+Desktop preparation now preserves saved publisher choices, and rebuild previews
+use the cloud's retained publication and profile. New automatic desktop launches
+remain disabled until the destination selector and public destination controls
+are complete. Keep the setting off for ordinary desktop use; metadata forwarding
+is not authorization to publish or proof of a qualified new-cloud selector.
 
 ### Retained rebuild confirmation regression
 

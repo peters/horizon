@@ -50,9 +50,10 @@ Reject a publishing credential sent to a worker or an allocation after missing v
 
 The local preference helpers do not authenticate metadata, change profile parsing or activate automatic launches.
 
-The launch-format prerequisite keeps every runtime constructor at None and refuses
-publisher envelopes until launch forwards their choice to the engine. Reject a
-reader that silently discards reviewed publishing intent. Preserve legacy flat
+Runtime constructors keep None until the selector is delivered. The version-2
+reader and actual UI preparation forward the full choice and profile atomically. Reject a
+reader that silently discards reviewed publishing intent. Refuse publisher envelopes
+without a build recipe, including serialization before any partial output. Preserve legacy flat
 encodings and exact-image recipe confirmations, including JSON/YAML compatibility.
 Unknown ordinary legacy keys stay compatible; reserved envelope keys may not hide
 inside a flat body, even when null. No publication is activated by this prerequisite.
@@ -82,9 +83,10 @@ retained account or exact publication grant on each new build, and renews person
 operation credentials immediately before push. Reusing a worker image requires no
 publisher authentication. Report a retry/rebuild that adopts a new host preference,
 loads another publishing grant, or accepts a confirmation token for another selection.
-New automatic launches stay behind the default-off stage; the saved-launch envelope
-reader remains fenced until actual UI forwarding is delivered with it. Do not ask
-this API prerequisite to activate the selector or update development image pins.
+New automatic launches stay behind the default-off stage. Saved envelope reads,
+actual UI preparation forwarding and record-aware rebuild previews form one bridge.
+Reject a preview that drops the retained publisher or accepts another profile name.
+Do not activate the selector or update development image pins in this bridge.
 
 Registry credential isolation must preserve the selected Unix Docker context and
 plugin locations without copying another registry login, a credential helper or
@@ -153,3 +155,12 @@ including worker and Upkeep panels whose local metadata has no SSH connection.
 Admission and retained-operation polling must check both saved board membership
 and live cloud groups. Cover the session-restore interval before live membership
 is copied. A local launch directory alone does not establish desktop ownership.
+
+Unstarted legacy launches without a publisher choice retain explicit recipe intent.
+Automatic profiles keep automatic intent, not an empty recipe confirmation.
+Reject silently adopting a new local override before their first durable record;
+an existing record must keep its own publisher when the saved choice is absent.
+
+Before a new desktop deployment record, confirm the saved choice through shared
+selection policy. Cover a removed override as well as a replacement, while keeping
+automatic intent without an override valid. Existing records remain authoritative.

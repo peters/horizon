@@ -675,10 +675,15 @@ Saved cloud launch confirmations retain their image intent in a conditional wire
 format. Existing launches with no reviewed choice keep their flat encoding.
 An explicit recipe-image confirmation also stays flat and must match the exact
 profile image. Publisher choices use a version-2 envelope that older readers
-refuse. This prerequisite also refuses those envelopes until the launch engine
-can consume the retained choice; it activates no selector or image publication.
+refuse. Compatible readers retain the full choice, and desktop preparation forwards
+that choice and its named profile to the shared engine. This bridge activates no
+selector or automatic publication.
+An unstarted legacy launch with no publisher choice keeps its explicit recipe target.
+An image-omitting build keeps automatic intent.
+A durable cloud record keeps its own publishing identity.
 Ordinary unknown legacy fields remain compatible, but mixed or downgraded
-publisher envelopes and reserved null keys are refused.
+publisher envelopes and reserved null keys are refused. Publisher choices require
+a build recipe; prebuilt launches keep their flat legacy or recipe confirmation.
 
 ### Staged portable build engine
 
@@ -686,8 +691,8 @@ The development `cloud_deploy` helper prints destination/account metadata in its
 plan and retains it in the confirmation token. Retry and rebuild keep the original
 publisher; a changed preference cannot redirect a cloud. Personal write credentials
 stay host-only and are renewed before push. A private image needs a separate verified
-read-only pull grant. New automatic launches remain off until the complete UI,
-public destination controls and saved-launch bridge are delivered. Do not enable a
+read-only pull grant. New automatic launches remain off until the complete UI and
+public destination controls are delivered. Do not enable a
 partial user flow or remove explicit development image pins in this stage.
 See docs/testing/procedures/portable-build-engine.md.
 
@@ -696,10 +701,15 @@ another profile is refused even when that profile names the same destination or
 omits its image. Recipe edits within the recorded profile still rebuild to the
 recorded destination.
 
-This staged engine is supported through the development CLI only. Desktop
-creation, saved publisher-envelope restoration and retained-publication rebuild
-previews wait for the atomic UI bridge. Keep the setting off for desktop use;
-a staged CLI record is not evidence that the desktop path is qualified.
+A new desktop record requires its saved publisher choice to match current local
+intent, including when an override was removed. Existing records retain their own
+publication; automatic intent without an override remains valid.
+
+Desktop preparation now preserves saved publisher choices, and rebuild previews
+use the cloud's retained publication and profile. New automatic desktop launches
+remain disabled until the destination selector and public destination controls
+are complete. Keep the setting off for ordinary desktop use; metadata forwarding
+is not authorization to publish or proof of a qualified new-cloud selector.
 
 A rebuild confirmation also snapshots the exact retained publication. Its token
 covers the publisher account or grant even when the resolved image and files are

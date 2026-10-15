@@ -459,3 +459,6 @@ fn the_saved_profile_follows_the_settings_a_rebuild_bound() {
     app.sync_bound_profiles();
     assert_eq!(app.cloud_prototype.groups.0[0].remote.as_ref().unwrap().profile, bound);
 }
+
+#[cfg(unix)]
+mod publishing;
