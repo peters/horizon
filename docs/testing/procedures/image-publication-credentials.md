@@ -22,6 +22,11 @@ The tests use synthetic tokens. They do not change an installed login.
 - This helper has no launch caller yet. Existing launches keep their behavior.
 - This procedure does not test a live registry push, UI selection or cloud allocation.
 
+## 3. Safety
+
+Use synthetic loopback responses and disposable credential stores only. Never
+provide a real token or complete a real account sign-in for these fixtures.
+
 ## 4. Equipment and preconditions
 
 - A candidate checkout and the supported Rust toolchain.
@@ -86,9 +91,34 @@ The tests use synthetic tokens. They do not change an installed login.
    A private operation login accepts a new token for the same account. Another account
    leaves its configuration unchanged.
 
+### 6.5 IC-05 — Recover the retained account
+
+1. Examine `a_recorded_account_can_sign_in_without_accepting_or_erasing_another_actor`
+   from IC-02.
+
+   Result: A cached account B does not make a retained account A impossible to
+   recover. The helper emits a device prompt for A. A response with A's reused
+   login but another immutable ID is refused without saving that chain or erasing
+   B. The correct account A prepares its private login and saves its chain.
+
+2. Examine `renewal_recovers_only_the_recorded_account_without_replacing_another_login`.
+
+   Result: The actual preparation and renewal entry paths share the recovery
+   boundary. A wrong identity ends the displayed prompt with refusal, preserves
+   the prior chain and leaves the operation-private login unchanged. A correct
+   identity renews only the retained operation's login.
+   The explicit `select_account` helper forces device sign-in without reusing the
+   cached account. No launch caller or visible account selector is activated.
+
+3. Examine the cached renamed-account fixture.
+
+   Result: The same immutable account under a changed namespace is refused with
+   a rename explanation before another device prompt. Expected-account sign-in
+   cancellation still ends the prompt without saving a chain.
+
 ## 7. Pass criteria
 
-- IC-01 through IC-04 pass.
+- IC-01 through IC-05 pass.
 - Another account cannot replace the expected publisher.
 - No token enters serialized account metadata or diagnostic output.
 - An operation owns its temporary Docker login until it finishes.

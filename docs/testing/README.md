@@ -47,6 +47,7 @@ documents that are not yet STE.
 | [device-type-multi-chunk](procedures/device-type-multi-chunk.md) | `horizon-device` text input in several `type` actions | none |
 | [docker-host-provider](procedures/docker-host-provider.md) | Clouds on an existing Docker host: create, stop, resume, delete, owned resources, the Cloud settings card and Check, the New cloud host card, the cloud card and `cloud_offers` | none |
 | [github-app-tokens](procedures/github-app-tokens.md) | GitHub App user tokens: device sign-in, renewal, refusal and expiry | none |
+| [image-publication-credentials](procedures/image-publication-credentials.md) | Operation-private publishing login, retained-account recovery and explicit selection | none |
 | [local-image-preferences](procedures/local-image-preferences.md) | Machine-local image destinations, source identity and transactional save | none |
 | [local-network-bridge-agent-access](procedures/local-network-bridge-agent-access.md) | Local Network Bridge, agent access on the worker | rents compute |
 | [new-cloud-catalog-refresh](procedures/new-cloud-catalog-refresh.md) | New cloud dialog, background price refresh and layout height | none |

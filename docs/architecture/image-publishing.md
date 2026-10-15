@@ -12,6 +12,9 @@ It authenticates the publishing account and returns non-secret account metadata 
 The account metadata contains the provider's immutable user ID and its login name.
 The helper rejects another user ID, including a reused login. Letter case does not change the account.
 An account rename is refused because it could change the selected namespace.
+A cached matching account ID with a changed name fails before prompting again;
+signing in cannot recover the recorded namespace. A new cloud needs a newly
+reviewed destination.
 
 The operation owns its temporary Docker configuration until it finishes.
 It writes only its authenticated publishing login there, not into the host's shared Docker configuration.
@@ -23,9 +26,13 @@ Credentials are neither printable nor serializable through this helper.
 Expected account metadata is untrusted and must pass validation before the login is prepared.
 The helper can renew the same account's operation login before a push. A long build must
 call this renewal checkpoint; preparation alone does not guarantee token validity through
-a later push. The helper refuses another current account without replacing its private login.
-It does not supply an account-switch UI or per-account storage. The launch integration must
-provide an explicit sign-in path for a recorded account before activation.
+a later push. When the cached host account differs from a retained publisher, preparation and
+renewal ask for a new device sign-in for the recorded immutable identity. The
+helper checks that identity before saving the returned credential chain. A wrong
+account leaves the prior stored chain and private operation login unchanged.
+A separate explicit account-selection helper always starts device sign-in rather
+than accepting the cached account. It is not an account-switch UI or per-account
+store; the launch and selector integrations still follow separately.
 This helper has no launch caller yet. The launch integration follows separately.
 
 ## Machine-local destination preferences
