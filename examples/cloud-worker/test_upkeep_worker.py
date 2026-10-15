@@ -522,11 +522,12 @@ class SchedulerTests(unittest.TestCase):
         (self.dir / 'companions' / 'link.json').symlink_to(self.root / 'kept')
         (self.dir / 'companions' / 'deeper').mkdir()
         (self.dir / 'companions' / 'deeper' / 'old.json').write_text('{}')
-        # The agent account owns the folders and can take away their write bits.
-        (self.dir / 'companions' / 'deeper').chmod(0o500)
-        (self.dir / 'companions').chmod(0o500)
+        # The agent account owns the folders and can take away their permissions.
+        (self.dir / 'companions' / 'deeper').chmod(0o000)
+        (self.dir / 'companions').chmod(0o000)
         self.assertTrue(RUN['forget_companion_requests']())
         self.assertFalse((self.dir / 'companions').exists())
+        self.assertEqual(list(self.dir.glob('.companions-removed-*')), [], 'nothing is left behind')
         self.assertEqual((self.root / 'kept').read_text(), 'kept')
         # A link in place of the folder goes, and what it points to stays.
         (self.root / 'elsewhere').mkdir()

@@ -102,13 +102,9 @@ impl HorizonApp {
                 continue;
             }
             if let Err(error) = self.start_upkeep_companion(cloud, &alias, action, &id, ctx) {
-                let answer = failure(action, &id, &error);
-                self.cloud_prototype
-                    .production
-                    .companions
-                    .agent
-                    .upkeep
-                    .record(cloud, &alias, &answer);
+                let state = &mut self.cloud_prototype.production.companions.agent.upkeep;
+                let answer = failure(action, &id, &error, state.started.contains_key(&key));
+                state.record(cloud, &alias, &answer);
             }
         }
     }
@@ -222,7 +218,17 @@ impl HorizonApp {
                 }
                 (answer, started)
             }
-            Err(error) => (failure(*action, id, &error), false),
+            Err(error) => {
+                let started = self
+                    .cloud_prototype
+                    .production
+                    .companions
+                    .agent
+                    .upkeep
+                    .started
+                    .contains_key(&key);
+                (failure(*action, id, &error, started), false)
+            }
         };
         // A started execution keeps the hold until it reports back.
         if !started {
@@ -234,11 +240,12 @@ impl HorizonApp {
     }
 }
 
-/// The answer to a request that Horizon could not record. A Stop and a busy companion are
-/// not done, so the next exchange sends them again; any other Ensure Ready is done, with
-/// the reason for the agent.
-fn failure(action: Ask, id: &str, error: &str) -> Value {
-    let done = action == Ask::EnsureReady && !error.starts_with("cloud_companion_busy");
+/// The answer to a request that Horizon could not record. A busy companion, and a Stop of a
+/// companion that a run started (`started`), are not done, so the next exchange sends them
+/// again; any other request is done, with the reason for the agent, so that it never holds
+/// back a later one.
+fn failure(action: Ask, id: &str, error: &str, started: bool) -> Value {
+    let done = (action != Ask::Stop || !started) && !error.starts_with("cloud_companion_busy");
     json!({ "operation_id": id, "action": action_name(action), "done": done, "error": error })
 }
 
@@ -380,16 +387,21 @@ mod tests {
     #[test]
     fn a_failed_request_names_its_operation_and_a_failed_stop_is_sent_again() {
         let id = manifest::provider_usage::new_operation_id();
-        let refused = failure(Ask::EnsureReady, &id, "Companion is not selected");
+        let refused = failure(Ask::EnsureReady, &id, "Companion is not selected", false);
         assert_eq!(refused["operation_id"], id.as_str());
         assert_eq!(refused["done"], true);
         assert_eq!(
-            failure(Ask::EnsureReady, &id, "cloud_companion_busy: wait")["done"],
+            failure(Ask::EnsureReady, &id, "cloud_companion_busy: wait", false)["done"],
             false
         );
         assert_eq!(
-            failure(Ask::Stop, &id, "Horizon has no cloud state directory")["done"],
+            failure(Ask::Stop, &id, "Horizon has no cloud state directory", true)["done"],
             false
+        );
+        // A refused Stop of a companion that no run started is done.
+        assert_eq!(
+            failure(Ask::Stop, &id, "Companion is not selected", false)["done"],
+            true
         );
         // A Stop whose start failed is tried again with the next exchange.
         let (temp, mut app, _) = upkeep_app();

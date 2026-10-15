@@ -574,23 +574,36 @@ def close_interrupted():
 
 def forget_companion_requests():
     """A companion request belongs to the run that wrote it, so one left behind starts nothing.
-    Returns whether none is left: a run that would see one does not start. A link, in place of
-    the folder or inside it, is removed and never followed."""
+    Returns whether none is left: a run that would see one does not start."""
     path = DIR + '/companions'
+    # A rename needs no permission on the folder itself, so one that the agent made unreadable
+    # goes too. A link in its place is moved, never followed.
+    trash = f'{DIR}/.companions-removed-{time.time_ns()}'
     try:
-        if os.path.isdir(path) and not os.path.islink(path):
-            # The agent account owns the folder and can take away its write bit; the loop runs
-            # as that account and gives it back. A folder that is a link is not walked into.
-            for folder, _, _ in os.walk(path):
-                os.chmod(folder, 0o700)
-            shutil.rmtree(path)
-        else:
-            os.unlink(path)
+        os.rename(path, trash)
     except FileNotFoundError:
         pass
     except OSError as error:
         print(f'Could not remove the companion requests of an earlier run: {error}', flush=True)
+    for earlier in glob.glob(glob.escape(DIR) + '/.companions-removed-*'):
+        remove_tree(earlier)
     return not os.path.lexists(path)
+
+
+def remove_tree(path):
+    """Removes `path` as far as it can. The agent account owns the folders and can take away
+    their permissions; the loop runs as that account and gives them back. Links are removed,
+    never followed."""
+    try:
+        if not stat.S_ISDIR(os.lstat(path).st_mode):
+            os.unlink(path)
+            return
+        os.chmod(path, 0o700)
+        for name in os.listdir(path):
+            remove_tree(os.path.join(path, name))
+        os.rmdir(path)
+    except (OSError, RecursionError):
+        pass
 
 
 def draw(started, jobs, queued, capacity):
