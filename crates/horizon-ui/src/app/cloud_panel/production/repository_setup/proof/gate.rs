@@ -116,7 +116,7 @@ fn proves_each_listed_repository() {
         append(&out, "results.jsonl", &result);
     }
     // No SSH forward to a Docker host outlives the gate.
-    super::close_forwards();
+    super::remote::close(true);
 }
 
 /// Proves the entry, starts its preview after a passed proof and removes all the entry's

@@ -39,9 +39,9 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn close_forwards(
     close(true);
 }
 
-/// Ends every open forward, and refuses later ones when `refuse`.
-#[cfg(any(not(test), unix))]
-fn close(refuse: bool) {
+/// Ends every open forward, and refuses later ones when `refuse`. The setup gate, a test
+/// of its own process, ends its forwards with it as Horizon's exit does.
+pub(super) fn close(refuse: bool) {
     let mut open = open_forwards();
     open.closed |= refuse;
     for group in std::mem::take(&mut open.groups) {
