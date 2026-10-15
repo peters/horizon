@@ -9,6 +9,12 @@ never passes what the worker's cores and memory allow. A repository whose pull r
 not move since its last clean run is skipped, except in a run that Run now started. No agent
 starts where the worker keeps agent approvals (ask): an Upkeep agent has nobody to ask.
 
+Between the planned runs, and during one, the loop lists the pull requests again every minute.
+A repository whose pull requests moved since its agent last started (a new pull request, a
+finished check, a review, a rebase) gets its agent at once; one whose agent runs or waits is
+left until that agent ends. The planned run catches what this missed. A rate limit of GitHub
+makes the loop wait longer before it lists again.
+
 The first planned run of each UTC day ends with the daily maintenance pass: one agent for the
 whole Upkeep, with the instructions in daily.md, after the agents of the repositories ended,
 so no two agents work in one repository at once.
@@ -48,6 +54,38 @@ DAILY = 'daily'
 # The newest lines of the daily pass that the status keeps besides those of the repositories.
 DAILY_ACTIVITY = 20
 REFRESH = 5
+# How often the loop lists the pull requests of every repository for a change, in seconds.
+POLL = 60
+# After GitHub reports a rate limit, the loop waits this long before it lists again, twice as
+# long after each further limit, up to BACKOFF_MAX.
+BACKOFF = 120
+BACKOFF_MAX = 30 * 60
+# What gh prints when GitHub limits the requests: the hourly limit or a secondary limit.
+RATE_LIMITED = re.compile(r'rate limit|abuse detection|HTTP 429', re.IGNORECASE)
+# What gh prints when the worker's GitHub access refuses a request before GitHub sees it.
+REFUSED = re.compile(r'Horizon: ')
+# How many open pull requests of one author a listing of one repository takes.
+LISTED = 200
+# How many repositories one search of a look lists. One search costs GitHub's hourly
+# budget the same as one listing of one repository, so a look every minute stays small.
+SEARCHED = 20
+# The longest search query that the worker's GitHub access accepts.
+SEARCH_LENGTH = 1024
+# The pages of a search, of 100 pull requests each. A look that finds more leaves the
+# repositories to the planned run.
+PAGES = 10
+SEARCH = '''query($q: String!, $after: String) {
+  search(query: $q, type: ISSUE, first: 100, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    nodes { ... on PullRequest { repository { nameWithOwner } state number headRefOid reviewDecision mergeable
+      commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
+        __typename
+        ... on CheckRun { name status conclusion checkSuite { workflowRun { workflow { name } } } }
+        ... on StatusContext { context state } } } } } } } } }
+  }
+}'''
+# The kind of a run that a change between the planned runs started.
+CHANGE = 'change'
 # Far more than the instructions Horizon writes (8 KiB of the person's and the parts it adds).
 PROMPT_LIMIT = 256 * 1024
 # The largest JSON file of the agent's folder that the loop reads, such as one agent's report.
@@ -286,22 +324,143 @@ def slots(costs):
     return max(1, min((os.cpu_count() or 2) - 1, int(memory_mb() * 0.8 // peak)))
 
 
+class Limited(Exception):
+    """GitHub refused a listing because of a rate limit."""
+
+
+class Refused(Exception):
+    """The worker's GitHub access refused a search, for example for a repository it does not
+    grant."""
+
+
 def open_pull_requests(repository, authors):
     """The open pull requests from `authors` with what decides whether they moved: head,
-    checks, review and mergeability. None when the repository cannot be read yet."""
+    checks, review and mergeability. None when the repository cannot be read yet. Raises
+    Limited when GitHub refused a listing for a rate limit."""
     found = []
     for author in authors:
         try:
             result = subprocess.run(
                 ['gh', 'pr', 'list', '--repo', repository, '--author', author, '--state', 'open',
-                 '--limit', '200', '--json', 'number,headRefOid,statusCheckRollup,reviewDecision,mergeable'],
+                 '--limit', str(LISTED), '--json', 'number,headRefOid,statusCheckRollup,reviewDecision,mergeable'],
                 capture_output=True, text=True, timeout=60)
+            if result.returncode != 0 and RATE_LIMITED.search(result.stderr or ''):
+                raise Limited(repository)
             page = json.loads(result.stdout or '[]') if result.returncode == 0 else None
         except (OSError, ValueError, subprocess.TimeoutExpired):
             page = None
         if not isinstance(page, list):
             return None
         found += [pr for pr in page if isinstance(pr, dict)]
+    return found
+
+
+def dig(value, *keys):
+    """The value at `keys` in nested objects, or None where one is missing."""
+    for key in keys:
+        if isinstance(key, int):
+            value = value[key] if isinstance(value, list) and len(value) > key else None
+        else:
+            value = value.get(key) if isinstance(value, dict) else None
+    return value
+
+
+def flat(node):
+    """A pull request of a search in the shape that gh pr list gives, so its fingerprint is
+    the same as in a run."""
+    checks = []
+    for check in dig(node, 'commits', 'nodes', 0, 'commit', 'statusCheckRollup', 'contexts', 'nodes') or []:
+        if dig(check, '__typename') == 'CheckRun':
+            checks.append({'name': check.get('name') or '', 'status': check.get('status') or '',
+                           'conclusion': check.get('conclusion') or '',
+                           'workflowName': dig(check, 'checkSuite', 'workflowRun', 'workflow', 'name') or ''})
+        elif isinstance(check, dict):
+            checks.append({'context': check.get('context') or '', 'state': check.get('state') or ''})
+    return {'number': node.get('number'), 'headRefOid': node.get('headRefOid') or '',
+            'statusCheckRollup': checks, 'reviewDecision': node.get('reviewDecision') or '',
+            'mergeable': node.get('mergeable') or ''}
+
+
+def query(repositories, author):
+    return ' '.join(['is:pr', 'is:open', f'author:{author}'] + [f'repo:{repository}' for repository in repositories])
+
+
+def search(repositories, author):
+    """The open pull requests from `author` in `repositories`, by repository, from one
+    search. None when the search failed or found too many, and None for a repository with
+    more than a run's listing takes. Raises Limited when GitHub refused it for a rate
+    limit, and Refused when the worker's GitHub access did."""
+    names = {repository.lower(): repository for repository in repositories}
+    found = {repository: [] for repository in repositories}
+    command = ['gh', 'api', 'graphql', '-f', f'query={SEARCH}', '-f', f'q={query(repositories, author)}']
+    after = None
+    for _ in range(PAGES):
+        try:
+            result = subprocess.run(command + (['-f', f'after={after}'] if after else []),
+                                    capture_output=True, text=True, timeout=60)
+            if result.returncode != 0 and RATE_LIMITED.search(result.stderr or ''):
+                raise Limited(repositories[0])
+            if result.returncode != 0 and REFUSED.search(result.stderr or ''):
+                raise Refused(repositories[0])
+            page = dig(json.loads(result.stdout or '{}'), 'data', 'search') if result.returncode == 0 else None
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            page = None
+        if not isinstance(dig(page, 'nodes'), list):
+            return None
+        for node in page['nodes']:
+            repository = names.get(str(dig(node, 'repository', 'nameWithOwner')).lower())
+            # The search can still find a pull request that merged or closed a moment ago.
+            if repository is not None and dig(node, 'state') == 'OPEN':
+                found[repository].append(flat(node))
+        after = dig(page, 'pageInfo', 'endCursor')
+        if not dig(page, 'pageInfo', 'hasNextPage'):
+            # The planned run sees the same as its own listing; a look would see more.
+            return {repository: listed if len(listed) <= LISTED else None for repository, listed in found.items()}
+    return None
+
+
+def groups(repositories, author):
+    """`repositories` in groups of at most SEARCHED, each with a query that the worker's
+    GitHub access accepts."""
+    group = []
+    for repository in repositories:
+        if group and (len(group) == SEARCHED or len(query(group + [repository], author)) > SEARCH_LENGTH):
+            yield group
+            group = []
+        group.append(repository)
+    if group:
+        yield group
+
+
+def searched(repositories, authors, apart):
+    """The open pull requests from `authors` in `repositories`, by repository, from a few
+    searches for all of them instead of a listing for each; None for a repository whose
+    search failed. The worker's GitHub access refuses a whole search that names one
+    repository it does not grant, so the repositories of a refused search go into `apart`:
+    each is searched on its own until that works, then with the others again. Raises
+    Limited when GitHub refused a search for a rate limit."""
+    found = {repository: [] for repository in repositories}
+    alone = [repository for repository in repositories if repository in apart]
+    for author in authors:
+        # A repository whose search failed for one author is not searched for the others.
+        together = [repository for repository in repositories if repository not in alone and found[repository] is not None]
+        lone = [repository for repository in alone if found[repository] is not None]
+        for group in [*groups(together, author), *([repository] for repository in lone)]:
+            try:
+                pulls = search(group, author)
+            except Refused:
+                apart.update(group if len(group) > 1 else ())
+                pulls = None
+            # Another failure, such as a timeout, is tried again with the same group.
+            if pulls is None:
+                found.update(dict.fromkeys(group))
+                continue
+            for repository, listed in pulls.items():
+                if listed is None:
+                    found[repository] = None
+                elif found[repository] is not None:
+                    found[repository] += listed
+    apart.difference_update(repository for repository in alone if found[repository] is not None)
     return found
 
 
@@ -321,6 +480,100 @@ def fingerprint(pull_requests, template):
                         for check in pr.get('statusCheckRollup') or [] if isinstance(check, dict))
         state.append([pr.get('number'), pr.get('headRefOid'), checks, pr.get('reviewDecision'), pr.get('mergeable')])
     return hashlib.sha256(json.dumps([state, template]).encode()).hexdigest()
+
+
+class Poller:
+    """Lists the pull requests of the repositories at most every POLL seconds and finds the
+    ones that moved since their agent last started. After a rate limit it waits longer."""
+
+    def __init__(self, started):
+        # The fingerprint that each repository's last agent started with. A failed agent's
+        # repository is not started again until its pull requests move, or the planned run.
+        self.started = {repository: value for repository, value in started.items()
+                        if isinstance(repository, str) and isinstance(value, str)} if isinstance(started, dict) else {}
+        self.saved = (dict(self.started), set())
+        self.after = 0
+        self.backoff = 0
+        # The repositories that Run now asked for but a rate limit held back: a later look
+        # starts them although nothing moved.
+        self.forced = set()
+        # The repositories that a look searches on their own, see searched().
+        self.apart = set()
+
+    def due(self):
+        return time.time() >= self.after
+
+    def save(self):
+        """Keeps `started` and `forced` for the next loop (see restored), so a restart does not
+        start an agent again for a change whose agent failed or did not start, and keeps a
+        Run now that waits."""
+        if (self.started, self.forced) != self.saved:
+            try:
+                save(DIR + '/started.json', {'started': self.started, 'forced': sorted(self.forced)})
+                self.saved = (dict(self.started), set(self.forced))
+            except OSError:
+                pass
+
+    def listed(self):
+        """A run listed every repository without a limit: the next look is a minute after
+        that, and the next limit waits the shortest time again."""
+        self.backoff = 0
+        self.after = max(self.after, time.time() + POLL)
+
+    def limited(self):
+        self.backoff = min(BACKOFF_MAX, self.backoff * 2 or BACKOFF)
+        self.after = time.time() + self.backoff
+        print(f'GitHub limits the requests; the loop lists the pull requests again in '
+              f'{self.backoff // 60} minutes.', flush=True)
+
+    def changed(self, repositories, authors, template, busy=(), forget=None):
+        """The repositories that moved, with their fingerprints, never one in `busy`: its
+        agent runs or waits, and the change is looked at when it has ended. `forget` is called
+        for a repository that has no open pull request any more, as a run does."""
+        if not self.due():
+            return {}
+        moved = {}
+        try:
+            pulls = searched([repository for repository in repositories if repository not in busy], authors,
+                             self.apart)
+        except Limited:
+            self.limited()
+            return moved
+        # Before the results are used, so a failure there does not search again at once. A
+        # minute after the search ended, so a slow search never makes the looks follow each other.
+        # Only a look that read a repository ends the longer waits after a limit.
+        if any(found is not None for found in pulls.values()):
+            self.backoff = 0
+        self.after = time.time() + (self.backoff or POLL)
+        for repository, found in pulls.items():
+            # A repository that the worker cannot read gets its agent in the planned run, which
+            # asks for access; after another failure the next look tries again.
+            if found is None:
+                continue
+            if not found:
+                # A pull request that opens again later is new to the agent, even when it is the
+                # same. Also without a fingerprint, for example after a failed first agent, the
+                # board drops the pull requests that closed.
+                self.started.pop(repository, None)
+                (forget or forget_seen)(repository)
+                continue
+            value = fingerprint(found, template)
+            if value != self.started.get(repository) or repository in self.forced:
+                moved[repository] = value
+        return moved
+
+
+def restored():
+    """The Poller of the loop before, or one that starts from the last clean agents."""
+    state = load(DIR + '/started.json', None)
+    if not isinstance(state, dict) or not isinstance(state.get('started'), dict):
+        return Poller(load(DIR + '/fingerprints.json', {}))
+    poller = Poller(state['started'])
+    forced = state.get('forced')
+    poller.forced = {repository for repository in forced if isinstance(repository, str)
+                     and REPOSITORY.fullmatch(repository)} if isinstance(forced, list) else set()
+    poller.saved = (dict(poller.started), set(poller.forced))
+    return poller
 
 
 def tree(pid):
@@ -505,15 +758,28 @@ def merge_status(repositories):
     os.replace(DIR + '/status.json.tmp', DIR + '/status.json')
 
 
+def forget_seen(repository):
+    """Between runs: a repository without open pull requests starts again from nothing.
+    Returns whether its report showed a pull request that is not merged."""
+    seen = load(DIR + '/fingerprints.json', {})
+    if isinstance(seen, dict) and seen.pop(repository, None) is not None:
+        save(DIR + '/fingerprints.json', seen)
+    return forget_open(repository)
+
+
 def forget_open(repository):
     """Keeps only the merged pull requests in a repository's report once it has no open ones,
-    so the board does not show pull requests that closed without an agent."""
+    so the board does not show pull requests that closed without an agent. Returns whether
+    the report showed one that is not merged."""
     path = DIR + '/status.d/' + slug(repository) + '.json'
     report = load(path, None)
     if isinstance(report, dict) and isinstance(report.get('pull_requests'), list):
-        report['pull_requests'] = [pr for pr in report['pull_requests']
-                                   if isinstance(pr, dict) and pr.get('state') == 'merged']
-        save(path, report)
+        kept = [pr for pr in report['pull_requests'] if isinstance(pr, dict) and pr.get('state') == 'merged']
+        if kept != report['pull_requests']:
+            report['pull_requests'] = kept
+            save(path, report)
+            return True
+    return False
 
 
 def trim(path):
@@ -547,14 +813,38 @@ def merged():
             if isinstance(pr, dict) and pr.get('state') == 'merged'} if isinstance(pull_requests, list) else set()
 
 
-def last_start():
-    """When the last recorded run started, or 0."""
+def last_run():
+    """When the last recorded run started and when it finished (0 for either that is not
+    known). A slot recorded as skipped did not start, for example one that passed during a
+    run of a change."""
     try:
         with open(DIR + '/runs.jsonl') as handle:
-            started = json.loads(handle.readlines()[-1]).get('started_at')
-        return started if type(started) is int else 0
-    except (OSError, IndexError, ValueError, AttributeError):
-        return 0
+            lines = handle.readlines()
+        for line in reversed(lines):
+            entry = json.loads(line)
+            if entry.get('outcome') != 'skipped':
+                return tuple(entry.get(key) if type(entry.get(key)) is int else 0
+                             for key in ('started_at', 'finished_at'))
+    except (OSError, ValueError, AttributeError):
+        pass
+    return 0, 0
+
+
+def held_back(upcoming, minutes):
+    """The planned run that was due, but had not started, when a new loop replaced this one:
+    it still runs. Otherwise `upcoming`."""
+    try:
+        with open(DIR + '/next-run') as handle:
+            earlier, planned = (int(field) for field in handle.read().split())
+    except (OSError, ValueError):
+        return upcoming
+    started, finished = last_run()
+    # Also when a run, for example of a change, was still going at that time and ended later
+    # than one more planned time.
+    if (planned == minutes and earlier <= time.time() and started < earlier
+            and (upcoming - minutes * 60 <= earlier or finished >= earlier)):
+        return earlier
+    return upcoming
 
 
 def close_interrupted():
@@ -565,8 +855,8 @@ def close_interrupted():
             last = json.loads(handle.readlines()[-1])
         if last.get('outcome') == 'running':
             closed = {'started_at': last['started_at'], 'finished_at': int(time.time()), 'outcome': 'failed'}
-            if last.get('kind') == DAILY:
-                closed['kind'] = DAILY
+            if last.get('kind') in (DAILY, CHANGE):
+                closed['kind'] = last['kind']
             record(closed)
     except (OSError, IndexError, ValueError, AttributeError, KeyError):
         pass
@@ -627,8 +917,11 @@ def draw(started, jobs, queued, capacity):
     sys.stdout.flush()
 
 
-def run_once(cfg, forced):
-    """One run. `forced` (Run now) also starts agents for repositories that did not move."""
+def run_once(cfg, forced, poller=None, only=None, until=None):
+    """One run. `forced` (Run now) also starts agents for repositories that did not move.
+    `only` holds the repositories that a look found moved, with their fingerprints: the run
+    starts their agents without listing them again. Until `until`, the run also starts the
+    agents of repositories that `poller` finds moved, when no agent of the run has them."""
     if approvals() != 'auto':
         print('This worker asks before an agent runs a command (agent approvals: ask), and an Upkeep '
               'agent has nobody to ask. Upkeep starts no agent. Use a worker with auto approvals.', flush=True)
@@ -646,29 +939,53 @@ def run_once(cfg, forced):
     repositories = names(cfg, 'repositories', REPOSITORY)
     authors = names(cfg, 'authors', AUTHOR, ['app/dependabot'])
     order = [repository for repository in names(cfg, 'order', REPOSITORY) if repository in repositories]
-    print(f'Listing open pull requests in {len(repositories)} repositories...', flush=True)
+    listed = [repository for repository in repositories if only is None or repository in only]
+    print(f'Listing open pull requests in {len(listed)} repositories...' if only is None
+          else f'Pull requests changed in {", ".join(listed)}.', flush=True)
     seen = load(DIR + '/fingerprints.json', {})
     seen = seen if isinstance(seen, dict) else {}
-    todo, prints, unchanged = [], {}, []
-    for repository in repositories:
-        found = open_pull_requests(repository, authors)
+    poller = poller or Poller(seen)
+    todo, prints, unchanged, limited = [], {}, [], []
+    read = False
+    for repository in listed:
+        if only is not None:
+            prints[repository] = only[repository]
+            todo.append(repository)
+            continue
+        try:
+            found = open_pull_requests(repository, authors)
+        except Limited:
+            # These agents wait for a later look: they would meet the same limit, and GitHub
+            # asks for no more requests for a while.
+            limited = listed[listed.index(repository):]
+            break
         # A repository it cannot read yet still gets an agent: the agent asks for access.
         if found is None:
             todo.append(repository)
             continue
+        read = True
         if not found:
             # A pull request that opens again later is new to the agent, even when it is the same.
             seen.pop(repository, None)
+            poller.started.pop(repository, None)
             forget_open(repository)
             continue
         prints[repository] = fingerprint(found, template)
         # Nothing moved since the last run: the agent would only reach the same answer.
         if not forced and seen.get(repository) == prints[repository]:
             unchanged.append(repository)
+            poller.started[repository] = prints[repository]
             continue
         todo.append(repository)
     if unchanged:
         print(f'Unchanged since the last run, skipped: {", ".join(unchanged)}', flush=True)
+    if limited:
+        if forced:
+            poller.forced.update(limited)
+        poller.limited()
+        print(f'GitHub limits the requests, left for a later listing: {", ".join(limited)}', flush=True)
+    elif only is None and read:
+        poller.listed()
     first = [repository for repository in order if repository in todo]
     rest = [repository for repository in todo if repository not in first]
     costs = load(DIR + '/costs.json', {})
@@ -680,9 +997,20 @@ def run_once(cfg, forced):
     jobs = [Job(repository) for repository in first + rest]
     queue = list(jobs)
     running = []
+    # The jobs that changes started: those of a run of a change, and those added during a run.
+    added = set(jobs) if only is not None else set()
     started = time.time()
 
+    def gone(repository):
+        seen.pop(repository, None)
+        forget_open(repository)
+
     def start(job):
+        # Without a listing the agent starts from what it finds: the next look compares with the
+        # fingerprint of the agent before it.
+        if job.repository in prints:
+            poller.started[job.repository] = prints[job.repository]
+        poller.forced.discard(job.repository)
         thread = threading.Thread(target=job.run, args=(template,), daemon=True)
         thread.start()
         running.append((job, thread))
@@ -696,6 +1024,29 @@ def run_once(cfg, forced):
                 if job.code == 0 and job.repository in prints:
                     seen[job.repository] = prints[job.repository]
             merge_status(repositories)
+            # A pause that came during the run lets it end; it starts no more agents.
+            if until is not None and time.time() < until and poller.due() and not os.path.exists(DIR + '/paused'):
+                busy = {job.repository for job in queue} | {job.repository for job, _ in running}
+                changes = poller.changed(repositories, authors, template, busy, gone)
+                # A pause or the next planned run that came during the search: the changes stay
+                # changed for a later look.
+                if os.path.exists(DIR + '/paused') or time.time() >= until:
+                    changes = {}
+                for repository, value in changes.items():
+                    prints[repository] = value
+                    if repository in order and repository not in first:
+                        first.append(repository)
+                    job = Job(repository)
+                    jobs.append(job)
+                    queue.append(job)
+                    added.add(job)
+            if queue and queue[0] in added and os.path.exists(DIR + '/paused'):
+                # A pause leaves the agent of a change for the first look after Resume, which
+                # starts it as Run now would, also after a look took the change.
+                job = queue.pop(0)
+                jobs.remove(job)
+                poller.forced.add(job.repository)
+                continue
             if queue:
                 job = queue[0]
                 ordered = job.repository in first
@@ -725,6 +1076,7 @@ def run_once(cfg, forced):
         costs[job.repository] = cost
     save(DIR + '/costs.json', costs)
     save(DIR + '/fingerprints.json', seen)
+    poller.save()
     draw(started, jobs, [], capacity)
     return all(job.code == 0 for job in jobs)
 
@@ -818,6 +1170,59 @@ def run_daily(cfg, template):
     return True
 
 
+def poll_once(poller, until):
+    """Between the planned runs: when the pull requests of a repository moved, a run of the
+    kind change starts the agents of those repositories at once. Returns whether one ran."""
+    if approvals() != 'auto' or not guarded() or not poller.due():
+        return False
+    template = read_prompt('prompt.md')
+    if template is None:
+        return False
+    cfg = config()
+    repositories = names(cfg, 'repositories', REPOSITORY)
+    gone = []
+
+    def forget(repository):
+        if forget_seen(repository):
+            gone.append(repository)
+
+    moved = poller.changed(repositories, names(cfg, 'authors', AUTHOR, ['app/dependabot']), template, forget=forget)
+    if gone:
+        # The board drops the pull requests that closed without an agent at once.
+        merge_status(repositories)
+    # Back where the last clean agent left it, for example after a failed agent: nothing to do.
+    seen = load(DIR + '/fingerprints.json', {})
+    for repository, value in list(moved.items()):
+        if isinstance(seen, dict) and seen.get(repository) == value and repository not in poller.forced:
+            poller.started[repository] = value
+            del moved[repository]
+    # A pause that came during the search: Resume starts these, as they are still changed. The
+    # planned run that came due during the search lists them itself.
+    if not moved or os.path.exists(DIR + '/paused') or time.time() >= until:
+        poller.save()
+        return False
+    # Taken before the run: a run that starts no agent, for example because the session
+    # environment failed, starts no run again; the next change or the planned run does.
+    for repository, value in moved.items():
+        poller.started[repository] = value
+        poller.forced.discard(repository)
+    poller.save()
+    begun = int(time.time())
+    before = merged()
+    # As before a planned run: a run that could see a companion request of an earlier run fails.
+    ok = forget_companion_requests()
+    if ok:
+        record({'started_at': begun, 'kind': CHANGE, 'outcome': 'running'})
+        try:
+            ok = run_once(cfg, False, poller, moved, until)
+        except Exception as error:  # noqa: BLE001 - one failed run must not end the loop
+            print(f'The run failed: {error}', flush=True)
+            ok = False
+    record({'started_at': begun, 'finished_at': int(time.time()), 'kind': CHANGE,
+            'outcome': 'done' if ok else 'failed', 'exit': 0 if ok else 1, 'merged': len(merged() - before)})
+    return True
+
+
 def main():
     for folder in ('repos', 'logs', 'status.d'):
         os.makedirs(os.path.join(DIR, folder), exist_ok=True)
@@ -825,17 +1230,10 @@ def main():
     cfg = config()
     minutes = every(cfg)
     upcoming = next_slot(cfg)
-    # A run that was due, but had not started, when a new loop replaced this one still runs.
-    try:
-        with open(DIR + '/next-run') as handle:
-            earlier, planned = (int(field) for field in handle.read().split())
-        if (planned == minutes and upcoming - minutes * 60 <= earlier <= time.time()
-                and last_start() < earlier):
-            upcoming = earlier
-    except (OSError, ValueError):
-        pass
+    upcoming = held_back(upcoming, minutes)
     write_next(upcoming, minutes)
     print(f'Upkeep waits for its next run at {time.strftime("%H:%M", time.gmtime(upcoming))} UTC.', flush=True)
+    poller = restored()
     while True:
         # The exchange asks for a restart after it installed a complete new loop. Here, at the
         # top, no run is going, and a due run or Run now is left for the new loop.
@@ -866,7 +1264,8 @@ def main():
             if ok:
                 record({'started_at': begun, 'outcome': 'running'})
                 try:
-                    ok = run_once(cfg, forced)
+                    # Changes during the run join it until its next planned run would start.
+                    ok = run_once(cfg, forced, poller, None, (begun // (every(cfg) * 60) + 1) * every(cfg) * 60)
                 except Exception as error:  # noqa: BLE001 - one failed run must not end the loop
                     print(f'The run failed: {error}', flush=True)
                     ok = False
@@ -891,6 +1290,20 @@ def main():
             minutes = every(cfg)
             upcoming = next_slot(cfg)
             write_next(upcoming, minutes)
+            ran = True
+        else:
+            # A run of a change leaves the planned run, Run now and the daily pass for the next turn.
+            try:
+                ran = not paused and poll_once(poller, upcoming)
+            except Exception as error:  # noqa: BLE001 - one failed look must not end the loop
+                print(f'The look for changes failed: {error}', flush=True)
+                ran = False
+            # The planned run stays due; later slots that passed during the run were skipped.
+            slot = upcoming + minutes * 60
+            while ran and slot < time.time():
+                record({'started_at': slot, 'outcome': 'skipped'})
+                slot += minutes * 60
+        if ran:
             print(f'\nUpkeep waits for its next run at {time.strftime("%H:%M", time.gmtime(upcoming))} UTC.', flush=True)
         time.sleep(10)
 

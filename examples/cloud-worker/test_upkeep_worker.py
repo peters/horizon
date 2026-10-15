@@ -8,7 +8,9 @@ import os
 from pathlib import Path
 import runpy
 import stat
+import sys
 import tempfile
+import time
 import types
 import unittest
 from unittest import mock
@@ -468,6 +470,44 @@ class LoopTests(unittest.TestCase):
             self.assertIn('this agent did not start', Path(job.log).read_text())
 
 
+def listing(head):
+    """What gh lists: one open pull request with this head."""
+    return json.dumps([{'number': 1, 'headRefOid': head, 'statusCheckRollup': [], 'reviewDecision': '',
+                        'mergeable': 'MERGEABLE'}])
+
+
+# The fake gh's answer to a search of a look: the listing on stdin, in each repository that
+# the search names, as GitHub returns it. Any other command gets the listing as it is.
+SHAPE = """
+import json, sys
+text = sys.stdin.read()
+query = [arg[2:] for arg in sys.argv if arg.startswith('q=')]
+try:
+    pulls = json.loads(text)
+except ValueError:
+    pulls = None
+if sys.argv[1:3] != ['api', 'graphql'] or not query or not isinstance(pulls, list):
+    sys.stdout.write(text)
+    sys.exit()
+def check(value):
+    if 'context' in value:
+        return {'__typename': 'StatusContext', 'context': value['context'], 'state': value.get('state')}
+    return {'__typename': 'CheckRun', 'name': value.get('name'), 'status': value.get('status'),
+            'conclusion': value.get('conclusion') or None,
+            'checkSuite': {'workflowRun': {'workflow': {'name': value['workflowName']}}} if value.get('workflowName') else None}
+if 'repo:acme/secret' in query[0].split():
+    print('gh: Horizon: acme/secret has no GitHub grant on this worker. (HTTP 403)', file=sys.stderr)
+    sys.exit(1)
+nodes = [{'repository': {'nameWithOwner': word[5:].upper()}, 'state': pr.get('state', 'OPEN'),
+          'number': pr.get('number'), 'headRefOid': pr.get('headRefOid'),
+          'reviewDecision': pr.get('reviewDecision') or None, 'mergeable': pr.get('mergeable'),
+          'commits': {'nodes': [{'commit': {'statusCheckRollup': {'contexts': {'nodes': [
+              check(value) for value in pr.get('statusCheckRollup') or []]}}}}]}}
+         for word in query[0].split() if word.startswith('repo:') for pr in pulls]
+print(json.dumps({'data': {'search': {'pageInfo': {'hasNextPage': False, 'endCursor': None}, 'nodes': nodes}}}))
+"""
+
+
 class SchedulerTests(unittest.TestCase):
     """run_once with fake gh, codex and session environment tools on PATH."""
 
@@ -481,10 +521,11 @@ class SchedulerTests(unittest.TestCase):
             folder.mkdir(parents=True)
         (self.dir / 'prompt.md').write_text('Work on @@REPOSITORY@@.')
         self.pulls = self.root / 'pulls.json'
-        self.pulls.write_text('[{"number": 1, "headRefOid": "a", "statusCheckRollup": []}]')
+        self.pulls.write_text(listing('a'))
         self.agents = self.root / 'agents.log'
         scripts = {
-            'gh': f'#!/bin/sh\ncat {self.pulls}\n',
+            'gh': self.cat(self.pulls),
+            'shape': f'#!{sys.executable}\n{SHAPE}',
             'codex': f'#!/bin/sh\ncat >> {self.agents}\necho >> {self.agents}\n',
             'horizon-worker-session-env': '#!/bin/sh\n',
             'horizon-worker-check': f'#!/bin/sh\n[ ! -e {self.root}/codex-disabled ]\n',
@@ -504,6 +545,10 @@ class SchedulerTests(unittest.TestCase):
             patch.start()
             self.addCleanup(patch.stop)
 
+    def cat(self, path):
+        """A fake gh that answers with the listing in `path`, for a look too."""
+        return f'#!/bin/sh\ncat {path} | {self.root}/tools/shape "$@"\n'
+
     def run_once(self, forced=False):
         with contextlib.redirect_stdout(io.StringIO()):
             return RUN['run_once']({'repositories': ['acme/web', 'acme/api']}, forced)
@@ -518,7 +563,7 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(self.agents_started(), 2)
         self.assertTrue(self.run_once(forced=True))
         self.assertEqual(self.agents_started(), 4)
-        self.pulls.write_text('[{"number": 1, "headRefOid": "b", "statusCheckRollup": []}]')
+        self.pulls.write_text(listing('b'))
         self.assertTrue(self.run_once())
         self.assertEqual(self.agents_started(), 6)
         # Closed, then opened again unchanged: the agents look at it again.
@@ -630,11 +675,35 @@ class SchedulerTests(unittest.TestCase):
             {'repository': 'acme/web', 'number': 3, 'state': 'ready'}]}))
         self.assertEqual(len(RUN['merged']() - before), 1)
 
-    def test_the_last_start_is_read_from_the_run_records(self):
-        self.assertEqual(RUN['last_start'](), 0)
+    def test_the_last_run_is_read_from_the_run_records(self):
+        self.assertEqual(RUN['last_run'](), (0, 0))
         RUN['record']({'started_at': 3600, 'outcome': 'running'})
         RUN['record']({'started_at': 3600, 'finished_at': 3700, 'outcome': 'failed'})
-        self.assertEqual(RUN['last_start'](), 3600)
+        self.assertEqual(RUN['last_run'](), (3600, 3700))
+        # A slot that passed during a run did not start.
+        RUN['record']({'started_at': 4500, 'outcome': 'skipped'})
+        self.assertEqual(RUN['last_run'](), (3600, 3700))
+
+    def test_a_new_loop_keeps_the_planned_run_that_a_run_held_back(self):
+        hour = 3600
+        # Hourly: a run of a change from 09:59 to 11:05 held back the run of 10:00 and skipped
+        # 11:00. A loop that starts at 11:05 runs the one of 10:00 now, not at 12:00.
+        (self.dir / 'next-run').write_text(f'{10 * hour} 60\n')
+        RUN['record']({'started_at': 10 * hour - 60, 'kind': 'change', 'outcome': 'running'})
+        RUN['record']({'started_at': 10 * hour - 60, 'finished_at': 11 * hour + 300, 'kind': 'change',
+                       'outcome': 'done'})
+        RUN['record']({'started_at': 11 * hour, 'outcome': 'skipped'})
+        self.assertEqual(RUN['held_back'](12 * hour, 60), 10 * hour)
+        # The run of 10:00 ran: nothing is held back.
+        RUN['record']({'started_at': 10 * hour + 5, 'finished_at': 10 * hour + 900, 'outcome': 'done'})
+        self.assertEqual(RUN['held_back'](12 * hour, 60), 12 * hour)
+        # A loop that was stopped over several planned runs does not catch up on old ones.
+        RUN['record']({'started_at': 5 * hour, 'finished_at': 5 * hour + 900, 'outcome': 'done'})
+        self.assertEqual(RUN['held_back'](12 * hour, 60), 12 * hour)
+        # One planned run after the last: the replaced loop's due run still runs.
+        self.assertEqual(RUN['held_back'](10 * hour + 60 * 60, 60), 10 * hour)
+        # A schedule that changed meanwhile starts from the new one.
+        self.assertEqual(RUN['held_back'](10 * hour + 30 * 60, 30), 10 * hour + 30 * 60)
 
     def test_a_run_the_loop_did_not_finish_is_closed_as_failed(self):
         RUN['record']({'started_at': 100, 'outcome': 'running'})
@@ -642,12 +711,354 @@ class SchedulerTests(unittest.TestCase):
         RUN['close_interrupted']()
         lines = [json.loads(line) for line in (self.dir / 'runs.jsonl').read_text().splitlines()]
         self.assertEqual([line['outcome'] for line in lines], ['running', 'failed'])
+        RUN['record']({'started_at': 200, 'kind': 'change', 'outcome': 'running'})
+        RUN['close_interrupted']()
+        last = json.loads((self.dir / 'runs.jsonl').read_text().splitlines()[-1])
+        self.assertEqual((last['kind'], last['outcome']), ('change', 'failed'))
+
+    def poll(self, poller):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return RUN['poll_once'](poller, time.time() + 3600)
+
+    def test_a_change_between_runs_starts_its_agents_at_once(self):
+        (self.dir / 'config.json').write_text(json.dumps({'repositories': ['acme/web', 'acme/api']}))
+        self.assertTrue(self.run_once())
+        poller = RUN['Poller'](json.loads((self.dir / 'fingerprints.json').read_text()))
+        with mock.patch.dict(RUN['run_once'].__globals__, POLL=0):
+            # Nothing moved since the agents started: no run, no agent.
+            self.assertFalse(self.poll(poller))
+            self.assertEqual(self.agents_started(), 2)
+            # A new head, a finished check or a review is a change: the agents start at once.
+            self.pulls.write_text(listing('b'))
+            self.assertTrue(self.poll(poller))
+            self.assertEqual(self.agents_started(), 4)
+            self.assertFalse(self.poll(poller))
+            self.assertEqual(self.agents_started(), 4)
+        lines = [json.loads(line) for line in (self.dir / 'runs.jsonl').read_text().splitlines()]
+        self.assertEqual([(line['kind'], line['outcome']) for line in lines], [('change', 'running'), ('change', 'done')])
+        # No listing within a minute of the last one.
+        self.assertFalse(self.poll(poller))
+        self.pulls.write_text(listing('c'))
+        self.assertFalse(self.poll(poller))
+        self.assertEqual(self.agents_started(), 4)
+
+    def test_a_pause_during_a_search_starts_nothing_and_keeps_the_change(self):
+        (self.dir / 'config.json').write_text(json.dumps({'repositories': ['acme/web', 'acme/api']}))
+        self.assertTrue(self.run_once())
+        poller = RUN['Poller'](json.loads((self.dir / 'fingerprints.json').read_text()))
+        before = dict(poller.started)
+        # The person pauses while the look waits for GitHub.
+        (self.root / 'b.json').write_text(listing('b'))
+        gh = self.root / 'tools' / 'gh'
+        gh.write_text(f'#!/bin/sh\ntouch {self.dir}/paused\ncat {self.root}/b.json | {self.root}/tools/shape "$@"\n')
+        with mock.patch.dict(RUN['run_once'].__globals__, POLL=0):
+            self.assertFalse(self.poll(poller))
+            self.assertEqual(poller.started, before)
+            self.assertFalse((self.dir / 'runs.jsonl').exists())
+            # The same in a run: the run ends with its own agents only.
+            (self.dir / 'paused').unlink()
+            self.pulls.write_text(listing('b'))
+            gh.write_text(f'#!/bin/sh\ncase "$*" in *graphql*) touch {self.dir}/paused ;; esac\n'
+                          f'cat {self.pulls} | {self.root}/tools/shape "$@"\n')
+            (self.dir / 'fingerprints.json').write_text('{}')
+            with contextlib.redirect_stdout(io.StringIO()):
+                RUN['run_once']({'repositories': ['acme/web', 'acme/api']}, False, poller, None, time.time() + 60)
+        self.assertEqual(self.agents_started(), 4)
+        # After Resume the next look finds the change again.
+        (self.dir / 'paused').unlink()
+        self.pulls.write_text(listing('c'))
+        gh.write_text(self.cat(self.pulls))
+        poller.after = 0
+        self.assertTrue(self.poll(poller))
+        self.assertEqual(self.agents_started(), 6)
+
+    def test_a_pause_holds_back_the_waiting_agents_of_a_change(self):
+        # One agent at a time; the person pauses while the first agent works.
+        (self.dir / 'config.json').write_text(json.dumps({'repositories': ['acme/web', 'acme/api'],
+                                                          'order': ['acme/web', 'acme/api']}))
+        (self.root / 'tools' / 'codex').write_text(
+            f'#!/bin/sh\ncat >> {self.agents}\necho >> {self.agents}\ntouch {self.dir}/paused\n')
+        poller = RUN['Poller']({})
+        with mock.patch.dict(RUN['run_once'].__globals__, POLL=0):
+            self.assertTrue(self.poll(poller))
+            self.assertEqual(self.agents.read_text().split(), ['Work', 'on', 'acme/web.'])
+            # After Resume the first look starts the agent that waited, although nothing moved.
+            (self.dir / 'paused').unlink()
+            self.assertTrue(self.poll(poller))
+        self.assertEqual(self.agents.read_text().split()[-1], 'acme/api.')
+        self.assertEqual(self.agents_started(), 2)
+
+    def test_a_pause_keeps_a_held_back_run_now_for_an_unchanged_repository(self):
+        (self.dir / 'config.json').write_text(json.dumps({'repositories': ['acme/web', 'acme/api'],
+                                                          'order': ['acme/web', 'acme/api']}))
+        self.assertTrue(self.run_once())
+        self.assertEqual(self.agents_started(), 2)
+        # Run now that a rate limit held back, for two repositories that did not change.
+        poller = RUN['Poller'](json.loads((self.dir / 'fingerprints.json').read_text()))
+        poller.forced.update({'acme/web', 'acme/api'})
+        (self.root / 'tools' / 'codex').write_text(
+            f'#!/bin/sh\ncat >> {self.agents}\necho >> {self.agents}\ntouch {self.dir}/paused\n')
+        with mock.patch.dict(RUN['run_once'].__globals__, POLL=0):
+            self.assertTrue(self.poll(poller))
+            self.assertEqual(self.agents_started(), 3)
+            (self.dir / 'paused').unlink()
+            # Also when a new loop replaced this one meanwhile.
+            poller = RUN['restored']()
+            self.assertEqual(poller.forced, {'acme/api'})
+            self.assertTrue(self.poll(poller))
+            self.assertEqual(self.agents.read_text().split()[-1], 'acme/api.')
+            (self.dir / 'paused').unlink()
+            self.assertFalse(self.poll(poller))
+        self.assertEqual(self.agents_started(), 4)
+
+    def test_a_new_loop_does_not_retry_a_change_whose_agent_failed(self):
+        (self.dir / 'config.json').write_text(json.dumps({'repositories': ['acme/web']}))
+        self.assertTrue(self.run_once())
+        poller = RUN['Poller'](json.loads((self.dir / 'fingerprints.json').read_text()))
+        self.pulls.write_text(listing('b'))
+        (self.root / 'tools' / 'codex').write_text(f'#!/bin/sh\ncat >> {self.agents}\necho >> {self.agents}\nexit 1\n')
+        with mock.patch.dict(RUN['run_once'].__globals__, POLL=0):
+            self.assertTrue(self.poll(poller))
+            self.assertEqual(self.agents_started(), 3)
+            # A new loop starts from what the agents started with, not from the last clean run.
+            restarted = RUN['restored']()
+            self.assertFalse(self.poll(restarted))
+            # A run that starts no agent is kept too.
+            self.pulls.write_text(listing('c'))
+            with mock.patch.dict(RUN['run_once'].__globals__, session_environment=lambda: None):
+                self.assertTrue(self.poll(restarted))
+            self.assertFalse(self.poll(RUN['restored']()))
+        self.assertEqual(self.agents_started(), 3)
+
+    def test_a_look_leaves_more_pull_requests_than_a_listing_takes_to_the_planned_run(self):
+        many = [{'number': number, 'headRefOid': 'a', 'statusCheckRollup': [], 'reviewDecision': '',
+                 'mergeable': 'MERGEABLE'} for number in range(RUN['LISTED'] + 1)]
+        self.pulls.write_text(json.dumps(many))
+        self.assertEqual(RUN['searched'](['acme/web'], ['app/dependabot'], set()), {'acme/web': None})
+        poller = RUN['Poller']({'acme/web': 'earlier'})
+        self.assertEqual(poller.changed(['acme/web'], ['app/dependabot'], 't'), {})
+        self.assertEqual(poller.started, {'acme/web': 'earlier'})
+        self.assertEqual(poller.apart, set())
+
+    def test_a_look_drops_closed_pull_requests_also_without_a_fingerprint(self):
+        (self.dir / 'config.json').write_text(json.dumps({'repositories': ['acme/web']}))
+        report = self.dir / 'status.d' / 'acme__web.json'
+        report.write_text(json.dumps({'pull_requests': [{'repository': 'acme/web', 'number': 1, 'state': 'failed'},
+                                                        {'repository': 'acme/web', 'number': 2, 'state': 'merged'}]}))
+        RUN['merge_status'](['acme/web'])
+        self.pulls.write_text('[]')
+        # The first agent failed, so no fingerprint is remembered.
+        with mock.patch.dict(RUN['run_once'].__globals__, POLL=0):
+            self.assertFalse(self.poll(RUN['Poller']({})))
+        status = json.loads((self.dir / 'status.json').read_text())
+        self.assertEqual([pr['number'] for pr in status['pull_requests']], [2])
+
+    def test_a_change_that_starts_no_agent_and_a_pull_request_that_opens_again(self):
+        (self.dir / 'config.json').write_text(json.dumps({'repositories': ['acme/web', 'acme/api']}))
+        self.assertTrue(self.run_once())
+        poller = RUN['Poller'](json.loads((self.dir / 'fingerprints.json').read_text()))
+        with mock.patch.dict(RUN['run_once'].__globals__, POLL=0):
+            # A worker that refuses the session environment starts no agent; the same change
+            # does not make a run again every minute.
+            self.pulls.write_text(listing('b'))
+            with mock.patch.dict(RUN['run_once'].__globals__, session_environment=lambda: None):
+                self.assertTrue(self.poll(poller))
+                self.assertFalse(self.poll(poller))
+            self.assertEqual(self.agents_started(), 2)
+            self.pulls.write_text(listing('c'))
+            self.assertTrue(self.poll(poller))
+            self.assertEqual(self.agents_started(), 4)
+            # Run now that a rate limit held back starts one run, also when that run starts no agent.
+            poller.forced.add('acme/web')
+            with mock.patch.dict(RUN['run_once'].__globals__, session_environment=lambda: None):
+                self.assertTrue(self.poll(poller))
+                self.assertFalse(self.poll(poller))
+            # A look that ends after the planned run came due leaves the change to that run.
+            self.pulls.write_text(listing('d'))
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertFalse(RUN['poll_once'](poller, time.time() - 1))
+            self.assertTrue(self.poll(poller))
+            self.assertEqual(self.agents_started(), 6)
+            self.pulls.write_text(listing('c'))
+            self.assertTrue(self.poll(poller))
+            self.assertEqual(self.agents_started(), 8)
+            # Closed, then opened again unchanged between the runs: the agents look at it again.
+            self.pulls.write_text('[]')
+            self.assertFalse(self.poll(poller))
+            self.assertEqual(json.loads((self.dir / 'fingerprints.json').read_text()), {})
+            self.pulls.write_text(listing('c'))
+            self.assertTrue(self.poll(poller))
+            self.assertEqual(self.agents_started(), 10)
+
+    def test_a_repository_whose_agent_runs_waits_until_it_ends(self):
+        self.assertEqual(set(RUN['Poller']({}).changed(['acme/web', 'acme/api'], ['app/dependabot'], 't',
+                                                       busy={'acme/web'})), {'acme/api'})
+        # In a run: the listing of the run sees head a; every later listing sees head b.
+        (self.root / 'b.json').write_text(listing('b'))
+        count = self.root / 'gh-count'
+        (self.root / 'tools' / 'gh').write_text(
+            f'#!/bin/sh\nn=$(($(cat {count} 2>/dev/null || echo 0) + 1)); echo $n > {count}\n'
+            f'if [ $n -le 2 ]; then cat {self.pulls}; else cat {self.root}/b.json; fi | {self.root}/tools/shape "$@"\n')
+        events = self.root / 'events'
+        (self.root / 'tools' / 'codex').write_text(
+            f'#!/bin/sh\nrepository=$(cat | sed "s/Work on //")\necho "start $repository" >> {events}\n'
+            f'sleep 0.3\necho "end $repository" >> {events}\n')
+        with mock.patch.dict(RUN['run_once'].__globals__, POLL=0), contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(RUN['run_once']({'repositories': ['acme/web', 'acme/api']}, False,
+                                            RUN['Poller']({}), None, time.time() + 60))
+        lines = events.read_text().splitlines()
+        for repository in ('acme/web.', 'acme/api.'):
+            # Head a, then head b once its first agent ended: never two agents at once.
+            self.assertEqual([line.split()[0] for line in lines if line.endswith(repository)],
+                             ['start', 'end', 'start', 'end'])
+
+    def test_a_rate_limit_makes_the_loop_wait_longer(self):
+        calls = self.root / 'gh-calls'
+        gh = self.root / 'tools' / 'gh'
+        limit = f'#!/bin/sh\necho x >> {calls}\necho "GraphQL: API rate limit exceeded for user ID 1." >&2\nexit 1\n'
+        gh.write_text(limit)
+        poller = RUN['Poller']({})
+        repositories, authors = ['acme/web', 'acme/api'], ['app/dependabot']
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(poller.changed(repositories, authors, 't'), {})
+            self.assertEqual(len(calls.read_text().splitlines()), 1, 'the other repositories wait too')
+            self.assertGreater(poller.after - time.time(), RUN['BACKOFF'] - 10)
+            self.assertEqual(poller.changed(repositories, authors, 't'), {})
+            self.assertEqual(len(calls.read_text().splitlines()), 1, 'no listing before the wait ends')
+            poller.after = 0
+            gh.write_text(limit.replace('GraphQL: API rate limit exceeded for user ID 1.',
+                                        'You have exceeded a secondary rate limit.'))
+            poller.changed(repositories, authors, 't')
+            self.assertEqual(poller.backoff, 2 * RUN['BACKOFF'])
+            # A look that reads nothing, for example on a GitHub error, keeps the longer wait.
+            gh.write_text('#!/bin/sh\necho "HTTP 502" >&2\nexit 1\n')
+            poller.after = 0
+            self.assertEqual(poller.changed(repositories, authors, 't'), {})
+            self.assertEqual(poller.backoff, 2 * RUN['BACKOFF'])
+            self.assertGreater(poller.after - time.time(), 2 * RUN['BACKOFF'] - 10)
+            # So does a run that reads nothing.
+            with contextlib.redirect_stdout(io.StringIO()):
+                RUN['run_once']({'repositories': repositories}, False, poller)
+            self.assertEqual(poller.backoff, 2 * RUN['BACKOFF'])
+            # Its agents, which ask for access, are not what this test counts.
+            self.agents.unlink()
+            gh.write_text(limit)
+            poller.after = 0
+            poller.changed(repositories, authors, 't')
+            self.assertEqual(poller.backoff, 4 * RUN['BACKOFF'])
+            # An answer without a limit ends the longer wait.
+            gh.write_text(self.cat(self.pulls))
+            poller.after = 0
+            self.assertEqual(set(poller.changed(repositories, authors, 't')), set(repositories))
+            self.assertEqual(poller.backoff, 0)
+        # A run that meets the limit lists no more and starts no agent there: the agent would
+        # meet it too.
+        gh.write_text(limit)
+        calls.write_text('')
+        self.assertTrue(self.run_once())
+        self.assertEqual(self.agents_started(), 0)
+        self.assertEqual(len(calls.read_text().splitlines()), 1)
+        # Run now held back by a limit: the next look starts the agents, also with no change.
+        (self.dir / 'config.json').write_text(json.dumps({'repositories': ['acme/web', 'acme/api']}))
+        gh.write_text(self.cat(self.pulls))
+        self.assertTrue(self.run_once())
+        self.assertEqual(self.agents_started(), 2)
+        poller = RUN['Poller'](json.loads((self.dir / 'fingerprints.json').read_text()))
+        gh.write_text(limit)
+        with contextlib.redirect_stdout(io.StringIO()):
+            RUN['run_once']({'repositories': ['acme/web', 'acme/api']}, True, poller)
+        self.assertEqual(self.agents_started(), 2)
+        gh.write_text(self.cat(self.pulls))
+        poller.after = 0
+        self.assertTrue(self.poll(poller))
+        self.assertEqual(self.agents_started(), 4)
+        poller.after = 0
+        self.assertFalse(self.poll(poller))
+        # A run of a change starts its agent from the look that found it, with no second listing.
+        (self.dir / 'config.json').write_text(json.dumps({'repositories': ['acme/web']}))
+        (self.dir / 'fingerprints.json').write_text('{}')
+        count = self.root / 'gh-count'
+        gh.write_text(f'#!/bin/sh\necho x >> {count}\ncat {self.pulls} | {self.root}/tools/shape "$@"\n')
+        self.assertTrue(self.poll(RUN['Poller']({})))
+        self.assertEqual(self.agents_started(), 5)
+        self.assertEqual(len(count.read_text().splitlines()), 1)
+
+    def test_a_look_searches_twenty_repositories_at_once_as_a_run_lists_them(self):
+        pulls = [{'number': 2, 'headRefOid': 'a', 'reviewDecision': '', 'mergeable': 'MERGEABLE',
+                  'statusCheckRollup': [
+                      {'name': 'test', 'workflowName': 'CI', 'status': 'IN_PROGRESS', 'conclusion': ''},
+                      {'name': 'lint', 'workflowName': '', 'status': 'COMPLETED', 'conclusion': 'SUCCESS'},
+                      {'context': 'ci/legacy', 'state': 'PENDING'}]}]
+        self.pulls.write_text(json.dumps(pulls))
+        calls = self.root / 'gh-calls'
+        (self.root / 'tools' / 'gh').write_text(
+            f'#!/bin/sh\necho x >> {calls}\ncat {self.pulls} | {self.root}/tools/shape "$@"\n')
+        repositories = [f'acme/r{number}' for number in range(25)]
+        found = RUN['searched'](repositories, ['app/dependabot', 'renovate[bot]'], set())
+        self.assertEqual(len(calls.read_text().splitlines()), 4, 'two searches for each bot')
+        self.assertEqual(set(found), set(repositories))
+        # The worker's GitHub access takes a query of at most 1024 characters.
+        long = [f'acme/{"x" * 90}{number}' for number in range(20)]
+        split = list(RUN['groups'](long, 'app/dependabot'))
+        self.assertEqual(sum(split, []), long)
+        self.assertGreater(len(split), 1)
+        self.assertTrue(all(len(RUN['query'](group, 'app/dependabot')) <= 1024 for group in split))
+        listed = RUN['open_pull_requests']('acme/r0', ['app/dependabot'])
+        self.assertEqual(RUN['fingerprint'](found['acme/r24'], 't'), RUN['fingerprint'](pulls + pulls, 't'))
+        self.assertEqual(RUN['fingerprint'](found['acme/r0'][:1], 't'), RUN['fingerprint'](listed, 't'))
+        # A search that never ends, or does not answer, lists nothing.
+        endless = types.SimpleNamespace(returncode=0, stderr='', stdout=json.dumps(
+            {'data': {'search': {'pageInfo': {'hasNextPage': True, 'endCursor': 'x'}, 'nodes': []}}}))
+        with mock.patch('subprocess.run', return_value=endless) as run:
+            self.assertEqual(RUN['searched'](['acme/web'], ['app/dependabot'], set()), {'acme/web': None})
+        self.assertEqual(run.call_count, RUN['PAGES'])
+        self.pulls.write_text('{"number": 1}')
+        self.assertEqual(RUN['searched'](['acme/web'], ['app/dependabot'], set()), {'acme/web': None})
+        # A pull request that merged a moment ago can still be found; it is not open.
+        self.pulls.write_text(json.dumps([dict(pulls[0], state='MERGED')]))
+        self.assertEqual(RUN['searched'](['acme/web'], ['app/dependabot'], set()), {'acme/web': []})
+
+    def test_a_repository_without_a_grant_does_not_hide_the_others(self):
+        poller = RUN['Poller']({})
+        repositories = ['acme/web', 'acme/secret', 'acme/api']
+        with mock.patch.dict(RUN['run_once'].__globals__, POLL=0):
+            # The worker refuses the search that names it: the next look searches each alone.
+            self.assertEqual(poller.changed(repositories, ['app/dependabot'], 't'), {})
+            self.assertEqual(poller.apart, set(repositories))
+            moved = poller.changed(repositories, ['app/dependabot'], 't')
+            self.assertEqual(set(moved), {'acme/web', 'acme/api'})
+            self.assertEqual(poller.apart, {'acme/secret'})
+            poller.started.update(moved)
+            # The others go back into one search; the refused one never starts or forgets.
+            calls = self.root / 'gh-calls'
+            (self.root / 'tools' / 'gh').write_text(
+                f'#!/bin/sh\necho x >> {calls}\ncat {self.pulls} | {self.root}/tools/shape "$@"\n')
+            self.assertEqual(poller.changed(repositories, ['app/dependabot'], 't'), {})
+            self.assertEqual(len(calls.read_text().splitlines()), 2)
+            self.assertNotIn('acme/secret', poller.started)
+            # A second bot does not search a repository again whose search was refused.
+            calls.write_text('')
+            refused = RUN['Poller']({})
+            refused.changed(repositories, ['app/dependabot', 'renovate[bot]'], 't')
+            self.assertEqual(len(calls.read_text().splitlines()), 1)
+            # A search that only failed, for example on a timeout, stays one search.
+            (self.root / 'tools' / 'gh').write_text('#!/bin/sh\necho "HTTP 502" >&2\nexit 1\n')
+            poller = RUN['Poller']({})
+            self.assertEqual(poller.changed(['acme/web', 'acme/api'], ['app/dependabot'], 't'), {})
+            self.assertEqual(poller.apart, set())
 
     def test_a_listing_that_hangs_or_is_not_a_list_reads_as_unreadable(self):
         self.pulls.write_text('{"number": 1}')
         self.assertIsNone(RUN['open_pull_requests']('acme/web', ['app/dependabot']))
         with mock.patch('subprocess.run', side_effect=RUN['subprocess'].TimeoutExpired('gh', 60)):
             self.assertIsNone(RUN['open_pull_requests']('acme/web', ['app/dependabot']))
+        # The agent of an unreadable repository starts, and the next look compares with the
+        # fingerprint of the agent before it, not with nothing.
+        poller = RUN['Poller']({'acme/web': 'earlier'})
+        with contextlib.redirect_stdout(io.StringIO()):
+            RUN['run_once']({'repositories': ['acme/web']}, False, poller)
+        self.assertEqual(self.agents_started(), 1)
+        self.assertEqual(poller.started, {'acme/web': 'earlier'})
 
     def run_daily(self):
         # As the loop does: both read before any agent of the run starts.

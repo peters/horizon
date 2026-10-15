@@ -367,8 +367,8 @@ calls the same tool.
 ## Upkeep
 
 Upkeep is one Codex agent on a cloud worker that reviews, fixes and squash-merges the
-pull requests that bots such as Dependabot open, on a schedule. It follows each
-repository's AGENTS.md. The person sees it in an Upkeep workspace: the cloud card, an
+pull requests that bots such as Dependabot open, on a schedule and within about a
+minute of a change of those pull requests. It follows each repository's AGENTS.md. The person sees it in an Upkeep workspace: the cloud card, an
 **Upkeep agent** panel attached to the running loop, browser panels the agent opens,
 and the Upkeep board with the next run, the runs of the last day and every pull
 request by state.
@@ -401,8 +401,8 @@ get `upkeep_unavailable`.
   elsewhere, such as a maintenance document, is a good source for the names.
 - `remove` removes repositories; the next run uses the list. An Upkeep keeps at least
   one repository.
-- `run_now` starts a run now. `pause` stops the scheduled runs; a run in progress
-  finishes. `resume` starts them again. Each answers `requested`: the worker gets it
+- `run_now` starts a run now, or after a run in progress ends. `pause` stops the
+  scheduled runs and the runs that changes start; a run in progress finishes. `resume` starts them again. Each answers `requested`: the worker gets it
   with the next exchange of Horizon, and `status` shows when it applied. Get explicit
   authorization from the person before `remove`, `pause` and `resume`.
 
