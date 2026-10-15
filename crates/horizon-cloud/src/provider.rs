@@ -134,7 +134,6 @@ pub const HETZNER: Description = Description {
     stopped: StoppedCost::ServerDeleted,
     choices: &[Choice::ServerTypeFallback],
     creatable: crate::offers::HETZNER_DEPLOYABLE,
-    // The project token must never reach a worker, so it cannot stop itself.
     registry_auth: false,
     rebuild: Rebuild::NewServer,
     site: "hetzner.com",
@@ -158,7 +157,6 @@ pub const DOCKER_HOST: Description = Description {
     stopped: StoppedCost::WorkerKept,
     choices: &[],
     creatable: true,
-    // Horizon stops nobody's own machine; the worker itself cannot stop its container.
     registry_auth: false,
     rebuild: Rebuild::Unsupported,
     site: "your own machine",
