@@ -331,7 +331,6 @@ impl HorizonApp {
                 || ((saved.cpu, saved.memory_gb) == (bound.cpu, bound.memory_gb) && saved.storage == bound.storage))
                 && saved.capabilities == bound.capabilities
                 && saved.bootstrap == bound.bootstrap
-                && saved.idle_stop_minutes == bound.idle_stop_minutes
                 && saved.build == bound.build
             {
                 continue;

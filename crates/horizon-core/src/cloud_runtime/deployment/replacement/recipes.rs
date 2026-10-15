@@ -85,11 +85,17 @@ pub fn plan(repository: &Path, bound: &Profile, profile_name: &str, cancel: &Can
     let head = checkout.head(repository)?;
     let profile = next_profile(&head, bound, profile_name)?;
     let uncommitted = uncommitted(&checkout, repository, &head, &profile)?;
+    // An idle period is no rebuild setting, so the cloud keeps its own; the note names
+    // the one the settings that a rebuild reads still set.
+    let idle = head
+        .config
+        .as_ref()
+        .and_then(|config| config.profiles.get(profile_name))
+        .and_then(|read| crate::cloud_runtime::repository::launch::idle_period_note(profile_name, read));
     let mut notes = notes(bound, head.notes);
-    notes.extend(crate::cloud_runtime::repository::launch::idle_period_note(
-        profile_name,
-        &profile,
-    ));
+    if !quick_start::on_public_base(bound) {
+        notes.extend(idle);
+    }
     Ok(Plan {
         changes: compatibility::changes(bound, &profile),
         profile,

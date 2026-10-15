@@ -334,7 +334,6 @@ fn a_new_server_binds_changed_settings_with_the_image_and_a_cancel_keeps_the_old
     let settings = |fixture: &Fixture| {
         let mut committed = fixture.state().profile;
         committed.capabilities.agents.insert(horizon_cloud::Agent::Codex);
-        committed.idle_stop_minutes = Some(30);
         let mut script = Script::new(fixture);
         script.head.config = Some(config(&committed));
         (committed, script)

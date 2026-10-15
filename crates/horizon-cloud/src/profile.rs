@@ -278,9 +278,9 @@ impl CloudConfig {
 impl Profile {
     /// `self` with the settings an image rebuild may change taken from `next`: the
     /// agents, browsers, desktop and agent approvals of `capabilities`, the readiness
-    /// timeout, the idle stop and the build section. The provider, size, storage, GPU
-    /// fields, image repository, hosted devices and bootstrap contract stay `self`'s:
-    /// a running worker keeps them.
+    /// timeout and the build section. The provider, size, storage, GPU fields, image
+    /// repository, hosted devices and bootstrap contract stay `self`'s: a running worker
+    /// keeps them. So does the idle period, which has no effect.
     #[must_use]
     pub fn with_rebuild_settings(&self, next: &Self) -> Self {
         Self {
@@ -292,7 +292,6 @@ impl Profile {
                 readiness_seconds: next.bootstrap.readiness_seconds,
                 contract_version: self.bootstrap.contract_version,
             },
-            idle_stop_minutes: next.idle_stop_minutes,
             build: next.build.clone(),
             ..self.clone()
         }

@@ -49,10 +49,7 @@ fn a_changed_or_missing_committed_profile_refuses_with_its_field_before_anything
         ),
         (|profile| profile.build = None, "has no build section"),
         // A rebuild setting is still checked as every profile is.
-        (
-            |profile| profile.idle_stop_minutes = Some(5),
-            "idle_stop_minutes must be between 10 and 1440",
-        ),
+        (|profile| profile.bootstrap.readiness_seconds = 5, "readiness timeout"),
         (
             |profile| profile.build.as_mut().unwrap().platform = "linux/arm64".into(),
             "platform must be linux/amd64",
