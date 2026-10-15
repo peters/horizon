@@ -249,6 +249,8 @@ def rest_refusal(policy, method, parts):
         return 'this Upkeep changes a review only through its plain path, such as /pulls/<number>/reviews.'
     if first == 'actions' and not RUN_CHANGES.fullmatch(rest) and not DISPATCH.fullmatch(rest):
         return 'this Upkeep lets an agent only start runs again, cancel them and start listed workflows.'
+    if first == 'pulls' and 'update-branch' in parts and not UPDATE.fullmatch('/'.join(parts)):
+        return 'this Upkeep updates a pull request\'s branch only through /pulls/<number>/update-branch.'
     if parts[:2] == ['git', 'refs'] and (method == 'POST' or len(parts) < 4 or parts[2] != 'heads' or '' in parts):
         return 'this Upkeep lets an agent change only existing branches through the API; push a new branch with Git.'
     return None

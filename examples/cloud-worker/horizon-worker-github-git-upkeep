@@ -111,11 +111,18 @@ def push_report(head, reason):
     text = ' '.join(reason.split())[:900].encode()
     report = pkt(b'unpack ok\n')
     for line in lines:
-        report += pkt(b'ng %s %s\n' % (line.partition(b'\0')[0].rstrip(b'\n').split(b' ')[-1], text))
+        ref = line.partition(b'\0')[0].rstrip(b'\n').split(b' ')[-1]
+        # A packet holds at most 65516 bytes; a very long ref name keeps less of the reason.
+        report += pkt(b'ng %s %s\n' % (ref, text[:max(0, 65000 - len(ref))]))
     report += b'0000'
-    if b'side-band-64k' in capabilities or b'side-band' in capabilities:
-        return pkt(b'\x02' + text + b'\n') + pkt(b'\x01' + report) + b'0000'
-    return report
+    if b'side-band-64k' not in capabilities and b'side-band' not in capabilities:
+        return report
+    # The report goes in band 1, in packets of at most 65520 or 1000 bytes with their header.
+    size = 65515 if b'side-band-64k' in capabilities else 995
+    banded = pkt(b'\x02' + text + b'\n')
+    for at in range(0, len(report), size):
+        banded += pkt(b'\x01' + report[at:at + size])
+    return banded + b'0000'
 
 
 def default_branch(environ, token, repository):

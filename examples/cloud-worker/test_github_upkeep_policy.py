@@ -107,7 +107,8 @@ class PolicyTests(ServiceTestCase):
                    ('PUT', 'pulls/3/reviews/8/dismissals/'), ('DELETE', 'pulls/3/reviews/08'),
                    ('POST', 'merges'), ('POST', 'merge-upstream'), ('POST', 'git/refs'),
                    ('PATCH', 'git/refs/tags/v1'), ('DELETE', 'git/refs/tags/v1'), ('PATCH', 'git/refs/notes/x'),
-                   ('PATCH', 'git/refs/heads'), ('PATCH', 'git/refs/heads/x/')]
+                   ('PATCH', 'git/refs/heads'), ('PATCH', 'git/refs/heads/x/'), ('PUT', 'pulls/04/update-branch'),
+                   ('PUT', 'pulls/4/update-branch/')]
         for method, path in refused:
             self.assertIsNotNone(upkeep.rest_refusal(policy, method, path.split('/')), (method, path))
         allowed = [('GET', 'git/trees/x'), ('POST', 'issues/1/comments'), ('POST', 'labels'),

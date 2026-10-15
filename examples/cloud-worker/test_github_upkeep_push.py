@@ -39,6 +39,25 @@ class CommandTests(unittest.TestCase):
         self.assertNotIn(b'ng ' + b'c' * 40, report)
         self.assertIsNone(push.push_report(line('%s %s refs/heads/x' % (OLD, NEW)) + b'0000', 'no'))
 
+    def test_a_large_refusal_report_comes_in_packets_that_git_reads(self):
+        def packets(data):
+            found, at = [], 0
+            while at < len(data):
+                size = int(data[at:at + 4], 16)
+                found.append(data[at + 4:at + size] if size else None)
+                at += size or 4
+            return found
+        long_refs = ['refs/heads/' + str(n) * 600 for n in range(98)]
+        for capability, limit in ((b'side-band-64k', 65520), (b'side-band', 1000)):
+            head = line(b'%s %s refs/heads/main\0report-status %s' % (OLD.encode(), NEW.encode(), capability)) \
+                + b''.join(line('%s %s %s' % (OLD, NEW, ref)) for ref in long_refs) + b'0000'
+            report = push.push_report(head, 'Horizon: ' + 'x' * 2000)
+            banded = packets(report)
+            self.assertTrue(all(piece is None or len(piece) + 4 <= limit for piece in banded), capability)
+            inner = b''.join(piece[1:] for piece in banded if piece and piece[:1] == b'\x01')
+            refused = [piece for piece in packets(inner) if piece and piece.startswith(b'ng ')]
+            self.assertEqual(len(refused), 99)
+
     def test_only_branches_other_than_the_default_pass(self):
         push.check_refs(['refs/heads/upkeep/x', 'refs/heads/main-2', 'refs/heads/dependabot/cargo/x'], 'main')
         for ref in ('refs/heads/main', 'refs/tags/v1', 'refs/notes/x', 'HEAD', 'refs/heads/'):
