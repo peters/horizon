@@ -40,7 +40,9 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn close_forwards(
 }
 
 /// Ends every open forward, and refuses later ones when `refuse`. The setup gate, a test
-/// of its own process, ends its forwards with it as Horizon's exit does.
+/// of its own process, ends its forwards with it as Horizon's exit does. A Windows test
+/// build has neither.
+#[cfg(any(not(test), unix))]
 pub(super) fn close(refuse: bool) {
     let mut open = open_forwards();
     open.closed |= refuse;
