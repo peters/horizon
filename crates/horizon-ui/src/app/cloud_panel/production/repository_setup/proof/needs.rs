@@ -293,11 +293,18 @@ impl super::Job {
         let mut copy = self.docker();
         copy.args(["run", "--rm", "--name", &self.container, "-v"])
             .arg(format!("{}:/workspace", self.volume))
-            .arg("-v")
-            .arg(format!("{}:/host-nuget:ro", host.display()))
             .args(["--entrypoint", "sh", super::TOOLS, "-c", COPY_PACKAGES, "sh"])
             .args(packages);
-        self.stream(copy, log)
+        // Only the packages the restore used go into the container, never the whole cache.
+        let mut copy = super::launch::Launch::new(copy);
+        // Each name is a plain `id/version`, checked when the restore output was read.
+        copy.copies = packages
+            .iter()
+            // A link in the package folder would arrive as a link to this computer's path.
+            .filter(|package| std::fs::symlink_metadata(host.join(package)).is_ok_and(|metadata| metadata.is_dir()))
+            .map(|package| super::launch::Copy::new(host.join(package), format!("/host-nuget/{package}")))
+            .collect();
+        self.stream_launch(copy, log, Some(super::STEP_TIMEOUT), false)
             .map_err(|error| format!("cannot copy the restored packages into the proof's volume: {error}"))?;
         self.packages_copied.set(true);
         Ok(())
@@ -322,16 +329,19 @@ impl super::Job {
         if targets.is_empty() {
             return Ok(());
         }
-        let mut command = self.ci_container()?;
-        command
+        let mut launch = self.ci_container()?;
+        launch
+            .command
             .args(session)
             .args(["--entrypoint", "sh", &self.image, "-c"])
             .arg("for target; do dotnet restore \"$target\" --nologo -v quiet || exit 1; done")
             .arg("sh")
             .args(&targets);
-        self.stream(command, log).map_err(|error| {
-            format!("dotnet restore in the container failed after the restore on this computer ({error})")
-        })
+        self.stream_launch(launch, log, Some(super::STEP_TIMEOUT), false)
+            .map(|_| ())
+            .map_err(|error| {
+                format!("dotnet restore in the container failed after the restore on this computer ({error})")
+            })
     }
 }
 
