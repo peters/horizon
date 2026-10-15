@@ -25,7 +25,7 @@ impl Drop for CancelOnDrop {
 impl Server {
     #[tool(
         name = "cloud_registry",
-        description = "Manage explicitly saved machine-local private image bindings. Arguments: operation=verify with image (repository@sha256:digest), or operation=status|reconcile|revoke with repository and generation. Verify checks the read-only pull grant and immutable image, then creates or reconciles its provider pull binding. Revoke removes only that provider binding; issuer-token revocation and running workers are separate. No compute allocation or image publication. Secrets, provider endpoints and settings paths cannot be supplied through this tool. Configure credentials through Cloud settings or the registry-bind CLI first. Cancellation leaves uncertain mutations fenced for reconciliation."
+        description = "Manage explicitly saved machine-local private image bindings. Arguments: operation=verify_pull with immutable image (repository@sha256:digest), or operation=pull_status with repository and generation; neither requires a compute account or creates provider access. Legacy operation=verify and status|reconcile|revoke manage provider registry access. Verify checks the read-only pull grant and immutable image, then creates or reconciles its provider pull binding. Revoke removes only that provider binding; issuer-token revocation and running workers are separate. No compute allocation or image publication. Secrets, provider endpoints and settings paths cannot be supplied through this tool. Configure credentials through Cloud settings or the registry-bind CLI first. Cancellation leaves uncertain mutations fenced for reconciliation."
     )]
     async fn registry(
         &self,
@@ -170,3 +170,7 @@ mod tests {
             .expect("server task");
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "registry_mcp/pull_tests.rs"]
+mod pull_tests;

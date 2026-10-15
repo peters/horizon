@@ -1088,3 +1088,7 @@ free capacity and builds its `cloud_offers` section. In `horizon-ui`,
 `prices::hosts` keeps the last reading for New cloud, Cloud settings and
 `cloud_offers`; `setup::docker_hosts` is the settings card and its editor;
 `creation::selector::hosts` draws the **YOUR HOST** cards and the host summary.
+
+Host pull-history UI regressions are grouped under
+`app/cloud_panel/production/setup/tests/host_pull.rs`; the parent settings tests
+retain shared fixtures and unrelated layout and account checks.

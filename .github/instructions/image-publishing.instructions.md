@@ -83,3 +83,32 @@ plugin locations without copying another registry login, a credential helper or
 proxy credentials. Resolve relative machine configuration paths before linking
 contexts or plugins. Keep explicit daemon-host precedence. Temporary config creation
 must not read a stored personal publication chain to prepare a registry-bound login.
+
+Host-only management must not load a compute key or create provider registry IDs.
+Keep host pull checks and provider reconciliation/revocation explicit in every
+interface. Metadata-only status must not load auth files or claim current issuer
+permission. Provider revocation must not claim that a host or issuer token was revoked.
+
+If a host journal is busy or unreadable, aggregate saved history stays unknown
+and does not fall back to a provider success. This can temporarily withhold the
+settings readiness hint; the action's own scoped status remains visible. Fresh
+verification results bypass this historical aggregate lookup.
+
+Saved host pull history never opens the provider journal or reads its compute key,
+even when a newer provider validation exists. Provider controls keep their own scoped
+status message. A fresh verification displays its own result.
+
+An explicit provider action can retain its own active provider proof when host
+history was read successfully and is empty. A busy or unreadable host journal
+never permits that fallback. Reopening settings reads host history only; it does
+not load compute credentials to recover provider history.
+
+Actions on previous registry generations must not clear or restore the current
+generation's readiness hint. Apply the same current-generation check before
+starting the action and before accepting its result.
+
+Settings verification must retain the selected saved binding identity independently
+of the editable image. Malformed images and images from another repository must
+clear that binding's hint without validating another one. A retired request must
+not alter current proof. Refusals survive settings closure and board-session
+switches until fresh successful verification, within the current app process.

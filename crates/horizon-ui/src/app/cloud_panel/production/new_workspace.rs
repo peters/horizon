@@ -97,7 +97,7 @@ impl HorizonApp {
         let form = &mut self.cloud_prototype.production;
         let waiting = form.setup.open && form.setup.resumes_creation();
         if waiting {
-            form.setup = super::setup::State::default();
+            form.setup.reset_form();
         }
         if form.creating || waiting {
             self.close_cloud_creation();

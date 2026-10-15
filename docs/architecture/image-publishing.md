@@ -216,3 +216,45 @@ They contain only their selected registry login. Other registry authentication,
 credential helpers and proxy settings stay out. A private configuration must not
 silently switch rootless or remote Docker to the default socket. Explicit host
 settings keep their existing precedence. The machine configuration stays unchanged.
+
+## Host-only registry management
+
+Machine-local bindings have two independent management scopes. `verify_pull` checks
+the immutable image using the saved read-only grant and a host journal; `pull_status`
+reads that journal without loading any credential. Both return `scope: host` and
+create no provider access. Legacy verify/status/reconcile/revoke remain provider
+operations. Their credential/account fences and resource IDs are unchanged.
+
+The settings card, CLI and stdio registry tool share this dispatch. The settings
+card puts provider lifecycle controls in a separate section. Its cached pull hint
+can retain a host check when provider access is revoked. A failed host-journal read
+does not silently fall back to another scope's successful read. A cached validation
+is history, not a current issuer-permission check; deployment verifies its exact
+immutable digest and current material again. Host checks do not revoke credentials
+already installed on a worker. No new operation allocates compute or publishes.
+
+A refused worker pull or failed/cancelled validation keeps that repository
+unverified across settings reopenings and board-session switches in the current
+app session. Reading saved
+status does not clear this failure; a new successful verification is required.
+After an app restart, saved successful history is available again. A verification displays its
+own image result rather than substituting history from the other scope.
+The settings card retains its saved repository and grant identity separately
+from the editable image. Malformed or other-repository images invalidate that
+card's hint without validating another binding; stale grants leave current proof alone.
+Worker pull refusals are retained before settings load, including a failed or
+replaced load.
+
+If a host journal is busy or unreadable, aggregate saved history stays unknown
+and does not fall back to a provider success. This can temporarily withhold the
+settings readiness hint; the action's own scoped status remains visible. Fresh
+verification results bypass this historical aggregate lookup.
+
+Saved host pull history never opens the provider journal or reads its compute key,
+even when a newer provider validation exists. Provider controls keep their own scoped
+status message. A fresh verification displays its own result.
+
+An explicit provider action can retain its own active provider proof when host
+history was read successfully and is empty. A busy or unreadable host journal
+never permits that fallback. Reopening settings reads host history only; it does
+not load compute credentials to recover provider history.
