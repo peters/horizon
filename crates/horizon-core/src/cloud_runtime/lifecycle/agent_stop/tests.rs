@@ -43,7 +43,7 @@ fn stops(store: &Store) -> Result<()> {
 }
 
 /// The stop's provider work settled: nothing it sent may have taken effect.
-fn settled() -> bool {
+fn settled(_: &Error) -> bool {
     false
 }
 
@@ -249,17 +249,41 @@ fn a_stop_whose_outcome_is_uncertain_keeps_the_agent_and_the_request() {
         store.save(&state)?;
         Err(Error::Invalid("the answer was lost"))
     };
-    assert!(stop_with(root.path(), &stop(), worker(&commands), uncertain, || true).is_err());
+    assert!(stop_with(root.path(), &stop(), worker(&commands), uncertain, |_| true).is_err());
     assert_eq!(attribution(root.path()), Some(stop().at));
     assert!(
         commands.borrow().is_empty(),
         "a stop that may have happened is not taken back"
     );
-    // So does a stop cancelled while the provider may still carry out what it received.
+}
+
+#[test]
+fn a_cancelled_stop_is_uncertain_only_once_a_provider_request_was_sent() {
+    use crate::cloud_runtime::mutation::State::{Pending, Settled};
+    let cancelled = Error::Provider(horizon_cloud::CloudError::Cancelled);
+    let refused = Error::Invalid("Unauthorized");
+    // Pending at the end: the request may have taken effect, whatever the error.
+    assert!(uncertain_outcome(Some(Pending), true, &refused));
+    // Cancelled after a request was sent, though rolled back as refused.
+    assert!(uncertain_outcome(Some(Settled), true, &cancelled));
+    // Cancelled before anything was sent, or refused outright.
+    assert!(!uncertain_outcome(None, false, &cancelled));
+    assert!(!uncertain_outcome(Some(Settled), true, &refused));
+}
+
+#[test]
+fn another_horizon_still_stopping_for_the_request_is_not_reported_stopped() {
     let root = tempfile::tempdir().unwrap();
-    ready(root.path(), |_| {});
-    let cancelled = |_: &Store| Err(Error::Provider(horizon_cloud::CloudError::Cancelled));
-    assert!(stop_with(root.path(), &stop(), worker(&commands), cancelled, settled).is_err());
-    assert_eq!(attribution(root.path()), Some(stop().at));
-    assert!(commands.borrow().is_empty());
+    ready(root.path(), |state| {
+        state.stage = Stage::Stopping;
+        state.stop_requested = true;
+        state.last_self_stop = Some(crate::cloud_runtime::SelfStop {
+            at: stop().at,
+            reason: "PR 12 merged".into(),
+            agent: Some("claude".into()),
+            session: Some("agent-a".into()),
+        });
+    });
+    let unread = |_: &Worker, _: &str| -> Result<String> { panic!("the request stays with that stop") };
+    assert!(stop_with(root.path(), &stop(), unread, never, settled).is_err());
 }

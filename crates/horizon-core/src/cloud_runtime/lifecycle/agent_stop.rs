@@ -138,15 +138,27 @@ pub fn stop_for_agent(root: &Path, settings: &Settings, cancel: &Cancellation, s
     // The provider work of the stop as its records announce it: a request that may have
     // reached the provider stays pending until it settles.
     let announced = std::cell::Cell::new(None);
-    let observe = |state| Ok(announced.replace(Some(state)).unwrap_or(mutation::State::Settled));
+    let pending = std::cell::Cell::new(false);
+    let observe = |state| {
+        pending.set(pending.get() || state == mutation::State::Pending);
+        Ok(announced.replace(Some(state)).unwrap_or(mutation::State::Settled))
+    };
     stop_with(
         root,
         stop,
         // Taking a request back must still run after the person cancelled the stop.
         |worker, command| run(worker, settings, root, &Cancellation::default(), command),
         |store| stop_locked(store, settings, cancel, &observe).map(drop),
-        || announced.get() == Some(mutation::State::Pending),
+        |error| uncertain_outcome(announced.get(), pending.get(), error),
     )
+}
+
+/// Whether a failed stop may still have taken effect: its last announced provider
+/// request is pending, or it was cancelled after a request was sent, which the provider
+/// may still carry out (a Docker host rolls such a stop back as refused).
+fn uncertain_outcome(last: Option<mutation::State>, sent: bool, error: &Error) -> bool {
+    last == Some(mutation::State::Pending)
+        || (sent && matches!(error, Error::Provider(horizon_cloud::CloudError::Cancelled)))
 }
 
 /// As `stop_for_agent`, with the worker command and the stop given.
@@ -155,7 +167,7 @@ pub(super) fn stop_with(
     request: &AgentStop,
     run: impl Fn(&Worker, &str) -> Result<String>,
     stop: impl FnOnce(&Store) -> Result<()>,
-    uncertain: impl Fn() -> bool,
+    uncertain: impl Fn(&Error) -> bool,
 ) -> Result<Deployment> {
     // Best effort: a worker the stop already reached cannot answer, and keeps the stop.
     let untake = |worker: &Worker| {
@@ -172,14 +184,21 @@ pub(super) fn stop_with(
         }
     };
     let state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
-    // Another Horizon on this computer already stopped the cloud for this request.
+    // Another Horizon on this computer already stopped the cloud for this request, or is
+    // stopping it: its stop decides, and the request stays with it.
     if state.stop_requested
         && state
             .last_self_stop
             .as_ref()
             .is_some_and(|stopped| stopped.at == request.at)
     {
-        return Ok(state);
+        return if state.stage == Stage::Stopped {
+            Ok(state)
+        } else {
+            Err(Error::Invalid(
+                "Another stop of this cloud for the agent's request has not finished; reconcile it",
+            ))
+        };
     }
     let requester = state.worker.as_ref().filter(|worker| {
         matches!(&state.operation, CreateState::Bound { worker_id } if *worker_id == request.worker_id)
@@ -219,10 +238,7 @@ pub(super) fn stop_with(
     if let Err(error) = stop(&store) {
         // Only a stop that certainly did not happen gives the request back and drops the
         // attribution; one whose provider request may have taken effect keeps both.
-        // A cancelled request may still be carried out by the provider that received it.
-        let cancelled = matches!(error, Error::Provider(horizon_cloud::CloudError::Cancelled));
-        if !uncertain()
-            && !cancelled
+        if !uncertain(&error)
             && let Some(mut now) = store.load()?
         {
             now.last_self_stop = earlier;

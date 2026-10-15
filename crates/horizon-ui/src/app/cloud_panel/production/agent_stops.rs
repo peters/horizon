@@ -175,6 +175,11 @@ impl HorizonApp {
                 }
                 continue;
             }
+            // The Stop closes the desktop tunnel; its last drop waits for its thread, which
+            // must not hold the UI.
+            if let Some(desktop) = runtime.desktop.take() {
+                std::thread::spawn(move || drop(desktop));
+            }
             runtime.agent_stop = Some(order);
             self.change_production_worker(id, Action::Stop, ctx);
             if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
