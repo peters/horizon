@@ -74,6 +74,16 @@ enum RepositoryAction {
 }
 
 impl HorizonApp {
+    /// Closes the dialog. A setup of its repository goes on after it, so the setup
+    /// board shows it with the others.
+    fn close_cloud_creation_to_board(&mut self, ctx: &Context) {
+        let setup = super::repository_setup::running_here(&self.cloud_prototype.production);
+        self.close_cloud_creation();
+        if setup {
+            self.open_setup_board(ctx, true);
+        }
+    }
+
     pub(in crate::app::cloud_panel) fn render_cloud_creation(&mut self, ctx: &Context) {
         if !self.cloud_prototype.production.creating {
             return;
@@ -150,7 +160,7 @@ impl HorizonApp {
             width >= TWO_COLUMNS && super::repository_setup::working_here(&self.cloud_prototype.production);
         let dismissed = self.cloud_creation_dismissed(ctx, &response, picking, escape && !terminal_live);
         if dismissed || actions.cancel {
-            self.close_cloud_creation();
+            self.close_cloud_creation_to_board(ctx);
             return;
         }
         if actions.this_pc {

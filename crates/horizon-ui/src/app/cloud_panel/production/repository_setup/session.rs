@@ -208,7 +208,7 @@ impl HorizonApp {
             self.cloud_prototype.error = Some(NO_SCOPE.into());
             return;
         };
-        let workspace = self.board.ensure_local_workspace("Cloud setup");
+        let workspace = self.board.ensure_local_workspace(WORKSPACE);
         // Deliberately local: config preparation must not inherit a focused cloud.
         let result = self.board.create_panel(
             PanelOptions {
@@ -245,6 +245,8 @@ impl HorizonApp {
                 run.dotnet = dotnet;
                 self.cloud_prototype.production.setup_runs.push(run);
                 self.cloud_prototype.error = None;
+                // Every setup shows on the setup board; it opens with the first one.
+                self.open_setup_board(ctx, false);
                 ctx.request_repaint();
             }
             Err(error) => {
@@ -276,6 +278,7 @@ impl HorizonApp {
         for run in self.cloud_prototype.production.setup_run_panels() {
             self.sync_cloud_setup_run(ctx, run);
         }
+        self.sync_setup_boards();
     }
 
     /// Samples the agent's screen, delivers a pending Enter, lists the files of a
@@ -704,6 +707,9 @@ const PREVIEW_PANEL_SIZE: [f32; 2] = [1040.0, 960.0];
 
 /// The name of a setup agent's hidden panel.
 const PANEL_NAME: &str = "Cloud repository setup";
+
+/// The local workspace of the setup agents and the setup board.
+pub(super) const WORKSPACE: &str = "Cloud setup";
 
 impl HorizonApp {
     /// Ends every setup run, and every setup about to start, when the board they belong

@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
 
+mod board;
 mod crates;
 mod view;
 pub(super) use view::{readable_rows, render};

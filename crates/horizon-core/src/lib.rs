@@ -31,6 +31,7 @@ mod session_store;
 mod shortcuts;
 pub mod speech_config;
 pub use speech_config::validate_speech_hotkey;
+pub mod setup_board;
 pub mod speech_model;
 mod ssh;
 mod terminal;
@@ -89,6 +90,7 @@ pub use session_store::{
     ResolvedSession, SessionDeletionNotice, SessionLease, SessionOpenDisposition, SessionStore, SessionSummary,
     StartupChooser, StartupDecision, StartupPromptReason,
 };
+pub use setup_board::SetupBoard;
 pub use shortcuts::{AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifiers};
 pub use ssh::{DiscoveredSshHost, SshConnection, SshConnectionStatus, discover_ssh_hosts};
 pub use terminal::{ClipboardTarget, ClipboardWrite, Terminal, open_url};

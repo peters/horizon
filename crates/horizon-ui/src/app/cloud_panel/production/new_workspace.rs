@@ -10,6 +10,7 @@ use horizon_core::{
     cloud_runtime::repository_choice::Choices,
 };
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 /// The workspace New workspace made for the cloud, and what it asked for.
 #[derive(Clone, Debug)]
@@ -24,6 +25,9 @@ pub(super) struct Intent {
     no_gpu: bool,
     /// The choice kept for each repository, and where they are saved.
     choices: Choices,
+    /// The kept choices while a thread still reads them, so a slow disk never holds the
+    /// frame; [`Intent::settle`] takes them into `choices`.
+    loading: Option<Arc<Mutex<Option<Choices>>>>,
     root: Option<PathBuf>,
     /// Keep what the person chooses now for the dialog's repository.
     keep: bool,
@@ -46,7 +50,17 @@ impl HorizonApp {
                 gpu,
                 chosen_for: None,
                 no_gpu: false,
-                choices: root.as_deref().map(Choices::load).unwrap_or_default(),
+                choices: Choices::default(),
+                loading: root.clone().map(|root| {
+                    let slot = Arc::new(Mutex::new(None));
+                    let (filled, wake) = (Arc::clone(&slot), ctx.clone());
+                    std::thread::spawn(move || {
+                        let choices = Choices::load(&root);
+                        *filled.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(choices);
+                        wake.request_repaint();
+                    });
+                    slot
+                }),
                 root,
                 keep: false,
                 error: None,
@@ -225,6 +239,26 @@ pub(super) mod machine;
 mod tests;
 mod upkeep;
 
+impl Intent {
+    /// Takes the kept choices once their read finished. False while it still runs.
+    fn settle(&mut self) -> bool {
+        let read = self
+            .loading
+            .as_ref()
+            .map(|slot| slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take());
+        match read {
+            None => true,
+            Some(None) => false,
+            Some(Some(choices)) => {
+                self.choices = choices;
+                self.loading = None;
+                self.looked_up = None;
+                true
+            }
+        }
+    }
+}
+
 impl HorizonApp {
     /// Keeps `placement` for the dialog's repository when the person asked for it, before
     /// the dialog acts on it. False when it could not be kept: the dialog then stays open
@@ -243,6 +277,11 @@ impl HorizonApp {
 pub(super) fn keep(intent: &mut Intent, repository: &str, placement: WorkspacePlacement) -> bool {
     if !intent.keep {
         return true;
+    }
+    // Saving before the kept choices are read would replace them with this one alone.
+    if !intent.settle() {
+        intent.error = Some("The kept choices are still being read; try again in a moment".to_owned());
+        return false;
     }
     let saved = match intent.root.clone() {
         Some(root) => intent

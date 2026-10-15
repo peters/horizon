@@ -59,6 +59,7 @@ fn plain_intent(workspace: WorkspaceId, gpu: bool) -> Intent {
         chosen_for: None,
         no_gpu: false,
         choices: Choices::default(),
+        loading: None,
         root: None,
         keep: false,
         error: None,
@@ -298,4 +299,51 @@ fn a_choice_that_cannot_be_saved_says_why_and_stops_the_action() {
     );
     app.cloud_prototype.production.new_workspace = Some(intent);
     assert!(!app.keep_new_workspace_choice(WorkspacePlacement::Cloud));
+}
+
+#[test]
+fn kept_choices_are_read_off_the_frame_and_nothing_is_saved_before_they_are() {
+    let (_temp, mut app) = test_app();
+    let workspace = app.board.create_workspace("cloud");
+    let root = tempfile::tempdir().unwrap();
+    let repository = "/synthetic/project";
+    let mut saved = Choices::default();
+    saved
+        .set(root.path(), repository, Some(WorkspacePlacement::Local))
+        .unwrap();
+    let form = &mut app.cloud_prototype.production;
+    form.repository = repository.into();
+    form.profiles = Some(config(CPU_ONLY));
+    let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let mut intent = plain_intent(workspace, false);
+    intent.root = Some(root.path().into());
+    intent.loading = Some(std::sync::Arc::clone(&slot));
+    intent.keep = true;
+    assert!(!keep(&mut intent, "/synthetic/other", WorkspacePlacement::Cloud));
+    assert!(
+        intent
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("still being read"))
+    );
+    assert_eq!(
+        Choices::load(root.path()).get(repository),
+        Some(WorkspacePlacement::Local),
+        "the saved choices stay"
+    );
+    intent.error = None;
+    form.new_workspace = Some(intent);
+    let (_, shown) = texts(form);
+    assert!(!shown.iter().any(|text| text.starts_with("You keep")), "{shown:?}");
+    *slot.lock().unwrap() = Some(Choices::load(root.path()));
+    let (_, shown) = texts(form);
+    assert!(
+        shown.iter().any(|text| text == "You keep This PC for this repository."),
+        "{shown:?}"
+    );
+    assert!(
+        form.new_workspace
+            .as_ref()
+            .is_some_and(|intent| intent.loading.is_none())
+    );
 }

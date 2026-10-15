@@ -21,6 +21,8 @@ enum MenuChoice {
     #[cfg(feature = "cloud-workspaces")]
     NewUpkeep,
     #[cfg(feature = "cloud-workspaces")]
+    SetupBoard,
+    #[cfg(feature = "cloud-workspaces")]
     FitClouds,
 }
 
@@ -71,6 +73,14 @@ const MENU: &[MenuEntry] = &[
         detail: "An agent fixes and merges dependency updates on a schedule",
         action: None,
         choice: MenuChoice::NewUpkeep,
+    },
+    #[cfg(feature = "cloud-workspaces")]
+    MenuEntry {
+        group: None,
+        title: "Setup board",
+        detail: "Every repository whose setup agent works on this computer",
+        action: None,
+        choice: MenuChoice::SetupBoard,
     },
     #[cfg(feature = "cloud-workspaces")]
     MenuEntry {
@@ -231,6 +241,8 @@ impl HorizonApp {
             // New Upkeep makes its workspace once its cloud starts.
             #[cfg(feature = "cloud-workspaces")]
             MenuChoice::NewUpkeep => self.open_upkeep_dialog(ctx),
+            #[cfg(feature = "cloud-workspaces")]
+            MenuChoice::SetupBoard => self.open_setup_board(ctx, true),
             #[cfg(feature = "cloud-workspaces")]
             MenuChoice::FitClouds => self.cloud_overview(ctx),
         }

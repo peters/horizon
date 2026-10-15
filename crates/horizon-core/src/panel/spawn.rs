@@ -177,6 +177,10 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: Pane
             let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
             Ok(spawn_upkeep(seed, status))
         }
+        PanelKind::SetupBoard => {
+            let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
+            Ok(spawn_setup_board(seed))
+        }
         PanelKind::Device => {
             let command = opts.command.take();
             let is_restore = opts.is_restore;
@@ -357,6 +361,19 @@ fn spawn_upkeep(mut seed: StaticPanelSeed, status: Option<PathBuf>) -> Panel {
     )
 }
 
+fn spawn_setup_board(mut seed: StaticPanelSeed) -> Panel {
+    let (title, has_custom_name) = seed.take_title(|| "Setup board".to_string());
+    tracing::info!("created setup board panel '{}' (id={})", title, seed.id.0);
+    seed.into_panel(
+        title,
+        PanelKind::SetupBoard,
+        PanelContent::SetupBoard(crate::SetupBoard::default()),
+        None,
+        None,
+        has_custom_name,
+    )
+}
+
 fn spawn_usage(mut seed: StaticPanelSeed) -> Panel {
     let (title, has_custom_name) = seed.take_title(|| "Usage".to_string());
     tracing::info!("created usage panel '{}' (id={})", title, seed.id.0);
@@ -451,7 +468,8 @@ pub(super) fn resolve_launch_command(
         | PanelKind::Usage
         | PanelKind::Upkeep
         | PanelKind::Browser
-        | PanelKind::Device => (String::new(), Vec::new()),
+        | PanelKind::Device
+        | PanelKind::SetupBoard => (String::new(), Vec::new()),
         PanelKind::Shell => {
             let use_login_shell = command.is_none() && PLATFORM_USES_LOGIN_SHELL;
             let program = command.unwrap_or_else(default_shell);
@@ -749,7 +767,8 @@ pub(super) fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
             | PanelKind::Usage
             | PanelKind::Upkeep
             | PanelKind::Browser
-            | PanelKind::Device => 0,
+            | PanelKind::Device
+            | PanelKind::SetupBoard => 0,
             PanelKind::Codex
             | PanelKind::Claude
             | PanelKind::OpenCode

@@ -134,6 +134,7 @@ pub enum PanelContent {
     GitChanges(DiffViewer),
     Usage(UsageDashboard),
     Upkeep(UpkeepBoard),
+    SetupBoard(crate::SetupBoard),
     Browser(Box<BrowserPanelState>),
     Device(crate::DevicePanelState),
     /// The last screen of a parked cloud member, as passive text: no PTY, no grid.
@@ -150,6 +151,7 @@ impl PanelContent {
             | Self::GitChanges(_)
             | Self::Usage(_)
             | Self::Upkeep(_)
+            | Self::SetupBoard(_)
             | Self::Browser(_)
             | Self::Parked(_) => None,
         }
@@ -163,6 +165,7 @@ impl PanelContent {
             | Self::GitChanges(_)
             | Self::Usage(_)
             | Self::Upkeep(_)
+            | Self::SetupBoard(_)
             | Self::Browser(_)
             | Self::Device(_)
             | Self::Parked(_) => None,
@@ -176,6 +179,7 @@ impl PanelContent {
             | Self::GitChanges(_)
             | Self::Usage(_)
             | Self::Upkeep(_)
+            | Self::SetupBoard(_)
             | Self::Browser(_)
             | Self::Device(_)
             | Self::Parked(_) => None,
@@ -190,6 +194,7 @@ impl PanelContent {
             | Self::GitChanges(_)
             | Self::Usage(_)
             | Self::Upkeep(_)
+            | Self::SetupBoard(_)
             | Self::Browser(_)
             | Self::Device(_)
             | Self::Parked(_) => None,
@@ -203,6 +208,7 @@ impl PanelContent {
             | Self::GitChanges(_)
             | Self::Usage(_)
             | Self::Upkeep(_)
+            | Self::SetupBoard(_)
             | Self::Browser(_)
             | Self::Device(_)
             | Self::Parked(_) => None,
@@ -217,6 +223,7 @@ impl PanelContent {
             | Self::Editor(_)
             | Self::Usage(_)
             | Self::Upkeep(_)
+            | Self::SetupBoard(_)
             | Self::Browser(_)
             | Self::Device(_)
             | Self::Parked(_) => None,
@@ -230,6 +237,7 @@ impl PanelContent {
             | Self::Editor(_)
             | Self::Usage(_)
             | Self::Upkeep(_)
+            | Self::SetupBoard(_)
             | Self::Browser(_)
             | Self::Device(_)
             | Self::Parked(_) => None,
@@ -244,6 +252,7 @@ impl PanelContent {
             | Self::Editor(_)
             | Self::GitChanges(_)
             | Self::Usage(_)
+            | Self::SetupBoard(_)
             | Self::Browser(_)
             | Self::Device(_)
             | Self::Parked(_) => None,
@@ -258,9 +267,25 @@ impl PanelContent {
             | Self::Editor(_)
             | Self::GitChanges(_)
             | Self::Usage(_)
+            | Self::SetupBoard(_)
             | Self::Browser(_)
             | Self::Device(_)
             | Self::Parked(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn setup_board(&self) -> Option<&crate::SetupBoard> {
+        match self {
+            Self::SetupBoard(board) => Some(board),
+            _ => None,
+        }
+    }
+
+    pub fn setup_board_mut(&mut self) -> Option<&mut crate::SetupBoard> {
+        match self {
+            Self::SetupBoard(board) => Some(board),
+            _ => None,
         }
     }
 
@@ -272,6 +297,7 @@ impl PanelContent {
             | Self::Editor(_)
             | Self::GitChanges(_)
             | Self::Upkeep(_)
+            | Self::SetupBoard(_)
             | Self::Browser(_)
             | Self::Device(_)
             | Self::Parked(_) => None,
@@ -285,6 +311,7 @@ impl PanelContent {
             | Self::Editor(_)
             | Self::GitChanges(_)
             | Self::Upkeep(_)
+            | Self::SetupBoard(_)
             | Self::Browser(_)
             | Self::Device(_)
             | Self::Parked(_) => None,
@@ -300,6 +327,7 @@ impl PanelContent {
             | Self::GitChanges(_)
             | Self::Usage(_)
             | Self::Upkeep(_)
+            | Self::SetupBoard(_)
             | Self::Device(_)
             | Self::Parked(_) => None,
         }
@@ -313,6 +341,7 @@ impl PanelContent {
             | Self::GitChanges(_)
             | Self::Usage(_)
             | Self::Upkeep(_)
+            | Self::SetupBoard(_)
             | Self::Device(_)
             | Self::Parked(_) => None,
         }
