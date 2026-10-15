@@ -60,6 +60,7 @@ fn cloud_workspace(app: &mut HorizonApp, name: &str, id: &str) -> WorkspaceId {
     let local = app.board.workspace(workspace).unwrap().local_id.clone();
     let mut group = CloudGroup::new(1, id.into(), local, std::env::temp_dir(), [0.0, 0.0]);
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: id.into(),
         revision: "a".repeat(40),
@@ -281,6 +282,7 @@ fn only_an_agent_panel_of_this_horizon_is_a_caller_and_it_sees_its_own_clouds() 
         let local = app.board.workspace(workspace).unwrap().local_id.clone();
         let mut group = CloudGroup::new(1, id.into(), local, std::env::temp_dir(), [0.0, 0.0]);
         group.remote = Some(CloudLaunch {
+            publishing_selection: None,
             deployment_started: true,
             id: id.into(),
             revision: "a".repeat(40),

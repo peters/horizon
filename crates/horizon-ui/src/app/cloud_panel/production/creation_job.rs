@@ -140,6 +140,7 @@ impl HorizonApp {
             workspace,
             title: form.title.trim().to_owned(),
             launch: CloudLaunch {
+                publishing_selection: None,
                 deployment_started: false,
                 id: cloud_id,
                 revision: String::new(),

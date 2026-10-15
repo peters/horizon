@@ -190,6 +190,7 @@ fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
     let config = CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 4\n    memory_gb: 8\n").unwrap();
     let profile = config.profiles["dev"].clone();
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "fixture".into(),
         revision: "a".repeat(40),
@@ -283,6 +284,7 @@ fn restoring_an_absolute_cloud_identity_never_touches_its_target() {
     let config = CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 4\n    memory_gb: 8\n").unwrap();
     let outside = temp.path().join("must-not-be-created");
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: outside.to_str().unwrap().into(),
         revision: "a".repeat(40),
@@ -328,6 +330,7 @@ fn add_unallocated_cloud(app: &mut HorizonApp, issue: u32, workspace: WorkspaceI
         [0.0, 0.0],
     );
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: false,
         id: format!("fixture{issue}"),
         revision: "a".repeat(40),
@@ -538,6 +541,7 @@ fn seed_unallocated_cloud(
     let config = CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 4\n    memory_gb: 8\n").unwrap();
     let profile = config.profiles["dev"].clone();
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "fixture".into(),
         revision: "a".repeat(40),
@@ -831,6 +835,7 @@ fn a_record_that_reads_again_is_not_blamed_for_a_later_settings_failure() {
     .unwrap();
     Store::lock(&root.join("fixture")).unwrap().save(&state).unwrap();
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "fixture".into(),
         revision: "a".repeat(40),

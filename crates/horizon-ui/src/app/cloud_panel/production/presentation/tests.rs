@@ -140,6 +140,7 @@ fn restore_fixture() -> (tempfile::TempDir, HorizonApp) {
     let profile = CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker\n    cpu: 4\n    memory_gb: 8\n    capabilities:\n      browsers: [chromium, firefox]\n").unwrap().profiles["dev"].clone();
     let mut group = CloudGroup::new(1, "Cloud".into(), "workspace".into(), temp.path().into(), [0.0, 0.0]);
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "fixture".into(),
         revision: "a".repeat(40),

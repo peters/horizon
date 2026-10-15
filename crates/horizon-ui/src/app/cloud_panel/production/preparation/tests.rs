@@ -37,6 +37,7 @@ fn stopped_cloud() -> (tempfile::TempDir, crate::app::HorizonApp, serde_json::Va
         "spec":null,"sessions":[],"worker":null
     });
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "fixture".into(),
         revision: "a".repeat(40),

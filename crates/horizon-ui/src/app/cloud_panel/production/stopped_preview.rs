@@ -82,6 +82,7 @@ fn preview_launch() -> Option<(CloudLaunch, Deployment)> {
     }))
     .ok()?;
     let launch = CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "synthetic-stopped".into(),
         revision: "a".repeat(40),

@@ -7,6 +7,7 @@ fn a_closing_cloud_shows_its_disposal_over_its_panels() {
         "a local cloud has no disposal to show"
     );
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "test".into(),
         revision: "a".repeat(40),

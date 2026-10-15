@@ -68,6 +68,7 @@ fn seed_rebuild(app: &mut HorizonApp, repository: std::path::PathBuf) -> bool {
     );
     group.size = [1140.0, 620.0];
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "synthetic-rebuild".into(),
         revision: "a".repeat(40),
@@ -228,6 +229,7 @@ fn cost_launch(created: &str) -> Option<(CloudLaunch, Deployment)> {
     }))
     .ok()?;
     let launch = CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "synthetic-cost".into(),
         revision: "a".repeat(40),
@@ -269,6 +271,7 @@ fn preview_launch() -> Option<CloudLaunch> {
     )
     .ok()?;
     Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "synthetic-deploy".into(),
         revision: "a".repeat(40),

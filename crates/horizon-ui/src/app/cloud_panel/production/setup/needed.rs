@@ -187,6 +187,7 @@ mod tests {
         app.cloud_prototype.root = Some(temp.path().join("cloud"));
         let mut group = CloudGroup::new(7, "App".into(), "w".into(), temp.path().into(), [0.0, 0.0]);
         group.remote = Some(CloudLaunch {
+            publishing_selection: None,
             deployment_started: true,
             id: "cloud-7".into(),
             revision: "9f3c2a1".into(),

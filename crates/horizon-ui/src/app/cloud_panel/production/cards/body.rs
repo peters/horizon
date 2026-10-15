@@ -261,6 +261,7 @@ mod tests {
         )
         .unwrap();
         CloudLaunch {
+            publishing_selection: None,
             deployment_started: false,
             id: "body".into(),
             revision: "a".repeat(40),

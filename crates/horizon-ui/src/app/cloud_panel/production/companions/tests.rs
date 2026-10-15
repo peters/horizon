@@ -7,6 +7,7 @@ fn groups() -> CloudGroups {
     let config = CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 8\n    memory_gb: 32\n").unwrap();
     let mut group = CloudGroup::new(1, "Source".into(), "workspace1".into(), "/synthetic".into(), [0.0, 0.0]);
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "source".into(),
         revision: "a".repeat(40),

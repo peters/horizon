@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-cloud/src/image_publishing.rs,crates/horizon-cloud/src/image_publishing/**,crates/horizon-core/src/cloud_runtime/github/publish/publication.rs,crates/horizon-core/src/cloud_runtime/github/publish/publication/**,crates/horizon-core/src/cloud_runtime/publishing.rs,crates/horizon-core/src/cloud_runtime/publishing/**,crates/horizon-core/src/cloud_runtime/setup/publishing.rs,crates/horizon-core/src/cloud_runtime/setup/publishing/**,crates/horizon-core/src/cloud_runtime/settings.rs"
+applyTo: "crates/horizon-core/src/cloud_panel.rs,crates/horizon-core/src/cloud_panel/launch_serde/**,crates/horizon-core/src/cloud_panel/launch_serde.rs,crates/horizon-cloud/src/image_publishing.rs,crates/horizon-cloud/src/image_publishing/**,crates/horizon-core/src/cloud_runtime/github/publish/publication.rs,crates/horizon-core/src/cloud_runtime/github/publish/publication/**,crates/horizon-core/src/cloud_runtime/publishing.rs,crates/horizon-core/src/cloud_runtime/publishing/**,crates/horizon-core/src/cloud_runtime/setup/publishing.rs,crates/horizon-core/src/cloud_runtime/setup/publishing/**,crates/horizon-core/src/cloud_runtime/settings.rs"
 ---
 
 # Image destination boundary
@@ -38,3 +38,14 @@ These limits are deliberate:
 Do not request the deferred launch or UI integration as fixes to this policy prerequisite.
 
 The local preference helpers do not authenticate metadata, change profile parsing or activate automatic launches.
+
+The launch-format prerequisite keeps every runtime constructor at None and refuses
+publisher envelopes until launch forwards their choice to the engine. Reject a
+reader that silently discards reviewed publishing intent. Preserve legacy flat
+encodings and exact-image recipe confirmations, including JSON/YAML compatibility.
+Unknown ordinary legacy keys stay compatible; reserved envelope keys may not hide
+inside a flat body, even when null. No publication is activated by this prerequisite.
+
+Recipe/profile equality is enforced before serialization as well as during
+deserialization. An inconsistent in-memory recipe emits no standalone launch
+JSON, and JSON/YAML serialization fail before it can reach an older reader.

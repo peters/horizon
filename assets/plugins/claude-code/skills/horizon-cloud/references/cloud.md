@@ -588,3 +588,12 @@ An entry CLI plan uses the same normal AGENT transport, with metadata only:
 The person supplies the values in the native host. Never add them to the plan,
 MCP arguments, agent conversation or worker configuration. Applied proves local
 Store completion, not remote validity, scope or node-removal authority.
+
+Saved cloud launch confirmations retain their image intent in a conditional wire
+format. Existing launches with no reviewed choice keep their flat encoding.
+An explicit recipe-image confirmation also stays flat and must match the exact
+profile image. Publisher choices use a version-2 envelope that older readers
+refuse. This prerequisite also refuses those envelopes until the launch engine
+can consume the retained choice; it activates no selector or image publication.
+Ordinary unknown legacy fields remain compatible, but mixed or downgraded
+publisher envelopes and reserved null keys are refused.

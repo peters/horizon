@@ -109,6 +109,7 @@ fn preview_launch() -> Option<CloudLaunch> {
     )
     .ok()?;
     Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "synthetic-failed".into(),
         revision: "a".repeat(40),

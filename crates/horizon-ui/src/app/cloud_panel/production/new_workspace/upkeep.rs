@@ -134,6 +134,7 @@ impl HorizonApp {
         let profile = creation_job::launch_profile(profile, Some(&cloud_runtime::provider::HETZNER), None)
             .map_err(|error| format!("{error}."))?;
         let launch = CloudLaunch {
+            publishing_selection: None,
             deployment_started: false,
             id: cloud_id.to_owned(),
             revision: prepared.revision.clone(),

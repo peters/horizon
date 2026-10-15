@@ -118,6 +118,7 @@ mod tests {
             [0.0, 0.0],
         );
         group.remote = Some(CloudLaunch {
+            publishing_selection: None,
             id: "fixture".into(),
             revision: "a".repeat(40),
             profile_name: "dev".into(),

@@ -94,6 +94,7 @@ fn overlap_fixture(focused: bool, overlaps: bool) -> (tempfile::TempDir, egui::C
     );
     group.size = [300.0, 400.0];
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: false,
         id: "overlap-fixture".into(),
         revision: "a".repeat(40),

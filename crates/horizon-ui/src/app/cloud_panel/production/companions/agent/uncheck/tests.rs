@@ -11,6 +11,7 @@ fn groups() -> horizon_core::cloud_panel::CloudGroups {
     .unwrap();
     let mut group = CloudGroup::new(1, "Source".into(), "workspace1".into(), "/synthetic".into(), [0.0, 0.0]);
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "source".into(),
         revision: "a".repeat(40),

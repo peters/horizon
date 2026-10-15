@@ -108,4 +108,13 @@ Cloud records can retain exact worker device IDs and unresolved capture attempts
 
 The receipt-capture adapter reads only the worker's actual tagged Self.ID via pinned root SSH and the existing userspace daemon socket, persists it before readiness and records uncertain attempts before enrollment. It binds the existing allocation request and saved tailnet ID to the owning cloud root. Worker agents cannot query this private root lane. No API secret is sent to a worker and no API editor or node-delete operation is activated by this adapter.
 
+Saved cloud launch confirmations retain their image intent in a conditional wire
+format. Existing launches with no reviewed choice keep their flat encoding.
+An explicit recipe-image confirmation also stays flat and must match the exact
+profile image. Publisher choices use a version-2 envelope that older readers
+refuse. This prerequisite also refuses those envelopes until the launch engine
+can consume the retained choice; it activates no selector or image publication.
+Ordinary unknown legacy fields remain compatible, but mixed or downgraded
+publisher envelopes and reserved null keys are refused.
+
 The desktop SDK also has an unwired exact-device HTTP prerequisite. It keeps API credentials on the desktop and returns typed retained reasons for missing/offline/denied/unverified404 outcomes. It does not enable automatic cloud node cleanup or add a UI/CLI/MCP deletion operation. See docs/architecture/tailnet-node-api.md and docs/testing/procedures/tailnet-node-api.md.

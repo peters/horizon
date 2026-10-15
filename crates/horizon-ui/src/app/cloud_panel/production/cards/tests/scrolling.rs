@@ -124,6 +124,7 @@ pub(super) fn verbose_card() -> (tempfile::TempDir, Context, HorizonApp) {
         [10.0, 10.0],
     );
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "scroll-fixture".into(),
         revision: "a".repeat(40),

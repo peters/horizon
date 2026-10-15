@@ -109,3 +109,32 @@ The current task does not add those operations.
 
 Preference saves validate the complete reloaded settings before looking up or replacing
 a scope. Duplicate checkout/profile entries are refused without discarding either choice.
+
+## Saved launch confirmation boundary
+
+Saved cloud launch confirmations retain their image intent in a conditional wire
+format. Existing launches with no reviewed choice keep their flat encoding.
+An explicit recipe-image confirmation also stays flat and must match the exact
+profile image. Publisher choices use a version-2 envelope that older readers
+refuse. This prerequisite also refuses those envelopes until the launch engine
+can consume the retained choice; it activates no selector or image publication.
+Ordinary unknown legacy fields remain compatible, but mixed or downgraded
+publisher envelopes and reserved null keys are refused.
+
+Cloud-launch JSON and YAML are untrusted. A parser must not silently lose a
+reviewed publisher and then launch the recipe's original target. The envelope
+requires a compatible consumer; this prerequisite fails closed for publisher
+choices until engine forwarding is wired in the same change that enables reads.
+Recipe confirmations carry no alternative publisher and retain identical image
+semantics for old readers. Runtime constructors initialize the new field to None,
+so ordinary saved launches remain unchanged. The reviewed choice adds no credential or source-repository URL; it carries
+only destination and publisher metadata, not authorization.
+
+Malformed launch bodies deliberately return a generic decode error rather than
+repeating rejected field values. Saved state is untrusted and an invalid field
+can contain accidentally pasted private text. This trades field-level diagnostics
+for a redacted error while retaining compatibility for valid legacy documents.
+
+Recipe/profile equality is enforced before serialization as well as during
+deserialization. An inconsistent in-memory recipe emits no standalone launch
+JSON, and JSON/YAML serialization fail before it can reach an older reader.

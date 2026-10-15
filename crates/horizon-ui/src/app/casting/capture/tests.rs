@@ -337,6 +337,7 @@ mod clouds {
         )
         .unwrap();
         CloudLaunch {
+            publishing_selection: None,
             deployment_started: true,
             id: "cast-fixture".into(),
             revision: "a".repeat(40),
