@@ -460,6 +460,7 @@ impl Job {
         match resources::Daemon::on(self.build_on.as_ref()) {
             Ok(daemon) => {
                 let _ = self.pinned.set(daemon.clone());
+                resources::note_engine(&self.volume, &daemon);
                 self.daemon = daemon;
             }
             Err(reason) => {

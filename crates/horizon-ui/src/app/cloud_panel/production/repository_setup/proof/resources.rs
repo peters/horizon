@@ -247,11 +247,20 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_reso
         // The daemon the proof pinned; without a proof that checked one, the run's Docker
         // host, else the daemon of this computer Docker uses now. Resources of a run on a
         // Docker host are never looked for on this computer, where they would look gone.
+        // A Docker host's daemon is used only when it is still the engine an earlier proof
+        // of the run made them on; one no proof reached has none of them.
         let pinned = pinned.as_ref().and_then(|pinned| pinned.get().cloned());
-        let daemon = pinned.or_else(|| match &build_on {
-            Some(host) => reopen_host(host, None),
-            None => cleanup_daemon(),
-        });
+        let daemon = match (pinned, &build_on) {
+            (Some(daemon), _) => Some(daemon),
+            (None, Some(host)) => {
+                let Some(engine_id) = engine_of(&resources.volume) else {
+                    drop(take_pending(&resources.volume));
+                    return;
+                };
+                reopen_host(host, Some(&engine_id))
+            }
+            (None, None) => cleanup_daemon(),
+        };
         let Some(daemon) = daemon else {
             resources.set_waiting(None);
             return;
@@ -301,6 +310,40 @@ fn pending() -> std::sync::MutexGuard<'static, Vec<Pending>> {
     PENDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// The engine ID of the Docker host each run's proofs made their resources on, by the
+/// run's volume, kept across the run's proofs: a replacement proof that fails before it
+/// reaches a daemon still leaves its cleanup bound to that engine.
+static ENGINES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+fn engines() -> std::sync::MutexGuard<'static, Vec<(String, String)>> {
+    ENGINES.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Notes the engine of `daemon` for the run of `volume`, when it is on a Docker host.
+pub(in crate::app::cloud_panel::production::repository_setup) fn note_engine(volume: &str, daemon: &Daemon) {
+    let Some(remote) = daemon.remote() else {
+        return;
+    };
+    let mut engines = engines();
+    engines.retain(|(known, _)| known != volume);
+    engines.push((volume.to_owned(), remote.engine_id().to_owned()));
+}
+
+fn engine_of(volume: &str) -> Option<String> {
+    engines()
+        .iter()
+        .find(|(known, _)| known == volume)
+        .map(|(_, id)| id.clone())
+}
+
+/// Takes the pending record of `volume` out of the registry, so whatever it holds, such
+/// as a forward and its folder, goes after the registry's lock is let go.
+fn take_pending(volume: &str) -> Option<Pending> {
+    let mut pending = pending();
+    let index = pending.iter().position(|known| known.resources.volume == volume)?;
+    Some(pending.swap_remove(index))
+}
+
 /// The Docker host a run's resources are on, by name: the pinned daemon's when there is
 /// one, none for this computer's; else the run's own Docker host on another machine.
 pub(in crate::app::cloud_panel::production::repository_setup) fn docker_host_of(
@@ -324,6 +367,8 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn expect_removal(
     (docker_host, engine_id): (Option<&str>, Option<&str>),
 ) {
     let (image, volume) = run_names(repository, run);
+    let engine_id = engine_id.map(str::to_owned).or_else(|| engine_of(&volume));
+    let engine_id = engine_id.as_deref();
     let mut pending = pending();
     match pending.iter_mut().find(|known| known.resources.volume == volume) {
         Some(known) => {
@@ -526,28 +571,44 @@ impl RunResources {
 
     /// Removes them; what a cleanup cannot show gone is logged and kept for a retry.
     fn remove_or_keep(self, daemon: Daemon) {
-        {
+        let engine_id = daemon.remote().map(|remote| remote.engine_id().to_owned());
+        // The old daemon, a forward with its folder, goes after the lock is let go.
+        let replaced = {
             let mut pending = pending();
             let docker_host = daemon.remote().map(|remote| remote.name().to_owned());
-            let engine_id = daemon.remote().map(|remote| remote.engine_id().to_owned());
             match pending.iter_mut().find(|known| known.resources.volume == self.volume) {
+                // Made on another engine than this daemon reaches: never removed here.
+                Some(known) if known.engine_id.is_some() && engine_id.is_some() && known.engine_id != engine_id => {
+                    known.working = false;
+                    drop(pending);
+                    tracing::warn!(
+                        volume = %self.volume,
+                        "a setup run's resources are on another engine than its Docker host reaches now; they stay recorded"
+                    );
+                    return;
+                }
                 Some(known) => {
-                    known.daemon = Some(daemon.clone());
                     known.working = true;
                     known.docker_host = docker_host.or_else(|| known.docker_host.take());
                     known.engine_id = engine_id.or_else(|| known.engine_id.take());
+                    known.daemon.replace(daemon.clone())
                 }
-                None => pending.push(Pending {
-                    resources: self.clone(),
-                    daemon: Some(daemon.clone()),
-                    working: true,
-                    docker_host,
-                    engine_id,
-                }),
+                None => {
+                    pending.push(Pending {
+                        resources: self.clone(),
+                        daemon: Some(daemon.clone()),
+                        working: true,
+                        docker_host,
+                        engine_id,
+                    });
+                    None
+                }
             }
-        }
+        };
+        drop(replaced);
         if self.remove(&daemon) {
-            pending().retain(|known| known.resources.volume != self.volume);
+            drop(take_pending(&self.volume));
+            engines().retain(|(volume, _)| *volume != self.volume);
         } else {
             tracing::warn!(
                 image = %self.image,
@@ -560,10 +621,16 @@ impl RunResources {
 
     /// Marks them as waiting for another try, on `daemon` when it is known.
     fn set_waiting(&self, daemon: Option<Daemon>) {
-        if let Some(known) = pending().iter_mut().find(|known| known.resources.volume == self.volume) {
+        let replaced = {
+            let mut pending = pending();
+            let Some(known) = pending.iter_mut().find(|known| known.resources.volume == self.volume) else {
+                return;
+            };
             known.working = false;
-            known.daemon = daemon.or_else(|| known.daemon.take());
-        }
+            daemon.and_then(|daemon| known.daemon.replace(daemon))
+        };
+        // A forward and its folder go after the lock is let go.
+        drop(replaced);
     }
 
     /// Removes them, again and again until a listing shows none left, within the
@@ -735,6 +802,25 @@ fn folder_slug(repository: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_run_on_a_docker_host_that_no_proof_reached_has_nothing_to_remove_there() {
+        use horizon_core::cloud_runtime::docker_host::{Access, Host};
+        let folder = tempfile::tempdir().unwrap();
+        let host = Host {
+            name: "builder".into(),
+            access: Access::Ssh,
+            address: Some("me@builder.invalid".into()),
+            docker: None,
+        };
+        let run = "abcdef12";
+        remove_run_resources(folder.path(), run, None, (None, Some(host)), true);
+        let (_, volume) = run_names(folder.path(), run);
+        assert!(
+            !pending().iter().any(|known| known.resources.volume == volume),
+            "no engine was ever reached for it, so no record waits"
+        );
+    }
 
     #[test]
     fn a_pinned_daemon_says_where_a_runs_resources_are_and_this_computer_has_no_host_name() {
