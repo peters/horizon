@@ -16,6 +16,8 @@ use std::{
 
 pub mod catalog;
 pub mod cloud;
+#[cfg(feature = "exposure-firewall")]
+pub mod firewalls;
 pub mod keys;
 pub mod networks;
 pub mod servers;

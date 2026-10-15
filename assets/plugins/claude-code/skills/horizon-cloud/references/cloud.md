@@ -912,3 +912,14 @@ prepared by the trusted launch adapter. Selecting a historical revision must not
 reload today's profile for a mutation: that profile may be absent or prebuilt now.
 The public headless request still resolves its own working-copy context; callers
 cannot supply a trusted profile through the wire schema.
+
+### Default-off exposure firewall SDK
+
+The Cloud `exposure-firewall` feature supplies exact owned Hetzner firewall
+operations only. It adds no public UI, CLI or MCP exposure control and never
+changes provisioning by itself. Creation is unattached; a controller must save
+intent before mutation, reconcile uncertainty without repeating a create, save
+returned IDs before action waits and freshly verify results. Original server and
+firewall ownership checks refuse selectors and foreign targets. Management access,
+worker expiry, source attribution and RunPod mappings need the final owner
+controller and real qualification. See docs/testing/procedures/exposure-firewalls.md.
