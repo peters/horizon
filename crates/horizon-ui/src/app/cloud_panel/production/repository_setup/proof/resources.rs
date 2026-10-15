@@ -340,17 +340,22 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn note_engine(
     })
 }
 
-/// Notes `engine_id` for the run of `volume`, unless another engine is noted for it.
+/// Notes `engine_id` for the run of `volume`, unless another engine is noted for it, and
+/// gives it to a pending cleanup of the run that does not know its engine yet, as when
+/// Horizon's exit noted the run before its first proof reached the host.
 fn note(volume: &str, engine_id: &str) -> Result<(), ()> {
-    let mut engines = engines();
-    match engines.iter().find(|(known, _)| known == volume) {
-        Some((_, known)) if known != engine_id => Err(()),
-        Some(_) => Ok(()),
-        None => {
-            engines.push((volume.to_owned(), engine_id.to_owned()));
-            Ok(())
+    {
+        let mut engines = engines();
+        match engines.iter().find(|(known, _)| known == volume) {
+            Some((_, known)) if known != engine_id => return Err(()),
+            Some(_) => {}
+            None => engines.push((volume.to_owned(), engine_id.to_owned())),
         }
     }
+    for known in pending().iter_mut().filter(|known| known.resources.volume == volume) {
+        known.engine_id.get_or_insert_with(|| engine_id.to_owned());
+    }
+    Ok(())
 }
 
 fn engine_of(volume: &str) -> Option<String> {
@@ -501,6 +506,10 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn retry_unremoved
             {
                 let docker_host = entry["docker_host"].as_str().map(str::to_owned);
                 let engine_id = entry["engine_id"].as_str().map(str::to_owned);
+                // On a Docker host, only the engine it was made on is ever cleaned.
+                if docker_host.is_some() && engine_id.is_none() {
+                    continue;
+                }
                 pending.push(Pending {
                     resources: RunResources::new(image.to_owned(), volume.to_owned()),
                     // A forwarded socket is gone with the Horizon that opened it.
@@ -533,10 +542,16 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn retry_unremoved
             // where they are missing and would look removed.
             // A forward that ended forwards nothing again: the host's name opens a new one.
             let daemon = daemon.filter(|daemon| daemon.remote().is_none_or(super::remote::Remote::alive));
-            let daemon = match (daemon, docker_host) {
-                (Some(daemon), _) => Some(daemon),
-                (None, Some(name)) => reopen(&name, engine_id.as_deref()),
-                (None, None) => cleanup_daemon(),
+            let engine_id = engine_id.or_else(|| engine_of(&resources.volume));
+            let daemon = match (daemon, docker_host, engine_id) {
+                (Some(daemon), _, _) => Some(daemon),
+                (None, Some(name), Some(engine_id)) => reopen(&name, Some(&engine_id)),
+                // On a Docker host whose engine no proof reached, nothing was made.
+                (None, Some(_), None) => {
+                    drop(take_pending(&resources.volume));
+                    return;
+                }
+                (None, None, _) => cleanup_daemon(),
             };
             match daemon {
                 Some(daemon) => resources.remove_or_keep(daemon),
@@ -549,26 +564,34 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn retry_unremoved
 /// Keeps every run whose resources are not shown gone, as Horizon exits, for its next
 /// run to remove: those that failed and those a thread still works on.
 pub(in crate::app::cloud_panel::production::repository_setup) fn keep_unremoved() {
+    // Taken before the pending registry, never inside it.
+    let noted = engines().clone();
     let kept: Vec<serde_json::Value> = pending()
         .iter()
-        .map(|known| {
-            serde_json::json!({
+        .filter_map(|known| {
+            let remote = known.daemon.as_ref().and_then(Daemon::remote);
+            let docker_host = remote.map(super::remote::Remote::name).or(known.docker_host.as_deref());
+            let engine_id = remote
+                .map(super::remote::Remote::engine_id)
+                .or(known.engine_id.as_deref())
+                .or_else(|| {
+                    let volume = &known.resources.volume;
+                    noted
+                        .iter()
+                        .find(|(known, _)| known == volume)
+                        .map(|(_, id)| id.as_str())
+                });
+            // A run on a Docker host whose engine no proof reached made nothing there.
+            if docker_host.is_some() && engine_id.is_none() {
+                return None;
+            }
+            Some(serde_json::json!({
                 "image": known.resources.image,
                 "volume": known.resources.volume,
                 "host": known.daemon.as_ref().and_then(|daemon| daemon.host.clone()),
-                "docker_host": known
-                    .daemon
-                    .as_ref()
-                    .and_then(Daemon::remote)
-                    .map(super::remote::Remote::name)
-                    .or(known.docker_host.as_deref()),
-                "engine_id": known
-                    .daemon
-                    .as_ref()
-                    .and_then(Daemon::remote)
-                    .map(super::remote::Remote::engine_id)
-                    .or(known.engine_id.as_deref()),
-            })
+                "docker_host": docker_host,
+                "engine_id": engine_id,
+            }))
         })
         .collect();
     if kept.is_empty() {
@@ -826,6 +849,31 @@ fn folder_slug(repository: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_exit_before_the_first_proof_reached_the_host_keeps_the_engine_it_then_reached() {
+        let volume = "horizon-setup-exit-race-0000";
+        let resources = RunResources::new("horizon-setup-exit-race-0000:candidate".into(), volume.into());
+        // The exit noted the run on its Docker host before any proof reached an engine.
+        pending().push(Pending {
+            resources,
+            daemon: None,
+            working: true,
+            docker_host: Some("builder".into()),
+            engine_id: None,
+        });
+        assert!(
+            note(volume, "engine-a").is_ok(),
+            "the first proof then reaches engine A"
+        );
+        let known = take_pending(volume).unwrap();
+        assert_eq!(
+            known.engine_id.as_deref(),
+            Some("engine-a"),
+            "the cleanup knows the engine"
+        );
+        engines().retain(|(known, _)| known != volume);
+    }
 
     #[test]
     fn a_run_keeps_the_engine_of_its_first_proof_until_its_resources_there_are_gone() {
