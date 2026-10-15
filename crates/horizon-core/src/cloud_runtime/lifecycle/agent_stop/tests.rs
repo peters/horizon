@@ -42,6 +42,11 @@ fn stops(store: &Store) -> Result<()> {
     store.save(&state)
 }
 
+/// The stop's provider work settled: nothing it sent may have taken effect.
+fn settled() -> bool {
+    false
+}
+
 fn never(_: &Store) -> Result<()> {
     panic!("the cloud is not stopped")
 }
@@ -117,7 +122,7 @@ fn a_stop_for_the_agent_stops_the_cloud_and_names_the_agent() {
     let root = tempfile::tempdir().unwrap();
     ready(root.path(), |_| {});
     let commands = RefCell::new(Vec::new());
-    let state = stop_with(root.path(), &stop(), worker(&commands), stops).unwrap();
+    let state = stop_with(root.path(), &stop(), worker(&commands), stops, settled).unwrap();
     assert_eq!(state.stage, Stage::Stopped);
     let recorded = stored(root.path()).last_self_stop.unwrap();
     assert_eq!(
@@ -137,9 +142,9 @@ fn a_cloud_another_horizon_already_stopped_for_the_request_is_that_stop() {
     let root = tempfile::tempdir().unwrap();
     ready(root.path(), |_| {});
     let commands = RefCell::new(Vec::new());
-    stop_with(root.path(), &stop(), worker(&commands), stops).unwrap();
+    stop_with(root.path(), &stop(), worker(&commands), stops, settled).unwrap();
     let unread = |_: &Worker, _: &str| -> Result<String> { panic!("the worker is not asked") };
-    let again = stop_with(root.path(), &stop(), unread, never).unwrap();
+    let again = stop_with(root.path(), &stop(), unread, never, settled).unwrap();
     assert_eq!(again.stage, Stage::Stopped);
 }
 
@@ -151,7 +156,7 @@ fn a_stop_that_fails_or_a_cloud_that_changed_is_taken_back() {
     let root = tempfile::tempdir().unwrap();
     ready(root.path(), |_| {});
     let failing = |_: &Store| Err(Error::Invalid("provider refused"));
-    assert!(stop_with(root.path(), &stop(), worker(&commands), failing).is_err());
+    assert!(stop_with(root.path(), &stop(), worker(&commands), failing, settled).is_err());
     assert_eq!(*commands.borrow(), std::slice::from_ref(&untake));
     assert_eq!(stored(root.path()).stage, Stage::Ready);
     assert_eq!(
@@ -163,13 +168,13 @@ fn a_stop_that_fails_or_a_cloud_that_changed_is_taken_back() {
     commands.borrow_mut().clear();
     let mut other = stop();
     other.worker_id = "41".into();
-    assert!(stop_with(root.path(), &other, worker(&commands), never).is_err());
+    assert!(stop_with(root.path(), &other, worker(&commands), never, settled).is_err());
     assert!(commands.borrow().is_empty());
     // The cloud is no longer ready on the worker that asked: nothing stops, and that
     // worker drops the request.
     let root = tempfile::tempdir().unwrap();
     ready(root.path(), |state| state.stage = Stage::Provision);
-    assert!(stop_with(root.path(), &stop(), worker(&commands), never).is_err());
+    assert!(stop_with(root.path(), &stop(), worker(&commands), never, settled).is_err());
     assert_eq!(*commands.borrow(), [untake]);
 }
 
@@ -182,7 +187,7 @@ fn a_cloud_another_operation_holds_gives_the_request_back_to_the_worker_that_too
     let _held = Store::lock(root.path()).unwrap();
     let commands = RefCell::new(Vec::new());
     assert!(matches!(
-        stop_with(root.path(), &request, worker(&commands), never),
+        stop_with(root.path(), &request, worker(&commands), never, settled),
         Err(Error::Busy)
     ));
     assert_eq!(
@@ -203,10 +208,32 @@ fn a_request_that_no_longer_holds_on_the_worker_stops_nothing() {
             assert_eq!(command, TAKE);
             Ok(answer.to_owned())
         };
-        assert!(stop_with(root.path(), &stop(), run, never).is_err());
+        assert!(stop_with(root.path(), &stop(), run, never, settled).is_err());
         assert_eq!(stored(root.path()).stage, Stage::Ready);
         assert_eq!(attribution(root.path()), None);
     }
+}
+
+#[test]
+fn a_stop_the_provider_refused_outright_names_no_agent_and_gives_the_request_back() {
+    let root = tempfile::tempdir().unwrap();
+    ready(root.path(), |_| {});
+    let commands = RefCell::new(Vec::new());
+    // As a Hetzner stop leaves its record: stopping, to be retried, with nothing sent
+    // that took effect.
+    let refused = |store: &Store| {
+        let mut state = store.load()?.unwrap();
+        state.stage = Stage::Stopping;
+        state.stop_requested = true;
+        store.save(&state)?;
+        Err(Error::Invalid("Unauthorized"))
+    };
+    assert!(stop_with(root.path(), &stop(), worker(&commands), refused, settled).is_err());
+    assert_eq!(attribution(root.path()), None);
+    assert_eq!(
+        *commands.borrow(),
+        [format!("horizon-worker-stopd --untake {}", stop().at)]
+    );
 }
 
 #[test]
@@ -222,7 +249,7 @@ fn a_stop_whose_outcome_is_uncertain_keeps_the_agent_and_the_request() {
         store.save(&state)?;
         Err(Error::Invalid("the answer was lost"))
     };
-    assert!(stop_with(root.path(), &stop(), worker(&commands), uncertain).is_err());
+    assert!(stop_with(root.path(), &stop(), worker(&commands), uncertain, || true).is_err());
     assert_eq!(attribution(root.path()), Some(stop().at));
     assert!(
         commands.borrow().is_empty(),

@@ -135,12 +135,17 @@ pub(super) fn read_with(root: &Path, run: impl Fn(&Worker, &str) -> Result<Strin
 /// # Errors
 /// Reports a busy or changed cloud and a failed stop.
 pub fn stop_for_agent(root: &Path, settings: &Settings, cancel: &Cancellation, stop: &AgentStop) -> Result<Deployment> {
+    // The provider work of the stop as its records announce it: a request that may have
+    // reached the provider stays pending until it settles.
+    let announced = std::cell::Cell::new(None);
+    let observe = |state| Ok(announced.replace(Some(state)).unwrap_or(mutation::State::Settled));
     stop_with(
         root,
         stop,
         // Taking a request back must still run after the person cancelled the stop.
         |worker, command| run(worker, settings, root, &Cancellation::default(), command),
-        |store| stop_locked(store, settings, cancel, mutation::IGNORE).map(drop),
+        |store| stop_locked(store, settings, cancel, &observe).map(drop),
+        || announced.get() == Some(mutation::State::Pending),
     )
 }
 
@@ -150,6 +155,7 @@ pub(super) fn stop_with(
     request: &AgentStop,
     run: impl Fn(&Worker, &str) -> Result<String>,
     stop: impl FnOnce(&Store) -> Result<()>,
+    uncertain: impl Fn() -> bool,
 ) -> Result<Deployment> {
     // Best effort: a worker the stop already reached cannot answer, and keeps the stop.
     let untake = |worker: &Worker| {
@@ -212,10 +218,9 @@ pub(super) fn stop_with(
     store.save(&attributed)?;
     if let Err(error) = stop(&store) {
         // Only a stop that certainly did not happen gives the request back and drops the
-        // attribution; one that may have happened keeps both.
-        if let Some(mut now) = store.load()?
-            && now.stage == Stage::Ready
-            && !now.stop_requested
+        // attribution; one whose provider request may have taken effect keeps both.
+        if !uncertain()
+            && let Some(mut now) = store.load()?
         {
             now.last_self_stop = earlier;
             store.save(&now)?;
