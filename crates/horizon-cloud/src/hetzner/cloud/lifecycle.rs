@@ -4,7 +4,7 @@
 //! the next provisioning creates a new server in the volume's location that
 //! attaches the same volume.
 use super::{Journal, Policy, Records, admitted, holds, worker};
-use crate::hetzner::servers::Announcement;
+use crate::hetzner::servers::{Announcement, OriginalServerAbsence};
 use crate::{
     Cancellation, CloudError, CreateState, Worker, WorkerSpec, WorkerStatus,
     hetzner::{Hetzner, volumes::Volume},
@@ -239,6 +239,35 @@ pub fn delete(
     records: &mut impl Records,
     grace: Duration,
 ) -> Result<(), CloudError> {
+    delete_with_observation(cloud, false, operation, journal, records, grace).map(drop)
+}
+
+/// Deletes through the same client and callbacks as [`delete`], optionally
+/// observing the exact server already Bound when this call began. The result
+/// reaches the caller only after all volume/key cleanup and durable saves succeed.
+/// Initial absence, resolved Requested history and Terminated retries yield None.
+/// A saved path, prior intent or a different client's 404 is never proof.
+/// # Errors
+/// As [`delete`]; errors and failed saves return no observation.
+pub fn delete_observed(
+    cloud: Cloud<'_>,
+    operation: &mut CreateState,
+    journal: &mut Journal,
+    records: &mut impl Records,
+    grace: Duration,
+) -> Result<Option<OriginalServerAbsence>, CloudError> {
+    delete_with_observation(cloud, true, operation, journal, records, grace)
+}
+
+fn delete_with_observation(
+    cloud: Cloud<'_>,
+    observe: bool,
+    operation: &mut CreateState,
+    journal: &mut Journal,
+    records: &mut impl Records,
+    grace: Duration,
+) -> Result<Option<OriginalServerAbsence>, CloudError> {
+    let original = if observe { bound_server_id(operation) } else { None };
     let Cloud {
         client,
         operation_id,
@@ -272,8 +301,20 @@ pub fn delete(
         *operation = next;
     }
     // A released server is deleted too: its stop may not have confirmed the delete.
+    let mut absence = None;
     if matches!(operation, CreateState::Bound { .. }) {
-        client.delete_server(operation_id, operation, cancel, |next| records.operation(next), |_| {})?;
+        if original.is_some() {
+            absence = client.delete_server_observed(
+                operation_id,
+                operation,
+                cancel,
+                |next| records.operation(next),
+                |_| {},
+                &mut |_| Ok(()),
+            )?;
+        } else {
+            client.delete_server(operation_id, operation, cancel, |next| records.operation(next), |_| {})?;
+        }
     }
     let mut fence = journal.volume.clone();
     if fence == CreateState::Requested {
@@ -324,7 +365,18 @@ pub fn delete(
             ..journal.clone()
         },
         records,
-    )
+    )?;
+    Ok(absence.filter(|proof| Some(proof.server_id()) == original && proof.operation_id() == operation_id))
+}
+
+fn bound_server_id(operation: &CreateState) -> Option<u64> {
+    let CreateState::Bound { worker_id } = operation else {
+        return None;
+    };
+    worker_id
+        .parse::<u64>()
+        .ok()
+        .filter(|id| *id != 0 && id.to_string() == *worker_id)
 }
 
 /// Saves `next` and only then lets the caller's journal take it, so a failed

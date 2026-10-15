@@ -4,7 +4,7 @@ use super::{server, spec, volume};
 use crate::{
     Cancellation, CloudError, CreateState,
     hetzner::{
-        cloud::{Cloud, Journal, Policy, Records, Stop, StopRecords, check, delete},
+        cloud::{Cloud, Journal, Policy, Records, Stop, StopRecords, check, delete, delete_observed},
         tests::provider,
     },
 };
@@ -266,4 +266,207 @@ fn a_server_found_for_an_uncertain_request_marks_its_volume_used_before_it_is_bo
     task.join().unwrap();
     assert_eq!(kept.operation, Some(CreateState::Bound { worker_id: "42".into() }));
     assert!(!kept.journal.expect("the journal is saved").unused);
+}
+
+#[test]
+fn observed_cloud_delete_returns_original_server_only_after_volume_key_and_saves() {
+    let (client, requests, task) = provider(vec![
+        (200, json!({"server":server("running", Some("192.0.2.10"))})),
+        (200, listing("actions", &json!([]))),
+        (200, json!({"action":{"id":3,"status":"success"}})),
+        gone(),
+        (200, json!({"volume":free_volume()})),
+        (204, Value::Null),
+        gone(),
+        (200, listing("ssh_keys", &json!([]))),
+        (200, listing("ssh_keys", &json!([]))),
+    ]);
+    let mut operation = CreateState::Bound { worker_id: "42".into() };
+    let mut journal = journal(CreateState::Bound { worker_id: "9".into() });
+    let mut kept = Kept::default();
+    let (operation_id, cancel) = (spec().operation_id, Cancellation::default());
+    let proof = delete_observed(
+        Cloud {
+            client: &client,
+            operation_id: &operation_id,
+            cancel: &cancel,
+        },
+        &mut operation,
+        &mut journal,
+        &mut kept,
+        Duration::ZERO,
+    )
+    .unwrap()
+    .unwrap();
+    task.join().unwrap();
+    assert_eq!((proof.operation_id(), proof.server_id()), (operation_id.as_str(), 42));
+    assert!(!kept.journal.unwrap().retains());
+    assert!(matches!(kept.operation, Some(CreateState::Terminated { .. })));
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 9);
+    assert_eq!(requests.iter().filter(|r| r.starts_with("DELETE ")).count(), 2);
+    assert!(
+        requests
+            .iter()
+            .all(|r| r.to_ascii_lowercase().contains("authorization: bearer secret-test-key"))
+    );
+}
+
+#[test]
+fn prepared_requested_or_already_terminated_history_never_gains_observed_proof() {
+    for original in [
+        CreateState::Prepared,
+        CreateState::Requested,
+        CreateState::Terminated { worker_id: "42".into() },
+    ] {
+        let responses = if original == CreateState::Requested {
+            vec![
+                (200, listing("servers", &json!([server("running", Some("192.0.2.10"))]))),
+                (200, json!({"server":server("running", Some("192.0.2.10"))})),
+                (200, listing("actions", &json!([]))),
+                (200, json!({"action":{"id":3,"status":"success"}})),
+                gone(),
+            ]
+        } else {
+            vec![]
+        };
+        let (client, requests, task) = provider(responses);
+        let mut operation = original.clone();
+        let mut journal = Journal::default();
+        let mut kept = Kept::default();
+        let (operation_id, cancel) = (spec().operation_id, Cancellation::default());
+        assert!(
+            delete_observed(
+                Cloud {
+                    client: &client,
+                    operation_id: &operation_id,
+                    cancel: &cancel
+                },
+                &mut operation,
+                &mut journal,
+                &mut kept,
+                Duration::ZERO
+            )
+            .unwrap()
+            .is_none()
+        );
+        task.join().unwrap();
+        assert_eq!(
+            requests.lock().unwrap().len(),
+            if original == CreateState::Requested { 5 } else { 0 }
+        );
+    }
+}
+
+#[test]
+fn observed_cloud_delete_initial_absence_and_unsaved_intent_return_no_proof() {
+    let (client, requests, task) = provider(vec![gone()]);
+    let mut operation = CreateState::Bound { worker_id: "42".into() };
+    let (operation_id, cancel) = (spec().operation_id, Cancellation::default());
+    assert!(
+        delete_observed(
+            Cloud {
+                client: &client,
+                operation_id: &operation_id,
+                cancel: &cancel
+            },
+            &mut operation,
+            &mut Journal::default(),
+            &mut Kept::default(),
+            Duration::ZERO
+        )
+        .unwrap()
+        .is_none()
+    );
+    task.join().unwrap();
+    assert_eq!(requests.lock().unwrap().len(), 1);
+    let (client, requests, task) = provider(vec![]);
+    assert!(matches!(
+        delete_observed(
+            Cloud {
+                client: &client,
+                operation_id: &operation_id,
+                cancel: &cancel
+            },
+            &mut CreateState::Bound { worker_id: "42".into() },
+            &mut Journal::default(),
+            &mut Refusing,
+            Duration::ZERO
+        ),
+        Err(CloudError::Persistence)
+    ));
+    task.join().unwrap();
+    assert!(requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn observed_cloud_delete_drops_server_proof_on_remaining_provider_or_final_save_failure() {
+    struct FailFinal;
+    impl Records for FailFinal {
+        fn journal(&mut self, journal: &Journal) -> Result<(), CloudError> {
+            if journal.key.is_none() {
+                Err(CloudError::Persistence)
+            } else {
+                Ok(())
+            }
+        }
+        fn operation(&mut self, _: &CreateState) -> Result<(), CloudError> {
+            Ok(())
+        }
+    }
+    for final_save in [false, true] {
+        let mut responses = vec![
+            (200, json!({"server":server("running", Some("192.0.2.10"))})),
+            (200, listing("actions", &json!([]))),
+            (200, json!({"action":{"id":3,"status":"success"}})),
+            gone(),
+        ];
+        if final_save {
+            responses.extend([
+                (200, listing("ssh_keys", &json!([]))),
+                (200, listing("ssh_keys", &json!([]))),
+            ]);
+        } else {
+            responses.push((
+                401,
+                json!({"error":{"code":"unauthorized","message":"synthetic refusal"}}),
+            ));
+        }
+        let (client, requests, task) = provider(responses);
+        let mut operation = CreateState::Bound { worker_id: "42".into() };
+        let mut journal = journal(if final_save {
+            CreateState::Prepared
+        } else {
+            CreateState::Bound { worker_id: "9".into() }
+        });
+        let (operation_id, cancel) = (spec().operation_id, Cancellation::default());
+        let cloud = Cloud {
+            client: &client,
+            operation_id: &operation_id,
+            cancel: &cancel,
+        };
+        let result = if final_save {
+            delete_observed(cloud, &mut operation, &mut journal, &mut FailFinal, Duration::ZERO)
+        } else {
+            delete_observed(
+                cloud,
+                &mut operation,
+                &mut journal,
+                &mut Kept::default(),
+                Duration::ZERO,
+            )
+        };
+        assert!(result.is_err());
+        task.join().unwrap();
+        assert!(journal.key.is_some());
+        assert_eq!(
+            requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|r| r.starts_with("DELETE "))
+                .count(),
+            1
+        );
+    }
 }

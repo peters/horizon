@@ -962,3 +962,207 @@ fn creation_waits_for_the_follow_up_start() {
     task.join().unwrap();
     assert!(requests.lock().unwrap()[2].starts_with("GET /actions/2 "));
 }
+
+#[test]
+fn observed_server_delete_needs_positive_identity_on_this_client_not_a_new_clients_404() {
+    let gone = || (404, error("not_found", "server not found"));
+    let (client, requests, task) = provider(vec![
+        (200, json!({"server":server(42)})),
+        (200, listing("actions", json!([]))),
+        (200, json!({"action":action(5, "success")})),
+        gone(),
+    ]);
+    let mut state = CreateState::Bound { worker_id: "42".into() };
+    let mut saved = Vec::new();
+    let proof = client
+        .delete_server_observed(
+            OPERATION,
+            &mut state,
+            &Cancellation::default(),
+            |next| {
+                saved.push(next.clone());
+                Ok(())
+            },
+            |_| {},
+            &mut |_| Ok(()),
+        )
+        .unwrap()
+        .unwrap();
+    task.join().unwrap();
+    assert_eq!((proof.operation_id(), proof.server_id()), (OPERATION, 42));
+    assert_eq!(saved, vec![CreateState::Terminated { worker_id: "42".into() }]);
+    assert_eq!(
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.starts_with("DELETE "))
+            .count(),
+        1
+    );
+
+    let (mut other, requests, task) = provider(vec![gone()]);
+    other.credential = Credential::new("synthetic-other-project".into()).unwrap();
+    let mut retry = CreateState::Bound { worker_id: "42".into() };
+    assert!(
+        other
+            .delete_server_observed(
+                OPERATION,
+                &mut retry,
+                &Cancellation::default(),
+                |_| Ok(()),
+                |_| {},
+                &mut |_| Ok(())
+            )
+            .unwrap()
+            .is_none()
+    );
+    task.join().unwrap();
+    assert_eq!(
+        requests.lock().unwrap().len(),
+        1,
+        "the new client's initial404 has no inherited positive observation"
+    );
+}
+
+#[test]
+fn observed_server_delete_refuses_wrong_identity_malformed_responses_and_cancel_before_dispatch() {
+    let mut wrong_id = server(43);
+    wrong_id["name"] = json!(format!("horizon-cloud-{OPERATION}"));
+    let mut wrong_owner = server(42);
+    wrong_owner["labels"]["horizon-operation"] = json!("foreign-operation");
+    for response in [json!({"server":wrong_id}), json!({"server":wrong_owner}), json!({})] {
+        let (client, requests, task) = provider(vec![(200, response)]);
+        let mut state = CreateState::Bound { worker_id: "42".into() };
+        assert!(
+            client
+                .delete_server_observed(
+                    OPERATION,
+                    &mut state,
+                    &Cancellation::default(),
+                    |_| panic!("no save"),
+                    |_| {},
+                    &mut |_| panic!("no mutation")
+                )
+                .is_err()
+        );
+        task.join().unwrap();
+        assert_eq!(requests.lock().unwrap().len(), 1);
+        assert!(matches!(state, CreateState::Bound { .. }));
+    }
+    let (client, requests, task) = provider(vec![]);
+    let cancel = Cancellation::default();
+    cancel.cancel();
+    assert!(
+        client
+            .delete_server_observed(
+                OPERATION,
+                &mut CreateState::Bound { worker_id: "42".into() },
+                &cancel,
+                |_| panic!("no save"),
+                |_| {},
+                &mut |_| panic!("no mutation")
+            )
+            .is_err()
+    );
+    task.join().unwrap();
+    assert!(requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn observed_server_delete_propagates_final_absence_save_failure_without_a_proof() {
+    let (client, requests, task) = provider(vec![
+        (200, json!({"server":server(42)})),
+        (200, listing("actions", json!([]))),
+        (200, json!({"action":action(5, "success")})),
+        (404, error("not_found", "gone")),
+    ]);
+    let mut state = CreateState::Bound { worker_id: "42".into() };
+    assert!(matches!(
+        client.delete_server_observed(
+            OPERATION,
+            &mut state,
+            &Cancellation::default(),
+            |_| Err(CloudError::Persistence),
+            |_| {},
+            &mut |_| Ok(())
+        ),
+        Err(CloudError::Persistence)
+    ));
+    task.join().unwrap();
+    assert!(matches!(state, CreateState::Bound { .. }));
+    assert_eq!(
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.starts_with("DELETE "))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn observed_server_delete_does_not_prove_absence_after_failed_or_lost_delete_replies() {
+    for response in [
+        None,
+        Some((401, error("unauthorized", "refused"))),
+        Some((200, json!({}))),
+    ] {
+        let replied = response.is_some();
+        let mut responses = vec![
+            (200, json!({"server":server(42)})),
+            (200, listing("actions", json!([]))),
+        ];
+        responses.extend(response);
+        let (client, requests, task) = provider(responses);
+        let mut state = CreateState::Bound { worker_id: "42".into() };
+        assert!(
+            client
+                .delete_server_observed(
+                    OPERATION,
+                    &mut state,
+                    &Cancellation::default(),
+                    |_| panic!("a failed delete must not save absence"),
+                    |_| {},
+                    &mut |_| Ok(())
+                )
+                .is_err()
+        );
+        task.join().unwrap();
+        assert!(matches!(state, CreateState::Bound { .. }));
+        assert_eq!(requests.lock().unwrap().len(), if replied { 3 } else { 2 });
+    }
+}
+
+#[test]
+fn observed_server_delete_rejects_noncanonical_and_terminated_history_as_proof() {
+    for mut state in [
+        CreateState::Bound {
+            worker_id: "042".into(),
+        },
+        CreateState::Terminated { worker_id: "42".into() },
+    ] {
+        let (client, requests, task) = provider(vec![
+            (200, json!({"server":server(42)})),
+            (200, listing("actions", json!([]))),
+            (200, json!({"action":action(5, "success")})),
+            (404, error("not_found", "gone")),
+        ]);
+        assert!(
+            client
+                .delete_server_observed(
+                    OPERATION,
+                    &mut state,
+                    &Cancellation::default(),
+                    |_| Ok(()),
+                    |_| {},
+                    &mut |_| Ok(())
+                )
+                .unwrap()
+                .is_none()
+        );
+        task.join().unwrap();
+        assert_eq!(requests.lock().unwrap().len(), 4);
+    }
+}
