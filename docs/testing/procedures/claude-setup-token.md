@@ -163,11 +163,15 @@ that Claude on the worker starts signed in.
    the file is missing. The card still shows that the cloud is stopped. The provider
    console shows no started worker for this cloud.
 
-4. Move the token file back. Click **Resume worker**.
+4. Move the token file back.
 
    ```sh
    mv <path of T02 step 2>.away <path of T02 step 2>
    ```
+
+   Result: The command stops with exit code 0.
+
+5. Click **Resume worker**.
 
    Result: The card shows Ready.
 
