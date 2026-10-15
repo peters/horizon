@@ -126,3 +126,13 @@ Ordinary unknown legacy fields remain compatible, but mixed or downgraded
 publisher envelopes and reserved null keys are refused.
 
 The desktop SDK also has an unwired exact-device HTTP prerequisite. It keeps API credentials on the desktop and returns typed retained reasons for missing/offline/denied/unverified404 outcomes. It does not enable automatic cloud node cleanup or add a UI/CLI/MCP deletion operation. See docs/architecture/tailnet-node-api.md and docs/testing/procedures/tailnet-node-api.md.
+
+### Host-only pull preparation prerequisite
+
+The provider-aware registry helper can prepare a direct-host pull grant without a
+RunPod key. It stores host records separately from provider registry records and
+refuses provider registry creation from a host grant. Both scopes pin the same
+read-only identity for each generation. Rotate the generation when that identity
+changes. Existing deployment callers are unchanged; portable launch wiring follows
+separately. This helper does not prove a live registry pull or revoke an installed
+host credential. See docs/testing/procedures/host-pull-journal.md.

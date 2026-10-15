@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/cloud_panel.rs,crates/horizon-core/src/cloud_panel/launch_serde/**,crates/horizon-core/src/cloud_panel/launch_serde.rs,crates/horizon-cloud/src/image_publishing.rs,crates/horizon-cloud/src/image_publishing/**,crates/horizon-core/src/cloud_runtime/github/publish/publication.rs,crates/horizon-core/src/cloud_runtime/github/publish/publication/**,crates/horizon-core/src/cloud_runtime/publishing.rs,crates/horizon-core/src/cloud_runtime/publishing/**,crates/horizon-core/src/cloud_runtime/setup/publishing.rs,crates/horizon-core/src/cloud_runtime/setup/publishing/**,crates/horizon-core/src/cloud_runtime/settings.rs"
+applyTo: "crates/horizon-core/src/cloud_panel.rs,crates/horizon-core/src/cloud_panel/launch_serde/**,crates/horizon-core/src/cloud_panel/launch_serde.rs,crates/horizon-cloud/src/image_publishing.rs,crates/horizon-cloud/src/image_publishing/**,crates/horizon-core/src/cloud_runtime/github/publish/publication.rs,crates/horizon-core/src/cloud_runtime/github/publish/publication/**,crates/horizon-core/src/cloud_runtime/publishing.rs,crates/horizon-core/src/cloud_runtime/publishing/**,crates/horizon-core/src/cloud_runtime/setup/publishing.rs,crates/horizon-core/src/cloud_runtime/setup/publishing/**,crates/horizon-core/src/cloud_runtime/settings.rs,crates/horizon-core/src/cloud_runtime/registry/**"
 ---
 
 # Image destination boundary
@@ -53,3 +53,11 @@ inside a flat body, even when null. No publication is activated by this prerequi
 Recipe/profile equality is enforced before serialization as well as during
 deserialization. An inconsistent in-memory recipe emits no standalone launch
 JSON, and JSON/YAML serialization fail before it can reach an older reader.
+
+Host-only pull preparation must not read a compute API key or create provider registry IDs.
+Existing provider journals retain their original path and account identity. Direct-host and
+provider journals have separate operation locks, but the first material pin is one
+generation-wide transaction. Report in-place pull changes accepted through another scope,
+provider mutation state accepted in a host journal, or publishing secrets sent to a worker.
+The deployment caller remains unchanged in this prerequisite; provider-aware launch wiring
+follows separately. Local checks cannot revoke a credential already installed on a host.

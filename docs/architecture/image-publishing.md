@@ -118,8 +118,15 @@ Unbound images retain the existing legacy-provider behavior.
 Temporary registry Docker directories are private at creation on Unix.
 These checks prove the immutable image read at that moment; they cannot guarantee future issuer availability.
 
-This prerequisite retains the existing Container registry journal requirement for a configured RunPod account.
-A host-only journal is a required follow-up before portable publishing activates on a Hetzner-only machine.
+The provider-aware preparation helper stores direct-host pull records under the private registry root's `hosts` directory.
+It does not read a RunPod key or create provider registry IDs. Existing RunPod records keep their original path and account binding.
+The two journals retain separate operation locks, but one generation-wide first-use transaction pins their shared pull identity.
+A changed pull username or secret requires a new generation, including when the other journal was used first.
+Malformed records and a direct-host record with provider mutation state are refused.
+
+This is a preparation prerequisite. Active deployment callers still use the existing provider journal;
+the portable launch integration must select the provider-aware helper before activation.
+Local validation does not revoke a pull credential already installed on a host.
 
 The verified CPU pull material retains the earliest configured or issuer-observed expiry.
 An elapsed known expiry stops allocation before provider contact.
