@@ -51,6 +51,9 @@ pub enum BrowserAuditAction {
     Resize {
         viewport: Option<[u32; 2]>,
     },
+    Zoom {
+        percent: Option<u32>,
+    },
     SessionCreated {
         backend: crate::BackendKind,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -251,6 +254,7 @@ impl BrowserAuditAction {
                 orientation: *orientation,
             },
             BrowserControlAction::Resize { viewport, .. } => Self::Resize { viewport: *viewport },
+            BrowserControlAction::Zoom { percent, .. } => Self::Zoom { percent: *percent },
             BrowserControlAction::Navigate { url, .. } => Self::Navigate {
                 destination: redact_url(url),
             },

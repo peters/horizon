@@ -366,7 +366,10 @@ impl Driver {
                     "wait for orientation acknowledgement before another page action",
                 )),
             );
-        } else if matches!(request.action, crate::BrowserControlAction::Resize { .. }) {
+        } else if matches!(
+            request.action,
+            crate::BrowserControlAction::Resize { .. } | crate::BrowserControlAction::Zoom { .. }
+        ) {
             self.begin_resize(request);
         } else {
             self.service_agent_request(request, events, stop);
@@ -529,7 +532,7 @@ impl Driver {
             BrowserCommand::Forward => self.traverse(1, events).map(|()| false),
             BrowserCommand::SetViewport { width, height } => {
                 if self.viewport_policy.follow_host([width, height]) {
-                    self.set_viewport(width, height, events);
+                    self.follow_host_viewport(events);
                 }
                 Ok(false)
             }

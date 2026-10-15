@@ -5,7 +5,7 @@ mod network;
 mod orientation;
 mod viewport;
 pub(crate) use orientation::{OrientationInput, OrientationOutput};
-pub(crate) use viewport::{ResizeInput, ResizeOutput};
+pub(crate) use viewport::{ResizeInput, ResizeOutput, ZoomInput, ZoomOutput};
 mod video;
 
 pub(crate) use http_auth::{HttpAuthInput, HttpAuthOutput};
@@ -1044,6 +1044,7 @@ fn semantic_capabilities(
     .collect::<Vec<_>>();
     if backend != BackendKind::SafariWebDriver && !remote {
         capabilities.push("resize".to_string());
+        capabilities.push("zoom".to_string());
         capabilities.extend(
             [
                 "network_capture",

@@ -157,9 +157,20 @@ pub enum BrowserControlValue {
         viewport: [u32; 2],
     },
     /// Browser-measured CSS content size. `requested: None` means host sizing.
+    /// Under a page zoom the applied size is the requested size divided by
+    /// `zoom_percent / 100`.
     Viewport {
         requested: Option<[u32; 2]>,
         applied: [u32; 2],
+        #[serde(default = "default_zoom_percent")]
+        zoom_percent: u32,
+    },
+    /// Applied page zoom and the browser-measured CSS viewport it produced.
+    /// `requested: None` means a reset to 100 percent.
+    Zoom {
+        requested: Option<u32>,
+        applied: u32,
+        viewport: [u32; 2],
     },
     Accepted,
     Navigation {
@@ -249,4 +260,8 @@ fn now_millis() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+}
+
+const fn default_zoom_percent() -> u32 {
+    100
 }

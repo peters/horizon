@@ -1,6 +1,6 @@
 ---
 procedure: browser-site-checks
-feature: Browser key presses for site checks
+feature: Browser key presses and page zoom for site checks
 platforms: [linux, windows, macos]
 cost: none
 destructive: no
@@ -12,8 +12,9 @@ owner: peters
 
 ## 1. Purpose
 
-This procedure tests the `browser_act` `press` action. Site smoke tests use it
-to examine the keyboard focus order and the focus ring of a page.
+This procedure tests the `browser_act` `press` action and the `browser_zoom`
+tool. Site smoke tests use them to examine the keyboard focus order, the focus
+ring, and the reflow of a page at a high zoom.
 
 ## 2. Applicability
 
@@ -21,6 +22,7 @@ to examine the keyboard focus order and the focus ring of a page.
 - Test local Chromium and local Firefox on each available platform.
 - Safari and remote targets use classic WebDriver actions. A real mobile device
   can ignore focus keys such as `Tab`.
+- Safari and remote targets refuse `browser_zoom` with `unsupported_backend`.
 - This procedure does not test text entry. Text entry uses `fill`.
 
 ## 3. Equipment and preconditions
@@ -113,7 +115,48 @@ to examine the keyboard focus order and the focus ring of a page.
    Result: The `press` records show `Tab` for named keys and `printable` for `q`.
    No record shows the pressed key as `q`.
 
-### 5.5 K05 — Repeat in Firefox
+### 5.5 Z01 — Zoom to 200 percent
+
+Do this task in the Chromium panel. K05 repeats it in Firefox.
+
+1. Call `browser_resize` with `width: 1280` and `height: 800`.
+
+   Result: `applied` is 1280 x 800 and `zoom_percent` is 100. The fixture shows
+   `width: 1280 CSS px · columns: 3`.
+
+2. Call `browser_zoom` with `percent: 200`.
+
+   Result: `applied_percent` is 200 and `css_viewport` is 640 x 400. The fixture
+   shows `width: 640 CSS px · columns: 1`.
+
+3. Read `[document.documentElement.scrollWidth, document.documentElement.clientWidth]` with `browser_evaluate`.
+
+   Result: The two values are equal. No content is clipped horizontally.
+
+### 5.6 Z02 — Combine zoom with a pin and reset
+
+1. Call `browser_zoom` with `percent: 400`.
+
+   Result: `css_viewport` is 320 x 200.
+
+2. Call `browser_resize` with `width: 1000` and `height: 800`.
+
+   Result: `applied` is 250 x 200 and `zoom_percent` is 400.
+
+3. Call `browser_zoom` with `reset: true`.
+
+   Result: `requested_percent` is null, `applied_percent` is 100 and
+   `css_viewport` is 1000 x 800.
+
+4. Call `browser_resize` with `reset: true`.
+
+   Result: The page follows the panel size again.
+
+5. Call `browser_zoom` with `percent: 501`.
+
+   Result: The server refuses the request with `invalid_input`.
+
+### 5.7 K05 — Repeat in Firefox
 
 1. Close the input of the Chromium MCP server.
 
@@ -123,13 +166,13 @@ to examine the keyboard focus order and the focus ring of a page.
 
    Result: `browser_list` shows one Firefox panel with the `press` capability.
 
-3. Do K01 and K02 in the Firefox panel.
+3. Do K01, K02, Z01 and Z02 in the Firefox panel.
 
    Result: The results are the same as in Chromium.
 
 ## 6. Pass criteria
 
-- K01 to K05 give the specified results in Chromium and Firefox.
+- K01 to K05, Z01 and Z02 give the specified results in Chromium and Firefox.
 - No audit record contains a printable key.
 
 ## 7. Cleanup

@@ -156,6 +156,17 @@ shell commands, files, or other MCP servers.
   the top-level document. Child refs return `unsupported_frame_action` for
   `scroll` and `set_files`. Safari and remote sessions scan only the top-level
   document.
+- `browser_zoom` sets a page zoom of 25-500 percent (`reset: true` returns to
+  100) on local Chromium and Firefox. The page lays out in a CSS viewport of the
+  panel size, or the `browser_resize` pin, divided by the zoom, so media
+  queries and reflow behave as at that browser zoom level, and the panel
+  magnifies the frame. `devicePixelRatio` does not change. The result reports
+  `requested_percent`, `applied_percent` and the measured `css_viewport`. The
+  zoom survives navigation and panel layout until reset or session
+  replacement. A zoom whose CSS viewport would exceed 8000 pixels per axis is
+  refused with `invalid_input`; if the panel grows later, the zoomed viewport
+  stops at 8000 pixels on that axis. Safari and remote sessions return
+  `unsupported_backend`.
 - `browser_act` clicks, fills, presses keys, scrolls, reloads, or traverses
   history. Set `count: 2` on a click for a backend-native trusted double-click.
   `press` takes a `key` such as `Tab`, `Shift+Tab`, `Enter`, `Escape`,

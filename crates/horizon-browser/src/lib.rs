@@ -64,8 +64,9 @@ pub use horizon_browser_protocol::{
     DEFAULT_WAIT_TIMEOUT_MILLIS, FrameDelivery, MAX_ATTACHMENT_FILES, MAX_CLICK_COUNT, MAX_NAVIGATION_TIMEOUT_MILLIS,
     MAX_PRESS_COUNT, MAX_QUERY_RESULTS, MAX_REMOTE_ATTACHMENT_BYTES, MAX_REMOTE_ATTACHMENT_REQUEST_BYTES,
     MAX_SNAPSHOT_NODES, MAX_VIDEO_COMPRESSION_LEVEL, MAX_VIDEO_FILE_BYTES, MAX_VIDEO_FPS, MAX_VIDEO_MAX_WIDTH,
-    MAX_VIDEO_QUALITY, MAX_WAIT_TIMEOUT_MILLIS, MIN_VIDEO_FILE_BYTES, MIN_VIDEO_FPS, MIN_VIDEO_MAX_WIDTH,
-    MIN_VIDEO_QUALITY, NavigationWait, SecretString, normalize_navigation_target,
+    MAX_VIDEO_QUALITY, MAX_WAIT_TIMEOUT_MILLIS, MAX_ZOOM_PERCENT, MIN_VIDEO_FILE_BYTES, MIN_VIDEO_FPS,
+    MIN_VIDEO_MAX_WIDTH, MIN_VIDEO_QUALITY, MIN_ZOOM_PERCENT, NavigationWait, SecretString,
+    normalize_navigation_target, zoomed_viewport,
 };
 pub use input::{BrowserButton, BrowserEditCommand, BrowserInput, BrowserKey, BrowserKeyChord, BrowserModifiers};
 pub use native_select::{NativeSelectOption, NativeSelectPopup};
