@@ -192,13 +192,15 @@ impl Host {
         self.forward(&format!("{}:{remote}", local.display()))
     }
 
-    /// The SSH command that forwards `local_port` on this computer's loopback to
-    /// `remote_port` on this host's loopback until the command ends, as for a desktop
-    /// that a container on the host publishes there. None for this computer.
+    /// The SSH command that forwards `local`, a socket path of this computer in a private
+    /// folder, to `remote_port` on this host's loopback until the command ends, as for a
+    /// desktop that a container on the host publishes there. Only who can open that
+    /// folder reaches it, unlike a port of this computer's loopback, which another
+    /// program could take first. None for this computer.
     /// # Errors
     /// As [`Host::validate`].
-    pub fn port_forward(&self, local_port: u16, remote_port: u16) -> Result<Option<Command>, CloudError> {
-        self.forward(&format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"))
+    pub fn port_forward(&self, local: &Path, remote_port: u16) -> Result<Option<Command>, CloudError> {
+        self.forward(&format!("{}:127.0.0.1:{remote_port}", local.display()))
     }
 
     /// An SSH session that runs nothing and keeps the local forward `spec` open. It ends

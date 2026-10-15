@@ -296,7 +296,7 @@ struct Job {
     config: std::sync::OnceLock<tempfile::TempDir>,
     /// On a Docker host, the SSH session that brings the desktop's port to this computer;
     /// it ends with the preview.
-    forward: std::sync::Mutex<Option<super::proof::Forward>>,
+    forward: std::sync::Mutex<Option<super::proof::PortForward>>,
 }
 
 impl Job {

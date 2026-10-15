@@ -743,13 +743,21 @@ fn a_host_forwards_its_engine_socket_and_a_loopback_port_over_its_own_ssh() {
         Some("me@builder"),
         "the address comes after --"
     );
-    let port = args(ssh.port_forward(41000, 32768).unwrap().unwrap());
+    let port = args(
+        ssh.port_forward(Path::new("/private/run/desktop.sock"), 32768)
+            .unwrap()
+            .unwrap(),
+    );
     assert!(
         port.windows(2)
-            .any(|pair| pair == ["-L", "127.0.0.1:41000:127.0.0.1:32768"])
+            .any(|pair| pair == ["-L", "/private/run/desktop.sock:127.0.0.1:32768"])
     );
     ssh.access = Access::TailscaleSsh;
-    let tailscale = args(ssh.port_forward(41000, 32768).unwrap().unwrap());
+    let tailscale = args(
+        ssh.port_forward(Path::new("/private/run/desktop.sock"), 32768)
+            .unwrap()
+            .unwrap(),
+    );
     assert_eq!(&tailscale[..3], ["tailscale", "ssh", "me@builder"]);
     let this_pc = Host {
         name: "local".into(),

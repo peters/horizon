@@ -775,9 +775,22 @@ impl Run {
     /// the proof's containers, image and volume and the run's folder go. A new setup of
     /// the same repository waits for that, so two setups never work in one folder.
     pub(super) fn discard(self) {
-        // Noted before the thread starts, so an exit that comes first keeps them.
-        let docker_host = self.build_on.as_ref().map(|host| host.name.as_str());
-        proof::expect_removal(&self.repository, &proof::run_id(&self.status_path), (docker_host, None));
+        // Noted first, so an exit keeps them: on the pinned host and engine, else the run's.
+        let pinned = self.proof.as_ref().map(Proof::daemon);
+        let on = pinned
+            .as_ref()
+            .and_then(|pinned| pinned.get())
+            .and_then(proof::Daemon::remote);
+        let docker_host = on.map_or_else(
+            || self.build_on.as_ref().map(|host| host.name.clone()),
+            |on| Some(on.name().to_owned()),
+        );
+        let engine_id = on.map(|on| on.engine_id().to_owned());
+        proof::expect_removal(
+            &self.repository,
+            &proof::run_id(&self.status_path),
+            (docker_host.as_deref(), engine_id.as_deref()),
+        );
         let repository = self.repository.clone();
         keep_ending_of(&repository, std::thread::spawn(move || drop(self)));
     }

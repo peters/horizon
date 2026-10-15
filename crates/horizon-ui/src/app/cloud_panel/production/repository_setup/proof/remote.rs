@@ -231,27 +231,96 @@ impl Remote {
         format!("unix://{}", self.socket.display())
     }
 
-    /// Forwards `remote_port` on the host's loopback to a free port on this computer's
-    /// loopback, as for a preview's desktop; the port and the session that keeps it.
+    /// Brings `remote_port` on the host's loopback to a port of this computer's loopback,
+    /// as for a preview's desktop: SSH forwards it to a socket in a private folder, and
+    /// Horizon relays the port it holds itself to that socket, so no other program can
+    /// stand in for the desktop. The port and what keeps it open.
+    #[cfg(unix)]
     pub(in crate::app::cloud_panel::production::repository_setup) fn forward_port(
         &self,
         remote_port: u16,
-    ) -> Result<(u16, Forward), String> {
-        let local = free_port()?;
+    ) -> Result<(u16, PortForward), String> {
+        let folder = private_folder()?;
+        let socket = folder.path().join("desktop.sock");
         let command = self
             .host
-            .port_forward(local, remote_port)
+            .port_forward(&socket, remote_port)
             .map_err(|error| error.to_string())?
             .ok_or("this computer's Docker needs no forward")?;
         let mut forward = Forward::start(command)?;
-        forward.wait(OPEN_TIMEOUT, || {
-            std::net::TcpStream::connect_timeout(
-                &std::net::SocketAddr::from(([127, 0, 0, 1], local)),
-                Duration::from_millis(200),
-            )
-            .is_ok()
-        })?;
-        Ok((local, forward))
+        forward.wait(OPEN_TIMEOUT, || socket.exists())?;
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
+            .map_err(|error| format!("cannot open a port for the desktop: {error}"))?;
+        let port = listener
+            .local_addr()
+            .map_err(|error| format!("cannot open a port for the desktop: {error}"))?
+            .port();
+        listener
+            .set_nonblocking(true)
+            .map_err(|error| format!("cannot open a port for the desktop: {error}"))?;
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let relay = std::sync::Arc::clone(&stop);
+        std::thread::spawn(move || relay_to(&listener, &socket, &relay));
+        Ok((
+            port,
+            PortForward {
+                _forward: forward,
+                _folder: folder,
+                stop,
+            },
+        ))
+    }
+
+    /// A desktop of a Docker host comes to a Unix socket, so only a Unix computer shows it.
+    #[cfg(not(unix))]
+    pub(in crate::app::cloud_panel::production::repository_setup) fn forward_port(
+        &self,
+        _remote_port: u16,
+    ) -> Result<(u16, PortForward), String> {
+        Err("a preview on a Docker host shows on Linux and macOS only".to_owned())
+    }
+}
+
+/// A desktop port of a Docker host brought to this computer: the SSH forward to a socket
+/// in a private folder, and the relay from Horizon's own loopback port. All of it ends
+/// with this value. Only a Unix computer makes one.
+#[cfg_attr(not(unix), allow(dead_code))]
+pub(in crate::app::cloud_panel::production::repository_setup) struct PortForward {
+    _forward: Forward,
+    _folder: tempfile::TempDir,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for PortForward {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Relays each connection to `listener` to the socket at `socket`, until `stop`.
+#[cfg(unix)]
+fn relay_to(listener: &std::net::TcpListener, socket: &std::path::Path, stop: &std::sync::atomic::AtomicBool) {
+    while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+        let Ok((client, _)) = listener.accept() else {
+            std::thread::sleep(Duration::from_millis(50));
+            continue;
+        };
+        let Ok(desktop) = std::os::unix::net::UnixStream::connect(socket) else {
+            continue;
+        };
+        let _ = client.set_nonblocking(false);
+        let (Ok(mut client_in), Ok(mut desktop_in)) = (client.try_clone(), desktop.try_clone()) else {
+            continue;
+        };
+        let (mut client_out, mut desktop_out) = (client, desktop);
+        std::thread::spawn(move || {
+            let _ = std::io::copy(&mut client_in, &mut desktop_out);
+            let _ = desktop_out.shutdown(std::net::Shutdown::Write);
+        });
+        std::thread::spawn(move || {
+            let _ = std::io::copy(&mut desktop_in, &mut client_out);
+            let _ = client_out.shutdown(std::net::Shutdown::Write);
+        });
     }
 }
 
@@ -315,35 +384,40 @@ fn answers(address: &str) -> bool {
     }
 }
 
-/// A new folder only this user may open, for a forwarded socket: in the user's runtime
-/// folder when there is one, since a socket path must stay short.
-fn private_folder() -> Result<tempfile::TempDir, String> {
-    let parent: Option<PathBuf> = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .filter(|folder| folder.is_dir());
-    let mut builder = tempfile::Builder::new();
-    builder.prefix("horizon-docker-");
-    #[cfg(unix)]
-    builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
-    match parent {
-        Some(parent) => builder.tempdir_in(parent),
-        None => builder.tempdir(),
-    }
-    .map_err(|error| format!("cannot make a private folder for the Docker forward: {error}"))
-}
+/// The longest socket path this computer takes, with room to spare: 104 bytes on macOS,
+/// 108 on Linux.
+const SOCKET_PATH_LIMIT: usize = 100;
 
-/// A port of this computer's loopback that no program holds now.
-fn free_port() -> Result<u16, String> {
-    std::net::TcpListener::bind(("127.0.0.1", 0))
-        .and_then(|listener| listener.local_addr())
-        .map(|address| address.port())
-        .map_err(|error| format!("cannot find a free port: {error}"))
+/// A new folder only this user may open, for a forwarded socket: in the user's runtime
+/// folder when there is one, else the temporary folder, else `/tmp`, whichever leaves a
+/// socket path short enough; a long `TMPDIR` would make SSH fail to open the socket.
+fn private_folder() -> Result<tempfile::TempDir, String> {
+    let candidates = [
+        std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
+        Some(std::env::temp_dir()),
+        Some(PathBuf::from("/tmp")),
+    ];
+    let mut last = None;
+    for parent in candidates.into_iter().flatten().filter(|folder| folder.is_dir()) {
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("horizon-docker-");
+        #[cfg(unix)]
+        builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
+        match builder.tempdir_in(&parent) {
+            Ok(folder) if fits_a_socket(&folder.path().join("desktop.sock")) => return Ok(folder),
+            Ok(_) => last = Some("its path is too long for a socket".to_owned()),
+            Err(error) => last = Some(error.to_string()),
+        }
+    }
+    Err(format!(
+        "cannot make a private folder for the Docker forward: {}",
+        last.unwrap_or_else(|| "no temporary folder".to_owned())
+    ))
 }
 
 /// Whether `path` is short enough for a Unix socket address.
-#[cfg(test)]
 fn fits_a_socket(path: &std::path::Path) -> bool {
-    path.as_os_str().len() < 100
+    path.as_os_str().len() < SOCKET_PATH_LIMIT
 }
 
 #[cfg(test)]
@@ -367,6 +441,40 @@ mod tests {
             let mode = std::fs::metadata(folder.path()).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o700);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_desktop_port_is_horizons_own_and_relays_to_the_forwarded_socket() {
+        use std::io::{Read as _, Write as _};
+        let folder = private_folder().unwrap();
+        let socket = folder.path().join("desktop.sock");
+        // A desktop that answers each line with the line.
+        let desktop = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = desktop.accept() {
+                let mut buffer = [0_u8; 64];
+                let read = stream.read(&mut buffer).unwrap();
+                stream.write_all(&buffer[..read]).unwrap();
+            }
+        });
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let relay = std::sync::Arc::clone(&stop);
+        let relaying = std::thread::spawn(move || relay_to(&listener, &socket, &relay));
+        let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        client.write_all(b"RFB 003.008\n").unwrap();
+        let mut answer = [0_u8; 12];
+        client.read_exact(&mut answer).unwrap();
+        assert_eq!(&answer, b"RFB 003.008\n");
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        relaying.join().unwrap();
+        assert!(
+            std::net::TcpStream::connect(("127.0.0.1", port)).is_err(),
+            "the port closes with the relay"
+        );
     }
 
     #[test]
