@@ -321,13 +321,14 @@ impl State {
                 emit: &|_| {},
                 secrets: Vec::new(),
             };
-            let result = management::manage(
+            let result = management::manage_prepared(
                 &key.root,
                 &management::Request {
                     repository: key.repository,
                     profile: key.profile_name,
                     action,
                 },
+                &key.profile,
                 &runtime::new_id(),
                 &runner,
             )
@@ -369,13 +370,14 @@ impl State {
                 emit: &emit,
                 secrets: Vec::new(),
             };
-            let result = management::manage(
+            let result = management::manage_prepared(
                 &key.root,
                 &management::Request {
                     repository: key.repository,
                     profile: key.profile_name,
                     action: management::Action::Authenticate { shown, switch },
                 },
+                &key.profile,
                 &id,
                 &runner,
             )

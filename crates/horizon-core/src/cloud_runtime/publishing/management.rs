@@ -147,6 +147,24 @@ pub fn manage(root: &Path, request: &Request, operation_id: &str, runner: &Runne
     })
 }
 
+/// Manage the profile already resolved by a trusted host launch adapter.
+/// The adapter must use the same prepared profile for inspection and mutation,
+/// including historical revisions. This profile is not a public request field.
+/// Account, exact grant, shown override and cancellation checks remain shared.
+/// # Errors
+/// Invalid scope, stale choice, disabled feature or refused/cancelled authentication.
+pub fn manage_prepared(
+    root: &Path,
+    request: &Request,
+    profile: &Profile,
+    operation_id: &str,
+    runner: &Runner<'_>,
+) -> Result<Info> {
+    manage_prepared_with(root, request, profile, operation_id, runner, |settings, key, switch| {
+        authenticate(settings, key, switch, runner)
+    })
+}
+
 pub(super) fn manage_owned(
     root: &Path,
     request: &Request,
@@ -198,7 +216,24 @@ fn manage_with(
         .profiles
         .get(&request.profile)
         .ok_or(Error::Invalid("Profile does not exist"))?;
-    let info = inspect(root, &prepared.repository, &request.profile, profile, runner.cancel)?;
+    let request = Request {
+        repository: prepared.repository.clone(),
+        ..request.clone()
+    };
+    manage_prepared_with(root, &request, profile, operation_id, runner, authenticate)
+}
+
+fn manage_prepared_with(
+    root: &Path,
+    request: &Request,
+    profile: &Profile,
+    operation_id: &str,
+    runner: &Runner<'_>,
+    authenticate: impl FnOnce(&Settings, &str, bool) -> Result<publication::Account>,
+) -> Result<Info> {
+    runner.cancel.check()?;
+    let repository = request.repository.canonicalize()?;
+    let info = inspect(root, &repository, &request.profile, profile, runner.cancel)?;
     if matches!(request.action, Action::List {}) {
         return Ok(info);
     }
@@ -230,25 +265,25 @@ fn manage_with(
                 return Err(Error::Invalid("Invalid authentication operation"));
             }
             let settings = setup::load_settings(root)?;
-            super::check_auth_storage(&settings, &prepared.repository)?;
+            super::check_auth_storage(&settings, &repository)?;
             // Normalize the untrusted origin and refuse ambiguity before opening sign-in.
-            super::source::automatic("publisher", &prepared.repository, &request.profile, runner)?;
+            super::source::automatic("publisher", &repository, &request.profile, runner)?;
             // Caller-named receipts must not share a cloud's process-global Skip key.
             let key = format!("image-destination:{}", uuid::Uuid::new_v4());
             let account = authenticate(&settings, &key, *switch)?;
-            let destination = personal(account, &prepared.repository, &request.profile, runner.cancel)?;
+            let destination = personal(account, &repository, &request.profile, runner.cancel)?;
             (shown, Some(destination))
         }
     };
     setup::save_enabled_image_destination(
         root,
-        &prepared.repository,
+        &repository,
         &request.profile,
         shown.as_ref(),
         destination.as_ref(),
         runner.cancel,
     )?;
-    inspect(root, &prepared.repository, &request.profile, profile, runner.cancel)
+    inspect(root, &repository, &request.profile, profile, runner.cancel)
 }
 
 #[cfg(test)]

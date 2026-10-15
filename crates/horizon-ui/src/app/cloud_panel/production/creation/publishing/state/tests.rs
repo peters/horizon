@@ -1,5 +1,142 @@
 use super::*;
 
+#[cfg(unix)]
+fn historical_git(repository: &std::path::Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repository)
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
+#[cfg(unix)]
+struct HistoricalFixture {
+    _temp: tempfile::TempDir,
+    key: Key,
+}
+
+#[cfg(unix)]
+fn historical_fixture(current_name: &str) -> HistoricalFixture {
+    let temp = tempfile::tempdir().unwrap();
+    let repository = temp.path().join("source");
+    std::fs::create_dir_all(repository.join(".horizon")).unwrap();
+    let config = repository.join(".horizon/cloud.yml");
+    std::fs::write(&config, "version: 1\ndefault: cpu\nprofiles:\n  cpu:\n    provider: runpod\n    cpu: 2\n    memory_gb: 4\n    build:\n      context: .\n      dockerfile: Dockerfile\n").unwrap();
+    std::fs::write(repository.join("Dockerfile"), "FROM scratch\n").unwrap();
+    historical_git(&repository, &["init", "--quiet"]);
+    historical_git(&repository, &["add", "."]);
+    historical_git(
+        &repository,
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture: save build profile",
+        ],
+    );
+    let revision = historical_git(&repository, &["rev-parse", "HEAD"]);
+    std::fs::write(&config, format!("version: 1\ndefault: {current_name}\nprofiles:\n  {current_name}:\n    provider: runpod\n    image: public.example/current/worker\n    cpu: 2\n    memory_gb: 4\n")).unwrap();
+    historical_git(&repository, &["add", "."]);
+    historical_git(
+        &repository,
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture: replace current profile",
+        ],
+    );
+    let cancel = Cancellation::default();
+    let prepared = runtime::repository::launch::prepare_with_configuration(
+        repository.to_str().unwrap(),
+        &revision,
+        runtime::repository::launch::Configuration::WorkingCopy,
+        &runtime::command::Runner {
+            cancel: &cancel,
+            emit: &|_| {},
+            secrets: Vec::new(),
+        },
+    )
+    .unwrap();
+    let root = temp.path().join("cloud");
+    std::fs::create_dir(&root).unwrap();
+    let mut settings = runtime::setup::load_settings(&root).unwrap();
+    settings.portable_image_publishing = true;
+    settings.registries = Some(
+        serde_json::from_value(serde_json::json!({
+            "root": root.join("registry"), "bindings": [{
+                "repository":"registry.example/team/worker", "generation":"historical-fixture",
+                "publish":{"username":"writer", "secret_file":root.join("absent-writer")},
+                "pull":{"username":"reader", "secret_file":root.join("absent-reader")},
+                "read_only_confirmed":true
+            }]
+        }))
+        .unwrap(),
+    );
+    std::fs::write(root.join("settings.json"), serde_json::to_vec(&settings).unwrap()).unwrap();
+    let key = Key {
+        root: root.clone(),
+        repository: prepared.repository,
+        raw_repository: repository.to_str().unwrap().into(),
+        profile_name: "cpu".into(),
+        profile: prepared.config.profiles["cpu"].clone(),
+    };
+    HistoricalFixture { _temp: temp, key }
+}
+
+#[test]
+#[cfg(unix)]
+fn historical_build_choices_can_change_when_the_current_profile_is_absent_or_prebuilt() {
+    for current_name in ["renamed", "cpu"] {
+        let fixture = historical_fixture(current_name);
+        let key = fixture.key.clone();
+        let repository = key.repository.clone();
+        let root = key.root.clone();
+        let cancel = Cancellation::default();
+        let mut state = State::default();
+        state.info = Some(load(&key, &cancel).unwrap());
+        state.key = Some(key);
+        let selected = state.info.as_ref().unwrap().choices[0].selection.clone();
+        let ctx = egui::Context::default();
+        state.save(Some(selected.clone()), &ctx);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while state.busy() {
+            state.poll(&ctx);
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(state.error.is_none(), "historical selection refused: {:?}", state.error);
+        assert_eq!(state.selected(), Some(&selected));
+        assert!(state.ready());
+        state.save(None, &ctx);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while state.busy() {
+            state.poll(&ctx);
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(state.error.is_none(), "historical reset refused: {:?}", state.error);
+        assert!(matches!(state.selected(), Some(Selection::Automatic { .. })));
+        assert!(!state.ready());
+        assert_eq!(historical_git(&repository, &["status", "--porcelain"]), "");
+        assert!(!root.join("absent-writer").exists());
+        assert!(!root.join("registry").exists());
+    }
+}
+
 fn personal() -> Selection {
     let account = runtime::github::publish::publication::Account {
         id: 17,

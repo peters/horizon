@@ -459,3 +459,9 @@ read or sign-in and its prompt across those edits, without launching another
 metadata thread. Confirmation still snapshots the complete profile, including
 storage, so an earlier queued Start or watch cannot adopt the changed sizing.
 All other profile fields and source/owner identity remain part of operation scope.
+
+Destination inspection, selection, reset and account sign-in use the same profile
+prepared by the trusted launch adapter. Selecting a historical revision must not
+reload today's profile for a mutation: that profile may be absent or prebuilt now.
+The public headless request still resolves its own working-copy context; callers
+cannot supply a trusted profile through the wire schema.

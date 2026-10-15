@@ -204,3 +204,9 @@ A launch that omits its image can refer to a legacy record with an explicit imag
 and no publication. That record is bound to its explicit destination; automatic
 preflight must not classify it as an unbound automatic retry. Cover this through
 the actual UI preparation path and keep later local overrides out of the record.
+
+Native destination mutations must use the same trusted prepared profile as
+inspection. A historical build may be absent or prebuilt at current HEAD. Reject
+a mutation or sign-in that silently reloads the current profile instead. Keep
+prepared profiles out of public requests, and retain every shared account, grant,
+shown-override and cancellation check in the prepared host entry point.

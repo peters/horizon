@@ -886,3 +886,9 @@ Management rechecks the staging setting in the same transaction as the exact
 override comparison. If it is disabled while sign-in waits, no destination
 preference commits. This does not revoke authorization already completed at the
 issuer or prove that a credential-chain write did not occur.
+
+Destination inspection, selection, reset and account sign-in use the same profile
+prepared by the trusted launch adapter. Selecting a historical revision must not
+reload today's profile for a mutation: that profile may be absent or prebuilt now.
+The public headless request still resolves its own working-copy context; callers
+cannot supply a trusted profile through the wire schema.

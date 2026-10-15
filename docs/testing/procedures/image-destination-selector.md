@@ -129,13 +129,26 @@ to a real account, change installed credentials, start a worker or allocate comp
 
 ### 6.3 IS-03 — Persist reviewed choices safely
 
-1. Run `cargo test -p horizon-core cloud_panel::launch_serde --lib`.
+1. Run the historical launch-context regressions.
+
+   ```sh
+   cargo test -p horizon-ui --bin horizon historical_build_choices_can_change
+   cargo test -p horizon-core --lib prepared_historical_profile_keeps
+   ```
+
+   Result: A real two-commit checkout selects an older image-omitting build after
+   the current profile is removed or made prebuilt. Actual selector selection and
+   reset settle against that historical profile. Shared mocked account sign-in
+   uses the same prepared profile and retains all grant and stale-choice checks.
+   YAML is unchanged; no credential or real authentication is used.
+
+2. Run `cargo test -p horizon-core cloud_panel::launch_serde --lib`.
 
    Result: A reviewed actor round-trips in a version 2 envelope. The old flat reader
    refuses it; missing choices, unsupported versions and unversioned choices fail.
    Legacy launches retain their previous flat encoding. Recipe-only confirmations remain flat and compatible with the older reader. Both JSON and YAML round trips pass.
 
-2. Run `cargo test -p horizon-core cloud_runtime::setup::tests::metadata_loading --lib`.
+3. Run `cargo test -p horizon-core cloud_runtime::setup::tests::metadata_loading --lib`.
 
    Result: First-use metadata reads create no settings or credentials. Malformed
    existing settings are refused without replacement.
