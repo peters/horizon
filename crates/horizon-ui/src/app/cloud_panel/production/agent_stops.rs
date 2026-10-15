@@ -133,6 +133,10 @@ impl HorizonApp {
             let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) else {
                 continue;
             };
+            // A stop already under way, as one for this very request: nothing to give back.
+            if runtime.operation == Some(Action::Stop) && runtime.stage == Some(Stage::Stopping) {
+                continue;
+            }
             let ready = runtime.stage == Some(Stage::Ready)
                 && runtime
                     .state

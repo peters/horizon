@@ -193,3 +193,18 @@ fn a_cloud_with_an_open_dialog_gives_the_request_back_instead_of_stopping() {
         .count();
     assert_eq!(given_back, 1, "logged once");
 }
+
+#[test]
+fn a_request_found_again_while_its_stop_runs_is_left_alone() {
+    use crate::app::test_support::test_app;
+    let (_temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    app.prepare_production_clouds(&ctx);
+    let runtime = app.cloud_prototype.production.runtimes.entry(1).or_default();
+    runtime.stage = Some(cloud_runtime::Stage::Stopping);
+    runtime.operation = Some(Action::Stop);
+    app.stop_clouds_for_agents(vec![(1, stop())], &ctx);
+    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    assert_eq!(runtime.given_back, None, "not given back");
+    assert!(runtime.logs.is_empty());
+}
