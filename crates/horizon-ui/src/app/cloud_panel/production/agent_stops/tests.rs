@@ -137,6 +137,7 @@ fn a_stop_request_starts_a_stop_for_that_agent() {
         profile_name: "dev".into(),
         profile: state.profile.clone(),
         placement: horizon_core::cloud_panel::Placement::default(),
+        publishing_selection: None,
     });
     app.cloud_prototype.groups.0.push(group);
     app.cloud_prototype.root = Some(root.clone());
