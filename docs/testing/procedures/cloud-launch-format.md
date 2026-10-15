@@ -17,9 +17,9 @@ of the recipe's original image when read by an incompatible application.
 
 ## 2. Applicability
 
-All production constructors retain the legacy `None` choice until the selector
-is delivered. Compatible consumers retain version-2 metadata and forward it to
-the engine; new automatic launches remain disabled. JSON/YAML checks run on all
+New cloud forwards its gated selector's confirmed choice. Other constructors keep
+legacy `None`. Compatible consumers retain version-2 metadata and forward it to
+the engine; automatic launches remain disabled for ordinary use. JSON/YAML checks run on all
 listed platforms. Durable cloud-record UI preparation is supported on Unix only.
 No provider account, publication or compute is activated by these tests.
 
@@ -118,8 +118,9 @@ settings changes or live worker actions are required.
 
 3. Run the full applicable local matrix, including the core and UI test tiers.
 
-   Result: Existing constructors explicitly use None. Legacy stored state, lifecycle
-   and preview tests retain their behavior. No new visible selector is activated.
+   Result: New cloud retains its reviewed choice. Other constructors use None, and
+   legacy stored state, lifecycle and preview tests retain their behavior. The
+   selector remains behind the staging gate.
 
 ## 7. Pass criteria
 

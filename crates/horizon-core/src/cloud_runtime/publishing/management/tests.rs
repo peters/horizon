@@ -80,6 +80,79 @@ fn run(fixture: &Fixture) -> Result<Info> {
 }
 
 #[test]
+#[cfg(unix)]
+fn prepared_historical_profile_keeps_selection_reset_and_authentication_in_one_context() {
+    for current_name in ["renamed", "cpu"] {
+        let mut fixture = fixture();
+        let cancel = Cancellation::default();
+        let runner = Runner {
+            cancel: &cancel,
+            emit: &|_| {},
+            secrets: Vec::new(),
+        };
+        let prepared = launch::prepare(fixture.request.repository.to_str().unwrap(), "HEAD", &runner).unwrap();
+        let profile = prepared.config.profiles["cpu"].clone();
+        let config = fixture.request.repository.join(".horizon/cloud.yml");
+        let current = format!(
+            "version: 1\ndefault: {current_name}\nprofiles:\n  {current_name}:\n    provider: runpod\n    image: public.example/current/worker\n    cpu: 2\n    memory_gb: 4\n"
+        );
+        std::fs::write(&config, &current).unwrap();
+        let listed = inspect(&fixture.cloud, &fixture.request.repository, "cpu", &profile, &cancel).unwrap();
+        fixture.request.action = Action::Select {
+            shown: None,
+            destination: listed.choices[0].selection.clone(),
+        };
+        assert!(
+            run(&fixture).is_err(),
+            "the working-copy entry point must still use current configuration"
+        );
+        let selected =
+            manage_prepared(&fixture.cloud, &fixture.request, &profile, "historical-choice", &runner).unwrap();
+        assert_eq!(selected.selection, Some(listed.choices[0].selection.clone()));
+        fixture.request.action = Action::Reset { shown: None };
+        assert!(manage_prepared(&fixture.cloud, &fixture.request, &profile, "stale-reset", &runner).is_err());
+        fixture.request.action = Action::Reset {
+            shown: selected.shown_override,
+        };
+        let reset = manage_prepared(&fixture.cloud, &fixture.request, &profile, "historical-reset", &runner).unwrap();
+        assert!(matches!(reset.selection, Some(Selection::Automatic { .. })));
+        for switch in [false, true] {
+            fixture.request.action = Action::Authenticate {
+                shown: reset.shown_override.clone(),
+                switch,
+            };
+            let mut called = false;
+            let authenticated = manage_prepared_with(
+                &fixture.cloud,
+                &fixture.request,
+                &profile,
+                "historical-auth",
+                &runner,
+                |_, key, observed_switch| {
+                    assert_eq!(observed_switch, switch);
+                    assert!(key.starts_with("image-destination:"));
+                    called = true;
+                    Ok(publication::Account {
+                        id: 17,
+                        login: "synthetic-publisher".into(),
+                    })
+                },
+            )
+            .unwrap();
+            assert!(called);
+            assert!(matches!(authenticated.selection, Some(Selection::Personal { account, .. }) if account.id == 17));
+            fixture.request.action = Action::Reset {
+                shown: authenticated.shown_override,
+            };
+            manage_prepared(&fixture.cloud, &fixture.request, &profile, "reset-auth", &runner).unwrap();
+        }
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), current);
+        assert!(!fixture.cloud.join("absent-publish").exists());
+        assert!(!fixture.cloud.join("docker").exists());
+    }
+}
+
+#[test]
 fn list_is_nonmutating_and_reads_no_registry_secret_or_compute_key() {
     let fixture = fixture();
     let before = std::fs::read(fixture.cloud.join("settings.json")).unwrap();

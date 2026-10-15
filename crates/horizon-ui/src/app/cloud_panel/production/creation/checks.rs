@@ -316,6 +316,7 @@ pub(super) fn with_summary(ui: &mut Ui, form: &mut Production, root: Option<&Pat
         ui.add_space(14.0);
     }
     selector::summary::show(ui, form);
+    super::publishing::show(ui, form);
     if !failing && !cfg!(test) {
         ui.add_space(14.0);
         show(ui, form, root);

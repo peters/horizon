@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-cloud-worker/src/remote.rs,crates/horizon-core/examples/cloud_deploy.rs,crates/horizon-core/examples/cloud_deploy/publishing/**,crates/horizon-core/src/cloud_panel.rs,crates/horizon-core/src/cloud_panel/launch_serde/**,crates/horizon-core/src/cloud_panel/launch_serde.rs,crates/horizon-cloud/src/image_publishing.rs,crates/horizon-cloud/src/image_publishing/**,crates/horizon-core/src/cloud_runtime/github/publish/publication.rs,crates/horizon-core/src/cloud_runtime/github/publish/publication/**,crates/horizon-core/src/cloud_runtime/publishing.rs,crates/horizon-core/src/cloud_runtime/publishing/**,crates/horizon-core/src/cloud_runtime/setup/publishing.rs,crates/horizon-core/src/cloud_runtime/setup/publishing/**,crates/horizon-core/src/cloud_runtime/settings.rs,crates/horizon-core/src/cloud_runtime/registry/**,crates/horizon-browser-control/src/manifest/image_destination.rs,crates/horizon-browser-control/src/manifest/provider_usage.rs,crates/horizon-browser-mcp/src/controller/image_destination.rs,crates/horizon-browser-mcp/src/server.rs,crates/horizon-ui/src/app/cloud_panel/image_destinations/**,crates/horizon-ui/src/app/cloud_panel/image_destinations.rs,crates/horizon-ui/src/app/browser_provider_usage.rs"
+applyTo: "crates/horizon-cloud-worker/src/remote.rs,crates/horizon-core/examples/cloud_deploy.rs,crates/horizon-core/examples/cloud_deploy/publishing/**,crates/horizon-core/src/cloud_panel.rs,crates/horizon-core/src/cloud_panel/launch_serde/**,crates/horizon-core/src/cloud_panel/launch_serde.rs,crates/horizon-cloud/src/image_publishing.rs,crates/horizon-cloud/src/image_publishing/**,crates/horizon-core/src/cloud_runtime/github/publish/publication.rs,crates/horizon-core/src/cloud_runtime/github/publish/publication/**,crates/horizon-core/src/cloud_runtime/publishing.rs,crates/horizon-core/src/cloud_runtime/publishing/**,crates/horizon-core/src/cloud_runtime/setup/publishing.rs,crates/horizon-core/src/cloud_runtime/setup/publishing/**,crates/horizon-core/src/cloud_runtime/settings.rs,crates/horizon-core/src/cloud_runtime/registry/**,crates/horizon-browser-control/src/manifest/image_destination.rs,crates/horizon-browser-control/src/manifest/provider_usage.rs,crates/horizon-browser-mcp/src/controller/image_destination.rs,crates/horizon-browser-mcp/src/server.rs,crates/horizon-ui/src/app/cloud_panel/image_destinations/**,crates/horizon-ui/src/app/cloud_panel/image_destinations.rs,crates/horizon-ui/src/app/browser_provider_usage.rs,crates/horizon-ui/src/app/cloud_panel/production.rs,crates/horizon-ui/src/app/cloud_panel/production/creation.rs,crates/horizon-ui/src/app/cloud_panel/production/creation/**,crates/horizon-ui/src/app/cloud_panel/production/creation_job.rs,crates/horizon-ui/src/app/cloud_panel/production/launch.rs,crates/horizon-ui/src/app/cloud_panel/production/launch/**,crates/horizon-ui/src/app/cloud_panel/production/setup.rs,crates/horizon-ui/src/app/cloud_panel/production/setup/**"
 ---
 
 # Image destination boundary
@@ -165,6 +165,30 @@ Before a new desktop deployment record, confirm the saved choice through shared
 selection policy. Cover a removed override as well as a replacement, while keeping
 automatic intent without an override valid. Existing records remain authoritative.
 
+The gated New cloud selector must reuse management Info/inspect/manage rather than
+copying grant, account or settings policy into UI code. Require a reviewed choice
+at every Start entry point, including price watches and collected creation jobs.
+Authentication cancellation owns its Cancellation handle, not a cloud Skip key.
+A personal target without separate read-only access stays visible but cannot start.
+
+Queued Start and stock watches retain the exact reviewed publishing confirmation.
+Wait through transient refresh; require a fresh review after profile, account or
+destination changes, including build-to-prebuilt transitions. Never consume a
+one-shot watch merely because metadata is loading. Keep choices and their layout
+visible while loading, with interactions disabled rather than removed.
+
+A Start click during refresh may queue only an already displayed valid choice in
+the exact same scope. It is not permission to dispatch: first reads remain blocked,
+and dispatch must wait for fresh matching metadata. Keep watch feedback visible
+even when the feature is disabled or the selected profile no longer has a build.
+
+An owned sign-in, before or after its prompt arrives, blocks Start and watch
+arming. Do not disable the prompt controls behind a queued Start.
+
+Settings describe the resolved repository without attributing a machine-local
+choice to repository YAML. Cached sign-in metadata is not a confirmed publishing
+account, and worker pull access remains separate from publication authorization.
+
 Before a first record, cover a saved non-recipe choice while the setting is off,
 even with an explicit recipe image. Refuse before persistence instead of creating
 a legacy record without that publisher. A legacy automatic launch with no shown
@@ -180,3 +204,9 @@ A launch that omits its image can refer to a legacy record with an explicit imag
 and no publication. That record is bound to its explicit destination; automatic
 preflight must not classify it as an unbound automatic retry. Cover this through
 the actual UI preparation path and keep later local overrides out of the record.
+
+Native destination mutations must use the same trusted prepared profile as
+inspection. A historical build may be absent or prebuilt at current HEAD. Reject
+a mutation or sign-in that silently reloads the current profile instead. Keep
+prepared profiles out of public requests, and retain every shared account, grant,
+shown-override and cancellation check in the prepared host entry point.

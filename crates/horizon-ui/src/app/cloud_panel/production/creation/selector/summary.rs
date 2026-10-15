@@ -326,7 +326,7 @@ pub(in super::super) struct Plan {
 }
 
 pub(in super::super) fn plan(form: &Production) -> Plan {
-    let blocked = super::super::storage::launch_reason(form);
+    let blocked = super::super::storage::launch_reason(form).or_else(|| super::super::publishing::start_blocked(form));
     let starting = form.pending_creation.is_some() || form.launch.submitted;
     let sold_out = profile(form)
         .map(|profile| sized(form, profile))
@@ -350,9 +350,17 @@ pub(in super::super) fn plan(form: &Production) -> Plan {
 /// Starts the chosen worker now, or arms the watch when "Start new cloud once
 /// available" is checked for a sold-out one. The Start button and Enter both land here.
 pub(in super::super) fn start(form: &mut Production) {
+    if super::super::publishing::start_blocked(form).is_some() {
+        return;
+    }
     if plan(form).wait {
         watch::arm(form);
     } else {
+        let Ok(confirmation) = super::super::publishing::start_confirmation(form) else {
+            return;
+        };
+        form.publishing.acknowledge();
+        form.launch.publishing = confirmation;
         form.launch.submitted = true;
     }
 }

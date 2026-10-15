@@ -99,6 +99,7 @@ Use these patterns. Each pattern names code that uses it.
 
 Examples:
 
+- [Image destination sign-in](../../crates/horizon-ui/src/app/cloud_panel/production/creation/publishing/state.rs) starts the platform URL handler on a worker thread. A separate receiver reports its result and requests a repaint. Its error does not replace the metadata error. A scope change discards its pending result.
 - `prepare` and `Pending::next` in
   [`preparation/job.rs`](../../crates/horizon-ui/src/app/cloud_panel/production/preparation/job.rs),
   and `poll_cloud_preparations` in

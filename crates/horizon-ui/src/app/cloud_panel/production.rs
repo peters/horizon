@@ -89,6 +89,7 @@ pub(super) struct Production {
     source: creation::source::State,
     /// What Start depends on, confirmed before it is offered.
     checks: creation::checks::State,
+    publishing: creation::publishing::State,
     revision: String,
     profiles: Option<CloudConfig>,
     selected_profile: String,

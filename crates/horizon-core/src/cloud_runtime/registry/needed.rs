@@ -1,4 +1,4 @@
-//! The image repository a cloud's profile names, as Cloud settings shows it before it
+//! The resolved image repository a cloud uses, as Cloud settings shows it before it
 //! is bound: who can publish the cloud's image there, and that workers have no pull
 //! credential for it.
 use super::Settings;
@@ -12,12 +12,12 @@ pub struct Needed {
     pub publishing: Publishing,
 }
 
-/// Who can publish a cloud's image to a repository without a binding.
+/// Publishing sign-in metadata for a repository without a binding, not proof of access.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Publishing {
-    /// `ghcr.io`: Horizon publishes as this GitHub account.
+    /// `ghcr.io`: the cached GitHub sign-in, not a confirmed cloud publisher.
     GitHub(String),
-    /// `ghcr.io`: the cloud card asks once, at the first push.
+    /// `ghcr.io`: no cached GitHub sign-in; publication needs authorization.
     AskOnCard,
     /// Another registry: a publishing credential bound in Container registry.
     Credential,
@@ -74,7 +74,7 @@ mod tests {
         assert_eq!(
             needed(&settings, "ghcr.io/acme/worker:main").map(|needed| needed.publishing),
             Some(Publishing::AskOnCard),
-            "without a stored chain the card asks at the first push"
+            "no stored chain is publishing metadata, not worker pull access"
         );
         for image in [
             "registry.example/team/worker:latest",

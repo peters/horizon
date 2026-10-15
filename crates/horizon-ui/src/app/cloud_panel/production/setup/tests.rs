@@ -756,3 +756,48 @@ fn settings_open_at_their_final_size_and_position() {
 }
 
 mod host_pull;
+mod registry_edit;
+
+#[test]
+fn registry_edit_stays_open_when_settings_are_configured_and_returns_for_review() {
+    for save in [false, true] {
+        let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState::default()),
+        });
+        let root = temp.path().join("cloud");
+        app.cloud_prototype.root = Some(root.clone());
+        app.edit_creation_registry(&ctx, Some("registry.example/team/worker".into()));
+        let (sender, receiver) = channel();
+        app.cloud_prototype.production.setup.receiver = Some(receiver);
+        sender
+            .send(Completion::Loaded(Box::new(Loaded {
+                draft: Draft::load(&root).unwrap(),
+                configured: true,
+                ssh_ready: true,
+                verified: dashboard::Verified::default(),
+                needed: Some(("registry.example/team/worker".into(), None)),
+            })))
+            .unwrap();
+        app.poll_cloud_accounts(&ctx);
+        assert!(
+            app.cloud_prototype.production.setup.open,
+            "registry settings must remain editable"
+        );
+        assert!(app.cloud_prototype.production.setup.resumes_creation());
+        assert!(!app.cloud_prototype.production.creating);
+        if save {
+            let (sender, receiver) = channel();
+            app.cloud_prototype.production.setup.receiver = Some(receiver);
+            sender.send(Completion::Saved(Vec::new())).unwrap();
+            app.poll_cloud_accounts(&ctx);
+        } else {
+            app.cancel_cloud_accounts();
+        }
+        assert!(!app.cloud_prototype.production.setup.open);
+        assert!(app.cloud_prototype.production.creating);
+        assert!(!app.cloud_prototype.production.launch.submitted);
+        assert!(!app.cloud_prototype.production.launch.accounts_checked);
+        assert!(app.cloud_prototype.production.pending_creation.is_none());
+        assert!(!root.exists(), "synthetic completion must not write settings");
+    }
+}
