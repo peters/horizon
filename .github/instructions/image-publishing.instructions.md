@@ -37,6 +37,10 @@ These limits are deliberate:
 
 Do not request the deferred launch or UI integration as fixes to this policy prerequisite.
 
+For CPU host grants, require current verification of the exact immutable digest.
+Reject a reread of mutable credential files that substitutes unverified material in user data.
+Reject a publishing credential sent to a worker or an allocation after missing verification.
+
 The local preference helpers do not authenticate metadata, change profile parsing or activate automatic launches.
 
 The launch-format prerequisite keeps every runtime constructor at None and refuses

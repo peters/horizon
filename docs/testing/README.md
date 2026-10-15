@@ -25,6 +25,7 @@ documents that are not yet STE.
 
 | Procedure | Feature | Cost |
 |---|---|---|
+| [bound-worker-pull](procedures/bound-worker-pull.md) | Exact read-only registry material for CPU hosts | none |
 | [browser-engine-panels](procedures/browser-engine-panels.md) | One browser panel per engine for each agent | none |
 | [browser-firefox-disclosure](procedures/browser-firefox-disclosure.md) | Firefox native webdriver getter and sign-in field | none |
 | [browser-passkey-bridge](procedures/browser-passkey-bridge.md) | Browser WebAuthn bridge to an external authenticator command | none |

@@ -120,6 +120,32 @@ impl Config {
 }
 
 impl Binding {
+    /// The exact read-only grant for a worker host. Publishing material stays local.
+    pub(in crate::cloud_runtime) fn host_login(&self) -> Result<horizon_cloud::host::RegistryLogin> {
+        self.validate()?;
+        if !self.read_only_confirmed {
+            return Err(Error::Invalid(
+                "Confirm that the worker pull credential is repository-scoped and read-only",
+            ));
+        }
+        let material = Material::load(&self.pull, &self.repository, None)?;
+        self.host_login_with(&material.secret)
+    }
+
+    fn host_login_with(&self, secret: &str) -> Result<horizon_cloud::host::RegistryLogin> {
+        let server = self.repository.split('/').next().unwrap_or_default();
+        if !horizon_cloud::host::RegistryLogin::valid_identity(server, &self.pull.username) {
+            return Err(Error::Invalid(
+                "Use a lowercase registry hostname without a trailing dot for a CPU host login",
+            ));
+        }
+        Ok(horizon_cloud::host::RegistryLogin {
+            server: server.to_owned(),
+            username: self.pull.username.clone(),
+            password: horizon_cloud::Credential::new(secret.to_owned())?,
+        })
+    }
+
     fn validate(&self) -> Result<()> {
         if repository(&self.repository)? != self.repository || !self.repository.contains('/') {
             return Err(Error::Invalid(
@@ -198,6 +224,30 @@ pub struct Prepared {
 }
 
 impl Prepared {
+    /// The read-only material verified for this exact immutable image, pinned in memory.
+    pub(in crate::cloud_runtime) fn host_login(&self) -> Result<horizon_cloud::host::RegistryLogin> {
+        if !self.verified {
+            return Err(Error::Invalid(
+                "Verify the worker's exact image with its read-only grant before allocation",
+            ));
+        }
+        self.binding.host_login_with(&self.pull.secret)
+    }
+
+    /// Earliest declared or issuer-observed expiry of the current verified material.
+    pub(in crate::cloud_runtime) fn pull_expires_at(&self) -> Result<Option<i64>> {
+        if !self.verified {
+            return Err(Error::Invalid("Verify the pull grant before retaining its expiry"));
+        }
+        let validation = self
+            .journal
+            .validation()
+            .ok_or(Error::Invalid("Verified pull metadata is missing"))?;
+        let declared = self.binding.pull.expires_at.as_deref().map(parse_expiry).transpose()?;
+        let observed = validation.expires_at.as_deref().map(parse_expiry).transpose()?;
+        Ok(declared.into_iter().chain(observed).min())
+    }
+
     /// # Errors
     /// Validates explicit grants, expiry, secret separation and source isolation before a build.
     pub fn for_image(settings: &Settings, image: &str, source: Option<&Path>, building: bool) -> Result<Option<Self>> {

@@ -68,6 +68,14 @@ Get explicit authorization for the exact resource before starting or stopping a 
 Keep credentials in Horizon. Do not send keys, tokens, endpoints, or raw provider
 capabilities as tool arguments. Preserve an uncertain operation's identity.
 
+A CPU cloud with an exact Container registry binding uses that read-only grant instead
+of the legacy provider pull login. Allocation requires verification of its immutable
+image digest. The host keeps the verified material; a file change cannot replace it.
+No publishing credential reaches the worker. Unbound images keep their legacy behavior.
+The existing Container registry journal still requires a configured RunPod account in
+this prerequisite; it does not yet qualify private bindings on a Hetzner-only host.
+See `docs/testing/procedures/bound-worker-pull.md` for synthetic checks.
+
 Failed cloud cards diagnose output from the failed step's current visit only.
 A Hetzner image rebuild replaces the server and keeps its workspace volume.
 `error during placement` reports a provider placement refusal after the image

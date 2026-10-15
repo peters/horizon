@@ -118,9 +118,9 @@ fn unsupported_requests_fail_the_preflight_before_any_state() {
         "pull": {"username": "reader", "secret_file": root.path().join("pull"), "expires_at": null}
     }]}))
     .unwrap();
-    assert_eq!(
-        pull(&private, &spec.profile.image).unwrap_err().to_string(),
-        "This image is private; add hetzner.registry_pull with a read-only pull token before deploying on Hetzner"
+    assert!(
+        pull(&private, &spec.profile.image).is_err(),
+        "the bound pull file is missing"
     );
     // Checked before the deployment is recorded, unless its server is only reconciled.
     assert!(admit(&private, &spec.profile.image, &CreateState::Prepared).is_err());
@@ -134,9 +134,17 @@ fn unsupported_requests_fail_the_preflight_before_any_state() {
     private.hetzner.as_mut().unwrap().registry_pull = Some(login("registry.example"));
     assert!(pull(&private, &spec.profile.image).unwrap());
     private.hetzner.as_mut().unwrap().registry_pull = Some(login("other.example"));
+    let bound = pull_login(
+        private.hetzner.as_ref().unwrap(),
+        private.registries.as_ref(),
+        &spec.profile.image,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(bound.server, "registry.example");
     assert_eq!(
-        pull(&private, &spec.profile.image).unwrap_err().to_string(),
-        "hetzner.registry_pull names a different registry than the profile's image"
+        bound.username, "reader",
+        "an exact binding takes precedence over the fallback login"
     );
     let mut hub = spec.profile.clone();
     hub.image = "team/worker".into();
@@ -295,6 +303,7 @@ mod failure_points {
                 server_types: vec!["cx33".into()],
             },
             registries: None,
+            verified_pull: std::cell::RefCell::default(),
         };
         let seen = std::cell::RefCell::new(Vec::new());
         let error = provision(
@@ -322,6 +331,72 @@ mod failure_points {
             "validation and read failures preserve existing evidence only"
         );
         (error, store.load().unwrap().unwrap(), retained(root).unwrap())
+    }
+
+    #[test]
+    fn an_exact_binding_refuses_missing_wrong_or_expired_verification_before_provider_contact() {
+        for case in ["missing", "wrong", "expired"] {
+            let root = tempfile::tempdir().unwrap();
+            let store = Store::lock(root.path()).unwrap();
+            let spec = spec();
+            let mut state: Deployment = serde_json::from_value(json!({
+                "version":1,"cloud_id":spec.operation_id,"repository":"/fixture","revision":"a".repeat(40),
+                "profile":spec.profile,"stage":"Provision","operation":{"state":"prepared"},"spec":spec,
+                "worker":null,"sessions":[]
+            }))
+            .unwrap();
+            store.save(&state).unwrap();
+            let closed = std::net::TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap();
+            let verified = (case != "missing").then(|| super::super::VerifiedPull {
+                image: if case == "wrong" {
+                    format!("registry.example/worker@sha256:{}", "b".repeat(64))
+                } else {
+                    spec.image_digest.clone()
+                },
+                expires_at: (case == "expired").then(|| time::OffsetDateTime::now_utc().unix_timestamp() - 1),
+                login: horizon_cloud::host::RegistryLogin {
+                    server: "registry.example".into(),
+                    username: "reader".into(),
+                    password: Credential::new("synthetic-pull".into()).unwrap(),
+                },
+            });
+            let compute = Compute {
+                client: Hetzner::loopback(Credential::new("synthetic-compute".into()).unwrap(), closed).unwrap(),
+                settings: serde_json::from_value(json!({"token_file":"/unused","server_types":["cx33"],"locations":["hel1"]})).unwrap(),
+                allowed: Allowed { locations:vec!["hel1".into()], server_types:vec!["cx33".into()] },
+                registries: Some(serde_json::from_value(json!({"root":root.path().join("registry"),"bindings":[{
+                    "repository":"registry.example/worker","generation":"synthetic-generation","read_only_confirmed":true,
+                    "publish":null,"pull":{"username":"reader","secret_file":root.path().join("pull"),"expires_at":null}
+                }]})).unwrap()),
+                verified_pull: std::cell::RefCell::new(verified),
+            };
+            let error = provision(
+                &compute,
+                &store,
+                &mut state,
+                &spec,
+                &Cancellation::default(),
+                &|_| {},
+                &|_| Ok(crate::cloud_runtime::mutation::State::Settled),
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(
+                if case == "wrong" {
+                    error.contains("another immutable image")
+                } else if case == "expired" {
+                    error.contains("expired")
+                } else {
+                    error.contains("Verify this cloud's read-only")
+                },
+                "{error}"
+            );
+            assert!(!retained(root.path()).unwrap());
+            assert_eq!(store.load().unwrap().unwrap().operation, CreateState::Prepared);
+        }
     }
 
     fn provisioning_responses() -> Vec<(u16, String)> {
@@ -388,6 +463,7 @@ mod failure_points {
                     server_types: vec!["cx33".into()],
                 },
                 registries: None,
+                verified_pull: std::cell::RefCell::default(),
             };
             let seen = std::cell::RefCell::new(Vec::new());
             let result = provision(
@@ -580,6 +656,7 @@ fn reconnect_readiness_keeps_the_exact_type_when_fallback_preferences_change() {
                 server_types: vec!["cx43".into()],
             },
             registries: None,
+            verified_pull: std::cell::RefCell::default(),
         };
         let request = Request::new(
             chosen.operation_id.clone(),
