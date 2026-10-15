@@ -415,7 +415,11 @@ fn run_deadline_persists_a_partial_report_and_stable_exit_code() {
     )
     .output;
     assert_eq!(failed_output.status.code(), Some(124));
-    assert!(String::from_utf8_lossy(&failed_output.stderr).contains("could not open report"));
+    assert!(
+        String::from_utf8_lossy(&failed_output.stderr).contains("could not open report"),
+        "stderr: {}",
+        String::from_utf8_lossy(&failed_output.stderr)
+    );
 }
 
 #[test]
@@ -1069,6 +1073,7 @@ fn run_deadline_after_action(
 ) -> DeadlineRun {
     let mut timeout_seconds = DEADLINE_TEST_TIMEOUT_SECONDS;
     loop {
+        let previous = queue_before_launch(manifest_path);
         let mut command = browser_cli();
         let timeout = timeout_seconds.to_string();
         command
@@ -1083,7 +1088,7 @@ fn run_deadline_after_action(
             command.args(["--output", output.to_str().expect("UTF-8 output path")]);
         }
         let mut child = command.spawn().expect("spawn deadline browser job");
-        match wait_for_queue(&mut child, manifest_path) {
+        match wait_for_queue_after(&mut child, manifest_path, &previous) {
             Queueing::Queued => {
                 wait_for_exit_within(
                     &mut child,
@@ -1095,8 +1100,8 @@ fn run_deadline_after_action(
                     timeout_seconds,
                 };
             }
-            // Exit status 124 is the job deadline; its report goes to stdout, not stderr.
-            // That run never had an action in flight, so it tests nothing.
+            // A deadline without observed live work did not reach this fixture's precondition.
+            // A late action can remain queued; the next attempt ignores its ID.
             Queueing::Exited(status, _)
                 if status.code() == Some(124) && timeout_seconds < MAX_DEADLINE_TEST_TIMEOUT_SECONDS =>
             {
@@ -1150,6 +1155,54 @@ fn answer_action(root: &std::path::Path, panel_id: &str, result: &horizon_browse
     staged.persist(&path).expect("publish result");
 }
 
+#[test]
+fn deadline_queue_observation_rejects_previous_attempts_and_exited_jobs() {
+    let root = tempfile::tempdir().expect("isolated queue-observer root");
+    let path = manifest::manifest_path_for_root(&root.path().join(".horizon"), "blocked-panel");
+    let action = horizon_browser::AgentAction {
+        action_id: "retained-action".into(),
+        actor: "browser-cli-test".into(),
+        requested_at_millis: 0,
+        action: horizon_browser::BrowserControlAction::Snapshot { max_nodes: 1 },
+    };
+    let mut stored = BrowserManifest {
+        panel_local_id: "blocked-panel".into(),
+        actions: vec![action.clone()],
+        ..BrowserManifest::default()
+    };
+    manifest::write_at(&path, &stored).expect("retain previous action");
+    let previous = queue_before_launch(&path);
+    assert!(
+        !action_queued_after(&path, &previous),
+        "previous attempt is not new work"
+    );
+    stored.actions.push(horizon_browser::AgentAction {
+        action_id: "current-action".into(),
+        ..action
+    });
+    manifest::write_at(&path, &stored).expect("queue current action under the same owner");
+    assert!(
+        action_queued_after(&path, &previous),
+        "a new action under the same owner is observed"
+    );
+    let mut child = browser_cli()
+        .arg("--help")
+        .env("HOME", root.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn task-owned non-action process");
+    wait_for_exit(&mut child, "exited queue-observer probe");
+    let observed = wait_for_queue_after(&mut child, &path, &previous);
+    let output = child.wait_with_output().expect("collect queue-observer probe");
+    assert!(output.status.success());
+    assert!(
+        matches!(observed, Queueing::Exited(status, _) if status.success()),
+        "an exited process is not current in-flight work"
+    );
+}
+
 /// What a job did while the test waited for its blocking action.
 enum Queueing {
     Queued,
@@ -1158,18 +1211,13 @@ enum Queueing {
 }
 
 fn wait_for_queue(child: &mut Child, manifest_path: &std::path::Path) -> Queueing {
+    wait_for_queue_after(child, manifest_path, &[])
+}
+
+fn wait_for_queue_after(child: &mut Child, manifest_path: &std::path::Path, previous: &[String]) -> Queueing {
     let deadline = Instant::now() + JOB_PROGRESS_GUARD;
     loop {
-        if action_queued(manifest_path) {
-            return Queueing::Queued;
-        }
         if let Some(status) = child.try_wait().expect("poll browser job") {
-            // The job may have queued its action after the read above and then exited at its
-            // deadline. That run had its action in flight, and a retry would find the action
-            // in the manifest before its own job queued one.
-            if action_queued(manifest_path) {
-                return Queueing::Queued;
-            }
             let mut stderr = String::new();
             if let Some(stream) = child.stderr.as_mut() {
                 stream
@@ -1177,6 +1225,12 @@ fn wait_for_queue(child: &mut Child, manifest_path: &std::path::Path) -> Queuein
                     .expect("read exited browser job error");
             }
             return Queueing::Exited(status, stderr);
+        }
+        // Only this attempt's action, observed while its process is alive, is evidence
+        // that the fixture reached the execution phase before its deadline.
+        if action_queued_after(manifest_path, previous) && child.try_wait().expect("confirm live browser job").is_none()
+        {
+            return Queueing::Queued;
         }
         if Instant::now() >= deadline {
             child.kill().expect("kill stalled task-owned browser job");
@@ -1187,11 +1241,29 @@ fn wait_for_queue(child: &mut Child, manifest_path: &std::path::Path) -> Queuein
     }
 }
 
-fn action_queued(manifest_path: &std::path::Path) -> bool {
+fn queued_action_ids(manifest_path: &std::path::Path) -> Option<Vec<String>> {
     std::fs::read(manifest_path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<BrowserManifest>(&bytes).ok())
-        .is_some_and(|manifest| !manifest.actions.is_empty())
+        .map(|manifest| manifest.actions.into_iter().map(|action| action.action_id).collect())
+}
+
+fn queue_before_launch(manifest_path: &std::path::Path) -> Vec<String> {
+    let deadline = Instant::now() + JOB_PROGRESS_GUARD;
+    loop {
+        if let Some(ids) = queued_action_ids(manifest_path) {
+            return ids;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "read the complete queue before launching the next attempt"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn action_queued_after(manifest_path: &std::path::Path, previous: &[String]) -> bool {
+    queued_action_ids(manifest_path).is_some_and(|ids| ids.iter().any(|id| !previous.contains(id)))
 }
 
 fn wait_for_manifest_action(child: &mut Child, manifest_path: &std::path::Path) {
