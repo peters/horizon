@@ -614,15 +614,13 @@ request through the API or GraphQL (`gh pr merge`) reaches GitHub only when GitH
 shows all of these. Nothing lifts them:
 
 - A GraphQL merge is the only change of its request.
-
 - The merge names the head commit (`gh pr merge --match-head-commit <head>`), and
   that commit is the head of the pull request now. GitHub then merges only that head.
 - The pull request is open, not a draft, and on the default branch of the repository.
   The agent can write every other branch, and GitHub moves a pull request to another
   base when its base branch is deleted, also after the gate read it.
-- GitHub reports the pull request ready to merge
-  (`clean`): the required checks and reviews passed, and the branch is up to date
-  where a rule requires that.
+- GitHub reports the pull request ready to merge (`clean`): the required checks and
+  reviews passed, and the branch is up to date where a rule requires that.
 - Every check run on the head completed as success, neutral or skipped, and the
   commit statuses all passed.
 
@@ -647,7 +645,8 @@ yours. GitHub does not let an account approve its own pull request; for such a p
 request the refusal asks you to merge it yourself.
 
 Otherwise the merge does not reach GitHub, and the refusal names the blockers and
-says "Approve to merge", or "Approve with the line upkeep-allow: workflows". The refusal shows on the board.
+says "Approve to merge", or "Approve with the line upkeep-allow: workflows". The
+refusal shows on the board.
 
 ## Trust boundary of the shared instructions
 
