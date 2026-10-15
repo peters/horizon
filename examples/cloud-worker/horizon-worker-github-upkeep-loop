@@ -1,0 +1,195 @@
+"""What the worker does by itself for the loop of its Upkeep, with the policy that Horizon sets
+(horizon-worker-github-upkeep): it allows the loop's own access requests, for that session only
+and under the rules Horizon uses, ends the loop's grants for a repository that a new policy
+drops, and starts the loop again after a container restart. Thus Upkeep keeps working while no
+Horizon runs. Requests for other repositories, and of other sessions, still wait for the
+person. A module that horizon-worker-github loads, not a command."""
+import contextlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+import time
+
+
+def load_common():
+    name = 'horizon_worker_github_common'
+    if name not in sys.modules:
+        loader = importlib.machinery.SourceFileLoader(
+            name, str(Path(__file__).resolve().with_name('horizon-worker-github-common')))
+        module = importlib.util.module_from_spec(importlib.util.spec_from_loader(name, loader))
+        sys.modules[name] = module
+        loader.exec_module(module)
+    return sys.modules[name]
+
+
+common = load_common()
+auth = common.auth
+agents = common.load_sibling('horizon-worker-github-agents', 'horizon_worker_github_agents')
+upkeep = common.load_sibling('horizon-worker-github-upkeep', 'horizon_worker_github_upkeep')
+
+# How often the service looks for the loop's requests, and how long it waits before it asks
+# GitHub again about a repository and access that GitHub or the worker refused. The loop's
+# tool waits 600 seconds for an answer.
+POLL_SECONDS = 2
+RETRY_SECONDS = 60
+# The loop that Horizon's exchange installs, and the account tool that starts it.
+LOOP = Path('/workspace/home/upkeep/run.sh')
+# The supervisor publishes it once the control service answers, before any session may start.
+HOST_INSTANCE = Path('/run/horizon-worker/browser-host-instance')
+TAILNET = '/usr/local/bin/horizon-worker-tailnet'
+# What the marker names after `remove`: no policy, so load() gives the strictest one.
+REMOVED = 'removed'
+PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+
+
+def current(store, marker=None):
+    """The policy of an Upkeep, or None. A policy that cannot be read, or that the marker does
+    not name, gives a policy without a session (upkeep.load), and the worker then allows
+    nothing by itself."""
+    policy = upkeep.load(store, common, marker or upkeep.MARKER)
+    return policy if policy is not None and policy.session is not None else None
+
+
+def listed(policy, repository):
+    return any(auth.same_repository(repository, held) for held in policy.repositories)
+
+
+def outside(policy, sessions, grant):
+    """Whether `grant` is one of the loop's, under one of `sessions`, that `policy` does not list."""
+    return grant['session'] in sessions and not (grant['session'] == policy.session
+                                                 and listed(policy, grant['repository']))
+
+
+def admits(policy, record, proc=agents.tasks.PROC):
+    """Whether the service allows `record` for its session by itself: the loop's own session,
+    read or push, for a repository of this Upkeep, while the session that asked still runs.
+    Horizon applies the same rule. Any other request stays pending for the person."""
+    return (policy is not None and record.get('session') == policy.session
+            and record.get('access') in common.ACCESS and listed(policy, record.get('repository'))
+            and agents.task_possible(record, proc))
+
+
+def install(store, source, book, marker=None):
+    """Ends the task grants of the loop, under the new policy's session and the previous one,
+    for every repository that the new policy does not list, and then sets the policy, both
+    under the book's lock, so no decision under way gives one again. The policy is set only
+    after the book: a policy whose grants did not end is never in place, and the next install
+    tries again. A grant that the person gave the loop for another repository ends too: a
+    grant does not record who gave it, and a list that changed while the worker could not be
+    read must not leave access behind. The person allows it again."""
+    value = upkeep.parse(json.loads(source))
+    marker, held = marker or upkeep.MARKER, []
+    with book.edit(then=lambda: held.append(upkeep.install(store, common, source, marker))) as data:
+        previous = current(store, marker)
+        sessions = {value.session} | ({previous.session} if previous is not None else set())
+        data['task_grants'] = [grant for grant in data['task_grants'] if not outside(value, sessions, grant)]
+    return held[0]
+
+
+def remove(store, marker=None):
+    """Removes the policy of an Upkeep, as when GitHub is disconnected. The marker first names
+    no policy, so from then on load() gives the strictest policy: the limits of the API broker
+    stay, also when the chain cannot be removed after this, and the worker allows nothing by
+    itself. Then each copy goes, durably. The next exchange sets the policy again. A cloud
+    without a policy keeps none."""
+    marker = marker or upkeep.MARKER
+    if upkeep.load(store, common, marker) is None:
+        return
+    upkeep.mark(REMOVED, marker)
+    for directory in upkeep.directories(store):
+        common.remove_durably(directory, upkeep.POLICY)
+
+
+def summary(store):
+    """What Horizon reads back in `requests`: the policy that the worker holds, or None."""
+    policy = current(store)
+    return None if policy is None else upkeep.summary(policy)
+
+
+class Allower:
+    """Allows the loop's pending requests for its own repositories, each for its session only.
+    The check runs again under the book's lock with the policy of that moment."""
+
+    def __init__(self, store, book, decide=agents.decide, clock=time.time, log=print):
+        self.store, self.book, self.decide, self.clock, self.log = store, book, decide, clock, log
+        # When GitHub or the worker last refused each repository and access. Each check holds
+        # the book's lock, so many requests for one repository never ask GitHub at each poll.
+        self.refused = {}
+
+    def step(self):
+        policy = current(self.store)
+        pending = [record for record in self.book.read()['requests'] if record.get('status') == 'pending']
+        self.refused = {key: at for key, at in self.refused.items() if self.clock() - at < RETRY_SECONDS}
+        if policy is None:
+            return
+        for record in pending:
+            key = (str(record.get('repository')).casefold(), record.get('access'))
+            if key in self.refused or not admits(policy, record):
+                continue
+            result = self.decide(self.store, self.book, record['id'], 'allow-task',
+                                 admit=lambda found: admits(current(self.store), found))
+            if not result.get('ok'):
+                self.refused[key] = self.clock()
+            self.log('Upkeep access for its own repository: ' + (
+                'allowed' if result.get('ok') else str(result.get('error'))), flush=True)
+
+    def forever(self, sleep=time.sleep):
+        while True:
+            try:
+                self.step()
+            # The thread must never end: a later poll tries again.
+            except Exception as error:
+                self.log('Upkeep access check failed: ' + type(error).__name__, flush=True)
+            sleep(POLL_SECONDS)
+
+
+def start_loop(store, book, run=subprocess.run, loop=LOOP, isolation=common.AGENT_ISOLATION,
+               ready=HOST_INSTANCE, marker=None, sleep=time.sleep, wait=None):
+    """Sets the marker again, which a container restart removed, and starts the loop in its
+    tmux session as the agent account, as Horizon's exchange does, when this worker has an
+    Upkeep and its loop is installed. A session that already runs is kept. Like any session,
+    it starts only after the supervisor published the browser host instance, so its agents
+    get theirs; it waits for that as long as the service runs, or `wait` seconds. Returns
+    whether it asked tmux to start one."""
+    marker = marker or upkeep.MARKER
+    if current(store, marker) is None or not isolation.exists():
+        return False
+    waited = 0
+    while not ready.exists():
+        if wait is not None and waited >= wait:
+            return False
+        sleep(1)
+        waited += 1
+    # Under the book's lock, as `install` and `remove` mark: Horizon may have set another
+    # policy, or removed it, while the loop waited.
+    with book.lock():
+        policy = current(store, marker)
+        if policy is None:
+            return False
+        try:
+            if upkeep.marked(marker) is None:
+                upkeep.mark(policy.digest, marker)
+        except OSError:
+            return False
+    try:
+        if not stat.S_ISREG(os.lstat(loop).st_mode):
+            return False
+    except OSError:
+        return False
+    command = [TAILNET, 'agent', 'tmux', '-L', 'horizon-cloud', 'new-session', '-d', '-s', policy.session,
+               '-c', str(loop.parent), '-e', 'PATH=' + PATH, '-e', 'BASH_ENV=', '-e', 'ENV=',
+               '/bin/bash', '--noprofile', '--norc', str(loop), policy.session]
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        run(command, cwd='/workspace', env={'PATH': PATH}, stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30, check=False)
+        return True
+    return False
+
+
+if __name__ == '__main__':
+    sys.exit('horizon-worker-github-upkeep-loop is a module of horizon-worker-github, not a command.')

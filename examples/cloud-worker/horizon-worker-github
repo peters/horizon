@@ -44,6 +44,7 @@ gitproxy = common.load_sibling('horizon-worker-github-git', 'horizon_worker_gith
 broker = common.load_sibling('horizon-worker-github-api', 'horizon_worker_github_api')
 mcp = common.load_sibling('horizon-worker-github-mcp', 'horizon_worker_github_mcp')
 upkeep = common.load_sibling('horizon-worker-github-upkeep', 'horizon_worker_github_upkeep')
+upkeep_loop = common.load_sibling('horizon-worker-github-upkeep-loop', 'horizon_worker_github_upkeep_loop')
 auth = common.auth
 GIT_AUTH = common.GIT_AUTH
 Store = common.Store
@@ -292,6 +293,10 @@ def serve(store=None, path=agents.SOCKET, proxy=gitproxy.ADDRESS, authority=gitp
         return 1
     server = servers[0]
     threading.Thread(target=refresh_loop, args=(store,), daemon=True).start()
+    # The Upkeep of this worker keeps working without Horizon: its loop starts again after a
+    # container restart, Git and gh already routed, and its own requests are allowed here.
+    threading.Thread(target=upkeep_loop.start_loop, args=(store, book), daemon=True).start()
+    threading.Thread(target=upkeep_loop.Allower(store, book).forever, daemon=True).start()
     agents.accept_forever(server, store, book, status)
     return 0
 
@@ -483,12 +488,17 @@ def host_status(store, path=agents.SOCKET):
 
 
 def clear(store, retire=None):
-    """Removes the static Git binding first, then the chain. When the binding cannot be
-    removed, the chain stays, so agents never keep access while status reports none."""
+    """Removes the static Git binding first, then the Upkeep policy, then the chain. When the
+    binding or the policy cannot be removed, the chain stays, so agents never keep access while
+    status reports none, and no policy of an earlier sign-in waits for the next one."""
     (retire or run_retire)()
+    book = agents.Book(store.runtime)
+    # Under the book's lock, so an install under way ends before it.
+    with book.lock():
+        upkeep_loop.remove(store)
     with store.lock():
         store.clear()
-    agents.Book(store.runtime).clear()
+    book.clear()
 
 
 def print_json(value):
@@ -524,7 +534,10 @@ def main(argv):
     elif operation == 'status':
         print_json(host_status(store))
     elif operation == 'requests':
-        print_json(agents.requests_report(agents.Book(store.runtime), store.load()[0]))
+        # `upkeep` tells Horizon which policy the worker holds and allows by itself; an older
+        # image has no such field.
+        print_json(dict(agents.requests_report(agents.Book(store.runtime), store.load()[0]),
+                        upkeep=upkeep_loop.summary(store)))
     elif operation == 'decide':
         print_json(agents.decide(store, agents.Book(store.runtime), argv[1], argv[2]))
     elif operation == 'upkeep':
@@ -535,7 +548,7 @@ def main(argv):
         source = sys.stdin.buffer.read(upkeep.MAX_POLICY + 1)
         if len(source) > upkeep.MAX_POLICY:
             raise ValueError('Upkeep policy is too large')
-        print_json(upkeep.install(store, common, source.decode()))
+        print_json(upkeep_loop.install(store, source.decode(), agents.Book(store.runtime)))
     else:
         clear(store)
     return 0

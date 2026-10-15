@@ -606,6 +606,28 @@ Horizon guarantees these items:
 - It never allows admin access, and never access for the whole cloud.
 - It never allows a repository that is not in the list.
 
+A worker image with `horizon-worker-github-upkeep-loop` applies these rules
+itself, also while no Horizon runs. It uses the session and the repositories of
+the Upkeep policy that Horizon sets as root before each exchange (see
+[What the agent can do on GitHub](#what-the-agent-can-do-on-github)). Only root
+can read and write the policy, so the agent account cannot change it. The worker
+guarantees these items:
+
+- It allows only for the task, never admin access, and never for the whole cloud.
+- It examines the policy again immediately before it allows a request, so it never
+  allows a repository that the current policy does not list. A policy that it
+  cannot read allows nothing.
+- A new policy ends the loop's task grants for each repository that it does not
+  list. This includes access that the person gave the loop on the cloud card for
+  another repository: the person allows it again when the loop asks.
+- After a container restart, it starts the loop again as the agent account, never
+  as root.
+- Disconnecting GitHub (`horizon-worker-github clear`) removes the policy. Until
+  Horizon sets it again, the strictest policy holds.
+
+Until the next exchange succeeds, the worker allows the loop's requests for the
+list that it has, also for a repository that the person removed in Horizon.
+
 Horizon and the worker do not guarantee these items:
 
 - They do not isolate the sessions of the cloud. All agent sessions of a worker

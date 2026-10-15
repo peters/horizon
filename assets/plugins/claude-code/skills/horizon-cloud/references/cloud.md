@@ -418,6 +418,16 @@ around it. The board shows the refusals among the activity lines. A worker image
 without this service starts no Upkeep agent; the person rebuilds the cloud on a
 current image. `docs/upkeep.md` lists every refusal and what it does not stop.
 
+A worker image with `horizon-worker-github-upkeep-loop` also allows the Upkeep agent's
+own access requests by itself, also while no Horizon runs: only for that task, only
+`read` or `push`, and only for a repository in the list that Horizon last set on the
+worker. Requests of other agent sessions, and for other repositories, still wait for the
+person. After a container restart, the worker starts the loop again as the agent account.
+An older image does neither: the loop then waits for Horizon. A repository that the
+person removes reaches the worker only with the next successful exchange; that exchange
+ends the Upkeep agent's task grants for each repository outside the new list, also a
+grant that the person gave on the card.
+
 ## GitHub access
 
 With Connect GitHub (Horizon **Cloud settings › GitHub**), each cloud's worker holds

@@ -124,6 +124,7 @@ COPY horizon-worker-tailnet \
     horizon-worker-github-upkeep \
     horizon-worker-github-api-upkeep \
     horizon-worker-github-git-upkeep \
+    horizon-worker-github-upkeep-loop \
     horizon-worker-gh-repository \
     horizon-worker-browserstack /usr/local/bin/
 RUN chmod 755 /usr/local/bin/horizon-worker-* \

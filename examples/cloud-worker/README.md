@@ -1651,6 +1651,35 @@ horizon-worker-github upkeep <<< '{"version":1,"session":"upkeep-<cloud>","repos
 - While the policy is set, the API broker and the Git proxy refuse what
   [What the agent can do on GitHub](../../docs/upkeep.md#what-the-agent-can-do-on-github)
   lists, and log each refusal in `/workspace/.horizon-gate/refused.jsonl`.
+- `requests` reports the policy as `upkeep` (`null` without one); an older image
+  has no such field.
+
+**The Upkeep of a worker.** With the policy, the worker also does the work of the
+loop that needs no person, so Upkeep keeps working while no Horizon runs (see
+[Upkeep](../../docs/upkeep.md)):
+
+- About every two seconds the service allows, for the task (`allow-task`), each
+  pending request of the loop's session for a listed repository, `read` or `push`,
+  while the session that asked runs. It checks the repository with GitHub as for
+  your decision, and examines the policy again under the lock of the requests.
+  After a refusal it asks GitHub about that repository and access again after a
+  minute; the request stays on the cloud card for you. Requests of other
+  sessions, of a session that ended, and for other repositories, wait for you. A
+  policy that cannot be read allows nothing.
+- A new policy ends every task grant of the loop's session, and of the session of
+  the policy it replaces, for a repository that it does not list. A grant does not
+  record who gave it, so this also ends a grant that you gave the loop on the cloud
+  card for another repository; allow it again when the loop asks. The service sets
+  the policy only after those grants ended.
+- `clear` removes the policy first, under the lock of the requests, and keeps the
+  chain when that fails. The marker then names no policy, so the strictest policy
+  holds and the worker allows nothing by itself until the next `upkeep`. No other
+  operation removes a policy: an Upkeep ends with its cloud.
+- When the service starts, as after a container restart, it writes the marker for
+  the policy on the volume again and starts the loop as the agent user in its tmux session,
+  `/workspace/home/upkeep/run.sh <session>`, as Horizon's exchange does. It waits
+  until the supervisor published the browser host instance, as every session does.
+  A session that runs is kept.
 
 **Status and removal.** Horizon runs these as root:
 

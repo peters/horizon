@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/upkeep.rs,crates/horizon-core/src/upkeep/**,examples/cloud-worker/test_upkeep_worker.py,docs/upkeep.md,docs/testing/procedures/upkeep/worker.sh,crates/horizon-ui/src/upkeep_widget.rs,crates/horizon-ui/src/upkeep_widget/**,crates/horizon-ui/src/app/upkeep.rs,crates/horizon-ui/src/app/upkeep/**,crates/horizon-ui/src/app/cloud_panel/production/new_workspace/upkeep.rs,crates/horizon-ui/src/app/cloud_panel/production/new_workspace/upkeep/**,crates/horizon-browser-control/src/manifest/upkeep.rs,crates/horizon-browser-mcp/src/controller/upkeep.rs,crates/horizon-cloud-worker/src/remote.rs,crates/horizon-ui/src/app/cloud_panel/production/companions/agent/upkeep.rs,crates/horizon-core/src/cloud_runtime/companions/inventory.rs"
+applyTo: "crates/horizon-core/src/upkeep.rs,crates/horizon-core/src/upkeep/**,examples/cloud-worker/test_upkeep_worker.py,docs/upkeep.md,docs/testing/procedures/upkeep/worker.sh,crates/horizon-ui/src/upkeep_widget.rs,crates/horizon-ui/src/upkeep_widget/**,crates/horizon-ui/src/app/upkeep.rs,crates/horizon-ui/src/app/upkeep/**,crates/horizon-ui/src/app/cloud_panel/production/new_workspace/upkeep.rs,crates/horizon-ui/src/app/cloud_panel/production/new_workspace/upkeep/**,crates/horizon-browser-control/src/manifest/upkeep.rs,crates/horizon-browser-mcp/src/controller/upkeep.rs,crates/horizon-cloud-worker/src/remote.rs,crates/horizon-ui/src/app/cloud_panel/production/companions/agent/upkeep.rs,crates/horizon-core/src/cloud_runtime/companions/inventory.rs,examples/cloud-worker/horizon-worker-github-upkeep-loop,examples/cloud-worker/test_github_upkeep_loop.py"
 ---
 
 # Trust boundaries of Upkeep
@@ -105,6 +105,20 @@ The worker and its agents write every request field. Check that:
   or `push`, and a repository of this Upkeep's saved list (ASCII case ignored).
 - The decision is always `Decision::AllowTask`, never a cloud-wide allow.
 - Every other request stays on the cloud card for the person.
+
+With the policy, the worker allows these requests itself (`horizon-worker-github-upkeep-loop`).
+Check that:
+
+- The worker applies the same rule as `allowed`, `task` included, and examines the policy
+  again under the lock of the request book (`admit` in `decide`) before it allows. A policy
+  without a session (a copy that cannot be read) allows nothing.
+- `install` ends the loop session's task grants for every repository that the new policy does
+  not list, under the book's lock, and sets the policy only after the book.
+- `start_loop` runs the loop only through `horizon-worker-tailnet agent`, never as root, and
+  only after `/run/horizon-worker/browser-host-instance` exists.
+- `clear` removes the policy under the book's lock before the chain, and first makes the
+  marker name no policy, so the strictest policy holds even when the chain stays.
+- Every write of the marker (`install`, `remove`, `start_loop`) holds the book's lock.
 
 ## The worker's GitHub policy and refusals
 
