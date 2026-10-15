@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/cloud_runtime/tailnet/cleanup*,crates/horizon-core/src/cloud_runtime/tailnet/cleanup/**,crates/horizon-core/src/cloud_runtime/deployment/deletion.rs,crates/horizon-core/src/cloud_runtime/deployment/redeploy.rs,crates/horizon-core/src/cloud_runtime/deployment/redeploy/**,crates/horizon-core/src/cloud_runtime/tailnet/receipt.rs,crates/horizon-core/src/cloud_runtime/providers/deletion.rs,crates/horizon-core/src/cloud_runtime/deployment/storage.rs,crates/horizon-core/src/cloud_runtime/lifecycle.rs,crates/horizon-core/Cargo.toml"
+applyTo: "crates/horizon-core/src/cloud_runtime/tailnet/cleanup*,crates/horizon-core/src/cloud_runtime/tailnet/cleanup/**,crates/horizon-core/src/cloud_runtime/deployment/deletion.rs,crates/horizon-core/src/cloud_runtime/deployment/redeploy.rs,crates/horizon-core/src/cloud_runtime/deployment/redeploy/**,crates/horizon-core/src/cloud_runtime/tailnet/receipt.rs,crates/horizon-core/src/cloud_runtime/providers/deletion.rs,crates/horizon-core/src/cloud_runtime/deployment/storage.rs,crates/horizon-core/src/cloud_runtime/lifecycle.rs,crates/horizon-core/Cargo.toml,crates/horizon-cloud/src/docker_host/worker.rs,crates/horizon-core/src/cloud_runtime/providers/docker_host.rs"
 ---
 
 # Exact recorded-node Core cleanup
@@ -14,7 +14,9 @@ The backend feature `tailnet-node-cleanup` is OFF by default. Gate API dispatch 
 
 For Docker deletion, preserve never-requested Prepared durably only with no port
 intent and owned-container absence; volume-only preparation is not enrollment.
-A container observed by either lookup must save Requested before rm, even after
-a preliminary absence. Save failure forbids removal; lost replies/retries retain
+A container observed by any lookup must save Requested, including final
+verification after earlier absence. Use the shared SDK observation path for both
+SDK lookups; final verification must save before returning an error. Save failure forbids removal; lost replies/retries retain
 uncertainty. Never infer freshness from a synthetic Terminated ID or erase legacy
-readiness/stop/resume history. Exercise the actual deletion controller.
+readiness/stop/resume history. Exercise all three actual controller lookups, including a final-only observation
+followed by container absence before retry.

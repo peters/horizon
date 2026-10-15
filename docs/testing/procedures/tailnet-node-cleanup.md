@@ -198,7 +198,9 @@ Docker executable drives the actual SDK capacity refusal and Core deletion
 controller without contacting Docker or a provider. Check repeated delete/reload,
 normal removal and redeploy after initial capacity failure, including volume-only
 preparation. Keep legacy readiness/stop/resume, Requested, synthetic Terminated
-and port-intent cases manual. An unexpected container found by either lookup must
-save Requested before removal; failed saves send no rm, and lost removal replies
-remain uncertain after reload/retry. The early/later cases check both the Core
-adapter and the SDK transition, not a claimed live Docker qualification.
+and port-intent cases manual. An unexpected container found by any of the three lookups must save Requested.
+The shared SDK observation path covers removal and final verification. A
+final-only observation followed by absence before retry must still block normal
+removal and redeploy. Failed saves send no rm at all three lookups; lost removal
+replies remain uncertain after reload/retry. These cases check the Core adapter
+and SDK transitions, not a claimed live Docker qualification.

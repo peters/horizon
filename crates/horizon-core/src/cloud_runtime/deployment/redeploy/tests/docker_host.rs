@@ -22,6 +22,9 @@ def done(value=''):save();print(value);sys.exit(0)
 if args[0]=='info':
  done('FIXTURE-ENGINE' if args[-1]=='{{.ID}}' else json.dumps(dict(OSType='linux',NCPU=1,MemTotal=1073741824,ServerVersion='29.0.1',Architecture='x86_64')))
 if args[:2]==['container','ls']:
+ if 'label=io.horizon.cloud=deleted-cloud' in args:
+  state['lookups']=state.get('lookups',0)+1
+  if state.get('appear_on_lookup')==state['lookups']:state['present']=True
  if state.pop('appear_after_first_lookup',False):state['present']=True;done('')
  done('a'*64 if state.get('present') else '')
 if args[:2]==['container','inspect']:
@@ -251,12 +254,11 @@ fn unexpected_early_or_later_container_is_durably_requested_before_remove_and_re
     }
 }
 #[test]
-fn failed_requested_save_cannot_remove_early_or_later_unexpected_container() {
-    for late in [false, true] {
+fn failed_requested_save_cannot_remove_a_container_observed_by_any_lookup() {
+    for lookup in [1, 2, 3] {
         let (root, cloud, settings) = fixture();
         change_engine(root.path(), |state| {
-            state["present"] = json!(!late);
-            state["appear_after_first_lookup"] = json!(late);
+            state["appear_on_lookup"] = json!(lookup);
             state["block_save"] = json!(true);
         });
         assert!(delete(&cloud, &settings).is_err());
@@ -281,4 +283,38 @@ fn failed_requested_save_cannot_remove_early_or_later_unexpected_container() {
         );
         assert!(!engine_state(root.path())["present"].as_bool().unwrap());
     }
+}
+
+#[test]
+fn final_verification_observation_remains_requested_after_container_disappears_before_retry() {
+    let (root, cloud, settings) = fixture();
+    change_engine(root.path(), |state| state["appear_on_lookup"] = json!(3));
+    let error = delete(&cloud, &settings).unwrap_err();
+    assert!(error.to_string().contains("did not remove"), "{error}");
+    let engine = engine_state(root.path());
+    assert_eq!(engine["lookups"], json!(3));
+    assert_eq!(engine["present"], json!(true));
+    assert!(
+        engine["calls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|call| !call.as_str().unwrap().starts_with("container rm"))
+    );
+    {
+        let store = Store::lock(&cloud).unwrap();
+        assert_eq!(store.load().unwrap().unwrap().operation, CreateState::Requested);
+    }
+    change_engine(root.path(), |state| state["present"] = json!(false));
+    assert!(
+        delete(&cloud, &settings)
+            .unwrap_err()
+            .to_string()
+            .contains("not recorded")
+    );
+    let store = Store::lock(&cloud).unwrap();
+    let mut state = store.load().unwrap().unwrap();
+    assert!(matches!(state.operation, CreateState::Terminated { .. }));
+    assert!(can_remove(&store, &state).is_err());
+    assert!(reopen(&store, &mut state, PUBLIC_KEY).is_err());
 }

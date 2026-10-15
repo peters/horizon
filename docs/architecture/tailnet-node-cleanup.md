@@ -23,7 +23,7 @@ RunPod requires a matching Deleted storage journal when its required marker exis
 Legacy unmanaged RunPod storage can have no journal or marker.
 Hetzner requires its completed deletion journal, terminated canonical volume ID, retained location, and no key or released server.
 DockerHost requires the exact empty journal that its SDK saves after container and volume absence.
-With cleanup enabled, Docker deletion preserves Prepared durably only if no container-port intent exists and the owned container is absent. Volume-only preparation does not imply enrollment. Any owned container found before removal first saves Requested, including a container that appears after the preliminary lookup; failed saves send no removal. Requested, port intent and legacy stop/resume/readiness history remain conservative even after resource absence. Synthetic Terminated ID shape never proves freshness.
+With cleanup enabled, Docker deletion preserves Prepared durably only if no container-port intent exists and the owned container is absent. Volume-only preparation does not imply enrollment. Any owned container found by the preliminary lookup, SDK removal lookup or final verification first saves Requested. Both SDK lookups use the same observation helper. A final-only observation stays recorded if the container disappears before retry; failed saves send no removal. Requested, port intent and legacy stop/resume/readiness history remain conservative even after resource absence. Synthetic Terminated ID shape never proves freshness.
 Missing required, malformed, foreign or unsettled resource evidence prevents API dispatch.
 
 A receipt from another original provider remains manual.

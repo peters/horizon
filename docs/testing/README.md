@@ -84,3 +84,4 @@ documents that are not yet STE.
 | [2026-10-15-tailnet-node-cleanup-first-live](reports/2026-10-15-tailnet-node-cleanup-first-live.md) | [tailnet-node-cleanup](procedures/tailnet-node-cleanup.md) | 2026-10-15 |
 | [2026-10-15-tailnet-node-cleanup-final-live](reports/2026-10-15-tailnet-node-cleanup-final-live.md) | [tailnet-node-cleanup](procedures/tailnet-node-cleanup.md) | 2026-10-15 |
 | [2026-10-15-tailnet-node-cleanup-docker-capacity-live](reports/2026-10-15-tailnet-node-cleanup-docker-capacity-live.md) | [tailnet-node-cleanup](procedures/tailnet-node-cleanup.md) | 2026-10-15 |
+| [2026-10-15-tailnet-node-cleanup-round4](reports/2026-10-15-tailnet-node-cleanup-round4.md) | [tailnet-node-cleanup](procedures/tailnet-node-cleanup.md) | 2026-10-15 |
