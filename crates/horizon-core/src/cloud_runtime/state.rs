@@ -262,13 +262,25 @@ impl Store {
     /// Returns read/parse errors without resetting or ignoring corrupt state.
     /// Refuses loading while a workspace-growth or compute-resize journal requires recovery.
     pub fn load(&self) -> Result<Option<Deployment>> {
-        super::deployment::storage::growth::require_settled(self.root())?;
-        super::deployment::storage::resize::require_settled(self.root())?;
-        self.load_during_storage_growth()
+        Self::snapshot(self.root())
+    }
+
+    /// Reads an atomic record without creating directories or taking an operation lock.
+    /// Execution must lock and check it again; a plan snapshot reserves no operation.
+    /// # Errors
+    /// Invalid records, pending storage recovery or filesystem failures.
+    pub fn snapshot(root: &Path) -> Result<Option<Deployment>> {
+        super::deployment::storage::growth::require_settled(root)?;
+        super::deployment::storage::resize::require_settled(root)?;
+        Self::read(root)
     }
 
     pub(in crate::cloud_runtime) fn load_during_storage_growth(&self) -> Result<Option<Deployment>> {
-        let path = self.root.join("deployment.json");
+        Self::read(self.root())
+    }
+
+    fn read(root: &Path) -> Result<Option<Deployment>> {
+        let path = root.join("deployment.json");
         match std::fs::read(path) {
             Ok(bytes) => {
                 let mut state: Deployment = serde_json::from_slice(&bytes).map_err(|_| Error::Json)?;

@@ -3,7 +3,8 @@
 This document defines the image destination boundary for epic #1597.
 The destination policy is a reusable module in `horizon-cloud`.
 It does not authenticate, send network requests or publish an image.
-The launch pipeline does not use automatic destinations yet.
+The shared launch engine resolves and retains destinations. New automatic launches
+remain behind a machine-local staging gate, off until the complete selector is delivered.
 
 ## Host publication preparation
 
@@ -33,20 +34,18 @@ account leaves the prior stored chain and private operation login unchanged.
 A separate explicit account-selection helper always starts device sign-in rather
 than accepting the cached account. It is not an account-switch UI or per-account
 store; the launch and selector integrations still follow separately.
-This helper has no launch caller yet. The launch integration follows separately.
+The engine uses this helper before a new personal build and renews its private login
+immediately before push. Registry-bound publication uses its exact saved grant instead.
 
-## Retained publication record prerequisite
+## Retained publication records and preparation
 
-A cloud record can retain its original recipe image, named profile, resolved image
+A cloud record retains its original recipe image, named profile, resolved image
 repository and nonsecret publisher identity. The record contains no credential and
-is not proof that a publisher is authenticated or permitted to push. Existing
-launch callers do not create this record yet; automatic publishing remains inactive.
-The two legacy image-preparation factories refuse a retained publisher before loading
-old publishing credentials. Initial preparation is fenced only when no image specification
-exists; rebuild preparation is fenced when it will build. Reconnect, resize and other
-operations that reuse an existing image are not subjected to a publishing-credential fence.
-The portable engine must replace these two fences with retained-account authorization
-before it can build or rebuild these images. Reading and migration preserve metadata.
+is not proof of current registry permission. A new API launch records its authorized
+local choice before image work. A retry or rebuild keeps that destination and compares
+its immutable account or publication grant again before loading image credentials.
+An existing image specification requires no publishing login. Reconnect and resize
+retain their existing image and do not start a publication.
 
 Store reads and writes validate the record against the resolved build profile.
 Personal destinations require matching immutable account metadata and namespace;
@@ -61,6 +60,11 @@ is refused. Existing deployment formats and enrollment evidence remain supported
 Legacy migration preserves publication metadata and the duplicate-worker guard,
 including when a neighboring cloud already has a publication record.
 
+
+Reconnect and resize accept an omitted image, the original recipe image or the
+resolved image after a rebuild. All three refer to the same retained destination;
+none selects a new publishing account. A different explicit image or named profile
+is refused before credentials load, including after an explicit recipe becomes automatic.
 
 ## Machine-local destination preferences
 
@@ -100,9 +104,13 @@ Malformed scopes and duplicate checkout/profile pairs are rejected when settings
 A removed registry grant does not prevent unrelated clouds from loading settings.
 Selection of that removed grant fails when the host tries to use it.
 
-These helpers have no launch or UI caller yet. They do not change profile parsing or enable image omission.
-The launch integration must authenticate the account and retain the destination before a build.
-It must compare the shown selection again before it uses credentials or paid resources.
+A build profile can omit `image`; a prebuilt profile still requires one. The staged
+engine consumes these preferences, authenticates the selected account and records
+its destination before building. It checks the shown selection again before using
+credentials. Existing explicit-image records retain their original image and do not
+inherit a later preference. A new automatic launch remains refused while the staging
+gate is off. The visible selector, public destination controls and saved-launch bridge
+are delivered separately before activation.
 
 ## Destination identity
 
@@ -168,8 +176,8 @@ The two journals retain separate operation locks, but one generation-wide first-
 A changed pull username or secret requires a new generation, including when the other journal was used first.
 Malformed records and a direct-host record with provider mutation state are refused.
 
-This is a preparation prerequisite. Active deployment callers still use the existing provider journal;
-the portable launch integration must select the provider-aware helper before activation.
+The shared initial-build and rebuild paths choose the provider-aware helper.
+Direct hosts use the host journal; provider-managed registry access retains its original journal.
 Local validation does not revoke a pull credential already installed on a host.
 
 The verified CPU pull material retains the earliest configured or issuer-observed expiry.
@@ -207,6 +215,51 @@ for a redacted error while retaining compatibility for valid legacy documents.
 Recipe/profile equality is enforced before serialization as well as during
 deserialization. An inconsistent in-memory recipe emits no standalone launch
 JSON, and JSON/YAML serialization fail before it can reach an older reader.
+
+## Staged engine and development CLI
+
+The engine keeps a false-by-default `portable_image_publishing` setting until the
+complete user flow is ready. Existing explicit-image launches remain supported.
+The development `cloud_deploy` helper accepts a profile without an image only in an
+explicitly enabled owned test fixture. Its plan prints the selected repository and
+account metadata, includes that choice in the confirmation token, and reads a saved
+cloud without creating state. Execution rechecks the choice. A changed preference
+cannot redirect a retained cloud; a missing original grant stops before building.
+
+The default-off stage does not enable saved publisher envelopes in the desktop.
+Version-2 reads and actual UI request forwarding remain one later atomic change.
+Git hosting and registry hosting remain independent; no GitLab sign-in or project
+discovery is added. A missing read-only grant for a private personal package stops
+before build and names the recorded destination. A publisher's write token never
+becomes worker pull access. Legacy deployment and allocation versions remain fenced.
+
+The first and final reviewable candidates require an owned real registry build,
+push and immutable read-only check, plus the read-only real-checkout identity gate.
+These prove local engine behavior, not a live issuer account or paid allocation.
+See [the engine procedure](../testing/procedures/portable-build-engine.md).
+
+A retained publishing record also fixes the rebuild profile name. A request for
+another profile is refused even when that profile names the same destination or
+omits its image. Recipe edits within the recorded profile still rebuild to the
+recorded destination.
+
+This staged engine is supported through the development CLI only. Desktop
+creation, saved publisher-envelope restoration and retained-publication rebuild
+previews wait for the atomic UI bridge. Keep the setting off for desktop use;
+a staged CLI record is not evidence that the desktop path is qualified.
+
+A rebuild confirmation also snapshots the exact retained publication. Its token
+covers the publisher account or grant even when the resolved image and files are
+identical. The locked execution compares that identity before reading credentials;
+a changed or missing publisher confirmation requires a fresh plan. Legacy plans
+without a retained publication keep their existing token format. The development
+CLI displays the recorded destination and account with the rebuild plan. A retained
+publisher requires that printed token even when the working copy is clean.
+
+Image-only retries also restore the locked record's working-copy confirmation.
+Advancing HEAD does not turn an older-revision retry into a commit-only build:
+the overlay and image label retain the original revision and files hash. Later
+unconfirmed file edits refuse before building.
 
 ## Docker context and registry isolation
 

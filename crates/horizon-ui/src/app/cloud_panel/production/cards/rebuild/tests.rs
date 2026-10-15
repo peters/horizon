@@ -30,6 +30,7 @@ fn ready(build: bool, phase: Phase) -> Runtime {
 /// The confirmation once the latest commit was read: a plan with `changes`, or `refused`.
 fn read(runtime: &Runtime, changes: &[&str], refused: Option<&str>) -> Confirmation {
     let plan = Plan {
+        publication: None,
         profile: runtime.state.as_ref().unwrap().profile.clone(),
         changes: changes.iter().map(|change| (*change).to_owned()).collect(),
         notes: Vec::new(),
@@ -284,6 +285,7 @@ fn the_confirmation_lists_every_uncommitted_file_before_a_rebuild_can_start() {
     let (_repository, files) = uncommitted_recipe();
     let note = "Uncommitted changes to companions are not used until you commit them.";
     runtime.confirmation = Confirmation::Rebuild(Preview::of(Ok(Plan {
+        publication: None,
         profile: runtime.state.as_ref().unwrap().profile.clone(),
         changes: Vec::new(),
         notes: vec![note.into()],

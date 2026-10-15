@@ -35,7 +35,7 @@ use horizon_cloud::{
 use std::time::{Duration, Instant};
 
 use recipes::{Head, Recipe, Recipes, latest_recipes, report_changes};
-pub use recipes::{PROFILE_CHANGE, Plan, plan};
+pub use recipes::{PROFILE_CHANGE, Plan, plan, plan_for_cloud};
 pub(super) use sessions::relaunch_sessions;
 
 const NOTHING_PENDING: &str = "No image replacement is pending";
@@ -45,6 +45,8 @@ const UNSETTLED: &str =
     "The provider has not reported the switched image yet; the replacement stays pending. Continue or cancel it.";
 const ADDS_CREDENTIAL: &str = "The rebuilt image needs a registry credential that this worker was created without, and a switch that adds one cannot be undone. Create a new cloud to use it.";
 const CONFIRMED_OTHER: &str = "The checkout changes this cloud's settings differently from what was confirmed; review the changes and rebuild again";
+const UNCONFIRMED_PUBLISHER: &str =
+    "The cloud's publishing identity changed or was not confirmed; review its rebuild plan again";
 const UNCONFIRMED_FILES: &str = "The uncommitted files in the image's build context are not the ones that were confirmed; review them and rebuild again";
 const SAME_IMAGE: &str = "The rebuilt image is the worker's current image, so the changed settings cannot reach the worker. Nothing changed on the worker and nothing is pending; rebuild again";
 
@@ -152,6 +154,7 @@ pub fn rebuild(
     emit(Event::stage(Stage::Validate));
     let (store, mut state) = open(request)?;
     ready(&state)?;
+    confirm_publication(&state, confirmed)?;
     // Checked before credentials load, so a changed profile is refused with its reason.
     let checkout = Runner {
         cancel,
@@ -282,7 +285,7 @@ fn open(request: &Request) -> Result<(Store, Deployment)> {
     if state.cloud_id != request.cloud_id
         || state.repository != request.repository
         || state.revision != request.revision
-        || state.profile != request.profile
+        || state.profile != crate::cloud_runtime::publishing::requested_profile(&state, &request.profile)
     {
         return Err(Error::Invalid(
             "Cloud is permanently bound to its repository, revision and profile",
@@ -341,6 +344,15 @@ fn accept(next: &Profile, confirmed: Option<&Profile>, settings: &Settings) -> R
         return Err(Error::Invalid(CONFIRMED_OTHER));
     }
     super::validate_agent_auth(settings, &next.capabilities, true)
+}
+
+fn confirm_publication(state: &Deployment, confirmed: Option<&Plan>) -> Result<()> {
+    if confirmed.map_or(state.publication.is_some(), |plan| {
+        plan.publication.as_ref() != state.publication.as_deref()
+    }) {
+        return Err(Error::Invalid(UNCONFIRMED_PUBLISHER));
+    }
+    Ok(())
 }
 
 /// Refuses uncommitted files that are not exactly the ones a person `confirmed`: an image

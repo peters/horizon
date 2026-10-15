@@ -93,3 +93,5 @@ fn old_settings_omit_empty_preferences_and_stale_grants_do_not_break_other_cloud
     cancel.cancel();
     assert!(selection(&settings, &root.path().join("absent"), "cpu", &profile(), &cancel).is_err());
 }
+
+mod launch;

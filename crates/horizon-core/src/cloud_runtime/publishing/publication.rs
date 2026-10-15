@@ -1,5 +1,5 @@
 //! Retained nonsecret image destination and publisher identity.
-use super::{Account, Destination, Error, Publisher, Result};
+use super::{Account, Destination, Error, Publisher, Result, Selection};
 use horizon_cloud::Profile;
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +16,29 @@ pub struct Publication {
 }
 
 impl Publication {
+    pub(super) fn check_selection(&self, shown: &Selection) -> Result<()> {
+        let matches = match shown {
+            Selection::Personal { destination, account } => {
+                self.destination == *destination && self.account.as_ref() == Some(account)
+            }
+            Selection::Registry { destination } => self.destination == *destination && self.account.is_none(),
+            Selection::Automatic { login, repository } => {
+                matches!(&self.destination.publisher, Publisher::GitHub { login: recorded }
+                    if login.as_ref().is_none_or(|shown| shown.eq_ignore_ascii_case(recorded)))
+                    && repository
+                        .as_ref()
+                        .is_none_or(|shown| shown == &self.destination.repository)
+            }
+            Selection::Recipe { .. } => false,
+        };
+        if !matches {
+            return Err(Error::Invalid(
+                "The cloud's recorded destination differs from the confirmed plan; review it before starting",
+            ));
+        }
+        Ok(())
+    }
+
     pub(in crate::cloud_runtime) fn validate(&self, profile: &Profile) -> Result<()> {
         self.destination
             .validate()

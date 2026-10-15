@@ -26,6 +26,9 @@ pub struct Settings {
     /// Local image destinations scoped to a canonical checkout and named profile.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub image_publishing: Vec<super::publishing::Override>,
+    /// Staging gate; the complete selector enables this in the final integration.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub portable_image_publishing: bool,
     pub cpu_flavors: Vec<String>,
     pub gpu_types: Vec<String>,
     #[serde(default)]

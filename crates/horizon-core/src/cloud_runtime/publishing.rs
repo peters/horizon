@@ -1,4 +1,7 @@
 //! Host-selected publishing intent. Repository metadata can name an image, never a credential.
+pub(in crate::cloud_runtime) const STAGED: &str =
+    "Portable image publishing is not enabled; keep an explicit image until the destination selector is available";
+mod preparation;
 mod publication;
 mod selection;
 mod source;
@@ -6,7 +9,10 @@ mod source;
 mod tests;
 
 use super::{Error, Result, github::publish::publication::Account, registry, settings::Settings};
+use horizon_cloud::Profile;
 use horizon_cloud::image_publishing::{Destination, Publisher};
+pub(in crate::cloud_runtime) use preparation::{authorize, bind_initial};
+pub use preparation::{check_auth_storage, prepare, preview};
 pub use publication::Publication;
 pub use selection::{Selection, choices, personal, selection};
 use serde::{Deserialize, Serialize};
@@ -85,6 +91,20 @@ fn selected<'a>(settings: &'a Settings, repository: &Path, profile: &str) -> Opt
         .find(|choice| choice.repository == repository && choice.profile == profile)
 }
 
+/// Restores the recorded target for automatic or original recipe image requests.
+pub(super) fn requested_profile(state: &super::state::Deployment, requested: &Profile) -> Profile {
+    let mut profile = requested.clone();
+    if requested.automatic_image()
+        || state
+            .publication
+            .as_ref()
+            .is_some_and(|record| requested.image == record.requested_image)
+    {
+        profile.image.clone_from(&state.profile.image);
+    }
+    profile
+}
+
 fn grant<'a>(settings: &'a Settings, destination: &str) -> Result<&'a registry::Binding> {
     settings
         .registries
@@ -115,7 +135,3 @@ pub(in crate::cloud_runtime) fn grant_id(binding: &registry::Binding) -> Result<
         hex
     }))
 }
-
-/// A record reader must not fall back to an older publisher when preparing a new image.
-pub(in crate::cloud_runtime) const IMAGE_PREPARATION_STAGED: &str =
-    "This cloud retains an image publisher; use the portable publishing engine to build or rebuild its image";

@@ -13,6 +13,25 @@ use std::path::{Path, PathBuf};
 
 const CHANGED: &str = "The uncommitted files in the image's build context are not the ones confirmed when this cloud was created. Put them back as they were, or delete this cloud and create a new one to confirm the files as they are now";
 
+pub(super) struct Preparation {
+    pub registry: Option<crate::cloud_runtime::registry::Prepared>,
+    publication: Option<crate::cloud_runtime::github::publish::publication::Prepared>,
+}
+
+impl Preparation {
+    pub(super) fn new(request: &Request, store: &Store, state: &mut Deployment, runner: &Runner<'_>) -> Result<Self> {
+        let publication = crate::cloud_runtime::publishing::prepare(request, store, state, runner)?;
+        let registry = super::prepare_registry(request, store, state)?;
+        Ok(Self { registry, publication })
+    }
+
+    pub(super) fn redactions(&self) -> Vec<String> {
+        self.registry
+            .as_ref()
+            .map_or_else(Vec::new, crate::cloud_runtime::registry::Prepared::redactions)
+    }
+}
+
 pub(super) fn validate_allocation_image(
     request: &Request,
     state: &Deployment,
@@ -124,8 +143,10 @@ pub(super) fn prepare_image(
     store: &Store,
     runner: &Runner<'_>,
     state: &mut Deployment,
-    registry: Option<&crate::cloud_runtime::registry::Prepared>,
+    preparation: &Preparation,
 ) -> Result<()> {
+    let registry = preparation.registry.as_ref();
+    let publication = preparation.publication.as_ref();
     if let Some(registry) = registry {
         registry.preflight(runner)?;
     }
@@ -145,15 +166,21 @@ pub(super) fn prepare_image(
     };
     let images = Images {
         docker_host: request.settings.docker_host.as_deref(),
-        isolated_registry: registry.is_some(),
-        docker_config: registry.map_or(request.settings.docker_config.as_path(), |registry| {
-            registry.docker_config(state.profile.build.is_some())
-        }),
+        isolated_registry: registry.is_some() || publication.is_some(),
+        docker_config: publication.map_or_else(
+            || {
+                registry.map_or(request.settings.docker_config.as_path(), |registry| {
+                    registry.docker_config(state.profile.build.is_some())
+                })
+            },
+            |publication| publication.docker_config(),
+        ),
         runner,
         // A bound image repository publishes with its own credential.
-        publisher: registry.is_none().then_some(Publisher {
+        publisher: (registry.is_none() || publication.is_some()).then_some(Publisher {
             docker_config: &request.settings.docker_config,
             cloud_id: &state.cloud_id,
+            prepared: publication,
         }),
     };
     let digest = if let Some(set) = &state.siblings {
@@ -419,9 +446,18 @@ mod tests {
                 emit: &|_| {},
                 secrets: Vec::new(),
             };
-            let failed = prepare_image(&request, &store, &runner, &mut state, None)
-                .unwrap_err()
-                .to_string();
+            let failed = prepare_image(
+                &request,
+                &store,
+                &runner,
+                &mut state,
+                &Preparation {
+                    registry: None,
+                    publication: None,
+                },
+            )
+            .unwrap_err()
+            .to_string();
             assert!(failed.contains("not the ones confirmed"), "{failed}");
             assert_eq!(state.uncommitted_image, None, "no image completed");
             assert_eq!(store.load().unwrap().unwrap().uncommitted_image, None);

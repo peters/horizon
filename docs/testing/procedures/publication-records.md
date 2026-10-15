@@ -57,7 +57,7 @@ No credential, registry request or compute allocation is required.
    Bad input is refused without an authentication request.
    The saved record remains unchanged after a refused write.
 
-### 6.2 PR-02 — Fence only new image preparation
+### 6.2 PR-02 — Require the retained grant only for new images
 
 1. Run the initial-image and rebuild compatibility tests.
 
@@ -65,9 +65,9 @@ No credential, registry request or compute allocation is required.
    RUSTFLAGS="-D warnings" cargo test -p horizon-core --lib publishing_fence
    ```
 
-   Result: The legacy factories refuse a retained publisher before loading old credentials
-   when an initial image or rebuild will be built.
-   An existing image specification does not invoke the image-build fence.
+   Result: Initial image and rebuild factories refuse a missing retained publishing grant
+   before loading compute credentials. An existing image specification needs no
+   publishing login.
    No Docker configuration is created and saved records remain unchanged.
 
 ### 6.3 PR-03 — Preserve paired allocation and neighboring ownership

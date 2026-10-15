@@ -2,7 +2,10 @@
 //! changes, and the profile its cloud binds with it: what [`plan`] shows a person before
 //! they confirm, and what a rebuild journals.
 use super::{Deployment, Error, Event, NO_RECIPE, Result, activity, compatibility, quick_start, rebuildable};
-use crate::cloud_runtime::{command::Runner, repository::uncommitted::Uncommitted};
+use crate::cloud_runtime::{
+    command::Runner,
+    repository::uncommitted::{self, Uncommitted},
+};
 use horizon_cloud::{Build, Cancellation, CloudConfig, Profile};
 use std::path::Path;
 
@@ -55,15 +58,27 @@ pub struct Plan {
     pub notes: Vec<String>,
     /// The uncommitted files that go into the image's build context.
     pub uncommitted: Uncommitted,
+    /// Exact nonsecret publishing identity shown with this rebuild confirmation.
+    pub publication: Option<crate::cloud_runtime::publishing::Publication>,
 }
 
 impl Plan {
     /// A SHA-256 over the profile the rebuild binds and the hash of its uncommitted files,
-    /// as 64 lowercase hexadecimal digits: a person who saw a printed plan confirms
+    /// plus its retained publishing identity, as 64 lowercase hexadecimal digits.
+    /// A person who saw a printed plan confirms
     /// exactly that plan by giving it back (`cloud_deploy rebuild`).
     #[must_use]
     pub fn token(&self) -> String {
-        crate::cloud_runtime::repository::uncommitted::token(&self.profile, &self.uncommitted)
+        use sha2::{Digest as _, Sha256};
+        let legacy = uncommitted::token(&self.profile, &self.uncommitted);
+        let Some(publication) = &self.publication else {
+            return legacy;
+        };
+        let mut hash = Sha256::new();
+        hash.update(legacy.as_bytes());
+        hash.update([0]);
+        hash.update(serde_json::to_vec(publication).unwrap_or_default());
+        uncommitted::hex(&hash.finalize())
     }
 }
 
@@ -74,6 +89,29 @@ impl Plan {
 /// Refuses as [`super::rebuild`] refuses the profile named `profile_name` and the
 /// uncommitted files.
 pub fn plan(repository: &Path, bound: &Profile, profile_name: &str, cancel: &Cancellation) -> Result<Plan> {
+    plan_with(repository, bound, profile_name, None, cancel)
+}
+
+/// The rebuild plan with the destination and recipe image recorded for this cloud.
+/// # Errors
+/// As [`plan`], including inconsistent publication metadata.
+pub fn plan_for_cloud(state: &Deployment, profile_name: &str, cancel: &Cancellation) -> Result<Plan> {
+    plan_with(
+        &state.repository,
+        &state.profile,
+        profile_name,
+        state.publication.as_deref(),
+        cancel,
+    )
+}
+
+fn plan_with(
+    repository: &Path,
+    bound: &Profile,
+    profile_name: &str,
+    publication: Option<&crate::cloud_runtime::publishing::Publication>,
+    cancel: &Cancellation,
+) -> Result<Plan> {
     if !rebuildable(bound) {
         return Err(Error::Invalid(NO_RECIPE));
     }
@@ -83,7 +121,7 @@ pub fn plan(repository: &Path, bound: &Profile, profile_name: &str, cancel: &Can
         secrets: Vec::new(),
     };
     let head = checkout.head(repository)?;
-    let profile = next_profile(&head, bound, profile_name)?;
+    let profile = next_profile(&head, bound, profile_name, publication)?;
     let uncommitted = uncommitted(&checkout, repository, &head, &profile)?;
     // An idle period is no rebuild setting, so the cloud keeps its own; the note names
     // the one the settings that a rebuild reads still set.
@@ -101,6 +139,7 @@ pub fn plan(repository: &Path, bound: &Profile, profile_name: &str, cancel: &Can
         profile,
         notes,
         uncommitted,
+        publication: publication.cloned(),
     })
 }
 
@@ -114,7 +153,7 @@ pub(super) fn latest_recipes(
 ) -> Result<Recipes> {
     emit(activity("Reading the recipe and its uncommitted changes"));
     let head = recipe.head(&state.repository)?;
-    let profile = next_profile(&head, &state.profile, profile_name)?;
+    let profile = next_profile(&head, &state.profile, profile_name, state.publication.as_deref())?;
     let uncommitted = uncommitted(recipe, &state.repository, &head, &profile)?;
     for note in notes(&state.profile, head.notes) {
         emit(Event::Output(note));
@@ -167,9 +206,14 @@ fn notes(bound: &Profile, notes: Vec<String>) -> Vec<String> {
 /// has no recipe; while the latest commit has no `.horizon/cloud.yml`, as for quick
 /// start, its image is the pin of this Horizon version and its profile stays. Committed
 /// settings are never passed over: with them such a cloud is refused.
-fn next_profile(head: &Head, bound: &Profile, profile_name: &str) -> Result<Profile> {
+fn next_profile(
+    head: &Head,
+    bound: &Profile,
+    profile_name: &str,
+    publication: Option<&crate::cloud_runtime::publishing::Publication>,
+) -> Result<Profile> {
     if !quick_start::on_public_base(bound) {
-        return compatibility::next_profile(bound, head.config.as_ref(), profile_name);
+        return compatibility::next_profile(bound, head.config.as_ref(), profile_name, publication);
     }
     if head.committed.is_some() {
         return Err(Error::Invalid(COMMITTED_BASE));

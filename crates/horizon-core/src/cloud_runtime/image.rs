@@ -96,6 +96,11 @@ impl Images<'_> {
         profile
             .validate(false)
             .map_err(|_| Error::Invalid("Invalid cloud profile"))?;
+        if profile.image.is_empty() {
+            return Err(Error::Invalid(
+                "Choose the image-publishing destination before building",
+            ));
+        }
         if !horizon_cloud::valid_id(operation_id) {
             return Err(Error::Invalid("Invalid image operation identity"));
         }

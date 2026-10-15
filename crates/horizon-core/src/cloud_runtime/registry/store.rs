@@ -6,7 +6,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-pub(super) fn ensure_outside_source(root: &Path, source: &Path) -> Result<()> {
+pub(in crate::cloud_runtime) fn ensure_outside_source(root: &Path, source: &Path) -> Result<()> {
     let mut resolved = PathBuf::new();
     for component in root.components() {
         if component == Component::ParentDir {
