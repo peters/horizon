@@ -50,6 +50,16 @@ impl super::Production {
 }
 
 impl super::Production {
+    fn chosen_revision(&self) -> String {
+        self.launch.revision.clone().unwrap_or_else(|| {
+            if self.revision.is_empty() {
+                "HEAD".into()
+            } else {
+                self.revision.clone()
+            }
+        })
+    }
+
     /// The same-worker siblings checked for this launch, once reviewed for exactly the
     /// prepared repository, revision and profile.
     fn chosen_siblings(&self) -> cloud_runtime::Result<Vec<cloud_runtime::siblings::Sibling>> {
@@ -102,19 +112,14 @@ impl HorizonApp {
             .as_ref()
             .and_then(|config| config.profiles.get(&form.selected_profile))
             .ok_or(cloud_runtime::Error::Invalid("Choose a repository profile"))?;
+        let publishing_selection = super::creation::publishing::launch_choice(form)?;
         runpod_usable(form, profile)?;
         let profile = launch_profile(profile, form.provider, form.size)?;
         let working_copy = super::creation::uncommitted::confirmed(form, profile.build.as_ref())?;
         let listed = working_copy.clone();
         let placement = form.placement.for_profile(profile.gpu);
         let repository = horizon_core::Config::expand_tilde(&form.repository);
-        let revision = if let Some(revision) = &form.launch.revision {
-            revision.clone()
-        } else if form.revision.is_empty() {
-            "HEAD".into()
-        } else {
-            form.revision.clone()
-        };
+        let revision = form.chosen_revision();
         let siblings = form.chosen_siblings()?;
         let reviewed = siblings.clone();
         let busy = form.creation_busy.clone();
@@ -140,7 +145,7 @@ impl HorizonApp {
             workspace,
             title: form.title.trim().to_owned(),
             launch: CloudLaunch {
-                publishing_selection: None,
+                publishing_selection,
                 deployment_started: false,
                 id: cloud_id,
                 revision: String::new(),
@@ -374,6 +379,13 @@ fn resolve(
         super::creation::uncommitted::unchanged(&repository, &revision, listed, cancel)?;
     }
     Ok(Resolved { repository, revision })
+}
+
+#[cfg(all(test, unix))]
+impl Pending {
+    pub(super) fn publishing_selection(&self) -> Option<&cloud_runtime::publishing::Selection> {
+        self.launch.publishing_selection.as_ref()
+    }
 }
 
 #[cfg(all(test, unix))]

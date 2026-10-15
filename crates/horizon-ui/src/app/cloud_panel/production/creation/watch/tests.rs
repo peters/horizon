@@ -93,3 +93,48 @@ fn stale_stock_and_cancelled_or_changed_selections_never_submit() {
     poll(&mut form);
     assert!(!form.launch.submitted);
 }
+
+#[test]
+fn fresh_stock_does_not_consume_a_watch_armed_while_publication_metadata_reloads() {
+    let mut form = form();
+    form.profiles.as_mut().unwrap().profiles.get_mut("dev").unwrap().build =
+        Some(serde_json::from_value(serde_json::json!({"context":".","dockerfile":"Dockerfile"})).unwrap());
+    let root = tempfile::tempdir().unwrap();
+    let repo = root.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let ctx = egui::Context::default();
+    form.repository = repo.to_str().unwrap().into();
+    let key = super::super::publishing::Key {
+        root: root.path().join("cloud"),
+        repository: repo.clone(),
+        raw_repository: repo.to_str().unwrap().into(),
+        profile_name: "dev".into(),
+        profile: form.profiles.as_ref().unwrap().profiles["dev"].clone(),
+    };
+    form.publishing.sync(Some(key), &ctx);
+    let settle = |form: &mut Production| {
+        for _ in 0..200 {
+            form.publishing.poll(&ctx);
+            if form.publishing.ready() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("fixture publication metadata did not settle");
+    };
+    settle(&mut form);
+    answer(&mut form, Availability::None);
+    form.publishing.reload(&ctx);
+    assert!(super::super::selector::summary::plan(&form).watchable);
+    form.launch.selector.wait_for_stock = true;
+    super::super::selector::summary::start(&mut form);
+    assert!(form.launch.watch.is_some());
+    answer(&mut form, Availability::Low);
+    poll(&mut form);
+    assert!(form.launch.watch.is_some());
+    assert!(!form.launch.submitted);
+    settle(&mut form);
+    poll(&mut form);
+    assert!(form.launch.watch.is_none());
+    assert!(form.launch.submitted);
+}

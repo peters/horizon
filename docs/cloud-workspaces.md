@@ -328,7 +328,10 @@ that are known only at the end.
 Missing account settings open a repair form without losing the title or target
 workspace. Enter the compute API key and choose how the profile's agents sign in:
 an API key, **ChatGPT sign-in** for Codex or subscription login for Claude.
-**Save and start** continues the submitted launch. A dedicated
+**Save and start** continues the submitted launch. Opening registry setup from
+New cloud uses **Save and return** instead: the form remains open even when compute
+and SSH are ready. Saving or cancelling returns to New cloud for a fresh publishing
+review without submitting a launch. A dedicated
 SSH identity is created when needed and keys stay in private machine-local files.
 Blank replacement fields preserve saved keys. Subscription login for Claude happens
 through the actual agent on the worker; worker readiness does not prove authentication.

@@ -15,6 +15,7 @@ mod placement;
 mod pricing;
 mod profiles;
 pub(super) mod provider;
+pub(super) mod publishing;
 pub(super) mod selector;
 pub(super) mod siblings;
 pub(super) mod source;
@@ -101,14 +102,7 @@ impl HorizonApp {
         let escape = ctx.input(|input| input.key_pressed(egui::Key::Escape));
         let picking = self.dir_picker.is_some();
         let refocus_repository = self.prepare_cloud_creation(ctx, picking);
-        let form = &mut self.cloud_prototype.production;
-        form.launch.siblings.sync(
-            ctx,
-            &form.repository,
-            form.launch.revision.as_deref(),
-            form.profiles.as_ref(),
-            &form.selected_profile,
-        );
+        self.sync_cloud_creation_choices(ctx);
         let id = Id::new("cloud-creation");
         let sizing_pass = measure_on_open(ctx, id);
         // Root chrome uses Tooltip order; raise this modal last to contain its input too.
@@ -163,6 +157,10 @@ impl HorizonApp {
             self.close_cloud_creation_to_board(ctx);
             return;
         }
+        if let Some(target) = self.cloud_prototype.production.publishing.take_setup() {
+            self.edit_creation_registry(ctx, (!target.is_empty()).then_some(target));
+            return;
+        }
         if actions.this_pc {
             self.open_repository_on_this_pc(ctx);
             return;
@@ -192,6 +190,18 @@ impl HorizonApp {
         watch::poll(&mut self.cloud_prototype.production);
         self.poll_cloud_launch(ctx);
         self.poll_cloud_creation(ctx);
+    }
+
+    fn sync_cloud_creation_choices(&mut self, ctx: &Context) {
+        let form = &mut self.cloud_prototype.production;
+        publishing::update(form, self.cloud_prototype.root.as_deref(), ctx);
+        form.launch.siblings.sync(
+            ctx,
+            &form.repository,
+            form.launch.revision.as_deref(),
+            form.profiles.as_ref(),
+            &form.selected_profile,
+        );
     }
 
     /// The worker fields and the summary: side by side when the dialog is wide enough, else
@@ -271,6 +281,7 @@ impl HorizonApp {
         form.launch = super::launch::State::default();
         form.source = source::State::default();
         form.checks = checks::State::default();
+        form.publishing = publishing::State::default();
     }
 
     /// What the dialog settles before it draws: the pickers that closed, the prices and the

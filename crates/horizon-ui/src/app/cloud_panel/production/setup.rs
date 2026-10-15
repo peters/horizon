@@ -81,10 +81,18 @@ enum Completion {
     Registry(std::result::Result<RegistryOutcome, String>),
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Continuation {
+    #[default]
+    None,
+    StartWhenReady,
+    ReturnForReview,
+}
+
 #[derive(Default)]
 pub(in crate::app::cloud_panel) struct State {
     pub(in crate::app::cloud_panel) open: bool,
-    continue_creation: bool,
+    continuation: Continuation,
     edits: fields::Edits,
     verified: dashboard::Verified,
     refused_pulls: std::collections::BTreeSet<String>,
@@ -161,7 +169,7 @@ impl State {
 
     /// Whether these settings resume a cloud creation once they are saved.
     pub(in crate::app::cloud_panel) fn resumes_creation(&self) -> bool {
-        self.open && self.continue_creation
+        self.open && self.continuation != Continuation::None
     }
 
     fn render_fields(
@@ -211,10 +219,10 @@ impl State {
                             && !self.github.connecting()
                             && !self.chatgpt.busy()
                             && !self.docker_hosts.editing(),
-                        egui::Button::new(if self.continue_creation {
-                            "Save and start"
-                        } else {
-                            "Save settings"
+                        egui::Button::new(match self.continuation {
+                            Continuation::None => "Save settings",
+                            Continuation::StartWhenReady => "Save and start",
+                            Continuation::ReturnForReview => "Save and return",
                         })
                         .min_size(egui::vec2(148.0, FOOTER_HEIGHT))
                         .corner_radius(10)
@@ -254,16 +262,38 @@ impl HorizonApp {
         self.open_cloud_settings(ctx, continue_creation, None);
     }
 
+    pub(super) fn edit_creation_registry(&mut self, ctx: &Context, repository: Option<String>) {
+        self.open_cloud_settings_for(
+            ctx,
+            Continuation::ReturnForReview,
+            repository.map(|repository| (repository, false)),
+        );
+    }
+
     /// Opens the settings; with a cloud's image, Container registry shows its repository
     /// when no binding covers it yet. When the registry refused that cloud's pull, the
     /// repository's saved pull validation is not shown as verified.
-    fn open_cloud_settings(&mut self, ctx: &Context, continue_creation: bool, cloud: Option<(String, bool)>) {
+    pub(super) fn open_cloud_settings(
+        &mut self,
+        ctx: &Context,
+        continue_creation: bool,
+        cloud: Option<(String, bool)>,
+    ) {
+        let continuation = if continue_creation {
+            Continuation::StartWhenReady
+        } else {
+            Continuation::None
+        };
+        self.open_cloud_settings_for(ctx, continuation, cloud);
+    }
+
+    fn open_cloud_settings_for(&mut self, ctx: &Context, continuation: Continuation, cloud: Option<(String, bool)>) {
         let root = self
             .cloud_prototype
             .root
             .clone()
             .unwrap_or_else(|| horizon_core::HorizonHome::resolve().root().join("cloud"));
-        let required_agents = continue_creation
+        let required_agents = (continuation == Continuation::StartWhenReady)
             .then(|| {
                 let form = &self.cloud_prototype.production;
                 form.profiles
@@ -274,7 +304,15 @@ impl HorizonApp {
             })
             .flatten();
         self.cloud_prototype.production.creating = false;
+        self.cloud_prototype.production.publishing = super::creation::publishing::State::default();
         self.cloud_prototype.production.pending_creation = None;
+        if continuation == Continuation::ReturnForReview {
+            self.cloud_prototype.production.launch.watch = None;
+            self.cloud_prototype.production.launch.watch_quote = None;
+            self.cloud_prototype.production.launch.price_rose = None;
+            self.cloud_prototype.production.launch.submitted = false;
+            self.cloud_prototype.production.launch.invalidate_account_readiness();
+        }
         let (sender, receiver) = channel();
         let state = &mut self.cloud_prototype.production.setup;
         if let Some(repository) = cloud
@@ -288,7 +326,7 @@ impl HorizonApp {
         self.cloud_prototype.production.setup = State {
             refused_pulls,
             open: true,
-            continue_creation,
+            continuation,
             required_agents: required_agents.clone(),
             receiver: Some(receiver),
             ..State::default()
@@ -337,6 +375,8 @@ impl HorizonApp {
             Completion::Saved(agents) => Some(agents.clone()),
             _ => None,
         };
+        let return_for_review =
+            matches!(completion, Completion::Saved(_)) && state.continuation == Continuation::ReturnForReview;
         let proceed = match completion {
             Completion::Registry(result) => {
                 match result {
@@ -360,14 +400,14 @@ impl HorizonApp {
                     .verified
                     .retain(|repository, _| !state.refused_pulls.contains(repository));
                 state.needed = needed::Needed::new(needed);
-                configured && state.continue_creation
+                configured && state.continuation == Continuation::StartWhenReady
             }
             Completion::Saved(_) => {
                 state.open = false;
                 // Prices answered to the credentials before these were saved prove nothing now.
                 self.cloud_prototype.production.prices.restart();
                 self.cloud_prototype.production.checks = super::creation::checks::State::default();
-                state.continue_creation
+                state.continuation == Continuation::StartWhenReady
             }
             Completion::Failed(error) => {
                 state.error = Some(error);
@@ -383,6 +423,8 @@ impl HorizonApp {
             state.reset_form();
             self.cloud_prototype.production.launch.accounts_checked = true;
             self.add_mock_cloud(ctx);
+        } else if return_for_review {
+            self.return_to_cloud_review();
         }
         if let Some(agents) = agents {
             let form = &mut self.cloud_prototype.production;
@@ -431,7 +473,7 @@ impl HorizonApp {
                 ui.set_width((ctx.content_rect().width() - 2.0 * DIALOG_INSET).clamp(240.0, 1060.0));
                 let bottom = ui.cursor().top() + dialog_height(ctx.content_rect());
                 ui.label(
-                    RichText::new(if state.continue_creation {
+                    RichText::new(if state.continuation == Continuation::StartWhenReady {
                         "Your first cloud"
                     } else {
                         "Cloud settings"
@@ -546,16 +588,23 @@ impl HorizonApp {
     }
 
     fn cancel_cloud_accounts(&mut self) {
-        let resume_creation = self.cloud_prototype.production.setup.continue_creation
-            && self.cloud_prototype.production.launch.workspace.is_some();
+        let continuation = self.cloud_prototype.production.setup.continuation;
+        let resume_creation = continuation == Continuation::ReturnForReview
+            || (continuation == Continuation::StartWhenReady
+                && self.cloud_prototype.production.launch.workspace.is_some());
         self.cloud_prototype.production.setup.reset_form();
         if resume_creation {
-            let form = &mut self.cloud_prototype.production;
-            form.launch.submitted = false;
-            form.launch.accounts_checked = false;
-            form.creating = true;
-            form.focus_title_on_open = true;
+            self.return_to_cloud_review();
         }
+    }
+
+    fn return_to_cloud_review(&mut self) {
+        let form = &mut self.cloud_prototype.production;
+        form.setup.reset_form();
+        form.launch.submitted = false;
+        form.launch.invalidate_account_readiness();
+        form.creating = true;
+        form.focus_title_on_open = true;
     }
 
     fn save_cloud_accounts(&mut self, ctx: &Context) {

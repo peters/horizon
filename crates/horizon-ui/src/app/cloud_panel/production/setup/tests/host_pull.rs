@@ -486,7 +486,7 @@ fn session_switch_cannot_restore_a_refused_pull_hint() {
     });
     assert!(!f.state().verified.contains_key(&f.repository));
     f.app.cloud_prototype.production.setup.open = true;
-    f.app.cloud_prototype.production.setup.continue_creation = true;
+    f.app.cloud_prototype.production.setup.continuation = Continuation::StartWhenReady;
     f.app.close_cloud_creation_for_session_switch();
     assert!(!f.state().open);
     f.app.open_cloud_accounts(&f.ctx, false);

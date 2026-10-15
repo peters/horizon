@@ -676,8 +676,8 @@ format. Existing launches with no reviewed choice keep their flat encoding.
 An explicit recipe-image confirmation also stays flat and must match the exact
 profile image. Publisher choices use a version-2 envelope that older readers
 refuse. Compatible readers retain the full choice, and desktop preparation forwards
-that choice and its named profile to the shared engine. This bridge activates no
-selector or automatic publication.
+that choice and its named profile to the shared engine. The gated selector now
+supplies reviewed intent; automatic publishing remains disabled for ordinary use.
 An unstarted legacy launch with no publisher choice keeps its explicit recipe target.
 An image-omitting build keeps automatic intent.
 A durable cloud record keeps its own publishing identity. An omitted-image launch
@@ -713,9 +713,8 @@ creating any record; explicit legacy recipe images continue to work.
 
 Desktop preparation now preserves saved publisher choices, and rebuild previews
 use the cloud's retained publication and profile. New automatic desktop launches
-remain disabled until the destination selector and public destination controls
-are complete. Keep the setting off for ordinary desktop use; metadata forwarding
-is not authorization to publish or proof of a qualified new-cloud selector.
+remain disabled until final integration is complete. Keep the setting off for ordinary desktop use; metadata forwarding
+is not authorization to publish.
 
 A rebuild confirmation also snapshots the exact retained publication. Its token
 covers the publisher account or grant even when the resolved image and files are
@@ -794,6 +793,54 @@ successful listing with only an inline selection error.
 
 Saved pull metadata compares the registry repository without a tag or digest.
 It retains the registry port and exact path; it is not a live access check.
+
+### Staged image destination selector
+
+With portable publishing enabled in a task-owned fixture, New cloud shows Publish
+images, the selected repository and publishing account. Change selects an existing
+authorized registry, uses the profile default or explicitly signs in to another
+account. The preference stays on this computer for the canonical checkout and
+named profile; repository YAML stays unchanged. UI reads and changes use the same
+management policy as host adapters. Cancel sign-in cancels only its owned attempt.
+Metadata is refreshed in the background every five seconds. Start can queue an
+already shown valid choice during refresh; dispatch waits for fresh matching
+metadata. A first read cannot queue an unknown choice. Refresh opens no sign-in.
+
+A personal image needs separate verified read-only worker access before Start.
+The setup action targets that exact repository. Settings describe the resolved
+repository without attributing a local choice to YAML. Cached sign-in metadata
+is not confirmation of the publishing account; worker pull access remains separate.
+Opening registry setup stays in settings even when compute and SSH are ready.
+Save and return or Cancel goes back to New Cloud for review without starting. Registry edits use the machine's agent defaults and preserve saved bindings; the next Start checks the selected profile's agent credentials again, even if an earlier profile read reported readiness.
+Destination metadata is historical,
+not proof of authentication; the engine confirms intent and access before a build.
+Public CLI/MCP controls use the same policy. Final activation still follows. Keep
+the staging setting off for ordinary use and retain the development image pins for now.
+See docs/testing/procedures/image-destination-selector.md.
+
+A queued Start or stock watch retains the full reviewed profile and publisher.
+Transient metadata refresh waits without consuming the request. Changed identity,
+profile or destination requires a fresh review; cached metadata never transfers to
+another profile or a prebuilt launch. Choice controls remain visible and disabled
+while metadata is loading.
+
+The loading indicator keeps the same space before, during and after a refresh.
+A stopped stock watch keeps its reason across background refreshes and shows
+metadata errors separately. Review the current choice before Start or a new watch.
+
+An interactive sign-in blocks Start until it ends. Its code, link and Cancel
+controls stay usable. Only an already shown choice can queue during metadata reads.
+
+Opening the sign-in page keeps the dialog responsive. If the browser cannot
+start, copy the code and retry the link; the metadata error stays separate.
+
+A destination save or sign-in blocks new Start and watch intent until fresh
+metadata returns after completion. Account changes stay disabled after a failed
+first metadata read; use Reload first. Ordinary
+metadata reloads can queue the already shown choice; saves cannot queue the old
+choice. Storage-only edits keep a pending destination read or sign-in alive,
+but a queued Start still requires its complete confirmed profile. A disabled feature does not warn about a missing image during refresh
+when the current profile already has an explicit image.
 
 ### Public image destination management
 

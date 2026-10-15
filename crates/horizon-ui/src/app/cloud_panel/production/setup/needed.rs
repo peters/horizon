@@ -1,4 +1,4 @@
-//! The image repository a cloud's `.horizon/cloud.yml` names, shown in Container registry
+//! The resolved image repository a cloud uses, shown in Container registry
 //! when Cloud settings open from that cloud and no binding covers the repository yet.
 use super::HorizonApp;
 use super::dashboard::{Readiness, Tone, Verified, caption, chip, label};
@@ -91,7 +91,7 @@ impl Readiness {
                 tone: Tone::Attention,
                 title: "Almost ready to launch",
                 cause: format!(
-                    "Add credentials for {}, which this cloud's .horizon/cloud.yml names.",
+                    "Add credentials for {}, the image repository this cloud uses.",
                     needed.repository
                 ),
             },
@@ -137,7 +137,7 @@ pub(super) fn block(ui: &mut Ui, needed: &mut Needed, drafts: &mut Vec<Draft>) {
                     chip(ui, Tone::Attention, "Not set up");
                 });
             });
-            caption(ui, "This cloud's .horizon/cloud.yml names this image repository.");
+            caption(ui, "This cloud uses this image repository.");
             label(ui, &format!("Publishing: {}", publishing(&pending.publishing)));
             label(
                 ui,
@@ -161,8 +161,10 @@ pub(super) fn block(ui: &mut Ui, needed: &mut Needed, drafts: &mut Vec<Draft>) {
 
 fn publishing(publishing: &Publishing) -> String {
     match publishing {
-        Publishing::GitHub(login) => format!("Horizon publishes as {login} on GitHub."),
-        Publishing::AskOnCard => "the cloud card asks GitHub once, at the first push.".into(),
+        Publishing::GitHub(login) => {
+            format!("cached GitHub sign-in: {login}. This does not confirm publishing access.")
+        }
+        Publishing::AskOnCard => "no cached GitHub sign-in. Publishing needs separate authorization.".into(),
         Publishing::Credential => "needs a publishing credential for this repository.".into(),
     }
 }

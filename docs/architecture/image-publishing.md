@@ -194,8 +194,8 @@ format. Existing launches with no reviewed choice keep their flat encoding.
 An explicit recipe-image confirmation also stays flat and must match the exact
 profile image. Publisher choices use a version-2 envelope that older readers
 refuse. Compatible readers retain the full choice, and desktop preparation forwards
-that choice and its named profile to the shared engine. This bridge activates no
-selector or automatic publication.
+that choice and its named profile to the shared engine. The gated selector now
+supplies reviewed intent; automatic publishing remains disabled for ordinary use.
 Ordinary unknown legacy fields remain compatible, but mixed or downgraded
 publisher envelopes and reserved null keys are refused. A publisher choice without
 a build recipe is invalid and cannot be saved or restored as a prebuilt launch.
@@ -205,8 +205,8 @@ reviewed publisher and then launch the recipe's original target. The envelope
 requires a compatible consumer; reads and actual UI request forwarding are wired
 atomically. The engine rechecks the shown choice against machine-local policy.
 Recipe confirmations carry no alternative publisher and retain identical image
-semantics for old readers. Runtime constructors initialize the new field to None,
-so ordinary saved launches remain unchanged. The reviewed choice adds no credential or source-repository URL; it carries
+semantics for old readers. New cloud forwards the selector's confirmed choice;
+other runtime constructors keep None and existing records remain authoritative. The reviewed choice adds no credential or source-repository URL; it carries
 only destination and publisher metadata, not authorization.
 
 Malformed launch bodies deliberately return a generic decode error rather than
@@ -266,9 +266,8 @@ without an override remains valid. Existing records skip this preference preflig
 
 Desktop preparation now preserves saved publisher choices, and rebuild previews
 use the cloud's retained publication and profile. New automatic desktop launches
-remain disabled until the destination selector and public destination controls
-are complete. Keep the setting off for ordinary desktop use; metadata forwarding
-is not authorization to publish or proof of a qualified new-cloud selector.
+remain disabled until final integration is complete. Keep the setting off for ordinary desktop use; metadata forwarding
+is not authorization to publish.
 
 A rebuild confirmation also snapshots the exact retained publication. Its token
 covers the publisher account or grant even when the resolved image and files are
@@ -410,3 +409,53 @@ Both admission and retained-operation polling check saved board membership as
 well as live cloud groups: session restoration can expose the saved membership
 before live cloud state is copied. A local launch directory alone does not
 establish desktop ownership.
+
+## Staged image destination selector
+
+With portable publishing enabled in a task-owned fixture, New cloud shows Publish
+images, the selected repository and publishing account. Change selects an existing
+authorized registry, uses the profile default or explicitly signs in to another
+account. The preference stays on this computer for the canonical checkout and
+named profile; repository YAML stays unchanged. UI reads and changes use the same
+management policy as host adapters. Cancel sign-in cancels only its owned attempt.
+A bounded five-second metadata refresh runs off the render thread. Start can queue
+an already shown valid choice while metadata loads. First reads cannot queue an
+unknown choice. Dispatch waits for fresh matching metadata from shared policy.
+The engine still compares the reviewed choice at first preparation.
+
+A personal image needs separate verified read-only worker access before Start.
+The setup action targets that exact repository. Settings describe the resolved
+repository without attributing a local choice to YAML. Cached sign-in metadata
+is not confirmation of the publishing account; worker pull access remains separate.
+Destination metadata is historical,
+not proof of authentication; the engine confirms intent and access before a build.
+Public CLI/MCP controls use the same policy. Final activation still follows. Keep
+the staging setting off for ordinary use and retain the development image pins for now.
+See docs/testing/procedures/image-destination-selector.md.
+
+A queued Start or stock watch retains the full reviewed profile and publisher.
+Transient metadata refresh waits without consuming the request. Changed identity,
+profile or destination requires a fresh review; cached metadata never transfers to
+another profile or a prebuilt launch. Choice controls remain visible and disabled
+while metadata is loading.
+
+The loading indicator keeps the same space before, during and after a refresh.
+A stopped stock watch keeps its reason across background refreshes and shows
+metadata errors separately. Review the current choice before Start or a new watch.
+
+An owned sign-in blocks queueing from its start, before its prompt arrives.
+Copy, Open and Cancel must remain usable until the sign-in ends. Background
+metadata reads can retain shown intent; interactive authentication cannot.
+
+A destination save or sign-in blocks new Start and watch intent until fresh
+metadata returns after completion. Account changes stay disabled after a failed
+first metadata read; use Reload first. Ordinary
+metadata reloads can queue the already shown choice; saves cannot queue the old
+choice. A disabled feature does not warn about a missing image during refresh
+when the current profile already has an explicit image.
+
+Storage edits do not affect destination-management inputs. Preserve the owned
+read or sign-in and its prompt across those edits, without launching another
+metadata thread. Confirmation still snapshots the complete profile, including
+storage, so an earlier queued Start or watch cannot adopt the changed sizing.
+All other profile fields and source/owner identity remain part of operation scope.
