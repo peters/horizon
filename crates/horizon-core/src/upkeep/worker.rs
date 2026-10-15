@@ -10,10 +10,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::cloud_runtime::{Error, Result, command::Runner, ssh::Connection};
 
+mod companions;
 mod daily;
 mod lock;
 pub mod policy;
 mod refusals;
+pub use companions::{CompanionAction, CompanionAsk};
 pub use lock::{SettingsLock, settings_lock};
 
 const EXCHANGE: &str = include_str!("worker/exchange.py");
@@ -436,6 +438,8 @@ Pull requests opened by: {authors}.\n\n\
 - If you cannot reach @@REPOSITORY@@ yet, first call the `github_access` tool for it with push access. Horizon allows it within seconds. When a call times out or reports that the request still waits, call it again: the same request comes back. Never give up because of a timeout. For a repository outside this Upkeep, such as one that holds shared rules linked from an AGENTS.md, ask with read access only; the person decides it.\n\
 - When a pull request page, a preview or an app run helps, open it in a browser panel with the horizon-browser tools so the person can watch.\n\
 - When the worker refuses a request, its reason starts with `Horizon: this Upkeep`. Do not look for another way around it: mark the pull request blocked with that reason.\n\
+- A UI check that the repository's rules require and this worker cannot do runs on the companion cloud of @@REPOSITORY@@'s `ui-acceptance` profile (`horizon-cloud-worker companions list`). Not listed or not selected: leave the pull request blocked; the owner creates it with New cloud and checks it on the Upkeep card. Write /workspace/home/upkeep/companions/<alias>.json as {{\"action\": \"ensure_ready\", \"operation_id\": \"<new UUID>\"}}. Horizon answers in companions-status.json beside it, under your operation_id; no answer in five minutes means the owner's Horizon is not running: blocked. At phase `ready`, `horizon-cloud-worker companions inspect <alias>` gives its SSH alias and worktree: fetch `pull/<number>/head`, run the documented procedure on its desktop (DISPLAY=:99, watched on its card), copy the evidence back, then write {{\"action\": \"stop\", \"operation_id\": \"<new UUID>\"}}, also after a failure.\n\
+- Evidence of a UI check goes on the orphan branch `upkeep/evidence` under `pr-<number>/<short head>/`, linked from your comment. Never a secret; never merged; remove a closed pull request's folder.\n\
 - Keep exactly one comment of yours on each pull request you worked on. Its first line is `<!-- upkeep -->`. Find it by that marker with `gh api repos/@@REPOSITORY@@/issues/<number>/comments` and edit it with `gh api --method PATCH` instead of adding another. In one or two sentences say where the pull request stands and why: merged, waiting for checks, or blocked and on what. Never mention other repositories or their pull requests in it.\n\
 - After every change, write @@STATUS@@ again: write a temporary file next to it, then move it into place. Use this JSON, for @@REPOSITORY@@ only:\n\
   {{\"pull_requests\": [{{\"repository\": \"owner/name\", \"number\": 1, \"title\": \"...\", \"url\": \"https://github.com/owner/name/pull/1\", \"author\": \"dependabot\", \"checks\": \"passed|failed|running|none\", \"state\": \"blocked|fixing|needs_review|waiting_checks|ready|merged\", \"note\": \"one short sentence\", \"updated_at\": \"RFC 3339\"}}], \"activity\": [{{\"at\": \"RFC 3339\", \"text\": \"one short sentence\"}}]}}\n\
@@ -456,7 +460,13 @@ fn unix(script: &str) -> String {
 /// # Errors
 /// Refuses a cloud id or revision that could not name a worker session, settings that
 /// [`Config::validate`] refuses, and a command too long for the worker's shell.
-pub fn command(cloud_id: &str, revision: &str, config: &Config, signals: Signals) -> Result<String> {
+pub fn command(
+    cloud_id: &str,
+    revision: &str,
+    config: &Config,
+    signals: Signals,
+    companions: &serde_json::Map<String, serde_json::Value>,
+) -> Result<String> {
     let valid_revision = matches!(revision.len(), 40 | 64)
         && revision
             .bytes()
@@ -487,6 +497,8 @@ pub fn command(cloud_id: &str, revision: &str, config: &Config, signals: Signals
             (true, Some(token)) => serde_json::Value::String(format!("{token:032x}")),
         },
         "paused": signals.paused,
+        // Horizon's answers to the agent's companion requests, by alias.
+        "companions": companions,
     });
     let engine = base64::engine::general_purpose::STANDARD;
     let script = engine.encode(unix(EXCHANGE));
@@ -520,6 +532,8 @@ pub struct Exchange {
     pub paused: bool,
     /// Refusals that root logged on the worker, each `{at, text}`.
     refused: Vec<serde_json::Value>,
+    /// What the agent asked of companion clouds; untrusted.
+    pub companions: Vec<CompanionAsk>,
 }
 
 #[derive(Deserialize)]
@@ -536,6 +550,8 @@ struct Raw {
     paused: bool,
     #[serde(default)]
     refused: Vec<serde_json::Value>,
+    #[serde(default)]
+    companions: Vec<serde_json::Value>,
 }
 
 /// Runs one exchange on the worker behind `connection`.
@@ -548,8 +564,9 @@ pub fn exchange(
     revision: &str,
     config: &Config,
     signals: Signals,
+    companions: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<Exchange> {
-    let remote = command(cloud_id, revision, config, signals)?;
+    let remote = command(cloud_id, revision, config, signals, companions)?;
     let output = runner.run_parsed("Upkeep exchange", &mut connection.pinned_command(&remote), TIMEOUT)?;
     parse(&output)
 }
@@ -568,6 +585,7 @@ pub fn parse(output: &str) -> Result<Exchange> {
         next_run: raw.next_run,
         paused: raw.paused,
         refused: raw.refused,
+        companions: companions::parse(raw.companions),
     })
 }
 

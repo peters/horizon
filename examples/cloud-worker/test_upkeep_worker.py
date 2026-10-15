@@ -113,7 +113,7 @@ class ExchangeTests(unittest.TestCase):
         self.assertTrue((binding / 'launch-requested').is_file())
         self.assertTrue((self.worker.data / SESSION).is_dir())
         self.assertEqual(answer, {'loop': True, 'settled': False, 'runs': [], 'next_run': None,
-                                  'paused': False, 'refused': [], 'status': None})
+                                  'paused': False, 'refused': [], 'companions': [], 'status': None})
         started = self.worker.calls[-1]
         self.assertEqual(started[:4], ('new-session', '-d', '-s', SESSION))
         self.assertEqual(started[-2:], (str(upkeep) + '/run.sh', SESSION))
@@ -290,6 +290,76 @@ class ExchangeTests(unittest.TestCase):
         answer = self.worker.exchange()
         self.assertIsNone(answer['status'])
         self.assertEqual(answer['next_run'], 1800000000)
+
+    def test_only_well_formed_companion_requests_reach_horizon(self):
+        folder = self.worker.upkeep / 'companions'
+        folder.mkdir(parents=True, mode=0o700)
+        operation = '1b4e28ba-2fa1-11d2-883f-0016d3cca427'
+        (folder / 'youpark.json').write_text(json.dumps({'action': 'ensure_ready', 'operation_id': operation}))
+        (folder / 'web.json').write_text(json.dumps({'action': 'delete', 'operation_id': operation}))
+        (folder / 'Upper.json').write_text(json.dumps({'action': 'stop', 'operation_id': operation}))
+        (folder / 'api.json').write_text(json.dumps({'action': 'stop', 'operation_id': 'not-a-uuid'}))
+        (folder / 'big.json').write_text(json.dumps({'action': 'stop', 'operation_id': operation, 'x': 'y' * 2000}))
+        # Valid JSON in the first KiB, and more after it.
+        padded = json.dumps({'action': 'stop', 'operation_id': operation}).ljust(EXCHANGE['COMPANION_REQUEST_LIMIT'])
+        (folder / 'padded.json').write_text(padded + '}')
+        (folder / 'fits.json').write_text(padded)
+        (folder / 'linked.json').symlink_to(self.worker.outside)
+        answer = self.worker.exchange()
+        self.assertEqual(answer['companions'],
+                         [{'alias': 'fits', 'action': 'stop', 'operation_id': operation},
+                          {'alias': 'youpark', 'action': 'ensure_ready', 'operation_id': operation}])
+        for n in range(6):
+            (folder / f'c{n}.json').write_text(json.dumps({'action': 'stop', 'operation_id': operation}))
+        self.assertEqual(len(self.worker.exchange()['companions']), EXCHANGE['COMPANION_LIMIT'])
+        # Requests that Horizon answered as done go and make room for the later ones.
+        done = {f'c{n}': {'operation_id': operation, 'done': True} for n in range(6)}
+        done['fits'] = {'operation_id': operation, 'done': True}
+        done['youpark'] = {'operation_id': operation, 'done': False}
+        self.assertEqual([ask['alias'] for ask in self.worker.exchange(payload(companions=done))['companions']],
+                         ['youpark'])
+        self.assertFalse((folder / 'c0.json').exists())
+        self.assertTrue((folder / 'youpark.json').exists())
+
+    def test_answered_requests_never_hold_back_later_ones(self):
+        folder = self.worker.upkeep / 'companions'
+        folder.mkdir(parents=True, mode=0o700)
+        operation = '1b4e28ba-2fa1-11d2-883f-0016d3cca427'
+        aliases = [chr(ord('a') + n) for n in range(9)]
+        for alias in aliases:
+            (folder / f'{alias}.json').write_text(json.dumps({'action': 'stop', 'operation_id': operation}))
+        # Horizon keeps at most four answers, the ones of the last requests it ran.
+        answers, reached = {}, []
+        for _ in range(4):
+            sent = [ask['alias'] for ask in self.worker.exchange(payload(companions=answers))['companions']]
+            reached += [alias for alias in sent if alias not in reached]
+            answers = {alias: {'operation_id': operation, 'done': True} for alias in sent}
+        self.assertEqual(reached, aliases)
+        self.assertEqual(list(folder.iterdir()), [])
+        # A request that the agent changed after it was read stays.
+        (folder / 'a.json').write_text(json.dumps({'action': 'stop', 'operation_id': operation}))
+        seen = os.stat(folder / 'a.json')
+        (folder / 'a.json').write_text(json.dumps({'action': 'stop', 'operation_id': operation}) + ' ')
+        handle = os.open(folder, os.O_RDONLY)
+        try:
+            EXCHANGE['retire'](handle, 'a.json', seen)
+        finally:
+            os.close(handle)
+        self.assertTrue((folder / 'a.json').exists())
+
+    def test_horizon_answers_companion_requests_in_a_status_file(self):
+        self.assertEqual(self.worker.exchange()['companions'], [])
+        self.assertFalse((self.worker.upkeep / 'companions-status.json').exists())
+        status = {'youpark': {'phase': 'ready', 'done': True}}
+        self.worker.exchange(payload(companions=status))
+        written = self.worker.upkeep / 'companions-status.json'
+        self.assertEqual(json.loads(written.read_text()), status)
+        self.assertEqual(stat.S_IMODE(written.stat().st_mode), 0o600)
+        written.unlink()
+        written.symlink_to(self.worker.outside)
+        self.worker.exchange(payload(companions={}))
+        self.assertEqual(self.worker.outside.read_text(), 'untouched')
+        self.assertEqual(json.loads(written.read_text()), {})
 
     def test_an_invalid_session_is_refused(self):
         for value in (payload(session='upkeep-../x'), payload(session='other'), payload(revision='HEAD')):
@@ -473,6 +543,37 @@ class SchedulerTests(unittest.TestCase):
             self.assertFalse(RUN['guarded']())
         self.assertTrue(RUN['guarded']())
 
+    def test_a_run_forgets_the_companion_requests_of_earlier_runs(self):
+        (self.dir / 'companions').mkdir()
+        (self.dir / 'companions' / 'youpark.json').write_text('{}')
+        (self.root / 'kept').write_text('kept')
+        (self.dir / 'companions' / 'link.json').symlink_to(self.root / 'kept')
+        (self.dir / 'companions' / 'deeper').mkdir()
+        (self.dir / 'companions' / 'deeper' / 'old.json').write_text('{}')
+        # The agent account owns the folders and can take away their permissions.
+        (self.dir / 'companions' / 'deeper').chmod(0o000)
+        (self.dir / 'companions').chmod(0o000)
+        self.assertTrue(RUN['forget_companion_requests']())
+        self.assertFalse((self.dir / 'companions').exists())
+        self.assertEqual(list(self.dir.glob('.companions-removed-*')), [], 'nothing is left behind')
+        self.assertEqual((self.root / 'kept').read_text(), 'kept')
+        # A link in place of the folder goes, and what it points to stays.
+        (self.root / 'elsewhere').mkdir()
+        (self.root / 'elsewhere' / 'youpark.json').write_text('{}')
+        (self.dir / 'companions').symlink_to(self.root / 'elsewhere')
+        self.assertTrue(RUN['forget_companion_requests']())
+        self.assertFalse(os.path.lexists(self.dir / 'companions'))
+        self.assertTrue((self.root / 'elsewhere' / 'youpark.json').exists())
+        self.assertTrue(RUN['forget_companion_requests'](), 'nothing to remove')
+
+    def test_a_pass_that_cannot_forget_earlier_requests_does_not_start(self):
+        (self.dir / 'daily.md').write_text('Daily.')
+        with mock.patch.dict(RUN['main'].__globals__, forget_companion_requests=lambda: False):
+            self.assertFalse(self.run_daily())
+        self.assertFalse((self.dir / 'runs.jsonl').exists())
+        self.assertEqual(self.agents_started(), 0)
+        self.assertTrue(RUN['daily_due'](False), 'the pass stays due')
+
     def test_a_profile_without_codex_starts_no_agent(self):
         (self.root / 'codex-disabled').touch()
         self.assertFalse(self.run_once())
@@ -559,7 +660,11 @@ class SchedulerTests(unittest.TestCase):
         (self.dir / 'status.d' / 'daily.json').write_text('{"activity": [{"at": "a", "text": "yesterday"}]}')
         self.assertTrue(RUN['daily_due'](False))
         self.assertFalse(RUN['daily_due'](True), 'Run now alone never starts it')
+        # A request that the run before left behind starts nothing in the pass.
+        (self.dir / 'companions').mkdir()
+        (self.dir / 'companions' / 'youpark.json').write_text('{}')
         self.assertTrue(self.run_daily())
+        self.assertFalse((self.dir / 'companions').exists())
         self.assertIn(f'Daily for acme/web, acme/api, report to {self.dir}/status.d/daily.json',
                       self.agents.read_text())
         self.assertEqual((self.dir / 'daily-day').read_bytes(), RUN['today']())

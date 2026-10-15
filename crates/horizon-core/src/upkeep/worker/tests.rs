@@ -41,9 +41,27 @@ fn the_first_repository_starts_the_cloud_and_clones_follow_the_choice() {
 #[test]
 fn the_command_refuses_names_that_could_escape_the_session() {
     let revision = "a".repeat(40);
-    assert!(command("abc-123", &revision, &config(), Signals::default()).is_ok());
-    assert!(command("abc;rm", &revision, &config(), Signals::default()).is_err());
-    assert!(command("abc", "HEAD", &config(), Signals::default()).is_err());
+    assert!(
+        command(
+            "abc-123",
+            &revision,
+            &config(),
+            Signals::default(),
+            &serde_json::Map::new()
+        )
+        .is_ok()
+    );
+    assert!(
+        command(
+            "abc;rm",
+            &revision,
+            &config(),
+            Signals::default(),
+            &serde_json::Map::new()
+        )
+        .is_err()
+    );
+    assert!(command("abc", "HEAD", &config(), Signals::default(), &serde_json::Map::new()).is_err());
 }
 
 #[test]
@@ -85,7 +103,14 @@ fn settings_that_could_reach_a_command_line_or_path_are_refused() {
 
 #[test]
 fn the_command_runs_as_the_agent_where_the_worker_isolates_it() {
-    let remote = command("abc-123", &"a".repeat(40), &config(), Signals::default()).unwrap();
+    let remote = command(
+        "abc-123",
+        &"a".repeat(40),
+        &config(),
+        Signals::default(),
+        &serde_json::Map::new(),
+    )
+    .unwrap();
     // The worker procedure in docs/testing/procedures/upkeep.md runs this exact command.
     if let Some(path) = std::env::var_os("HORIZON_TEST_UPKEEP_COMMAND") {
         std::fs::write(path, &remote).unwrap();
@@ -112,10 +137,33 @@ fn the_command_runs_as_the_agent_where_the_worker_isolates_it() {
         })
         .collect();
     assert!(long.validate().is_ok());
-    let longest = command("abc-123", &"a".repeat(40), &long, Signals::default()).unwrap();
+    // As many companion answers as Horizon sends, with the longest texts it keeps.
+    let answers = (0..4)
+        .map(|n| {
+            // Horizon keeps 120 characters of one text without control characters; a
+            // backslash is the longest character left once escaped.
+            let text = "\\".repeat(120);
+            let answer = serde_json::json!({
+                "operation_id": "1b4e28ba-2fa1-11d2-883f-0016d3cca427", "action": "ensure_ready",
+                "target_cloud_id": "t".repeat(90), "phase": "confirmation_required", "done": true,
+                "executing": false, "resend": false, "error": text,
+            });
+            (format!("{n:a>64}"), answer)
+        })
+        .collect();
+    let longest = command("abc-123", &"a".repeat(40), &long, Signals::default(), &answers).unwrap();
     // Room for the scripts to grow before this limit is a concern.
     assert!(longest.len() < COMMAND_LIMIT - 12 * 1024, "{}", longest.len());
-    assert!(command("abc-123", &"A".repeat(40), &config(), Signals::default()).is_err());
+    assert!(
+        command(
+            "abc-123",
+            &"A".repeat(40),
+            &config(),
+            Signals::default(),
+            &serde_json::Map::new()
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -142,6 +190,20 @@ fn the_prompt_is_a_template_for_one_repository() {
     assert!(prompt.contains("the 1 other repositories"));
     assert!(prompt.contains("write @@STATUS@@ again"));
     assert!(prompt.contains("github_access"));
+}
+
+#[test]
+fn the_prompt_says_how_a_ui_check_gets_a_companion_and_where_its_evidence_goes() {
+    let prompt = prompt(&config());
+    assert!(prompt.contains("`ui-acceptance` profile"));
+    assert!(prompt.contains("/workspace/home/upkeep/companions/<alias>.json"));
+    assert!(prompt.contains(r#"{"action": "ensure_ready", "operation_id": "<new UUID>"}"#));
+    assert!(prompt.contains("companions-status.json"));
+    assert!(prompt.contains("leave the pull request blocked"));
+    assert!(prompt.contains("Horizon is not running: blocked"));
+    assert!(prompt.contains("also after a failure"));
+    assert!(prompt.contains("orphan branch `upkeep/evidence`"));
+    assert!(prompt.contains("Never a secret"));
 }
 
 #[test]
@@ -196,7 +258,7 @@ fn a_report_that_is_not_json_is_left_out() {
 #[test]
 fn a_run_now_travels_with_its_token() {
     let payload = |signals: Signals| -> serde_json::Value {
-        let remote = command("abc-123", &"a".repeat(40), &config(), signals).unwrap();
+        let remote = command("abc-123", &"a".repeat(40), &config(), signals, &serde_json::Map::new()).unwrap();
         let encoded = remote.rsplit(" - '").next().unwrap().trim_end_matches('\'');
         let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).unwrap();
         serde_json::from_reader(flate2::read::ZlibDecoder::new(bytes.as_slice())).unwrap()

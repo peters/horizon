@@ -222,10 +222,12 @@ exchange. The exchange does these steps:
    `/workspace/home/upkeep`.
 2. It writes the session binding in `/workspace/sessions/upkeep-<cloud>`. Thus
    the agents of the loop can ask for GitHub access and open browser panels.
-3. It writes the Run now and Pause signals.
+3. It writes the Run now and Pause signals, and Horizon's answers to the companion
+   requests of the agents (see [UI acceptance on companion clouds](#ui-acceptance-on-companion-clouds)).
 4. It starts the loop in the tmux session `upkeep-<cloud>` when the session does
    not run the loop.
-5. It reads back the runs, the next run time and the status that the agents wrote.
+5. It reads back the runs, the next run time, the status and the companion requests
+   that the agents wrote.
 
 The loop starts one run on the schedule, or sooner after **Run now**. A run lists
 the open pull requests of the bots in each repository. It starts one Codex agent
@@ -621,6 +623,99 @@ gives at most 1,000 results. They only put the list in order.
 
 The settings that **Start Upkeep** saves pass the checks of the worker loop
 (`Config::validate`) before Horizon saves them or sends them to a worker.
+
+## UI acceptance on companion clouds
+
+Some repositories require a check of their user interface for some updates, for
+example a youpark update of Avalonia. The repository's AGENTS.md tells when the check
+applies and how to do it. The Upkeep worker cannot do such a check itself, because it
+has no desktop, GPU or image of the repository. The agent does the check on a
+[companion cloud](companion-controller.md) of the repository. The code is in
+`crates/horizon-core/src/cloud_runtime/companions/inventory.rs`,
+`crates/horizon-core/src/upkeep/worker/companions.rs` and
+`crates/horizon-ui/src/app/cloud_panel/production/companions/agent/upkeep.rs`.
+
+- An Upkeep cloud declares one companion for each of its repositories whose checkout
+  on this computer (`<owner>/<name>` in the code folder for clones, as **New Upkeep**
+  clones it) has a
+  committed profile with the name `ui-acceptance` in `.horizon/cloud.yml`. The alias
+  is the repository name in lower case, with a hyphen in place of each character other
+  than a letter or a digit, for example `youpark`. Other repositories declare nothing.
+- The owner makes the companion cloud once: **New cloud** from the repository's
+  checkout with the `ui-acceptance` profile, in the workspace of the Upkeep. The owner
+  starts it once, stops it, and checks it on the card of the Upkeep cloud. Thus the
+  owner decides which repository can start a cloud, and on which provider.
+- The agent asks for the companion with the file
+  `/workspace/home/upkeep/companions/<alias>.json`, for example
+  `{"action": "ensure_ready", "operation_id": "<new UUID>"}`. The action is
+  `ensure_ready` or `stop`. The exchange sends at most four requests to Horizon, and
+  removes a request when Horizon has answered it as done.
+- Horizon does the request as it does the request of an agent panel (see the tool
+  `cloud_companion_ensure_ready`): the operation runs on the card of the companion
+  cloud. Horizon writes the answer of each alias to
+  `/workspace/home/upkeep/companions-status.json` with the next exchange: the
+  operation ID, the phase, whether it is done, and a message or an error.
+- The agent then uses the companion with `horizon-cloud-worker companions inspect`,
+  SSH and Git: it fetches the pull request, does the procedure of the repository on
+  the desktop of the companion, which the person watches on its card, and copies the
+  evidence back. Then it asks for `stop`, also when the check failed.
+- When an exchange shows that no run is active, or the Upkeep cloud has not been ready
+  for five minutes, Horizon stops each companion that a run of this Upkeep started. A
+  failed exchange stops nothing. When the Ensure Ready that started the companion has not
+  finished, Horizon first sends it again so that the companion's card finishes it. When
+  the Stop fails or the companion refuses it, Horizon sends a new one ten minutes later,
+  up to six times. Horizon keeps this record only while it runs.
+- The agent puts the screenshots and logs of the check on the orphan branch
+  `upkeep/evidence` of the repository, under `pr-<number>/<short head>/`, and links
+  them from its one comment on the pull request. Nobody merges this branch. The branch
+  holds only screenshots and logs from UI acceptance, never secrets. When a pull
+  request closes, the agent removes its folder.
+- When the companion is not declared or not checked, or when the owner's Horizon does
+  not run, the agent leaves the pull request blocked and gives the reason. A companion
+  needs the owner's Horizon: the worker cannot start a cloud by itself.
+
+## Trust boundary of companion requests
+
+Untrusted input:
+
+- Each companion request and file in `/workspace/home/upkeep/companions`. The agent
+  account writes them, and an agent can follow instructions from a pull request.
+- The text that the agent puts on the `upkeep/evidence` branch and in its comment.
+
+Trusted input:
+
+- The saved settings of the Upkeep, the checkouts on this computer and the `ui-acceptance`
+  profiles that they commit.
+- The owner's checkbox on the card and the cloud records of Horizon.
+
+Horizon guarantees these items:
+
+- A request can only start or stop a companion of the Upkeep's own cloud that the owner
+  checked. The source of each request is that cloud; the request has no field for it.
+  Horizon examines the alias, the action and the operation ID again before it acts.
+- The exchange reads only regular files with a valid alias and at most 1 KiB, opened
+  without following links, and sends at most four requests. It removes a request that
+  Horizon answered as done, unless the agent changed it after the exchange read it.
+- A request outside a run starts nothing, and the loop removes the requests of earlier
+  runs when a run or the daily maintenance pass starts. A run or pass that cannot remove
+  them does not start. A request with an operation ID that Horizon answered as done
+  is not sent again, and Horizon sends one request for each alias at a time.
+- The answers that Horizon sends back have a limited set of fields and a message of at
+  most 120 characters without control characters, for at most four aliases.
+
+Horizon does not guarantee these items:
+
+- It does not limit what the agent does on the companion. The companion grants trusted
+  shell access, as [the companion controller](companion-controller.md) describes.
+- It does not stop a companion that a run started when Horizon restarted during that
+  run, when the Upkeep cloud's worker stops answering while it shows as ready, when the
+  Stops fail six times in a row (for example after the repository's `ui-acceptance`
+  profile is gone), or when the Upkeep is removed. The agent's own `stop` request still stops it.
+- It does not know when a run really ends: the agent account writes the run records
+  that the exchange reads. An agent that writes a record of a run in progress keeps its
+  requests allowed and delays the stop at the end of the run. It still can start only a
+  companion that the owner checked.
+- It does not examine the files on the `upkeep/evidence` branch.
 
 ## Agent requests
 

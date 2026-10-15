@@ -572,6 +572,40 @@ def close_interrupted():
         pass
 
 
+def forget_companion_requests():
+    """A companion request belongs to the run that wrote it, so one left behind starts nothing.
+    Returns whether none is left: a run that would see one does not start."""
+    path = DIR + '/companions'
+    # A rename needs no permission on the folder itself, so one that the agent made unreadable
+    # goes too. A link in its place is moved, never followed.
+    trash = f'{DIR}/.companions-removed-{time.time_ns()}'
+    try:
+        os.rename(path, trash)
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        print(f'Could not remove the companion requests of an earlier run: {error}', flush=True)
+    for earlier in glob.glob(glob.escape(DIR) + '/.companions-removed-*'):
+        remove_tree(earlier)
+    return not os.path.lexists(path)
+
+
+def remove_tree(path):
+    """Removes `path` as far as it can. The agent account owns the folders and can take away
+    their permissions; the loop runs as that account and gives them back. Links are removed,
+    never followed."""
+    try:
+        if not stat.S_ISDIR(os.lstat(path).st_mode):
+            os.unlink(path)
+            return
+        os.chmod(path, 0o700)
+        for name in os.listdir(path):
+            remove_tree(os.path.join(path, name))
+        os.rmdir(path)
+    except (OSError, RecursionError):
+        pass
+
+
 def draw(started, jobs, queued, capacity):
     width = max(40, shutil.get_terminal_size((120, 40)).columns)
     since = f'since {time.strftime("%H:%M", time.gmtime(started))} UTC'
@@ -749,7 +783,8 @@ def run_daily(cfg, template):
     if environment is None or not codex_enabled(environment):
         return False
     # The checks above can take minutes; a pause that came meanwhile holds the pass back too.
-    if os.path.exists(DIR + '/paused') or not take_daily():
+    # The requests go before the pass shows as running to the exchange, as for a run.
+    if os.path.exists(DIR + '/paused') or not forget_companion_requests() or not take_daily():
         return False
     repositories = names(cfg, 'repositories', REPOSITORY)
     # Validated names only; they hold no `@`, so they never make another placeholder.
@@ -824,13 +859,17 @@ def main():
             # Read before any agent of this run starts, so no agent of it can change them.
             daily_template = read_prompt('daily.md')
             begun = int(time.time())
-            record({'started_at': begun, 'outcome': 'running'})
             before = merged()
-            try:
-                ok = run_once(cfg, forced)
-            except Exception as error:  # noqa: BLE001 - one failed run must not end the loop
-                print(f'The run failed: {error}', flush=True)
-                ok = False
+            # Before the run shows as running to the exchange. A run that could see a request of
+            # an earlier run fails at once.
+            ok = forget_companion_requests()
+            if ok:
+                record({'started_at': begun, 'outcome': 'running'})
+                try:
+                    ok = run_once(cfg, forced)
+                except Exception as error:  # noqa: BLE001 - one failed run must not end the loop
+                    print(f'The run failed: {error}', flush=True)
+                    ok = False
             record({'started_at': begun, 'finished_at': int(time.time()), 'outcome': 'done' if ok else 'failed',
                     'exit': 0 if ok else 1, 'merged': len(merged() - before)})
             # A pause that came during the run holds the pass back until a planned run after it.

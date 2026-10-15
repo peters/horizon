@@ -127,6 +127,14 @@ with the next exchange, and Repositories saves only the repositories that the pe
 added or removed. A board that a config file opens has no buttons. Agents reach the same
 actions through `cloud_upkeep`; the board shows each agent change below its title.
 
+For a UI check that a repository's rules require, an Upkeep cloud declares one companion
+for each of its repositories whose checkout on this computer commits a `ui-acceptance`
+profile. The person creates that cloud with New cloud in the Upkeep's workspace and
+checks it on the Upkeep card. The Upkeep agent starts and stops it through its worker's
+exchange, not through the companion tools, and Horizon stops it when the run ends; it
+needs the person's Horizon running. See "UI acceptance on companion clouds" in
+`docs/upkeep.md`.
+
 Browser provider catalogs and browser sessions use `horizon-browser`.
 This skill does not install servers, start resources, or enable network access on load.
 

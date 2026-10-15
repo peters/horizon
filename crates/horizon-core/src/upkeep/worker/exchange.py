@@ -38,6 +38,14 @@ REFUSALS_LIMIT = 64 * 1024
 REFUSALS_KEPT = 20
 SESSION = re.compile(r'upkeep-[A-Za-z0-9_-]{1,90}')
 REVISION = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
+# The agent asks for a companion cloud with companions/<alias>.json; Horizon answers in
+# companions-status.json. The alias rule is Horizon's own.
+COMPANION = re.compile(r'[a-z][a-z0-9_-]{0,63}')
+OPERATION = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+COMPANION_ACTIONS = ('ensure_ready', 'stop')
+COMPANION_LIMIT = 4
+COMPANION_REQUEST_LIMIT = 1024
+COMPANION_STATUS_LIMIT = 64 * 1024
 
 
 class Refused(Exception):
@@ -294,7 +302,65 @@ def refusals():
     return found[-REFUSALS_KEPT:]
 
 
-def report(upkeep, loop, settled):
+def companion_requests(upkeep, answers):
+    """The agent's companion requests, at most four: companions/<alias>.json holding an action
+    and an operation ID. Anything else in that folder is left out. A request that Horizon's
+    `answers` show as done is removed, so that it never holds back a later one, also once
+    Horizon no longer keeps that answer."""
+    try:
+        fd = os.open('companions', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=upkeep)
+    except OSError:
+        return []
+    try:
+        if os.fstat(fd).st_uid != os.geteuid():
+            return []
+        requests = []
+        for name in sorted(os.listdir(fd)):
+            alias = name[:-len('.json')] if name.endswith('.json') else ''
+            if not COMPANION.fullmatch(alias):
+                continue
+            try:
+                seen = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            except OSError:
+                continue
+            # One byte more than allowed tells a file that is too long from one that fits.
+            data = read(fd, name, COMPANION_REQUEST_LIMIT + 1) or b''
+            if len(data) > COMPANION_REQUEST_LIMIT:
+                continue
+            try:
+                request = json.loads(data)
+            except (ValueError, RecursionError):
+                continue
+            if not (isinstance(request, dict) and request.get('action') in COMPANION_ACTIONS
+                    and isinstance(request.get('operation_id'), str)
+                    and OPERATION.fullmatch(request['operation_id'])):
+                continue
+            answer = answers.get(alias)
+            if (isinstance(answer, dict) and answer.get('done') is True
+                    and answer.get('operation_id') == request['operation_id']):
+                retire(fd, name, seen)
+            else:
+                requests.append({'alias': alias, 'action': request['action'],
+                                 'operation_id': request['operation_id']})
+                if len(requests) == COMPANION_LIMIT:
+                    break
+        return requests
+    finally:
+        os.close(fd)
+
+
+def retire(parent, name, seen):
+    """Removes the request `name` that Horizon answered, unless the agent changed it since it
+    was read."""
+    try:
+        now = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (now.st_ino, now.st_size, now.st_mtime_ns) == (seen.st_ino, seen.st_size, seen.st_mtime_ns):
+            os.unlink(name, dir_fd=parent)
+    except OSError:
+        pass
+
+
+def report(upkeep, loop, settled, answers):
     """What the board shows. Everything here comes from files that the agent can write, so
     only the fields and types that Horizon reads are sent back."""
     status = read(upkeep, 'status.json', STATUS_LIMIT)
@@ -306,6 +372,7 @@ def report(upkeep, loop, settled):
         next_run = None
     answer = {'loop': loop, 'settled': settled, 'runs': runs, 'next_run': next_run,
               'paused': read(upkeep, 'paused', 0) is not None, 'refused': refusals(),
+              'companions': companion_requests(upkeep, answers),
               'status': status.decode('utf-8', 'replace') if status is not None else None}
     text = json.dumps(answer, allow_nan=False)
     if len(text) > OUTPUT_LIMIT:
@@ -324,13 +391,20 @@ def exchange(payload):
         try:
             install(payload, upkeep)
             signal(payload, upkeep)
+            companions = payload.get('companions')
+            if not isinstance(companions, dict):
+                companions = {}
+            else:
+                text = json.dumps(companions, indent=1)
+                if len(text) <= COMPANION_STATUS_LIMIT:
+                    write(upkeep, 'companions-status.json', text)
             # Last, after every file is in place: a running loop starts the new one between two
             # runs, and only ever sees a complete install.
             if read(upkeep, 'installing', 0) is not None:
                 write(upkeep, 'restart', '')
                 remove(upkeep, 'installing')
             loop, settled = keep_loop(session, HOME + '/' + FOLDER)
-            return report(upkeep, loop, settled)
+            return report(upkeep, loop, settled, companions)
         finally:
             os.close(upkeep)
     finally:

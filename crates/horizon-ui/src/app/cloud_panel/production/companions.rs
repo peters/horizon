@@ -6,6 +6,7 @@ mod tests;
 mod view;
 
 use super::HorizonApp;
+pub(in crate::app) use agent::Seen;
 use horizon_core::{
     cloud_panel::CloudGroups,
     cloud_runtime::{

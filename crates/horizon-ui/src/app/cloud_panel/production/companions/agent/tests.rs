@@ -35,6 +35,32 @@ fn operation(action: intent::Action, state: intent::State, phase: Phase) -> Oper
     }
 }
 
+/// An operation of Upkeep `source` that has settled at `phase`, as its job reports it.
+pub(super) fn settled(source: &str, alias: &str, action: intent::Action, phase: Phase) -> Submitted {
+    let state = if phase == Phase::Refused {
+        intent::State::Failed
+    } else {
+        intent::State::Succeeded
+    };
+    Submitted {
+        operation: operation(action, state, phase),
+        context: Context {
+            source: Target {
+                scope: Scope {
+                    session_id: "session".into(),
+                    workspace_id: "workspace".into(),
+                },
+                cloud_id: source.into(),
+                declaration: Declaration::new("example/source", "dev"),
+            },
+            declarations: std::collections::BTreeMap::new(),
+            inventory: Vec::new(),
+        },
+        alias: alias.into(),
+        settings: Err("not read".into()),
+    }
+}
+
 fn deployment() -> Deployment {
     serde_json::from_value(json!({
         "version":1,"cloud_id":"target","repository":"/synthetic","revision":"a".repeat(40),
@@ -309,6 +335,7 @@ fn settled_and_confirmation_answers_start_nothing() {
                 operation,
                 context: context.clone(),
                 alias: "consumer".into(),
+                settings: Err("not read".into()),
             },
             &ctx,
         );
@@ -362,8 +389,9 @@ fn a_status_poll_never_starts_a_recorded_operation() {
         operation: operation(intent::Action::EnsureReady, intent::State::Submitted, Phase::Submitted),
         context: context.clone(),
         alias: "consumer".into(),
+        settings: Err("not read".into()),
     };
-    let (answer, started) = app.answer_submitted(&request("status"), "source", submitted(), &ctx);
+    let (answer, started) = app.answer_submitted(reads_only(&request("status")), false, "source", submitted(), &ctx);
     assert!(!started);
     assert_eq!(answer["phase"], "submitted");
     // Nothing runs it, so polling alone would wait forever: the agent must resend.
@@ -374,13 +402,14 @@ fn a_status_poll_never_starts_a_recorded_operation() {
     // While it runs on its card, polling is enough.
     let agent = &mut app.cloud_prototype.production.companions.agent;
     agent.executing.insert("target".into());
-    let (answer, _) = app.answer_submitted(&request("status"), "source", submitted(), &ctx);
+    let (answer, _) = app.answer_submitted(reads_only(&request("status")), false, "source", submitted(), &ctx);
     assert_eq!(answer["resend"], false);
     assert_eq!(answer["message"], hint(Phase::Submitted));
     app.cloud_prototype.production.companions.agent.executing.clear();
     // The same operation sent again as Ensure Ready tries to continue it on its card,
     // which is not open here.
-    let (answer, started) = app.answer_submitted(&request("ensure_ready"), "source", submitted(), &ctx);
+    let (answer, started) =
+        app.answer_submitted(reads_only(&request("ensure_ready")), false, "source", submitted(), &ctx);
     assert!(!started);
     assert_ne!(answer["message"], hint(Phase::Submitted));
     assert_eq!(answer["resend"], true);

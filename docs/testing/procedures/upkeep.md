@@ -2,7 +2,7 @@
 procedure: upkeep
 feature: Upkeep board, worker loop and New Upkeep (the dependency pull request agent)
 platforms: [linux]
-cost: rents compute (UPK-10 and UPK-13)
+cost: rents compute (UPK-10, UPK-13 and UPK-15)
 destructive: yes (UPK-12 deletes the cloud that UPK-10 made)
 secrets: [GitHub sign-in, Hetzner API token, ChatGPT login of Codex]
 owner: peters
@@ -22,7 +22,7 @@ board, and that **New Upkeep** starts a real Upkeep on a Hetzner cloud.
 - Candidate: a Horizon build with the `upkeep` panel kind.
 - Platforms: Linux host.
 - UPK-01 to UPK-06 read a synthetic status document. UPK-07 runs the worker
-  exchange in a local container. UPK-08 to UPK-14 use real GitHub data and a real
+  exchange in a local container. UPK-08 to UPK-15 use real GitHub data and a real
   Hetzner cloud.
 - This procedure does not test: the quality of the work of the agent, Renovate
   pull requests, or a schedule longer than one hour.
@@ -43,6 +43,9 @@ made-up repositories and one public pull request.
 > Upkeep shows every repository that the GitHub App can reach. Blur or crop them in
 > a recording that you publish.
 
+> **CAUTION:** TASK UPK-15 RENTS A SECOND CLOUD, THE COMPANION. The provider bills its
+> volume until you delete it, and its server while it runs.
+
 > **CAUTION:** TASK UPK-13 USES A RUNNING UPKEEP CLOUD AND CHANGES ITS REPOSITORIES,
 > ITS PAUSE STATE AND ITS RUNS. A run can merge real bot pull requests. Use an Upkeep
 > whose repositories you are permitted to change.
@@ -54,7 +57,7 @@ made-up repositories and one public pull request.
 - Network access to github.com for task UPK-03.
 - For task UPK-07: Docker, a Rust toolchain for this repository, and a Horizon
   worker image (`ghcr.io/peters/horizon-worker-base`) on this computer.
-- For tasks UPK-08 to UPK-14: the
+- For tasks UPK-08 to UPK-15: the
   [local device smoke fixture](../../../scripts/device-smoke/README.md) with
   `--native-view`, a persistent session, and Cloud settings with a GitHub sign-in,
   a Hetzner project with free capacity for one `cx23` server, and the ChatGPT login
@@ -63,6 +66,10 @@ made-up repositories and one public pull request.
 - For task UPK-10: two repositories, `<repo>` and `<second>`, each with at least
   one open Dependabot pull request, both where you are permitted to merge
   Dependabot pull requests.
+- For task UPK-15: a repository `<ui>` of the Upkeep, checked out on this computer
+  as `~/github/<owner>/<ui>`, whose committed `.horizon/cloud.yml` has a profile
+  `ui-acceptance` with `desktop: true`. Use a commit that is only on this computer
+  if the repository has no such profile.
 - A browser that is signed in to the GitHub account of Cloud settings. Each new
   cloud asks for one GitHub authorization.
 
@@ -584,14 +591,74 @@ Do this task before UPK-12, on the cloud of UPK-10.
 
    Result: `runs.jsonl` has no new line with `"kind": "daily"`.
 
+### 6.15 UPK-15 — UI acceptance on a companion cloud
+
+> **CAUTION:** THIS TASK RENTS THE COMPANION CLOUD AND USES A RUNNING UPKEEP CLOUD. A run
+> can merge real bot pull requests in the repositories of the Upkeep.
+
+Use the Upkeep cloud of UPK-10 before UPK-12, with `<ui>` in its repositories. Write
+each request on the worker as the agent account, for example in the **Upkeep agent**
+panel. `<uuid>` is a new UUID each time (`python3 -c 'import uuid; print(uuid.uuid4())'`).
+
+1. Look at the companions of the Upkeep card.
+
+   Result: The card shows the companion `<ui>` (the repository name in lower case)
+   with **Matching cloud is missing**. No other repository of the Upkeep shows.
+
+2. In the workspace of the Upkeep, start **New cloud** from `~/github/<owner>/<ui>`
+   with the profile `ui-acceptance`. When it is ready, stop it. On the Upkeep card,
+   check `<ui>`.
+
+   Result: The companion shows as checked and stopped.
+
+3. Outside a run, write `/workspace/home/upkeep/companions/<ui>.json` with
+   `{"action": "ensure_ready", "operation_id": "<uuid>"}`. Wait two minutes.
+
+   Result: The companion stays stopped. `companions-status.json` has no answer for
+   that operation.
+
+4. Click **Run now**. While the run is active, write the same file with a new UUID.
+
+   Result: Within a minute, `/workspace/home/upkeep/companions-status.json` shows that
+   operation ID under `<ui>`. The companion card starts. Later the answer shows phase
+   `ready` and `done` true.
+
+5. Run `horizon-cloud-worker companions inspect <ui>` on the Upkeep worker. Run
+   `ssh <alias> true` with the SSH alias that it shows.
+
+   Result: The command shows the SSH alias and the worktree. SSH connects.
+
+6. While the run is active, write the file with `{"action": "stop", "operation_id":
+   "<uuid>"}`.
+
+   Result: The answer shows phase `stopped` and `done` true. The companion card shows
+   the cloud stopped.
+
+7. Click **Run now**. While the run is active, ask for `ensure_ready` again. Wait until
+   it is ready, do not ask for `stop`, and let the run end.
+
+   Result: After the run, Horizon stops the companion. The answer for `<ui>` shows a
+   `stop` operation with phase `stopped`.
+
+8. Uncheck `<ui>` on the Upkeep card. During a run, ask for `ensure_ready`.
+
+   Result: The answer shows `done` true and an error. The companion stays stopped.
+
+9. In `/workspace/home/upkeep/companions`, write `Bad.json` and `big.json` (more than
+   1 KiB), each with a valid request, and a link `link.json` to another file.
+
+   Result: `companions-status.json` has no answer for these files, and the exchange
+   does not fail.
+
 ## 7. Pass criteria
 
-- UPK-01 to UPK-14 give the results above.
+- UPK-01 to UPK-15 give the results above.
 
 ## 8. Cleanup
 
 1. Close Horizon and delete `<folder>`.
 2. After UPK-12, delete `~/.horizon/upkeep/<cloud>` in the fixture home.
+3. After UPK-15, delete the companion cloud on its card.
 
 ## 9. Record of results
 

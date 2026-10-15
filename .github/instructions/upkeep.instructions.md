@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/upkeep.rs,crates/horizon-core/src/upkeep/**,examples/cloud-worker/test_upkeep_worker.py,docs/upkeep.md,docs/testing/procedures/upkeep/worker.sh,crates/horizon-ui/src/upkeep_widget.rs,crates/horizon-ui/src/upkeep_widget/**,crates/horizon-ui/src/app/upkeep.rs,crates/horizon-ui/src/app/upkeep/**,crates/horizon-ui/src/app/cloud_panel/production/new_workspace/upkeep.rs,crates/horizon-ui/src/app/cloud_panel/production/new_workspace/upkeep/**,crates/horizon-browser-control/src/manifest/upkeep.rs,crates/horizon-browser-mcp/src/controller/upkeep.rs,crates/horizon-cloud-worker/src/remote.rs"
+applyTo: "crates/horizon-core/src/upkeep.rs,crates/horizon-core/src/upkeep/**,examples/cloud-worker/test_upkeep_worker.py,docs/upkeep.md,docs/testing/procedures/upkeep/worker.sh,crates/horizon-ui/src/upkeep_widget.rs,crates/horizon-ui/src/upkeep_widget/**,crates/horizon-ui/src/app/upkeep.rs,crates/horizon-ui/src/app/upkeep/**,crates/horizon-ui/src/app/cloud_panel/production/new_workspace/upkeep.rs,crates/horizon-ui/src/app/cloud_panel/production/new_workspace/upkeep/**,crates/horizon-browser-control/src/manifest/upkeep.rs,crates/horizon-browser-mcp/src/controller/upkeep.rs,crates/horizon-cloud-worker/src/remote.rs,crates/horizon-ui/src/app/cloud_panel/production/companions/agent/upkeep.rs,crates/horizon-core/src/cloud_runtime/companions/inventory.rs"
 ---
 
 # Trust boundaries of Upkeep
@@ -115,6 +115,28 @@ file that root owns. The exchange reads back the refusal log that root owns
 and only the fixed fields; the text goes to the board as activity lines. Check that no
 change starts an agent without the `guarded` check, reads the log from a folder the
 agent can write, or sends more than `REFUSALS_KEPT` lines.
+
+## Untrusted: companion requests from the worker
+
+The agent asks for a companion cloud with `upkeep/companions/<alias>.json`
+(`docs/upkeep.md`, section "Trust boundary of companion requests"). The agent writes
+every field. Check that:
+
+- `exchange.py` reads only regular files of at most 1 KiB with a valid alias, opened
+  without following links, and sends at most four; `worker/companions.rs` parses them
+  again and drops any that are not an alias, `ensure_ready` or `stop`, and a UUID.
+- The source of each request is the Upkeep's own cloud; nothing from the worker names a
+  cloud. Only a companion that the owner checked can start (`lifecycle::bind_selected`).
+- A request starts nothing outside a run. `run.py` removes the requests before each run
+  and each daily maintenance pass, and does not start one when it cannot. An operation
+  already answered as done is not sent again (`exchange.py` removes it, Horizon skips
+  it), and one request per alias runs at a time. A refused automatic Stop is sent again
+  with a new operation ID a bounded number of times, since every operation ID stays in
+  the companion's journal.
+- Horizon's answers keep a fixed set of fields and at most 120 characters of text, for at
+  most four aliases, so the remote command stays under its limit.
+- Upkeep declarations come only from the saved repository list and the committed
+  `ui-acceptance` profile of each checkout on this computer.
 
 ## Host work off the UI thread
 
