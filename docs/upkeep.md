@@ -550,7 +550,9 @@ these requests of every agent of the cloud:
   changed check run is refused for the same reason; asking for a check again passes.
 - The approval of a run or a deployment, and any other change of Actions than
   starting a run again or cancelling it.
-- The approval of a pull request, and the dismissal of a review: only you approve.
+- The approval of a pull request, the dismissal of a review, and an edit of a
+  submitted review (its body could add `upkeep-allow: workflows` to your approval):
+  only you approve.
 - Auto-merge (a merge that GitHub makes later, unchecked).
 - A workflow dispatch, unless the person listed that workflow of that repository in
   the settings of the Upkeep.
@@ -625,7 +627,9 @@ These blockers also stop a merge, until you approve that exact head:
 - `no-checks`: the head has no check run and no commit status.
 - `workflows`: a file in `.github/workflows` changes, and not every commit of the
   pull request is the work of a listed bot (the bot wrote it, and GitHub or the bot
-  committed it with a signature that GitHub verified, as for Dependabot). The agent
+  committed it with a signature that GitHub verified, as for Dependabot). The gate
+  compares the base commit with the head commit, so a push during the check changes
+  nothing; a comparison that GitHub cuts short keeps the blocker. The agent
   can push to a bot's branch, and `author` sees only who opened the pull request.
 
 An **Approve** review of your account on the head lifts `author` and `no-checks`,

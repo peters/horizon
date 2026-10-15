@@ -11,6 +11,7 @@ from test_horizon_worker_github import service
 upkeep = service.upkeep
 checks = service.broker.checks
 HEAD = 'a' * 40
+BASE = 'c' * 40
 
 
 def approval(**changes):
@@ -23,7 +24,7 @@ class Fake:
     def __init__(self, **changes):
         self.pull = {'state': 'open', 'draft': False, 'user': {'login': 'dependabot[bot]'},
                      'head': {'sha': HEAD, 'ref': 'dependabot/cargo/x', 'repo': {'full_name': 'example/project'}},
-                     'mergeable_state': 'clean', 'commits': 1}
+                     'base': {'sha': BASE}, 'mergeable_state': 'clean'}
         self.runs = [{'name': 'ci', 'status': 'completed', 'conclusion': 'success'},
                      {'name': 'lint', 'status': 'completed', 'conclusion': 'skipped'}]
         self.status = {'state': 'pending', 'statuses': []}
@@ -31,14 +32,18 @@ class Fake:
         self.commits = [{'author': {'login': 'dependabot[bot]'}, 'committer': {'login': 'web-flow'},
                          'commit': {'verification': {'verified': True}}}]
         self.reviews = []
+        self.total = None
         self.__dict__.update(changes)
         self.asked = []
 
     def __call__(self, method, path):
         self.asked.append(path)
         route = path.split('?')[0]
+        if route == '/repos/example/project/compare/%s...%s' % (BASE, HEAD):
+            return 200, {'files': self.files, 'commits': self.commits,
+                         'total_commits': len(self.commits) if self.total is None else self.total}
         answers = {'/user': {'login': 'owner'}, '/pulls/7': self.pull, '/check-runs': {'check_runs': self.runs},
-                   '/status': self.status, '/files': self.files, '/commits': self.commits, '/reviews': self.reviews}
+                   '/status': self.status, '/reviews': self.reviews}
         for end, answer in answers.items():
             if route.endswith(end):
                 return 200, answer
@@ -62,7 +67,7 @@ class GateTests(unittest.TestCase):
     def test_a_bot_pull_request_with_green_checks_on_its_head_passes(self):
         fake = Fake()
         self.gate(fake)
-        self.assertFalse(any('/reviews' in path or '/commits?' in path for path in fake.asked))
+        self.assertFalse(any('/reviews' in path for path in fake.asked))
 
     def test_hard_checks_are_never_lifted(self):
         approved = [approval()]
@@ -115,15 +120,17 @@ class GateTests(unittest.TestCase):
         for files in (touched, renamed):
             for commits in ([*Fake().commits, agent], [forged], [unsigned], []):
                 fake = Fake(files=files, commits=commits, reviews=[approval()])
-                fake.pull['commits'] = len(commits)
                 text = self.refused(fake, 'blocked on workflows')
                 self.assertIn('Approve with the line upkeep-allow: workflows', text)
         fake = Fake(files=touched, commits=[agent], reviews=[approval(body='Looks fine.\nupkeep-allow: workflows')])
         self.gate(fake)
         # A list that GitHub cut short is not every commit.
-        longer = Fake(files=touched)
-        longer.pull['commits'] = 251
-        self.refused(longer, 'blocked on workflows')
+        self.refused(Fake(files=touched, total=251), 'blocked on workflows')
+        self.refused(Fake(files=[{'filename': 'x%d' % n} for n in range(300)]), 'blocked on workflows')
+        # The comparison is by commit: a base that GitHub does not show is refused.
+        unknown = Fake()
+        unknown.pull['base'] = {}
+        self.refused(unknown, 'base commit')
 
     def test_only_the_persons_approval_of_this_head_counts(self):
         person = Fake()

@@ -30,9 +30,12 @@ agent-writable, so nothing there is a control. Check that:
   the only mutation of its document) reaches GitHub only after `gate` passed for the
   exact head that the request names. The gate trusts
   only GitHub's answers: `/user`, the pull request, every check run (all pages), the
-  combined status, the changed files and, when a workflow file changes, every commit's
-  author, committer and verified signature (all of them, or the `workflows` blocker
-  stays). The hard checks are never lifted; an approval counts only as the signed-in
+  combined status, and the comparison of the base commit with the head commit (by SHA,
+  never by pull request number, which a push can change meanwhile): its files and, when a
+  workflow file changes, every commit's author, committer and verified signature (all of
+  them, or the `workflows` blocker stays). An agent cannot edit a submitted review
+  (`REVIEW_EDIT`), so the approval line is the person's. A GraphQL merge's grants are
+  checked again after the gate. The hard checks are never lifted; an approval counts only as the signed-in
   account's latest decision, `APPROVED`, on the exact head, and lifts `workflows` only
   with the line `upkeep-allow: workflows`. Its trust
   rests on the refusal of every agent approval above.

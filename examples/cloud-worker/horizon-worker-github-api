@@ -416,14 +416,15 @@ class Exchange(checks.Checks):
                 policy.check_lookup(looked, plan.ids, candidate.allowed)
             except policy.Refused as error:
                 raise elsewhere(error, policy.lookup_repositories(looked)) from None
-        # Checked again just before the request goes out: a task's session can end meanwhile.
+        if rules is not None:
+            self.upkeep_merges(rules, plan, candidate, granted)
+        # Checked again just before the request goes out, after the merge gate asked GitHub: a
+        # task's session can end meanwhile.
         fresh = self.fresh(candidate, refuse=True)
         policy.plan(schema, body, fresh.allowed)
         if plan.ids:
             policy.check_lookup(looked, plan.ids, fresh.allowed)
         features = [('GraphQL-Features', value) for value in self.request.values('graphql-features')]
-        if rules is not None:
-            self.upkeep_merges(rules, plan, fresh, granted)
         status, reply = self.broker.call(rest.API, 'POST', '/graphql', candidate.token,
                                          plan.body(body.get('variables') or {}), features, sent=granted)
         if status == 401:

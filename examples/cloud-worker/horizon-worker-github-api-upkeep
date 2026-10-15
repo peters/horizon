@@ -113,17 +113,32 @@ def bot_commit(rules, commit):
             and verification.get('verified') is True)
 
 
-def workflows_changed_by_others(rules, call, base, number, pull):
-    """Whether a file under .github/workflows changes in the pull request and not every commit
-    of it is a listed bot's: an agent may push to a bot's branch, and the author check sees
-    only who opened it. GitHub lists at most 250 commits; a pull request with more counts as
-    changed by others."""
-    files = pages(call, '%s/pulls/%d/files' % (base, number))
+def workflows_changed_by_others(rules, call, base, head, pull):
+    """Whether a file under .github/workflows changes between the pull request's base commit
+    and `head`, and not every commit between them is a listed bot's: an agent may push to a
+    bot's branch, and the author check sees only who opened it. Both are read by commit, so a
+    push meanwhile changes nothing here. A comparison that GitHub cuts short (300 files, 250
+    commits) counts as changed by others."""
+    since = (pull.get('base') or {}).get('sha')
+    if not isinstance(since, str) or not HEAD.fullmatch(since):
+        raise upkeep.Refused('GitHub did not show the base commit of the pull request; try again.')
+    files, commits, total = None, [], None
+    for page in range(1, MAX_PAGES + 1):
+        status, reply = call('GET', '%s/compare/%s...%s?per_page=100&page=%d' % (base, since, head, page))
+        found = reply.get('commits') if status == 200 and isinstance(reply, dict) else None
+        if not isinstance(found, list):
+            raise upkeep.Refused('GitHub did not compare the pull request with its base; try again.')
+        if files is None:
+            files, total = reply.get('files'), reply.get('total_commits')
+        commits.extend(found)
+        if len(found) < 100:
+            break
+    if not isinstance(files, list) or len(files) >= 300:
+        return True
     if not any(isinstance(item, dict) and any(str(item.get(key) or '').startswith(upkeep.WORKFLOWS)
                                               for key in ('filename', 'previous_filename')) for item in files):
         return False
-    commits = pages(call, '%s/pulls/%d/commits' % (base, number))
-    return (not commits or pull.get('commits') != len(commits)
+    return (not commits or total != len(commits)
             or not all(isinstance(commit, dict) and bot_commit(rules, commit) for commit in commits))
 
 
@@ -175,7 +190,7 @@ def check(rules, call, repository, number, head):
         blockers.append('author')
     if not runs and not combined['statuses']:
         blockers.append('no-checks')
-    if workflows_changed_by_others(rules, call, base, number, pull):
+    if workflows_changed_by_others(rules, call, base, head, pull):
         blockers.append('workflows')
     if not blockers:
         return
