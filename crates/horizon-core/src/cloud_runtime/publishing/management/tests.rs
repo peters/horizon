@@ -419,14 +419,14 @@ fn saved_pull_metadata_matches_repository_identity_for_tagged_and_pinned_recipes
 }
 
 #[test]
-fn disabling_portable_publishing_during_authentication_preserves_the_disabled_preferences() {
+fn legacy_staging_false_does_not_block_a_confirmed_personal_choice() {
     let mut fixture = fixture();
     fixture.request.action = Action::Authenticate {
         shown: None,
         switch: true,
     };
     let path = fixture.cloud.join("settings.json");
-    let mut disabled = Vec::new();
+    let before = setup::load_settings(&fixture.cloud).unwrap();
     let result = manage_with(
         &fixture.cloud,
         &fixture.request,
@@ -438,20 +438,28 @@ fn disabling_portable_publishing_during_authentication_preserves_the_disabled_pr
             secrets: Vec::new(),
         },
         |_, _, _| {
-            let mut settings = setup::load_settings(&fixture.cloud).unwrap();
-            settings.portable_image_publishing = false;
-            disabled = serde_json::to_vec(&settings).unwrap();
-            std::fs::write(&path, &disabled).unwrap();
+            let mut saved = serde_json::to_value(setup::load_settings(&fixture.cloud).unwrap()).unwrap();
+            saved["portable_image_publishing"] = false.into();
+            std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
             Ok(publication::Account {
                 id: 17,
                 login: "synthetic-publisher".into(),
             })
         },
     );
-    assert!(
-        result.is_err(),
-        "a completed sign-in must not commit a destination after the gate is disabled"
+    let info = result.unwrap();
+    assert!(info.enabled);
+    let choice = info.shown_override.unwrap();
+    assert_eq!(choice.account.unwrap().id, 17);
+    assert!(choice.destination.starts_with("ghcr.io/synthetic-publisher/"));
+    let saved = setup::load_settings(&fixture.cloud).unwrap();
+    assert!(saved.portable_image_publishing);
+    assert_eq!(saved.runpod_key_file, before.runpod_key_file);
+    assert_eq!(
+        serde_json::to_value(saved.registries).unwrap(),
+        serde_json::to_value(before.registries).unwrap()
     );
-    assert_eq!(std::fs::read(path).unwrap(), disabled);
+    let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert!(raw.get("portable_image_publishing").is_none());
     assert!(!fixture.cloud.join("docker").exists());
 }

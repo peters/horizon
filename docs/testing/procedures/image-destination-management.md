@@ -86,7 +86,7 @@ unmatched. The metadata lookup reads no registry secret.
 
 All applicable checks pass, including the full local matrix and current-head hosted
 CI. Keep metadata, synthetic sign-in, real source and live registry evidence separate.
-No publication, allocation or public-interface proof is implied by this prerequisite.
+No publication, allocation or public-interface proof is implied by this procedure.
 
 ## 8. Cleanup
 

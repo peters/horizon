@@ -1,6 +1,5 @@
 //! Host-selected publishing intent. Repository metadata can name an image, never a credential.
-pub(in crate::cloud_runtime) const STAGED: &str =
-    "Portable image publishing is not enabled; keep an explicit image until the destination selector is available";
+pub(in crate::cloud_runtime) const STAGED: &str = "Portable image publishing is not enabled for this legacy request; use the current publishing flow or an explicit image";
 pub mod management;
 pub mod operations;
 mod preparation;

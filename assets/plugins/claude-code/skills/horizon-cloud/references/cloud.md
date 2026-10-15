@@ -1,22 +1,23 @@
 # Cloud MCP reference
 
-The staged publication helper can recover a retained account even when another
+The publication helper can recover a retained account even when another
 account is cached: it requests device sign-in for the recorded immutable identity
 and checks it before saving a new credential chain. A wrong account preserves
 the previous chain and private operation login. A renamed matching account is
 refused before a futile prompt because its recorded namespace cannot change.
 Explicit account selection starts
 a new device sign-in. Launch preparation uses retained-account recovery; a visible
-selector and account switch remain separate from this staged API.
+selector and public destination controls use explicit account selection;
+existing-cloud recovery still requires its recorded identity.
 
-### Retained publication record prerequisite
+### Retained publication records
 
 Cloud persistence can retain a recipe, resolved destination and nonsecret publisher
-identity without activating a publishing flow. Records contain no credentials and
+identity. Records contain no credentials and
 prove no current registry permission. Deployment format 5 and paired allocation
 format 3 prevent older readers from erasing that identity; migration retains the
 original enrollment and worker ownership evidence. Invalid or downgraded records
-are refused. New staged API launches retain their choice before image work.
+are refused. New launches retain their choice before image work.
 A retry or rebuild must authorize that same account or publication grant. Reusing
 an existing image, including reconnect and resize, needs no publishing login.
 See docs/testing/procedures/publication-records.md.
@@ -683,8 +684,8 @@ format. Existing launches with no reviewed choice keep their flat encoding.
 An explicit recipe-image confirmation also stays flat and must match the exact
 profile image. Publisher choices use a version-2 envelope that older readers
 refuse. Compatible readers retain the full choice, and desktop preparation forwards
-that choice and its named profile to the shared engine. The gated selector now
-supplies reviewed intent; automatic publishing remains disabled for ordinary use.
+that choice and its named profile to the shared engine. New cloud supplies the reviewed destination and publishing identity.
+Build profiles may omit the image; explicit images remain supported.
 An unstarted legacy launch with no publisher choice keeps its explicit recipe target.
 An image-omitting build keeps automatic intent.
 A durable cloud record keeps its own publishing identity. An omitted-image launch
@@ -694,15 +695,14 @@ Ordinary unknown legacy fields remain compatible, but mixed or downgraded
 publisher envelopes and reserved null keys are refused. Publisher choices require
 a build recipe; prebuilt launches keep their flat legacy or recipe confirmation.
 
-### Staged portable build engine
+### Portable build engine
 
 The development `cloud_deploy` helper prints destination/account metadata in its
 plan and retains it in the confirmation token. Retry and rebuild keep the original
 publisher; a changed preference cannot redirect a cloud. Personal write credentials
 stay host-only and are renewed before push. A private image needs a separate verified
-read-only pull grant. New automatic launches remain off until the complete UI and
-public destination controls are delivered. Do not enable a
-partial user flow or remove explicit development image pins in this stage.
+read-only pull grant. Build profiles may omit image and use the reviewed
+machine-local destination. A prebuilt profile still requires an explicit image.
 See docs/testing/procedures/portable-build-engine.md.
 
 A retained publishing record also fixes the rebuild profile name. A request for
@@ -715,13 +715,14 @@ intent, including when an override was removed. Existing records retain their ow
 publication; automatic intent without an override remains valid. A legacy
 image-omitting launch refuses a later scoped override until it is reviewed.
 An automatic record that still has no publisher needs the same review on retry.
-With the staging setting off, saved non-recipe publisher choices refuse before
-creating any record; explicit legacy recipe images continue to work.
+Saved publisher choices must match current local intent before creating any
+record. Retiring an old staging value does not authorize another destination;
+explicit legacy recipe images remain compatible.
 
 Desktop preparation now preserves saved publisher choices, and rebuild previews
-use the cloud's retained publication and profile. New automatic desktop launches
-remain disabled until final integration is complete. Keep the setting off for ordinary desktop use; metadata forwarding
-is not authorization to publish.
+use the cloud's retained publication and profile. Automatic desktop launches
+review the destination before Start. Metadata forwarding alone is not
+authorization to publish.
 
 A rebuild confirmation also snapshots the exact retained publication. Its token
 covers the publisher account or grant even when the resolved image and files are
@@ -780,7 +781,7 @@ history was read successfully and is empty. A busy or unreadable host journal
 never permits that fallback. Reopening settings reads host history only; it does
 not load compute credentials to recover provider history.
 
-### Staged destination management policy
+### Destination management policy
 
 The shared core destination manager reads metadata without opening the settings
 editor or loading provider credentials. It lists choices, selects an existing
@@ -789,8 +790,8 @@ personal destination. Every mutation compares the exact shown local override.
 Host-owned, bounded operation receipts retain the actor, host, repository and
 settings root through polling or cancellation. Cancellation is a request, not
 proof that a write did not commit; list saved state after an expired receipt.
-The public host adapter below uses this policy. Automatic publication remains
-disabled until final integration. See docs/testing/procedures/image-destination-management.md.
+The public host adapter below uses this policy.
+See docs/testing/procedures/image-destination-management.md.
 
 Direct-root receipts require the exact canonical Git root. Public host adapters
 use the distinct launch-directory entry point: the shared worker normalizes the
@@ -801,10 +802,11 @@ successful listing with only an inline selection error.
 Saved pull metadata compares the registry repository without a tag or digest.
 It retains the registry port and exact path; it is not a live access check.
 
-### Staged image destination selector
+### Image destination selector
 
-With portable publishing enabled in a task-owned fixture, New cloud shows Publish
-images, the selected repository and publishing account. Change selects an existing
+New cloud shows Publish images, the selected repository and publishing account.
+Automatic uses the image-publishing account, independently of the Git host or
+source author. Choose an authorized account or registry before starting. Change selects an existing
 authorized registry, uses the profile default or explicitly signs in to another
 account. The preference stays on this computer for the canonical checkout and
 named profile; repository YAML stays unchanged. UI reads and changes use the same
@@ -821,8 +823,9 @@ Opening registry setup stays in settings even when compute and SSH are ready.
 Save and return or Cancel goes back to New Cloud for review without starting. Registry edits use the machine's agent defaults and preserve saved bindings; the next Start checks the selected profile's agent credentials again, even if an earlier profile read reported readiness.
 Destination metadata is historical,
 not proof of authentication; the engine confirms intent and access before a build.
-Public CLI/MCP controls use the same policy. Final activation still follows. Keep
-the staging setting off for ordinary use and retain the development image pins for now.
+The normal CLI plan runner and public MCP tool use the same policy. Build
+profiles can omit image; prebuilt profiles still require it. Publishing choices
+stay on this computer rather than in repository YAML.
 See docs/testing/procedures/image-destination-selector.md.
 
 A queued Start or stock watch retains the full reviewed profile and publisher.
@@ -846,8 +849,8 @@ metadata returns after completion. Account changes stay disabled after a failed
 first metadata read; use Reload first. Ordinary
 metadata reloads can queue the already shown choice; saves cannot queue the old
 choice. Storage-only edits keep a pending destination read or sign-in alive,
-but a queued Start still requires its complete confirmed profile. A disabled feature does not warn about a missing image during refresh
-when the current profile already has an explicit image.
+but a queued Start still requires its complete confirmed profile. An explicit image stays visible during refresh; automatic metadata does not
+replace its reviewed target.
 
 ### Public image destination management
 
@@ -881,18 +884,17 @@ host restart. List saved state and review it before retrying an expired operatio
 
 The normal CLI plan runner exposes the same tool and schema through
 `horizon-browser run PLAN.json`; its stdio MCP server exposes the same operation.
-Existing clouds keep their recorded publisher. Retained publication status is a
-separate follow-up outcome.
-The staging setting still defaults to false, so mutations remain disabled until
-final integration. See docs/testing/procedures/image-destination-public.md.
+Existing clouds keep their recorded publisher. cloud_list reports the retained
+worker image and publisher metadata when that cloud's matching runtime is loaded.
+See docs/testing/procedures/image-destination-public.md.
 
 `cloud_image_destination` operations are `list`, `select`, `reset`, `authenticate`,
 `status` and `cancel`.
 
-Management rechecks the staging setting in the same transaction as the exact
-override comparison. If it is disabled while sign-in waits, no destination
-preference commits. This does not revoke authorization already completed at the
-issuer or prove that a credential-chain write did not occur.
+Management compares the exact shown override inside the save transaction.
+A cancelled or stale operation cannot silently replace another preference.
+Cancellation does not revoke authorization already completed at the issuer or
+prove that an in-flight write was rolled back. List saved state after uncertainty.
 
 Destination inspection, selection, reset and account sign-in use the same profile
 prepared by the trusted launch adapter. Selecting a historical revision must not

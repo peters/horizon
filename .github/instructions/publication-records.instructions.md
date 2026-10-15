@@ -20,10 +20,10 @@ Report these failures:
 - Migration bypasses a neighboring duplicate-worker fence.
 
 The engine authenticates and compares the retained identity before each new build.
-A default-off gate keeps new automatic launches inactive until the selector and
-interface controls are complete. Publisher envelopes are read only with actual UI
-forwarding integrated atomically. Keep record-aware rebuild previews on that same
-contract. Do not request activation as a fix to this bridge.
+Ordinary machine settings enable the completed selector and interface controls.
+Publisher envelopes and actual UI forwarding share one atomic contract. Keep
+record-aware rebuild previews on that same contract. Retiring persisted staging
+values must not weaken original-account, exact-grant or shown-choice checks.
 
 Rebuild plans and preparation must reject a profile name different from the retained
 publication profile, including another profile with the same image or no image.

@@ -483,13 +483,19 @@ mod tests {
     }
 
     #[test]
-    fn disabled_publishing_cannot_create_a_publisherless_record_from_a_saved_choice() {
+    fn legacy_staging_false_still_requires_current_publishing_confirmation() {
         use horizon_core::cloud_runtime::publishing::Selection;
         let temp = tempfile::tempdir().unwrap();
         let repository = temp.path().join("source");
         std::fs::create_dir(&repository).unwrap();
         let mut settings = publishing_settings(temp.path());
         settings.portable_image_publishing = false;
+        let mut legacy = serde_json::to_value(&settings).unwrap();
+        legacy["portable_image_publishing"] = false.into();
+        let settings_path = temp.path().join("settings.json");
+        let before = serde_json::to_vec(&legacy).unwrap();
+        std::fs::write(&settings_path, &before).unwrap();
+        assert!(Settings::load(&settings_path).unwrap().portable_image_publishing);
         let personal = Selection::Personal {
             destination: serde_json::from_value(serde_json::json!({
                 "repository":"ghcr.io/fixture-user/source-cpu",
@@ -516,10 +522,11 @@ mod tests {
                 "public.example/legacy/worker",
             );
             assert!(
-                matches!(result, Err(Failure::Refused(message)) if message.contains("not enabled")),
-                "saved publisher choice must refuse before persistence"
+                matches!(result, Err(Failure::Refused(message)) if message.contains("changed since it was shown")),
+                "retiring the staging flag must not authorize an unreviewed publisher"
             );
             assert!(!temp.path().join("fixture/deployment.json").exists());
+            assert_eq!(std::fs::read(&settings_path).unwrap(), before);
         }
         assert!(
             prepare_publishing_choice(
@@ -530,7 +537,7 @@ mod tests {
                 "public.example/legacy/worker",
             )
             .is_ok(),
-            "an explicit legacy image still prepares while publishing is disabled"
+            "an explicit legacy image still prepares after the staging flag is retired"
         );
         let retained = Store::snapshot(&temp.path().join("fixture")).unwrap().unwrap();
         assert!(retained.publication.is_none());

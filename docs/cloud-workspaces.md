@@ -619,10 +619,54 @@ six months, and never writes it into a checkout. **Disconnect** forgets it. A
 repository the app does not reach shows **Add it on GitHub**, which opens the
 app's repository choice.
 
+### Choose where to publish images
+
+A profile with `build` can omit `image`. New cloud shows **Publish images** with
+the selected destination and publishing account before you start. **Automatic**
+uses your image-publishing account, independently of the source repository's
+author or Git host. If no authorized destination is available, choose an account
+or set up the exact registry before building.
+
+Use **Change** to select an existing authorized registry, use the profile default
+or explicitly sign in to another publishing account. Horizon remembers the choice
+on this computer for the canonical checkout and named profile. It keeps the exact
+saved grant reference; changing accounts cannot substitute another grant. The
+repository YAML stays unchanged. Opening worker pull setup returns to New cloud
+for a fresh review after **Save and return** or Cancel; it does not start a worker.
+
+For example, a build profile can contain:
+
+```yaml
+version: 1
+default: dev
+profiles:
+  dev:
+    provider: runpod
+    min_cpu: 2
+    min_memory_gb: 4
+    build:
+      context: .horizon
+      dockerfile: .horizon/Dockerfile
+```
+
+A prebuilt profile without `build` still requires `image`. An explicit image is
+supported too. Reconnect, retry and rebuild keep an existing cloud's recorded
+destination and publishing identity, even if the current account or local
+preference changes. An older cloud without publisher metadata keeps its explicit
+image; Horizon does not invent a former account binding.
+
+Local agent panels use `cloud_image_destination` through normal CLI plans or
+stdio MCP without a Settings window. List the named profile, retain its exact
+`shown_override`, and use the listed choice for select/reset. The host supplies
+the checkout and settings scope; callers cannot supply credentials or another
+source path. See [public destination operations](architecture/image-publishing.md#public-destination-operations).
+Git hosting and image hosting are independent. This adds no GitLab account
+connection or project discovery.
+
 ### Publishing images to ghcr.io
 
-A cloud whose image Horizon builds pushes it to the registry that its profile
-names. GitHub's package registry does not accept tokens of the GitHub App behind
+A cloud whose image Horizon builds pushes it to its reviewed destination, from
+the profile or the machine-local choice. GitHub's package registry does not accept tokens of the GitHub App behind
 Connect GitHub, so the first time an image goes to `ghcr.io`, the card shows
 **Allow Horizon to publish images for you** with a code. Open GitHub, paste the
 code and click **Authorize** once. The permission covers images only
@@ -1856,8 +1900,8 @@ working copy with libgit2. Thus no program that the repository's Git configurati
 names runs, for example a content filter or a file system monitor. Horizon refuses a
 configuration that names another working folder (`core.worktree`).
 
-> **WARNING:** THE IMAGE CAN GO TO A PUBLIC REGISTRY. For example, the package
-> `ghcr.io/peters/horizon-development` is public. Each uncommitted file in the build
+> **WARNING:** THE IMAGE CAN GO TO A PUBLIC REGISTRY. Review the selected
+> destination and its visibility. Each uncommitted file in the build
 > context can go into the image. Examine the list before you click **Start cloud**
 > in **New cloud** or **Rebuild and restart** in the rebuild confirmation.
 
