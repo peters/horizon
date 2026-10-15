@@ -6,8 +6,8 @@ for every agent of the cloud:
 
 - The API broker refuses the changes that an Upkeep never needs and that could publish the
   repository, start code with its secrets, stand in for a check or for the person's approval:
-  file changes under .github/workflows, releases and their assets, commit statuses, repository
-  dispatches, approvals of runs and deployments, approvals and dismissals of reviews, and
+  file changes under .github/workflows, releases and their assets, commit statuses, deployments,
+  repository dispatches, approvals of runs and deployments, approvals and dismissals of reviews, and
   auto-merge. A workflow dispatch passes only for a workflow that the person listed. Runs can
   be started again or cancelled.
 
@@ -47,6 +47,7 @@ LOG_LIMIT = 256 << 10
 # Changes under a repository path that the policy refuses whatever the grant.
 REFUSED_CHANGES = {
     'releases': 'a release publishes the repository',
+    'deployments': 'a deployment can start a workflow with the secrets of the repository',
     'dispatches': 'a repository dispatch can start a workflow with the secrets of the repository',
     'statuses': 'a commit status could stand in for a required check',
 }

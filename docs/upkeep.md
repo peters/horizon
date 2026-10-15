@@ -382,7 +382,8 @@ these requests of every agent of the cloud:
 
 - A change of a file in `.github/workflows` through the contents API.
 - A release and a release asset (a release publishes the repository), a commit
-  status (it could stand in for a required check), and a repository dispatch.
+  status (it could stand in for a required check), and a deployment or a repository
+  dispatch (either can start a workflow with the secrets of the repository).
 - The approval of a run or a deployment, and any other change of Actions than
   starting a run again or cancelling it.
 - The approval of a pull request, and the dismissal of a review: only you approve.

@@ -98,7 +98,7 @@ class PolicyTests(ServiceTestCase):
     def test_the_policy_refuses_changes_that_an_upkeep_never_needs(self):
         policy = upkeep.Policy()
         refused = [('POST', 'releases'), ('PATCH', 'releases/1'), ('POST', 'releases/assets'),
-                   ('POST', 'dispatches'), ('POST', 'statuses/' + HEAD), ('PUT', 'contents/.github/workflows/ci.yml'),
+                   ('POST', 'dispatches'), ('POST', 'deployments'), ('POST', 'statuses/' + HEAD), ('PUT', 'contents/.github/workflows/ci.yml'),
                    ('DELETE', 'contents/.github/workflows/ci.yml'), ('POST', 'actions/runs/1/approve'),
                    ('POST', 'actions/runs/1/pending_deployments'), ('DELETE', 'actions/caches'),
                    ('DELETE', 'actions/runs/1'), ('POST', 'actions/workflows/1/enable'),

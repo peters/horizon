@@ -543,7 +543,7 @@ def run_once(cfg, forced):
         return False
     if not guarded():
         print('This worker does not limit the GitHub access of an agent, so Upkeep starts no agent. '
-              'Rebuild the cloud on a current worker image.', flush=True)
+              'Rebuild the cloud on a current worker image with agent isolation.', flush=True)
         return False
     if session_environment() is None:
         return False
