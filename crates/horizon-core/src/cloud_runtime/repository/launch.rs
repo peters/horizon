@@ -79,12 +79,31 @@ pub fn prepare_with_configuration(
         Configuration::QuickStart => (quick_start::config(&repository, &revision, runner)?, Vec::new()),
     };
     let config = creatable(config)?;
+    let mut notes = notes;
+    notes.extend(
+        config
+            .profiles
+            .iter()
+            .filter_map(|(name, profile)| idle_period_note(name, profile)),
+    );
     Ok(Prepared {
         repository,
         revision,
         config,
         notes,
         working_copy,
+    })
+}
+
+/// The note New cloud and Rebuild show for a profile that still sets an idle period,
+/// which has no effect.
+#[must_use]
+pub fn idle_period_note(name: &str, profile: &horizon_cloud::Profile) -> Option<String> {
+    profile.idle_stop_minutes.map(|_| {
+        format!(
+            "idle_stop_minutes in profile {name} has no effect: no cloud stops when idle. \
+             An agent on the worker stops it when its task is done, or choose Stop."
+        )
     })
 }
 
@@ -558,6 +577,28 @@ mod tests {
         assert_eq!(read(temp.path()).unwrap().config.profiles["dev"].cpu, 8);
         std::fs::write(&path, "uncommitted-invalid-marker").unwrap();
         assert_eq!(read(temp.path()).unwrap().config.profiles["dev"].cpu, 8);
+    }
+    #[test]
+    fn new_cloud_notes_that_an_idle_period_has_no_effect() {
+        let temp = tempfile::tempdir().unwrap();
+        repository(temp.path());
+        assert!(read(temp.path()).unwrap().notes.is_empty());
+        std::fs::write(
+            temp.path().join(".horizon/cloud.yml"),
+            format!("{CONFIG}    idle_stop_minutes: 30\n"),
+        )
+        .unwrap();
+        git(temp.path(), &["add", "."]);
+        commit(temp.path());
+        let prepared = read(temp.path()).unwrap();
+        assert_eq!(prepared.config.profiles["dev"].idle_stop_minutes, Some(30));
+        assert_eq!(
+            prepared.notes,
+            [
+                "idle_stop_minutes in profile dev has no effect: no cloud stops when idle. An agent on the worker \
+              stops it when its task is done, or choose Stop."
+            ]
+        );
     }
     #[test]
     fn committed_configuration_is_not_emitted_to_progress_logs() {

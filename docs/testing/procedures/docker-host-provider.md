@@ -75,7 +75,7 @@ the cloud's own container and volume.
    profiles:
      local:
        provider: docker-host
-       image: ghcr.io/peters/horizon-worker-base@sha256:f28a0ceb76b559b299000b440a26951bc70a820003d3911c4e130174bef944ec
+       image: ghcr.io/peters/horizon-worker-base@sha256:a3abdf1800d95adccdf93438208a206d2353f9a6fe69c4529faea791f73230f7
        cpu: 2
        memory_gb: 4
        gpu: false

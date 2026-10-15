@@ -25,7 +25,7 @@ const STAGES: [Stage; 7] = [
     Stage::Ready,
 ];
 
-const CONFIRMATION: &str = "Rebuild the image from the .horizon recipe in this checkout, uncommitted changes included, with the newest agent CLIs, then restart the worker on it? Running agent processes restart. Files under /workspace, including worktrees and agent logins, are kept. The cloud takes the agents, browsers, desktop, readiness timeout, idle stop and build settings of .horizon/cloud.yml in the working copy; its size, storage, GPU and image repository stay.";
+const CONFIRMATION: &str = "Rebuild the image from the .horizon recipe in this checkout, uncommitted changes included, with the newest agent CLIs, then restart the worker on it? Running agent processes restart. Files under /workspace, including worktrees and agent logins, are kept. The cloud takes the agents, browsers, desktop, readiness timeout and build settings of .horizon/cloud.yml in the working copy; its size, storage, GPU and image repository stay.";
 const READING: &str = "Reading .horizon/cloud.yml and the uncommitted changes…";
 const CHANGES: &str = "This rebuild changes the cloud's settings:";
 const SAME_SETTINGS: &str = "The cloud's settings stay as they are.";

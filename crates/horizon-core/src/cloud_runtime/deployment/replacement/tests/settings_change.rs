@@ -7,7 +7,7 @@ use std::process::Command;
 
 /// A ready cloud with agent `claude` and Chromium, and a committed profile that adds
 /// `codex`, swaps Chromium for Firefox, adds the desktop, a longer readiness timeout, an
-/// idle stop and another Dockerfile.
+/// idle period, which has no effect and is no change, and another Dockerfile.
 fn settings_change() -> (Fixture, Profile, Profile) {
     let fixture = Fixture::with(&json!({"agents":["claude"],"browsers":["chromium"]}));
     let bound = fixture.state().profile;
@@ -21,13 +21,12 @@ fn settings_change() -> (Fixture, Profile, Profile) {
     (fixture, bound, committed)
 }
 
-const CHANGES: [&str; 7] = [
+const CHANGES: [&str; 6] = [
     "Adds agent codex",
     "Adds browser firefox",
     "Removes browser chromium",
     "Adds the desktop",
     "Readiness timeout 600 s → 1800 s",
-    "Idle stop off → 30 min",
     "Build dockerfile Dockerfile → Dockerfile.agents",
 ];
 
@@ -66,7 +65,6 @@ fn each_change_is_listed_in_a_plain_sentence() {
             "Removes agent claude",
             "Removes the desktop",
             "Agent approvals auto → ask",
-            "Idle stop 30 min → 60 min",
         ]
     );
     assert_eq!(compatibility::changes(&bound, &bound), Vec::<String>::new());
@@ -383,20 +381,31 @@ fn a_plan_reads_the_working_copy_and_lists_its_changes_and_uncommitted_files() {
     let planned = plan(repository.path(), &bound, "dev", &cancel).unwrap();
     assert_eq!(planned.profile, committed);
     assert_eq!(planned.changes, CHANGES);
-    assert!(planned.notes.is_empty() && planned.uncommitted.is_empty());
+    assert!(planned.uncommitted.is_empty());
+    assert_eq!(
+        planned.notes,
+        [
+            "idle_stop_minutes in profile dev has no effect: no cloud stops when idle. An agent on the worker \
+          stops it when its task is done, or choose Stop."
+        ]
+    );
 
     // The checkout moved past the cloud's commit and has uncommitted settings: the plan
     // reads the latest commit with the working copy, and lists the file, which is in the
     // build context.
     let mut later = committed.clone();
-    later.idle_stop_minutes = Some(45);
+    later.bootstrap.readiness_seconds = 900;
     commit(&later);
     let mut working = later.clone();
     working.capabilities.desktop = false;
     save(&working);
     let uncommitted = plan(repository.path(), &bound, "dev", &cancel).unwrap();
     assert_eq!(uncommitted.profile, working);
-    assert!(uncommitted.changes.contains(&"Idle stop off → 45 min".to_owned()));
+    assert!(
+        uncommitted
+            .changes
+            .contains(&"Readiness timeout 600 s → 900 s".to_owned())
+    );
     assert!(!uncommitted.changes.contains(&"Adds the desktop".to_owned()));
     let files: Vec<_> = uncommitted
         .uncommitted
@@ -412,7 +421,10 @@ fn a_plan_reads_the_working_copy_and_lists_its_changes_and_uncommitted_files() {
     assert_eq!(invalid.profile, later);
     assert_eq!(
         invalid.notes,
-        ["The working copy of .horizon/cloud.yml is not valid, so the committed settings apply."]
+        [
+            "The working copy of .horizon/cloud.yml is not valid, so the committed settings apply.".to_owned(),
+            crate::cloud_runtime::repository::launch::idle_period_note("dev", &later).unwrap(),
+        ]
     );
     let mut gpu = committed;
     gpu.gpu = true;

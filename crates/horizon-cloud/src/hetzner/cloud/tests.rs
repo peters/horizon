@@ -135,14 +135,15 @@ fn a_worker_bills_its_type_price_where_it_runs_from_the_creation_of_its_server()
 }
 
 #[test]
-fn a_worker_with_an_idle_period_is_described_with_it() {
+fn an_idle_period_is_no_part_of_a_worker() {
     let mut spec = spec();
     spec.profile.idle_stop_minutes = Some(30);
     let described = worker(&server("running", Some("192.0.2.10")), &spec, &volume()).unwrap();
-    // The host plan passes the period, so the worker verifies against its own spec only.
-    described.verify(&spec).unwrap();
-    spec.profile.idle_stop_minutes = Some(40);
-    assert!(described.verify(&spec).is_err());
+    assert!(!described.env.contains_key("HORIZON_IDLE_STOP_MINUTES"));
+    for minutes in [None, Some(40)] {
+        spec.profile.idle_stop_minutes = minutes;
+        described.verify(&spec).unwrap();
+    }
 }
 
 #[test]
@@ -198,13 +199,13 @@ fn the_host_plan_carries_the_worker_contract_and_its_idle_period() {
     ] {
         assert!(rendered.contains(expected), "{expected}");
     }
-    assert!(!rendered.contains("HORIZON_IDLE_STOP_MINUTES"));
+    // An idle period has no effect, so no server carries it.
     spec.profile.idle_stop_minutes = Some(30);
     let rendered = plan(&spec, "/dev/disk/by-id/scsi-0HC_Volume_9", None)
         .unwrap()
         .cloud_config()
         .unwrap();
-    assert!(rendered.contains("HORIZON_IDLE_STOP_MINUTES=30"));
+    assert!(!rendered.contains("HORIZON_IDLE_STOP_MINUTES"));
 }
 
 fn allowing(locations: &[&str], server_types: &[&str]) -> Policy {

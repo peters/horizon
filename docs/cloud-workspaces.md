@@ -1420,20 +1420,18 @@ attempts that reach readiness inspect fresh provider data; this does not change
 panel eligibility for a cached Ready record when an earlier preflight fails. This capacity check does not itself prove that files
 survive a provider restart; persistence still needs a live recovery test.
 
-Stop ends the processes on the worker. The storage can stay billable. Idle stop
-is off by default. With a worker image from before the agent stop (one that does
-not report `horizon-agent-stop-contract=1`), set `idle_stop_minutes` (10 to 1440)
-in a profile to use it. A dedicated worker then stops after that time without
-agent activity. A current image has no idle stop: it accepts the setting and
-ignores it, and its agents stop the worker when their task is done. The worker
-is active while an agent terminal prints output. The worker is also active while
-its container uses half a CPU core or more, so a quiet build keeps it on.
-
-On RunPod, the worker stops itself. It uses a provider credential that applies
-only to that worker. The stop also occurs when this computer is offline. The
-worker never deletes anything. Horizon itself never stops an idle cloud: on
-Hetzner, which gives a worker no credential that can stop it, `idle_stop_minutes`
-has no effect.
+Stop ends the processes on the worker. The storage can stay billable. No cloud
+stops when idle. `idle_stop_minutes` (10 to 1440) still parses, so an older
+`.horizon/cloud.yml` keeps working, but it has no effect: Horizon gives no worker
+an idle period, and **New cloud** and **Rebuild** show a note for a profile that
+sets one. Instead, an agent stops its worker when its task is done (see below). A
+RunPod cloud created before this change still carries its period in
+`HORIZON_IDLE_STOP_MINUTES`; it reconnects as before, and its image stops it when
+idle until a rebuild moves it to a current image, which has no idle stop. Such a
+worker is active while an agent terminal prints output, or while its container uses
+half a CPU core or more. It stops itself with a provider credential that applies
+only to that worker, also when this computer is offline, and never deletes
+anything.
 
 For each RunPod cloud, Horizon asks the provider for the status of the worker in
 these conditions:
@@ -1448,21 +1446,20 @@ During this check, the card shows **Checking provider**. If the provider reports
 that the worker stopped, the card shows **Stopped** · **Storage kept · billable** ·
 **Stopped outside Horizon** with **Resume worker**, and logs `The provider reports
 that this worker is stopped. Horizon did not stop it; …`. It does not show
-**Operation failed**. Horizon cannot tell the cause: the worker's idle stop, an
-agent or the provider account can stop a worker.
+**Operation failed**. Horizon cannot tell the cause: an agent, the idle stop of a
+worker created before this change, or the provider account can stop a worker.
 
 If the provider reports that the worker runs, the card shows the original
 failure. Horizon records a stop that the provider confirms as an ordinary stopped
 cloud. Nothing resumes it automatically. If the record already showed the stop,
 the card shows **Stopped**. You can also choose **Check provider** at any time.
-Without `idle_stop_minutes`, a worker stops only with **Stop** or at an agent's
-request. Shared workers and profiles with hosted devices do not support idle stop.
+A worker created now stops only with **Stop** or at an agent's request.
 
 An agent can stop its worker when its task is done, such as when its pull request
 is merged. A worker image built from the current worker bootstrap offers this on
 every dedicated RunPod worker, with no idle period, and has no idle stop of its
-own; it reports `horizon-agent-stop-contract=1`. Older images offer it only with
-`idle_stop_minutes`. On RunPod the worker stops itself, without this computer.
+own; it reports `horizon-agent-stop-contract=1`. Older images offer it only to a
+worker with an idle period. On RunPod the worker stops itself, without this computer.
 A worker on Hetzner or a Docker host has no credential that can stop it. Started
 with `HORIZON_WORKER_STOP=horizon`, it records the request for Horizon to carry
 out; Horizon does not give that setting or take such requests yet, so these
@@ -1612,7 +1609,6 @@ file:
 - `capabilities`: the agents, the browsers, the desktop and `agent_approvals`. For
   example, you can add the agent `codex` to a cloud that has only `claude`.
 - `bootstrap.readiness_seconds`, the readiness timeout.
-- `idle_stop_minutes`.
 - The `build` section: `context`, `dockerfile` and `platform`.
 
 Horizon refuses the rebuild when the profile is different from the profile of the
@@ -1629,7 +1625,8 @@ change these fields:
 - A missing `build` section. Then there is no recipe to rebuild.
 
 Horizon also refuses a profile with values that no profile can have, for example
-`idle_stop_minutes` together with hosted devices. For each change, the rebuild output
+`idle_stop_minutes` outside 10 to 1440. A changed `idle_stop_minutes` is no change:
+it has no effect, and Rebuild says so. For each change, the rebuild output
 shows a line that starts with `Profile change:`, for example `Profile change: Adds
 agent codex`. Before Horizon builds, it checks the API key file of each agent in the
 new profile, not only of an added agent, as each deployment does. A reconnect of the
@@ -1692,7 +1689,7 @@ cloud instead releases its server and starts a new one, with a new server ID and
 address, on the same workspace volume; see
 [Hetzner](cloud-hetzner.md#rebuilding-the-image). On either provider `/workspace`
 (worktrees, agent logins, SSH host keys) survives; the container disk is reset and
-running processes end. The worker gets the new capabilities and idle stop in its
+running processes end. The worker gets the new capabilities in its
 environment: the pod update sends them on RunPod, and the new server gets them on
 Hetzner. The cloud's profile changes only when the worker runs the new image. Until
 then, and after a cancelled rebuild, the cloud keeps its previous profile. After

@@ -3,12 +3,12 @@ use super::*;
 #[test]
 fn legacy_markers_accept_only_the_original_effective_capabilities() {
     let legacy = "horizon-worker-contract=1\nhorizon-source-contract=1\n";
-    assert!(validate(legacy, &Capabilities::default(), false, false).is_ok());
+    assert!(validate(legacy, &Capabilities::default(), false).is_ok());
     let minimal = serde_json::from_str("{}").unwrap();
-    assert!(validate(legacy, &minimal, false, false).is_err());
-    assert!(validate(legacy, &Capabilities::default(), true, false).is_err());
+    assert!(validate(legacy, &minimal, false).is_err());
+    assert!(validate(legacy, &Capabilities::default(), true).is_err());
     let remote = serde_json::from_str(r#"{"browserstack":{}}"#).unwrap();
-    assert!(validate(&format!("{legacy}{CAPABILITIES_MARKER}\n"), &remote, false, false).is_err());
+    assert!(validate(&format!("{legacy}{CAPABILITIES_MARKER}\n"), &remote, false).is_err());
 }
 
 #[test]
@@ -23,10 +23,10 @@ fn session_restart_is_reported_only_by_its_exact_marker_and_never_required() {
     );
     assert!(!WorkerContract::reported(current).session_restart);
     assert!(!WorkerContract::reported("horizon-worker-contract=1\nhorizon-source-contract=1\n").capabilities);
-    assert!(validate(current, &Capabilities::default(), false, false).is_ok());
+    assert!(validate(current, &Capabilities::default(), false).is_ok());
     let restartable = format!("{current}{SESSION_RESTART_MARKER}\n");
     assert!(WorkerContract::reported(&restartable).session_restart);
-    assert!(validate(&restartable, &Capabilities::default(), false, false).is_ok());
+    assert!(validate(&restartable, &Capabilities::default(), false).is_ok());
     for incidental in [
         "prefix-horizon-session-restart-contract=1",
         "horizon-session-restart-contract=1-suffix",
@@ -36,7 +36,7 @@ fn session_restart_is_reported_only_by_its_exact_marker_and_never_required() {
         assert!(!WorkerContract::reported(&format!("{current}{incidental}\n")).session_restart);
     }
     // The feature marker never substitutes for a required contract marker.
-    assert!(validate(SESSION_RESTART_MARKER, &Capabilities::default(), false, false).is_err());
+    assert!(validate(SESSION_RESTART_MARKER, &Capabilities::default(), false).is_err());
 }
 
 #[test]
@@ -84,7 +84,7 @@ fn source_packaging_features_are_reported_only_by_their_exact_markers() {
             );
         }
         // A feature marker never substitutes for a required contract marker.
-        assert!(validate(marker, &Capabilities::default(), false, false).is_err());
+        assert!(validate(marker, &Capabilities::default(), false).is_err());
     }
 }
 
@@ -112,48 +112,29 @@ fn the_container_start_is_read_only_from_its_exact_marker() {
     // The largest value must never panic; platforms with a smaller time range report none.
     let _ = WorkerContract::reported(&format!("{current}horizon-container-started={}\n", u64::MAX));
     // An optional report never substitutes for a required contract marker.
-    assert!(validate("horizon-container-started=5", &Capabilities::default(), false, false).is_err());
+    assert!(validate("horizon-container-started=5", &Capabilities::default(), false).is_err());
 }
 
 #[test]
 fn keeping_agent_prompts_requires_its_exact_marker_and_auto_mode_needs_none() {
     let current = "horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n";
     let auto: Capabilities = serde_json::from_str(r#"{"agents":["codex"]}"#).unwrap();
-    assert!(validate(current, &auto, false, false).is_ok());
+    assert!(validate(current, &auto, false).is_ok());
     let ask: Capabilities = serde_json::from_str(r#"{"agents":["codex"],"agent_approvals":"ask"}"#).unwrap();
-    assert!(validate(current, &ask, false, false).is_err());
+    assert!(validate(current, &ask, false).is_err());
     for incidental in [
         "horizon-agent-approvals-contract=2",
         " horizon-agent-approvals-contract=1",
     ] {
-        assert!(validate(&format!("{current}{incidental}\n"), &ask, false, false).is_err());
+        assert!(validate(&format!("{current}{incidental}\n"), &ask, false).is_err());
     }
-    assert!(validate(&format!("{current}{AGENT_APPROVALS_MARKER}\n"), &ask, false, false).is_ok());
+    assert!(validate(&format!("{current}{AGENT_APPROVALS_MARKER}\n"), &ask, false).is_ok());
 }
 
 #[test]
-fn idle_stop_requires_its_exact_marker_only_when_requested() {
+fn no_idle_marker_is_required() {
     let current = "horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n";
-    assert!(validate(current, &Capabilities::default(), false, false).is_ok());
-    assert!(validate(current, &Capabilities::default(), false, true).is_err());
-    for incidental in ["horizon-idle-stop-contract=2", " horizon-idle-stop-contract=1"] {
-        let output = format!("{current}{incidental}\n");
-        assert!(validate(&output, &Capabilities::default(), false, true).is_err());
-    }
-    let supported = format!("{current}horizon-idle-stop-contract=1\n");
-    assert!(validate(&supported, &Capabilities::default(), false, true).is_ok());
-    // An image with the agent stop has no idle stop, and its agents stop it instead.
-    let agent_stop = format!("{current}horizon-agent-stop-contract=1\n");
-    assert!(validate(&agent_stop, &Capabilities::default(), false, true).is_ok());
-    assert!(
-        validate(
-            &format!("{current}horizon-agent-stop-contract=2\n"),
-            &Capabilities::default(),
-            false,
-            true
-        )
-        .is_err()
-    );
+    assert!(validate(current, &Capabilities::default(), false).is_ok());
 }
 
 #[cfg(unix)]
@@ -188,7 +169,7 @@ fn readiness_preserves_strict_legacy_arguments_and_runs_modern_service_checks() 
             assert_eq!(ready.exists(), script == modern);
             let output = String::from_utf8(output.stdout).unwrap();
             assert_eq!(
-                validate(&output, &capabilities, false, false).is_ok(),
+                validate(&output, &capabilities, false).is_ok(),
                 script == modern || capabilities == Capabilities::default()
             );
             // Readiness relays the running image's report, so a legacy image never claims restart.

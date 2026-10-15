@@ -130,7 +130,6 @@ pub(super) fn changes(bound: &Profile, next: &Profile) -> Vec<String> {
         );
     }
     let approvals = |approvals: AgentApprovals| if approvals.is_auto() { "auto" } else { "ask" };
-    let minutes = |minutes: Option<u16>| minutes.map_or_else(|| "off".to_owned(), |minutes| format!("{minutes} min"));
     let mut differs = |what: &str, before: String, after: String| {
         if before != after {
             changes.push(format!("{what} {before} → {after}"));
@@ -145,11 +144,6 @@ pub(super) fn changes(bound: &Profile, next: &Profile) -> Vec<String> {
         "Readiness timeout",
         format!("{} s", bound.bootstrap.readiness_seconds),
         format!("{} s", next.bootstrap.readiness_seconds),
-    );
-    differs(
-        "Idle stop",
-        minutes(bound.idle_stop_minutes),
-        minutes(next.idle_stop_minutes),
     );
     if let (Some(before), Some(after)) = (&bound.build, &next.build) {
         differs("Build context", before.context.clone(), after.context.clone());

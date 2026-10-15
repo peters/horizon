@@ -134,9 +134,9 @@ pub struct Profile {
     pub bootstrap: Bootstrap,
     #[serde(default)]
     pub capabilities: crate::Capabilities,
-    /// Minutes without agent activity before a dedicated worker stops itself, where
-    /// the provider gives it a credential for that (`RunPod`); elsewhere it has no
-    /// effect. See `provider::IdleStop`.
+    /// An idle period from before the agent stop. It still parses, so an older
+    /// `.horizon/cloud.yml` keeps working, but it has no effect: no worker and no Horizon
+    /// stops an idle cloud; an agent on the worker stops it when its task is done.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_stop_minutes: Option<u16>,
     /// Lowest CUDA version, as `major.minor`, a GPU host must offer to run the image.
@@ -317,11 +317,9 @@ impl Profile {
                 "Supported providers are RunPod, Hetzner and Docker hosts; Daytona and Fly.io are design fixtures",
             ));
         }
-        if self.provider == crate::docker_host::PROVIDER
-            && (self.gpu || self.capabilities.browserstack.is_some() || self.idle_stop_minutes.is_some())
-        {
+        if self.provider == crate::docker_host::PROVIDER && (self.gpu || self.capabilities.browserstack.is_some()) {
             return Err(ProfileError::Invalid(
-                "A Docker host runs CPU clouds without GPUs, hosted devices or an idle stop",
+                "A Docker host runs CPU clouds without GPUs or hosted devices",
             ));
         }
         if self.provider == crate::hetzner::PROVIDER {
@@ -344,16 +342,11 @@ impl Profile {
                 "Unsupported worker contract or readiness timeout",
             ));
         }
-        if let Some(minutes) = self.idle_stop_minutes {
-            if !IDLE_STOP_MINUTES.contains(&minutes) {
-                return Err(ProfileError::Invalid("idle_stop_minutes must be between 10 and 1440"));
-            }
-            // A stopped worker cannot release hosted devices it still holds.
-            if self.capabilities.browserstack.is_some() {
-                return Err(ProfileError::Invalid(
-                    "idle_stop_minutes cannot be combined with hosted devices",
-                ));
-            }
+        if self
+            .idle_stop_minutes
+            .is_some_and(|minutes| !IDLE_STOP_MINUTES.contains(&minutes))
+        {
+            return Err(ProfileError::Invalid("idle_stop_minutes must be between 10 and 1440"));
         }
         if let Some(version) = &self.min_cuda_version {
             if cuda_version(version).is_none() {
@@ -388,9 +381,8 @@ impl Profile {
         Ok(())
     }
 }
-/// Worker environment variable carrying a dedicated worker's idle period in minutes.
-pub const IDLE_STOP_ENVIRONMENT_KEY: &str = "HORIZON_IDLE_STOP_MINUTES";
-/// Accepted idle periods: long enough to outlast a quiet build, at most one day.
+/// The idle periods an older `.horizon/cloud.yml` could set, still accepted though they
+/// have no effect.
 pub const IDLE_STOP_MINUTES: std::ops::RangeInclusive<u16> = 10..=1440;
 /// The most GPU memory a profile can ask for: more than any single GPU offers.
 const MAX_GPU_MEMORY_GB: u16 = 1024;
@@ -673,18 +665,13 @@ mod tests {
         );
     }
     #[test]
-    fn idle_stop_is_optional_bounded_and_excludes_hosted_devices() {
+    fn an_idle_period_still_parses_within_its_old_bounds_with_any_provider_or_devices() {
         let mut config = CloudConfig::parse(EXAMPLE).unwrap();
         assert!(
             config
                 .profiles
                 .values()
                 .all(|profile| profile.idle_stop_minutes.is_none())
-        );
-        let yaml = EXAMPLE.replace("    # idle_stop_minutes: 30", "    idle_stop_minutes: 30");
-        assert_eq!(
-            CloudConfig::parse(&yaml).unwrap().profiles["development"].idle_stop_minutes,
-            Some(30)
         );
         let mut profile = config.profiles.remove("image-only").unwrap();
         let saved = serde_json::to_value(&profile).unwrap();
@@ -695,12 +682,18 @@ mod tests {
             assert_eq!(profile.validate(false).is_ok(), accepted, "minutes={minutes}");
         }
         profile.idle_stop_minutes = Some(30);
+        let saved = serde_json::to_value(&profile).unwrap();
+        assert_eq!(saved["idle_stop_minutes"], 30);
+        assert_eq!(serde_json::from_value::<Profile>(saved).unwrap(), profile);
         profile.capabilities.browserstack = Some(crate::BrowserStack {
             provider: crate::BrowserStack::default_provider(),
             targets: ["ios_phone".into()].into(),
             local_ports: [8080].into(),
         });
-        assert!(profile.validate(false).is_err());
+        assert!(profile.validate(false).is_ok());
+        profile.capabilities.browserstack = None;
+        profile.provider = crate::docker_host::PROVIDER.into();
+        assert!(profile.validate(false).is_ok());
     }
     #[test]
     fn a_cuda_floor_is_optional_numeric_and_only_for_gpu_profiles() {

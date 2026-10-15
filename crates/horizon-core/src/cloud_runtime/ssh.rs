@@ -122,7 +122,7 @@ impl Connection {
             &mut self.command(&worker_contract::readiness_command(capabilities)?),
             timeout.min(Duration::from_secs(40)),
         )?;
-        worker_contract::validate(&output, capabilities, false, false)?;
+        worker_contract::validate(&output, capabilities, false)?;
         Ok(WorkerContract::reported(&output))
     }
     /// # Errors

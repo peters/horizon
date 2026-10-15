@@ -68,8 +68,8 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | toolbar Menu | The **Menu** button at the right of the toolbar and its menu. It holds Quick Nav, Sessions, Remote Hosts, the cloud actions and Settings. | More menu, overflow menu, Cloud menu |
 | New cloud button | The accent **+ New cloud** button in the toolbar. It makes a workspace and opens New cloud for it. | Cloud ▾, place menu |
 | New workspace button | The **+ Workspace** button in the toolbar. It makes an empty workspace on this computer. | New menu |
-| idle period | The value of `idle_stop_minutes` in a profile. | idle timeout, idle limit |
-| idle stop | The stop of a RunPod worker by itself after an idle period without agent activity, in an image from before the agent stop. Horizon does not stop an idle cloud. | auto stop, auto-stop |
+| idle period | The value of `idle_stop_minutes` in a profile. It has no effect now. | idle timeout, idle limit |
+| idle stop | The stop of a RunPod worker by itself after an idle period without agent activity. Only a worker created before the agent stop, on an image from before it, does this. Horizon does not stop an idle cloud. | auto stop, auto-stop |
 | stop request | The file `/run/horizon-worker/stop-request.json` on a worker without a stop credential. The stop service writes it for an agent's stop, and `horizon-worker-stopd --take` gives it to Horizon. | — |
 | stop log | The file `/workspace/.horizon/self-stops.jsonl` on a worker. It keeps each agent's stop with its reason. | — |
 | host instance | The identity of the Horizon host process that owns the browsers of an agent. Browser tools use it to find the workspace of the agent. It is not a secret. | host ID |

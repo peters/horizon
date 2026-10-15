@@ -64,13 +64,7 @@ impl Images<'_> {
 
 /// The features `output`, a worker check report, promises once it satisfies `profile`.
 fn validated(output: &str, profile: &Profile, git_auth: bool, sibling_grants: Option<bool>) -> Result<WorkerContract> {
-    worker_contract::validate(
-        output,
-        &profile.capabilities,
-        git_auth,
-        profile.idle_stop_minutes.is_some()
-            && horizon_cloud::provider::Description::of(profile).idle_stop == horizon_cloud::provider::IdleStop::Worker,
-    )?;
+    worker_contract::validate(output, &profile.capabilities, git_auth)?;
     sibling_grants.map_or(Ok(()), |grants| validate_siblings(output, grants))?;
     Ok(WorkerContract::reported(output))
 }

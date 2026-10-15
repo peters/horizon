@@ -9,7 +9,7 @@ use horizon_cloud::{Capabilities, Profile};
 // to put here; docs/release-flow.md describes the update, which also updates CONTRACT.
 macro_rules! image {
     () => {
-        "ghcr.io/peters/horizon-worker-base@sha256:f28a0ceb76b559b299000b440a26951bc70a820003d3911c4e130174bef944ec"
+        "ghcr.io/peters/horizon-worker-base@sha256:a3abdf1800d95adccdf93438208a206d2353f9a6fe69c4529faea791f73230f7"
     };
 }
 
@@ -31,8 +31,7 @@ pub const IMAGE: &str = image!();
 pub const CONTRACT: &str = "horizon-git-auth-contract=1
 horizon-git-auth-contract=2
 horizon-github-chain-contract=1
-horizon-idle-stop-contract=1
-horizon-idle-report-contract=1
+horizon-agent-stop-contract=1
 horizon-siblings-contract=1
 horizon-session-env-contract=1
 horizon-gpu-lock-contract=1
@@ -244,16 +243,11 @@ mod tests {
     #[test]
     fn the_pinned_report_satisfies_the_builtin_profile_and_tagged_enrollment() {
         let checker = include_str!("../../../../../../examples/cloud-worker/horizon-worker-check");
-        // Markers the checker no longer prints, which the pinned image still reports until
-        // the pin moves to an image built from this checker.
-        let retired = ["horizon-idle-stop-contract=1", "horizon-idle-report-contract=1"];
         let lines: Vec<_> = CONTRACT.lines().collect();
         assert!(!lines.is_empty());
         for line in &lines {
             assert!(
-                line.starts_with("horizon-")
-                    && line.contains("-contract=")
-                    && (checker.contains(line) || retired.contains(line)),
+                line.starts_with("horizon-") && line.contains("-contract=") && checker.contains(line),
                 "{line} is a current checker marker"
             );
         }
@@ -261,7 +255,7 @@ mod tests {
         assert_eq!(unique.len(), lines.len(), "each marker once");
         let profile = &builtin().unwrap().profiles[PROFILE];
         let report = trusted_contract(IMAGE, &profile.capabilities).unwrap();
-        crate::cloud_runtime::worker_contract::validate(report, &profile.capabilities, true, true).unwrap();
+        crate::cloud_runtime::worker_contract::validate(report, &profile.capabilities, true).unwrap();
         let contract = crate::cloud_runtime::WorkerContract::reported(report);
         assert!(contract.tailnet, "the pinned image enforces tagged enrollment");
         assert!(report.lines().any(|line| line == "horizon-tailnet-contract=4"));

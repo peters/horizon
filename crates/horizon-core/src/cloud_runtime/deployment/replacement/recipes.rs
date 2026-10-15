@@ -85,10 +85,15 @@ pub fn plan(repository: &Path, bound: &Profile, profile_name: &str, cancel: &Can
     let head = checkout.head(repository)?;
     let profile = next_profile(&head, bound, profile_name)?;
     let uncommitted = uncommitted(&checkout, repository, &head, &profile)?;
+    let mut notes = notes(bound, head.notes);
+    notes.extend(crate::cloud_runtime::repository::launch::idle_period_note(
+        profile_name,
+        &profile,
+    ));
     Ok(Plan {
         changes: compatibility::changes(bound, &profile),
         profile,
-        notes: notes(bound, head.notes),
+        notes,
         uncommitted,
     })
 }
