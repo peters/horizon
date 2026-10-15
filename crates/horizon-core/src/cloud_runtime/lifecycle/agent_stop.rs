@@ -14,7 +14,7 @@ const TAKE: &str = "if command -v horizon-worker-stopd >/dev/null 2>&1; then exe
 const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A stop an agent asked for, as the worker's stop log keeps it.
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentStop {
     /// When the agent asked, in milliseconds since the Unix epoch.
@@ -25,7 +25,20 @@ pub struct AgentStop {
     /// The worker the request was taken from; a stop applies only to it.
     #[serde(skip)]
     pub worker_id: String,
+    /// That worker as it was read, to give the request back to it without the cloud's
+    /// record, which another operation may hold.
+    #[serde(skip)]
+    pub worker: Option<Box<Worker>>,
 }
+
+impl PartialEq for AgentStop {
+    fn eq(&self, other: &Self) -> bool {
+        (self.at, &self.reason, &self.session, &self.agent, &self.worker_id)
+            == (other.at, &other.reason, &other.session, &other.agent, &other.worker_id)
+    }
+}
+
+impl Eq for AgentStop {}
 
 /// What one read of the worker's stop request found.
 #[derive(Debug, PartialEq, Eq)]
@@ -53,7 +66,7 @@ struct Refused {
     refused: String,
 }
 
-fn parse(output: &str, worker_id: &str) -> Result<Requested> {
+fn parse(output: &str, worker: &Worker) -> Result<Requested> {
     let output = output.trim();
     if output.is_empty() || output == "null" {
         return Ok(Requested::Nothing);
@@ -66,7 +79,8 @@ fn parse(output: &str, worker_id: &str) -> Result<Requested> {
     }
     let mut stop: AgentStop =
         serde_json::from_str(output).map_err(|_| Error::Invalid("The worker's stop request is malformed"))?;
-    worker_id.clone_into(&mut stop.worker_id);
+    stop.worker_id.clone_from(&worker.id);
+    stop.worker = Some(Box::new(worker.clone()));
     Ok(Requested::Stop(stop))
 }
 
@@ -103,15 +117,15 @@ pub fn read_stop_request(root: &Path, settings: &Settings, cancel: &Cancellation
 
 /// As `read_stop_request`, with the worker command given.
 pub(super) fn read_with(root: &Path, run: impl Fn(&Worker, &str) -> Result<String>) -> Result<Requested> {
-    let Some((worker_id, worker)) = Store::lock(root)?
+    let Some(worker) = Store::lock(root)?
         .load()?
         .as_ref()
         .and_then(watched)
-        .map(|(id, worker)| (id.to_owned(), worker.clone()))
+        .map(|(_, worker)| worker.clone())
     else {
         return Ok(Requested::Nothing);
     };
-    parse(&run(&worker, TAKE)?, &worker_id)
+    parse(&run(&worker, TAKE)?, &worker)
 }
 
 /// Stops the cloud at `root` as Stop does, for the agent's request `stop`, and records
@@ -137,7 +151,20 @@ pub(super) fn stop_with(
     run: impl Fn(&Worker, &str) -> Result<String>,
     stop: impl FnOnce(&Store) -> Result<()>,
 ) -> Result<Deployment> {
-    let store = Store::lock(root)?;
+    // Best effort: a worker the stop already reached cannot answer, and keeps the stop.
+    let untake = |worker: &Worker| {
+        let _ = run(worker, &format!("horizon-worker-stopd --untake {}", request.at));
+    };
+    let store = match Store::lock(root) {
+        Ok(store) => store,
+        // Another operation holds the cloud: the request goes back to the worker it came from.
+        Err(error) => {
+            if let Some(worker) = &request.worker {
+                untake(worker);
+            }
+            return Err(error);
+        }
+    };
     let state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
     // Another Horizon on this computer already stopped the cloud for this request.
     if state.stop_requested
@@ -148,10 +175,6 @@ pub(super) fn stop_with(
     {
         return Ok(state);
     }
-    // Best effort: a worker the stop already reached cannot answer, and keeps the stop.
-    let untake = |worker: &Worker| {
-        let _ = run(worker, &format!("horizon-worker-stopd --untake {}", request.at));
-    };
     let requester = state.worker.as_ref().filter(|worker| {
         matches!(&state.operation, CreateState::Bound { worker_id } if *worker_id == request.worker_id)
             && worker.id == request.worker_id
@@ -166,20 +189,41 @@ pub(super) fn stop_with(
         ));
     };
     let worker = worker.clone();
-    if let Err(error) = stop(&store) {
-        untake(&worker);
-        return Err(error);
+    // The request still holds on the worker now, not only when it was read: one that
+    // lapsed while this computer slept, or was replaced, stops nothing.
+    match parse(&run(&worker, TAKE)?, &worker)? {
+        Requested::Stop(now) if now.at == request.at => {}
+        _ => {
+            return Err(Error::Invalid(
+                "The agent's stop request no longer holds on the worker, so Horizon did not stop it",
+            ));
+        }
     }
-    // The card names the agent and its reason, as after a stop the worker made itself.
-    let mut state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
-    state.last_self_stop = Some(crate::cloud_runtime::SelfStop {
+    // The agent and its reason are recorded before the provider is asked, so a stop
+    // whose outcome is uncertain keeps them for the card.
+    let earlier = state.last_self_stop.clone();
+    let mut attributed = state;
+    attributed.last_self_stop = Some(crate::cloud_runtime::SelfStop {
         at: request.at,
         reason: request.reason.clone(),
         agent: Some(request.agent.clone()),
         session: Some(request.session.clone()),
     });
-    store.save(&state)?;
-    Ok(state)
+    store.save(&attributed)?;
+    if let Err(error) = stop(&store) {
+        // Only a stop that certainly did not happen gives the request back and drops the
+        // attribution; one that may have happened keeps both.
+        if let Some(mut now) = store.load()?
+            && now.stage == Stage::Ready
+            && !now.stop_requested
+        {
+            now.last_self_stop = earlier;
+            store.save(&now)?;
+            untake(&worker);
+        }
+        return Err(error);
+    }
+    store.load()?.ok_or(Error::Invalid("No cloud deployment"))
 }
 
 /// Gives the request `stop` back to the worker that took it, as `shown`, the card's copy
@@ -196,9 +240,10 @@ pub fn give_back_stop_request(
     cancel: &Cancellation,
     stop: &AgentStop,
 ) -> Result<()> {
-    let worker = shown
+    let worker = stop
         .worker
-        .as_ref()
+        .as_deref()
+        .or(shown.worker.as_ref())
         .filter(|worker| worker.id == stop.worker_id)
         .ok_or(Error::Invalid("The stop request came from another worker"))?;
     run(
