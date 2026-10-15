@@ -139,7 +139,7 @@ fn deleted_runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runt
 }
 
 pub(super) fn node_cleanup_pending(runtime: &super::Runtime) -> bool {
-    runtime.cleanup_retry == Some(super::lifecycle::CleanupRetry::Legacy)
+    runtime.cleanup_retry.is_some()
         || runtime
             .state
             .as_ref()

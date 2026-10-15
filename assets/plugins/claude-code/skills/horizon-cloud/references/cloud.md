@@ -599,6 +599,8 @@ Pending cleanup appears in Manage and the existing sidebar/cloud_list attention 
 
 Retry reads settings in the background. A delayed read keeps the operation busy; cancelled or failed preflight sends no cleanup request. Retry keeps its display context through settings errors, cancellation, invalid launch identity and lifecycle lock contention. The card retains Deleted, its error and Retry. Legacy missing identity also keeps its manual explanation after another error. The next Retry stays asynchronous.
 
+Ordinary Remove also retains the legacy missing-ID context before a later busy removal can replace its error. Core publishes the saved Deleted state and last durable cleanup ledger under the original lifecycle lock, so a contended UI reload keeps pending Retry available and clears confirmed cleanup. Failed saves supply no new deletion fact.
+
 This context affects display only. New authoritative lifecycle facts or a settled recorded snapshot clear obsolete context; an empty legacy snapshot does not prove cleanup. The original locked Store remains the sole authority for deletion and removal. A cleared display context, cached snapshot or error text cannot release an unresolved record.
 
 ## Owner API credential management

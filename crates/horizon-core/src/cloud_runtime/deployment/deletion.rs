@@ -17,25 +17,40 @@ pub fn terminate(
     if state.stage == Stage::Deleted
         && (state.operation != CreateState::Prepared || !state.tailnet_enrollment.is_empty())
     {
+        emit(Event::Snapshot(Box::new(state.clone())));
         if state.tailnet_enrollment.cleanup_pending() {
             cancel.check()?;
         }
-        return super::super::tailnet::cleanup::retry(&store, &mut state, emit);
+        return cleanup_deleted(&store, &mut state, emit);
     }
     if state.spec.is_none() {
         return Err(Error::Invalid("No worker was requested"));
     }
     crate::cloud_runtime::providers::lifecycle(&state, settings).delete(&store, &mut state, cancel, emit)?;
-    finish_deletion(state, &store)?;
+    finish_termination(state, &store, emit)
+}
+
+fn finish_termination(state: Deployment, store: &Store, emit: &dyn Fn(Event)) -> Result<()> {
+    let state = finish_deletion(state, store)?;
+    // Publish the saved provider-deletion fact before node cleanup can fail and
+    // before another controller can take the original deployment lock.
+    emit(Event::Snapshot(Box::new(state.clone())));
     #[cfg(feature = "tailnet-node-cleanup")]
     {
-        let mut state = store
-            .load()?
-            .ok_or(Error::Invalid("Deleted cloud record is unavailable"))?;
-        super::super::tailnet::cleanup::retry(&store, &mut state, emit)
+        let mut state = state;
+        cleanup_deleted(store, &mut state, emit)
     }
     #[cfg(not(feature = "tailnet-node-cleanup"))]
     Ok(())
+}
+
+#[cfg(feature = "tailnet-node-cleanup")]
+fn cleanup_deleted(store: &Store, state: &mut Deployment, emit: &dyn Fn(Event)) -> Result<()> {
+    let result = super::super::tailnet::cleanup::retry(store, state, emit);
+    // Cleanup changes the in-memory ledger only after its confirmation is saved.
+    // Keep its last durable facts even if a later receipt or the caller's reload fails.
+    emit(Event::Snapshot(Box::new(state.clone())));
+    result
 }
 
 /// Deletes a Hetzner cloud's server, workspace volume and SSH key, each proven absent.
@@ -199,11 +214,13 @@ fn reported_spec(worker: Option<&Worker>, current: WorkerSpec, next: WorkerSpec)
     Ok(if side == Some(ImageSide::Next) { next } else { current })
 }
 
-pub(super) fn finish_deletion(mut state: Deployment, store: &Store) -> Result<()> {
+pub(super) fn finish_deletion(mut state: Deployment, store: &Store) -> Result<Deployment> {
     drop_replacement(store, &mut state)?;
     state.stage = Stage::Deleted;
     state.worker = None;
-    store.save(&state)
+    store.save(&state)?;
+    state.version = state.record_version();
+    Ok(state)
 }
 
 #[cfg(test)]
@@ -288,5 +305,181 @@ mod tests {
                 "Confirming workspace storage removal",
             ]
         );
+    }
+
+    #[cfg(all(unix, feature = "tailnet-node-cleanup"))]
+    fn snapshot_fixture(captured: bool) -> (tempfile::TempDir, Store, Deployment, Settings) {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::lock(&temp.path().join("cloud")).unwrap();
+        let profile = serde_json::json!({
+            "provider":"runpod", "image":"registry.example/worker", "cpu":4, "memory_gb":8
+        });
+        let mut state: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1, "cloud_id":"cloud", "repository":"/synthetic", "revision":"a",
+            "profile":profile, "stage":"Ready", "operation":{"state":"bound","worker_id":"worker1"},
+            "spec":{"operation_id":"cloud", "image_digest":"sha256:synthetic", "profile":profile,
+                "public_key":"synthetic", "registry_auth_id":null, "gpu_types":[], "cpu_flavors":[],
+                "data_centers":[]},
+            "worker":{"id":"worker1", "name":"cloud", "imageName":"registry.example/worker",
+                "desiredStatus":"RUNNING"}, "sessions":[]
+        }))
+        .unwrap();
+        if captured {
+            state.tailnet_enrollment = serde_json::from_value(serde_json::json!({"receipts":[{
+                "tailnet_id":"work", "provider":"runpod", "worker_id":"worker1",
+                "allocation_request_id":"cloud", "device_id":"n-exact"
+            }]}))
+            .unwrap();
+            std::fs::write(store.root().join("tailnet.json"), b"{").unwrap();
+        } else {
+            super::super::super::tailnet::Selection {
+                tailnet: Some("work".into()),
+            }
+            .commit(store.root())
+            .unwrap();
+        }
+        store.save(&state).unwrap();
+        state = store.load().unwrap().unwrap();
+        let settings = serde_json::from_value(serde_json::json!({
+            "runpod_key_file":temp.path().join("absent-key"),
+            "ssh_identity_file":temp.path().join("absent-identity"),
+            "docker_config":temp.path().join("absent-docker"),
+            "registry_pull_auth_id":null, "cpu_flavors":[], "gpu_types":[]
+        }))
+        .unwrap();
+        (temp, store, state, settings)
+    }
+
+    #[cfg(all(unix, feature = "tailnet-node-cleanup"))]
+    #[test]
+    fn deletion_snapshot_is_durable_and_locked_before_node_cleanup_can_fail() {
+        for captured in [false, true] {
+            let (_temp, store, mut state, _settings) = snapshot_fixture(captured);
+            state.stage = Stage::DeleteStorage;
+            state.operation = CreateState::Terminated {
+                worker_id: "worker1".into(),
+            };
+            let selection = std::fs::read(store.root().join("tailnet.json")).unwrap();
+            let snapshots = std::cell::RefCell::new(Vec::new());
+            let emit = |event| {
+                let Event::Snapshot(snapshot) = event else {
+                    panic!("only the durable snapshot precedes this local cleanup failure")
+                };
+                assert!(matches!(Store::lock(store.root()), Err(Error::Busy)));
+                let bytes = std::fs::read(store.root().join("deployment.json")).unwrap();
+                assert_eq!(bytes, serde_json::to_vec_pretty(&snapshot).unwrap());
+                assert_eq!(snapshot.stage, Stage::Deleted);
+                assert!(snapshot.worker.is_none());
+                assert_eq!(snapshot.operation, state.operation);
+                assert_eq!(snapshot.tailnet_enrollment, state.tailnet_enrollment);
+                snapshots.borrow_mut().push(snapshot);
+            };
+            let error = finish_termination(state.clone(), &store, &emit).unwrap_err();
+            assert!(error.to_string().contains(if captured {
+                "Tailnet settings or OS credential are unavailable"
+            } else {
+                "not recorded"
+            }));
+            assert_eq!(snapshots.borrow().len(), 2);
+            assert_eq!(std::fs::read(store.root().join("tailnet.json")).unwrap(), selection);
+            assert_eq!(
+                serde_json::to_value(store.load().unwrap().unwrap()).unwrap(),
+                serde_json::to_value(snapshots.borrow()[0].as_ref()).unwrap()
+            );
+        }
+    }
+
+    #[cfg(all(unix, feature = "tailnet-node-cleanup"))]
+    #[test]
+    fn failed_deletion_save_never_publishes_a_deleted_snapshot() {
+        let (_temp, store, mut state, _settings) = snapshot_fixture(true);
+        let original = std::fs::read(store.root().join("deployment.json")).unwrap();
+        state.version = u32::MAX;
+        assert!(finish_termination(state, &store, &|_| panic!("failed save is no deletion fact")).is_err());
+        assert_eq!(std::fs::read(store.root().join("deployment.json")).unwrap(), original);
+        assert_eq!(store.load().unwrap().unwrap().stage, Stage::Ready);
+    }
+
+    #[cfg(all(unix, feature = "tailnet-node-cleanup"))]
+    #[test]
+    fn deleted_retry_snapshot_precedes_cancellation_or_legacy_cleanup_failure() {
+        for captured in [false, true] {
+            let (_temp, store, mut state, settings) = snapshot_fixture(captured);
+            state.operation = CreateState::Terminated {
+                worker_id: "worker1".into(),
+            };
+            let state = finish_deletion(state, &store).unwrap();
+            let original = std::fs::read(store.root().join("deployment.json")).unwrap();
+            let root = store.root().to_path_buf();
+            drop(store);
+            let cancel = Cancellation::default();
+            if captured {
+                cancel.cancel();
+            }
+            let observed = std::cell::Cell::new(0);
+            let emit = |event| {
+                let Event::Snapshot(snapshot) = event else {
+                    panic!("snapshot must come first")
+                };
+                assert!(matches!(Store::lock(&root), Err(Error::Busy)));
+                assert_eq!(serde_json::to_vec_pretty(&snapshot).unwrap(), original);
+                assert_eq!(snapshot.stage, state.stage);
+                observed.set(observed.get() + 1);
+            };
+            let error = terminate(&root, &settings, &cancel, &emit).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(if captured { "cancelled" } else { "not recorded" })
+            );
+            assert_eq!(observed.get(), if captured { 1 } else { 2 });
+            assert_eq!(std::fs::read(root.join("deployment.json")).unwrap(), original);
+            assert!(Store::lock(&root).is_ok(), "the original lock ends with its controller");
+        }
+    }
+
+    #[cfg(all(unix, feature = "tailnet-node-cleanup"))]
+    #[test]
+    fn confirmed_cleanup_publishes_its_final_snapshot_under_the_original_lock() {
+        let (_temp, store, mut state, settings) = snapshot_fixture(true);
+        super::super::super::tailnet::Selection {
+            tailnet: Some("work".into()),
+        }
+        .commit(store.root())
+        .unwrap();
+        let receipt = state.tailnet_enrollment.receipts()[0].clone();
+        state.tailnet_enrollment.confirm_removed(&receipt).unwrap();
+        state.operation = CreateState::Terminated {
+            worker_id: "worker1".into(),
+        };
+        let observed = std::cell::Cell::new(0);
+        let emit = |event| {
+            let Event::Snapshot(snapshot) = event else {
+                panic!("confirmed receipt must not reach Node API")
+            };
+            assert!(matches!(Store::lock(store.root()), Err(Error::Busy)));
+            assert_eq!(snapshot.stage, Stage::Deleted);
+            assert!(snapshot.tailnet_enrollment.receipts()[0].node_deleted);
+            assert_eq!(
+                serde_json::to_vec_pretty(&snapshot).unwrap(),
+                std::fs::read(store.root().join("deployment.json")).unwrap()
+            );
+            observed.set(observed.get() + 1);
+        };
+        finish_termination(state, &store, &emit).unwrap();
+        assert_eq!(observed.get(), 2);
+        let root = store.root().to_path_buf();
+        drop(store);
+        let retries = std::cell::Cell::new(0);
+        terminate(&root, &settings, &Cancellation::default(), &|event| {
+            let Event::Snapshot(snapshot) = event else {
+                panic!("confirmed retry performs no cleanup request")
+            };
+            assert!(matches!(Store::lock(&root), Err(Error::Busy)));
+            assert!(snapshot.tailnet_enrollment.receipts()[0].node_deleted);
+            retries.set(retries.get() + 1);
+        })
+        .unwrap();
+        assert_eq!(retries.get(), 2);
     }
 }

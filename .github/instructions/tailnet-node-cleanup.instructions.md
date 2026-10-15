@@ -33,4 +33,6 @@ Keep one display-only cleanup_retry context for recorded pending cleanup or lega
 
 Clear obsolete context on authoritative non-Deleted Stage, Ready, successful Deleted completion, Stopped, Resumed or a snapshot with a non-Deleted stage or fully confirmed recorded ledger. Neither this context nor a cached snapshot authorizes Delete or removal. Recheck the original locked Store and current durable evidence for every node request, normal removal and redeploy. Exercise failure retention for recorded and legacy cases, snapshot/event reset and refusal to remove an unresolved Store record after display context clears.
 
+Establish legacy display context on the first ordinary Remove failure, before a second busy Remove can replace the missing-ID error. Emit the exact saved Deleted snapshot under the original Store before cleanup and emit the last durable ledger after cleanup succeeds or fails. A failed save must publish no invented fact. Exercise first Ready deletion with a contended UI reload and both pending-failure and fully confirmed completion; the former retains Retry and the latter clears it without a reload. Do not infer Deleted stage from error text.
+
 For restored legacy cards, inspect the raw record reason for warning presentation. A rendered STATE_UNKNOWN prefix must not hide the warning. Display text still supplies no removal authority.

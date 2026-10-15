@@ -197,6 +197,20 @@ impl CleanupRetryFixture {
         }
     }
 
+    fn first_delete_events(&mut self) -> std::sync::mpsc::Sender<Event> {
+        let mut ready = ready_bound_runtime();
+        ready.state.as_mut().unwrap().cloud_id = "fixture".into();
+        assert_eq!(ready.stage, Some(Stage::Ready));
+        assert!(ready.cleanup_retry.is_none());
+        ready.progress.begin_deletion();
+        ready.operation = Some(Action::Delete);
+        ready.stage = Some(Stage::DeleteWorker);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        ready.receiver = Some(receiver);
+        self.app.cloud_prototype.production.runtimes.insert(7, ready);
+        sender
+    }
+
     fn delayed_retry(&mut self, bytes: Vec<u8>, cancel_read: bool) {
         let settings = self.temp.path().join("settings.json");
         if !settings.exists() {
@@ -311,6 +325,65 @@ fn cleanup_retry_retains_deleted_after_a_locked_record_and_the_next_settings_rea
         fixture.delayed_retry(valid_retry_settings(fixture.temp.path()), true);
         fixture.assert_retained("cancelled");
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn first_deletion_snapshot_survives_a_contended_reload_and_keeps_the_next_retry_background() {
+    let mut fixture = CleanupRetryFixture::new(false);
+    let store = cloud_runtime::state::Store::lock(&fixture.temp.path().join("fixture")).unwrap();
+    let sender = fixture.first_delete_events();
+    sender.send(Event::stage(Stage::DeleteWorker)).unwrap();
+    sender
+        .send(Event::Snapshot(Box::new(store.load().unwrap().unwrap())))
+        .unwrap();
+    let error = cloud_runtime::Error::TailnetNodeCleanup {
+        tailnet_id: "work".into(),
+        device_id: "n-pending-fixture".into(),
+        reason: "the node API is unavailable",
+    }
+    .to_string();
+    sender.send(Event::failed(error.clone())).unwrap();
+    assert!(matches!(
+        cloud_runtime::state::Store::lock(store.root()),
+        Err(cloud_runtime::Error::Busy)
+    ));
+    fixture.assert_retained(&error);
+    let runtime = &fixture.app.cloud_prototype.production.runtimes[&7];
+    assert_eq!(runtime.cleanup_retry, Some(CleanupRetry::Recorded));
+    assert!(runtime.progress.ended_in(Stage::Deleted).is_some());
+    assert_eq!(store.load().unwrap().unwrap().stage, Stage::Deleted);
+    drop(store);
+    fixture.delayed_retry(valid_retry_settings(fixture.temp.path()), true);
+    fixture.assert_retained("cancelled");
+}
+
+#[cfg(unix)]
+#[test]
+fn first_deletion_final_snapshot_clears_confirmed_cleanup_without_a_reload() {
+    let mut fixture = CleanupRetryFixture::new(false);
+    let store = cloud_runtime::state::Store::lock(&fixture.temp.path().join("fixture")).unwrap();
+    let sender = fixture.first_delete_events();
+    let mut saved = store.load().unwrap().unwrap();
+    sender.send(Event::Snapshot(Box::new(saved.clone()))).unwrap();
+    let receipt = saved.tailnet_enrollment.receipts()[0].clone();
+    saved.tailnet_enrollment.confirm_removed(&receipt).unwrap();
+    store.save(&saved).unwrap();
+    fixture.original = std::fs::read(store.root().join("deployment.json")).unwrap();
+    sender.send(Event::Snapshot(Box::new(saved))).unwrap();
+    sender.send(Event::deleted()).unwrap();
+    assert!(matches!(
+        cloud_runtime::state::Store::lock(store.root()),
+        Err(cloud_runtime::Error::Busy)
+    ));
+    fixture.settle();
+    let runtime = fixture.app.cloud_prototype.production.runtimes.get_mut(&7).unwrap();
+    assert_eq!(runtime.stage, Some(Stage::Deleted));
+    assert!(runtime.cleanup_retry.is_none());
+    assert!(!node_cleanup_pending(runtime));
+    assert!(!has(&action_texts(&fixture.ctx, runtime), "Retry node cleanup"));
+    assert!(runtime.state.as_ref().unwrap().tailnet_enrollment.receipts()[0].node_deleted);
+    fixture.assert_bytes();
 }
 
 #[cfg(unix)]

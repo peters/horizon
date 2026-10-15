@@ -158,6 +158,12 @@ Never pass a secret through an argument, environment variable, worker or log.
    A later generic error does not hide the legacy missing-ID explanation.
    An empty Deleted snapshot does not settle legacy cleanup.
    A second delayed Retry stays responsive. Both attempts preserve the saved record.
+   Ordinary Remove on a restored legacy card records its missing-ID context.
+   A second Remove with the original Store locked retains the manual explanation and Retry.
+   First deletion from Ready publishes its saved Deleted snapshot under the original Store.
+   A contended UI reload after cleanup failure retains the pending receipt and Retry.
+   Fully confirmed cleanup publishes its final durable ledger and clears Retry without a reload.
+   Failed deletion saves publish no Deleted snapshot.
    Authoritative Stage, Ready and settled recorded snapshots clear obsolete display context.
    The locked Store still refuses removal of its unresolved record after the display context clears.
    Opening Close directly after a legacy restore still shows the explicit-discard warning.

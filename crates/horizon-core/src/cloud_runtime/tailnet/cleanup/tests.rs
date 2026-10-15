@@ -337,6 +337,7 @@ fn an_already_deleted_none_cloud_retries_without_provider_or_api_credentials() {
     state.tailnet_enrollment = EnrollmentLedger::default();
     state.version = state.record_version();
     store.save(&state).unwrap();
+    let original = std::fs::read(store.root().join("deployment.json")).unwrap();
     drop(store);
     let root = directory.path().join("cloud");
     let settings = serde_json::from_value(serde_json::json!({
@@ -345,10 +346,20 @@ fn an_already_deleted_none_cloud_retries_without_provider_or_api_credentials() {
         "cpu_flavors":[], "gpu_types":[]
     }))
     .unwrap();
-    crate::cloud_runtime::deployment::terminate(&root, &settings, &horizon_cloud::Cancellation::default(), &|_| {
-        panic!("no request or progress needed")
+    let snapshots = std::cell::Cell::new(0);
+    crate::cloud_runtime::deployment::terminate(&root, &settings, &horizon_cloud::Cancellation::default(), &|event| {
+        let Event::Snapshot(snapshot) = event else {
+            panic!("no request or progress needed")
+        };
+        assert!(matches!(state::Store::lock(&root), Err(Error::Busy)));
+        assert_eq!(serde_json::to_vec_pretty(&snapshot).unwrap(), original);
+        assert_eq!(std::fs::read(root.join("deployment.json")).unwrap(), original);
+        assert_eq!(snapshot.tailnet_enrollment, state.tailnet_enrollment);
+        snapshots.set(snapshots.get() + 1);
     })
     .unwrap();
+    assert_eq!(snapshots.get(), 2);
+    assert_eq!(std::fs::read(root.join("deployment.json")).unwrap(), original);
     assert!(
         !state::Store::lock(&root)
             .unwrap()
@@ -483,6 +494,7 @@ fn cancelled_deleted_retry_preserves_receipts_before_api_or_provider_access() {
         store.save(&state).unwrap();
         let before = state.tailnet_enrollment.clone();
         let root = store.root().to_owned();
+        let original = std::fs::read(root.join("deployment.json")).unwrap();
         drop(store);
         let settings = serde_json::from_value(serde_json::json!({
             "runpod_key_file":root.join("absent-provider-key"),"ssh_identity_file":root.join("absent-ssh-key"),
@@ -492,10 +504,22 @@ fn cancelled_deleted_retry_preserves_receipts_before_api_or_provider_access() {
         .unwrap();
         let cancel = horizon_cloud::Cancellation::default();
         cancel.cancel();
+        let snapshots = std::cell::Cell::new(0);
         assert!(matches!(
-            crate::cloud_runtime::deployment::terminate(&root, &settings, &cancel, &|_| panic!("cancelled dispatch")),
+            crate::cloud_runtime::deployment::terminate(&root, &settings, &cancel, &|event| {
+                let Event::Snapshot(snapshot) = event else {
+                    panic!("cancelled dispatch")
+                };
+                assert!(matches!(state::Store::lock(&root), Err(Error::Busy)));
+                assert_eq!(serde_json::to_vec_pretty(&snapshot).unwrap(), original);
+                assert_eq!(std::fs::read(root.join("deployment.json")).unwrap(), original);
+                assert_eq!(snapshot.tailnet_enrollment, before);
+                snapshots.set(snapshots.get() + 1);
+            }),
             Err(Error::Provider(horizon_cloud::CloudError::Cancelled))
         ));
+        assert_eq!(snapshots.get(), 1);
+        assert_eq!(std::fs::read(root.join("deployment.json")).unwrap(), original);
         assert_eq!(
             state::Store::lock(&root)
                 .unwrap()

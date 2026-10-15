@@ -112,6 +112,56 @@ fn a_selected_legacy_cloud_without_device_identity_stays_manual_after_close() {
 }
 
 #[test]
+fn repeated_legacy_remove_keeps_cleanup_retry_after_original_record_lock_contention() {
+    let (temp, mut app) = test_app();
+    let path = temp.path().join("fixture");
+    let mut state = pending_node();
+    state.tailnet_enrollment = EnrollmentLedger::default();
+    Store::lock(&path).unwrap().save(&state).unwrap();
+    cloud_runtime::tailnet::Selection {
+        tailnet: Some("work".into()),
+    }
+    .commit(&path)
+    .unwrap();
+    let original = std::fs::read(path.join("deployment.json")).unwrap();
+    let selection = std::fs::read(path.join("tailnet.json")).unwrap();
+    add_cloud(&mut app, temp.path(), Some(state));
+    let ctx = egui::Context::default();
+
+    app.remove_deleted_cloud(101, &ctx);
+    app.settle_cloud_removals_at(&ctx);
+    let runtime = &app.cloud_prototype.production.runtimes[&101];
+    assert_eq!(
+        runtime.error.as_deref(),
+        Some(ManualCleanupReason::DeviceIdentityUnavailable.message())
+    );
+    assert_eq!(
+        runtime.cleanup_retry,
+        Some(super::super::super::lifecycle::CleanupRetry::Legacy)
+    );
+
+    let store = Store::lock(&path).unwrap();
+    app.remove_deleted_cloud(101, &ctx);
+    app.settle_cloud_removals_at(&ctx);
+    let runtime = &app.cloud_prototype.production.runtimes[&101];
+    assert_eq!(
+        runtime.error.as_deref(),
+        Some("Another controller owns this cloud operation")
+    );
+    assert_eq!(runtime.stage, Some(Stage::Deleted));
+    assert!(super::super::super::cards::node_cleanup_pending(runtime));
+    assert_eq!(
+        runtime.cleanup_retry,
+        Some(super::super::super::lifecycle::CleanupRetry::Legacy)
+    );
+    drop(store);
+
+    assert_eq!(app.cloud_prototype.groups.0.len(), 1);
+    assert_eq!(std::fs::read(path.join("deployment.json")).unwrap(), original);
+    assert_eq!(std::fs::read(path.join("tailnet.json")).unwrap(), selection);
+}
+
+#[test]
 fn directly_closing_a_restored_legacy_cloud_warns_before_discard_and_cancel_preserves_it() {
     let (temp, mut app) = test_app();
     let path = temp.path().join("fixture");

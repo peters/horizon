@@ -64,11 +64,10 @@ impl Runtime {
     fn refresh_cleanup_retry(&mut self, state: &cloud_runtime::state::Deployment) {
         if state.stage != Stage::Deleted {
             self.cleanup_retry = None;
+        } else if state.tailnet_enrollment.cleanup_pending() {
+            self.cleanup_retry = Some(CleanupRetry::Recorded);
         } else if !state.tailnet_enrollment.is_empty() {
-            self.cleanup_retry = self
-                .cleanup_retry
-                .filter(|_| state.tailnet_enrollment.cleanup_pending())
-                .map(|_| CleanupRetry::Recorded);
+            self.cleanup_retry = None;
         }
     }
 
@@ -111,14 +110,18 @@ impl Runtime {
         }
     }
 
-    /// Shows the failure an operation reported. Whether it may be a stop Horizon did
-    /// not make is decided now, while a resize that failed still shows as running.
-    pub(super) fn show_failure(&mut self, error: String, at: std::time::Instant) {
+    fn remember_legacy_cleanup(&mut self, error: &str) {
         if self.stage == Some(Stage::Deleted)
             && error == cloud_runtime::tailnet::receipt::ManualCleanupReason::DeviceIdentityUnavailable.message()
         {
             self.cleanup_retry = Some(CleanupRetry::Legacy);
         }
+    }
+
+    /// Shows the failure an operation reported. Whether it may be a stop Horizon did
+    /// not make is decided now, while a resize that failed still shows as running.
+    pub(super) fn show_failure(&mut self, error: String, at: std::time::Instant) {
+        self.remember_legacy_cleanup(&error);
         if self.cleanup_retry.is_some() {
             self.progress.stage(Stage::Deleted, at);
             self.stage = Some(Stage::Deleted);
@@ -580,6 +583,7 @@ impl HorizonApp {
 
     pub(super) fn cloud_removal_error(&mut self, id: u32, message: String) {
         if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
+            runtime.remember_legacy_cleanup(&message);
             runtime.error = Some(message.clone());
         }
         self.cloud_prototype.error = Some(message);
