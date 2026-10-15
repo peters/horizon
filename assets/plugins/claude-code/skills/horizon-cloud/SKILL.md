@@ -113,7 +113,8 @@ chosen bots in chosen repositories, with a board beside its card. It costs money
 its worker runs and needs a GitHub sign-in, a Hetzner project and a Codex login in Cloud
 settings. Only the person starts one in the dialog. Horizon allows the loop's GitHub
 access for the chosen repositories without asking; every other request still waits on
-the card. Once a day, after the repositories' agents, the loop runs one daily maintenance
+the card. On a current worker image, the worker also does this by itself while no Horizon
+runs, and starts the loop again after a container restart. Once a day, after the repositories' agents, the loop runs one daily maintenance
 agent for the whole Upkeep that does the "Daily maintenance" tasks of the shared
 instructions the repositories' AGENTS.md link; its read request for that shared
 repository waits on the card too. See `docs/upkeep.md` for its limits and trust
