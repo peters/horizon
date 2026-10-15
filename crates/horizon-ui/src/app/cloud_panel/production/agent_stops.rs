@@ -14,20 +14,32 @@ use std::{path::Path, sync::mpsc::TryRecvError, time::Duration};
 /// How often the worker's stop request is read.
 const CHECK_INTERVAL: Duration = Duration::from_secs(30);
 
+/// An agent's request the worker took, with the settings it was read with, so the card
+/// stops the cloud for it without reading them on the UI thread.
+#[derive(Debug)]
+pub(in crate::app::cloud_panel) struct Order {
+    pub(super) stop: AgentStop,
+    pub(super) settings: Settings,
+}
+
 /// What reading the stop requests finds, for the card.
 #[derive(Debug)]
 pub(in crate::app::cloud_panel) enum Found {
     /// A read is about to run; sent only to learn whether the card still listens.
     Watching,
     /// The worker took an agent's request: the card stops the cloud for it.
-    Stop(AgentStop),
+    Stop(Box<Order>),
     /// A line for the card's log.
     Log(String),
 }
 
 /// Reads every `interval` until `send` finds that the card no longer listens. A failed
 /// read is logged once until it changes.
-fn run(interval: Duration, read: impl Fn() -> cloud_runtime::Result<Requested>, send: &dyn Fn(Found) -> bool) {
+fn run(
+    interval: Duration,
+    read: impl Fn() -> cloud_runtime::Result<(Requested, Settings)>,
+    send: &dyn Fn(Found) -> bool,
+) {
     let mut failed = None;
     loop {
         std::thread::sleep(interval);
@@ -36,9 +48,9 @@ fn run(interval: Duration, read: impl Fn() -> cloud_runtime::Result<Requested>, 
         }
         let found = match read() {
             // Until the stop starts, a later read gives the same stop again.
-            Ok(Requested::Stop(stop)) => Found::Stop(stop),
-            Ok(Requested::Refused(words)) => Found::Log(format!("An agent's stop request was dropped: {words}")),
-            Ok(Requested::Nothing | Requested::Waiting(_)) => {
+            Ok((Requested::Stop(stop), settings)) => Found::Stop(Box::new(Order { stop, settings })),
+            Ok((Requested::Refused(words), _)) => Found::Log(format!("An agent's stop request was dropped: {words}")),
+            Ok((Requested::Nothing | Requested::Waiting(_), _)) => {
                 failed = None;
                 continue;
             }
@@ -61,7 +73,7 @@ fn run(interval: Duration, read: impl Fn() -> cloud_runtime::Result<Requested>, 
 
 impl Runtime {
     /// The agent stop that reading found, if any; its log lines go to the card.
-    pub(super) fn poll_agent_stops(&mut self) -> Option<AgentStop> {
+    pub(super) fn poll_agent_stops(&mut self) -> Option<Order> {
         let mut stop = None;
         loop {
             let Some(found) = &self.agent_stops else {
@@ -69,7 +81,7 @@ impl Runtime {
             };
             match found.try_recv() {
                 Ok(Found::Watching) => {}
-                Ok(Found::Stop(found)) => stop = Some(found),
+                Ok(Found::Stop(found)) => stop = Some(*found),
                 Ok(Found::Log(line)) => self.push_log(line),
                 Err(TryRecvError::Empty) => return stop,
                 Err(TryRecvError::Disconnected) => {
@@ -128,8 +140,10 @@ impl HorizonApp {
     /// that is not ready, that another operation holds, or that has a dialog open gives
     /// the request back to its worker, which drops it, and the agent may ask again. A
     /// request given back once is never carried out later, even if the worker kept it.
-    pub(super) fn stop_clouds_for_agents(&mut self, stops: Vec<(u32, AgentStop)>, ctx: &egui::Context) {
-        for (id, stop) in stops {
+    pub(super) fn stop_clouds_for_agents(&mut self, orders: Vec<(u32, Order)>, ctx: &egui::Context) {
+        for (id, order) in orders {
+            let stop = &order.stop;
+            let closing = self.cloud_prototype.production.close.open_for(id);
             let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) else {
                 continue;
             };
@@ -143,6 +157,7 @@ impl HorizonApp {
                     .as_ref()
                     .is_some_and(cloud_runtime::lifecycle::takes_stop_requests);
             if !ready
+                || closing
                 || runtime.busy()
                 || !matches!(runtime.confirmation, Confirmation::None)
                 || runtime.given_back == Some(stop.at)
@@ -156,11 +171,11 @@ impl HorizonApp {
                     runtime.given_back = Some(stop.at);
                 }
                 if let Some(shown) = runtime.state.clone() {
-                    self.give_back_stop_request(id, shown, stop);
+                    self.give_back_stop_request(id, shown, order);
                 }
                 continue;
             }
-            runtime.agent_stop = Some(stop);
+            runtime.agent_stop = Some(order);
             self.change_production_worker(id, Action::Stop, ctx);
             if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
                 runtime.agent_stop = None;
@@ -168,8 +183,9 @@ impl HorizonApp {
         }
     }
 
-    /// Gives `stop` back to the worker of cloud `id`, as `shown` names it, off the UI thread.
-    fn give_back_stop_request(&self, id: u32, shown: cloud_runtime::state::Deployment, stop: AgentStop) {
+    /// Gives the request of `order` back to the worker of cloud `id`, as `shown` names it,
+    /// off the UI thread.
+    fn give_back_stop_request(&self, id: u32, shown: cloud_runtime::state::Deployment, order: Order) {
         let Some(root) = self.cloud_prototype.root.clone() else {
             return;
         };
@@ -185,15 +201,13 @@ impl HorizonApp {
             return;
         };
         std::thread::spawn(move || {
-            let given = Settings::load(&root.join("settings.json")).and_then(|settings| {
-                cloud_runtime::lifecycle::give_back_stop_request(
-                    &state_root,
-                    &shown,
-                    &settings,
-                    &Cancellation::default(),
-                    &stop,
-                )
-            });
+            let given = cloud_runtime::lifecycle::give_back_stop_request(
+                &state_root,
+                &shown,
+                &order.settings,
+                &Cancellation::default(),
+                &order.stop,
+            );
             // A request the worker keeps lapses ten minutes after its take; until then the
             // card gives it back again each time it is found.
             drop(given);
@@ -202,9 +216,10 @@ impl HorizonApp {
 }
 
 /// One read, with the settings read on this thread, not the UI's.
-fn read(state_root: &Path, settings: &Path) -> cloud_runtime::Result<Requested> {
+fn read(state_root: &Path, settings: &Path) -> cloud_runtime::Result<(Requested, Settings)> {
     let settings = Settings::load(settings)?;
-    cloud_runtime::lifecycle::read_stop_request(state_root, &settings, &Cancellation::default())
+    let requested = cloud_runtime::lifecycle::read_stop_request(state_root, &settings, &Cancellation::default())?;
+    Ok((requested, settings))
 }
 
 #[cfg(test)]

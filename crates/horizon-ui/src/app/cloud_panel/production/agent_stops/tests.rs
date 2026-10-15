@@ -8,6 +8,21 @@ fn stop() -> AgentStop {
     .unwrap()
 }
 
+fn settings() -> Settings {
+    serde_json::from_value(serde_json::json!({
+        "runpod_key_file": "/unused", "ssh_identity_file": "/unused", "docker_config": "/unused",
+        "registry_pull_auth_id": null, "cpu_flavors": [], "gpu_types": []
+    }))
+    .unwrap()
+}
+
+fn order() -> Order {
+    Order {
+        stop: stop(),
+        settings: settings(),
+    }
+}
+
 /// What `run` sends for the reads `answers`; the card stops listening once they are
 /// all read.
 fn sent(answers: Vec<cloud_runtime::Result<Requested>>) -> Vec<String> {
@@ -21,12 +36,16 @@ fn sent(answers: Vec<cloud_runtime::Result<Requested>>) -> Vec<String> {
                 *checks.borrow_mut() += 1;
                 return *checks.borrow() <= count;
             }
-            Found::Stop(stop) => found.borrow_mut().push(format!("stop: {}", stop.reason)),
+            Found::Stop(order) => found.borrow_mut().push(format!("stop: {}", order.stop.reason)),
             Found::Log(line) => found.borrow_mut().push(line),
         }
         true
     };
-    run(Duration::ZERO, || answers.borrow_mut().next().unwrap(), &send);
+    run(
+        Duration::ZERO,
+        || answers.borrow_mut().next().unwrap().map(|answer| (answer, settings())),
+        &send,
+    );
     found.into_inner()
 }
 
@@ -74,7 +93,7 @@ fn the_reading_ends_once_the_card_stops_listening() {
         Duration::ZERO,
         || {
             *reads.borrow_mut() += 1;
-            Ok(Requested::Nothing)
+            Ok((Requested::Nothing, settings()))
         },
         &|found| !matches!(found, Found::Watching),
     );
@@ -139,7 +158,7 @@ fn a_stop_request_starts_a_stop_for_that_agent() {
     sender
         .send(Found::Log("Reading the agent's stop request failed: once".into()))
         .unwrap();
-    sender.send(Found::Stop(stop())).unwrap();
+    sender.send(Found::Stop(Box::new(order()))).unwrap();
     app.prepare_production_clouds(&ctx);
     let runtime = &app.cloud_prototype.production.runtimes[&1];
     assert_eq!(runtime.operation, Some(Action::Stop));
@@ -171,7 +190,7 @@ fn a_cloud_with_an_open_dialog_gives_the_request_back_instead_of_stopping() {
     let runtime = app.cloud_prototype.production.runtimes.entry(1).or_default();
     runtime.stage = Some(cloud_runtime::Stage::Ready);
     runtime.confirmation = Confirmation::Delete;
-    app.stop_clouds_for_agents(vec![(1, stop())], &ctx);
+    app.stop_clouds_for_agents(vec![(1, order())], &ctx);
     // Found again later, as a worker that kept it gives it, it is still not carried out.
     app.cloud_prototype
         .production
@@ -179,7 +198,7 @@ fn a_cloud_with_an_open_dialog_gives_the_request_back_instead_of_stopping() {
         .get_mut(&1)
         .unwrap()
         .confirmation = Confirmation::None;
-    app.stop_clouds_for_agents(vec![(1, stop())], &ctx);
+    app.stop_clouds_for_agents(vec![(1, order())], &ctx);
     let runtime = &app.cloud_prototype.production.runtimes[&1];
     assert_eq!(runtime.operation, None, "no Stop starts");
     assert!(runtime.agent_stop.is_none());
@@ -203,8 +222,22 @@ fn a_request_found_again_while_its_stop_runs_is_left_alone() {
     let runtime = app.cloud_prototype.production.runtimes.entry(1).or_default();
     runtime.stage = Some(cloud_runtime::Stage::Stopping);
     runtime.operation = Some(Action::Stop);
-    app.stop_clouds_for_agents(vec![(1, stop())], &ctx);
+    app.stop_clouds_for_agents(vec![(1, order())], &ctx);
     let runtime = &app.cloud_prototype.production.runtimes[&1];
     assert_eq!(runtime.given_back, None, "not given back");
     assert!(runtime.logs.is_empty());
+}
+
+#[test]
+fn a_cloud_whose_close_dialog_is_open_gives_the_request_back() {
+    use crate::app::test_support::test_app;
+    let (_temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    app.prepare_production_clouds(&ctx);
+    app.cloud_prototype.production.runtimes.entry(1).or_default().stage = Some(cloud_runtime::Stage::Ready);
+    app.request_cloud_close(1);
+    app.stop_clouds_for_agents(vec![(1, order())], &ctx);
+    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    assert_eq!(runtime.operation, None, "no Stop starts");
+    assert_eq!(runtime.given_back, Some(stop().at));
 }

@@ -124,7 +124,8 @@ pub fn stop_for_agent(root: &Path, settings: &Settings, cancel: &Cancellation, s
     stop_with(
         root,
         stop,
-        |worker, command| run(worker, settings, root, cancel, command),
+        // Taking a request back must still run after the person cancelled the stop.
+        |worker, command| run(worker, settings, root, &Cancellation::default(), command),
         |store| stop_locked(store, settings, cancel, mutation::IGNORE).map(drop),
     )
 }

@@ -296,7 +296,7 @@ pub(super) struct Runtime {
     /// confirmed.
     stopped_outside: bool,
     /// The agent request that the Stop starting now carries out (`agent_stops`).
-    agent_stop: Option<cloud_runtime::lifecycle::AgentStop>,
+    agent_stop: Option<agent_stops::Order>,
     /// What the reading of agents' stop requests of this ready cloud found; dropping it
     /// ends the reading.
     agent_stops: Option<std::sync::mpsc::Receiver<agent_stops::Found>>,

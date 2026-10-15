@@ -397,7 +397,13 @@ impl HorizonApp {
         if runtime.busy() {
             return;
         }
-        let settings = match Settings::load(&root.join("settings.json")) {
+        // A Stop for an agent's request comes with the settings it was read with.
+        let preloaded = runtime
+            .agent_stop
+            .as_ref()
+            .filter(|_| action == Action::Stop)
+            .map(|order| order.settings.clone());
+        let settings = match preloaded.map_or_else(|| Settings::load(&root.join("settings.json")), Ok) {
             Ok(settings) => settings,
             Err(error) => {
                 fail_before_start(runtime, action, error.to_string());
@@ -431,7 +437,11 @@ impl HorizonApp {
         runtime.sender = Some(tx.clone());
         begin_operation(runtime, action);
         // A Stop for an agent's request carries it out and names the agent.
-        let agent_stop = runtime.agent_stop.take().filter(|_| action == Action::Stop);
+        let agent_stop = runtime
+            .agent_stop
+            .take()
+            .filter(|_| action == Action::Stop)
+            .map(|order| order.stop);
         if let Some(stop) = &agent_stop {
             runtime.push_log(format!("{} asked to stop this cloud: {}", stop.agent, stop.reason));
         }

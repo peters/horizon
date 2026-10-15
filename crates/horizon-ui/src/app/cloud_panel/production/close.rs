@@ -24,6 +24,11 @@ impl State {
     pub(in crate::app::cloud_panel) fn closing(&self, id: u32) -> bool {
         self.deleting.contains(&id)
     }
+
+    /// The close dialog of cloud `id` is open, or its close is deleting its resources.
+    pub(in crate::app::cloud_panel::production) fn open_for(&self, id: u32) -> bool {
+        self.confirming == Some(id) || self.closing(id)
+    }
 }
 
 #[cfg(test)]
