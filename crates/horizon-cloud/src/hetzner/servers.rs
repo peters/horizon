@@ -1,6 +1,7 @@
 //! Servers. A worker is one server named and labelled after its operation; the
 //! caller durably persists `CreateState` before every create request.
 mod deletion;
+pub use deletion::OriginalServerAbsence;
 
 use super::{
     ACTION_TIMEOUT, Action, Failure, Hetzner, Method, OPERATION_LABEL, Waited, keys::SshKey, resource_name, valid_name,
