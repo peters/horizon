@@ -21,14 +21,36 @@ const UNKNOWN: &str = "Unknown or expired image-destination operation; list save
 
 /// Supplied by the trusted host after checking the live local agent panel.
 /// These fields are never accepted as agent-supplied authority.
-/// The host resolves the agent's checkout to its Git root before constructing an owner.
-/// The worker refuses a prepared repository outside that exact canonical scope.
+/// Direct dispatch/start require the exact canonical Git root. Launch-directory
+/// dispatch retains the registered launch path here and resolves its checkout in
+/// the shared worker. Public callers cannot supply either source path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Owner {
     pub actor: String,
     pub host: String,
     pub root: PathBuf,
     pub repository: PathBuf,
+}
+
+/// A live local panel's registered launch directory, supplied only by its host.
+/// The shared worker resolves its Git root before reading or changing a choice.
+#[derive(Clone, Debug)]
+pub struct LaunchOwner {
+    pub actor: String,
+    pub host: String,
+    pub root: PathBuf,
+    pub directory: PathBuf,
+}
+
+impl LaunchOwner {
+    fn receipt_scope(self) -> Owner {
+        Owner {
+            actor: self.actor,
+            host: self.host,
+            root: self.root,
+            repository: self.directory,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -137,6 +159,33 @@ impl Manager {
         action: serde_json::Value,
         notify: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<Status> {
+        self.dispatch_with(owner, id, profile, action, notify, false)
+    }
+
+    /// Resolve a host-registered launch directory on the worker, including subfolders.
+    /// Receipts remain bound to that exact launch path and live panel, not a caller path.
+    /// # Errors
+    /// As [`Self::dispatch`], or an invalid checkout/configuration on the worker.
+    pub fn dispatch_launch(
+        &mut self,
+        owner: LaunchOwner,
+        id: &str,
+        profile: Option<String>,
+        action: serde_json::Value,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<Status> {
+        self.dispatch_with(owner.receipt_scope(), id, profile, action, notify, true)
+    }
+
+    fn dispatch_with(
+        &mut self,
+        owner: Owner,
+        id: &str,
+        profile: Option<String>,
+        action: serde_json::Value,
+        notify: Arc<dyn Fn() + Send + Sync>,
+        launch: bool,
+    ) -> Result<Status> {
         if let Ok(readback) = serde_json::from_value::<Readback>(action.clone()) {
             if profile.is_some() {
                 return Err(Error::Invalid("Receipt status and cancellation take no profile"));
@@ -155,7 +204,25 @@ impl Manager {
             profile,
             action,
         };
-        self.start(owner, request, id, notify)
+        if launch {
+            let worker_owner = owner.clone();
+            let worker_request = request.clone();
+            let operation = id.to_owned();
+            self.start_with(owner, request, id, notify, move |cancel, emit| {
+                management::manage(
+                    &worker_owner.root,
+                    &worker_request,
+                    &operation,
+                    &Runner {
+                        cancel,
+                        emit,
+                        secrets: Vec::new(),
+                    },
+                )
+            })
+        } else {
+            self.start(owner, request, id, notify)
+        }
     }
 
     /// Start or read back exactly the same retained request. Runs all I/O off the caller thread.
@@ -285,6 +352,12 @@ impl Manager {
             },
         );
         Ok(status)
+    }
+
+    /// Whether receipts still need background polling, even without panel output.
+    #[must_use]
+    pub fn running(&self) -> bool {
+        self.jobs.values().any(|job| !job.status.done)
     }
 
     /// Consume bounded reports and cancel operations whose original host-owned scope vanished.

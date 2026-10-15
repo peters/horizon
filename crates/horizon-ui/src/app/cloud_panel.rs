@@ -1,5 +1,7 @@
 mod codex_login_sync;
 mod fullscreen;
+#[cfg(feature = "cloud-workspaces")]
+mod image_destinations;
 mod new_cloud_view;
 mod ownership;
 mod production;

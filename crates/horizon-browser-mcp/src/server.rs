@@ -216,6 +216,20 @@ impl HorizonBrowserMcp {
     }
 
     #[tool(
+        name = "cloud_image_destination",
+        description = "Inspect or change this local agent panel checkout's machine-local image destination for a named build profile. No repository YAML is changed. List first; select a listed registry destination or reset using its exact shown_override snapshot. Only authenticate initiates personal publishing sign-in; switch requires the person's explicit account-change instruction. Existing clouds retain their original publisher. Supply a fresh lowercase UUID operation_id for a reviewed action; reuse it after a lost answer. Every action may return pending: poll status with that ID and no profile until done, then read the nested result or error. Cancel uses the same ID without a profile. Sign-in briefly waits for its device code and verification URI to show the person. Poll at least every 10 seconds: authentication requests cancellation after 30 seconds without an owner readback. Cancellation is a request, not proof settings stayed unchanged. Receipts expire and are lost at host restart: list saved state before retrying then. Requires the owning desktop and a local agent panel; remote worker panels cannot change desktop publishing choices. No tokens, secret references or settings-root arguments."
+    )]
+    async fn cloud_image_destination(
+        &self,
+        Parameters(input): Parameters<horizon_browser_control::manifest::provider_usage::ImageDestinationRequest>,
+    ) -> Result<Json<crate::model::HostJson>, String> {
+        self.controller
+            .cloud_image_destination(input)
+            .await
+            .map(|value| Json(crate::model::HostJson(value)))
+    }
+
+    #[tool(
         name = "tailnet_api_credential",
         description = "Request native owner setup or removal of a desktop-global saved tailnet API credential. set_personal_token, set_oauth and remove create only a pending owner request. The person enters an empty masked draft and explicitly saves the requested kind, or approves removal of that exact request in Settings > Tailnets. No secret is accepted from the agent; replacing a binding requires the same native owner choice. Does not open Settings. Supply the exact saved tailnet_id from cloud_companions and a caller-chosen UUID request_id. Poll status with the same IDs; cancel stops only a pending request. Requests expire after 15 minutes, are volatile and are scoped to the original calling agent and host. Running writes cannot be cancelled. No credential values, paths, OS references, owner grants or automatic node deletion. Applied means the local store transaction finished, not that remote API access was tested."
     )]
@@ -907,6 +921,7 @@ mod tests {
                 "cloud_companion_stop",
                 "cloud_companion_uncheck",
                 "cloud_companions",
+                "cloud_image_destination",
                 "cloud_list",
                 "cloud_offers",
                 "cloud_upkeep",

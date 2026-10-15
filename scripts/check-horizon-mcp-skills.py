@@ -14,6 +14,7 @@ SOURCES = {
 }
 TOOL = re.compile(r'#\[tool\(\s*name\s*=\s*"([^"]+)"')
 OPERATIONS = [
+    ('crates/horizon-browser-control/src/manifest/image_destination.rs', 'Action', 'horizon-cloud', set(), 'cloud_image_destination'),
     ('crates/horizon-browser-control/src/manifest/cast.rs', 'CastOperation', 'horizon-cast', set(), 'cast'),
     ('crates/horizon-browser-control/src/manifest/device.rs', 'Operation', 'horizon-device', {'BrowserScreenshot'}, 'device_panel'),
     ('crates/horizon-browser-control/src/manifest/device.rs', 'VideoAction', 'horizon-device', set(), 'device_panel video'),

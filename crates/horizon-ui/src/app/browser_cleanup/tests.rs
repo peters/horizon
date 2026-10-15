@@ -47,7 +47,7 @@ fn host_poll_removes_ended_browsers_from_board_and_saved_state() {
     let ready = browser(&mut app, workspace, 102, BrowserStatus::Ready, false);
     let starting = browser(&mut app, workspace, 103, BrowserStatus::Starting, true);
 
-    assert!(app.poll_browser_create_requests());
+    assert!(app.poll_browser_create_requests(&egui::Context::default()));
 
     assert!(app.board.panel(stopped).is_none());
     assert!(app.board.panel(failed).is_none());
@@ -84,7 +84,7 @@ fn cleanup_clears_fullscreen_and_render_state_without_closing_other_panel_kinds(
     app.terminal_body_screen_rects.insert(stopped, Rect::NOTHING);
     app.panel_render_caches.browser_ui_state.entry(stopped).or_default();
 
-    app.poll_browser_create_requests();
+    app.poll_browser_create_requests(&egui::Context::default());
 
     assert_eq!(app.fullscreen_panel, None);
     assert_eq!(app.board.focused, Some(editor));
@@ -106,7 +106,7 @@ fn failed_navigation_does_not_remove_a_live_browser() {
         .expect("browser")
         .navigation_error = Some("The page was unreachable".into());
 
-    app.poll_browser_create_requests();
+    app.poll_browser_create_requests(&egui::Context::default());
 
     assert!(app.board.panel(ready).is_some());
 }

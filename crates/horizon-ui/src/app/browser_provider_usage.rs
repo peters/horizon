@@ -14,6 +14,8 @@ use super::{HorizonApp, browser_requests::actor_panel};
 pub(super) struct UsageHostState {
     pending: Vec<PendingUsage>,
     #[cfg(feature = "cloud-workspaces")]
+    pub(in crate::app) image_destinations: horizon_core::cloud_runtime::publishing::operations::Manager,
+    #[cfg(feature = "cloud-workspaces")]
     pub(in crate::app) tailnet_credentials: super::tailnets::requests::Requests,
 }
 
@@ -23,10 +25,10 @@ struct PendingUsage {
 }
 
 impl HorizonApp {
-    pub(in crate::app) fn publish_tailnet_credential_result(&mut self, result: UsageResult) {
+    pub(in crate::app) fn publish_host_usage_result(&mut self, result: UsageResult) {
         self.browser_create_host.io.write(move || {
             if let Err(error) = manifest::provider_usage::complete_provider_usage(&result) {
-                tracing::warn!(kind = ?error.kind(), "could not answer an API credential request");
+                tracing::warn!(kind = ?error.kind(), "could not answer a host metadata request");
             }
         });
     }
@@ -44,11 +46,11 @@ impl HorizonApp {
         }
     }
 
-    pub(super) fn poll_provider_usage(&mut self) -> bool {
-        self.poll_provider_usage_queue(&UsageQueue::default())
+    pub(super) fn poll_provider_usage(&mut self, ctx: &egui::Context) -> bool {
+        self.poll_provider_usage_queue(&UsageQueue::default(), ctx)
     }
 
-    fn poll_provider_usage_queue(&mut self, queue: &UsageQueue) -> bool {
+    fn poll_provider_usage_queue(&mut self, queue: &UsageQueue, ctx: &egui::Context) -> bool {
         let requests = match queue.claim(manifest::host_instance()) {
             Ok(requests) => requests,
             Err(error) => {
@@ -58,7 +60,13 @@ impl HorizonApp {
         };
         #[cfg(feature = "cloud-workspaces")]
         self.poll_tailnet_credential_requests();
+        #[cfg(feature = "cloud-workspaces")]
+        self.poll_image_destination_operations(ctx);
         for request in requests {
+            if request.image_destination.is_some() {
+                self.answer_image_destination(&request, ctx);
+                continue;
+            }
             if request.tailnet_credential.is_some() {
                 self.answer_tailnet_credential(&request);
                 continue;
@@ -97,6 +105,10 @@ impl HorizonApp {
                 .pending
                 .push(PendingUsage { request, providers });
         }
+        self.finish_provider_usage(queue)
+    }
+
+    fn finish_provider_usage(&mut self, queue: &UsageQueue) -> bool {
         let pending = std::mem::take(&mut self.browser_create_host.provider_usage.pending);
         let mut changed = false;
         for mut pending in pending {
@@ -154,12 +166,20 @@ impl HorizonApp {
 
 impl HorizonApp {
     #[cfg(not(feature = "cloud-workspaces"))]
+    fn answer_image_destination(&mut self, request: &UsageRequest, _ctx: &egui::Context) {
+        self.publish_host_usage_result(request.result(
+            Vec::new(),
+            Some("image_destination_unavailable: cloud support is disabled".into()),
+        ));
+    }
+
+    #[cfg(not(feature = "cloud-workspaces"))]
     fn answer_tailnet_credential(&mut self, request: &UsageRequest) {
         let result = request.result(
             Vec::new(),
             Some("tailnet_credential_unavailable: cloud support is disabled".into()),
         );
-        self.publish_tailnet_credential_result(result);
+        self.publish_host_usage_result(result);
     }
 }
 
@@ -287,7 +307,7 @@ mod tests {
         let queue = UsageQueue::new(temp.path().to_path_buf());
         let identity = AgentIdentity::new(&actor, Some(manifest::host_instance()));
         let id = queue.enqueue(identity, None).expect("all providers");
-        app.poll_provider_usage_queue(&queue);
+        app.poll_provider_usage_queue(&queue, &egui::Context::default());
         let result = queue.take(identity, &id).expect("result").expect("completed");
         assert!(result.error.is_none());
         assert_eq!(result.providers.len(), 3);
@@ -302,14 +322,14 @@ mod tests {
         assert!(app.settings.is_none());
         assert!(app.browser_create_host.remote_allocations.summaries(None).is_empty());
         let id = queue.enqueue(identity, Some("cloud-b".into())).expect("one provider");
-        app.poll_provider_usage_queue(&queue);
+        app.poll_provider_usage_queue(&queue, &egui::Context::default());
         let result = queue.take(identity, &id).expect("result").expect("completed");
         assert_eq!(result.providers.len(), 1);
         assert_eq!(result.providers[0].provider, "cloud-b");
         let id = queue
             .enqueue(identity, Some("unknown".into()))
             .expect("unknown provider");
-        app.poll_provider_usage_queue(&queue);
+        app.poll_provider_usage_queue(&queue, &egui::Context::default());
         assert_eq!(
             queue
                 .take(identity, &id)
@@ -323,7 +343,7 @@ mod tests {
         assert_removed_profile(&mut app, &queue, identity);
         let foreign = AgentIdentity::new("horizon:missing-agent", Some(manifest::host_instance()));
         let id = queue.enqueue(foreign, None).expect("stale agent");
-        app.poll_provider_usage_queue(&queue);
+        app.poll_provider_usage_queue(&queue, &egui::Context::default());
         let result = queue.take(foreign, &id).expect("result").expect("refused");
         assert_eq!(result.error.as_deref(), Some("provider_usage_unavailable"));
         assert!(result.providers.is_empty());
@@ -338,7 +358,7 @@ mod tests {
             providers: [("cloud-b".into(), ProviderUsageMonitor::default())].into(),
         });
         app.template_config.browser.remote.providers.remove("cloud-b");
-        app.poll_provider_usage_queue(queue);
+        app.poll_provider_usage_queue(queue, &egui::Context::default());
         let result = queue.take(identity, &id).expect("result").expect("completed");
         assert_eq!(result.error.as_deref(), Some("provider_unknown"));
         assert!(result.providers.is_empty());
@@ -368,10 +388,51 @@ mod tests {
             ]
             .into(),
         });
-        app.poll_provider_usage_queue(queue);
+        app.poll_provider_usage_queue(queue, &egui::Context::default());
         let result = queue.take(identity, &id).expect("result").expect("partial completion");
         assert!(result.error.is_none());
         assert_eq!(result.providers[0].running, Some(2));
         assert_eq!(result.providers[1].error.as_deref(), Some("provider_usage_timed_out"));
+    }
+
+    #[test]
+    #[cfg(feature = "cloud-workspaces")]
+    fn destination_operations_are_polled_even_when_the_usage_queue_is_unavailable() {
+        use horizon_core::cloud_runtime::publishing::operations::LaunchOwner;
+        let (temp, mut app) = crate::app::test_support::test_app();
+        let (notify, received) = std::sync::mpsc::sync_channel(1);
+        app.browser_create_host
+            .provider_usage
+            .image_destinations
+            .dispatch_launch(
+                LaunchOwner {
+                    actor: "horizon:owned-poll".into(),
+                    host: manifest::host_instance().into(),
+                    root: temp.path().join("cloud"),
+                    directory: temp.path().join("missing-checkout"),
+                },
+                "owned-queue-failure",
+                Some("cpu".into()),
+                serde_json::json!({"operation":"list"}),
+                std::sync::Arc::new(move || {
+                    let _ = notify.try_send(());
+                }),
+            )
+            .unwrap();
+        received.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert!(
+            app.browser_create_host.provider_usage.image_destinations.running(),
+            "the worker report still needs polling"
+        );
+        let unavailable = temp.path().join("not-a-directory");
+        std::fs::create_dir_all(unavailable.join("runtime")).unwrap();
+        std::fs::write(unavailable.join("runtime/browser-provider-usage"), b"fixture").unwrap();
+        let queue = UsageQueue::new(unavailable);
+        assert!(queue.claim(manifest::host_instance()).is_err());
+        app.poll_provider_usage_queue(&queue, &egui::Context::default());
+        assert!(
+            !app.browser_create_host.provider_usage.image_destinations.running(),
+            "queue failure must not suppress operation completion, scope or expiry polling"
+        );
     }
 }

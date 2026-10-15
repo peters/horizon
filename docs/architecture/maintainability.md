@@ -1107,3 +1107,9 @@ metadata without opening the credential editor and retain the preference write f
 Host pull-history UI regressions are grouped under
 `app/cloud_panel/production/setup/tests/host_pull.rs`; the parent settings tests
 retain shared fixtures and unrelated layout and account checks.
+
+Public image-destination operations keep their wire schema in browser-control
+and normal CLI/MCP routing in browser-mcp. The UI image_destinations leaf binds
+only the live panel scope. Shared publishing operations resolve a typed launch
+directory on a worker and retain bounded receipts. Live preference transactions
+recheck the staging setting beside the override comparison.

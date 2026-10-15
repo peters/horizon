@@ -315,9 +315,12 @@ not load compute credentials to recover provider history.
 ## Shared destination management boundary
 
 The shared manager accepts a local repository and named working-copy profile.
-Direct native management can normalize a checkout subdirectory. Receipt-backed
-operations instead require the host's actual Git root: the worker compares the
-prepared root with that owned scope before reading host policy or authenticating.
+Direct native management can normalize a checkout subdirectory. Direct-root receipt
+operations require the host's actual Git root: the worker compares the prepared
+root with that scope before reading host policy or authenticating. Public host
+adapters instead use a typed `LaunchOwner` from the live panel's registered start
+directory. The shared worker resolves that directory to its Git root before
+policy. This accepts subdirectories without filesystem work on the render thread.
 Canonical aliases pass that root check, while receipt identity remains the exact
 host-supplied owner. Cancelled metadata reads propagate cancellation, including a
 lookup that finishes successfully after its cancellation was requested.
@@ -336,5 +339,52 @@ receipt ID cannot clear or consume a cloud card's Skip request.
 Scope disappearance, lack of observation and lifetime limits request cancellation.
 A receipt is not durable proof of whether a write committed; settings mutations
 use the existing compare-and-swap fence, and callers list state after expiry.
-The default-off setting still gates mutations. No public adapter is wired by
-this prerequisite; later UI, CLI and MCP controls must use this shared policy.
+The default-off setting still gates mutations. The public host adapter, CLI plan
+runner and stdio MCP tool use this shared policy.
+
+## Public destination operations
+
+Use `cloud_image_destination` from a live local agent panel. It uses the panel's
+registered launch directory and resolves its checkout in the shared background
+worker, including subdirectories. The host supplies the settings root and source;
+never pass a root, source path, token or credential value. Remote worker and SSH
+panels cannot change desktop publishing choices. No Settings window is required.
+
+Supply a fresh lowercase UUID `operation_id` and a named build `profile` for a new
+action. Start with `action: {"operation":"list"}`. The result gives the selected
+account/destination, exact `shown_override` and existing registry choices. For
+`select`, pass a listed `destination` and the exact `shown` snapshot. For `reset`,
+pass that same `shown`. A stale snapshot refuses without replacing another choice.
+The preference stays machine-local; source YAML remains unchanged.
+
+Every action can return a pending receipt. Poll `status` with the same operation
+ID and no profile until `done` is true, then read its nested result or error.
+A receipt alone does not prove that listing or a mutation completed.
+
+Only `authenticate` starts personal publishing sign-in. Pass `shown` and set
+`switch: true` only after the person asks to change account. Show the device code
+and verification URI returned by the operation. Never collect a token yourself.
+Poll `status` with the same ID and no profile at least every ten seconds while
+sign-in runs. Thirty seconds without readback requests cancellation. `cancel`
+requests cancellation only for that owned operation. After a timeout, read status
+with the same ID; do not create another mutation. Receipts expire and disappear on
+host restart. List saved state and review it before retrying an expired operation.
+
+The normal CLI plan runner exposes the same tool and schema through
+`horizon-browser run PLAN.json`; its stdio MCP server exposes the same operation.
+Existing clouds keep their recorded publisher. Retained publication status is a
+separate follow-up outcome.
+The staging setting still defaults to false, so mutations remain disabled until
+final integration. See docs/testing/procedures/image-destination-public.md.
+
+Management rechecks the staging setting in the same transaction as the exact
+override comparison. If it is disabled while sign-in waits, no destination
+preference commits. This does not revoke authorization already completed at the
+issuer or prove that a credential-chain write did not occur.
+
+The desktop destination adapter refuses any agent panel owned by a cloud group,
+including worker and Upkeep panels whose local metadata has no SSH connection.
+Both admission and retained-operation polling check saved board membership as
+well as live cloud groups: session restoration can expose the saved membership
+before live cloud state is copied. A local launch directory alone does not
+establish desktop ownership.

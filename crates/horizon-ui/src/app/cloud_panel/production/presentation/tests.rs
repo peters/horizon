@@ -785,7 +785,7 @@ fn browser_cleanup_preserves_cloud_restore_and_failed_presentations() {
     panel.local_id = "firefox".into();
     app.fullscreen_panel = Some(id);
     let groups = std::mem::take(&mut app.cloud_prototype.groups);
-    app.poll_browser_create_requests();
+    app.poll_browser_create_requests(&egui::Context::default());
     assert!(
         app.board.panel(id).is_some(),
         "saved membership must protect early restore"

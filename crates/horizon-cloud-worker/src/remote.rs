@@ -423,7 +423,7 @@ fn usage(
     Ok(results)
 }
 
-/// The cloud list and Upkeep belong to a Horizon host; a worker answers that it has none.
+/// Desktop-owned operations belong to a Horizon host; a worker refuses them.
 /// Returns whether `request` was such a request.
 fn refused_host_only(request: &horizon_browser_control::manifest::provider_usage::UsageRequest) -> bool {
     let Some(error) = host_only_refusal(request) else {
@@ -436,7 +436,7 @@ fn refused_host_only(request: &horizon_browser_control::manifest::provider_usage
 }
 
 /// The refusal of a request that only a Horizon host answers. An agent on the worker, the
-/// Upkeep agent included, must never change the Upkeep or the cloud list.
+/// Upkeep agent included, must never change desktop-owned state.
 fn host_only_refusal(
     request: &horizon_browser_control::manifest::provider_usage::UsageRequest,
 ) -> Option<&'static str> {
@@ -444,6 +444,8 @@ fn host_only_refusal(
         Some("cloud_list_unavailable: requires a Horizon agent panel")
     } else if request.tailnet_credential.is_some() {
         Some("tailnet_credential_unavailable: requires the desktop owner")
+    } else if request.image_destination.is_some() {
+        Some("image_destination_unavailable: requires a Horizon agent panel on the person's computer")
     } else if request.upkeep.is_some() {
         Some("upkeep_unavailable: requires a Horizon agent panel on the person's computer")
     } else {
@@ -455,7 +457,7 @@ fn host_only_refusal(
 mod tests {
     use super::*;
     #[test]
-    fn a_worker_refuses_the_cloud_list_and_upkeep_and_answers_the_rest() {
+    fn a_worker_refuses_desktop_operations_and_answers_the_rest() {
         let request = |extra: serde_json::Value| {
             let mut value = serde_json::json!({
                 "request_id": "r", "actor": "horizon:a", "host_instance": "h", "provider": null,
@@ -475,6 +477,11 @@ mod tests {
         );
         let upkeep = request(serde_json::json!({"upkeep": {"operation": "add", "repositories": ["acme/web"]}}));
         assert!(host_only_refusal(&upkeep).is_some_and(|error| error.starts_with("upkeep_unavailable")));
+        let image = request(serde_json::json!({
+            "provider":"configured-browser-account",
+            "image_destination":{"operation_id":"27d497e2-1f54-4bc4-b746-ab2a3d9efad5","profile":"cpu","action":{"operation":"list"}}
+        }));
+        assert!(host_only_refusal(&image).is_some_and(|error| error.starts_with("image_destination_unavailable")));
         let list = request(serde_json::json!({"cloud_list": {"operation": "list"}}));
         assert!(host_only_refusal(&list).is_some_and(|error| error.starts_with("cloud_list_unavailable")));
         assert_eq!(host_only_refusal(&request(serde_json::json!({}))), None);

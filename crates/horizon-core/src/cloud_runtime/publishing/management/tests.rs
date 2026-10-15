@@ -344,3 +344,41 @@ fn saved_pull_metadata_matches_repository_identity_for_tagged_and_pinned_recipes
     assert!(!fixture.cloud.join("registry").exists());
     assert!(!fixture.cloud.join("docker").exists());
 }
+
+#[test]
+fn disabling_portable_publishing_during_authentication_preserves_the_disabled_preferences() {
+    let mut fixture = fixture();
+    fixture.request.action = Action::Authenticate {
+        shown: None,
+        switch: true,
+    };
+    let path = fixture.cloud.join("settings.json");
+    let mut disabled = Vec::new();
+    let result = manage_with(
+        &fixture.cloud,
+        &fixture.request,
+        "synthetic-signin",
+        None,
+        &Runner {
+            cancel: &Cancellation::default(),
+            emit: &|_| {},
+            secrets: Vec::new(),
+        },
+        |_, _, _| {
+            let mut settings = setup::load_settings(&fixture.cloud).unwrap();
+            settings.portable_image_publishing = false;
+            disabled = serde_json::to_vec(&settings).unwrap();
+            std::fs::write(&path, &disabled).unwrap();
+            Ok(publication::Account {
+                id: 17,
+                login: "synthetic-publisher".into(),
+            })
+        },
+    );
+    assert!(
+        result.is_err(),
+        "a completed sign-in must not commit a destination after the gate is disabled"
+    );
+    assert_eq!(std::fs::read(path).unwrap(), disabled);
+    assert!(!fixture.cloud.join("docker").exists());
+}
