@@ -149,6 +149,9 @@ Never pass a secret through an argument, environment variable, worker or log.
    Initial and final checks remain asynchronous. Periodic display advice retains its settled controls.
    Cancel, context changes and retained Ready watches keep their existing lock and generation checks.
    Only a matching displayed saved-tailnet/device pair retains its previous API detail.
+   A delayed Retry settings read leaves UI frames responsive and keeps the operation busy.
+   Cancellation or malformed settings prevent provider/node dispatch.
+   Opening Close directly after a legacy restore still shows the explicit-discard warning.
 
 2. In the isolated desktop, open Manage for the original pending cloud.
 

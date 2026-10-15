@@ -26,3 +26,5 @@ SDK lookups; final verification must save before returning an error. Save failur
 uncertainty. Never infer freshness from a synthetic Terminated ID or erase legacy
 readiness/stop/resume history. Exercise all three actual controller lookups, including a final-only observation
 followed by container absence before retry.
+
+Cleanup Retry settings reads must stay off the UI thread, with the busy receiver installed before dispatch and cancellation checked after a delayed read. A preflight failure must not invoke provider/node cleanup. Preserve the existing failed-preflight watch behavior for live workers. For restored legacy cards, inspect the raw record reason for warning presentation; a rendered STATE_UNKNOWN prefix must not hide the warning. Display text still supplies no removal authority.

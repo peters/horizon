@@ -60,6 +60,119 @@ fn deleted_resources_keep_manual_node_message_and_offer_cleanup_retry() {
     assert!(!has(&action_texts(&ctx, &mut runtime), "Retry node cleanup"));
 }
 
+#[cfg(unix)]
+fn valid_retry_settings(root: &std::path::Path) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "runpod_key_file": root.join("runpod"),
+        "ssh_identity_file": root.join("ssh"),
+        "docker_config": root.join("docker"),
+        "registry_pull_auth_id": null, "cpu_flavors": [], "gpu_types": []
+    }))
+    .unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn cleanup_retry_keeps_the_ui_responsive_during_settings_read_and_retains_failures() {
+    use std::{
+        io::Write as _,
+        os::unix::fs::OpenOptionsExt as _,
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+    for cancel_read in [false, true] {
+        let (temp, mut app) = crate::app::test_support::test_app();
+        resumable_cloud(&mut app, false);
+        app.cloud_prototype.root = Some(temp.path().to_owned());
+        let mut runtime = ready_bound_runtime();
+        runtime.stage = Some(Stage::Deleted);
+        let state = runtime.state.as_mut().unwrap();
+        state.stage = Stage::Deleted;
+        state.operation = cloud_runtime::CreateState::Terminated {
+            worker_id: "worker1".into(),
+        };
+        let cloud_root = temp.path().join("fixture");
+        cloud_runtime::state::Store::lock(&cloud_root)
+            .unwrap()
+            .save(state)
+            .unwrap();
+        let original = std::fs::read(cloud_root.join("deployment.json")).unwrap();
+        app.cloud_prototype.production.runtimes.insert(7, runtime);
+        let settings = temp.path().join("settings.json");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&settings)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let bytes = if cancel_read {
+            valid_retry_settings(temp.path())
+        } else {
+            b"{".to_vec()
+        };
+        let (ready, reading) = mpsc::channel();
+        let (permit, permitted) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut file = loop {
+                if let Ok(file) = std::fs::OpenOptions::new()
+                    .write(true)
+                    .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed())
+                    .open(&settings)
+                {
+                    break file;
+                }
+                assert!(Instant::now() < deadline, "settings reader did not start");
+                std::thread::sleep(Duration::from_millis(1));
+            };
+            ready.send(()).unwrap();
+            let ui_returned = permitted.recv_timeout(Duration::from_secs(5)).is_ok();
+            file.write_all(&bytes).unwrap();
+            ui_returned
+        });
+        let ctx = egui::Context::default();
+        app.apply_card_action(7, Action::Delete, &ctx);
+        reading.recv_timeout(Duration::from_secs(5)).unwrap();
+        let runtime = app.cloud_prototype.production.runtimes.get_mut(&7).unwrap();
+        assert!(runtime.busy());
+        assert!(has(&action_texts(&ctx, runtime), "Deleting cloud resources"));
+        let cancel = runtime.cancel.clone().unwrap();
+        app.apply_card_action(7, Action::Delete, &ctx);
+        if cancel_read {
+            cancel.cancel();
+            assert!(
+                app.cloud_prototype.production.runtimes[&7]
+                    .cancel
+                    .as_ref()
+                    .unwrap()
+                    .is_cancelled()
+            );
+        }
+        permit.send(()).unwrap();
+        assert!(writer.join().unwrap(), "Retry waited for settings on the UI thread");
+        let receiver = app
+            .cloud_prototype
+            .production
+            .runtimes
+            .get_mut(&7)
+            .unwrap()
+            .receiver
+            .take()
+            .unwrap();
+        let event = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        match event {
+            cloud_runtime::Event::Failed(reason, _) => assert!(reason.contains(if cancel_read {
+                "cancelled"
+            } else {
+                "Invalid cloud state or settings"
+            })),
+            other => panic!("preflight must report its failure without provider work: {other:?}"),
+        }
+        assert_eq!(std::fs::read(cloud_root.join("deployment.json")).unwrap(), original);
+    }
+}
+
 #[test]
 fn deletion_replaces_deployment_actions_with_its_steps_and_total_time() {
     use horizon_core::cloud_runtime::{Cancellation, progress::Progress};

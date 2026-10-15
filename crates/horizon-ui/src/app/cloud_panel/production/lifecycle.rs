@@ -1,4 +1,5 @@
 use super::{Confirmation, Event, HorizonApp, Runtime, Settings, Stage, Store, channel, cloud_runtime, deployment};
+use std::path::Path;
 
 /// What a provider check reports.
 type RecoveryResult = cloud_runtime::Result<cloud_runtime::lifecycle::ReconciledDeployment>;
@@ -296,6 +297,31 @@ impl Runtime {
     }
 }
 
+fn action_settings(runtime: &Runtime, action: Action, path: &Path) -> cloud_runtime::Result<Option<Settings>> {
+    // Cleanup retry has no live worker watch to retain during its settings preflight.
+    if action == Action::Delete && runtime.stage == Some(Stage::Deleted) {
+        return Ok(None);
+    }
+    runtime
+        .agent_stop
+        .as_ref()
+        .filter(|_| action == Action::Stop)
+        .map(|order| order.settings.clone())
+        .map_or_else(|| Settings::load(path), Ok)
+        .map(Some)
+}
+
+fn checked_settings(
+    settings: Option<Settings>,
+    path: &Path,
+    cancel: &cloud_runtime::Cancellation,
+) -> cloud_runtime::Result<Settings> {
+    cancel.check()?;
+    let settings = settings.map_or_else(|| Settings::load(path), Ok)?;
+    cancel.check()?;
+    Ok(settings)
+}
+
 /// A worker operation that failed its preflight is still that operation's failure: it
 /// gets its own attempt, so the status names it and diagnosis ignores earlier output.
 fn fail_before_start(runtime: &mut Runtime, action: Action, error: String) {
@@ -402,13 +428,8 @@ impl HorizonApp {
         // uncertain; this holds even when the choice is refused below. The Stop for an
         // agent's request sets the claim again once it started.
         runtime.stopping_for = None;
-        // A Stop for an agent's request comes with the settings it was read with.
-        let preloaded = runtime
-            .agent_stop
-            .as_ref()
-            .filter(|_| action == Action::Stop)
-            .map(|order| order.settings.clone());
-        let settings = match preloaded.map_or_else(|| Settings::load(&root.join("settings.json")), Ok) {
+        let settings_path = root.join("settings.json");
+        let settings = match action_settings(runtime, action, &settings_path) {
             Ok(settings) => settings,
             Err(error) => {
                 fail_before_start(runtime, action, error.to_string());
@@ -423,11 +444,15 @@ impl HorizonApp {
                 return;
             }
         };
-        if action == Action::Reconcile {
+        if action == Action::Reconcile
+            && let Some(settings) = settings
+        {
             runtime.start_reconciliation(state_root, settings, ctx);
             return;
         }
-        if action == Action::RevokeBrowserstack {
+        if action == Action::RevokeBrowserstack
+            && let Some(settings) = settings
+        {
             runtime.start_device_release(state_root, settings, ctx);
             return;
         }
@@ -458,6 +483,13 @@ impl HorizonApp {
             let emit = |event| {
                 let _ = tx.send(event);
                 ctx.request_repaint();
+            };
+            let settings = match checked_settings(settings, &settings_path, &cancel) {
+                Ok(settings) => settings,
+                Err(error) => {
+                    emit(Event::failed(error.to_string()));
+                    return;
+                }
             };
             let Some(result) = power_result(action, agent_stop.as_ref(), &root, &settings, &cancel, &emit) else {
                 return;

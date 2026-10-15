@@ -87,3 +87,32 @@ This qualifies default-enabled Core cleanup with Personal access/missing-access 
 Only this report and its index row were added after qualification; all compiler inputs and the extra schema were compared before and after. Exact published-head input/Git-consumer comparison, GitHub checks, independent review and final merge permission remain separate gates. This report does not claim a future head passed those gates.
 
 Procedure: [tailnet node cleanup](../procedures/tailnet-node-cleanup.md).
+
+## 7. Review-fix qualification
+
+Sections 1–6 retain the first review's tested inputs. The following results cover the fixes made after that review. The checked parent is `bc5567c2cf9b74c046ae97775400a3c30d83555c`, with the recorded uncommitted source changes. The new normal UI SHA256 is `8b79c4484884be581b50c8683d30d0e33d9833bc6ef49c6d203bab963f2034bf`. Its 2,194-entry input inventory SHA256 is `20c8c50659e89f77ec4ccdab257d82152f4c8926e3625981c4db5c976a21ccdd`.
+
+Cleanup Retry now reads settings on its background worker. The busy receiver is installed before dispatch. Cancellation is checked before the read and before cleanup. The regression holds the settings read open, renders another UI frame, refuses a second operation and verifies malformed-settings and cancellation failures without changing the deployment. Existing live-worker Delete preflight and watch behavior remain covered by their unchanged tests. A restored legacy card's raw record reason now supplies the discard warning even when the rendered reason has a state-unknown prefix. The direct-restore regression selects Cancel and verifies the original record and selection bytes.
+
+| New qualification | Result |
+|---|---|
+| Default Core | 2,138 passed; 21 intentional ignores; related integration targets passed |
+| Default UI | 2,278 passed; 2 intentional ignores; font 3 and home-isolation 2 passed |
+| UI speech | 2,324 passed; 2 intentional ignores; font 3 and home-isolation 2 passed |
+| Worker | 210 passed; 3 intentional ignores |
+| Remaining workspace targets | Standard package, integration and doctest targets passed |
+| Required checks | Blocking and strict Clippy, formatting, maintainability, skill coverage and diff checks passed |
+
+The workspace result uses complete target groups. Initial whole-workspace commands stopped on environment failures. A private test directory fixed an unsafe ancestor path. Isolated runs supplied a clean temporary directory, root-owned SSH configuration and the original init reaper. They used the exact frozen test binaries and source, with read-only runtime libraries, private home/state and no host credentials or Docker socket. Failed attempts remain recorded; they are not passing whole-command results. Only unaffected non-UI results from this same recovery checkout were reused after input comparison. No lost temporary test logs were reused.
+
+The required workspace advisory command exited 101 on the same two inherited boolean-struct findings. A supplementary UI check exposed eleven more inherited boolean-struct findings. All thirteen diagnostic files match the checked parent. The inherited unknown-lint diagnostic also remains. No changed UI source had a new actionable advisory finding. This is not a pedantic-clean result.
+
+The fresh synthetic Native run used the new normal UI, Core `cloud-workspaces,default,tailnet-node-cleanup`, SDK features `[]` and `profile.test=false`. The running UI and its ordinary public browser-MCP child matched the new hash. Three public viewer inspections showed displayed, advancing frames before input. Direct Close on a restored legacy card showed the warning before any Retry. Cancel kept the card and both saved files; explicit discard hid it. Missing-API Retry retained the exact receipt and manual reason. The actual window changed from 1480×900 to 1100×700; Fit, the readable close modal, Cancel, window restore and Fit passed. Pending explicit discard and confirmed normal removal then passed. Ordinary public cloud-list replies showed 3 → 2 → 1 → 0. All three original deployment/selection pairs matched before fixture cleanup.
+
+Four current-run public recordings were finalized and copied before viewer close. All four fully decoded with frame counts 525/946/437/383, matching public recording status; every encoder-failed flag was false. The two-pass GIF uses all four full ranges in order at 4× speed, 6 fps and 1000×625: 66.17 seconds, 397 frames and 5,449,692 bytes, SHA256 `8aeeb0f23a90922c8abc6c10f38a06e67630257d6ad597ed303c95574a82c0a2`. Its full decode, contact sheet and small-window modal review passed. The application exited normally with code 0; its synthetic credential service was empty, children and collectors stopped, and target expired. The exact owned container was absent on the same healthy daemon. The viewer closed and the original relay exited 0. The added synthetic legacy files were removed only after their preservation proof and explicit discard; the existing fixture then cleaned its own catalog and records.
+
+Two equipment errors supplied no feature result: an external parent Cargo configuration stopped one launch before container creation, and an invalid version-4 empty-ledger fixture was rejected by production. The latter run exited normally and completed cleanup. The final run used the actual legacy encoding, version 1 with no enrollment ledger. No production schema or controller was weakened.
+
+The real default-CLI C03 in section 5 is reused. Its exact frozen normal CLI, full original input inventory and contemporaneous successful summary survive. All 1,275 rows of a conservative non-UI input comparison match; the four UI files and two UI-only embedded guides are outside the CLI dependency closure. No new paid run was required. Raw temporary HTTP/ledger files were lost in the reboot; they were not reconstructed. This reuse proves the unchanged CLI behavior tested in section 5, not a new observation of provider or account state.
+
+Final report prose was added after qualification. Compiler inputs, the external schema fixture and runtime behavior remain bound to their recorded evidence. Exact-head GitHub checks and independent review remain separate merge gates. M1 and M2 remain outside these activation results.

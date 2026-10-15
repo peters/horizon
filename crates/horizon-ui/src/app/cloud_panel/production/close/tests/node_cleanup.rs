@@ -112,6 +112,88 @@ fn a_selected_legacy_cloud_without_device_identity_stays_manual_after_close() {
 }
 
 #[test]
+fn directly_closing_a_restored_legacy_cloud_warns_before_discard_and_cancel_preserves_it() {
+    let (temp, mut app) = test_app();
+    let path = temp.path().join("fixture");
+    let mut state = pending_node();
+    state.tailnet_enrollment = EnrollmentLedger::default();
+    Store::lock(&path).unwrap().save(&state).unwrap();
+    cloud_runtime::tailnet::Selection {
+        tailnet: Some("work".into()),
+    }
+    .commit(&path)
+    .unwrap();
+    let before = std::fs::read(path.join("deployment.json")).unwrap();
+    let selection_before = std::fs::read(path.join("tailnet.json")).unwrap();
+    let restored = Store::lock(&path).unwrap().load().unwrap().unwrap();
+    add_cloud(&mut app, temp.path(), Some(restored));
+    assert!(app.cloud_prototype.production.runtimes[&101].error.is_none());
+    app.request_cloud_close(101);
+    let ctx = egui::Context::default();
+    app.settle_cloud_removals_at(&ctx);
+    let close = &app.cloud_prototype.production.close;
+    assert_eq!(
+        close.records[&101],
+        Record::Unreadable(ManualCleanupReason::DeviceIdentityUnavailable.message().into())
+    );
+    let offer = offer::offer(
+        &app.cloud_prototype.production.runtimes[&101],
+        true,
+        &close.records[&101],
+        None,
+    );
+    assert!(offer.remove_anyway);
+    assert!(offer.reason.as_deref().unwrap().starts_with(offer::STATE_UNKNOWN));
+    let mut warning_visible = false;
+    let mut discard_visible = false;
+    let mut cancel = None;
+    for _ in 0..2 {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.render_cloud_close_confirmation(ui.ctx());
+        });
+        for shape in &output.shapes {
+            if let egui::epaint::Shape::Text(text) = &shape.shape {
+                let label = text.galley.text();
+                warning_visible |= label.contains("hides its retry controls");
+                discard_visible |= label == "Remove from Horizon anyway";
+                if label == "Cancel" {
+                    cancel = Some(text.pos + text.galley.size() * 0.5);
+                }
+            }
+        }
+        output.textures_delta.clear();
+    }
+    assert!(warning_visible);
+    assert!(discard_visible);
+    let cancel = cancel.expect("the close dialog must offer Cancel");
+    for pressed in [true, false] {
+        let _ = ctx
+            .run_ui(
+                egui::RawInput {
+                    events: vec![
+                        egui::Event::PointerMoved(cancel),
+                        egui::Event::PointerButton {
+                            pos: cancel,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::default(),
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ui| app.render_cloud_close_confirmation(ui.ctx()),
+            )
+            .discard_textures();
+    }
+    app.settle_cloud_removals_at(&ctx);
+    assert!(!app.cloud_close_confirmation_open());
+    assert_eq!(app.cloud_prototype.groups.0.len(), 1);
+    assert!(app.cloud_prototype.production.runtimes[&101].error.is_none());
+    assert_eq!(std::fs::read(path.join("deployment.json")).unwrap(), before);
+    assert_eq!(std::fs::read(path.join("tailnet.json")).unwrap(), selection_before);
+}
+
+#[test]
 fn explicit_owner_remove_anyway_retains_the_original_pending_record() {
     let (temp, mut app) = test_app();
     let path = temp.path().join("fixture");

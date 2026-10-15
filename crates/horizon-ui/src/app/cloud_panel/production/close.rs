@@ -7,9 +7,13 @@ use super::{HorizonApp, Runtime, Stage, cards::wording, lifecycle::Action};
 pub(super) use decisions::{Origin, RemovalStart};
 use offer::{Failure, Primary, Record};
 
-fn pending_tailnet_cleanup(runtime: &Runtime, reason: Option<&str>) -> bool {
+fn pending_tailnet_cleanup(runtime: &Runtime, record: Option<&Record>, reason: Option<&str>) -> bool {
+    let record_reason = match record {
+        Some(Record::Unreadable(reason)) => Some(reason.as_str()),
+        _ => None,
+    };
     super::cards::node_cleanup_pending(runtime)
-        || reason.is_some_and(|reason| {
+        || [record_reason, reason].into_iter().flatten().any(|reason| {
             reason.starts_with("Tailnet node cleanup is unconfirmed for saved tailnet ")
                 || reason
                     == super::cloud_runtime::tailnet::receipt::ManualCleanupReason::DeviceIdentityUnavailable.message()
@@ -465,7 +469,7 @@ fn paint_reason(ui: &mut egui::Ui, offer: &offer::Offer, record: Option<&Record>
             ui.colored_label(crate::theme::PALETTE_RED(), reason);
         }
     }
-    if pending_tailnet_cleanup(runtime, offer.reason.as_deref()) && offer.remove_anyway {
+    if pending_tailnet_cleanup(runtime, record, offer.reason.as_deref()) && offer.remove_anyway {
         ui.label("Tailnet node cleanup is still unconfirmed. Removing this card keeps its original record but hides its retry controls.");
     }
 }

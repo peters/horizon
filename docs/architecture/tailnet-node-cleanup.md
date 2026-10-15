@@ -86,3 +86,7 @@ Display advice never authorizes discard: a fresh final check retains the origina
 Cancellation, context drift and old generations cannot apply a later removal.
 The UI preserves an earlier precise API failure only for the same displayed saved-tailnet/device pair; text supplies no authority.
 A retained Ready connection watch does not prevent explicit RemoveAnyway, while busy operations and the lifecycle lock still refuse it.
+
+Cleanup Retry reads saved settings on the background operation worker.
+The card stays busy while that read waits. Cancellation is checked before the read and again before cleanup dispatch; invalid settings report an operation failure without provider or node work.
+The explicit-discard warning also examines the raw saved-record reason, so a restored legacy cloud with no captured device ID receives it before any retry.
