@@ -63,6 +63,8 @@ pub enum PanelKind {
     Upkeep,
     Browser,
     Device,
+    /// The setup board: every repository whose cloud setup agent works on this computer.
+    SetupBoard,
 }
 
 impl PanelKind {
@@ -76,7 +78,10 @@ impl PanelKind {
     /// panels insert at the caret; browser panels dispatch through CDP.
     #[must_use]
     pub const fn accepts_text_input(self) -> bool {
-        !matches!(self, Self::GitChanges | Self::Usage | Self::Upkeep | Self::Device)
+        !matches!(
+            self,
+            Self::GitChanges | Self::Usage | Self::Upkeep | Self::Device | Self::SetupBoard
+        )
     }
 
     #[must_use]
@@ -103,6 +108,7 @@ impl PanelKind {
             Self::GitChanges => "Git Changes",
             Self::Usage => "Usage",
             Self::Upkeep => "Upkeep",
+            Self::SetupBoard => "Setup board",
             Self::Browser => "Browser",
             Self::Device => "Device",
             Self::Codex | Self::Claude | Self::OpenCode | Self::Gemini | Self::KiloCode | Self::Pi | Self::Grok => {
@@ -677,6 +683,7 @@ impl Panel {
             PanelContent::GitChanges(_)
             | PanelContent::Usage(_)
             | PanelContent::Upkeep(_)
+            | PanelContent::SetupBoard(_)
             | PanelContent::Device(_)
             | PanelContent::Parked(_) => {}
             PanelContent::Browser(browser) => browser.request_shutdown(),
@@ -705,6 +712,7 @@ impl Panel {
             PanelContent::GitChanges(_)
             | PanelContent::Usage(_)
             | PanelContent::Upkeep(_)
+            | PanelContent::SetupBoard(_)
             | PanelContent::Device(_)
             | PanelContent::Parked(_) => true,
             PanelContent::Browser(browser) => browser.shutdown_with_timeout(timeout),
@@ -722,6 +730,7 @@ impl Panel {
             PanelContent::GitChanges(_)
             | PanelContent::Usage(_)
             | PanelContent::Upkeep(_)
+            | PanelContent::SetupBoard(_)
             | PanelContent::Device(_)
             | PanelContent::Parked(_) => true,
             PanelContent::Browser(browser) => browser.shutdown_with_timeout(timeout),
@@ -1050,7 +1059,12 @@ mod tests {
         ] {
             assert!(kind.accepts_text_input(), "kind {kind:?} must accept text input");
         }
-        for kind in [PanelKind::GitChanges, PanelKind::Usage, PanelKind::Upkeep] {
+        for kind in [
+            PanelKind::GitChanges,
+            PanelKind::Usage,
+            PanelKind::Upkeep,
+            PanelKind::SetupBoard,
+        ] {
             assert!(!kind.accepts_text_input(), "kind {kind:?} must reject text input");
         }
     }

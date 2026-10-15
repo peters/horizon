@@ -694,7 +694,20 @@ again for the same repository.
 Several repositories can be set up at the same time, each with its own agent. Click
 **Close** while a setup works, open **New cloud** again, choose another repository
 and start its setup. **New cloud** shows the setup of the repository that it opens
-for, so open it for the first repository to see that setup again. One
+for, so open it for the first repository to see that setup again.
+
+The **Setup board** panel shows every setup in one place. It opens with the first setup,
+beside the setup agents in a local workspace (the active one, else a workspace named
+**Cloud setup**), and **Close** in the setup view shows it.
+**Menu** > **Setup board** opens it too. Each row shows the repository, a segment for
+each step, and what the setup does now: the running step, **Waiting for a build
+slot** with the setups that build, a failed step, or **Ready** with the agent's
+summary. **Open agent** shows the agent's panel. **Open in New cloud** (**Use in New
+cloud** once the setup is ready) opens **New cloud** for that repository, with its
+steps, the agent's terminal and **Use this setup**. **Stop** stops the setup.
+**Set up a repository** opens **New cloud** to start another one. The rows are made
+again from the setups that run, so after a restart the board is empty until a new
+setup starts. One
 repository has one setup at a time: a second setup of the same folder, also through
 a link to it, is refused until the first one stops. A message about a setup, for
 example why **Use this setup** did not commit, shows under the steps of that setup.

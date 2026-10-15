@@ -12,6 +12,22 @@ use super::spawn::{
 use super::{DEFAULT_CELL_HEIGHT, DEFAULT_CELL_WIDTH, Panel, PanelKind};
 
 impl Panel {
+    /// The content a board panel restarts with: the Upkeep board reads its status again
+    /// and keeps its pull request panel, the usage dashboard starts empty, and the setup
+    /// board gets its rows from the app on the next frame. `None` for any other panel.
+    fn fresh_board_content(&self) -> Option<PanelContent> {
+        match &self.content {
+            PanelContent::Upkeep(board) => {
+                let mut fresh = crate::UpkeepBoard::new(Some(board.path().to_path_buf()));
+                fresh.browser = board.browser;
+                Some(PanelContent::Upkeep(fresh))
+            }
+            PanelContent::Usage(_) => Some(PanelContent::Usage(UsageDashboard::new())),
+            PanelContent::SetupBoard(_) => Some(PanelContent::SetupBoard(crate::SetupBoard::default())),
+            _ => None,
+        }
+    }
+
     /// Restart panel content while keeping the same identity and layout.
     /// Terminal agent panels resume their existing session. Browser panels
     /// only schedule an asynchronous relaunch; `Ok(())` confirms that the
@@ -39,16 +55,8 @@ impl Panel {
             return Ok(());
         }
 
-        if let PanelContent::Upkeep(board) = &self.content {
-            let mut fresh = crate::UpkeepBoard::new(Some(board.path().to_path_buf()));
-            // The pull request panel it opened stays its own.
-            fresh.browser = board.browser;
-            self.content = PanelContent::Upkeep(fresh);
-            return Ok(());
-        }
-
-        if let PanelContent::Usage(_) = &self.content {
-            self.content = PanelContent::Usage(UsageDashboard::new());
+        if let Some(fresh) = self.fresh_board_content() {
+            self.content = fresh;
             return Ok(());
         }
 

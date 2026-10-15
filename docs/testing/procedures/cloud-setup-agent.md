@@ -559,9 +559,43 @@ checked on the cloud card, and an agent panel in the same workspace.
 
    Result: Horizon starts.
 
+### 6.22 S22 — The setup board
+
+1. Start the setup agent on two copies of the fixture without `.horizon`, as in S20.
+
+   Result: The **Setup board** panel opens in the workspace of the setup agents. It has
+   one row for each copy, with the name, the path, a segment for each step and the
+   running step.
+
+2. Wait until a proof of one copy waits for a build slot, as in S21.
+
+   Result: Its row says **Waiting for a build slot** and names the other copy. Its
+   **Build image** segment is yellow.
+
+3. On the row of the first copy, click **Open in New cloud**.
+
+   Result: **New cloud** opens and shows the steps of the first copy.
+
+4. Click **Close**.
+
+   Result: The dialog closes and the canvas shows the setup board.
+
+5. On the row of the second copy, click **Open agent**.
+
+   Result: The agent panel of the second copy shows.
+
+6. On the row of the second copy, click **Stop**.
+
+   Result: The agent of the second copy stops and its row goes. The first copy keeps
+   its row.
+
+7. Close the setup board. Open **Menu** and click **Setup board**.
+
+   Result: The setup board opens again with the row of the first copy.
+
 ## 7. Pass criteria
 
-- S01 to S21 give the results above.
+- S01 to S22 give the results above.
 - The proof ran on this computer. Before you click **Use this setup** in S04,
   `docker images` lists `horizon-setup-ci-app-<hash>-<run>:candidate`. `<hash>` is
   six hexadecimal digits that Horizon derives from the repository's path. `<run>` is

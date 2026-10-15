@@ -13,6 +13,7 @@ use std::path::Path;
 mod accept;
 mod access;
 mod agent;
+mod board;
 mod bounded;
 mod cards;
 mod commit;
@@ -129,7 +130,7 @@ pub(super) fn footer(ui: &mut egui::Ui, form: &Production) -> Footer {
         } else if finished {
             "Use this setup commits the files in .horizon and reads them as this repository's profile."
         } else {
-            "Close keeps the agent working. Open New cloud again to come back."
+            "Close keeps the agent working. The setup board shows it with every other setup."
         };
         ui.label(RichText::new(hint).size(13.0).color(theme::FG_SOFT()));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
