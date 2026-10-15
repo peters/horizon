@@ -3,8 +3,8 @@ with the cloud's token, and for which repository and access. gh reaches the brok
 host, so the policy also names the hosts that GitHub redirects to, which get no token:
 
 - api.github.com: a repository's own paths (`/repos/OWNER/NAME/...` or
-  `/repositories/ID/...`), searches limited to granted repositories, and `/`, `/rate_limit`
-  and `/meta`. A read needs a read grant. A change needs a push grant and must be one of the
+  `/repositories/ID/...`), searches limited to granted repositories, `/`, `/rate_limit`,
+  `/meta`, and reads of the global security advisories (`/advisories`), which are public. A read needs a read grant. A change needs a push grant and must be one of the
   changes that pull requests, issues, releases, commits, checks and workflow runs make; no
   change to a repository's settings, access, secrets or hooks, and no delete of a repository.
 - uploads.github.com: a release asset upload, with a push grant.
@@ -51,6 +51,8 @@ REPOSITORY = re.compile(r'/repos/%s/%s%s' % (OWNER, NAME, REST))
 BY_ID = re.compile(r'/repositories/(?P<id>[1-9][0-9]{0,19})%s' % REST)
 SEARCH = re.compile(r'/search/(?P<kind>issues|commits|code|repositories)')
 PLAIN = {'/', '/rate_limit', '/meta'}
+# The global security advisories: public data in no repository, read only.
+ADVISORIES = re.compile(r'/advisories(?:/GHSA(?:-[0-9A-Za-z]{4}){3})?')
 ASSETS = re.compile(r'/repos/%s/%s/releases/[1-9][0-9]{0,19}/assets' % (OWNER, NAME))
 QUERY = re.compile(r'[A-Za-z0-9._~%!$&\'()*+,;=:@/?-]{0,8192}')
 # The first part of a repository path that a push grant may change, and for `actions` the
@@ -182,7 +184,7 @@ def route(method, host, target):
             except policy.Refused as refused:
                 raise Refused(403, str(refused)) from None
             return Route(host, 'search', 'read', repositories=repositories)
-        if path in PLAIN and method in READS:
+        if (path in PLAIN or ADVISORIES.fullmatch(path)) and method in READS:
             return Route(host, 'plain')
         if path == '/graphql':
             if method != 'POST':
