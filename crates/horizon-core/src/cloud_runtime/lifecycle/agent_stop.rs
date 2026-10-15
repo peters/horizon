@@ -244,12 +244,17 @@ pub(super) fn stop_with(
     let worker = worker.clone();
     // The request still holds on the worker now, not only when it was read: one that
     // lapsed while this computer slept, or was replaced, stops nothing.
-    match parse(&run(&worker, TAKE)?, &worker)? {
-        Requested::Stop(now) if now.at == request.at => {}
-        _ => {
+    match run(&worker, TAKE).and_then(|answer| parse(&answer, &worker)) {
+        Ok(Requested::Stop(now)) if now.at == request.at => {}
+        Ok(_) => {
             return Err(Error::Invalid(
                 "The agent's stop request no longer holds on the worker, so Horizon did not stop it",
             ));
+        }
+        // Nothing was sent to the provider: the request goes back, if the worker answers.
+        Err(error) => {
+            untake(&worker);
+            return Err(error);
         }
     }
     // The agent and its reason are recorded before the provider is asked, so a stop

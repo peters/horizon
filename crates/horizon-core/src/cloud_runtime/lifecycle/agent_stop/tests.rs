@@ -443,3 +443,24 @@ fn a_stop_cancelled_while_it_waits_for_the_cloud_gives_the_request_back() {
         [format!("horizon-worker-stopd --untake {}", stop().at)]
     );
 }
+
+#[test]
+fn a_second_take_that_fails_gives_the_request_back() {
+    let root = tempfile::tempdir().unwrap();
+    ready(root.path(), |_| {});
+    let commands = RefCell::new(Vec::new());
+    let run = |_: &Worker, command: &str| {
+        commands.borrow_mut().push(command.to_owned());
+        if command == TAKE {
+            Err(Error::Invalid("connection reset"))
+        } else {
+            Ok(String::new())
+        }
+    };
+    assert!(stop_with(root.path(), &stop(), run, never, settled, || false, Duration::ZERO).is_err());
+    assert_eq!(
+        *commands.borrow(),
+        [TAKE.to_owned(), format!("horizon-worker-stopd --untake {}", stop().at)]
+    );
+    assert_eq!(attribution(root.path()), None);
+}

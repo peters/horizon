@@ -222,10 +222,15 @@ fn a_request_found_again_while_its_stop_runs_is_left_alone() {
     let runtime = app.cloud_prototype.production.runtimes.entry(1).or_default();
     runtime.stage = Some(cloud_runtime::Stage::Stopping);
     runtime.operation = Some(Action::Stop);
+    runtime.stopping_for = Some(stop().at);
     app.stop_clouds_for_agents(vec![(1, order())], &ctx);
-    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    let runtime = app.cloud_prototype.production.runtimes.get_mut(&1).unwrap();
     assert_eq!(runtime.given_back, None, "not given back");
     assert!(runtime.logs.is_empty());
+    // During a person's Stop it is another operation's: given back.
+    runtime.stopping_for = None;
+    app.stop_clouds_for_agents(vec![(1, order())], &ctx);
+    assert_eq!(app.cloud_prototype.production.runtimes[&1].given_back, Some(stop().at));
 }
 
 #[test]

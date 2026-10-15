@@ -147,8 +147,12 @@ impl HorizonApp {
             let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) else {
                 continue;
             };
-            // A stop already under way, as one for this very request: nothing to give back.
-            if runtime.operation == Some(Action::Stop) && runtime.stage == Some(Stage::Stopping) {
+            // The stop for this very request is under way: nothing to give back. A person's
+            // Stop, or one for another request, is another operation: given back below.
+            if runtime.operation == Some(Action::Stop)
+                && runtime.stage == Some(Stage::Stopping)
+                && runtime.stopping_for == Some(stop.at)
+            {
                 continue;
             }
             let ready = runtime.stage == Some(Stage::Ready)
@@ -180,9 +184,12 @@ impl HorizonApp {
             if let Some(desktop) = runtime.desktop.take() {
                 std::thread::spawn(move || drop(desktop));
             }
+            let at = order.stop.at;
             runtime.agent_stop = Some(order);
             self.change_production_worker(id, Action::Stop, ctx);
             if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
+                // Set only when this request's Stop started.
+                runtime.stopping_for = runtime.agent_stop.is_none().then_some(at);
                 runtime.agent_stop = None;
             }
         }
