@@ -153,6 +153,7 @@ pub fn stop_for_agent(root: &Path, settings: &Settings, cancel: &Cancellation, s
         |worker, command| run(worker, settings, root, &Cancellation::default(), command),
         |store| stop_locked(store, settings, cancel, &observe).map(drop),
         |error| uncertain_outcome(announced.get(), pending.get(), error),
+        || cancel.is_cancelled(),
         LOCK_PATIENCE,
     )
 }
@@ -176,6 +177,7 @@ pub(super) fn stop_with(
     run: impl Fn(&Worker, &str) -> Result<String>,
     stop: impl FnOnce(&Store) -> Result<()>,
     uncertain: impl Fn(&Error) -> bool,
+    cancelled: impl Fn() -> bool,
     patience: Duration,
 ) -> Result<Deployment> {
     // Best effort: a worker the stop already reached cannot answer, and keeps the stop.
@@ -183,13 +185,26 @@ pub(super) fn stop_with(
         let _ = run(worker, &format!("horizon-worker-stopd --untake {}", request.at));
     };
     // Another operation holds the cloud, which may be another Horizon stopping it for this
-    // very request: it is waited for, and the request is left to it, not given back, so
-    // that the two cannot drop it between them.
+    // very request: it is waited for, since that stop checks the request again as soon as
+    // it holds the cloud. One that holds it longer, or a cancel, gives the request back to
+    // the worker it came from, so no stop that did not happen stays on its log.
     let waited = Instant::now();
     let store = loop {
         match Store::lock(root) {
-            Err(Error::Busy) if waited.elapsed() < patience => std::thread::sleep(Duration::from_millis(250)),
-            locked => break locked?,
+            Err(Error::Busy) if waited.elapsed() < patience && !cancelled() => {
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            Err(error) => {
+                if let Some(worker) = &request.worker {
+                    untake(worker);
+                }
+                return Err(if cancelled() {
+                    Error::Provider(horizon_cloud::CloudError::Cancelled)
+                } else {
+                    error
+                });
+            }
+            Ok(store) => break store,
         }
     };
     let state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
@@ -251,11 +266,16 @@ pub(super) fn stop_with(
         // Only a stop that certainly did not happen gives the request back and drops the
         // attribution; one whose provider request may have taken effect keeps both.
         if !uncertain(&error) {
+            let restored = store.load().and_then(|now| {
+                now.map_or(Ok(()), |mut now| {
+                    now.last_self_stop = earlier;
+                    store.save(&now)
+                })
+            });
             untake(&worker);
-            if let Some(mut now) = store.load()? {
-                now.last_self_stop = earlier;
-                store.save(&now)?;
-            }
+            // The stop's own failure is what the card reports; a record that could not be
+            // restored keeps its attribution until the next stop replaces it.
+            drop(restored);
         }
         return Err(error);
     }
