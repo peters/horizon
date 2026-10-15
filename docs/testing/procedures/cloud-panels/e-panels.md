@@ -397,11 +397,15 @@ bind the token.
 2. Ask the operator to write the token to the token file in this Shell panel.
 
    ```sh
-   (umask 077; cat > /workspace/credentials/claude-oauth-token)
+   (umask 077; IFS= read -rs token && printf '%s\n' "$token" > /workspace/credentials/claude-oauth-token)
    ```
 
-   Result: The operator pastes the token, then types Enter and Ctrl+D. The file
-   exists with mode `-rw-------`.
+   The Bash built-in `read -s` turns off the echo of the terminal while the operator
+   pastes, and turns it on again when the line ends or the command stops. `printf`
+   is a Bash built-in, so the token is in no command line.
+
+   Result: The operator pastes the token, then types Enter. The panel does not show
+   the token. The file exists with mode `-rw-------`.
 
 3. Open a new Shell panel as in E01 steps 1 and 2. Count the token variable. Do not
    show its value.
