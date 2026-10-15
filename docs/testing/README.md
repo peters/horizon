@@ -71,6 +71,7 @@ documents that are not yet STE.
 | [new-cloud-picker](procedures/new-cloud-picker.md) | New cloud dialog, worker list, filters, picks and data centers | none |
 | [one-service-gateway-engine](procedures/one-service-gateway-engine.md) | Feature-off LAN/tailnet endpoint engine prerequisite | none |
 | [tailnet-enrollment-ledger](procedures/tailnet-enrollment-ledger.md) | Saved enrollment receipts, allocation identity and capture attempts | none |
+| [runpod-exposure-ports](procedures/runpod-exposure-ports.md) | Default-off decoder for observed existing TCP mappings | none |
 | [tailnet-receipt-capture](procedures/tailnet-receipt-capture.md) | Device ID capture before Ready and after stop/resume | rents compute (LIVE only) |
 | [tailnet-stable-device-name](procedures/tailnet-stable-device-name.md) | Cloud tailnet device name after stop and resume | rents compute |
 | [tailnet-tagged-enrollment](procedures/tailnet-tagged-enrollment.md) | Marker 4 and one-time enrollment/resume tag checks; optional real-tailnet lane needs separate authorization | rents compute (optional R01 only) |

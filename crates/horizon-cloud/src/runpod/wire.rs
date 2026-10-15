@@ -2,6 +2,8 @@
 use crate::{CloudError, NetworkVolume, SshHost, Worker};
 use serde::Deserialize;
 use std::{collections::BTreeMap, net::IpAddr};
+#[cfg(feature = "exposure-ports")]
+mod ports;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,6 +21,8 @@ pub(super) struct Pod {
     ssh: Ssh,
     cost: f64,
     started_at: Option<String>,
+    #[cfg(feature = "exposure-ports")]
+    runtime: Option<serde_json::Value>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -99,6 +103,12 @@ impl Pod {
             let dns = ip.is_none().then_some(host);
             (ip, dns, Some(BTreeMap::from([("22".to_owned(), port)])))
         });
+        #[cfg(feature = "exposure-ports")]
+        let port_mappings = if self.status == "RUNNING" {
+            ports::with_runtime(self.runtime, public_ip, port_mappings)
+        } else {
+            port_mappings
+        };
         let (network_volume, volume_in_gb, volume_mount_path) =
             if let Some(mount) = self.mounts.network.into_iter().next() {
                 if !crate::valid_id(&mount.volume_id) {

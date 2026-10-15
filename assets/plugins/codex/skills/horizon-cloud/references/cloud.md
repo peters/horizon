@@ -839,6 +839,15 @@ firewall ownership checks refuse selectors and foreign targets. Management acces
 worker expiry, source attribution and RunPod mappings need the final owner
 controller and real qualification. See docs/testing/procedures/exposure-firewalls.md.
 
+### Staged RunPod exposure port observations
+
+The default-off SDK feature `exposure-ports` reads existing v2 runtime TCP port
+mappings for a RUNNING Pod at its numeric SSH public address. It ignores requested,
+HTTP and pending ports; ambiguous runtime facts supply no additional endpoints.
+It does not change Pod creation, publish a service or qualify RunPod isolation.
+See docs/testing/procedures/runpod-exposure-ports.md. Public controller activation
+and fresh original-Pod mapping checks remain separate requirements.
+
 ### Destination management policy
 
 The shared core destination manager reads metadata without opening the settings
