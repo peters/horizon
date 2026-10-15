@@ -9,7 +9,7 @@ mod transport;
 
 use super::{Error, Result};
 pub use check::check;
-pub use horizon_cloud::docker_host::{Access, Capacity, Host};
+pub use horizon_cloud::docker_host::{Access, Capacity, Host, private_ports};
 pub use probe::{Check, CheckState, Probe, probe};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

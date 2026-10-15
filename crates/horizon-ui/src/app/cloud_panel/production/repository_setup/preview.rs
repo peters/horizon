@@ -602,6 +602,14 @@ impl Job {
                 remote.name()
             )));
         }
+        // The desktop has no password: an engine that lets the network reach its loopback
+        // ports does not publish it.
+        if let Some(remote) = daemon.daemon.remote().filter(|remote| !remote.loopback_private()) {
+            return Ok(Hardware::Missing(format!(
+                "the Docker host {} runs Docker older than stable 28, which lets other machines on its network reach the preview's desktop; update it to show the preview",
+                remote.name()
+            )));
+        }
         let root = self.spec.kvm && rootless(daemon);
         let user = if root { "0:0" } else { "10001:10001" };
         let devices = devices(self.gpu, self.spec.kvm.then_some(Path::new(KVM)), root);

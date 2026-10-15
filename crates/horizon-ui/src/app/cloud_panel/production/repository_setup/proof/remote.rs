@@ -14,17 +14,34 @@ const OPEN_TIMEOUT: Duration = Duration::from_secs(30);
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The process groups of the SSH forwards that are open now, so Horizon's exit ends
-/// those that a value it never drops still holds, such as a cleanup still waiting.
-static OPEN: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+/// those that a value it never drops still holds, such as a cleanup still waiting; and
+/// whether the exit closed them, after which no forward may open.
+struct Open {
+    groups: Vec<u32>,
+    closed: bool,
+}
 
-fn open_forwards() -> std::sync::MutexGuard<'static, Vec<u32>> {
+static OPEN: std::sync::Mutex<Open> = std::sync::Mutex::new(Open {
+    groups: Vec::new(),
+    closed: false,
+});
+
+fn open_forwards() -> std::sync::MutexGuard<'static, Open> {
     OPEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Ends every SSH forward that is still open, as Horizon exits: a forward must not
-/// outlive the Horizon that opened it.
+/// Ends every SSH forward that is still open, as Horizon exits, and refuses any later
+/// one: a forward must not outlive the Horizon that opened it.
 pub(in crate::app::cloud_panel::production::repository_setup) fn close_forwards() {
-    for group in std::mem::take(&mut *open_forwards()) {
+    // The tests of one process each exit their app, while other tests still open forwards.
+    close(cfg!(not(test)));
+}
+
+/// Ends every open forward, and refuses later ones when `refuse`.
+fn close(refuse: bool) {
+    let mut open = open_forwards();
+    open.closed |= refuse;
+    for group in std::mem::take(&mut open.groups) {
         super::stream::end_group(group);
     }
 }
@@ -40,13 +57,19 @@ impl Forward {
     fn start(mut command: Command) -> Result<Self, String> {
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(&mut command, 0);
+        // Started and registered under the registry's lock, so an exit that closes the
+        // forwards meanwhile cannot miss this one.
+        let mut open = open_forwards();
+        if open.closed {
+            return Err("Horizon is exiting".to_owned());
+        }
         let child = command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|error| format!("cannot start ssh: {error}"))?;
-        open_forwards().push(child.id());
+        open.groups.push(child.id());
         Ok(Self { child })
     }
 
@@ -85,7 +108,7 @@ impl Forward {
 
 impl Drop for Forward {
     fn drop(&mut self) {
-        open_forwards().retain(|group| *group != self.child.id());
+        open_forwards().groups.retain(|group| *group != self.child.id());
         super::stream::end_group(self.child.id());
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -109,6 +132,9 @@ pub(in crate::app::cloud_panel::production::repository_setup) struct Remote {
     _folder: tempfile::TempDir,
     socket: PathBuf,
     forward: std::sync::Mutex<Forward>,
+    /// The engine's own ID and its version, as it answered when the forward opened.
+    engine_id: String,
+    engine_version: String,
 }
 
 impl Remote {
@@ -129,11 +155,15 @@ impl Remote {
         forward
             .wait(ANSWER_TIMEOUT, || answers(&address))
             .map_err(|error| format!("the Docker of {} does not answer: {error}", host.name))?;
+        let (engine_id, engine_version) =
+            engine(&address).ok_or_else(|| format!("the Docker of {} does not say which engine it is", host.name))?;
         Ok(Self {
             host: host.clone(),
             _folder: folder,
             socket,
             forward: std::sync::Mutex::new(forward),
+            engine_id,
+            engine_version,
         })
     }
 
@@ -149,6 +179,19 @@ impl Remote {
     /// The Docker host's name, as Cloud settings save it.
     pub(in crate::app::cloud_panel::production::repository_setup) fn name(&self) -> &str {
         &self.host.name
+    }
+
+    /// The engine's own ID, which tells this engine from another one the same name
+    /// reaches later.
+    pub(in crate::app::cloud_panel::production::repository_setup) fn engine_id(&self) -> &str {
+        &self.engine_id
+    }
+
+    /// Whether the engine keeps ports it publishes on its loopback private: Docker before
+    /// stable 28 lets hosts on the same network reach them, so a preview's desktop, which
+    /// has no password, is not published there.
+    pub(in crate::app::cloud_panel::production::repository_setup) fn loopback_private(&self) -> bool {
+        horizon_core::cloud_runtime::docker_host::private_ports(&self.engine_version)
     }
 
     /// The `DOCKER_HOST` of the forwarded engine.
@@ -178,6 +221,36 @@ impl Remote {
         })?;
         Ok((local, forward))
     }
+}
+
+/// The ID and the version of the engine at `address`, or none when it does not say
+/// within a few seconds.
+fn engine(address: &str) -> Option<(String, String)> {
+    let mut probe = Command::new("docker");
+    probe
+        .env("DOCKER_HOST", address)
+        .env_remove("DOCKER_CONTEXT")
+        .args(["info", "--format", "{{.ID}} {{.ServerVersion}}"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut probe, 0);
+    let mut child = probe.spawn().ok()?;
+    let started = Instant::now();
+    while child.try_wait().ok()?.is_none() {
+        if started.elapsed() > Duration::from_secs(10) {
+            super::stream::end_group(child.id());
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut std::io::Read::take(child.stdout.take()?, 4096), &mut text).ok()?;
+    let (id, version) = text.trim().split_once(' ')?;
+    (!id.is_empty() && !version.is_empty()).then(|| (id.to_owned(), version.to_owned()))
 }
 
 /// Whether the engine at `address` answers `docker version` within a few seconds.
@@ -274,6 +347,8 @@ mod tests {
         assert!(error.contains("status 255") && error.contains("publickey"), "{error}");
     }
 
+    // A process group ends only on Unix.
+    #[cfg(unix)]
     #[test]
     fn horizons_exit_ends_a_forward_that_is_never_dropped() {
         let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -284,11 +359,19 @@ mod tests {
         // Held where nothing drops it, as a cleanup still waiting at exit holds its daemon.
         let held = Box::leak(Box::new(forward));
         assert!(held.alive());
-        close_forwards();
+        close(true);
         let started = std::time::Instant::now();
         while held.alive() {
             assert!(started.elapsed() < Duration::from_secs(5), "the forward {pid} ended");
             std::thread::sleep(Duration::from_millis(20));
         }
+        let mut command = Command::new("sleep");
+        command.arg("60");
+        assert!(
+            Forward::start(command).is_err(),
+            "no forward opens once the exit closed them"
+        );
+        // The other tests of this process open forwards again.
+        open_forwards().closed = false;
     }
 }

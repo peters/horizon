@@ -180,7 +180,7 @@ fn prove(entry: &Entry, out: &Path) -> serde_json::Value {
     // the entry, as the dialog accepts such a setup.
     let passed = proved && preview["outcome"] != "failed";
     let worker = proof.stop();
-    remove_run_resources(&entry.repository, &entry.run, worker, Some(pinned), true);
+    remove_run_resources(&entry.repository, &entry.run, worker, (Some(pinned), None), true);
     let mut result = serde_json::json!({
         "passed": passed,
         "phases": phases,

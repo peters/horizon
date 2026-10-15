@@ -225,25 +225,32 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_reso
     repository: &Path,
     run: &str,
     after: Option<std::thread::JoinHandle<()>>,
-    pinned: Option<Pinned>,
+    (pinned, build_on): (Option<Pinned>, Option<horizon_core::cloud_runtime::docker_host::Host>),
     wait: bool,
 ) {
-    let docker_host = pinned
-        .as_ref()
-        .and_then(|pinned| pinned.get())
-        .and_then(Daemon::remote)
-        .map(|remote| remote.name().to_owned());
-    expect_removal(repository, run, docker_host.as_deref());
+    let on_host = pinned.as_ref().and_then(|pinned| pinned.get()).and_then(Daemon::remote);
+    // The run's Docker host names where they are also when no proof pinned a daemon,
+    // as when a replacement proof failed before it reached one.
+    let docker_host = on_host
+        .map(|remote| remote.name().to_owned())
+        .or_else(|| build_on.as_ref().map(|host| host.name.clone()));
+    let engine_id = on_host.map(|remote| remote.engine_id().to_owned());
+    expect_removal(repository, run, (docker_host.as_deref(), engine_id.as_deref()));
     let (image, volume) = run_names(repository, run);
     let resources = RunResources::new(image, volume);
     let remove = move || {
         if let Some(after) = after {
             let _ = after.join();
         }
-        // The daemon the proof pinned; without a proof that checked one, the daemon of
-        // this computer Docker uses now. A daemon on another machine is never touched.
+        // The daemon the proof pinned; without a proof that checked one, the run's Docker
+        // host, else the daemon of this computer Docker uses now. Resources of a run on a
+        // Docker host are never looked for on this computer, where they would look gone.
         let pinned = pinned.as_ref().and_then(|pinned| pinned.get().cloned());
-        let Some(daemon) = pinned.or_else(cleanup_daemon) else {
+        let daemon = pinned.or_else(|| match &build_on {
+            Some(host) => reopen_host(host, None),
+            None => cleanup_daemon(),
+        });
+        let Some(daemon) = daemon else {
             resources.set_waiting(None);
             return;
         };
@@ -277,6 +284,9 @@ struct Pending {
     /// The Docker host they are on, by name, as an earlier Horizon kept them: its forward
     /// opens again for the retry.
     docker_host: Option<String>,
+    /// That host's engine ID when they were made, so a retry never removes on another
+    /// engine the same name reaches later.
+    engine_id: Option<String>,
 }
 
 /// Every run whose resources are not shown gone yet: from the moment the run is let go
@@ -295,7 +305,7 @@ fn pending() -> std::sync::MutexGuard<'static, Vec<Pending>> {
 pub(in crate::app::cloud_panel::production::repository_setup) fn expect_removal(
     repository: &Path,
     run: &str,
-    docker_host: Option<&str>,
+    (docker_host, engine_id): (Option<&str>, Option<&str>),
 ) {
     let (image, volume) = run_names(repository, run);
     let mut pending = pending();
@@ -304,12 +314,16 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn expect_removal(
             if known.docker_host.is_none() {
                 known.docker_host = docker_host.map(str::to_owned);
             }
+            if known.engine_id.is_none() {
+                known.engine_id = engine_id.map(str::to_owned);
+            }
         }
         None => pending.push(Pending {
             resources: RunResources::new(image, volume),
             daemon: None,
             working: true,
             docker_host: docker_host.map(str::to_owned),
+            engine_id: engine_id.map(str::to_owned),
         }),
     }
 }
@@ -331,27 +345,42 @@ fn cleanup_daemon() -> Option<Daemon> {
 /// The daemon of the Docker host `name` saved in Cloud settings, forwarded again for a
 /// retry; none when the host is no longer saved or cannot be reached now.
 #[cfg(not(test))]
-fn reopen(name: &str) -> Option<Daemon> {
+fn reopen(name: &str, engine_id: Option<&str>) -> Option<Daemon> {
     let path = horizon_core::HorizonHome::resolve()
         .root()
         .join("cloud")
         .join("settings.json");
     let settings = horizon_core::cloud_runtime::settings::Settings::load(&path).ok()?;
     let host = settings.docker_hosts.iter().find(|host| host.name == name)?;
-    Daemon::on(Some(host))
-        .map_err(|error| {
-            tracing::warn!(
-                host = name,
-                "cannot reach the Docker host to remove a setup run's resources: {error}"
-            );
-        })
-        .ok()
+    reopen_host(host, engine_id)
 }
 
 /// A test never reaches a Docker host.
 #[cfg(test)]
-fn reopen(_name: &str) -> Option<Daemon> {
+fn reopen(_name: &str, _engine_id: Option<&str>) -> Option<Daemon> {
     None
+}
+
+/// The daemon of `host`, forwarded again for a retry, when it is still the engine
+/// `engine_id` names; none when it cannot be reached or is another engine now.
+fn reopen_host(host: &horizon_core::cloud_runtime::docker_host::Host, engine_id: Option<&str>) -> Option<Daemon> {
+    let daemon = Daemon::on(Some(host))
+        .map_err(|error| {
+            tracing::warn!(
+                host = host.name,
+                "cannot reach the Docker host to remove a setup run's resources: {error}"
+            );
+        })
+        .ok()?;
+    let found = daemon.remote().map(super::remote::Remote::engine_id);
+    if engine_id.is_some_and(|expected| found != Some(expected)) {
+        tracing::warn!(
+            host = host.name,
+            "the Docker host is another engine now; a setup run's resources stay recorded for the one they are on"
+        );
+        return None;
+    }
+    Some(daemon)
 }
 
 /// Where Horizon keeps the run resources it could not remove before it exited.
@@ -369,6 +398,10 @@ fn leftovers_file() -> std::path::PathBuf {
     std::env::temp_dir().join(format!("horizon-test-setup-leftovers-{}.json", std::process::id()))
 }
 
+/// Resources waiting for another try, with the daemon, the Docker host and the engine
+/// they are on.
+type Waiting = (RunResources, Option<Daemon>, Option<String>, Option<String>);
+
 /// Tries again to remove what earlier cleanups could not, this run of Horizon's or one
 /// before it, in the background; Horizon's exit waits for it.
 pub(in crate::app::cloud_panel::production::repository_setup) fn retry_unremoved() {
@@ -382,6 +415,7 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn retry_unremoved
                 && !pending.iter().any(|known| known.resources.volume == volume)
             {
                 let docker_host = entry["docker_host"].as_str().map(str::to_owned);
+                let engine_id = entry["engine_id"].as_str().map(str::to_owned);
                 pending.push(Pending {
                     resources: RunResources::new(image.to_owned(), volume.to_owned()),
                     // A forwarded socket is gone with the Horizon that opened it.
@@ -394,19 +428,21 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn retry_unremoved
                         }),
                     working: false,
                     docker_host,
+                    engine_id,
                 });
             }
         }
     }
-    let waiting: Vec<(RunResources, Option<Daemon>, Option<String>)> = pending()
+    let waiting: Vec<Waiting> = pending()
         .iter_mut()
         .filter(|known| !known.working)
         .map(|known| {
             known.working = true;
-            (known.resources.clone(), known.daemon.clone(), known.docker_host.clone())
+            let route = (known.docker_host.clone(), known.engine_id.clone());
+            (known.resources.clone(), known.daemon.clone(), route.0, route.1)
         })
         .collect();
-    for (resources, daemon, docker_host) in waiting {
+    for (resources, daemon, docker_host, engine_id) in waiting {
         super::super::run::keep_ending(std::thread::spawn(move || {
             // Resources on a Docker host are never looked for on this computer's daemon,
             // where they are missing and would look removed.
@@ -414,7 +450,7 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn retry_unremoved
             let daemon = daemon.filter(|daemon| daemon.remote().is_none_or(super::remote::Remote::alive));
             let daemon = match (daemon, docker_host) {
                 (Some(daemon), _) => Some(daemon),
-                (None, Some(name)) => reopen(&name),
+                (None, Some(name)) => reopen(&name, engine_id.as_deref()),
                 (None, None) => cleanup_daemon(),
             };
             match daemon {
@@ -441,6 +477,12 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn keep_unremoved(
                     .and_then(Daemon::remote)
                     .map(super::remote::Remote::name)
                     .or(known.docker_host.as_deref()),
+                "engine_id": known
+                    .daemon
+                    .as_ref()
+                    .and_then(Daemon::remote)
+                    .map(super::remote::Remote::engine_id)
+                    .or(known.engine_id.as_deref()),
             })
         })
         .collect();
@@ -471,17 +513,20 @@ impl RunResources {
         {
             let mut pending = pending();
             let docker_host = daemon.remote().map(|remote| remote.name().to_owned());
+            let engine_id = daemon.remote().map(|remote| remote.engine_id().to_owned());
             match pending.iter_mut().find(|known| known.resources.volume == self.volume) {
                 Some(known) => {
                     known.daemon = Some(daemon.clone());
                     known.working = true;
                     known.docker_host = docker_host.or_else(|| known.docker_host.take());
+                    known.engine_id = engine_id.or_else(|| known.engine_id.take());
                 }
                 None => pending.push(Pending {
                     resources: self.clone(),
                     daemon: Some(daemon.clone()),
                     working: true,
                     docker_host,
+                    engine_id,
                 }),
             }
         }

@@ -767,7 +767,8 @@ impl Run {
         let pinned = self.proof.as_ref().map(Proof::daemon);
         let worker = self.stop_all();
         let after = joined(before, worker);
-        proof::remove_run_resources(&self.repository, &proof::run_id(&self.status_path), after, pinned, wait);
+        let route = (pinned, self.build_on.clone());
+        proof::remove_run_resources(&self.repository, &proof::run_id(&self.status_path), after, route, wait);
     }
 
     /// Ends the run in the background: its agent's processes end, its proof stops, then
@@ -776,7 +777,7 @@ impl Run {
     pub(super) fn discard(self) {
         // Noted before the thread starts, so an exit that comes first keeps them.
         let docker_host = self.build_on.as_ref().map(|host| host.name.as_str());
-        proof::expect_removal(&self.repository, &proof::run_id(&self.status_path), docker_host);
+        proof::expect_removal(&self.repository, &proof::run_id(&self.status_path), (docker_host, None));
         let repository = self.repository.clone();
         keep_ending_of(&repository, std::thread::spawn(move || drop(self)));
     }
