@@ -311,3 +311,30 @@ An explicit provider action can retain its own active provider proof when host
 history was read successfully and is empty. A busy or unreadable host journal
 never permits that fallback. Reopening settings reads host history only; it does
 not load compute credentials to recover provider history.
+
+## Shared destination management boundary
+
+The shared manager accepts a local repository and named working-copy profile.
+Direct native management can normalize a checkout subdirectory. Receipt-backed
+operations instead require the host's actual Git root: the worker compares the
+prepared root with that owned scope before reading host policy or authenticating.
+Canonical aliases pass that root check, while receipt identity remains the exact
+host-supplied owner. Cancelled metadata reads propagate cancellation, including a
+lookup that finishes successfully after its cancellation was requested.
+Repository YAML and origin metadata are untrusted and cannot choose credentials
+or an authentication endpoint. Listing reads settings and the cached sign-in store to obtain nonsecret
+account identity; it never returns stored tokens and does not authenticate, read registry secrets, allocate compute
+or mutate a preference. Selection accepts only an already configured exact
+registry grant. Personal targets are derived by the explicit authentication path,
+which rejects ambiguous origins and unsafe credential storage before sign-in.
+
+The trusted host supplies operation ownership (actor, host, settings root and
+repository), never the caller's payload. Receipts are in-memory and bounded by
+count, lifetime and retention. IDs cannot be reused for another owner or request. Each authentication attempt
+uses a separate private Skip key outside the valid cloud-ID namespace; a caller
+receipt ID cannot clear or consume a cloud card's Skip request.
+Scope disappearance, lack of observation and lifetime limits request cancellation.
+A receipt is not durable proof of whether a write committed; settings mutations
+use the existing compare-and-swap fence, and callers list state after expiry.
+The default-off setting still gates mutations. No public adapter is wired by
+this prerequisite; later UI, CLI and MCP controls must use this shared policy.

@@ -1099,6 +1099,11 @@ free capacity and builds its `cloud_offers` section. In `horizon-ui`,
 `cloud_offers`; `setup::docker_hosts` is the settings card and its editor;
 `creation::selector::hosts` draws the **YOUR HOST** cards and the host summary.
 
+Image destination policy lives in `cloud_runtime::publishing::management`;
+`publishing::operations` owns bounded asynchronous receipts and sign-in prompts.
+Host adapters supply ownership and render results, while shared setup helpers read
+metadata without opening the credential editor and retain the preference write fence.
+
 Host pull-history UI regressions are grouped under
 `app/cloud_panel/production/setup/tests/host_pull.rs`; the parent settings tests
 retain shared fixtures and unrelated layout and account checks.
