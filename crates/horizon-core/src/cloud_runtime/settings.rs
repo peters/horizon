@@ -26,8 +26,13 @@ pub struct Settings {
     /// Local image destinations scoped to a canonical checkout and named profile.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub image_publishing: Vec<super::publishing::Override>,
-    /// Staging gate; the complete selector enables this in the final integration.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    /// Legacy in-process switch. Saved staging values no longer disable the completed flow.
+    /// Kept for lower-level callers that explicitly construct a legacy request; never stored.
+    #[serde(
+        default = "Settings::portable_image_publishing_default",
+        deserialize_with = "completed_portable_publishing",
+        skip_serializing
+    )]
     pub portable_image_publishing: bool,
     pub cpu_flavors: Vec<String>,
     pub gpu_types: Vec<String>,
@@ -103,7 +108,18 @@ pub struct RegistryPull {
 pub fn default_agents() -> Vec<horizon_cloud::Agent> {
     vec![horizon_cloud::Agent::Codex, horizon_cloud::Agent::Claude]
 }
+fn completed_portable_publishing<'de, D>(deserializer: D) -> std::result::Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    bool::deserialize(deserializer).map(|_| Settings::portable_image_publishing_default())
+}
+
 impl Settings {
+    pub(in crate::cloud_runtime) const fn portable_image_publishing_default() -> bool {
+        true
+    }
+
     /// # Errors
     /// Rejects missing/malformed settings and relative binding paths.
     pub fn load(path: &Path) -> Result<Self> {
@@ -588,5 +604,58 @@ mod tests {
             std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o644)).unwrap();
             assert!(validate_ssh_identity(file.path()).is_err());
         }
+    }
+
+    #[test]
+    fn legacy_false_does_not_disable_completed_publishing_or_rewrite_bindings_on_read() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        let token = serde_json::json!({"file":root.path().join("absent-agent-token"),"saved_at":0});
+        let mut raw = serde_json::json!({
+            "runpod_key_file":root.path().join("absent-compute"),
+            "ssh_identity_file":root.path().join("absent-identity"),
+            "docker_config":root.path().join("absent-docker"),
+            "cpu_flavors":[],"gpu_types":[],"claude_token":token
+        });
+        for legacy in [Some(false), Some(true), None] {
+            raw.as_object_mut().unwrap().remove("portable_image_publishing");
+            if let Some(value) = legacy {
+                raw["portable_image_publishing"] = value.into();
+            }
+            let before = serde_json::to_vec(&raw).unwrap();
+            std::fs::write(&path, &before).unwrap();
+            let loaded = Settings::load(&path).unwrap();
+            assert!(
+                loaded.portable_image_publishing,
+                "old staging state must not disable the completed flow"
+            );
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                before,
+                "reading never migrates machine settings in place"
+            );
+            let saved = serde_json::to_value(loaded).unwrap();
+            assert!(saved.get("portable_image_publishing").is_none());
+            assert_eq!(saved["claude_token"], raw["claude_token"]);
+            assert!(!root.path().join("absent-agent-token").exists());
+        }
+        for invalid in [serde_json::Value::Null, "false".into(), 0.into()] {
+            raw["portable_image_publishing"] = invalid;
+            let before = serde_json::to_vec(&raw).unwrap();
+            std::fs::write(&path, &before).unwrap();
+            assert!(Settings::load(&path).is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+        }
+        assert!(
+            super::super::setup::load_settings(&root.path().join("fresh"))
+                .unwrap()
+                .portable_image_publishing
+        );
+        assert!(
+            super::super::setup::Draft::load(&root.path().join("fresh-draft"))
+                .unwrap()
+                .settings
+                .portable_image_publishing
+        );
     }
 }

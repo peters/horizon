@@ -335,7 +335,7 @@ fn a_reload_keeps_the_destination_visible_but_cannot_confirm_stale_metadata() {
 }
 
 #[test]
-fn a_disabled_feature_keeps_the_explicit_recipe_without_reading_git_or_sign_in() {
+fn ordinary_settings_keep_an_explicit_recipe_and_require_review_of_automatic_intent() {
     let root = tempfile::tempdir().unwrap();
     let key = Key {
         root: root.path().to_owned(),
@@ -349,7 +349,7 @@ fn a_disabled_feature_keeps_the_explicit_recipe_without_reading_git_or_sign_in()
         .unwrap(),
     };
     let loaded = load(&key, &Cancellation::default()).unwrap();
-    assert!(!loaded.enabled);
+    assert!(loaded.enabled);
     assert_eq!(
         loaded.selection,
         Some(Selection::Recipe {
@@ -360,7 +360,13 @@ fn a_disabled_feature_keeps_the_explicit_recipe_without_reading_git_or_sign_in()
     let mut automatic = key;
     automatic.profile.image.clear();
     let loaded = load(&automatic, &Cancellation::default()).unwrap();
-    assert!(loaded.selection.is_none());
+    assert_eq!(
+        loaded.selection,
+        Some(Selection::Automatic {
+            login: None,
+            repository: None
+        })
+    );
     assert!(!state(Some(loaded)).ready());
 }
 
@@ -396,7 +402,7 @@ fn expired_metadata_blocks_start_until_shared_policy_has_been_read_again() {
         }))
         .unwrap(),
     });
-    // The cached enabled publisher has been replaced by default, disabled settings.
+    // Current settings select the explicit recipe instead of the cached personal publisher.
     state.refresh_at = Some(Instant::now());
     assert!(!state.ready());
     assert!(state.snapshot().is_none());
@@ -420,8 +426,11 @@ fn expired_metadata_blocks_start_until_shared_policy_has_been_read_again() {
             image: "registry.example/team/worker".into()
         })
     );
-    assert!(!state.info.as_ref().unwrap().enabled);
-    assert!(state.ready(), "the fresh explicit recipe uses the disabled policy");
+    assert!(state.info.as_ref().unwrap().enabled);
+    assert!(
+        state.ready(),
+        "the fresh explicit recipe can be reviewed without signing in"
+    );
     assert!(!root.path().join("settings.json").exists());
     assert!(!root.path().join("registry").exists());
 }

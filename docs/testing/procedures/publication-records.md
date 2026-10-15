@@ -1,6 +1,6 @@
 ---
 procedure: publication-records
-feature: Retained image publisher persistence prerequisite
+feature: Retained image publisher persistence and status
 platforms: [linux, macos, windows]
 cost: none
 destructive: no
@@ -17,11 +17,11 @@ Check that version guards prevent accidental loss during migration or downgrade.
 
 ## 2. Applicability
 
-Use the publication record prerequisite of #1597.
-It does not activate automatic publishing, image omission or new UI controls.
+Use the retained publication contract of #1597.
+These checks add no image work or visible UI control.
 No native GIF applies because existing visible behavior is unchanged.
 Core metadata checks run on all supported desktop platforms.
-The cloud-list UI handler checks in PR-04 run on Unix only.
+The actual cloud-list UI handler checks in PR-04 run on Unix only.
 Write and migration checks need Unix directory durability.
 Windows compiles these checks but skips unsupported runs with a stated reason.
 

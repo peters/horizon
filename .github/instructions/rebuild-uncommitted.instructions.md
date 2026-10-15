@@ -11,9 +11,9 @@ files in the image" of `docs/cloud-workspaces.md`.
 
 ## What goes out
 
-The image can be pushed to a public registry, for example
-`ghcr.io/peters/horizon-development`. Every uncommitted file in the build
-context can go into the image, so a person must see each one first.
+The image can be pushed to a public registry at the reviewed destination. Every
+uncommitted file in the build context can go into the image, so a person must
+see each one first.
 
 - Names in build paths compare without case, so a build path that a
   case-insensitive checkout accepts still matches. A build path with `..`, an

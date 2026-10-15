@@ -12,12 +12,13 @@ owner: peters
 
 ## 1. Purpose
 
-Verify the gated New cloud destination review and its retained publisher choice.
+Verify the ordinary New cloud destination review and its retained publisher choice.
 
 ## 2. Applicability
 
-The selector is staged behind machine-local `portable_image_publishing`, false by
-default. This native fixture runs on Linux with X11. Cross-platform Rust checks
+Ordinary machine settings enable the selector. Repeat the default with no legacy
+key and with an old false value, using private fixture settings only. This native
+fixture runs on Linux with X11. Cross-platform Rust checks
 are separate evidence; native macOS qualification remains deferred under the
 local device-smoke workflow. Windows cloud operations are unsupported. This
 procedure qualifies no registry push or worker allocation.
@@ -44,9 +45,11 @@ to a real account, change installed credentials, start a worker or allocate comp
    advancing sequences while the fixture heartbeat changes. Record the child
    executable path and hash.
 
-2. Enable the staging gate only in the fixture's private settings.
+2. Leave the retired staging key out of private fixture settings.
 
-   Result: The user's settings, processes and workers are unchanged.
+   Result: The selector appears through the ordinary default. Repeat with the old
+   false value: the same flow appears without rewriting settings on read. The
+   user's installed settings, processes and workers are unchanged.
 
 ## 6. Tasks
 
@@ -103,8 +106,8 @@ to a real account, change installed credentials, start a worker or allocate comp
    before or after its prompt arrives; its code, link and Cancel stay usable.
    Opening the verification page uses a worker thread and reports failure
    separately from metadata. Repeated clicks cannot start concurrent openers.
-   A disabled gate preserves explicit
-   recipe behavior.
+   Ordinary defaults preserve explicit recipe behavior. An old saved false value
+   does not hide the completed selector or authorize a stale choice.
    Storage-only edits keep an owned metadata read or sign-in alive and retain
    its code and cancellation handle. They do not reuse a queued Start's older
    full-profile confirmation. All other scope changes still discard old answers.

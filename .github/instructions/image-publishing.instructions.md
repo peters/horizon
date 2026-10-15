@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-cloud-worker/src/remote.rs,crates/horizon-core/examples/cloud_deploy.rs,crates/horizon-core/examples/cloud_deploy/publishing/**,crates/horizon-core/src/cloud_panel.rs,crates/horizon-core/src/cloud_panel/launch_serde/**,crates/horizon-core/src/cloud_panel/launch_serde.rs,crates/horizon-cloud/src/image_publishing.rs,crates/horizon-cloud/src/image_publishing/**,crates/horizon-core/src/cloud_runtime/github/publish/publication.rs,crates/horizon-core/src/cloud_runtime/github/publish/publication/**,crates/horizon-core/src/cloud_runtime/publishing.rs,crates/horizon-core/src/cloud_runtime/publishing/**,crates/horizon-core/src/cloud_runtime/setup/publishing.rs,crates/horizon-core/src/cloud_runtime/setup/publishing/**,crates/horizon-core/src/cloud_runtime/settings.rs,crates/horizon-core/src/cloud_runtime/registry/**,crates/horizon-browser-control/src/manifest/image_destination.rs,crates/horizon-browser-control/src/manifest/provider_usage.rs,crates/horizon-browser-mcp/src/controller/image_destination.rs,crates/horizon-browser-mcp/src/server.rs,crates/horizon-ui/src/app/cloud_panel/image_destinations/**,crates/horizon-ui/src/app/cloud_panel/image_destinations.rs,crates/horizon-ui/src/app/browser_provider_usage.rs,crates/horizon-ui/src/app/cloud_panel/production.rs,crates/horizon-ui/src/app/cloud_panel/production/creation.rs,crates/horizon-ui/src/app/cloud_panel/production/creation/**,crates/horizon-ui/src/app/cloud_panel/production/creation_job.rs,crates/horizon-ui/src/app/cloud_panel/production/launch.rs,crates/horizon-ui/src/app/cloud_panel/production/launch/**,crates/horizon-ui/src/app/cloud_panel/production/setup.rs,crates/horizon-ui/src/app/cloud_panel/production/setup/**"
+applyTo: "crates/horizon-cloud-worker/src/remote.rs,crates/horizon-core/examples/cloud_deploy.rs,crates/horizon-core/examples/cloud_deploy/publishing/**,crates/horizon-core/src/cloud_panel.rs,crates/horizon-core/src/cloud_panel/launch_serde/**,crates/horizon-core/src/cloud_panel/launch_serde.rs,crates/horizon-cloud/src/image_publishing.rs,crates/horizon-cloud/src/image_publishing/**,crates/horizon-core/src/cloud_runtime/github/publish/publication.rs,crates/horizon-core/src/cloud_runtime/github/publish/publication/**,crates/horizon-core/src/cloud_runtime/publishing.rs,crates/horizon-core/src/cloud_runtime/publishing/**,crates/horizon-core/src/cloud_runtime/setup/publishing.rs,crates/horizon-core/src/cloud_runtime/setup/publishing/**,crates/horizon-core/src/cloud_runtime/settings.rs,crates/horizon-core/src/cloud_runtime/registry/**,crates/horizon-browser-control/src/manifest/image_destination.rs,crates/horizon-browser-control/src/manifest/provider_usage.rs,crates/horizon-browser-mcp/src/controller/image_destination.rs,crates/horizon-browser-mcp/src/server.rs,crates/horizon-ui/src/app/cloud_panel/image_destinations/**,crates/horizon-ui/src/app/cloud_panel/image_destinations.rs,crates/horizon-ui/src/app/browser_provider_usage.rs,crates/horizon-ui/src/app/cloud_panel/production.rs,crates/horizon-ui/src/app/cloud_panel/production/creation.rs,crates/horizon-ui/src/app/cloud_panel/production/creation/**,crates/horizon-ui/src/app/cloud_panel/production/creation_job.rs,crates/horizon-ui/src/app/cloud_panel/production/launch.rs,crates/horizon-ui/src/app/cloud_panel/production/launch/**,crates/horizon-ui/src/app/cloud_panel/production/setup.rs,crates/horizon-ui/src/app/cloud_panel/production/setup/**,.horizon/cloud.yml,.horizon/README.md,crates/horizon-ui/src/app/cloud_panel/production/repository_setup/prompt.rs"
 ---
 
 # Image destination boundary
@@ -32,31 +32,32 @@ another account is cached. Check the device result before saving its credential
 chain; a wrong account must preserve the prior stored chain. Preparation and
 renewal share this guard. A renamed matching account must fail before a futile
 device prompt, with a specific rename explanation. Explicit selection must not silently reuse a cached
-account. The engine calls preparation and renewal. Visible account selection follows separately.
+account. The engine calls preparation and renewal. Native and public destination
+controls use explicit account selection.
 
 These limits are deliberate:
 
-- This prerequisite supplies a reusable policy contract. It does not enable automatic launches.
+- The reusable policy contract serves the completed automatic launch flow.
 - The policy performs no authentication or network operation and proves no registry permission.
 - Host adapters supply a source identity without credentials and check the publisher before each publication.
 - Explicitly authorized registry destinations can use another service, a nested project path or a registry port.
 - GitLab account connection and project discovery are outside this task.
 
-Do not request the deferred launch or UI integration as fixes to this policy prerequisite.
+Keep source naming, account authorization and visible confirmation as separate checks.
 
 For CPU host grants, require current verification of the exact immutable digest.
 Reject a reread of mutable credential files that substitutes unverified material in user data.
 Reject a publishing credential sent to a worker or an allocation after missing verification.
 
-The local preference helpers do not authenticate metadata, change profile parsing or activate automatic launches.
+The local preference helpers return metadata; they do not prove registry permission.
 
-Runtime constructors keep None until the selector is delivered. The version-2
-reader and actual UI preparation forward the full choice and profile atomically. Reject a
+New cloud supplies its reviewed choice. Other constructors preserve legacy None.
+The version-2 reader and actual UI preparation forward the full choice and profile atomically. Reject a
 reader that silently discards reviewed publishing intent. Refuse publisher envelopes
 without a build recipe, including serialization before any partial output. Preserve legacy flat
 encodings and exact-image recipe confirmations, including JSON/YAML compatibility.
 Unknown ordinary legacy keys stay compatible; reserved envelope keys may not hide
-inside a flat body, even when null. No publication is activated by this prerequisite.
+inside a flat body, even when null. Decoding metadata never authorizes publication.
 
 Recipe/profile equality is enforced before serialization as well as during
 deserialization. An inconsistent in-memory recipe emits no standalone launch
@@ -78,15 +79,15 @@ Coordination files retain their inode, resolve parent aliases, contain no secret
 and refuse symlinks, wrong owners, broad permissions and extra hard links.
 Existing roots with no pending intent must not require a readable parent.
 
-The staged engine records new destinations before building, authenticates the
+The engine records new destinations before building, authenticates the
 retained account or exact publication grant on each new build, and renews personal
 operation credentials immediately before push. Reusing a worker image requires no
 publisher authentication. Report a retry/rebuild that adopts a new host preference,
 loads another publishing grant, or accepts a confirmation token for another selection.
-New automatic launches stay behind the default-off stage. Saved envelope reads,
-actual UI preparation forwarding and record-aware rebuild previews form one bridge.
-Reject a preview that drops the retained publisher or accepts another profile name.
-Do not activate the selector or update development image pins in this bridge.
+Saved envelope reads, actual UI preparation forwarding and record-aware rebuild
+previews share one retained-publisher contract. Reject a preview that drops that
+identity or accepts another profile name. Ordinary settings enable the completed
+flow; development build profiles omit their personal publication destinations.
 
 Registry credential isolation must preserve the selected Unix Docker context and
 plugin locations without copying another registry login, a credential helper or
@@ -124,8 +125,8 @@ clear that binding's hint without validating another one. A retired request must
 not alter current proof. Refusals survive settings closure and board-session
 switches until fresh successful verification, within the current app process.
 
-The staged destination manager and receipt owner are a shared host API, not yet
-public controls. Reject caller-supplied actor/host/root authority, cross-owner
+The destination manager and receipt owner are shared host policy for native and
+public CLI/MCP controls. Reject caller-supplied actor/host/root authority, cross-owner
 receipt access, ID reuse for another request, unbounded work/history, registry-secret
 or compute-key reads during listing, or a mutation that skips the exact shown-override
 fence. Listing may inspect cached sign-in metadata for identity, but must not return
@@ -165,7 +166,7 @@ Before a new desktop deployment record, confirm the saved choice through shared
 selection policy. Cover a removed override as well as a replacement, while keeping
 automatic intent without an override valid. Existing records remain authoritative.
 
-The gated New cloud selector must reuse management Info/inspect/manage rather than
+The New cloud selector must reuse management Info/inspect/manage rather than
 copying grant, account or settings policy into UI code. Require a reviewed choice
 at every Start entry point, including price watches and collected creation jobs.
 Authentication cancellation owns its Cancellation handle, not a cloud Skip key.
@@ -204,6 +205,16 @@ A launch that omits its image can refer to a legacy record with an explicit imag
 and no publication. That record is bound to its explicit destination; automatic
 preflight must not classify it as an unbound automatic retry. Cover this through
 the actual UI preparation path and keep later local overrides out of the record.
+
+Ordinary settings and setup drafts enable the completed publishing flow. Retired
+saved portable_image_publishing values, including false, must not hide it. Reading
+settings must not rewrite them, and later saves must retain unrelated credential
+references while dropping the obsolete key. This retires a staging detail, not
+the exact shown-choice, original-account, grant, owner or cancellation fences.
+New setup build profiles omit image rather than deriving a push target from Git
+origin or the source author; preserve existing explicit destinations or omissions.
+Prebuilt profiles still require image. Cover ordinary default and old-false
+settings through UI, CLI/MCP, setup proof and fresh-state publication checks.
 
 Native destination mutations must use the same trusted prepared profile as
 inspection. A historical build may be absent or prebuilt at current HEAD. Reject

@@ -17,9 +17,9 @@ of the recipe's original image when read by an incompatible application.
 
 ## 2. Applicability
 
-New cloud forwards its gated selector's confirmed choice. Other constructors keep
+New cloud forwards its selector's confirmed choice. Other constructors keep
 legacy `None`. Compatible consumers retain version-2 metadata and forward it to
-the engine; automatic launches remain disabled for ordinary use. JSON/YAML checks run on all
+the engine. Ordinary settings enable the completed flow. JSON/YAML checks run on all
 listed platforms. Durable cloud-record UI preparation is supported on Unix only.
 No provider account, publication or compute is activated by these tests.
 
@@ -85,14 +85,14 @@ settings changes or live worker actions are required.
    durable records stay authoritative.
    Refusal creates no deployment record, registry journal or Docker login.
 
-   Run `cargo test -p horizon-ui --bin horizon disabled_publishing_cannot_create`
+   Run `cargo test -p horizon-ui --bin horizon legacy_staging_false_still_requires_current_publishing_confirmation`
    and `cargo test -p horizon-ui --bin horizon legacy_automatic_intent_cannot`.
 
-   Result: Registry, personal and automatic choices refuse with the setting off
-   before creating a publisherless record, even with an explicit recipe image.
+   Result: An old saved false staging value loads as enabled. Registry, personal
+   and automatic choices still require current confirmation before a new record.
    An unconfirmed automatic launch refuses a later scoped override before any
-   record. Explicit legacy images still prepare with the setting off. Settings
-   bytes remain unchanged and no authentication or registry operation starts.
+   record. Explicit legacy images remain supported. Settings bytes stay unchanged
+   and no authentication or registry operation starts.
 
    Run `cargo test -p horizon-ui --bin horizon an_unbound_automatic_retry`.
 
@@ -120,7 +120,7 @@ settings changes or live worker actions are required.
 
    Result: New cloud retains its reviewed choice. Other constructors use None, and
    legacy stored state, lifecycle and preview tests retain their behavior. The
-   selector remains behind the staging gate.
+   selector reviews the destination under ordinary machine defaults.
 
 ## 7. Pass criteria
 

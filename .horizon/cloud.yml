@@ -3,7 +3,6 @@ default: cpu
 profiles:
   cpu:
     provider: runpod
-    image: ghcr.io/peters/horizon-development
     build:
       context: .horizon
       dockerfile: .horizon/Dockerfile.cpu
@@ -22,7 +21,6 @@ profiles:
       readiness_seconds: 1800
   gpu:
     provider: runpod
-    image: ghcr.io/peters/horizon-development
     build:
       context: .horizon
       dockerfile: .horizon/Dockerfile.gpu

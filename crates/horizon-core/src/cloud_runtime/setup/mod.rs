@@ -391,7 +391,7 @@ fn defaults(root: &Path) -> Settings {
         registry_pull_auth_id: None,
         registries: None,
         image_publishing: Vec::new(),
-        portable_image_publishing: false,
+        portable_image_publishing: Settings::portable_image_publishing_default(),
         cpu_flavors: vec!["cpu3c".into()],
         gpu_types: vec!["NVIDIA RTX A6000".into()],
         data_centers: Vec::new(),

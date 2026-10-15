@@ -40,9 +40,13 @@ the build. Manual builds without these arguments install Codex 0.155.1 and
 Claude Code 2.1.278, so they stay reproducible. After changing the derivation,
 run `python3 -B .horizon/test_retain_component_sources.py`.
 
-The public images target `ghcr.io/peters/horizon-development`. Configure provider
-credentials, GPU selection and publishing credentials in machine-local settings.
-Repository YAML cannot choose credentials. The recipes use only public upstream
+Both build profiles omit `image`. In New cloud, review **Publish images** and use
+**Change** to select your authorized publishing account or an existing registry
+destination. Horizon remembers this choice on this computer for the checkout and
+named profile. Another person's Git account or the source remote cannot authorize
+publication. Existing clouds keep their recorded destination and publisher.
+Configure provider credentials, GPU selection and publishing credentials in
+machine-local settings. Repository YAML cannot choose credentials. The recipes use only public upstream
 bases and compile worker helpers from a pinned public Horizon revision; no
 private registry access is needed to build them. The context contains only
 recipes, the installer and notices. Runtime source, package caches, account

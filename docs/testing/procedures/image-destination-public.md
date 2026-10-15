@@ -32,7 +32,7 @@ start a real sign-in, publish an image or allocate compute.
 - A frozen Horizon binary and normal `horizon-browser` CLI/MCP binary.
 - An isolated native desktop with a public Horizon Device viewer.
 - A synthetic Git checkout with an image-omitting build profile.
-- Private cloud settings with the staging setting enabled and a synthetic registry
+- Ordinary private cloud settings and a synthetic registry
   binding. Credential files must be absent.
 
 ## 5. Setup
@@ -125,14 +125,15 @@ cancellation settles without changing source or credentials.
    Result: The first actor resolves the same Git root. Another actor cannot read
    back, cancel or replay the first actor's receipt.
 
-5. Run the deterministic cancellation and disabled-setting tests.
+5. Run the deterministic cancellation and legacy-setting migration tests.
 
    Result: A receipt retains its actor, host, settings root and registered path.
    Lost scope, lack of sign-in observation and lifetime limits request cancellation.
    Active jobs schedule polling even when the terminal has no output.
-   The default-off setting refuses mutations before activation. Disabling it
-   while mocked authentication waits refuses the preference commit and preserves
-   the disabled settings bytes.
+   Missing and old false staging values load as enabled without rewriting settings
+   on read. A correctly owned, confirmed mocked sign-in can save its exact choice;
+   stale snapshots and missing grants still refuse. The next save drops only the
+   obsolete key and retains unrelated credential bindings.
 
 ## 7. Pass criteria
 

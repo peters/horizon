@@ -25,7 +25,8 @@ documents that are not yet STE.
 
 | Procedure | Feature | Cost |
 |---|---|---|
-| [portable-build-engine](procedures/portable-build-engine.md) | Retain publisher identity through staged image preparation | none |
+| [portable-build-engine](procedures/portable-build-engine.md) | Retain publisher identity through image preparation | none |
+| [portable-image-publishing](procedures/portable-image-publishing.md) | Ordinary defaults, portable setup and first/final local publishing proof | none |
 | [bound-worker-pull](procedures/bound-worker-pull.md) | Exact read-only registry material for CPU hosts | none |
 | [host-pull-journal](procedures/host-pull-journal.md) | Separate direct-host and provider pull records | none |
 | [registry-docker-context](procedures/registry-docker-context.md) | Keep daemon selection with isolated registry credentials | none |
@@ -43,7 +44,7 @@ documents that are not yet STE.
 | [cloud-idle-period](procedures/cloud-idle-period.md) | An idle period that still parses but has no effect: the New cloud and Rebuild note, no idle period on a new worker, and the reconnect of a worker created with one | rents compute |
 | [cloud-launch-format](procedures/cloud-launch-format.md) | Saved cloud launch format and actual publisher-intent forwarding | none |
 | [image-destination-management](procedures/image-destination-management.md) | Shared destination policy and bounded host-owned receipts | none |
-| [image-destination-selector](procedures/image-destination-selector.md) | Gated New cloud publishing destination and account review | none |
+| [image-destination-selector](procedures/image-destination-selector.md) | New cloud publishing destination and account review | none |
 
 | [image-destination-public](procedures/image-destination-public.md) | Host-scoped destination actions through normal CLI plans and stdio MCP | none |
 | [publication-records](procedures/publication-records.md) | Retained image publisher and migration version guards | none |

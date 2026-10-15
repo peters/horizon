@@ -3,8 +3,8 @@
 This document defines the image destination boundary for epic #1597.
 The destination policy is a reusable module in `horizon-cloud`.
 It does not authenticate, send network requests or publish an image.
-The shared launch engine resolves and retains destinations. New automatic launches
-remain behind a machine-local staging gate, off until the complete selector is delivered.
+The shared launch engine resolves and retains destinations. New cloud and public
+CLI/MCP controls review the selected publisher before ordinary automatic launches.
 
 ## Host publication preparation
 
@@ -32,8 +32,9 @@ renewal ask for a new device sign-in for the recorded immutable identity. The
 helper checks that identity before saving the returned credential chain. A wrong
 account leaves the prior stored chain and private operation login unchanged.
 A separate explicit account-selection helper always starts device sign-in rather
-than accepting the cached account. It is not an account-switch UI or per-account
-store; the launch and selector integrations still follow separately.
+than accepting the cached account. The native selector and public destination
+controls call this helper for an explicit account switch. It is not a per-account
+credential store.
 The engine uses this helper before a new personal build and renews its private login
 immediately before push. Registry-bound publication uses its exact saved grant instead.
 
@@ -104,13 +105,13 @@ Malformed scopes and duplicate checkout/profile pairs are rejected when settings
 A removed registry grant does not prevent unrelated clouds from loading settings.
 Selection of that removed grant fails when the host tries to use it.
 
-A build profile can omit `image`; a prebuilt profile still requires one. The staged
+A build profile can omit `image`; a prebuilt profile still requires one. The
 engine consumes these preferences, authenticates the selected account and records
 its destination before building. It checks the shown selection again before using
 credentials. Existing explicit-image records retain their original image and do not
-inherit a later preference. A new automatic launch remains refused while the staging
-gate is off. The visible selector and public destination controls
-are delivered separately before activation.
+inherit a later preference. New cloud and the public destination controls use the
+same machine-local policy. An absent or unauthorized destination refuses before
+the expensive build and offers the specific account or registry setup action.
 
 ## Destination identity
 
@@ -194,8 +195,8 @@ format. Existing launches with no reviewed choice keep their flat encoding.
 An explicit recipe-image confirmation also stays flat and must match the exact
 profile image. Publisher choices use a version-2 envelope that older readers
 refuse. Compatible readers retain the full choice, and desktop preparation forwards
-that choice and its named profile to the shared engine. The gated selector now
-supplies reviewed intent; automatic publishing remains disabled for ordinary use.
+that choice and its named profile to the shared engine. New cloud supplies the reviewed destination and publishing identity.
+Build profiles may omit the image; explicit images remain supported.
 Ordinary unknown legacy fields remain compatible, but mixed or downgraded
 publisher envelopes and reserved null keys are refused. A publisher choice without
 a build recipe is invalid and cannot be saved or restored as a prebuilt launch.
@@ -228,46 +229,39 @@ A legacy automatic launch with no saved confirmation must still be automatic und
 shared selection policy: a scoped registry or personal override requires a new
 review before any record. An automatic record without a publisher remains
 unbound: retry requires the same review of a later override and preserves the
-existing record on refusal. When the staging setting is off, a saved non-recipe
-choice refuses before persistence, so it cannot create a publisherless legacy
-record that blocks a later retry. Explicit recipe images remain compatible.
+existing record on refusal. Retiring a saved staging value does not authorize a
+stale non-recipe choice: it must still match current local intent before a first
+record. Explicit recipe images remain compatible.
 
-## Staged engine and development CLI
+## Portable engine and development CLI
 
-The engine keeps a false-by-default `portable_image_publishing` setting until the
-complete user flow is ready. Existing explicit-image launches remain supported.
-The development `cloud_deploy` helper accepts a profile without an image only in an
-explicitly enabled owned test fixture. Its plan prints the selected repository and
-account metadata, includes that choice in the confirmation token, and reads a saved
-cloud without creating state. Execution rechecks the choice. A changed preference
+Ordinary machine settings enable portable publishing. Build profiles may omit
+image; explicit-image and prebuilt launches remain supported. The development
+`cloud_deploy` helper prints the selected repository and account in its plan,
+includes that choice in its confirmation token, and reads a retained cloud
+without creating state. Execution rechecks the choice. A changed preference
 cannot redirect a retained cloud; a missing original grant stops before building.
 
-Version-2 reads, actual UI preparation forwarding and retained-publication rebuild
-previews share the same metadata contract. The default-off stage still prevents
-new automatic launches from bypassing the unfinished destination selector.
-Git hosting and registry hosting remain independent; no GitLab sign-in or project
-discovery is added. A missing read-only grant for a private personal package stops
-before build and names the recorded destination. A publisher's write token never
-becomes worker pull access. Legacy deployment and allocation versions remain fenced.
+Saved `portable_image_publishing` values are a retired staging detail. Missing,
+false and true all load as enabled. Reading settings never rewrites their bytes;
+the next ordinary save omits the obsolete key while retaining all credential
+references. Invalid non-boolean legacy values still refuse parsing. The default
+is centralized in Settings and used by setup drafts. Explicit lower-level
+in-process legacy requests may still construct the conservative disabled path;
+ordinary persisted settings cannot leave the completed user flow hidden.
 
-The first and final reviewable candidates require an owned real registry build,
-push and immutable read-only check, plus the read-only real-checkout identity gate.
-These prove local engine behavior, not a live issuer account or paid allocation.
-See [the engine procedure](../testing/procedures/portable-build-engine.md).
+Version-2 launch reads, UI preparation and retained-publication rebuild previews
+share the same metadata contract. Every Start entry point reviews the current
+publisher, including Enter, stock watches and collected creation jobs. Git hosting
+and image hosting remain independent; this adds no GitLab sign-in or project
+discovery. A private personal image needs a separate verified read-only pull
+grant before building. A publisher's write token never becomes worker pull access.
+Legacy deployment and allocation versions remain fenced.
 
 A retained publishing record also fixes the rebuild profile name. A request for
 another profile is refused even when that profile names the same destination or
 omits its image. Recipe edits within the recorded profile still rebuild to the
 recorded destination.
-
-Before creating a new record, desktop preparation confirms a saved choice against
-the current shared selection policy, including a removed override. Automatic intent
-without an override remains valid. Existing records skip this preference preflight.
-
-Desktop preparation now preserves saved publisher choices, and rebuild previews
-use the cloud's retained publication and profile. New automatic desktop launches
-remain disabled until final integration is complete. Keep the setting off for ordinary desktop use; metadata forwarding
-is not authorization to publish.
 
 A rebuild confirmation also snapshots the exact retained publication. Its token
 covers the publisher account or grant even when the resolved image and files are
@@ -281,6 +275,11 @@ Image-only retries also restore the locked record's working-copy confirmation.
 Advancing HEAD does not turn an older-revision retry into a commit-only build:
 the overlay and image label retain the original revision and files hash. Later
 unconfirmed file edits refuse before building.
+
+The first and final reviewable candidates require an owned real registry build,
+push and immutable read-only check, plus the read-only real-checkout identity and
+setup gates. These prove local engine behavior, not a live issuer account or paid
+allocation. See [the final integration procedure](../testing/procedures/portable-image-publishing.md).
 
 ## Docker context and registry isolation
 
@@ -360,8 +359,7 @@ receipt ID cannot clear or consume a cloud card's Skip request.
 Scope disappearance, lack of observation and lifetime limits request cancellation.
 A receipt is not durable proof of whether a write committed; settings mutations
 use the existing compare-and-swap fence, and callers list state after expiry.
-The default-off setting still gates mutations. The public host adapter, CLI plan
-runner and stdio MCP tool use this shared policy.
+The public host adapter, CLI plan runner and stdio MCP tool use this shared policy.
 
 ## Public destination operations
 
@@ -393,15 +391,14 @@ host restart. List saved state and review it before retrying an expired operatio
 
 The normal CLI plan runner exposes the same tool and schema through
 `horizon-browser run PLAN.json`; its stdio MCP server exposes the same operation.
-Existing clouds keep their recorded publisher. Retained publication status is a
-separate follow-up outcome.
-The staging setting still defaults to false, so mutations remain disabled until
-final integration. See docs/testing/procedures/image-destination-public.md.
+Existing clouds keep their recorded publisher. cloud_list reports the retained
+worker image and publisher metadata when that cloud's matching runtime is loaded.
+See docs/testing/procedures/image-destination-public.md.
 
-Management rechecks the staging setting in the same transaction as the exact
-override comparison. If it is disabled while sign-in waits, no destination
-preference commits. This does not revoke authorization already completed at the
-issuer or prove that a credential-chain write did not occur.
+Management compares the exact shown override inside the save transaction.
+A cancelled or stale operation cannot silently replace another preference.
+Cancellation does not revoke authorization already completed at the issuer or
+prove that an in-flight write was rolled back. List saved state after uncertainty.
 
 The desktop destination adapter refuses any agent panel owned by a cloud group,
 including worker and Upkeep panels whose local metadata has no SSH connection.
@@ -410,10 +407,11 @@ well as live cloud groups: session restoration can expose the saved membership
 before live cloud state is copied. A local launch directory alone does not
 establish desktop ownership.
 
-## Staged image destination selector
+## Image destination selector
 
-With portable publishing enabled in a task-owned fixture, New cloud shows Publish
-images, the selected repository and publishing account. Change selects an existing
+New cloud shows Publish images, the selected repository and publishing account.
+Automatic uses the image-publishing account, independently of the Git host or
+source author. Choose an authorized account or registry before starting. Change selects an existing
 authorized registry, uses the profile default or explicitly signs in to another
 account. The preference stays on this computer for the canonical checkout and
 named profile; repository YAML stays unchanged. UI reads and changes use the same
@@ -429,8 +427,9 @@ repository without attributing a local choice to YAML. Cached sign-in metadata
 is not confirmation of the publishing account; worker pull access remains separate.
 Destination metadata is historical,
 not proof of authentication; the engine confirms intent and access before a build.
-Public CLI/MCP controls use the same policy. Final activation still follows. Keep
-the staging setting off for ordinary use and retain the development image pins for now.
+The normal CLI plan runner and public MCP tool use the same policy. Build
+profiles can omit image; prebuilt profiles still require it. Publishing choices
+stay on this computer rather than in repository YAML.
 See docs/testing/procedures/image-destination-selector.md.
 
 A queued Start or stock watch retains the full reviewed profile and publisher.
@@ -451,8 +450,8 @@ A destination save or sign-in blocks new Start and watch intent until fresh
 metadata returns after completion. Account changes stay disabled after a failed
 first metadata read; use Reload first. Ordinary
 metadata reloads can queue the already shown choice; saves cannot queue the old
-choice. A disabled feature does not warn about a missing image during refresh
-when the current profile already has an explicit image.
+choice. An explicit image stays visible during refresh; automatic metadata does not
+replace its reviewed target.
 
 Storage edits do not affect destination-management inputs. Preserve the owned
 read or sign-in and its prompt across those edits, without launching another

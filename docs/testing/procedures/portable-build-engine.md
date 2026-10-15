@@ -13,14 +13,14 @@ owner: peters
 ## 1. Purpose
 
 Check image omission, destination confirmation, retained identity and operation-private
-credentials. Keep new automatic launches disabled until the complete user flow is ready.
+credentials through the completed ordinary publishing flow.
 
 ## 2. Applicability
 
 Use a supported Unix host and Docker with buildx. The development CLI exercises the
 shared engine. This procedure creates no compute resource and changes no installed login.
-Desktop preparation forwards saved publisher metadata, but new automatic desktop
-launches remain disabled until the selector and public destination controls are complete.
+Desktop preparation forwards the reviewed publisher metadata. UI, CLI and MCP
+use the shared policy; no manual staging switch is required.
 
 ## 3. Safety
 
@@ -59,9 +59,9 @@ Record owned container, volume and image identities before creating resources.
 
    Result: The profile contains no publication account or image destination.
 
-3. Enable `portable_image_publishing` only in the owned fixture's settings.
+3. Use ordinary private fixture settings without a publishing feature switch.
 
-   Result: The test can exercise the staged API. The installed setting stays unchanged.
+   Result: The test exercises the ordinary default. Installed settings stay unchanged.
    Configure both exact registry grants as described in `docs/private-registry-bindings.md`.
    A fixture preference uses the canonical checkout, `fixture` profile and selected repository.
    Its `binding` is SHA-256 of the compact UTF-8 JSON array `[publish.username,publish.secret_file]`.
@@ -202,10 +202,9 @@ and with an omitted image. Both must refuse before using its different Dockerfil
 matching-profile recipe edits keep the recorded destination.
 
 Desktop preparation now preserves saved publisher choices, and rebuild previews
-use the cloud's retained publication and profile. New automatic desktop launches
-remain disabled until the destination selector and public destination controls
-are complete. Keep the setting off for ordinary desktop use; metadata forwarding
-is not authorization to publish or proof of a qualified new-cloud selector.
+use the cloud's retained publication and profile. New cloud reviews the publisher
+before Start. Metadata forwarding is not authorization to publish; the separate
+selector procedure qualifies its visible flow.
 
 ### Retained rebuild confirmation regression
 
