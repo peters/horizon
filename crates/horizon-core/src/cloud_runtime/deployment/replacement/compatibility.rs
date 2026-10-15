@@ -35,7 +35,10 @@ pub(super) fn next_profile(bound: &Profile, config: Option<&CloudConfig>, name: 
     if let Some(reason) = refusal(bound, committed) {
         return Err(Error::Invalid(reason));
     }
-    let next = bound.with_rebuild_settings(committed);
+    let mut next = bound.with_rebuild_settings(committed);
+    // An idle period has no effect, so a rebuild keeps the cloud's own: a change of it
+    // alone would build the same image for a changed profile.
+    next.idle_stop_minutes = bound.idle_stop_minutes;
     next.validate(false).map_err(|error| {
         Error::Invalid(match error {
             ProfileError::Invalid(reason) => reason,

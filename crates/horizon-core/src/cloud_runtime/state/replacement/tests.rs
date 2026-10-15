@@ -284,6 +284,8 @@ fn a_journaled_profile_changes_only_the_rebuild_settings_and_binds_on_commit() {
     state.replacement_changes_profile(bound.clone()).unwrap();
     assert_eq!(state.image_replacement.as_ref().unwrap().profile, None);
     let mut next = bound.clone();
+    // A journal of an earlier build may change the idle period, which has no effect now.
+    next.idle_stop_minutes = Some(30);
     next.build = Some(horizon_cloud::Build {
         context: ".".into(),
         dockerfile: "Dockerfile".into(),
@@ -302,15 +304,13 @@ fn a_journaled_profile_changes_only_the_rebuild_settings_and_binds_on_commit() {
     let mut tampered = state.clone();
     tampered.image_replacement.as_mut().unwrap().profile = Some(Box::new(bound.clone()));
     assert!(tampered.replacement_worker().is_err());
-    // A profile no rebuild may bind: an invalid readiness timeout, another idle period,
-    // which is no rebuild setting, or no recipe to rebuild from.
+    // A profile no rebuild may bind: an invalid readiness timeout, or no recipe to
+    // rebuild from.
     let mut invalid = next.clone();
     invalid.bootstrap.readiness_seconds = 5;
-    let mut idle = next.clone();
-    idle.idle_stop_minutes = Some(30);
     let mut recipeless = next.clone();
     recipeless.build = None;
-    for profile in [invalid, idle, recipeless] {
+    for profile in [invalid, recipeless] {
         let mut tampered = state.clone();
         tampered.image_replacement.as_mut().unwrap().profile = Some(Box::new(profile));
         assert!(tampered.replacement_worker().is_err());
