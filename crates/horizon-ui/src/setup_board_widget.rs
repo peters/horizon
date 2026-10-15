@@ -120,6 +120,14 @@ fn row_card(ui: &mut Ui, row: &Row) -> Option<Request> {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(&row.name).size(14.0).strong().color(theme::FG()));
                 ui.label(RichText::new(&row.agent).size(11.5).color(theme::FG_SOFT()));
+                if let Some(host) = &row.build_on {
+                    ui.label(
+                        RichText::new(format!("builds on {host}"))
+                            .size(11.5)
+                            .color(theme::FG_SOFT()),
+                    )
+                    .on_hover_text("The proof builds the image and runs the CI with this Docker host's Docker.");
+                }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     request = buttons(ui, row);
                 });

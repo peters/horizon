@@ -297,6 +297,11 @@ impl HorizonApp {
         // Start needs the tailnet settings, and their picker now waits in More options.
         self.cloud_prototype.production.tailnets.poll(ctx);
         self.offer_setup_presets();
+        let root = self.cloud_prototype.root.clone();
+        self.cloud_prototype
+            .production
+            .setup_build_on
+            .refresh(root.as_deref(), ctx);
         checks::update(
             &mut self.cloud_prototype.production,
             self.cloud_prototype.root.as_deref(),

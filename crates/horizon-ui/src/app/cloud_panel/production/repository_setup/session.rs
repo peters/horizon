@@ -20,6 +20,8 @@ pub(in crate::app::cloud_panel::production) struct Starting {
     chosen_mode: super::Mode,
     /// The repository as the person entered it.
     pub(super) entered: String,
+    /// The Docker host its proof builds on; none for this computer.
+    build_on: Option<horizon_core::cloud_runtime::docker_host::Host>,
     receiver: std::sync::mpsc::Receiver<Result<Prepared, String>>,
 }
 
@@ -86,7 +88,8 @@ impl HorizonApp {
             return;
         };
         let chosen_mode = std::mem::take(&mut self.cloud_prototype.production.setup_mode);
-        self.prepare_cloud_setup(ctx, preset, chosen_mode, entered);
+        let build_on = self.cloud_prototype.production.setup_build_on.chosen();
+        self.prepare_cloud_setup(ctx, (preset, build_on), chosen_mode, entered);
         self.cloud_prototype.error = None;
     }
 
@@ -94,7 +97,10 @@ impl HorizonApp {
     fn prepare_cloud_setup(
         &mut self,
         ctx: &egui::Context,
-        preset: horizon_core::PresetConfig,
+        (preset, build_on): (
+            horizon_core::PresetConfig,
+            Option<horizon_core::cloud_runtime::docker_host::Host>,
+        ),
         chosen_mode: super::Mode,
         entered: String,
     ) {
@@ -114,6 +120,7 @@ impl HorizonApp {
             preset,
             chosen_mode,
             entered,
+            build_on,
             receiver,
         });
     }
@@ -148,6 +155,7 @@ impl HorizonApp {
             preset,
             chosen_mode,
             entered,
+            build_on,
             receiver: _,
         } = starting;
         let Prepared {
@@ -186,7 +194,7 @@ impl HorizonApp {
         // reads its baseline and mode after it.
         if run::endings_begun(&repository) != endings {
             run::remove_run_folder(&status);
-            self.prepare_cloud_setup(ctx, preset, chosen_mode, entered);
+            self.prepare_cloud_setup(ctx, (preset, build_on), chosen_mode, entered);
             return;
         }
         let kind = preset.kind;
@@ -243,6 +251,7 @@ impl HorizonApp {
                 run.pending_prompt = pending_prompt;
                 run.outside = outside;
                 run.dotnet = dotnet;
+                run.build_on = build_on;
                 self.cloud_prototype.production.setup_runs.push(run);
                 self.cloud_prototype.error = None;
                 // Every setup shows on the setup board; it opens with the first one.
@@ -906,6 +915,7 @@ mod tests {
             },
             chosen_mode: super::super::Mode::New,
             entered,
+            build_on: None,
             receiver,
         });
         // That run is stopped, and its ending is already over by the next frame: the

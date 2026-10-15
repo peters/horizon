@@ -24,6 +24,8 @@ pub struct Row {
     pub path: String,
     /// The agent's preset name.
     pub agent: String,
+    /// The Docker host its proof builds on, by name; none for this computer.
+    pub build_on: Option<String>,
     /// The state of each setup step, in order.
     pub steps: Vec<Step>,
     /// What the run does now, as one short line.

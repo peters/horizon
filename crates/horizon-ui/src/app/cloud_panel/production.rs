@@ -113,6 +113,8 @@ pub(super) struct Production {
     setup_presets: Vec<horizon_core::PresetConfig>,
     /// The chosen setup preset, by name.
     setup_preset: Option<String>,
+    /// Where the next setup's proof builds: this computer or a saved Docker host.
+    setup_build_on: repository_setup::BuildOn,
     session_id: Option<String>,
     pub runtimes: HashMap<u32, Runtime>,
     companions: companions::State,

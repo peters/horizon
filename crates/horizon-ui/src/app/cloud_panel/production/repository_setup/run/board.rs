@@ -82,6 +82,7 @@ impl Run {
                 self.entered.clone()
             },
             agent: self.agent.clone(),
+            build_on: self.build_on.as_ref().map(|host| host.name.clone()),
             steps: segments,
             now,
             state,

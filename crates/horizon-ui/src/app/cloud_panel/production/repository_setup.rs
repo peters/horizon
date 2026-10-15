@@ -15,6 +15,7 @@ mod access;
 mod agent;
 mod board;
 mod bounded;
+mod build_on;
 mod cards;
 mod commit;
 mod pins;
@@ -26,6 +27,7 @@ mod runs;
 mod session;
 mod snapshot;
 mod untrusted;
+pub(super) use build_on::State as BuildOn;
 pub(super) use prompt::Mode;
 #[cfg(test)]
 use prompt::prompt;
@@ -263,6 +265,7 @@ fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str, wide: bool)
             }
         }
     });
+    form.setup_build_on.show(ui);
     if open { Choice::SetupAgent } else { Choice::None }
 }
 
