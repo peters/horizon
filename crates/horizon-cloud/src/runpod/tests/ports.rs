@@ -49,6 +49,8 @@ fn ambiguous_or_invalid_runtime_facts_do_not_supply_exposure_endpoints() {
         json!({"ports":[valid.clone(),valid.clone()]}),
         json!({"ports":[valid.clone(),{"private":20001,"public":33000,"type":"tcp","ip":"192.0.2.1"}]}),
         json!({"ports":[valid.clone(),{"private":22,"public":22002,"type":"tcp","ip":"192.0.2.1"}]}),
+        json!({"ports":[valid.clone(),{"private":20001,"public":33001,"type":"unknown","ip":"192.0.2.1"}]}),
+        json!({"ports":[valid.clone(),{"private":20001,"public":33001,"type":"","ip":"192.0.2.1"}]}),
         json!({"ports":[{"private":20000,"public":33000,"type":"tcp","ip":"192.0.2.1","future_semantics":true}]}),
         json!({"ports":vec![valid;129]}),
     ] {

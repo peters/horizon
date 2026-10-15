@@ -17,8 +17,15 @@ struct Port {
     private: u16,
     public: Option<u16>,
     #[serde(rename = "type")]
-    kind: String,
+    kind: Protocol,
     ip: Option<IpAddr>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Protocol {
+    Tcp,
+    Http,
 }
 
 pub(super) fn with_runtime(
@@ -42,7 +49,7 @@ fn mappings(value: serde_json::Value, host: IpAddr, known: &BTreeMap<String, u16
     let mut public_ports = BTreeSet::from([ssh]);
     let mut mappings = known.clone();
     for port in runtime.ports {
-        if port.kind != "tcp" {
+        if matches!(port.kind, Protocol::Http) {
             continue;
         }
         if port.private == 0 || !private_ports.insert(port.private) {
