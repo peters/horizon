@@ -346,7 +346,14 @@ To find a cloud for the person, name its workspace and its group.
 default) returns each cloud's `cloud` ID, name, group (`needs_you`, `cloud` or
 `parked`), status line, `hourly_rate` with its ISO 4217 `currency` (both `null`
 when the worker reports no rate) and `working`. Never add rates in
-different currencies. The others take the `cloud` ID from `list`:
+different currencies. `worker_image` is the recorded image reference and
+`image_publication` is the retained destination and publisher identity. They come
+only from that cloud's matching loaded runtime and are `null` when unavailable;
+an unresolved automatic image is also `null`. A registry publication retains its
+opaque nonsecret `destination.publisher.binding` ID, not the credential value or
+path. Legacy records have no publication. Account-setting changes do not replace this
+identity. These fields open no credentials and prove no current registry access.
+The others take the `cloud` ID from `list`:
 
 - `attach` moves the person's view to the cloud, as a click on its row does.
 - `park` parks the terminals of a cloud that is out of view now. Horizon refuses

@@ -20,7 +20,8 @@ Check that version guards prevent accidental loss during migration or downgrade.
 Use the publication record prerequisite of #1597.
 It does not activate automatic publishing, image omission or new UI controls.
 No native GIF applies because existing visible behavior is unchanged.
-Metadata checks run on all supported desktop platforms.
+Core metadata checks run on all supported desktop platforms.
+The cloud-list UI handler checks in PR-04 run on Unix only.
 Write and migration checks need Unix directory durability.
 Windows compiles these checks but skips unsupported runs with a stated reason.
 
@@ -89,6 +90,23 @@ No credential, registry request or compute allocation is required.
 
    Result: Blocking and strict checks pass. Record advisory results separately.
    Hosted CI checks the supported platforms on the exact head.
+
+### 6.4 PR-04 — List retained publication metadata
+
+1. On a Unix host, run `cargo test -p horizon-ui publication_status_uses_only --bin horizon`.
+
+   Result: The actual workspace cloud-list handler returns the cloud's retained
+   image and publisher metadata. Another cloud's runtime and an unloaded runtime
+   produce `null` values. No credential values or paths enter the response.
+   Run `cargo test -p horizon-ui an_unresolved_automatic_image_is_null --bin horizon`.
+   An unresolved automatic image is `null`; a resolved registry publication retains
+   its exact opaque nonsecret binding ID and no credential material.
+
+2. Run `cargo test -p horizon-ui production::list::agent --bin horizon`.
+
+   Result: Workspace and actor isolation still hold. Attach, park, expiry and
+   ambiguous-cloud refusal keep their existing behavior. These are local synthetic
+   records; no worker or registry is contacted.
 
 ## 7. Pass criteria
 

@@ -208,3 +208,85 @@ fn an_expired_request_or_an_ambiguous_cloud_changes_nothing() {
     assert!(error.starts_with("cloud_list_ambiguous_cloud"), "{error}");
     assert!(!runtime(&mut app).parking.is_parked());
 }
+
+#[test]
+fn publication_status_uses_only_the_clouds_retained_runtime_metadata() {
+    use horizon_core::cloud_runtime::{github::publish::publication::Account, publishing::Publication};
+    let (_temp, mut app, actor) = cloud_with_agent();
+    let state = runtime(&mut app).state.as_mut().unwrap();
+    let publication = Publication {
+        profile: "cpu".into(),
+        requested_image: String::new(),
+        destination: serde_json::from_value(json!({
+            "repository":"ghcr.io/synthetic-user/fixture",
+            "publisher":{"kind":"git_hub","login":"synthetic-user"}
+        }))
+        .unwrap(),
+        account: Some(Account {
+            id: 17,
+            login: "synthetic-user".into(),
+        }),
+    };
+    let expected = serde_json::to_value(&publication).unwrap();
+    let destination = publication.destination.clone();
+    state.profile.image.clone_from(&destination.repository);
+    state.profile.build = Some(serde_json::from_value(json!({"context":".","dockerfile":"Dockerfile"})).unwrap());
+    state.version = 5;
+    if let Some(spec) = &mut state.spec {
+        spec.profile = state.profile.clone();
+    }
+    state.publication = Some(Box::new(publication));
+    let ctx = egui::Context::default();
+    let listed = app.answer_cloud_list(&request(&actor, "list", None), &ctx).unwrap();
+    assert_eq!(listed["clouds"][0]["worker_image"], destination.repository);
+    assert_eq!(listed["clouds"][0]["image_publication"], expected);
+    assert_eq!(
+        listed["clouds"][0]["image_publication"]["destination"]["repository"],
+        destination.repository
+    );
+    let encoded = serde_json::to_string(&listed).unwrap();
+    assert!(!encoded.contains("secret_file"));
+    assert!(!encoded.contains("access_token"));
+    runtime(&mut app).state.as_mut().unwrap().cloud_id = "different-cloud".into();
+    let listed = app.answer_cloud_list(&request(&actor, "list", None), &ctx).unwrap();
+    assert!(listed["clouds"][0]["worker_image"].is_null());
+    assert!(listed["clouds"][0]["image_publication"].is_null());
+    runtime(&mut app).state = None;
+    let listed = app.answer_cloud_list(&request(&actor, "list", None), &ctx).unwrap();
+    assert!(listed["clouds"][0]["image_publication"].is_null());
+}
+
+#[test]
+fn an_unresolved_automatic_image_is_null_and_a_retained_registry_grant_stays_opaque() {
+    let (_temp, mut app, actor) = cloud_with_agent();
+    let state = runtime(&mut app).state.as_mut().unwrap();
+    state.profile.image.clear();
+    state.profile.build = Some(serde_json::from_value(json!({"context":".","dockerfile":"Dockerfile"})).unwrap());
+    if let Some(spec) = &mut state.spec {
+        spec.profile = state.profile.clone();
+    }
+    let ctx = egui::Context::default();
+    let listed = app.answer_cloud_list(&request(&actor, "list", None), &ctx).unwrap();
+    assert!(listed["clouds"][0]["worker_image"].is_null());
+    assert!(listed["clouds"][0]["image_publication"].is_null());
+
+    let binding = "a".repeat(64);
+    let expected = json!({
+        "profile":"cpu", "requested_image":"",
+        "destination":{"repository":"registry.example/team/worker",
+            "publisher":{"kind":"registry","binding":binding}}
+    });
+    let state = runtime(&mut app).state.as_mut().unwrap();
+    state.version = 5;
+    state.profile.image = "registry.example/team/worker".into();
+    if let Some(spec) = &mut state.spec {
+        spec.profile = state.profile.clone();
+    }
+    state.publication = Some(Box::new(serde_json::from_value(expected.clone()).unwrap()));
+    let listed = app.answer_cloud_list(&request(&actor, "list", None), &ctx).unwrap();
+    assert_eq!(listed["clouds"][0]["worker_image"], "registry.example/team/worker");
+    assert_eq!(listed["clouds"][0]["image_publication"], expected);
+    let encoded = serde_json::to_string(&listed).unwrap();
+    assert!(!encoded.contains("secret_file"));
+    assert!(!encoded.contains("access_token"));
+}

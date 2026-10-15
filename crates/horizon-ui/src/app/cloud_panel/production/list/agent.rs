@@ -64,7 +64,7 @@ impl HorizonApp {
             .filter_map(|(index, group)| Some((index, group.remote.as_ref()?.id.clone())));
         if list.operation == CloudListOperation::List {
             let clouds: Vec<Value> = in_workspace
-                .map(|(index, id)| entry(&id, &self.cloud_facts(&self.cloud_prototype.groups.0[index], now)))
+                .map(|(index, id)| self.listed_cloud_entry(index, &id, now))
                 .collect();
             return Ok(json!({ "clouds": clouds }));
         }
@@ -133,6 +133,18 @@ impl HorizonApp {
         }
     }
 
+    fn listed_cloud_entry(&self, index: usize, id: &str, now: SystemTime) -> Value {
+        let group = &self.cloud_prototype.groups.0[index];
+        let state = self
+            .cloud_prototype
+            .production
+            .runtimes
+            .get(&group.issue)
+            .and_then(|runtime| runtime.state.as_ref())
+            .filter(|state| state.cloud_id == id);
+        entry(id, &self.cloud_facts(group, now), state)
+    }
+
     /// Moves the view to cloud `index` as a click on its row does: to its first
     /// member, which takes the focus so that a parked cloud attaches at once.
     fn attach_listed_cloud(&mut self, index: usize, ctx: &egui::Context) {
@@ -169,7 +181,7 @@ impl HorizonApp {
 }
 
 /// One cloud of a `list` answer.
-fn entry(id: &str, facts: &CloudFacts) -> Value {
+fn entry(id: &str, facts: &CloudFacts, state: Option<&horizon_core::cloud_runtime::state::Deployment>) -> Value {
     json!({
         "cloud": id,
         "name": facts.name,
@@ -178,6 +190,8 @@ fn entry(id: &str, facts: &CloudFacts) -> Value {
         "hourly_rate": facts.hourly_rate.map(|rate| rate.hourly),
         "currency": facts.hourly_rate.map(|rate| rate.currency),
         "working": facts.working,
+        "worker_image": state.map(|state| &state.profile.image).filter(|image| !image.is_empty()),
+        "image_publication": state.and_then(|state| state.publication.as_ref()),
     })
 }
 
