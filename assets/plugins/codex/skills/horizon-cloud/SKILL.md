@@ -52,6 +52,12 @@ Credentials are desktop-global, so a workspace agent cannot approve its own requ
 Status qualification uses the production UI, actual CLI and normal AGENT public
 MCP responses; baseline id/name evidence alone does not qualify API status.
 
+Machine-local destination preference helpers retain a checkout/profile scope and
+nonsecret account or exact registry grant metadata. They do not change launch or
+profile parsing yet. A saved preference is not proof of authentication or registry
+permission. Keep these settings outside repository files and use the shared
+transactional save helper to preserve other windows' choices.
+
 Image publication credentials belong on the host. An operation preparation helper
 retains the authenticated provider account ID and owns a separate temporary Docker
 login. It has no launch caller yet; existing launch behavior and explicit `image`
