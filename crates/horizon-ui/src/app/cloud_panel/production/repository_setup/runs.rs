@@ -75,6 +75,29 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn keep_ending_of(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .push((Some(repository.to_path_buf()), ending));
+    // Counted after it is in the list: a preparation that read the count before sees a
+    // new count, and one that read it after waits for this ending.
+    *BEGUN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .entry(repository.to_path_buf())
+        .or_default() += 1;
+}
+
+/// For each repository, how many endings of its runs began so far.
+static BEGUN: std::sync::Mutex<std::collections::BTreeMap<std::path::PathBuf, u64>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+/// How many endings of runs of `repository` began so far. A preparation reads it before it
+/// waits for those endings: once it differs, another ending began since, which the wait
+/// may not have seen and the baseline read after it may hold the writes of.
+pub(in crate::app::cloud_panel::production::repository_setup) fn endings_begun(repository: &std::path::Path) -> u64 {
+    BEGUN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(repository)
+        .copied()
+        .unwrap_or_default()
 }
 
 /// Waits until every ending of a run of `repository` has ended, with what their ending

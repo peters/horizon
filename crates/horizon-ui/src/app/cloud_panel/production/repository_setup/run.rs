@@ -873,8 +873,8 @@ impl Step {
     }
 }
 
+pub(super) use super::runs::{endings_begun, wait_for_ended_runs_of, wait_for_ended_runs_within};
 pub(in crate::app::cloud_panel::production::repository_setup) use super::runs::{keep_ending, keep_ending_of};
-pub(super) use super::runs::{wait_for_ended_runs_of, wait_for_ended_runs_within};
 
 /// A run dropped without Stop or Use, as when Horizon exits, still leaves nothing
 /// behind: Horizon waits for its proof to stop and removes what it made.

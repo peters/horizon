@@ -38,6 +38,9 @@ struct Prepared {
     dotnet: bool,
     launcher: Option<Vec<String>>,
     git_crates: Vec<String>,
+    /// How many endings of runs of the repository had begun before the preparation
+    /// waited for them.
+    endings: u64,
 }
 
 impl HorizonApp {
@@ -83,6 +86,18 @@ impl HorizonApp {
             return;
         };
         let chosen_mode = std::mem::take(&mut self.cloud_prototype.production.setup_mode);
+        self.prepare_cloud_setup(ctx, preset, chosen_mode, entered);
+        self.cloud_prototype.error = None;
+    }
+
+    /// Prepares a setup of `entered` with `preset` on a thread; it starts once prepared.
+    fn prepare_cloud_setup(
+        &mut self,
+        ctx: &egui::Context,
+        preset: horizon_core::PresetConfig,
+        chosen_mode: super::Mode,
+        entered: String,
+    ) {
         let agents = self.cloud_prototype.production.setup_agents.clone();
         let (sender, receiver) = std::sync::mpsc::channel();
         let wake = ctx.clone();
@@ -101,24 +116,22 @@ impl HorizonApp {
             entered,
             receiver,
         });
-        self.cloud_prototype.error = None;
     }
 
-    /// Starts each agent once the files outside `.horizon` were read for its run.
+    /// Starts each agent once the files outside `.horizon` were read for its run. A setup
+    /// that prepares again starts at the earliest on the next frame.
     fn poll_cloud_setup_start(&mut self, ctx: &egui::Context) {
-        let mut index = 0;
-        while let Some(starting) = self.cloud_prototype.production.setup_starting.get(index) {
+        for starting in std::mem::take(&mut self.cloud_prototype.production.setup_starting) {
             let prepared = match starting.receiver.try_recv() {
                 Ok(prepared) => prepared,
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    index += 1;
+                    self.cloud_prototype.production.setup_starting.push(starting);
                     continue;
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     Err("Could not read the repository before the setup agent starts".to_owned())
                 }
             };
-            let starting = self.cloud_prototype.production.setup_starting.remove(index);
             match prepared {
                 Ok(prepared) => self.launch_cloud_repository_setup(ctx, starting, prepared),
                 Err(error) => {
@@ -148,6 +161,7 @@ impl HorizonApp {
             dotnet,
             launcher,
             git_crates: crates,
+            endings,
         } = prepared;
         // Two entries of one folder, such as a link and its target, still get one run.
         if let Some(other) = self
@@ -164,6 +178,15 @@ impl HorizonApp {
             ));
             self.cloud_prototype.production.setup_mode = chosen_mode;
             run::remove_run_folder(&status);
+            return;
+        }
+        // An earlier run of this folder began to end after the preparation looked, as when
+        // it was stopped meanwhile: its agent may have written here while the baseline was
+        // read, or still writes. The setup prepares again, so it waits for that ending and
+        // reads its baseline and mode after it.
+        if run::endings_begun(&repository) != endings {
+            run::remove_run_folder(&status);
+            self.prepare_cloud_setup(ctx, preset, chosen_mode, entered);
             return;
         }
         let kind = preset.kind;
@@ -771,6 +794,14 @@ fn prepare(
         .filter(|path| path.is_dir())
         .ok_or("Choose an existing local repository directory")?;
     let status = status_path()?;
+    // What earlier cleanups could not remove is tried again in the background. One
+    // setup for each folder: an earlier run of this repository still ending, as after
+    // Stop, ends first. Runs of other repositories go on. The count is read first, so
+    // an ending that begins later is noticed before the agent starts.
+    let endings = run::endings_begun(&repository);
+    super::proof::retry_unremoved();
+    run::wait_for_ended_runs_of(&repository);
+    // Read once the earlier run ended: what it wrote decides the mode, as the baseline.
     let mode = chosen_mode.resolve(&repository);
     let instructions = prompt(agents, (&repository, &status), &mode);
     let unit = format!(
@@ -778,12 +809,8 @@ fn prepare(
         super::proof::run_id(&status),
         std::process::id()
     );
-    // What earlier cleanups could not remove is tried again in the background. One
-    // setup for each folder: an earlier run of this repository still ending, as after
-    // Stop, ends first. Runs of other repositories go on.
-    super::proof::retry_unremoved();
-    run::wait_for_ended_runs_of(&repository);
     Ok(Prepared {
+        endings,
         identity: super::untrusted::identity(&repository),
         outside: super::commit::outside(&repository),
         dotnet: super::proof::uses_nuget(&repository),
@@ -840,6 +867,73 @@ fn files_summary(changes: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The setup agent is offered on Linux only.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_setup_prepared_before_its_folder_began_to_end_prepares_again() {
+        let (temp, ctx, mut app) =
+            crate::app::test_support::test_app_with_startup(horizon_core::StartupDecision::Ephemeral {
+                runtime_state: Box::default(),
+            });
+        let folder = temp.path().join("repository");
+        std::fs::create_dir_all(&folder).unwrap();
+        let entered = folder.display().to_string();
+        // Prepared before an earlier run of the folder began to end, such as a run that a
+        // link to the folder started and that is stopped while this one prepares.
+        let prepared = prepare(&entered, super::super::Mode::New, &[]).unwrap();
+        let first_status = prepared.status.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender.send(Ok(prepared)).unwrap();
+        app.cloud_prototype.production.setup_starting.push(Starting {
+            preset: horizon_core::PresetConfig {
+                name: "Test panel".into(),
+                kind: PanelKind::Usage,
+                alias: None,
+                command: None,
+                args: Vec::new(),
+                resume: horizon_core::PanelResume::default(),
+                ssh_connection: None,
+            },
+            chosen_mode: super::super::Mode::New,
+            entered,
+            receiver,
+        });
+        // That run is stopped, and its ending is already over by the next frame: the
+        // baseline may still hold what its agent wrote.
+        let canonical = std::fs::canonicalize(&folder).unwrap();
+        run::keep_ending_of(&canonical, std::thread::spawn(|| {}));
+        run::wait_for_ended_runs_of(&canonical);
+        app.sync_cloud_repository_setup(&ctx);
+        assert!(
+            app.cloud_prototype.production.setup_runs.is_empty(),
+            "no agent starts on a baseline read while another one ended"
+        );
+        assert_eq!(
+            app.cloud_prototype.production.setup_starting.len(),
+            1,
+            "it prepares again"
+        );
+        let started = Instant::now();
+        while !app.cloud_prototype.production.setup_starting.is_empty() {
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "it started after preparing again"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+            app.sync_cloud_repository_setup(&ctx);
+        }
+        assert_eq!(app.cloud_prototype.production.setup_runs.len(), 1);
+        let gone = Instant::now();
+        while first_status.parent().is_some_and(Path::exists) {
+            assert!(
+                gone.elapsed() < Duration::from_secs(10),
+                "the first preparation's folder goes"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        app.end_cloud_repository_setup();
+    }
 
     #[test]
     fn the_finished_card_names_a_few_files_each_cut_short() {
