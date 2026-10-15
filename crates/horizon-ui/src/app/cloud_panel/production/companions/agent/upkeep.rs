@@ -24,6 +24,9 @@ const TEXT: usize = 120;
 /// How long an Upkeep cloud stays not ready before what its runs started stops, so that a
 /// short refresh never ends a check in the middle.
 const NOT_READY: Duration = Duration::from_mins(5);
+/// How often those stops are sent again while the cloud stays not ready, at the pace of a
+/// ready cloud's exchanges.
+const NOT_READY_RETRY: Duration = Duration::from_secs(30);
 
 /// What one sync of an Upkeep cloud saw.
 pub(in crate::app) enum Seen {
@@ -44,7 +47,7 @@ pub(super) struct State {
     /// Companions that a run started, by cloud and alias, with the operation ID of the
     /// Stop that ends them once no run is active.
     started: BTreeMap<(String, String), Option<String>>,
-    /// When what the runs of each Upkeep cloud that is not ready started stops.
+    /// When what the runs of each Upkeep cloud that is not ready started stops next.
     not_ready: BTreeMap<String, Instant>,
 }
 
@@ -65,13 +68,13 @@ impl HorizonApp {
                 return;
             }
             Seen::NotReady => {
-                let due = *state
-                    .not_ready
-                    .entry(cloud.to_owned())
-                    .or_insert_with(|| Instant::now() + NOT_READY);
-                if Instant::now() < due {
+                let now = Instant::now();
+                let due = state.not_ready.entry(cloud.to_owned()).or_insert(now + NOT_READY);
+                if now < *due {
                     return;
                 }
+                // Not on every frame while a Stop runs.
+                *due = now + NOT_READY_RETRY;
                 (Vec::new(), false)
             }
         };
@@ -491,7 +494,12 @@ mod tests {
         let state = &mut app.cloud_prototype.production.companions.agent.upkeep;
         state.not_ready.insert("upkeep".into(), Instant::now());
         app.run_upkeep_companions("upkeep", Seen::NotReady, &ctx);
-        assert!(app.cloud_prototype.production.companions.agent.holds("upkeep"));
+        let agent = &app.cloud_prototype.production.companions.agent;
+        assert!(agent.holds("upkeep"));
+        assert!(
+            agent.upkeep.not_ready["upkeep"] > Instant::now(),
+            "sent again later, not every frame"
+        );
     }
 
     #[test]
