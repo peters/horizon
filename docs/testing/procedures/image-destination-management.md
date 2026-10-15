@@ -64,6 +64,10 @@ separate from these tests. Do not use a shared account or settings directory.
    abandoned scopes, unobserved jobs and deadlines request cancellation. A sign-in
    prompt stays with its original owner and clears when the operation finishes.
 
+Recipe metadata matches saved pull bindings for bare, tagged and digest-pinned
+images, including registry ports. Other paths and unconfirmed bindings remain
+unmatched. The metadata lookup reads no registry secret.
+
 ### 6.3 DM-03 — Read-only real checkout
 
 1. Set `HORIZON_TEST_REPOSITORY` to this task checkout and `HORIZON_TEST_PROFILE`

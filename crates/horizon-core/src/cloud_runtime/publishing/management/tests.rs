@@ -303,3 +303,44 @@ fn cancellation_during_metadata_selection_is_not_a_successful_listing() {
         ));
     }
 }
+
+#[test]
+fn saved_pull_metadata_matches_repository_identity_for_tagged_and_pinned_recipes() {
+    let fixture = fixture();
+    let mut settings = setup::load_settings(&fixture.cloud).unwrap();
+    for repository in ["registry.example/group/worker", "registry.example:5000/group/worker"] {
+        settings.registries.as_mut().unwrap().bindings[0].repository = repository.into();
+        for confirmed in [true, false] {
+            settings.registries.as_mut().unwrap().bindings[0].read_only_confirmed = confirmed;
+            std::fs::write(
+                fixture.cloud.join("settings.json"),
+                serde_json::to_vec(&settings).unwrap(),
+            )
+            .unwrap();
+            for (image, matches) in [
+                (repository.to_owned(), true),
+                (format!("{repository}:latest"), true),
+                (format!("{repository}@sha256:{}", "a".repeat(64)), true),
+                (format!("{repository}-other:latest"), false),
+            ] {
+                let profile: Profile = serde_json::from_value(serde_json::json!({
+                    "provider":"runpod","image":image,"cpu":2,"memory_gb":4,
+                    "build":{"context":".","dockerfile":"Dockerfile"}
+                }))
+                .unwrap();
+                let info = inspect(
+                    &fixture.cloud,
+                    &fixture.request.repository,
+                    "cpu",
+                    &profile,
+                    &Cancellation::default(),
+                )
+                .unwrap();
+                assert_eq!(info.pull_saved, matches && confirmed, "{image}, confirmed={confirmed}");
+                assert_eq!(info.selection, Some(Selection::Recipe { image }));
+            }
+        }
+    }
+    assert!(!fixture.cloud.join("registry").exists());
+    assert!(!fixture.cloud.join("docker").exists());
+}

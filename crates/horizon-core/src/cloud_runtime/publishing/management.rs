@@ -1,8 +1,8 @@
 //! Destination management shared by native and headless host adapters.
 use super::{Override, Selection, choices, personal, selection};
 use crate::cloud_runtime::{
-    Cancellation, Error, Result, command::Runner, github::publish::publication, repository::launch, settings::Settings,
-    setup,
+    Cancellation, Error, Result, command::Runner, github::publish::publication, registry, repository::launch,
+    settings::Settings, setup,
 };
 use horizon_cloud::Profile;
 use serde::{Deserialize, Serialize};
@@ -116,6 +116,7 @@ fn inspect_with(
     let pull_saved = selection
         .as_ref()
         .and_then(Selection::repository)
+        .and_then(registry::repository_of)
         .is_some_and(|target| {
             settings.registries.as_ref().is_some_and(|config| {
                 config

@@ -756,3 +756,6 @@ Git root. A receipt bound to a subdirectory refuses before host policy or
 authentication; direct native management still normalizes checkout folders.
 Cancellation during metadata selection is reported as cancellation, never as a
 successful listing with only an inline selection error.
+
+Saved pull metadata compares the registry repository without a tag or digest.
+It retains the registry port and exact path; it is not a live access check.
