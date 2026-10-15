@@ -27,12 +27,14 @@ IDS = {'111': 'example/project', '222': 'example/secret'}
 
 class FakeAPI(http.server.ThreadingHTTPServer):
     """GitHub's API, uploads and content hosts on one port, told apart by the Host field.
-    Every request is recorded with its Authorization; `graphql` answers GraphQL bodies."""
+    Every request is recorded with its Authorization; `graphql` answers GraphQL bodies, and
+    `answers` the GET paths that it names."""
 
     def __init__(self):
         super().__init__(('127.0.0.1', 0), APIHandler)
         self.seen = []
         self.graphql = lambda body: {'data': {}}
+        self.answers = {}
         threading.Thread(target=self.serve_forever, daemon=True).start()
 
     @property
@@ -57,6 +59,8 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
         data = self.rfile.read(int(self.headers.get('Content-Length', '0')))
         host, path = self.headers.get('Host'), self.path
         self.server.seen.append((self.command, host, path, self.headers.get('Authorization'), data))
+        if self.command == 'GET' and path in self.server.answers:
+            return self.reply(200, json.dumps(self.server.answers[path]).encode())
         if host == 'codeload.github.com':
             return self.reply(200, b'archive', 'application/x-gzip')
         if path == '/graphql':

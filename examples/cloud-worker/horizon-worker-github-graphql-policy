@@ -88,7 +88,7 @@ class Refused(Exception):
 class Plan:
     """What the broker sends for one request, and what it checks before and after."""
 
-    def __init__(self, text, operation, mutation, ids, markers, kinds):
+    def __init__(self, text, operation, mutation, ids, markers, kinds, mutations=()):
         # The document with the added fields.
         self.text = text
         self.operation = operation
@@ -100,6 +100,8 @@ class Plan:
         self.markers = markers
         # The types that `node` and `nodes` may give.
         self.kinds = kinds
+        # (name, arguments) of each mutation field, with the variables put in.
+        self.mutations = list(mutations)
 
     def body(self, variables):
         body = {'query': self.text, 'variables': variables}
@@ -181,6 +183,7 @@ class Walk:
         self.allowed = allowed
         self.inserts = {}
         self.ids = []
+        self.mutations = []
         # The field names of each selection set, by the set and how it was reached.
         self.walked = {}
         # The selection sets that the operation reaches.
@@ -231,10 +234,13 @@ class Walk:
             if field.name not in MUTATIONS:
                 raise Refused('the GraphQL mutation %s is not allowed on this worker.' % field.name)
             types = self.schema.arguments.get(self.schema.mutation, {}).get(field.name, {})
+            arguments = {}
             for name, node in field.arguments.items():
                 if name not in types:
                     raise Refused('the GraphQL mutation %s has no argument %s.' % (field.name, name))
-                self.collect_ids(types[name], self.value(node, declared))
+                arguments[name] = self.value(node, declared)
+                self.collect_ids(types[name], arguments[name])
+            self.mutations.append((field.name, arguments))
             return
         if field.name not in ROOTS:
             raise Refused('the GraphQL field %s is not allowed on this worker.' % field.name)
@@ -428,7 +434,8 @@ def plan(schema, body, allowed):
     for fragment in document.fragments.values():
         if fragment.selection_set.end not in walk.used:
             raise Refused('the GraphQL fragment %s is not used.' % fragment.name)
-    return Plan(walk.text(), operation.name, mutation, walk.ids, walk.markers, frozenset(walk.kinds))
+    return Plan(walk.text(), operation.name, mutation, walk.ids, walk.markers, frozenset(walk.kinds),
+                walk.mutations)
 
 
 def lookup(schema, ids):
