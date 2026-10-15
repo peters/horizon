@@ -106,6 +106,16 @@ impl Records {
                 .validate(&self.project.profile)
                 .map_err(|_| Error::Encoding)?;
         }
+        if self.allocation.service_admission.as_ref().is_some_and(|record| {
+            !record.valid()
+                || !self.project.identity.belongs_to(
+                    &record.owner().session_id.to_string(),
+                    &record.owner().workspace_id,
+                    &record.owner().cloud_id,
+                )
+        }) {
+            return Err(Error::Ownership);
+        }
         if self.allocation.id != self.project.allocation
             || self.allocation.member != self.project.identity
             || self.allocation.sharing != SharingMode::Dedicated

@@ -48,6 +48,7 @@ fn resizing_requires_a_saved_record_without_a_requested_worker() {
     let root = temp.path().join("fixture");
     let store = super::super::Store::lock(&root).unwrap();
     let mut state = horizon_core::cloud_runtime::state::Deployment {
+        service_admission: None,
         version: 1,
         cloud_id: "fixture".into(),
         repository: temp.path().into(),
@@ -560,14 +561,16 @@ fn only_a_ready_running_worker_schedules_the_one_second_refresh() {
     // egui subtracts the expected frame time from the requested delay.
     let refresh = delay(&mut running);
     assert!(refresh <= super::super::RUN_COST_REFRESH && refresh > super::super::RUN_COST_REFRESH / 2);
-    for mut idle in [
+    for mut idle in vec![
         cost_runtime(Stage::Stopped, &cost_worker("EXITED", &serde_json::json!({}))),
         cost_runtime(
             Stage::Ready,
             &cost_worker("RUNNING", &serde_json::json!({"lastStartedAt": null})),
         ),
         super::super::Runtime::default(),
-    ] {
+    ]
+    .into_boxed_slice()
+    {
         assert!(delay(&mut idle) > std::time::Duration::from_secs(60));
     }
 }

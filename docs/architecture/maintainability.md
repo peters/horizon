@@ -680,6 +680,10 @@ CPU storage is allocated. Provider wire changes never rewrite saved allocation
 identities or manufacture direct-create receipts.
 `state` defines and persists the deployment aggregate; `state::replacement` owns its
 journaled image-replacement state machine and the transition checks.
+`state::service_admission` validates retained one-device metadata without runtime
+authority. `state` and `allocation::legacy` preserve its version and original
+scope through shared reads and paired conversion. Snapshot delegation and current
+publishing preparation remain in their existing modules.
 `deployment::replacement` rebuilds a dedicated cloud's image from its recipe in the
 checkout, the latest commit with the confirmed uncommitted files, drives the journaled switch of its bound worker, settles an interrupted switch
 on reconnect and relaunches sessions afterwards. Its Git, Docker, registry, provider and

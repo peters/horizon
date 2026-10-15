@@ -505,6 +505,7 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
     } else {
         let mut created = Deployment {
             version: 1,
+            service_admission: None,
             cloud_id: request.cloud_id.clone(),
             repository: request.repository.clone(),
             revision: request.revision.clone(),
