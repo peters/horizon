@@ -3,7 +3,6 @@
 //! switch and reconnect live in `deployment::replacement`.
 use super::{
     Confirmation, Event, HorizonApp, Request, Runtime, Settings, Stage, Store, cloud_runtime, lifecycle::Action,
-    presentation,
 };
 use horizon_core::cloud_runtime::deployment::replacement::{self, Plan};
 use std::{
@@ -300,7 +299,7 @@ fn run(
     };
     match result {
         Ok(state) if ready.get() => {
-            presentation::watch(&state, &request.settings, &request.state_root, cancel, tx, ctx);
+            super::watch_ready(&state, &request.settings, &request.state_root, cancel, tx, ctx);
         }
         // Dropping an unsent replacement leaves the worker as it was without
         // reconnecting; reconnect to restore the presentation stopped for it.

@@ -1,4 +1,5 @@
 //! UI actions and progress for real deployments. Provider/build/session work lives in core.
+mod agent_stops;
 mod capabilities;
 pub(super) mod cards;
 mod close;
@@ -294,6 +295,8 @@ pub(super) struct Runtime {
     /// The worker stopped without an operation the owner started, as the provider
     /// confirmed.
     stopped_outside: bool,
+    /// The agent request that the Stop starting now carries out (`agent_stops`).
+    agent_stop: Option<cloud_runtime::lifecycle::AgentStop>,
     /// A failure of a ready or reconnecting cloud, held while the provider check that
     /// may explain it as a stop runs.
     unexplained_failure: Option<String>,
@@ -550,6 +553,7 @@ impl HorizonApp {
         let mut finished = Vec::new();
         let mut removed = Vec::new();
         let mut resumed = Vec::new();
+        let mut agent_stops = Vec::new();
         for (&id, runtime) in &mut self.cloud_prototype.production.runtimes {
             runtime.repaint_context.get_or_insert_with(|| ctx.clone());
             let events: Vec<_> = runtime
@@ -577,6 +581,7 @@ impl HorizonApp {
                         runtime.desktop_last_input = last;
                     }
                     Event::Watching => {}
+                    Event::AgentStopRequested(stop) => agent_stops.push((id, stop)),
                     Event::Desktop(tunnel) => {
                         runtime.desktop = Some(tunnel);
                         runtime.needs_desktop = true;
@@ -623,6 +628,7 @@ impl HorizonApp {
         self.reconcile_sharing(ctx);
         self.finish_closing_clouds(ctx);
         self.reconnect_resumed(resumed, ctx);
+        self.stop_clouds_for_agents(agent_stops, ctx);
         self.remove_closed_cloud_browsers(removed);
         self.sync_bound_profiles();
         self.sync_cloud_members();
@@ -933,13 +939,25 @@ fn run_deployment_with_siblings(
     let settings = request.settings.clone();
     let root = request.state_root.clone();
     match deployment::deploy_with_siblings(request, siblings, cancel, &emit) {
-        Ok(state) => {
-            presentation::watch(&state, &settings, &root, cancel, tx, ctx);
-        }
+        Ok(state) => watch_ready(&state, &settings, &root, cancel, tx, ctx),
         Err(error) => {
             report_failure(&root, &error, &emit);
         }
     }
+}
+
+/// Watches the ready cloud `state` until `cancel`: its presentation, and the stop
+/// requests of agents on a worker that cannot stop itself.
+fn watch_ready(
+    state: &Deployment,
+    settings: &Settings,
+    root: &std::path::Path,
+    cancel: &cloud_runtime::Cancellation,
+    tx: &std::sync::mpsc::Sender<Event>,
+    ctx: &egui::Context,
+) {
+    agent_stops::watch(state, settings, root, cancel, tx, ctx);
+    presentation::watch(state, settings, root, cancel, tx, ctx);
 }
 
 /// Reports the saved record with the failure, so the card shows what was kept. A

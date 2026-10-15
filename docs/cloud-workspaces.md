@@ -1471,10 +1471,16 @@ is merged. A worker image built from the current worker bootstrap offers this on
 every dedicated RunPod worker, with no idle period, and has no idle stop of its
 own; it reports `horizon-agent-stop-contract=1`. Older images offer it only to a
 worker with an idle period. On RunPod the worker stops itself, without this computer.
-A worker on Hetzner or a Docker host has no credential that can stop it. Started
-with `HORIZON_WORKER_STOP=horizon`, it records the request for Horizon to carry
-out; Horizon does not give that setting or take such requests yet, so these
-workers offer no agent stop. Shared workers and profiles
+A worker on Hetzner or a Docker host has no credential that can stop it, so
+Horizon starts it with `HORIZON_WORKER_STOP=horizon`: the worker records the
+request, and while the cloud is ready and no other operation runs, Horizon reads it
+every 30 seconds (`horizon-worker-stopd --take`) and then stops the cloud as **Stop**
+does. The card shows `<agent> asked to stop this cloud: <reason>`, then **Stopped
+by <agent>** with the reason. This works only while Horizon runs: a request that
+Horizon does not take within ten minutes lapses, and the worker keeps running. A
+worker created before this change has no such setting and offers no agent stop: a
+Hetzner cloud gets it with its next server, after Stop and Resume or a rebuild, and
+a Docker host cloud only when it is created again. Shared workers and profiles
 with hosted devices offer no agent stop. Agents get a
 `stop_this_worker` MCP tool (or run `horizon-worker-stop --reason "..."`) with a
 one-line reason. The worker identifies the requesting agent session itself,

@@ -6,8 +6,7 @@ Where the provider gives the worker a credential to stop itself (RunPod), this s
 checks the request and stops the worker at once. Where it does not (Hetzner, a Docker
 host), a worker started with HORIZON_WORKER_STOP=horizon has the service check the
 request and record it, for Horizon to carry out the next time it reads the worker with
-`horizon-worker-stopd --take`, which checks it again. Horizon does not give that setting
-yet. A shared worker and a worker
+`horizon-worker-stopd --take`, which checks it again. A shared worker and a worker
 with hosted devices offer no stop: the first runs other clouds' sessions, and the second
 could not release the devices it holds once stopped."""
 import errno

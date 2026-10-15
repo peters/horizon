@@ -105,6 +105,11 @@ and Delete work as for a rented worker:
 - **Resume** starts the same container on the same loopback port.
 - **Delete** removes only the container and the volume of this cloud.
 
+An agent in the cloud can stop it when its task is done, with `stop_this_worker`.
+The container cannot stop itself, so it records the request, and Horizon, while it
+runs, reads it every 30 seconds and stops the container as **Stop** does. A
+container created before Horizon could take such requests offers no agent stop.
+
 **Manage** shows **Rebuild image & restart…** but you cannot click it. A cloud on
 a host keeps the image that it started with. To get a new image, delete the cloud
 and start it again.

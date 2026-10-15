@@ -108,6 +108,10 @@ pub enum Event {
     /// A watch of a ready worker is about to check it. Sent only to learn whether the
     /// card still listens, so a watch whose card is gone, as after a session switch, ends.
     Watching,
+    /// An agent on a worker that cannot stop itself asked for its stop, and the worker
+    /// took the request for Horizon: the card stops the cloud for it
+    /// (`lifecycle::stop_for_agent`).
+    AgentStopRequested(lifecycle::AgentStop),
 }
 impl Event {
     #[must_use]

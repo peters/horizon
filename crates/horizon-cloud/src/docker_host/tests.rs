@@ -281,6 +281,8 @@ fn clouds_on_one_host_get_their_own_names_volumes_and_ports() {
         (WorkerStatus::Running, &Some(Box::new(host())))
     );
     assert_eq!(one.env["HORIZON_CLOUD_OPERATION"], "first");
+    // A container cannot stop itself: an agent's stop is Horizon's to take.
+    assert_eq!(one.env["HORIZON_WORKER_STOP"], "horizon");
     let volumes: Vec<String> = docker.volumes.borrow().keys().cloned().collect();
     assert_eq!(
         volumes,

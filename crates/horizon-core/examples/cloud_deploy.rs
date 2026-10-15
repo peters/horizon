@@ -17,7 +17,7 @@ use horizon_core::cloud_runtime::{
     state::Store,
 };
 use std::{path::PathBuf, process::ExitCode};
-const USAGE: &str = "Usage: cloud_deploy tailnets STATE_ROOT [TAILNET_ID] | offers SETTINGS [REQUIREMENTS_JSON] | plan-deploy|deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--quick-start] [--worker-choice OFFER_JSON_FILE] [--plan-token PLAN_TOKEN] (deploy and prepare-image) [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|resume|reconnect|endpoint|delete|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | plan-rebuild|rebuild SETTINGS STATE_ROOT PROFILE [PLAN_TOKEN] (rebuild only) | reconcile SETTINGS STATE_ROOT [WORKER_ID]. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume. --quick-start uses the built-in quick-start profile on the public base image for a commit without .horizon/cloud.yml. On the checked-out commit the image builds from the working copy, as in New cloud: plan-deploy lists its uncommitted files and prints the token that deploy and prepare-image then need.";
+const USAGE: &str = "Usage: cloud_deploy tailnets STATE_ROOT [TAILNET_ID] | offers SETTINGS [REQUIREMENTS_JSON] | plan-deploy|deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--quick-start] [--worker-choice OFFER_JSON_FILE] [--plan-token PLAN_TOKEN] (deploy and prepare-image) [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|take-stop|resume|reconnect|endpoint|delete|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | plan-rebuild|rebuild SETTINGS STATE_ROOT PROFILE [PLAN_TOKEN] (rebuild only) | reconcile SETTINGS STATE_ROOT [WORKER_ID]. take-stop reads an agent's stop request of a Hetzner or Docker host cloud once and stops the cloud for it, as the card does every 30 s. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume. --quick-start uses the built-in quick-start profile on the public base image for a commit without .horizon/cloud.yml. On the checked-out commit the image builds from the working copy, as in New cloud: plan-deploy lists its uncommitted files and prints the token that deploy and prepare-image then need.";
 
 fn main() -> ExitCode {
     match run() {
@@ -60,6 +60,9 @@ fn run_args(args: &[String]) -> cloud_runtime::Result<()> {
     if args[0] == "stop" && args.len() == 3 {
         cloud_runtime::lifecycle::stop(&PathBuf::from(&args[2]), &settings, &cancel)?;
         return Ok(());
+    }
+    if args[0] == "take-stop" && args.len() == 3 {
+        return take_stop(&PathBuf::from(&args[2]), &settings, &cancel);
     }
     if args[0] == "revoke-browserstack" && args.len() == 3 {
         cloud_runtime::lifecycle::revoke_browserstack(&PathBuf::from(&args[2]), &settings, &cancel)?;
@@ -672,4 +675,21 @@ mod tests {
             ));
         }
     }
+}
+
+/// Reads the agent's stop request of the cloud at `root` once, as the card does, and
+/// stops the cloud for a request the worker took.
+fn take_stop(root: &std::path::Path, settings: &Settings, cancel: &Cancellation) -> cloud_runtime::Result<()> {
+    use cloud_runtime::lifecycle::Requested;
+    match cloud_runtime::lifecycle::read_stop_request(root, settings, cancel)? {
+        Requested::Nothing => println!("No stop request"),
+        Requested::Waiting(words) => println!("Waiting: {words}"),
+        Requested::Refused(words) => println!("Dropped: {words}"),
+        Requested::Stop(stop) => {
+            println!("{} asked to stop this cloud: {}", stop.agent, stop.reason);
+            let state = cloud_runtime::lifecycle::stop_for_agent(root, settings, cancel, &stop)?;
+            println!("Stopped: {:?}", state.stage);
+        }
+    }
+    Ok(())
 }
