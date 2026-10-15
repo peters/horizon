@@ -7,8 +7,12 @@ use horizon_core::cloud_runtime::state::Deployment;
 use horizon_core::cloud_runtime::{CreateState, state::Store};
 
 #[cfg(unix)]
+mod cancellation;
+#[cfg(unix)]
 mod refresh;
 mod refused;
+#[cfg(unix)]
+mod watch;
 
 fn deployment() -> Deployment {
     serde_json::from_value(serde_json::json!({

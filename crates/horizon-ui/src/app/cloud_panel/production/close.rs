@@ -110,7 +110,9 @@ impl HorizonApp {
 
     /// Forgets the dialog and what an earlier attempt of cloud `id`'s close left.
     fn end_close_confirmation(&mut self, id: u32) {
+        self.restore_closing_panels(id);
         let close = &mut self.cloud_prototype.production.close;
+        close.deleting.remove(&id);
         close.jobs.cancel(id);
         close.owners.remove(&id);
         close.removing.remove(&id);

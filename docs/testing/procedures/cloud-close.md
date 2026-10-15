@@ -251,7 +251,7 @@ Use a new fixture for this task. Change only its private synthetic records.
 
    ```sh
    RUSTFLAGS="-D warnings" cargo test --locked -p horizon-ui cloud_panel::production::removal::tests
-   RUSTFLAGS="-D warnings" cargo test --locked -p horizon-ui cloud_panel::production::close::tests::refresh
+   RUSTFLAGS="-D warnings" cargo test --locked -p horizon-ui cloud_panel::production::close
    ```
 
    Result: A real `deployment.json` FIFO blocks the worker read. UI polling, dialog rendering and an unrelated board action return.
@@ -259,6 +259,8 @@ Use a new fixture for this task. Change only its private synthetic records.
    Only the newest generation receives a final result. The worker holds its Store lock through the UI discard.
    A changed launch cannot use an older result. Automatic close treats Pending as work in progress.
    A blocked periodic refresh keeps settled close controls visible. A final removal waits for a fresh worker decision.
+   Cancel and Escape clear automatic close intent after a completed deletion. When the blocked read finishes, the cloud and its panels remain.
+   A Ready connection watch permits explicit removal after deletion fails before startup. A busy operation or a held Store lock still refuses removal.
 
 ### 6.7 C07: Check the small window
 

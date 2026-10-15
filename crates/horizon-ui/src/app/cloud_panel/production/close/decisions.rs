@@ -73,7 +73,7 @@ impl HorizonApp {
             .production
             .runtimes
             .get(&id)
-            .is_some_and(|runtime| runtime.receiver.is_some() || runtime.busy())
+            .is_some_and(|runtime| runtime.busy() || (runtime.receiver.is_some() && origin != Origin::Anyway))
         {
             return RemovalStart::Refused;
         }
@@ -128,7 +128,9 @@ impl HorizonApp {
                         .production
                         .runtimes
                         .get(&id)
-                        .is_some_and(|runtime| runtime.receiver.is_some() || runtime.busy())
+                        .is_some_and(|runtime| {
+                            runtime.busy() || (runtime.receiver.is_some() && origin != Origin::Anyway)
+                        })
                     {
                         self.removal_refused(id, origin, Refusal::Busy);
                         continue;
