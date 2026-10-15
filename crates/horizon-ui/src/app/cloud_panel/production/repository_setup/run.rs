@@ -241,6 +241,8 @@ pub(in crate::app::cloud_panel::production) struct Run {
     /// The browser panel for a fix on GitHub, and who works in it for the current proof.
     pub(super) fix_panel: Option<PanelId>,
     pub(super) fixer: Option<Fixer>,
+    /// Why the last thing asked of this run did not happen, shown with its progress.
+    pub(super) notice: Option<String>,
 }
 
 /// What the person did in the progress view.
@@ -345,6 +347,7 @@ impl Run {
             agent_closed: false,
             fix_panel: None,
             fixer: None,
+            notice: None,
         }
     }
 
@@ -764,12 +767,13 @@ impl Run {
     }
 
     /// Ends the run in the background: its agent's processes end, its proof stops, then
-    /// the proof's containers, image and volume and the run's folder go. A new setup
-    /// waits for that, so two setups never run at once.
+    /// the proof's containers, image and volume and the run's folder go. A new setup of
+    /// the same repository waits for that, so two setups never work in one folder.
     pub(super) fn discard(self) {
         // Noted before the thread starts, so an exit that comes first keeps them.
         proof::expect_removal(&self.repository, &proof::run_id(&self.status_path));
-        keep_ending(std::thread::spawn(move || drop(self)));
+        let repository = self.repository.clone();
+        keep_ending_of(&repository, std::thread::spawn(move || drop(self)));
     }
 
     fn release(&mut self, wait: bool) {
@@ -869,44 +873,8 @@ impl Step {
     }
 }
 
-/// Runs, agents and proof resources being ended in the background.
-static ENDING: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>> = std::sync::Mutex::new(Vec::new());
-
-/// Keeps `ending`, a thread that ends a run, an agent or what a proof made, so a new
-/// setup and Horizon's exit wait for it.
-pub(in crate::app::cloud_panel::production::repository_setup) fn keep_ending(ending: std::thread::JoinHandle<()>) {
-    ENDING
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push(ending);
-}
-
-/// Waits until every run, agent and proof resource being ended in the background has
-/// ended, with what their ending started in turn: a new setup starts only then, and
-/// Horizon exits only then. No waiter takes a handle out before its thread has
-/// finished, so every waiter sees each running one: a thread leaves the list only once
-/// its work has returned, and any ending it started by then is in the list already.
-pub(super) fn wait_for_ended_runs() {
-    let _ = wait_for_ended_runs_within(None);
-}
-
-/// As [`wait_for_ended_runs`], for at most `limit`; whether every one ended in time.
-pub(super) fn wait_for_ended_runs_within(limit: Option<Duration>) -> bool {
-    let deadline = limit.map(|limit| Instant::now() + limit);
-    loop {
-        {
-            let mut ending = ENDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            ending.retain(|run| !run.is_finished());
-            if ending.is_empty() {
-                return true;
-            }
-        }
-        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-}
+pub(super) use super::runs::{endings_begun, wait_for_ended_runs_of, wait_for_ended_runs_within};
+pub(in crate::app::cloud_panel::production::repository_setup) use super::runs::{keep_ending, keep_ending_of};
 
 /// A run dropped without Stop or Use, as when Horizon exits, still leaves nothing
 /// behind: Horizon waits for its proof to stop and removes what it made.
@@ -917,7 +885,7 @@ impl Drop for Run {
 }
 
 /// Removes a finished run's folder, its status, proof logs and screenshots, on a thread
-/// that a new setup and Horizon's exit wait for.
+/// that Horizon's exit waits for.
 pub(super) fn remove_run_folder(status: &std::path::Path) {
     let status = status.to_path_buf();
     keep_ending(std::thread::spawn(move || remove_run_folder_now(&status)));
@@ -1015,7 +983,7 @@ mod tests {
             .map(|_| {
                 let done = nested_done.clone();
                 std::thread::spawn(move || {
-                    wait_for_ended_runs();
+                    wait_for_ended_runs_within(None);
                     done.load(Ordering::SeqCst)
                 })
             })

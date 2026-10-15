@@ -467,6 +467,12 @@ reads or changes it, and agents work only with the repositories the cloud was gi
   build files give), shows a desktop app live in a Device panel when the agent names
   one, and **Use this setup** commits it. No MCP tool starts a setup: ask the person
   to open **New cloud** for the repository.
+- Several repositories can be set up at the same time, each with its own setup agent.
+  The person clicks **Close** while a setup works, opens **New cloud** again for
+  another repository and starts its setup; **New cloud** opened for the first
+  repository shows that setup again. One folder has one setup at a time: a second
+  setup of the same folder, also through a symbolic link, is refused until the first
+  one stops.
 - When that proof's build fails because an organization limits OAuth apps, Horizon names
   the organization and offers the fix on GitHub; the Dockerfile is not the cause. If the
   person lets the setup agent make the fix, the agent gets one **GitHub access** browser

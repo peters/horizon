@@ -502,9 +502,41 @@ checked on the cloud card, and an agent panel in the same workspace.
    Result: The answer has `"changed": false`. No tool checks a companion: only the
    owner can check the box again, on the card.
 
+### 6.20 S20 — Two repositories at once
+
+1. Start the setup agent on a copy of the fixture without `.horizon`, then click
+   **Close** while it works.
+
+   Result: The dialog closes. The agent keeps working.
+
+2. Click **+ New cloud** and enter a second copy of the fixture without `.horizon`.
+
+   Result: The dialog offers the setup choices for the second copy. It does not say
+   that another setup is still working.
+
+3. Start the setup agent for the second copy.
+
+   Result: The dialog shows the steps of the second setup. The first agent keeps
+   working.
+
+4. Click **Close**. Click **+ New cloud** and enter the first copy.
+
+   Result: The dialog shows the steps of the first setup, with its elapsed times.
+
+5. Click **Stop**, then **Close**. Click **+ New cloud** and enter the second copy.
+
+   Result: The first agent stopped. The dialog shows the steps of the second setup,
+   which still works.
+
+6. Make a symbolic link to the second copy. Click **Close**, click **+ New cloud**,
+   enter the link and start the setup agent.
+
+   Result: No second agent starts. The dialog says that a setup of the folder already
+   runs. The second setup still works.
+
 ## 7. Pass criteria
 
-- S01 to S19 give the results above.
+- S01 to S20 give the results above.
 - The proof ran on this computer. Before you click **Use this setup** in S04,
   `docker images` lists `horizon-setup-ci-app-<hash>-<run>:candidate`. `<hash>` is
   six hexadecimal digits that Horizon derives from the repository's path. `<run>` is

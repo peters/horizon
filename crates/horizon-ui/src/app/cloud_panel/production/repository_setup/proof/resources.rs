@@ -214,7 +214,8 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_reso
     if wait {
         remove();
     } else {
-        super::super::run::keep_ending(std::thread::spawn(remove));
+        // It waits for the run's agent to end, so a new setup of the repository waits for it.
+        super::super::run::keep_ending_of(repository, std::thread::spawn(remove));
     }
 }
 
@@ -291,7 +292,7 @@ fn leftovers_file() -> std::path::PathBuf {
 }
 
 /// Tries again to remove what earlier cleanups could not, this run of Horizon's or one
-/// before it, in the background; a new setup and Horizon's exit wait for it.
+/// before it, in the background; Horizon's exit waits for it.
 pub(in crate::app::cloud_panel::production::repository_setup) fn retry_unremoved() {
     let file = leftovers_file();
     if let Ok(bytes) = super::super::untrusted::read_regular(&file, 1024 * 1024) {

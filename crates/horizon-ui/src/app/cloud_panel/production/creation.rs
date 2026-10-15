@@ -79,8 +79,8 @@ impl HorizonApp {
             return;
         }
         let viewport = ctx.content_rect();
-        // A running setup agent shows its output; large windows give it room.
-        let widest = if self.cloud_prototype.production.setup_run.is_some() {
+        // A setup agent of this repository shows its output; large windows give it room.
+        let widest = if super::repository_setup::running_here(&self.cloud_prototype.production) {
             1480.0
         } else {
             1180.0
@@ -160,7 +160,12 @@ impl HorizonApp {
         match actions.repository {
             RepositoryAction::Load => self.read_cloud_profiles(ctx),
             RepositoryAction::Setup => self.start_cloud_repository_setup(ctx),
-            RepositoryAction::SetupRun(action) => self.cloud_repository_setup_action(ctx, action),
+            RepositoryAction::SetupRun(action) => {
+                // The dialog acts on the run of the repository it shows.
+                if let Some(run) = self.cloud_prototype.production.run_here_key() {
+                    self.cloud_repository_setup_action(ctx, run, action);
+                }
+            }
             RepositoryAction::ChooseSibling(alias) => self.choose_cloud_sibling(ctx, alias),
             RepositoryAction::Adopt(path) => self.adopt_cloud_source(ctx, &path),
             RepositoryAction::CloneFolder => self.choose_clone_folder(ctx),

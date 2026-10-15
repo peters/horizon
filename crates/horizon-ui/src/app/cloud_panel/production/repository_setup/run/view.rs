@@ -62,6 +62,10 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn render(
                 ui.add_space(8.0);
                 callout(ui, question);
             }
+            if let Some(notice) = &run.notice {
+                ui.add_space(8.0);
+                ui.colored_label(theme::PALETTE_RED(), notice);
+            }
             ui.add_space(12.0);
             // Beside the agent's own terminal, the person types there; inline, a field
             // passes messages and the footer is not the only place to act.

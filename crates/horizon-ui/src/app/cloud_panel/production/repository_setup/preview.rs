@@ -171,7 +171,7 @@ impl Preview {
     fn remove_container(&self) {
         let container = self.container.clone();
         let pinned = self.pinned.clone();
-        // Registered, so Horizon's exit and the next setup wait for it.
+        // Registered, so Horizon's exit waits for it.
         super::run::keep_ending(std::thread::spawn(move || {
             if let Some(daemon) = pinned.get() {
                 let _ = super::proof::remove_now(daemon, &["rm", "--force", &container]);
