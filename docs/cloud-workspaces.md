@@ -699,6 +699,14 @@ repository has one setup at a time: a second setup of the same folder, also thro
 a link to it, is refused until the first one stops. A message about a setup, for
 example why **Use this setup** did not commit, shows under the steps of that setup.
 
+The image build, the CI in the image and the fast rerun are the heavy part of a setup.
+Horizon runs them for a limited number of setups at the same time on one Docker: one
+for each 16 processors of the computer, at least one and at most four. A setup that
+waits for a free build slot shows **Waiting for a build slot** and the repositories
+that build at that time on its **Build image** step. Slots go in the order that the
+setups asked for them. To change the number, start Horizon with
+`HORIZON_SETUP_BUILD_SLOTS` set to a number from 1 to 16.
+
 The agent reads the CI of the repository first, the GitHub Actions workflows in
 `.github/workflows`: the Linux jobs that restore, build and test, the tool versions
 they use and where those versions come from. Horizon proves GitHub Actions jobs

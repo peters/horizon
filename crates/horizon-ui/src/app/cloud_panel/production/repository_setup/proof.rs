@@ -21,6 +21,7 @@ mod needs;
 mod preflight;
 mod resources;
 mod session_env;
+mod slots;
 pub(super) use session_env::arguments as session_environment;
 mod stream;
 use needs::distinct_builds;
@@ -104,6 +105,9 @@ enum Event {
     /// The setup the worker read asks for a GPU; the preview of its image gets it too.
     Gpu(bool),
     Started(Phase),
+    /// Every build slot of the daemon is taken, by the setups of these repositories; an
+    /// empty list once the proof has its slot.
+    Waiting(Vec<String>),
     /// The failed build met an account problem; it comes before the build's `Finished`.
     Fix(super::access::Fix),
     Finished(Phase, Result<(), String>),
@@ -150,6 +154,8 @@ pub(super) struct Proof {
     pinned: Pinned,
     /// An account problem the build met that the person fixes on GitHub.
     pub(super) fix: Option<super::access::Fix>,
+    /// The repositories whose setups hold every build slot while this proof waits for one.
+    pub(super) waiting: Vec<String>,
 }
 
 impl Proof {
@@ -231,6 +237,7 @@ impl Proof {
             worker: Some(worker),
             pinned,
             fix: None,
+            waiting: Vec::new(),
         }
     }
 
@@ -279,6 +286,7 @@ impl Proof {
                 Event::Inputs(inputs) => self.inputs = Some(inputs),
                 Event::Gpu(gpu) => self.gpu = gpu,
                 Event::Started(phase) => self.phase_mut(phase).started = Some(Instant::now()),
+                Event::Waiting(holders) => self.waiting = holders,
                 Event::Fix(fix) => self.fix = Some(fix),
                 Event::Finished(phase, result) => {
                     let state = self.phase_mut(phase);
@@ -462,6 +470,10 @@ impl Job {
             self.ctx.request_repaint();
             return;
         }
+        // The heavy part waits for a build slot of the daemon, held until the proof ends.
+        let Some(_slot) = self.take_slot() else {
+            return;
+        };
         for phase in [Phase::Build, Phase::Ci, Phase::Fast] {
             if self.cancel.is_cancelled() {
                 return;
@@ -495,6 +507,16 @@ impl Job {
                 return;
             }
         }
+    }
+
+    /// One of the daemon's build slots, once one is free; `None` once the proof stopped.
+    /// While it waits, the dialog hears which setups hold them.
+    fn take_slot(&self) -> Option<slots::Slot> {
+        let tell = |holders: &[String]| {
+            let _ = self.sender.send(Event::Waiting(holders.to_vec()));
+            self.ctx.request_repaint();
+        };
+        slots::take_for(self.daemon.host(), &self.repository, &self.cancel, tell)
     }
 
     fn build(&self, setup: &super::snapshot::Setup, log: &mut Option<std::fs::File>) -> Result<(), String> {

@@ -849,6 +849,21 @@ impl Run {
             });
         }
         let phase = self.proof_phase(&step.title)?;
+        // The proof waits for a build slot that other setups hold.
+        if step.title == proof::BUILD
+            && phase.started.is_none()
+            && let Some(waiting) = self
+                .proof
+                .as_ref()
+                .map(|proof| &proof.waiting)
+                .filter(|waiting| !waiting.is_empty())
+        {
+            return Some(Step {
+                title: step.title.clone(),
+                state: State::Pending,
+                detail: format!("Waiting for a build slot; {} builds", waiting.join(", ")),
+            });
+        }
         let (state, detail) = match (phase.started, phase.ended, phase.failure.as_deref()) {
             (_, Some(_), Some(failure)) => (State::Failed, failure.to_owned()),
             (_, Some(_), None) => (State::Done, "proved by Horizon".to_owned()),
@@ -994,6 +1009,28 @@ mod tests {
                 "no waiter returns before the nested ending finished"
             );
         }
+    }
+
+    // The proof's test doubles are built where the setup agent is offered: on Linux.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_proof_that_waits_for_a_build_slot_says_who_builds() {
+        let mut run = Run::new(
+            PanelId(1),
+            PanelKind::Usage,
+            std::path::PathBuf::from("."),
+            std::path::PathBuf::from("missing.json"),
+            Mode::New,
+        );
+        run.proof = Some(Proof::waiting_on(&["web-api", "mobile-app"]));
+        let steps = run.steps();
+        let build = steps.iter().find(|step| step.title == proof::BUILD).unwrap();
+        assert_eq!(build.state, State::Pending);
+        assert_eq!(build.detail, "Waiting for a build slot; web-api, mobile-app builds");
+        run.proof = Some(Proof::waiting_on(&[]));
+        let steps = run.steps();
+        let build = steps.iter().find(|step| step.title == proof::BUILD).unwrap();
+        assert!(build.detail.is_empty(), "a proof with its slot waits for nothing");
     }
 
     #[test]
