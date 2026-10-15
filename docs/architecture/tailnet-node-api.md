@@ -2,15 +2,15 @@
 
 The desktop SDK supplies `NodeApi` for a trusted desktop controller.
 It can delete an exact captured device ID after provider compute and storage absence.
-It is not connected to cloud deletion, UI, CLI or MCP.
-The future controller must authenticate the owner and examine the locked receipt.
+The SDK supplies no UI, CLI or MCP operation itself.
+The owning controller must authenticate the owner and examine the locked receipt.
 The SDK grants no owner or workspace authority.
 
 Inputs are the saved local tailnet ID, recorded device ID and remaining HTTP budget.
 The SDK bounds each device ID and encodes it as one path segment.
 It does not infer IDs from names, tags or inventory.
 A trusted library caller can deliberately supply another ID.
-The future controller must prevent that operation.
+The owning controller must prevent that operation.
 
 API credentials stay in the desktop OS store.
 API status and node requests use the same private resolver under the existing tailnet lock.
@@ -49,4 +49,5 @@ Other non-200 OAuth replies report an unexpected response, with no subsequent DE
 An expired shared budget prevents DELETE dispatch even after a valid OAuth reply.
 
 The SDK changes no owning ledger and has no name-based fallback.
-Automatic node cleanup remains a separate outcome with first-head and final-head real-input checks.
+Core integration is described in [recorded-node cleanup](tailnet-node-cleanup.md).
+That integration needs first-head and final-head real-input checks.

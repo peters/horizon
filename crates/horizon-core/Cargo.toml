@@ -11,6 +11,7 @@ repository.workspace = true
 [features]
 default = ["cloud-workspaces"]
 cloud-workspaces = ["dep:horizon-cloud", "dep:horizon-cloud-protocol", "dep:ring", "dep:ed25519-dalek", "dep:if-addrs", "dep:simple-dns", "dep:socket2", "dep:tar", "dep:semver", "dep:flate2"]
+tailnet-node-cleanup = []
 cloud-panel-mock = ["cloud-workspaces"]
 trace-profiling = ["profiling/profile-with-tracing"]
 

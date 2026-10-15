@@ -9,6 +9,8 @@ use horizon_cloud::{
     },
 };
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "tailnet-node-cleanup")]
+use std::io::Read;
 use std::io::Write;
 
 pub(in crate::cloud_runtime) mod growth;
@@ -112,6 +114,21 @@ fn bound(record: Option<Record>) -> Result<Option<Volume>> {
 
 pub(in crate::cloud_runtime) fn retained(store: &Store, deployment: &Deployment) -> Result<bool> {
     Ok(load_owned(store.root(), deployment)?.is_some_and(|record| record.state != State::Deleted))
+}
+
+/// Checks the owned canonical journal without provider access. A required marker
+/// cannot be replaced by absence; future/unknown fields cannot confirm deletion.
+#[cfg(feature = "tailnet-node-cleanup")]
+pub(in crate::cloud_runtime) fn deletion_confirmed(store: &Store, deployment: &Deployment) -> Result<bool> {
+    let Some(record) = load_owned(store.root(), deployment)? else {
+        return Ok(true);
+    };
+    if record.state != State::Deleted {
+        return Ok(false);
+    }
+    let original: serde_json::Value = serde_json::from_slice(&read_record(store.root())?).map_err(|_| Error::Json)?;
+    let canonical = serde_json::to_value(record).map_err(|_| Error::Json)?;
+    Ok(original == canonical)
 }
 
 /// Inspect the same validated storage journal while holding the deployment lock.
@@ -221,7 +238,7 @@ fn records_worker(recorded: &WorkerSpec, worker: &WorkerSpec, replacement: Optio
 }
 
 fn load_at(root: &std::path::Path, worker: &WorkerSpec, replacement: Option<&WorkerSpec>) -> Result<Option<Record>> {
-    let bytes = match std::fs::read(root.join("workspace-volume.json")) {
+    let bytes = match read_record(root) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             if root.join("workspace-volume.required").try_exists()? {
@@ -247,6 +264,26 @@ fn load_at(root: &std::path::Path, worker: &WorkerSpec, replacement: Option<&Wor
     record.state.verify(&record.spec)?;
     Ok(Some(record))
 }
+#[cfg(not(feature = "tailnet-node-cleanup"))]
+fn read_record(root: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    std::fs::read(root.join("workspace-volume.json"))
+}
+
+#[cfg(feature = "tailnet-node-cleanup")]
+fn read_record(root: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    const LIMIT: usize = 1024 * 1024;
+    let file = std::fs::File::open(root.join("workspace-volume.json"))?;
+    let mut bytes = Vec::new();
+    file.take((LIMIT + 1) as u64).read_to_end(&mut bytes)?;
+    if bytes.len() > LIMIT {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Workspace storage journal is oversized",
+        ));
+    }
+    Ok(bytes)
+}
+
 fn save(store: &Store, record: &Record) -> Result<()> {
     let marker = std::fs::OpenOptions::new()
         .create(true)

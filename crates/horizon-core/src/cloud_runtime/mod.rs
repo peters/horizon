@@ -61,6 +61,14 @@ pub enum Error {
     DockerNotResponding(&'static str),
     #[error("Private worker request failed; its output is intentionally not logged")]
     PrivateTransport,
+    #[error(
+        "Tailnet node cleanup is unconfirmed for saved tailnet {tailnet_id}, device {device_id}: {reason}. Preserve the original cloud record, remove this exact node manually in its saved tailnet or retry node cleanup."
+    )]
+    TailnetNodeCleanup {
+        tailnet_id: String,
+        device_id: String,
+        reason: &'static str,
+    },
     #[error("Another controller owns this cloud operation")]
     Busy,
     #[error("{primary}; cleanup also failed: {cleanup}")]

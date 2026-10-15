@@ -10,6 +10,8 @@ pub(super) fn reopen(store: &Store, state: &mut Deployment, public_key: &str) ->
     if state.stage != Stage::Deleted {
         return Err(Error::Invalid("Only a deleted cloud can be redeployed"));
     }
+    #[cfg(feature = "tailnet-node-cleanup")]
+    super::super::tailnet::cleanup::require_complete(store, state)?;
     if state.worker.is_some()
         || state.requires_browserstack_release()
         || !matches!(state.operation, CreateState::Prepared | CreateState::Terminated { .. })
@@ -59,6 +61,8 @@ pub(super) fn reopen(store: &Store, state: &mut Deployment, public_key: &str) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(all(unix, feature = "tailnet-node-cleanup"))]
+    mod cleanup;
     #[cfg(unix)]
     use crate::cloud_runtime::{deployment::Request, settings::Settings};
     #[cfg(unix)]
@@ -108,8 +112,24 @@ mod tests {
         assert_eq!(deleted.stage, Stage::Deleted);
         assert!(deleted.worker.is_none());
         assert_eq!(deleted.tailnet_enrollment, before);
-        reopen(&store, &mut deleted, "unused").unwrap();
-        assert_eq!(deleted.stage, Stage::Validate);
+        #[cfg(not(feature = "tailnet-node-cleanup"))]
+        {
+            reopen(&store, &mut deleted, "unused").unwrap();
+            assert_eq!(deleted.stage, Stage::Validate);
+        }
+        #[cfg(feature = "tailnet-node-cleanup")]
+        {
+            assert!(reopen(&store, &mut deleted, "unused").is_err());
+            let receipt = deleted.tailnet_enrollment.receipts()[0].clone();
+            deleted.tailnet_enrollment.confirm_removed(&receipt).unwrap();
+            store.save(&deleted).unwrap();
+            let confirmed = deleted.tailnet_enrollment.clone();
+            assert!(reopen(&store, &mut deleted, "unused").is_err());
+            assert_eq!(deleted.stage, Stage::Deleted);
+            assert_eq!(store.load().unwrap().unwrap().tailnet_enrollment, confirmed);
+            assert_eq!(deleted.tailnet_enrollment.attempts(), before.attempts());
+        }
+        #[cfg(not(feature = "tailnet-node-cleanup"))]
         assert_eq!(store.load().unwrap().unwrap().tailnet_enrollment, before);
     }
 
