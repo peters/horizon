@@ -556,7 +556,7 @@ these requests of every agent of the cloud:
 - Auto-merge (a merge that GitHub makes later, unchecked).
 - A change of the base branch of a pull request: the merge gate compares the pull
   request with its base, and a new base could bring in changes that it did not check.
-  Open a new pull request instead.
+  Open a new pull request instead. The gate also merges only into the default branch.
 - A workflow dispatch, unless the person listed that workflow of that repository in
   the settings of the Upkeep.
 - A change of the default branch without a pull request: a Git push to it, a file
@@ -617,7 +617,10 @@ shows all of these. Nothing lifts them:
 
 - The merge names the head commit (`gh pr merge --match-head-commit <head>`), and
   that commit is the head of the pull request now. GitHub then merges only that head.
-- The pull request is open and not a draft, and GitHub reports it ready to merge
+- The pull request is open, not a draft, and on the default branch of the repository.
+  The agent can write every other branch, and GitHub moves a pull request to another
+  base when its base branch is deleted, also after the gate read it.
+- GitHub reports the pull request ready to merge
   (`clean`): the required checks and reviews passed, and the branch is up to date
   where a rule requires that.
 - Every check run on the head completed as success, neutral or skipped, and the

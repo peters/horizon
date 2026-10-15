@@ -24,7 +24,8 @@ class Fake:
     def __init__(self, **changes):
         self.pull = {'state': 'open', 'draft': False, 'user': {'login': 'dependabot[bot]'},
                      'head': {'sha': HEAD, 'ref': 'dependabot/cargo/x', 'repo': {'full_name': 'example/project'}},
-                     'base': {'sha': BASE}, 'mergeable_state': 'clean'}
+                     'base': {'sha': BASE, 'ref': 'main', 'repo': {'default_branch': 'main'}},
+                     'mergeable_state': 'clean'}
         self.runs = [{'name': 'ci', 'status': 'completed', 'conclusion': 'success'},
                      {'name': 'lint', 'status': 'completed', 'conclusion': 'skipped'}]
         self.status = {'state': 'pending', 'statuses': []}
@@ -86,6 +87,12 @@ class GateTests(unittest.TestCase):
             fake = Fake(reviews=approved)
             fake.pull.update(change)
             self.refused(fake, 'not an open pull request')
+        # A pull request on another branch could move to the default branch after the gate.
+        for base in ({'sha': BASE, 'ref': 'release', 'repo': {'default_branch': 'main'}},
+                     {'sha': BASE, 'ref': 'main', 'repo': {}}, {'sha': BASE}):
+            fake = Fake(reviews=approved)
+            fake.pull['base'] = base
+            self.refused(fake, 'only into the default branch')
 
     def test_a_plain_approval_lifts_the_author_and_no_checks(self):
         person = Fake()
@@ -129,7 +136,7 @@ class GateTests(unittest.TestCase):
         self.refused(Fake(files=[{'filename': 'x%d' % n} for n in range(300)]), 'blocked on workflows')
         # The comparison is by commit: a base that GitHub does not show is refused.
         unknown = Fake()
-        unknown.pull['base'] = {}
+        unknown.pull['base'] = {'ref': 'main', 'repo': {'default_branch': 'main'}}
         self.refused(unknown, 'base commit')
 
     def test_only_the_persons_approval_of_this_head_counts(self):

@@ -427,8 +427,8 @@ of the default branch without a pull request, a tag push, and a workflow dispatc
 that the person did not list in `workflows` of `~/.horizon/upkeep/<cloud>/upkeep.json`
 (no dialog yet). Its reason starts with `Horizon: this Upkeep`: report it as a
 blocker for the person, never as missing access, and do not ask for more access to go
-around it. A merge passes only a gate in that service: the exact head, every check
-passed, a bot or the account's own `upkeep/` branch as the author, and a workflow change
+around it. A merge passes only a gate in that service: the exact head, the default branch as
+the base, every check passed, a bot or the account's own `upkeep/` branch as the author, and a workflow change
 only in a bot's own commits; otherwise the person's **Approve** of that head (with the line
 `upkeep-allow: workflows` for a workflow change). The board shows the refusals among the activity lines. A worker image
 without this service starts no Upkeep agent; the person rebuilds the cloud on a
