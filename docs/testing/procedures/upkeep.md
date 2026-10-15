@@ -435,6 +435,14 @@ Do this task before UPK-12, on the cloud of UPK-10.
 
    Result: That board shows no buttons.
 
+10. Wait until no run continues. On GitHub, write the comment
+    `@dependabot rebase` on an open Dependabot pull request of `<repo>`.
+
+    Result: Within 3 minutes after Dependabot pushed the rebased branch, the board
+    shows **Running**. `/workspace/home/upkeep/runs.jsonl` has a new line with
+    `"kind": "change"`. Only the log of `<repo>` in `/workspace/home/upkeep/logs`
+    has a new agent. **Next run** shows the same planned time as before.
+
 ### 6.12 UPK-12 — Remove the Upkeep cloud
 
 > **CAUTION:** THE NEXT STEP DELETES THE SERVER, THE VOLUME AND THE SSH KEY OF THE

@@ -10,14 +10,17 @@ head. This page describes the parts that exist now.
 The `upkeep` panel kind is the board of one Upkeep. The board shows these items:
 
 - The agent, the schedule, the worker and the number of repositories.
-- **Next run**: the time to the next run. The card shows **Running** while a run
-  continues and **Paused** when the schedule stops. While the daily maintenance pass
-  continues, the line under **Running** starts with **Daily maintenance**.
+- **Next run**: the time to the next planned run. The card shows **Running** while a
+  run continues. This includes a run that a change of a pull request started between
+  the planned runs. The card shows **Paused** when the schedule stops. While the
+  daily maintenance pass continues, the line under **Running** starts with **Daily
+  maintenance**.
   - **Late**: the planned run is more than 10 minutes overdue.
   - **No report**: a run still shows as running after two schedule periods, and
     after at least three hours, or five hours for the daily maintenance pass. The
     worker can be stopped.
 - **Last 24 hours**: one bar for each hour, and the total of merged pull requests.
+  The bar of an hour includes the runs that changes started.
   A red bar shows a failed run. An outline shows a skipped run. A green part shows
   merges. A cyan mark under a bar shows an hour with the daily maintenance pass.
 - The pull requests in groups by state: **Blocked**, **Fixing**, **Needs review**,
@@ -271,6 +274,60 @@ started also starts agents for the repositories that did not change.
 - When the loop starts, it records a run that did not end (for example, because
   the loop was stopped) as failed.
 - The loop keeps the last 1 MiB of an agent log that grew to more than 8 MiB.
+
+The loop also looks for changes every minute, between the planned runs and during
+a run:
+
+- It lists the open pull requests of each repository again. These are changes: a
+  new or closed pull request, a new head, a new check state, a new review decision
+  or a new mergeability. A rebase gives a new head. The person's Approve
+  can give a new review decision. When the pull requests of a repository changed
+  after the start of its last agent, the loop starts the agent of that repository
+  at once.
+- Between the planned runs, such an agent starts in a run of its own, with the kind
+  `change` in `runs.jsonl`. During a run, it joins that run, until the next planned
+  run would start.
+- A repository whose agent runs or waits in a run is not started again. The loop
+  looks at its changes after that agent ended.
+- A repository whose agent failed starts again when its pull requests change, or in
+  the next planned run. This is also true after an update of the loop: the loop
+  keeps what each agent started with in `started.json`.
+- An agent that pushes or merges changes its pull requests, so the next look after
+  it ended usually starts it once more. That agent finds the new state, for example
+  checks that run on its push.
+- The planned runs stay. They find what the checks every minute missed, and they
+  start an agent again after it failed. The daily maintenance pass still follows
+  the first planned run of a UTC day. The loop does not look for changes during the
+  daily maintenance pass.
+- A run of a change does not take **Run now** or the planned run. When either is
+  due when the run of the change ends, it starts next, also after an update of the
+  loop. Later planned times that passed during the run of the change are recorded
+  as skipped.
+- Each look makes one GitHub search for each bot and each 20 repositories. A look
+  sees the same as the listing of a run. One search costs about 2 of the 5,000
+  points an hour that GitHub gives the worker's account. A look every minute at 16
+  repositories with one bot uses about 120 points an hour.
+- A run lists at most 200 open pull requests of one bot in a repository. When a
+  look finds more, it leaves that repository to the planned run.
+- The worker's GitHub access refuses a whole search that names one repository
+  without a grant. The next looks search each repository of that search on its
+  own, and the others go back into one search once their own search works. The
+  repository without a grant gets its agent in the planned run, which asks for
+  access.
+- When GitHub answers with a rate limit or a secondary rate limit, the loop stops
+  that look. It waits 2 minutes before the next look. After each further limit, it
+  waits twice as long, up to 30 minutes. Only a look or a run that reads the pull
+  requests of a repository ends these longer waits. A run that meets a rate limit lists no more
+  repositories and starts no agent for the repositories that it did not list. The
+  next look starts them when their pull requests changed, and after **Run now**
+  also when they did not.
+- While the schedule stops, the loop does not look for changes, and a run in
+  progress starts no more agents for changes. After **Resume**, the next look
+  starts the agents of the repositories that changed meanwhile.
+- When a look finds no open pull request of the bots in a repository any more, the
+  board drops its open pull requests at once.
+- `runs.jsonl` keeps its last 200 lines, two for each run. On a day with many
+  changes, the bars of the first hours of **Last 24 hours** can be empty.
 
 ## The daily maintenance pass
 
