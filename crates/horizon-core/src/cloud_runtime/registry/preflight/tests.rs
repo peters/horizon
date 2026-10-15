@@ -82,7 +82,13 @@ fn login_sends_only_loaded_secret_on_stdin_and_never_logs_a_reply() {
     let script = root.path().join("docker");
     std::fs::write(&script, r#"#!/bin/sh
 [ "$1" = --config ] && [ "$3" = --host ] && [ "$4" = unix:///synthetic/docker.sock ] || exit 2
-[ "$(cat "$2/config.json")" = '{"auths":{"registry.example":{}}}' ] || exit 3
+python3 - "$2/config.json" <<'PY' || exit 3
+import json, sys
+with open(sys.argv[1]) as source:
+    config = json.load(source)
+assert config["auths"] == {"registry.example": {}}
+assert set(config) <= {"auths", "currentContext", "cliPluginsExtraDirs"}
+PY
 shift 4
 [ "$1" = login ] && [ "$2" = --username ] && [ "$3" = reader ] && [ "$4" = --password-stdin ] && [ "$5" = registry.example ] || exit 2
 [ "$(cat)" = synthetic-pull ] || exit 4

@@ -77,3 +77,9 @@ an unfinished intent must wait or finish the parent sync before proceeding.
 Coordination files retain their inode, resolve parent aliases, contain no secrets
 and refuse symlinks, wrong owners, broad permissions and extra hard links.
 Existing roots with no pending intent must not require a readable parent.
+
+Registry credential isolation must preserve the selected Unix Docker context and
+plugin locations without copying another registry login, a credential helper or
+proxy credentials. Resolve relative machine configuration paths before linking
+contexts or plugins. Keep explicit daemon-host precedence. Temporary config creation
+must not read a stored personal publication chain to prepare a registry-bound login.

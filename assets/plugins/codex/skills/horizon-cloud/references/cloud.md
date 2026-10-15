@@ -673,3 +673,7 @@ read-only identity for each generation. Rotate the generation when that identity
 changes. Existing deployment callers are unchanged; portable launch wiring follows
 separately. This helper does not prove a live registry pull or revoke an installed
 host credential. See docs/testing/procedures/host-pull-journal.md.
+
+On Unix, private registry credentials preserve the machine's Docker context and plugin
+locations. They copy no unrelated registry login, credential helper or proxy setting.
+Explicit host settings keep their existing precedence.

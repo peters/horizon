@@ -93,14 +93,14 @@ fn login(
         .ok_or(Error::Invalid("Invalid registry repository"))?;
     // A fresh config forces the provided login and cannot overwrite the config
     // used by the build or worker probe with a returned identity token.
-    let config = tempfile::tempdir()?;
+    let config = crate::cloud_runtime::github::publish::empty_build_config()?;
     // Docker auto-selects an OS credential helper when the config has no auth
     // entries. An empty entry selects its file store without supplying a cached
     // login, keeping both secrets and successful-login writes task-local.
-    std::fs::write(
-        config.path().join("config.json"),
-        serde_json::json!({"auths": {host: {}}}).to_string(),
-    )?;
+    let path = config.path().join("config.json");
+    let mut settings: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?).map_err(|_| Error::Json)?;
+    settings["auths"] = serde_json::json!({host: {}});
+    std::fs::write(path, serde_json::to_vec(&settings).map_err(|_| Error::Json)?)?;
     command
         .env_remove("DOCKER_AUTH_CONFIG")
         .arg("--config")
