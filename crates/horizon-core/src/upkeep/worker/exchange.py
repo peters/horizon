@@ -38,6 +38,13 @@ REFUSALS_LIMIT = 64 * 1024
 REFUSALS_KEPT = 20
 SESSION = re.compile(r'upkeep-[A-Za-z0-9_-]{1,90}')
 REVISION = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
+# The agent asks for a companion cloud with companions/<alias>.json; Horizon answers in
+# companions-status.json. The alias rule is Horizon's own.
+COMPANION = re.compile(r'[a-z][a-z0-9_-]{0,63}')
+OPERATION = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+COMPANION_ACTIONS = ('ensure_ready', 'stop')
+COMPANION_LIMIT = 4
+COMPANION_STATUS_LIMIT = 64 * 1024
 
 
 class Refused(Exception):
@@ -294,6 +301,37 @@ def refusals():
     return found[-REFUSALS_KEPT:]
 
 
+def companion_requests(upkeep):
+    """The agent's companion requests, at most four: companions/<alias>.json holding an action
+    and an operation ID. Anything else in that folder is left out."""
+    try:
+        fd = os.open('companions', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=upkeep)
+    except OSError:
+        return []
+    try:
+        if os.fstat(fd).st_uid != os.geteuid():
+            return []
+        requests = []
+        for name in sorted(os.listdir(fd)):
+            alias = name[:-len('.json')] if name.endswith('.json') else ''
+            if not COMPANION.fullmatch(alias):
+                continue
+            try:
+                request = json.loads(read(fd, name, 1024) or b'')
+            except (ValueError, RecursionError):
+                continue
+            if (isinstance(request, dict) and request.get('action') in COMPANION_ACTIONS
+                    and isinstance(request.get('operation_id'), str)
+                    and OPERATION.fullmatch(request['operation_id'])):
+                requests.append({'alias': alias, 'action': request['action'],
+                                 'operation_id': request['operation_id']})
+                if len(requests) == COMPANION_LIMIT:
+                    break
+        return requests
+    finally:
+        os.close(fd)
+
+
 def report(upkeep, loop, settled):
     """What the board shows. Everything here comes from files that the agent can write, so
     only the fields and types that Horizon reads are sent back."""
@@ -306,6 +344,7 @@ def report(upkeep, loop, settled):
         next_run = None
     answer = {'loop': loop, 'settled': settled, 'runs': runs, 'next_run': next_run,
               'paused': read(upkeep, 'paused', 0) is not None, 'refused': refusals(),
+              'companions': companion_requests(upkeep),
               'status': status.decode('utf-8', 'replace') if status is not None else None}
     text = json.dumps(answer, allow_nan=False)
     if len(text) > OUTPUT_LIMIT:
@@ -324,6 +363,11 @@ def exchange(payload):
         try:
             install(payload, upkeep)
             signal(payload, upkeep)
+            companions = payload.get('companions')
+            if isinstance(companions, dict):
+                text = json.dumps(companions, indent=1)
+                if len(text) <= COMPANION_STATUS_LIMIT:
+                    write(upkeep, 'companions-status.json', text)
             # Last, after every file is in place: a running loop starts the new one between two
             # runs, and only ever sees a complete install.
             if read(upkeep, 'installing', 0) is not None:

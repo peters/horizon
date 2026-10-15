@@ -116,6 +116,25 @@ and only the fixed fields; the text goes to the board as activity lines. Check t
 change starts an agent without the `guarded` check, reads the log from a folder the
 agent can write, or sends more than `REFUSALS_KEPT` lines.
 
+## Untrusted: companion requests from the worker
+
+The agent asks for a companion cloud with `upkeep/companions/<alias>.json`
+(`docs/upkeep.md`, section "Trust boundary of companion requests"). The agent writes
+every field. Check that:
+
+- `exchange.py` reads only regular files of at most 1 KiB with a valid alias, opened
+  without following links, and sends at most four; `worker/companions.rs` parses them
+  again and drops any that are not an alias, `ensure_ready` or `stop`, and a UUID.
+- The source of each request is the Upkeep's own cloud; nothing from the worker names a
+  cloud. Only a companion that the owner checked can start (`lifecycle::bind_selected`).
+- A request starts nothing outside a run, `run.py` removes the requests before each run
+  and each daily maintenance pass, an operation already answered as done is not sent
+  again, and one request per alias runs at a time.
+- Horizon's answers keep a fixed set of fields and at most 120 characters of text, for at
+  most four aliases, so the remote command stays under its limit.
+- Upkeep declarations come only from the saved repository list and the committed
+  `ui-acceptance` profile of each checkout on this computer.
+
 ## Host work off the UI thread
 
 Discovery (`horizon_core::upkeep::discover`), the clone of the first repository, the

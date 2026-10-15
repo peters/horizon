@@ -6,7 +6,7 @@ use std::sync::mpsc::Receiver;
 use std::time::Instant;
 
 use horizon_core::WorkspaceId;
-use horizon_core::upkeep::worker::{Config, Signals};
+use horizon_core::upkeep::worker::{CompanionAsk, Config, Signals};
 
 use super::form::Form;
 
@@ -72,8 +72,8 @@ pub(in crate::app) struct Answer {
 }
 
 /// What an exchange hands back: the GitHub access requests it allowed, also when the rest
-/// of it failed, and what it learned.
-pub(in crate::app) type Exchanged = (Vec<String>, Result<Answer, String>);
+/// of it failed, and what it learned, with the agent's companion requests.
+pub(in crate::app) type Exchanged = (Vec<String>, Result<(Answer, Vec<CompanionAsk>), String>);
 
 /// One Upkeep cloud's exchange with its worker.
 #[derive(Default)]

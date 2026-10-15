@@ -363,7 +363,7 @@ fn a_status_poll_never_starts_a_recorded_operation() {
         context: context.clone(),
         alias: "consumer".into(),
     };
-    let (answer, started) = app.answer_submitted(&request("status"), "source", submitted(), &ctx);
+    let (answer, started) = app.answer_submitted(reads_only(&request("status")), false, "source", submitted(), &ctx);
     assert!(!started);
     assert_eq!(answer["phase"], "submitted");
     // Nothing runs it, so polling alone would wait forever: the agent must resend.
@@ -374,13 +374,14 @@ fn a_status_poll_never_starts_a_recorded_operation() {
     // While it runs on its card, polling is enough.
     let agent = &mut app.cloud_prototype.production.companions.agent;
     agent.executing.insert("target".into());
-    let (answer, _) = app.answer_submitted(&request("status"), "source", submitted(), &ctx);
+    let (answer, _) = app.answer_submitted(reads_only(&request("status")), false, "source", submitted(), &ctx);
     assert_eq!(answer["resend"], false);
     assert_eq!(answer["message"], hint(Phase::Submitted));
     app.cloud_prototype.production.companions.agent.executing.clear();
     // The same operation sent again as Ensure Ready tries to continue it on its card,
     // which is not open here.
-    let (answer, started) = app.answer_submitted(&request("ensure_ready"), "source", submitted(), &ctx);
+    let (answer, started) =
+        app.answer_submitted(reads_only(&request("ensure_ready")), false, "source", submitted(), &ctx);
     assert!(!started);
     assert_ne!(answer["message"], hint(Phase::Submitted));
     assert_eq!(answer["resend"], true);

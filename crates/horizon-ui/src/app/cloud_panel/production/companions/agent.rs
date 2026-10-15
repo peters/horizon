@@ -3,8 +3,10 @@
 //! a companion. A request's operation runs on the target cloud's card, as its own
 //! buttons would, and the agent polls its status by operation ID.
 mod tailnets;
+mod upkeep;
 use super::{CloudGroups, HorizonApp, Owner};
 use crate::app::browser_requests::actor_panel;
+use horizon_core::upkeep::worker::CompanionAction as Ask;
 use horizon_core::{
     browser::manifest::{
         self,
@@ -27,6 +29,7 @@ use std::{
     sync::mpsc::{Receiver, Sender, channel},
     time::{Duration, Instant},
 };
+pub(in crate::app) use upkeep::Seen;
 
 /// How long a job waits for a companion journal another job holds.
 const BUSY_WAIT: Duration = Duration::from_secs(8);
@@ -42,6 +45,8 @@ pub(super) struct State {
     executing: BTreeSet<String>,
     /// Source clouds with an uncheck whose deselection is being saved.
     unchecking: BTreeSet<String>,
+    /// Upkeep loops' requests, which come through their clouds' exchanges.
+    upkeep: upkeep::State,
 }
 
 enum Message {
@@ -53,6 +58,13 @@ enum Message {
     Executed {
         source: String,
         target: String,
+    },
+    /// An Upkeep loop's Ensure Ready or Stop was recorded, or why not.
+    Upkeep {
+        source: String,
+        alias: String,
+        ask: (Ask, String),
+        outcome: Result<Box<Submitted>, String>,
     },
     /// An uncheck's deselection was saved in the source's journal, or why not.
     Unchecked {
@@ -129,7 +141,9 @@ impl HorizonApp {
                 } => {
                     let (answer, started) = match outcome {
                         Ok(submitted) => {
-                            let (answer, started) = self.answer_submitted(&request, &source, *submitted, ctx);
+                            let tailnet = request.cloud_companion.as_ref().is_some_and(|r| r.tailnet.is_some());
+                            let (answer, started) =
+                                self.answer_submitted(reads_only(&request), tailnet, &source, *submitted, ctx);
                             (Ok(answer), started)
                         }
                         Err(error) => (Err(error), false),
@@ -161,6 +175,14 @@ impl HorizonApp {
                     self.release_companion_source(&source);
                     complete(&request, uncheck::answer(&source, &alias, saved));
                 }
+                Message::Upkeep {
+                    source,
+                    alias,
+                    ask,
+                    outcome,
+                } => {
+                    self.finish_upkeep_companion(&source, &alias, &ask, outcome, ctx);
+                }
                 Message::Executed { source, target } => {
                     self.cloud_prototype
                         .production
@@ -181,18 +203,19 @@ impl HorizonApp {
     /// status poll, which only reads. Returns whether an execution started.
     fn answer_submitted(
         &mut self,
-        request: &UsageRequest,
+        reads_only: bool,
+        tailnet: bool,
         source: &str,
         submitted: Submitted,
         ctx: &egui::Context,
     ) -> (Value, bool) {
-        if request.cloud_companion.as_ref().is_some_and(|r| r.tailnet.is_some()) {
+        if tailnet {
             self.cloud_prototype
                 .production
                 .tailnets
                 .invalidate(&submitted.operation.intent.target_cloud_id);
         }
-        if reads_only(request) {
+        if reads_only {
             let mut answer = describe(source, &submitted.alias, &submitted.operation);
             let operation = &submitted.operation;
             if answer["done"] == false

@@ -572,6 +572,12 @@ def close_interrupted():
         pass
 
 
+def forget_companion_requests():
+    """A companion request belongs to the run that wrote it, so one left behind starts nothing.
+    A link in place of the folder is left alone; links inside it are removed, not followed."""
+    shutil.rmtree(DIR + '/companions', ignore_errors=True)
+
+
 def draw(started, jobs, queued, capacity):
     width = max(40, shutil.get_terminal_size((120, 40)).columns)
     since = f'since {time.strftime("%H:%M", time.gmtime(started))} UTC'
@@ -757,6 +763,8 @@ def run_daily(cfg, template):
     begun = int(time.time())
     job = Job('daily maintenance', DAILY, DAILY_LIMIT)
     try:
+        # Before the pass shows as running to the exchange, as for a run.
+        forget_companion_requests()
         record({'started_at': begun, 'kind': DAILY, 'outcome': 'running'})
         thread = threading.Thread(target=job.run, args=(template,), daemon=True)
         thread.start()
@@ -823,6 +831,8 @@ def main():
             cfg = config()
             # Read before any agent of this run starts, so no agent of it can change them.
             daily_template = read_prompt('daily.md')
+            # Before the run shows as running to the exchange.
+            forget_companion_requests()
             begun = int(time.time())
             record({'started_at': begun, 'outcome': 'running'})
             before = merged()
