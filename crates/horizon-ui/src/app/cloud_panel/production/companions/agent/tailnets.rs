@@ -1,6 +1,7 @@
 //! Companion inventory reads only the host's nonsecret background snapshots.
 use crate::app::tailnets::State;
 use horizon_core::cloud_runtime::tailnet::{ApiCredentialObservation, Catalog, Tailnet};
+use serde_json::Value;
 use std::{collections::BTreeMap, path::Path};
 
 pub(super) struct Inventory<'a> {
@@ -24,6 +25,72 @@ fn snapshot(catalog: Option<&Catalog>, mut observation: impl FnMut(&str) -> ApiC
     Inventory {
         tailnets,
         api_credentials,
+    }
+}
+
+impl super::HorizonApp {
+    pub(in crate::app) fn answer_tailnet_credential(
+        &mut self,
+        request: &horizon_core::browser::manifest::provider_usage::UsageRequest,
+    ) {
+        use horizon_core::browser::manifest;
+        let answer = (|| -> Result<Value, String> {
+            if request.host_instance != manifest::host_instance()
+                || crate::app::browser_requests::actor_panel(&self.board, &request.actor).is_none()
+                || manifest::now_millis() >= request.deadline_at_millis
+            {
+                return Err("tailnet_credential_unavailable: caller or request expired".into());
+            }
+            let input = request
+                .tailnet_credential
+                .as_ref()
+                .filter(|input| input.valid())
+                .ok_or("tailnet_credential_invalid_request")?;
+            let root = self
+                .cloud_prototype
+                .root
+                .as_ref()
+                .ok_or("tailnet_credential_unavailable")?;
+            if matches!(
+                input.operation,
+                manifest::provider_usage::CredentialOperation::Status
+                    | manifest::provider_usage::CredentialOperation::Cancel
+            ) {
+                return self
+                    .browser_create_host
+                    .provider_usage
+                    .tailnet_credentials
+                    .answer_existing(&request.actor, input, root, manifest::now_millis())
+                    .map_err(str::to_string);
+            }
+            let network = self
+                .cloud_prototype
+                .production
+                .tailnets
+                .cached_catalog_at(root)
+                .and_then(|catalog| catalog.tailnets.iter().find(|network| network.id == input.tailnet_id))
+                .ok_or("tailnet_credential_unknown_tailnet: refresh cloud_companions")?;
+            self.browser_create_host
+                .provider_usage
+                .tailnet_credentials
+                .answer(
+                    &request.actor,
+                    input,
+                    crate::app::tailnets::requests::Target {
+                        root: root.clone(),
+                        id: network.id.clone(),
+                        name: network.name.clone(),
+                    },
+                    manifest::now_millis(),
+                )
+                .map_err(str::to_string)
+        })();
+        let mut result = request.result(Vec::new(), None);
+        match answer {
+            Ok(value) => result.tailnet_credential = Some(value),
+            Err(error) => result.error = Some(error),
+        }
+        self.publish_tailnet_credential_result(result);
     }
 }
 

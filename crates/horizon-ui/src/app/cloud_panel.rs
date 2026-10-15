@@ -43,6 +43,10 @@ pub(super) struct CloudPrototype {
 
 #[cfg(feature = "cloud-workspaces")]
 impl CloudPrototype {
+    pub(super) fn reopen_tailnets(&mut self, editor: &mut super::tailnets::State) {
+        self.production.tailnets.reopen_settings(editor);
+    }
+
     pub(super) fn reload_tailnets(&mut self, editor: super::tailnets::State) {
         self.production.tailnets.reload_after(editor);
     }

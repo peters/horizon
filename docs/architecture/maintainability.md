@@ -708,6 +708,13 @@ observations to the production cache before agent requests, and retains closed
 operation barriers before a fresh read. The `companions/agent/tailnets` leaf reads
 that root-scoped cache without filesystem or OS-store IO. CLI status lives in the
 focused `cloud_deploy/tailnets` leaf and uses the same nonsecret observation DTO.
+Tailnet API owner removal uses the focused `tailnets/api_credentials/removal.rs`
+exact target check and `tailnets/requests.rs` volatile owner-decision registry.
+The protocol and MCP controller leaves carry metadata only; the existing CLI
+plan runner invokes the same MCP operation. Background workers use the existing
+Store transaction lock instead of adding a second credential mutation engine.
+Credential request replies use the existing `HostIo` worker; the UI thread keeps
+request validation and volatile decision state.
 `image` prepares the worker image and checks its contract before allocation;
 `source` validates and packs the committed source before allocation and transfers
 it to the ready worker; `git_credentials` and `agent_credentials` install or clear
