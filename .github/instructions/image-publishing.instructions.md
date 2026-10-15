@@ -106,3 +106,9 @@ not load compute credentials to recover provider history.
 Actions on previous registry generations must not clear or restore the current
 generation's readiness hint. Apply the same current-generation check before
 starting the action and before accepting its result.
+
+Settings verification must retain the selected saved binding identity independently
+of the editable image. Malformed images and images from another repository must
+clear that binding's hint without validating another one. A retired request must
+not alter current proof. Refusals survive settings closure and board-session
+switches until fresh successful verification, within the current app process.

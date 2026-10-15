@@ -234,10 +234,16 @@ immutable digest and current material again. Host checks do not revoke credentia
 already installed on a worker. No new operation allocates compute or publishes.
 
 A refused worker pull or failed/cancelled validation keeps that repository
-unverified across settings reopenings in the current app session. Reading saved
+unverified across settings reopenings and board-session switches in the current
+app session. Reading saved
 status does not clear this failure; a new successful verification is required.
 After an app restart, saved successful history is available again. A verification displays its
 own image result rather than substituting history from the other scope.
+The settings card retains its saved repository and grant identity separately
+from the editable image. Malformed or other-repository images invalidate that
+card's hint without validating another binding; stale grants leave current proof alone.
+Worker pull refusals are retained before settings load, including a failed or
+replaced load.
 
 If a host journal is busy or unreadable, aggregate saved history stays unknown
 and does not fall back to a provider success. This can temporarily withhold the

@@ -118,7 +118,11 @@ No step publishes an image, rents a worker or revokes an installed host credenti
    revocation remains blocked until that key is saved or cleared. Read failures
    cannot replace unknown host state with another scope's success. A failed check
    stays unverified after reading historical status, closing and reopening the
-   settings form, and clears only after fresh verification. A fresh check displays the image that action verified. Provider
+   settings form or switching board sessions during first-cloud setup, and clears
+   only after fresh verification. Malformed digests and images from another saved
+   repository invalidate the selected card before any background check. A stale
+   request cannot clear proof for a newer grant. A worker refusal is retained
+   even when settings loading fails or its receiver is replaced before polling. A fresh check displays the image that action verified. Provider
    status keeps an active provider proof when no host check exists. It does not
    save provider history as a host check. Locked and corrupt host journals keep the
    hint unknown even with an active provider proof. A later readable host status
@@ -130,10 +134,13 @@ No step publishes an image, rents a worker or revokes an installed host credenti
    Result: Validate pull access and Last pull check are available for saved bindings.
    Provider controls are in a separate section and require their compute account.
 
-3. Request status, then try validating a mutable tag with synthetic credentials.
+3. Request status, then validate a mutable tag and `repository@sha256:0`.
+   Close and reopen settings after each refusal, and request history again.
 
    Result: Status says Host pull access and shows saved history or Not checked.
-   The tag is refused with an immutable-image action before a registry/provider call.
+   Both invalid images are refused with an immutable-image action before a
+   registry/provider call. The old verified hint stays absent after reopen and
+   history. A new successful immutable-image check restores it.
    No real authorization is claimed by this lane.
 
 4. Repeat in both themes and at minimum window width; record viewer video.

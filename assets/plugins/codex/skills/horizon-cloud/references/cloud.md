@@ -689,10 +689,16 @@ The CLI is `cloud_deploy registry SETTINGS ACTION_JSON_FILE`; the optional stdio
 `cloud_registry` tool uses the same operations and machine-bound settings file.
 
 A refused worker pull or failed/cancelled validation keeps that repository
-unverified across settings reopenings in the current app session. Reading saved
+unverified across settings reopenings and board-session switches in the current
+app session. Reading saved
 status does not clear this failure; a new successful verification is required.
 After an app restart, saved successful history is available again. A verification displays its
 own image result rather than substituting history from the other scope.
+The settings card retains its saved repository and grant identity separately
+from the editable image. Malformed or other-repository images invalidate that
+card's hint without validating another binding; stale grants leave current proof alone.
+Worker pull refusals are retained before settings load, including a failed or
+replaced load.
 
 Saved host pull history never opens the provider journal or reads its compute key,
 even when a newer provider validation exists. Provider controls keep their own scoped
@@ -702,4 +708,3 @@ An explicit provider action can retain its own active provider proof when host
 history was read successfully and is empty. A busy or unreadable host journal
 never permits that fallback. Reopening settings reads host history only; it does
 not load compute credentials to recover provider history.
-

@@ -5,7 +5,7 @@ use super::{State, fields, registry};
 use crate::{app::util::chrome_button, theme};
 use egui::{Align, Color32, Frame, Layout, Margin, RichText, Sense, Stroke, Ui, vec2};
 use horizon_core::cloud_runtime::{
-    registry::{Action, Validation},
+    registry::Validation,
     setup::{Agent, Authentication, Draft},
 };
 use std::collections::BTreeMap;
@@ -355,7 +355,11 @@ pub(super) fn readiness_banner(ui: &mut Ui, state: &State) {
 }
 
 /// Every card, in two columns when there is room. Returns a registry action a button asked for.
-pub(super) fn page(ui: &mut Ui, state: &mut State, hosts: &mut super::super::prices::hosts::State) -> Option<Action> {
+pub(super) fn page(
+    ui: &mut Ui,
+    state: &mut State,
+    hosts: &mut super::super::prices::hosts::State,
+) -> Option<registry::Request> {
     let State {
         draft,
         edits,

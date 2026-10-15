@@ -12,12 +12,36 @@ use horizon_core::cloud_runtime::{
     setup,
 };
 
+/// Keeps the saved card's identity separate from its editable validation image.
+pub(super) struct Request {
+    pub(super) action: Action,
+    pub(super) repository: String,
+    pub(super) generation: String,
+}
+
+impl Request {
+    pub(super) fn for_binding(saved: &Binding, action: Action) -> Self {
+        let (repository, generation) = match &action {
+            Action::Verify { .. } | Action::VerifyPull { .. } => (&saved.repository, &saved.generation),
+            Action::PullStatus { repository, generation }
+            | Action::Status { repository, generation }
+            | Action::Reconcile { repository, generation }
+            | Action::Revoke { repository, generation } => (repository, generation),
+        };
+        Self {
+            repository: repository.clone(),
+            generation: generation.clone(),
+            action,
+        }
+    }
+}
+
 pub(super) fn card(
     ui: &mut Ui,
     accounts: &mut setup::Draft,
     verified: &Verified,
     needed: &mut Needed,
-) -> Option<Action> {
+) -> Option<Request> {
     let mut action = None;
     let compute_saved = accounts.runpod_key.is_empty();
     let pending = needed.pending(&accounts.registries).is_some();
@@ -117,7 +141,7 @@ fn binding(
     verified: &Verified,
     compute_saved: bool,
     (saved_pull, saved_publish, publishing_open): (bool, bool, bool),
-    action: &mut Option<Action>,
+    action: &mut Option<Request>,
 ) {
     let (tone, word) = state(draft, verified);
     ui.horizontal(|ui| {
@@ -166,7 +190,11 @@ fn binding(
     );
     expiry_and_publishing(ui, draft, saved_publish, publishing_open);
     if let Some(saved) = draft.original.clone() {
-        management(ui, draft, &saved, verified, compute_saved, action);
+        let mut selected = None;
+        management(ui, draft, &saved, verified, compute_saved, &mut selected);
+        if let Some(selected) = selected {
+            *action = Some(Request::for_binding(&saved, selected));
+        }
     }
 }
 

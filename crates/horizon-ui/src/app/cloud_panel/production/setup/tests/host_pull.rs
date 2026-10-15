@@ -111,7 +111,12 @@ impl HistoryFixture {
     }
 
     fn act(&mut self, action: Action) {
-        self.app.manage_cloud_registry(&self.ctx, action);
+        let saved = self.state().draft.as_ref().unwrap().registries[0]
+            .original
+            .as_ref()
+            .unwrap();
+        let request = registry::Request::for_binding(saved, action);
+        self.app.manage_cloud_registry(&self.ctx, request);
         wait(&mut self.app, &self.ctx);
     }
 
@@ -296,10 +301,16 @@ fn a_host_pull_status_is_allowed_with_an_unsaved_compute_key() {
     *app.cloud_prototype.production.setup.draft.as_mut().unwrap().runpod_key = "synthetic-unsaved".into();
     app.manage_cloud_registry(
         &ctx,
-        horizon_core::cloud_runtime::registry::Action::PullStatus {
-            repository: "registry.example/team/worker".into(),
-            generation: "synthetic-generation".into(),
-        },
+        registry::Request::for_binding(
+            app.cloud_prototype.production.setup.draft.as_ref().unwrap().registries[0]
+                .original
+                .as_ref()
+                .unwrap(),
+            Action::PullStatus {
+                repository: "registry.example/team/worker".into(),
+                generation: "synthetic-generation".into(),
+            },
+        ),
     );
     assert!(app.cloud_prototype.production.setup.receiver.is_some());
     wait(&mut app, &ctx);
@@ -363,9 +374,12 @@ fn status_cannot_restore_a_refused_pull_but_a_fresh_check_can() {
         .insert(binding.repository.clone(), validation());
     app.manage_cloud_registry(
         &ctx,
-        Action::VerifyPull {
-            image: format!("{}:mutable", binding.repository),
-        },
+        registry::Request::for_binding(
+            &binding,
+            Action::VerifyPull {
+                image: format!("{}:mutable", binding.repository),
+            },
+        ),
     );
     wait(&mut app, &ctx);
     let state = &mut app.cloud_prototype.production.setup;
@@ -460,4 +474,121 @@ fn closing_and_reopening_settings_cannot_restore_a_refused_pull_hint() {
     f.app.open_cloud_accounts(&f.ctx, false);
     wait(&mut f.app, &f.ctx);
     assert!(f.state().verified.contains_key(&f.repository));
+}
+
+#[test]
+fn session_switch_cannot_restore_a_refused_pull_hint() {
+    let mut f = HistoryFixture::new();
+    f.app.cloud_prototype.root = Some(f.root.path().join("cloud"));
+    f.host_status();
+    f.act(Action::VerifyPull {
+        image: format!("{}:latest", f.repository),
+    });
+    assert!(!f.state().verified.contains_key(&f.repository));
+    f.app.cloud_prototype.production.setup.open = true;
+    f.app.cloud_prototype.production.setup.continue_creation = true;
+    f.app.close_cloud_creation_for_session_switch();
+    assert!(!f.state().open);
+    f.app.open_cloud_accounts(&f.ctx, false);
+    wait(&mut f.app, &f.ctx);
+    assert!(
+        !f.state().verified.contains_key(&f.repository),
+        "session switch must retain the refusal"
+    );
+    f.host_status();
+    assert!(!f.state().verified.contains_key(&f.repository));
+}
+
+#[test]
+fn malformed_image_cannot_leave_the_selected_binding_verified() {
+    let mut f = HistoryFixture::new();
+    f.app.cloud_prototype.root = Some(f.root.path().join("cloud"));
+    f.host_status();
+    assert!(f.state().verified.contains_key(&f.repository));
+    f.act(Action::VerifyPull {
+        image: format!("{}@sha256:0", f.repository),
+    });
+    assert!(f.state().error.is_some());
+    assert!(
+        !f.state().verified.contains_key(&f.repository),
+        "invalid image must invalidate the selected binding"
+    );
+    f.app.cancel_cloud_accounts();
+    f.app.open_cloud_accounts(&f.ctx, false);
+    wait(&mut f.app, &f.ctx);
+    assert!(!f.state().verified.contains_key(&f.repository));
+    f.host_status();
+    assert!(!f.state().verified.contains_key(&f.repository));
+}
+
+#[test]
+fn image_from_another_saved_binding_cannot_validate_the_selected_card() {
+    let mut f = HistoryFixture::new();
+    f.host_status();
+    let draft = f.app.cloud_prototype.production.setup.draft.as_mut().unwrap();
+    let mut other = draft.registries[0].original.clone().unwrap();
+    other.repository = "registry.example/other/worker".into();
+    other.generation = "other-generation".into();
+    draft.settings.registries.as_mut().unwrap().bindings.push(other.clone());
+    f.act(Action::VerifyPull {
+        image: format!("{}@sha256:{}", other.repository, "a".repeat(64)),
+    });
+    assert!(f.state().error.as_deref().unwrap().contains("this saved repository"));
+    assert!(f.state().receiver.is_none());
+    assert!(!f.state().verified.contains_key(&f.repository));
+    assert!(!f.host_path.with_file_name("other-generation.json").exists());
+}
+
+#[test]
+fn a_stale_validation_request_cannot_invalidate_a_new_grant() {
+    let mut f = HistoryFixture::new();
+    f.host_status();
+    let mut saved = f.state().draft.as_ref().unwrap().registries[0]
+        .original
+        .clone()
+        .unwrap();
+    saved.generation = "retired-generation".into();
+    let request = registry::Request::for_binding(
+        &saved,
+        Action::VerifyPull {
+            image: "malformed".into(),
+        },
+    );
+    f.app.manage_cloud_registry(&f.ctx, request);
+    assert!(f.state().error.as_deref().unwrap().contains("saved pull grant changed"));
+    assert!(f.state().receiver.is_none());
+    assert!(f.state().verified.contains_key(&f.repository));
+    assert!(!f.state().refused_pulls.contains(&f.repository));
+}
+
+#[test]
+fn worker_refusal_is_retained_before_settings_load_can_fail_or_be_replaced() {
+    for failed_load in [true, false] {
+        let mut f = HistoryFixture::new();
+        let root = f.root.path().join("cloud");
+        f.app.cloud_prototype.root = Some(root.clone());
+        let path = root.join("settings.json");
+        let original = std::fs::read(&path).unwrap();
+        if failed_load {
+            std::fs::write(&path, b"invalid settings").unwrap();
+        }
+        let image = format!("{}@sha256:{}", f.repository, "a".repeat(64));
+        f.app.open_cloud_settings(&f.ctx, false, Some((image, true)));
+        assert!(
+            f.state().refused_pulls.contains(&f.repository),
+            "record refusal before spawning a loader"
+        );
+        if failed_load {
+            wait(&mut f.app, &f.ctx);
+            assert!(f.state().error.is_some());
+            std::fs::write(&path, &original).unwrap();
+        } else {
+            f.app.cancel_cloud_accounts();
+        }
+        f.app.open_cloud_accounts(&f.ctx, false);
+        wait(&mut f.app, &f.ctx);
+        assert!(!f.state().verified.contains_key(&f.repository));
+        f.host_status();
+        assert!(!f.state().verified.contains_key(&f.repository));
+    }
 }

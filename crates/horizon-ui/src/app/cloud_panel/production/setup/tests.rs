@@ -373,10 +373,13 @@ fn registry_setup_rotation_and_status_share_the_machine_policy() {
     *app.cloud_prototype.production.setup.draft.as_mut().unwrap().runpod_key = "unsaved-compute".into();
     app.manage_cloud_registry(
         &ctx,
-        registry::Action::Revoke {
-            repository: original.repository.clone(),
-            generation: original.generation.clone(),
-        },
+        super::registry::Request::for_binding(
+            &original,
+            registry::Action::Revoke {
+                repository: original.repository.clone(),
+                generation: original.generation.clone(),
+            },
+        ),
     );
     assert!(app.cloud_prototype.production.setup.receiver.is_none());
     assert!(
@@ -399,10 +402,13 @@ fn registry_setup_rotation_and_status_share_the_machine_policy() {
         .clear();
     app.manage_cloud_registry(
         &ctx,
-        registry::Action::Status {
-            repository: original.repository.clone(),
-            generation: original.generation.clone(),
-        },
+        super::registry::Request::for_binding(
+            &original,
+            registry::Action::Status {
+                repository: original.repository.clone(),
+                generation: original.generation.clone(),
+            },
+        ),
     );
     wait(&mut app, &ctx);
     assert!(
