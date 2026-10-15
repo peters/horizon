@@ -56,6 +56,7 @@ documents that are not yet STE.
 | [image-publication-credentials](procedures/image-publication-credentials.md) | Operation-private publishing login, retained-account recovery and explicit selection | none |
 | [local-image-preferences](procedures/local-image-preferences.md) | Machine-local image destinations, source identity and transactional save | none |
 | [local-network-bridge-agent-access](procedures/local-network-bridge-agent-access.md) | Local Network Bridge, agent access on the worker | rents compute |
+| [one-service-gateway-engine](procedures/one-service-gateway-engine.md) | Feature-off LAN/tailnet endpoint engine prerequisite | none |
 | [new-cloud-catalog-refresh](procedures/new-cloud-catalog-refresh.md) | New cloud dialog, background price refresh and layout height | none |
 | [new-cloud-source-search](procedures/new-cloud-source-search.md) | New cloud source field: search over checkouts and GitHub repositories, folder paths and links | none |
 | [native-app-automate](procedures/native-app-automate.md) | Native app matrix, MCP, CLI and exact cleanup | paid device |
@@ -78,6 +79,7 @@ documents that are not yet STE.
 
 | Report | Procedure | Date |
 |---|---|---|
+| [2026-10-15-one-service-gateway-engine](reports/2026-10-15-one-service-gateway-engine.md) | [one-service-gateway-engine](procedures/one-service-gateway-engine.md) | 2026-10-15 |
 | [2026-10-05-cloud-panels](reports/2026-10-05-cloud-panels.md) | [cloud-panels](procedures/cloud-panels.md) | 2026-10-05 |
 | [2026-10-14-tailnet-receipt-capture](reports/2026-10-14-tailnet-receipt-capture.md) | [ledger](procedures/tailnet-enrollment-ledger.md), [capture](procedures/tailnet-receipt-capture.md) | 2026-10-14 |
 | [2026-10-14-tailnet-api-removal](reports/2026-10-14-tailnet-api-removal.md) | [tailnet-api-removal](procedures/tailnet-api-removal.md) | 2026-10-14 |

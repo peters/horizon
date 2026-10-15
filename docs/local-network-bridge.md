@@ -227,6 +227,73 @@ the open ports. Switching the bridge off stops a probe or a browse at once: no n
 connection attempt starts, and one already under way may finish within its 1.5
 seconds, when its connection is closed without use. Horizon never walks the subnet on its own.
 
+## One-device sharing: endpoint engine prerequisite
+
+The `one-service-gateway` Core feature adds an internal TCP gate for one LAN or
+tailnet endpoint. The feature is off by default. No UI, CLI or MCP operation starts
+this engine. The existing **Share local network** control keeps its current behavior.
+This prerequisite does not complete [#1335 M1-1](https://github.com/peters/horizon/issues/1335).
+
+M1-1 still requires one-device sharing through the Local Network Bridge for both
+LAN and tailnet targets. Owner controls, durable attempts, worker SSH, UI/CLI/MCP
+parity and actual worker qualification remain required delivery outcomes.
+The engine supplies the endpoint policy and byte relay for those outcomes.
+It does not replace Tailscale, enroll a desktop or create a new network or relay service.
+
+### Trust boundary
+
+Endpoint names, addresses, ports and SOCKS requests are untrusted input. DNS,
+interface routes and Tailscale metadata can change after preflight. A caller must
+supply owner authority before it starts this host-only primitive. A parsed endpoint,
+a saved path, an attempt ID or a gateway receipt does not supply that authority.
+
+`Endpoint::new` accepts an IPv4 literal or DNS name and one nonzero TCP port.
+It rejects URLs, malformed names and IPv6 endpoint input before a lookup.
+Preflight must select one unique IPv4 address. Another name, address or port fails
+before DNS or client access. The proxy connects only to the checked address.
+
+The LAN source uses the existing subnet, interface and route policy. It refuses
+this computer, destinations outside that policy and ambiguous DNS results.
+The route check compares source addresses. It cannot detect an administrator's
+route change that preserves the same source address on another interface.
+
+The tailnet source requires an existing Linux kernel-mode Tailscale client.
+The client uses a trusted root-owned executable and the fixed
+`/run/tailscale/tailscaled.sock` socket. It performs read-only status and WhoIs
+commands with an empty environment, bounded output and bounded command waits.
+It performs no enrollment, API credential access, tailnet mutation or PATH fallback.
+
+A tailnet binding contains the desktop Self ID, peer StableID, normalized full peer
+name and exact IPv4 address/port. The address must belong directly to that peer,
+inside `100.64.0.0/10`; an advertised subnet route does not qualify.
+The route must select an actual Self source address. Self cannot be the peer.
+The client reads Self again after DNS and WhoIs. A supplied name must match the
+full peer name; a short alias cannot supply identity.
+
+The gate compares the captured binding before start, at each admission and during
+source checks. A changed or unavailable source revokes the gateway and closes its
+relays. A concurrent source check refuses one request without revocation.
+A revoked gateway does not resume automatically. A new attempt needs new admission.
+
+The receipt contains an operation ID, generation and local proxy port. Close accepts
+only that exact receipt. Port reuse does not make an older receipt valid.
+Drop stops the gateway and its active relays. Cached status contains the approved
+endpoint and counters; it does not publish raw account or WhoIs responses.
+
+### Engine limits and delivery evidence
+
+The engine reuses the existing loopback SOCKS5 TCP relay and its 64-connection and
+64-GiB bounds. It supplies no worker listener, SSH custody, public exposure, UDP,
+Mosh or general IPv6 support. These limits do not remove LAN/tailnet endpoint
+requirements from M1-1.
+
+Component tests cover parser, binding, relay, half-close and stale-receipt behavior.
+Opt-in Linux guest tests exercise real tailnet DNS/route/WhoIs checks and peer bytes.
+A component result does not qualify owner approval, durable recovery or worker SSH.
+Actual LAN and tailnet sharing must pass through the completed owner path before
+M1-1 delivery. Use the [engine procedure](testing/procedures/one-service-gateway-engine.md)
+for prerequisite evidence and the existing bridge procedures for regression evidence.
+
 ## How it works
 
 Switching the bridge on starts a SOCKS5 proxy on this computer's loopback and one

@@ -5,6 +5,8 @@
 //! the proxy's loopback port. Only the owner starts a [`Bridge`], from the cloud card, and
 //! nothing persists it; dropping it stops its SSH session and closes every relayed connection.
 mod discovery;
+#[cfg(feature = "one-service-gateway")]
+pub mod endpoint;
 mod rules;
 mod scope;
 mod session;

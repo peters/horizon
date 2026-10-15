@@ -298,6 +298,15 @@ stop or reconnect. Re-read status after that event. Remove only task-owned forwa
 unforward closes their active connections. This network path does not permit a
 browser controller outside the public `browser_*` MCP contract.
 
+The internal Core feature `one-service-gateway` is off by default. It narrows the
+existing relay to one checked LAN or tailnet endpoint. It adds no public tool,
+worker forward or owner approval path. Do not start it from a saved path, parsed
+endpoint or gateway receipt. The feature cannot enroll a desktop client or grant
+agent access. Its tailnet source needs an existing Linux kernel-mode Tailscale
+client; userspace mode and Self as a target are refused. Actual M1 delivery still
+requires both LAN/tailnet sharing, owner controls, durable attempts, pinned worker
+SSH and UI/CLI/MCP parity. Current bridge tools retain their existing behavior.
+
 ## Cloud cards on the canvas
 
 A deployed cloud's card sits in a workspace like a panel. When the workspace has
