@@ -110,7 +110,8 @@ class PolicyTests(ServiceTestCase):
                    ('POST', 'merges'), ('POST', 'merge-upstream'), ('POST', 'git/refs'),
                    ('PATCH', 'git/refs/tags/v1'), ('DELETE', 'git/refs/tags/v1'), ('PATCH', 'git/refs/notes/x'),
                    ('PATCH', 'git/refs/heads'), ('PATCH', 'git/refs/heads/x/'), ('PUT', 'pulls/04/update-branch'),
-                   ('PUT', 'pulls/4/update-branch/'), ('PUT', 'pulls/3/reviews/8')]
+                   ('PUT', 'pulls/4/update-branch/'), ('PUT', 'pulls/3/reviews/8'),
+                   ('PATCH', 'pulls/7/'), ('PATCH', 'pulls/comments/5/'), ('PATCH', 'pulls/comments')]
         for method, path in refused:
             self.assertIsNotNone(upkeep.rest_refusal(policy, method, path.split('/')), (method, path))
         allowed = [('GET', 'git/trees/x'), ('POST', 'issues/1/comments'), ('POST', 'labels'),
@@ -120,7 +121,8 @@ class PolicyTests(ServiceTestCase):
                    ('POST', 'actions/runs/1/cancel'), ('POST', 'actions/jobs/1/rerun'),
                    ('POST', 'check-runs/1/rerequest'), ('POST', 'check-suites/1/rerequest'),
                    ('PUT', 'pulls/1/merge'), ('DELETE', 'git/refs/heads/dependabot/cargo/x'),
-                   ('POST', 'pulls/3/reviews'), ('DELETE', 'pulls/3/reviews/8'),
+                   ('POST', 'pulls/3/reviews'), ('DELETE', 'pulls/3/reviews/8'), ('PATCH', 'pulls/7'),
+                   ('PATCH', 'pulls/comments/5'),
                    ('POST', 'actions/workflows/release.yml/dispatches')]
         for method, path in allowed:
             self.assertIsNone(upkeep.rest_refusal(policy, method, path.split('/')), (method, path))

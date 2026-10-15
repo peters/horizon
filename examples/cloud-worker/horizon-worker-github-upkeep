@@ -63,6 +63,8 @@ UPDATE = re.compile(r'pulls/(?P<number>[1-9][0-9]{0,19})/update-branch')
 # The edit of a pull request, whose body can name a new base: the merge gate compares the
 # pull request with its base, so the base stays the one that the gate read.
 PULL = re.compile(r'pulls/[1-9][0-9]{0,19}')
+# The other edit under pulls, of a review comment, which names no base.
+PULL_COMMENT = re.compile(r'pulls/comments/[1-9][0-9]{0,19}')
 RETARGET = 'this Upkeep does not let an agent change the base branch of a pull request: open a new one.'
 # The check changes that stay: ask GitHub to run a check again. A check run that an agent
 # wrote could stand in for a required check, and the merge gate trusts them.
@@ -261,7 +263,8 @@ def rest_refusal(policy, method, parts):
         return 'this Upkeep lets an agent only ask for a check again: a check run could stand in for a required check.'
     if first == 'actions' and not RUN_CHANGES.fullmatch(rest) and not DISPATCH.fullmatch(rest):
         return 'this Upkeep lets an agent only start runs again, cancel them and start listed workflows.'
-    if first == 'pulls' and method == 'PATCH' and len(parts) == 2 and not PULL.fullmatch('/'.join(parts)):
+    if first == 'pulls' and method == 'PATCH' and not PULL.fullmatch('/'.join(parts)) \
+            and not PULL_COMMENT.fullmatch('/'.join(parts)):
         return 'this Upkeep edits a pull request only through /pulls/<number>.'
     if first == 'pulls' and 'update-branch' in parts and not UPDATE.fullmatch('/'.join(parts)):
         return 'this Upkeep updates a pull request\'s branch only through /pulls/<number>/update-branch.'

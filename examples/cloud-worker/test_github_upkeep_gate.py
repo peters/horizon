@@ -240,10 +240,13 @@ class GateBrokerTests(BrokerTestCase):
         before = len(self.api.seen)
         for target, body in [('/repos/example/project/pulls/7', {'title': 'x', 'base': 'main'}),
                              ('/repos/example/project/pulls/7', b'{"title": "x", "base": null}'),
-                             ('/repos/example/project/pulls/07', {'title': 'x'})]:
+                             ('/repos/example/project/pulls/07', {'title': 'x'}),
+                             ('/repos/example/project/pulls/7/', {'title': 'x', 'base': 'main'}),
+                             ('/repos/example/project/pulls/7/x', {'title': 'x'})]:
             status, _, payload = self.send('PATCH', target, body=body)
             self.assertEqual(status, 403, target)
-            self.assertIn('Horizon: this Upkeep', json.loads(payload)['message'])
+            # The broker's routes refuse a trailing slash before the Upkeep policy does.
+            self.assertIn('Horizon: this', json.loads(payload)['message'])
         self.assertEqual(len(self.api.seen), before)
         status, _, _ = self.send('PATCH', '/repos/example/project/pulls/7', body={'title': 'x', 'body': 'y'})
         self.assertEqual(status, 200)
