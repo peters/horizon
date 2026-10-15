@@ -44,6 +44,7 @@ These metadata helpers do not authenticate an account or prove registry permissi
 The source adapter reads the origin with bounded, cancellable Git commands on a worker thread.
 It removes URL credentials before package naming and sends no remote text to output events.
 Without a supported remote, it uses the canonical local checkout path.
+Malformed or unreadable Git configuration stops selection; it is not treated as an absent origin.
 The source transport, host, complete path and explicit port distinguish source identities.
 Origin normalization removes at most one final `.git` suffix and does not interpret browser routes.
 Relative local origins use the canonical checkout path. Non-UTF-8 fallback paths are refused.

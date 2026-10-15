@@ -3,28 +3,21 @@ use super::{Destination, Error, Result};
 use crate::cloud_runtime::command::Runner;
 use std::{fmt::Write as _, path::Path, process::Command, time::Duration};
 
+const ORIGIN_READ: &str =
+    "Could not read this checkout's Git origin; repair its Git configuration before choosing an automatic image";
 const ORIGIN_INVALID: &str =
     "Use an unambiguous Git origin without query parameters, or choose an explicit image destination";
 
 pub(super) fn automatic(login: &str, repository: &Path, name: &str, runner: &Runner<'_>) -> Result<Destination> {
     runner.cancel.check()?;
     let repository = repository.canonicalize()?;
-    let mut command = Command::new("git");
-    command
-        .arg("-C")
-        .arg(&repository)
-        .args(["config", "--local", "--get-all", "remote.origin.url"]);
     // A remote can contain credentials. Never send its output to a card or log.
     let quiet = Runner {
         cancel: runner.cancel,
         emit: &|_| {},
         secrets: Vec::new(),
     };
-    let origin = match quiet.run_parsed("repository image identity", &mut command, Duration::from_secs(10)) {
-        Ok(origin) => Some(origin),
-        Err(Error::Command(_)) => None,
-        Err(error) => return Err(error),
-    };
+    let origin = read_origin(&repository, &quiet)?;
     let source = origin
         .as_deref()
         .map(|origin| {
@@ -49,6 +42,41 @@ pub(super) fn automatic(login: &str, repository: &Path, name: &str, runner: &Run
         .map_err(|_| Error::Invalid("Could not select a personal image destination"))
 }
 
+fn read_origin(repository: &Path, runner: &Runner<'_>) -> Result<Option<String>> {
+    let run = |command: &mut Command| {
+        runner
+            .run_parsed("repository image identity", command, Duration::from_secs(10))
+            .map_err(|error| match error {
+                Error::Command(_) => Error::Invalid(ORIGIN_READ),
+                other => other,
+            })
+    };
+    let mut probe = git_config(repository);
+    probe.args(["--show-origin", "--null", "--get", "--default", "", "remote.origin.url"]);
+    let found = run(&mut probe)?;
+    // Git labels only the absent key's --default as command-line data. A real value,
+    // including an empty one, has a file origin; the second read must then succeed.
+    if found == "command line:\0\0" {
+        return Ok(None);
+    }
+    if !found.starts_with("file:") {
+        return Err(Error::Invalid(ORIGIN_READ));
+    }
+    let mut command = git_config(repository);
+    command.args(["--get-all", "remote.origin.url"]);
+    run(&mut command).map(Some)
+}
+
+fn git_config(repository: &Path) -> Command {
+    let mut command = Command::new("git");
+    command
+        .env("LC_ALL", "C")
+        .arg("-C")
+        .arg(repository)
+        .args(["config", "--local"]);
+    command
+}
+
 fn remote(origin: &str) -> Result<Option<String>> {
     if origin.len() > 4096 || origin.contains(char::is_control) || origin.contains('\u{fffd}') {
         return Err(Error::Invalid(ORIGIN_INVALID));
@@ -62,6 +90,9 @@ fn remote(origin: &str) -> Result<Option<String>> {
             return Ok(None);
         }
         let (authority, path) = rest.split_once('/').ok_or(Error::Invalid(ORIGIN_INVALID))?;
+        if authority.contains(['?', '#', '\\']) {
+            return Err(Error::Invalid(ORIGIN_INVALID));
+        }
         (scheme, authority, path, false)
     } else if let Some((authority, path)) = scp(origin) {
         if authority.len() == 1 && authority.bytes().all(|b| b.is_ascii_alphabetic()) && path.starts_with(['/', '\\']) {

@@ -125,7 +125,11 @@ fn non_utf8_local_paths_are_refused_without_lossy_package_identity() {
             .path()
             .join(std::ffi::OsString::from_vec(vec![b'r', byte]))
             .join("project");
-        std::fs::create_dir_all(&repo).unwrap();
+        for path in [".git/objects", ".git/refs"] {
+            std::fs::create_dir_all(repo.join(path)).unwrap();
+        }
+        std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(repo.join(".git/config"), "").unwrap();
         assert!(matches!(
             automatic("builder", &repo.canonicalize().unwrap(), "cpu", &runner),
             Err(Error::Invalid(
@@ -205,4 +209,37 @@ fn ipv6_scp_paths_keep_at_signs_out_of_username_detection() {
         remote("git@git.example:team/project@v2.git").unwrap(),
         remote("ssh://git@git.example/~/team/project@v2.git").unwrap()
     );
+}
+
+#[test]
+fn authority_delimiters_cannot_be_hidden_in_discarded_userinfo() {
+    for origin in [
+        "https://host?@evil/team/p.git",
+        "https://host#@evil/p.git",
+        "https://host\\@evil/p.git",
+        "git://host?@evil/p.git",
+    ] {
+        assert!(remote(origin).is_err());
+    }
+}
+
+#[test]
+fn malformed_git_configuration_is_refused_without_output_or_a_local_fallback() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = root.path().join("repo");
+    target(&repo, None);
+    std::fs::write(repo.join(".git/config"), "[broken\n").unwrap();
+    let cancel = Cancellation::default();
+    let events = std::cell::RefCell::new(Vec::new());
+    let emit = |event| events.borrow_mut().push(event);
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &emit,
+        secrets: Vec::new(),
+    };
+    assert!(matches!(
+        automatic("builder", &repo, "cpu", &runner),
+        Err(Error::Invalid(ORIGIN_READ))
+    ));
+    assert!(events.borrow().is_empty());
 }
