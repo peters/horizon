@@ -123,6 +123,16 @@ pub(super) struct Production {
     /// The workspace New workspace made for this dialog's cloud, and what it asked for.
     new_workspace: Option<new_workspace::Intent>,
 }
+
+impl Production {
+    /// Opens New cloud. Each opening reads the Docker hosts again before a Start uses
+    /// one chosen earlier.
+    pub(super) fn open_creation(&mut self) {
+        self.creating = true;
+        self.focus_title_on_open = true;
+        self.setup_build_on.read_again();
+    }
+}
 #[derive(Default, PartialEq, Eq)]
 enum Confirmation {
     #[default]

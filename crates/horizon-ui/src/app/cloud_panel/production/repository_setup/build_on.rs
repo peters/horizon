@@ -25,18 +25,27 @@ pub(in crate::app::cloud_panel::production) struct State {
     /// The opening whose read finished last; a host chosen earlier is used only after it
     /// is this opening.
     read_for: Option<u64>,
-    /// A Start that waits for this opening's read.
-    start_after_read: bool,
+    /// The Starts that wait for this opening's read, with what each submitted; one for
+    /// each repository.
+    start_after_read: Vec<Submitted>,
     /// The host a waiting Start chose, when the read found it no longer saved.
     gone: Option<String>,
+}
+
+/// What a Start submitted: the repository entered, the agent's preset and the mode. A
+/// Start that waits goes on with these, whatever the dialog shows by then.
+pub(in crate::app::cloud_panel::production) struct Submitted {
+    pub(super) entered: String,
+    pub(super) preset: horizon_core::PresetConfig,
+    pub(super) mode: super::Mode,
 }
 
 /// What becomes of a Start that waited for the dialog's read of the Docker hosts.
 pub(in crate::app::cloud_panel::production) enum Deferred {
     /// No Start waits, or its read has not finished.
     Waiting,
-    /// The read finished and the Start goes on.
-    Start,
+    /// The read finished and the Start goes on with what it submitted.
+    Start(Box<Submitted>),
     /// The chosen host is no longer saved, so the Start does not go on.
     HostGone(String),
 }
@@ -48,15 +57,20 @@ impl State {
         if let Some((opening, job)) = &self.job
             && let Ok(hosts) = job.try_recv()
         {
-            self.hosts = hosts;
-            self.read_for = Some(*opening);
+            // A read of an earlier opening only frees the slot: the settings may have
+            // changed again since it began, and this opening's read follows at once.
+            let current = *opening == self.opening;
             self.job = None;
-            if self
-                .chosen
-                .as_ref()
-                .is_some_and(|chosen| !self.hosts.iter().any(|host| &host.name == chosen))
-            {
-                self.drop_choice();
+            if current {
+                self.hosts = hosts;
+                self.read_for = Some(self.opening);
+                if self
+                    .chosen
+                    .as_ref()
+                    .is_some_and(|chosen| !self.hosts.iter().any(|host| &host.name == chosen))
+                {
+                    self.drop_choice();
+                }
             }
         }
         let Some(root) = root else {
@@ -90,7 +104,7 @@ impl State {
     /// person chose another machine for it.
     fn drop_choice(&mut self) {
         if let Some(chosen) = self.chosen.take()
-            && std::mem::take(&mut self.start_after_read)
+            && !std::mem::take(&mut self.start_after_read).is_empty()
         {
             self.gone = Some(chosen);
         }
@@ -101,7 +115,7 @@ impl State {
     pub(in crate::app::cloud_panel::production) fn read_again(&mut self) {
         self.read_at = None;
         self.opening += 1;
-        self.start_after_read = false;
+        self.start_after_read.clear();
         self.gone = None;
     }
 
@@ -111,22 +125,31 @@ impl State {
         self.chosen.is_some() && self.read_for != Some(self.opening)
     }
 
-    /// Keeps a Start for after this opening's read when it must wait for it; true then.
-    pub(in crate::app::cloud_panel::production) fn defer_start(&mut self) -> bool {
-        self.start_after_read = self.waiting();
+    /// Keeps a Start for after this opening's read when it must wait for it; gives it
+    /// back when it goes on now.
+    pub(in crate::app::cloud_panel::production) fn defer_start(&mut self, submitted: Submitted) -> Option<Submitted> {
+        if !self.waiting() {
+            return Some(submitted);
+        }
         self.start_after_read
+            .retain(|waiting| waiting.entered != submitted.entered);
+        self.start_after_read.push(submitted);
+        None
     }
 
-    /// What becomes of a deferred Start, once each when its read finished.
+    /// What becomes of the deferred Starts once their read finished: one Start at a call,
+    /// or once why none goes on.
     pub(in crate::app::cloud_panel::production) fn deferred(&mut self) -> Deferred {
         if let Some(name) = self.gone.take() {
             return Deferred::HostGone(name);
         }
-        if self.start_after_read && !self.waiting() {
-            self.start_after_read = false;
-            return Deferred::Start;
+        if self.waiting() {
+            return Deferred::Waiting;
         }
-        Deferred::Waiting
+        if self.start_after_read.is_empty() {
+            return Deferred::Waiting;
+        }
+        Deferred::Start(Box::new(self.start_after_read.remove(0)))
     }
 
     /// The Docker host the next setup builds on; none for this computer.
@@ -218,6 +241,22 @@ fn on_other_machines(hosts: Vec<Host>) -> Vec<Host> {
 mod tests {
     use super::*;
 
+    fn submitted(entered: &str) -> Submitted {
+        Submitted {
+            entered: entered.into(),
+            preset: horizon_core::PresetConfig {
+                name: "Claude".into(),
+                alias: None,
+                kind: horizon_core::PanelKind::Claude,
+                command: None,
+                args: Vec::new(),
+                resume: horizon_core::PanelResume::default(),
+                ssh_connection: None,
+            },
+            mode: super::super::Mode::default(),
+        }
+    }
+
     fn host(name: &str, access: Access) -> Host {
         Host {
             name: name.into(),
@@ -252,29 +291,63 @@ mod tests {
             read_for: Some(0),
             ..State::default()
         };
-        assert!(!state.defer_start(), "a host this opening read starts at once");
+        assert!(
+            state.defer_start(submitted("/work/a")).is_some(),
+            "a host this opening read starts at once"
+        );
         state.read_again();
         // A read of the previous opening is still in flight when the dialog opens again.
         let (sender, receiver) = mpsc::channel();
         state.job = Some((0, receiver));
-        assert!(state.defer_start(), "a host chosen in an earlier opening waits");
+        assert!(
+            state.defer_start(submitted("/work/a")).is_none(),
+            "a host chosen in an earlier opening waits"
+        );
         let folder = tempfile::tempdir().unwrap();
-        sender.send(vec![host("builder", Access::Ssh)]).unwrap();
+        // That read saw the host removed; it was saved again before this opening.
+        sender.send(Vec::new()).unwrap();
         let ctx = egui::Context::default();
         state.refresh(Some(folder.path()), &ctx);
         assert!(
             matches!(state.deferred(), Deferred::Waiting),
             "the previous opening's read does not count"
         );
+        assert!(state.chosen.is_some(), "nor does it drop the choice");
         let (sender, receiver) = mpsc::channel();
         state.job = Some((1, receiver));
         sender.send(vec![host("builder", Access::Ssh)]).unwrap();
         state.refresh(Some(folder.path()), &ctx);
         assert!(
-            matches!(state.deferred(), Deferred::Start),
-            "this opening's read lets the Start go on"
+            matches!(state.deferred(), Deferred::Start(start) if start.entered == "/work/a"),
+            "this opening's read lets the Start go on with what it submitted"
         );
         assert!(matches!(state.deferred(), Deferred::Waiting), "the Start goes on once");
+    }
+
+    #[test]
+    fn each_repository_keeps_its_waiting_start() {
+        let mut state = State {
+            hosts: vec![host("builder", Access::Ssh)],
+            chosen: Some("builder".into()),
+            ..State::default()
+        };
+        state.read_again();
+        for entered in ["/work/a", "/work/b", "/work/a"] {
+            assert!(state.defer_start(submitted(entered)).is_none());
+        }
+        let (sender, receiver) = mpsc::channel();
+        state.job = Some((1, receiver));
+        sender.send(vec![host("builder", Access::Ssh)]).unwrap();
+        state.refresh(Some(tempfile::tempdir().unwrap().path()), &egui::Context::default());
+        let mut started = Vec::new();
+        while let Deferred::Start(start) = state.deferred() {
+            started.push(start.entered);
+        }
+        assert_eq!(
+            started,
+            ["/work/b", "/work/a"],
+            "a second Start of a repository replaces its first"
+        );
     }
 
     #[test]
@@ -286,7 +359,7 @@ mod tests {
             ..State::default()
         };
         state.read_again();
-        assert!(state.defer_start());
+        assert!(state.defer_start(submitted("/work/a")).is_none());
         let (sender, receiver) = mpsc::channel();
         state.job = Some((1, receiver));
         sender.send(Vec::new()).unwrap();

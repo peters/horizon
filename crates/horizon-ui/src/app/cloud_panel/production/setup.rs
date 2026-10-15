@@ -603,8 +603,7 @@ impl HorizonApp {
         form.setup.reset_form();
         form.launch.submitted = false;
         form.launch.invalidate_account_readiness();
-        form.creating = true;
-        form.focus_title_on_open = true;
+        form.open_creation();
     }
 
     fn save_cloud_accounts(&mut self, ctx: &Context) {

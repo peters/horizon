@@ -1,6 +1,7 @@
 //! The setup agent's session: a hidden panel the dialog starts, samples, writes to
 //! and closes, and the commit of the files it wrote.
 use super::access::{self, Fixer};
+use super::build_on::Submitted;
 use super::prompt::prompt;
 use super::run::{self, Action, Run};
 use crate::app::cloud_panel::production::{HorizonApp, PanelKind, PanelOptions};
@@ -59,17 +60,6 @@ impl HorizonApp {
         if self.cloud_prototype.production.starting_here() {
             return;
         }
-        // A host chosen in an earlier opening of the dialog waits for this opening's read.
-        if self.cloud_prototype.production.setup_build_on.defer_start() {
-            return;
-        }
-        if let Some(run) = self.cloud_prototype.production.run_here() {
-            if run.ending() {
-                return;
-            }
-            let panel = run.panel;
-            self.cloud_repository_setup_action(ctx, panel, Action::Stop);
-        }
         let presets = super::setup_choices(&self.cloud_prototype.production);
         let preset = super::chosen_preset(&self.cloud_prototype.production, &presets)
             .cloned()
@@ -91,9 +81,36 @@ impl HorizonApp {
         let Some(preset) = preset else {
             return;
         };
-        let chosen_mode = std::mem::take(&mut self.cloud_prototype.production.setup_mode);
+        let mode = self.cloud_prototype.production.setup_mode.clone();
+        let submitted = Submitted { entered, preset, mode };
+        // A host chosen in an earlier opening of the dialog waits for this opening's read.
+        if let Some(submitted) = self.cloud_prototype.production.setup_build_on.defer_start(submitted) {
+            self.start_submitted_setup(ctx, submitted);
+        }
+    }
+
+    /// Starts the setup a Start submitted, now or after it waited for the read of the
+    /// Docker hosts, on the repository it names whatever the dialog shows by then.
+    pub(in crate::app::cloud_panel::production) fn start_submitted_setup(
+        &mut self,
+        ctx: &egui::Context,
+        submitted: Submitted,
+    ) {
+        let Submitted { entered, preset, mode } = submitted;
+        let form = &self.cloud_prototype.production;
+        if form.setup_starting.iter().any(|starting| starting.entered == entered) {
+            return;
+        }
+        if let Some(run) = form.setup_runs.iter().find(|run| super::same_folder(run, &entered)) {
+            if run.ending() {
+                return;
+            }
+            let panel = run.panel;
+            self.cloud_repository_setup_action(ctx, panel, Action::Stop);
+        }
+        self.cloud_prototype.production.setup_mode = super::Mode::default();
         let build_on = self.cloud_prototype.production.setup_build_on.chosen();
-        self.prepare_cloud_setup(ctx, (preset, build_on), chosen_mode, entered);
+        self.prepare_cloud_setup(ctx, (preset, build_on), mode, entered);
         self.cloud_prototype.error = None;
     }
 

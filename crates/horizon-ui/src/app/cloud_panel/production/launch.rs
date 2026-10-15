@@ -120,8 +120,7 @@ impl HorizonApp {
         form.size = None;
         form.placement = Placement::default();
         form.provider = None;
-        form.creating = true;
-        form.focus_title_on_open = true;
+        form.open_creation();
         // Only New workspace marks a workspace it made; any other opening has none.
         form.new_workspace = None;
         // With no repository yet, the dialog asks where the code is instead of reading nothing.

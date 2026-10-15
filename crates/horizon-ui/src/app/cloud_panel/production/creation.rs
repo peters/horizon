@@ -282,8 +282,7 @@ impl HorizonApp {
         form.source = source::State::default();
         form.checks = checks::State::default();
         form.publishing = publishing::State::default();
-        // The next dialog reads the Docker hosts again at once, so a host changed in the
-        // meantime is not used as it was.
+        // A Start that waits for the Docker hosts' read goes with the dialog.
         form.setup_build_on.read_again();
     }
 
@@ -307,7 +306,11 @@ impl HorizonApp {
             .refresh(root.as_deref(), ctx);
         match self.cloud_prototype.production.setup_build_on.deferred() {
             super::repository_setup::Deferred::Waiting => {}
-            super::repository_setup::Deferred::Start => self.start_cloud_repository_setup(ctx),
+            super::repository_setup::Deferred::Start(submitted) => {
+                self.start_submitted_setup(ctx, *submitted);
+                // Another waiting Start goes on in the next frame.
+                ctx.request_repaint();
+            }
             super::repository_setup::Deferred::HostGone(name) => {
                 self.cloud_prototype.error = Some(format!(
                     "The Docker host {name} is no longer in Cloud settings. Choose where the setup builds, then start it again."
