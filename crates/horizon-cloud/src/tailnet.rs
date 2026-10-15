@@ -2,7 +2,7 @@
 mod api;
 mod bindings;
 mod keychain;
-pub use api::{ApiCredential, ApiCredentialKind, ApiCredentialStatus};
+pub use api::{ApiCredential, ApiCredentialKind, ApiCredentialStatus, NodeApi, NodeDeletion, RetentionReason};
 pub use bindings::Store;
 /// OS-store namespace; credentials have no public read API.
 pub const KEYCHAIN_SERVICE: &str = "horizon-cloud-tailnets";

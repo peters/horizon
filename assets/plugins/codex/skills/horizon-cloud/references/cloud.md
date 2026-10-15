@@ -529,6 +529,8 @@ Enrollment receipts are allocation metadata, separate from the displayed device 
 
 The receipt-capture adapter reads only the worker's actual tagged Self.ID via pinned root SSH and the existing userspace daemon socket, persists it before readiness and records uncertain attempts before enrollment. It binds the existing allocation request and saved tailnet ID to the owning cloud root. Worker agents cannot query this private root lane. No API secret is sent to a worker and no API editor or node-delete operation is activated by this adapter.
 
+The desktop NodeApi SDK prerequisite can request only an exact encoded device ID supplied by a trusted controller; it does not itself authenticate owner/workspace authority or persist cleanup confirmation. It is not wired to cloud deletion or public UI/CLI/MCP mutations. Missing managed slots and disabled API bindings never resurrect staged credentials; all404 remains unconfirmed. API values stay on the desktop. See docs/architecture/tailnet-node-api.md and docs/testing/procedures/tailnet-node-api.md.
+
 ## Owner API credential management
 
 `tailnet_api_credential` operations are `set_personal_token`, `set_oauth`, `remove`, `status`, and `cancel`.
