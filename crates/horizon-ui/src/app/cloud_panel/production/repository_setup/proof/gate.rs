@@ -8,6 +8,8 @@
 //! - `GATE_OUT`: the folder for `started.jsonl`, `results.jsonl`, the proof logs and the
 //!   preview screenshots.
 //! - `GATE_PREFIX`: the start of the run names of entries without a `run`.
+//! - `GATE_DOCKER_HOST`: the name of a Docker host saved in Cloud settings; when set,
+//!   the proofs and previews run on its Docker, as a setup that builds on it does.
 use super::super::preview;
 use super::*;
 use std::io::Write as _;
@@ -24,6 +26,22 @@ const PREVIEW_LIMIT: Duration = Duration::from_mins(10);
 
 /// How often the gate takes what the proof or the preview reported.
 const POLL: Duration = Duration::from_millis(500);
+
+/// The Docker host `GATE_DOCKER_HOST` names in Cloud settings, if it names one.
+fn docker_host() -> Option<horizon_core::cloud_runtime::docker_host::Host> {
+    let name = std::env::var("GATE_DOCKER_HOST").ok().filter(|name| !name.is_empty())?;
+    let path = horizon_core::HorizonHome::resolve()
+        .root()
+        .join("cloud")
+        .join("settings.json");
+    let settings = horizon_core::cloud_runtime::settings::Settings::load(&path).expect("Cloud settings load");
+    let host = settings
+        .docker_hosts
+        .into_iter()
+        .find(|host| host.name == name)
+        .expect("GATE_DOCKER_HOST names a Docker host saved in Cloud settings");
+    Some(host)
+}
 
 /// One repository of the list, as the gate proves it.
 struct Entry {
@@ -97,6 +115,8 @@ fn proves_each_listed_repository() {
         result["seconds"] = started.elapsed().as_secs().into();
         append(&out, "results.jsonl", &result);
     }
+    // No SSH forward to a Docker host outlives the gate.
+    super::remote::close(true);
 }
 
 /// Proves the entry, starts its preview after a passed proof and removes all the entry's
@@ -117,6 +137,7 @@ fn prove(entry: &Entry, out: &Path) -> serde_json::Value {
     let root_dirty = Arc::new(AtomicBool::new(false));
     let mut proof = Proof::start(
         (&entry.repository, &entry.run, identity),
+        docker_host(),
         (1, spec),
         log.clone(),
         (true, root_dirty.clone(), access),
@@ -159,7 +180,7 @@ fn prove(entry: &Entry, out: &Path) -> serde_json::Value {
     // the entry, as the dialog accepts such a setup.
     let passed = proved && preview["outcome"] != "failed";
     let worker = proof.stop();
-    remove_run_resources(&entry.repository, &entry.run, worker, Some(pinned), true);
+    remove_run_resources(&entry.repository, &entry.run, worker, (Some(pinned), None), true);
     let mut result = serde_json::json!({
         "passed": passed,
         "phases": phases,

@@ -398,7 +398,8 @@ fn engine(docker: &impl Docker) -> Result<Value, CloudError> {
 
 /// Whether `version` is a stable Docker Engine 28 or later, such as `28.5.1`,
 /// `29.0.0-ce` or a distribution build such as `28.1.2+dfsg1`.
-fn private_ports(version: &str) -> bool {
+#[must_use]
+pub fn private_ports(version: &str) -> bool {
     let version = version.split_once('+').map_or(version, |(version, _build)| version);
     let (release, suffix) = version.split_once('-').unwrap_or((version, ""));
     let parts: Vec<&str> = release.split('.').collect();

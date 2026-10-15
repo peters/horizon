@@ -328,6 +328,7 @@ impl HorizonApp {
             run.previewed_request = 0;
             run.proof = Some(super::proof::Proof::start(
                 (&run.repository, &id, run.identity),
+                run.build_on.clone(),
                 (request, spec),
                 log,
                 (run.host_restore, run.root_dirty.clone(), access),
@@ -744,6 +745,8 @@ impl HorizonApp {
             );
         }
         super::proof::keep_unremoved();
+        // The resources kept on a Docker host are retried with a new forward next time.
+        super::proof::close_forwards();
     }
 
     /// The process the agent's panel started, which leads its own process group.

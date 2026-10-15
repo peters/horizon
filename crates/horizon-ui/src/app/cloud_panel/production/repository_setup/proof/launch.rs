@@ -286,7 +286,7 @@ impl Job {
         // A GPU profile is proved with a GPU or not at all: CI that passes without one
         // says nothing about the worker that has one.
         if self.wants_gpu() {
-            if !Path::new("/dev/nvidiactl").exists() {
+            if self.daemon.remote().is_some() || !Path::new("/dev/nvidiactl").exists() {
                 return Err(
                     "the default profile needs a GPU and this computer has no NVIDIA GPU, so Horizon cannot prove it here"
                         .to_owned(),

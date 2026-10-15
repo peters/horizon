@@ -163,6 +163,31 @@ not find.
    Result: The command shows nothing. The worker check containers have no run name in
    their names, so step 2 does not find them.
 
+### 6.4 G04: Run the gate on a Docker host
+
+Do this task for a pull request that changes how a proof reaches a Docker of another
+machine.
+
+1. In **Cloud settings**, save a Docker host with SSH access to a Linux machine with
+   Docker that your SSH key reaches without a password prompt.
+
+   Result: The Docker host card lists the host by its name, `<host>`.
+
+2. Run the gate with `GATE_DOCKER_HOST` set to the name of the host, and with
+   `--only` for a short list of entries.
+
+   ```bash
+   GATE_DOCKER_HOST=<host> python3 scripts/setup-gate.py <list> --lanes 1 --only <repo>
+   ```
+
+   Result: The entries pass as in G01. On the host, `docker images` lists the images of
+   the run while it runs. On this computer, `docker images` does not list them.
+
+3. After the runner ends, run the commands of G03 steps 2 and 3 on the host.
+
+   Result: The commands show nothing. The runner looks for leftovers on this computer
+   only, so do this step by hand.
+
 ## 7. Pass criteria
 
 - Every entry shows PASS, and the exit code is 0.

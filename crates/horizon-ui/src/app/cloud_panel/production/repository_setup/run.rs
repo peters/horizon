@@ -244,6 +244,8 @@ pub(in crate::app::cloud_panel::production) struct Run {
     pub(super) fixer: Option<Fixer>,
     /// Why the last thing asked of this run did not happen, shown with its progress.
     pub(super) notice: Option<String>,
+    /// The Docker host its proof builds on; none for this computer.
+    pub(super) build_on: Option<horizon_core::cloud_runtime::docker_host::Host>,
 }
 
 /// What the person did in the progress view.
@@ -349,6 +351,7 @@ impl Run {
             fix_panel: None,
             fixer: None,
             notice: None,
+            build_on: None,
         }
     }
 
@@ -764,15 +767,26 @@ impl Run {
         let pinned = self.proof.as_ref().map(Proof::daemon);
         let worker = self.stop_all();
         let after = joined(before, worker);
-        proof::remove_run_resources(&self.repository, &proof::run_id(&self.status_path), after, pinned, wait);
+        let route = (pinned, self.build_on.clone());
+        proof::remove_run_resources(&self.repository, &proof::run_id(&self.status_path), after, route, wait);
     }
 
     /// Ends the run in the background: its agent's processes end, its proof stops, then
     /// the proof's containers, image and volume and the run's folder go. A new setup of
     /// the same repository waits for that, so two setups never work in one folder.
     pub(super) fn discard(self) {
-        // Noted before the thread starts, so an exit that comes first keeps them.
-        proof::expect_removal(&self.repository, &proof::run_id(&self.status_path));
+        // Noted first, so an exit keeps them: on the pinned host and engine, else the run's.
+        let pinned = self.proof.as_ref().map(Proof::daemon);
+        let known = pinned.as_ref().and_then(|pinned| pinned.get());
+        let docker_host = proof::docker_host_of(known, self.build_on.as_ref());
+        let engine_id = known
+            .and_then(proof::Daemon::remote)
+            .map(|on| on.engine_id().to_owned());
+        proof::expect_removal(
+            &self.repository,
+            &proof::run_id(&self.status_path),
+            (docker_host.as_deref(), engine_id.as_deref()),
+        );
         let repository = self.repository.clone();
         keep_ending_of(&repository, std::thread::spawn(move || drop(self)));
     }
