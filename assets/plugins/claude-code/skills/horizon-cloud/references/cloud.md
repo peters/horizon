@@ -703,7 +703,11 @@ recorded destination.
 
 A new desktop record requires its saved publisher choice to match current local
 intent, including when an override was removed. Existing records retain their own
-publication; automatic intent without an override remains valid.
+publication; automatic intent without an override remains valid. A legacy
+image-omitting launch refuses a later scoped override until it is reviewed.
+An automatic record that still has no publisher needs the same review on retry.
+With the staging setting off, saved non-recipe publisher choices refuse before
+creating any record; explicit legacy recipe images continue to work.
 
 Desktop preparation now preserves saved publisher choices, and rebuild previews
 use the cloud's retained publication and profile. New automatic desktop launches

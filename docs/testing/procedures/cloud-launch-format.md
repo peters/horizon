@@ -85,6 +85,22 @@ settings changes or live worker actions are required.
    durable records stay authoritative.
    Refusal creates no deployment record, registry journal or Docker login.
 
+   Run `cargo test -p horizon-ui --bin horizon disabled_publishing_cannot_create`
+   and `cargo test -p horizon-ui --bin horizon legacy_automatic_intent_cannot`.
+
+   Result: Registry, personal and automatic choices refuse with the setting off
+   before creating a publisherless record, even with an explicit recipe image.
+   An unconfirmed automatic launch refuses a later scoped override before any
+   record. Explicit legacy images still prepare with the setting off. Settings
+   bytes remain unchanged and no authentication or registry operation starts.
+
+   Run `cargo test -p horizon-ui --bin horizon an_unbound_automatic_retry`.
+
+   Result: A first automatic preparation with no override can save an unbound
+   record. After an override is added, an unconfirmed retry refuses while keeping
+   both the record and settings byte-identical. Already recorded publishers stay
+   authoritative; no sign-in, build or allocation starts.
+
 2. Run the actual UI rebuild-preview regression.
 
    ```sh

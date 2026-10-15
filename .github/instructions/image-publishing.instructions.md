@@ -164,3 +164,14 @@ an existing record must keep its own publisher when the saved choice is absent.
 Before a new desktop deployment record, confirm the saved choice through shared
 selection policy. Cover a removed override as well as a replacement, while keeping
 automatic intent without an override valid. Existing records remain authoritative.
+
+Before a first record, cover a saved non-recipe choice while the setting is off,
+even with an explicit recipe image. Refuse before persistence instead of creating
+a legacy record without that publisher. A legacy automatic launch with no shown
+choice must reject a scoped override while still accepting no-override automatic
+intent. Existing durable records remain authoritative.
+
+Also cover a retry whose existing automatic record still has no publication, such
+as after missing sign-in. That record has no publisher to retain and must not
+adopt a later scoped override without a reviewed choice. Already bound records
+retain their original publisher regardless of current preferences.

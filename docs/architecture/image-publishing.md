@@ -224,6 +224,13 @@ automatic intent; it must not forward an empty recipe confirmation. A changed lo
 silently replace that image or create a record for the replacement. Existing
 records remain authoritative; a missing launch choice does not replace their
 retained publishing identity with a recipe confirmation.
+A legacy automatic launch with no saved confirmation must still be automatic under
+shared selection policy: a scoped registry or personal override requires a new
+review before any record. An automatic record without a publisher remains
+unbound: retry requires the same review of a later override and preserves the
+existing record on refusal. When the staging setting is off, a saved non-recipe
+choice refuses before persistence, so it cannot create a publisherless legacy
+record that blocks a later retry. Explicit recipe images remain compatible.
 
 ## Staged engine and development CLI
 
