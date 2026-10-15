@@ -8,6 +8,10 @@ memory) decides how many run together: a heavy one runs alone, and the number si
 never passes what the worker's cores and memory allow. A repository whose pull requests did
 not move since its last clean run is skipped, except in a run that Run now started. No agent
 starts where the worker keeps agent approvals (ask): an Upkeep agent has nobody to ask.
+
+The first planned run of each UTC day ends with the daily maintenance pass: one agent for the
+whole Upkeep, with the instructions in daily.md, after the agents of the repositories ended,
+so no two agents work in one repository at once.
 """
 import glob
 import hashlib
@@ -37,7 +41,17 @@ ACTIVITY = 80
 LOG_LIMIT = 8 * 1024 * 1024
 # A job that runs longer than this is stopped, so one stuck repository cannot hold the hour.
 JOB_LIMIT = 90 * 60
+# The daily maintenance pass works across every repository, so it may take longer.
+DAILY_LIMIT = 4 * 60 * 60
+# The file name of the daily pass's report and log. A repository's name always holds `__`.
+DAILY = 'daily'
+# The newest lines of the daily pass that the status keeps besides those of the repositories.
+DAILY_ACTIVITY = 20
 REFRESH = 5
+# Far more than the instructions Horizon writes (8 KiB of the person's and the parts it adds).
+PROMPT_LIMIT = 256 * 1024
+# The largest JSON file of the agent's folder that the loop reads, such as one agent's report.
+REPORT_LIMIT = 4 * 1024 * 1024
 # The names Horizon accepts. They reach command lines, file names and prompts, so the loop
 # checks them again: config.json is a file in the agent's own folder.
 REPOSITORY = re.compile(r'(?!-)[A-Za-z0-9-]{1,39}(?<!-)/(?!\.\.?$)[A-Za-z0-9._-]{1,100}')
@@ -49,10 +63,12 @@ def refuse_constant(name):
 
 
 def load(path, default):
+    """The JSON in `path`, or `default`. Every file here is the agent's, so it is read only as
+    a regular file of a bounded size, never through a link or a pipe that could block."""
+    data = read_regular(path, REPORT_LIMIT)
     try:
-        with open(path) as handle:
-            return json.load(handle, parse_constant=refuse_constant)
-    except (OSError, ValueError, RecursionError):
+        return default if data is None else json.loads(data, parse_constant=refuse_constant)
+    except (ValueError, RecursionError):
         return default
 
 
@@ -168,6 +184,34 @@ def read_small(path):
         return os.read(fd, 64)
     finally:
         os.close(fd)
+
+
+def read_regular(path, limit):
+    """The bytes of the regular file `path`, read as read_small reads, or None when it is not
+    a regular file or is larger than `limit`."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        data = b''
+        while len(data) <= limit:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                return data
+            data += chunk
+        return None
+    finally:
+        os.close(fd)
+
+
+def read_prompt(name):
+    """The instructions in `name`, or None when they are not a regular file or are larger than
+    any instructions Horizon writes."""
+    data = read_regular(DIR + '/' + name, PROMPT_LIMIT)
+    return None if data is None else data.decode('utf-8', 'replace')
 
 
 def take_run_now():
@@ -312,9 +356,10 @@ def tree_rss_mb(pid):
 
 
 class Job:
-    def __init__(self, repository):
+    def __init__(self, repository, key=None, limit=JOB_LIMIT):
         self.repository = repository
-        self.slug = slug(repository)
+        self.slug = key or slug(repository)
+        self.limit = limit
         self.started = None
         self.finished = None
         self.peak_mb = 0
@@ -390,7 +435,7 @@ class Job:
             stopped = False
             while process.poll() is None:
                 self.peak_mb = max(self.peak_mb, tree_rss_mb(process.pid))
-                if not stopped and time.time() - self.started > JOB_LIMIT:
+                if not stopped and time.time() - self.started > self.limit:
                     # With every process it started, so no tool of the agent keeps running.
                     for pid in tree(process.pid):
                         try:
@@ -434,20 +479,27 @@ def entries(report, key):
 
 
 def merge_status(repositories):
-    """One status document from the jobs' own reports, which the agents write as they like."""
+    """One status document from the jobs' own reports, which the agents write as they like.
+    Only the lines of the daily pass's own report are marked as daily."""
     reports, activity = [], []
     for repository in repositories:
         report = load(DIR + '/status.d/' + slug(repository) + '.json', {})
         reports.append(entries(report, 'pull_requests'))
         activity += entries(report, 'activity')
-    activity.sort(key=lambda entry: str(entry.get('at', '')))
+    by_time = lambda entry: str(entry.get('at', ''))  # noqa: E731
+    activity.sort(key=by_time)
+    daily = entries(load(DIR + '/status.d/' + DAILY + '.json', {}), 'activity')
+    daily.sort(key=by_time)
+    activity = ([{key: value for key, value in entry.items() if key != 'daily'} for entry in activity[-ACTIVITY:]]
+                + [{**entry, 'daily': True} for entry in daily[-DAILY_ACTIVITY:]])
+    activity.sort(key=by_time)
     # Open pull requests first, taken from every repository in turn, so a cut leaves out merged
     # ones before open ones and never all of a late repository.
     pull_requests = []
     for merged_now in (False, True):
         lists = [[pr for pr in report if (pr.get('state') == 'merged') == merged_now] for report in reports]
         pull_requests += [pr for row in itertools.zip_longest(*lists) for pr in row if pr is not None]
-    status = {'pull_requests': pull_requests[:PULL_REQUESTS], 'activity': activity[-ACTIVITY:]}
+    status = {'pull_requests': pull_requests[:PULL_REQUESTS], 'activity': activity}
     with open(DIR + '/status.json.tmp', 'w') as handle:
         json.dump(status, handle, ensure_ascii=False, separators=(',', ':'))
     os.replace(DIR + '/status.json.tmp', DIR + '/status.json')
@@ -512,14 +564,20 @@ def close_interrupted():
         with open(DIR + '/runs.jsonl') as handle:
             last = json.loads(handle.readlines()[-1])
         if last.get('outcome') == 'running':
-            record({'started_at': last['started_at'], 'finished_at': int(time.time()), 'outcome': 'failed'})
+            closed = {'started_at': last['started_at'], 'finished_at': int(time.time()), 'outcome': 'failed'}
+            if last.get('kind') == DAILY:
+                closed['kind'] = DAILY
+            record(closed)
     except (OSError, IndexError, ValueError, AttributeError, KeyError):
         pass
 
 
 def draw(started, jobs, queued, capacity):
     width = max(40, shutil.get_terminal_size((120, 40)).columns)
-    lines = [f'Upkeep run since {time.strftime("%H:%M", time.gmtime(started))} UTC, {capacity} side by side at most', '']
+    since = f'since {time.strftime("%H:%M", time.gmtime(started))} UTC'
+    title = (f'Upkeep daily maintenance {since}' if capacity is None
+             else f'Upkeep run {since}, {capacity} side by side at most')
+    lines = [title, '']
     now = time.time()
     for job in jobs:
         if job.started is None:
@@ -547,8 +605,10 @@ def run_once(cfg, forced):
         return False
     if session_environment() is None:
         return False
-    with open(DIR + '/prompt.md') as handle:
-        template = handle.read()
+    template = read_prompt('prompt.md')
+    if template is None:
+        print('The agent instructions in prompt.md cannot be read; this run starts no agent.', flush=True)
+        return False
     repositories = names(cfg, 'repositories', REPOSITORY)
     authors = names(cfg, 'authors', AUTHOR, ['app/dependabot'])
     order = [repository for repository in names(cfg, 'order', REPOSITORY) if repository in repositories]
@@ -635,6 +695,94 @@ def run_once(cfg, forced):
     return all(job.code == 0 for job in jobs)
 
 
+def today():
+    return time.strftime('%Y-%m-%d', time.gmtime()).encode()
+
+
+def daily_due(run_now_only):
+    """Whether the daily maintenance pass follows this run: in the first planned run of a UTC
+    day, never in a run that only Run now started."""
+    return not run_now_only and read_small(DIR + '/daily-day') != today()
+
+
+def write_day(day):
+    """Replaces daily-day with `day` through a new temporary file, or removes it for None."""
+    if day is None:
+        try:
+            os.remove(DIR + '/daily-day')
+        except FileNotFoundError:
+            pass
+        return
+    fd, temporary = tempfile.mkstemp(prefix='.daily-day.', dir=DIR)
+    with os.fdopen(fd, 'wb') as handle:
+        handle.write(day)
+    os.replace(temporary, DIR + '/daily-day')
+
+
+def take_daily():
+    """Records today as the day of the daily pass before the pass starts. Returns whether it
+    could: a loop that stops during the pass, or that cannot record the day, never starts the
+    pass twice in one day."""
+    try:
+        write_day(today())
+    except OSError as error:
+        print(f'Could not record the day of the daily maintenance pass, so it does not start: {error}', flush=True)
+        return False
+    # The report of an earlier pass does not stay: the board shows only what this pass reports.
+    try:
+        os.remove(DIR + '/status.d/' + DAILY + '.json')
+    except OSError:
+        pass
+    return True
+
+
+def run_daily(cfg, template):
+    """The daily maintenance pass, recorded as a run of its own. Returns whether it started.
+    `cfg` and `template` are what the run read before any agent of it started: the agents can
+    change the files meanwhile, so the pass never reads them again."""
+    if template is None:
+        return False
+    if approvals() != 'auto':
+        return False
+    environment = session_environment()
+    earlier = read_small(DIR + '/daily-day')
+    if environment is None or not codex_enabled(environment):
+        return False
+    # The checks above can take minutes; a pause that came meanwhile holds the pass back too.
+    if os.path.exists(DIR + '/paused') or not take_daily():
+        return False
+    repositories = names(cfg, 'repositories', REPOSITORY)
+    # Validated names only; they hold no `@`, so they never make another placeholder.
+    template = template.replace('@@REPOSITORIES@@', ', '.join(repositories))
+    begun = int(time.time())
+    job = Job('daily maintenance', DAILY, DAILY_LIMIT)
+    try:
+        record({'started_at': begun, 'kind': DAILY, 'outcome': 'running'})
+        thread = threading.Thread(target=job.run, args=(template,), daemon=True)
+        thread.start()
+        try:
+            while thread.is_alive():
+                merge_status(repositories)
+                draw(begun, [job], [], None)
+                time.sleep(REFRESH)
+        finally:
+            thread.join()
+        merge_status(repositories)
+        draw(begun, [job], [], None)
+    finally:
+        # A pass whose agent never started, for example because the policy changed in the
+        # meantime or the run could not be recorded, stays due for the next planned run.
+        if not job.launched:
+            try:
+                write_day(earlier)
+            except OSError as error:
+                print(f'Could not make the daily maintenance pass due again: {error}', flush=True)
+        # Also when the pass fails here, so the board never shows it running after it ended.
+        record({'started_at': begun, 'finished_at': int(time.time()), 'kind': DAILY,
+                'outcome': 'done' if job.code == 0 else 'failed'})
+    return True
+
+
 def main():
     for folder in ('repos', 'logs', 'status.d'):
         os.makedirs(os.path.join(DIR, folder), exist_ok=True)
@@ -668,10 +816,13 @@ def main():
             upcoming = next_slot(cfg)
             write_next(upcoming, minutes)
         forced = not paused and take_run_now()
-        if not paused and (forced or time.time() >= upcoming):
+        planned = time.time() >= upcoming
+        if not paused and (forced or planned):
             # A Run now that came since is taken too, with its token: it asked for this run.
             take_run_now()
             cfg = config()
+            # Read before any agent of this run starts, so no agent of it can change them.
+            daily_template = read_prompt('daily.md')
             begun = int(time.time())
             record({'started_at': begun, 'outcome': 'running'})
             before = merged()
@@ -680,9 +831,16 @@ def main():
             except Exception as error:  # noqa: BLE001 - one failed run must not end the loop
                 print(f'The run failed: {error}', flush=True)
                 ok = False
-            ended = int(time.time())
-            record({'started_at': begun, 'finished_at': ended, 'outcome': 'done' if ok else 'failed',
+            record({'started_at': begun, 'finished_at': int(time.time()), 'outcome': 'done' if ok else 'failed',
                     'exit': 0 if ok else 1, 'merged': len(merged() - before)})
+            # A pause that came during the run holds the pass back until a planned run after it.
+            # A Run now that came when the planned run was due anyway is that planned run too.
+            if not os.path.exists(DIR + '/paused') and daily_due(forced and not planned):
+                try:
+                    run_daily(cfg, daily_template)
+                except Exception as error:  # noqa: BLE001 - one failed pass must not end the loop
+                    print(f'The daily maintenance pass failed: {error}', flush=True)
+            ended = int(time.time())
             # Run now during this run asked for the run that just ended. Its token is
             # recorded, so the same Run now sent again starts no run either.
             take_run_now()

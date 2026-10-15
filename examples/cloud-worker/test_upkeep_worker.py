@@ -1,5 +1,6 @@
 """The Upkeep exchange writes only as the owner of the agent's home and never follows a link
 the agent planted; the loop keeps invalid names out of commands and gives the prompt on stdin."""
+import base64
 import contextlib
 import io
 import json
@@ -11,6 +12,7 @@ import tempfile
 import types
 import unittest
 from unittest import mock
+import zlib
 
 WORKER = Path(__file__).resolve().parents[2] / 'crates/horizon-core/src/upkeep/worker'
 EXCHANGE = runpy.run_path(str(WORKER / 'exchange.py'))
@@ -20,7 +22,8 @@ SESSION = 'upkeep-45ee423d-7fb2'
 
 def payload(**changes):
     value = {'session': SESSION, 'revision': 'a' * 40, 'config': {'repositories': ['acme/web']},
-             'prompt': 'Keep moving.', 'run': '#!/bin/bash\n', 'scheduler': 'print()\n',
+             'instructions': 'Keep moving.', 'prompt': ' Hourly.', 'daily_prompt': ' Daily.',
+             'run': '#!/bin/bash\n', 'scheduler': 'print()\n',
              'run_now': False, 'paused': None}
     value.update(changes)
     return value
@@ -84,6 +87,16 @@ class ExchangeTests(unittest.TestCase):
         self.assertTrue((self.worker.upkeep / 'restart').is_file())
         self.assertFalse((self.worker.upkeep / 'installing').exists())
 
+    def test_the_payload_arrives_compressed_on_the_command_line(self):
+        argument = base64.b64encode(zlib.compress(json.dumps(payload()).encode())).decode()
+        names = EXCHANGE['main'].__globals__
+        with mock.patch.dict(names, HOME=str(self.worker.home), SESSIONS=str(self.worker.sessions),
+                             SESSION_DATA=str(self.worker.data), tmux=self.worker.tmux), \
+                mock.patch('sys.argv', ['-', argument]), contextlib.redirect_stdout(io.StringIO()) as out:
+            EXCHANGE['main']()
+        self.assertTrue(json.loads(out.getvalue())['loop'])
+        self.assertEqual((self.worker.upkeep / 'daily.md').read_text(), 'Keep moving. Daily.')
+
     def test_installs_the_loop_and_binding_and_starts_the_session(self):
         answer = self.worker.exchange(payload(run_now=True))
         upkeep = self.worker.upkeep
@@ -91,6 +104,8 @@ class ExchangeTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(upkeep.stat().st_mode), 0o700)
         self.assertEqual(stat.S_IMODE((upkeep / 'run.sh').stat().st_mode), 0o700)
         self.assertEqual(stat.S_IMODE((upkeep / 'prompt.md').stat().st_mode), 0o600)
+        self.assertEqual((upkeep / 'prompt.md').read_text(), 'Keep moving. Hourly.')
+        self.assertEqual((upkeep / 'daily.md').read_text(), 'Keep moving. Daily.')
         self.assertTrue((upkeep / 'run-now').is_file())
         binding = self.worker.sessions / SESSION
         self.assertEqual((binding / 'agent').read_text(), 'codex\n')
@@ -213,14 +228,16 @@ class ExchangeTests(unittest.TestCase):
         lines = ['{"started_at": 1, "x": NaN, "outcome": "done", "merged": 2}', '[' * 100000,
                  '{"started_at": 3, "outcome": "\\ud800"}',
                  '{"started_at": 99999999999999999999}', '{"started_at": true}',
-                 '{"started_at": 2, "finished_at": 1e400, "outcome": {"deep": [[[]]]}, "merged": -1}']
+                 '{"started_at": 2, "finished_at": 1e400, "outcome": {"deep": [[[]]]}, "merged": -1}',
+                 '{"started_at": 4, "kind": "daily"}', '{"started_at": 5, "kind": ["daily"]}']
         (self.worker.upkeep / 'runs.jsonl').write_text('\n'.join(lines) + '\n')
         (self.worker.upkeep / 'next-run').write_text('99999999999999999999')
         os.mkdir(self.worker.upkeep / 'status.json')
         answer = self.worker.exchange()
         self.assertEqual(answer['runs'], [{'started_at': 1, 'merged': 2, 'outcome': 'done'},
                                           {'started_at': 3, 'outcome': '?'},
-                                          {'started_at': 2}])
+                                          {'started_at': 2}, {'started_at': 4, 'kind': 'daily'},
+                                          {'started_at': 5}])
         self.assertIsNone(answer['next_run'])
         self.assertIsNone(answer['status'])
 
@@ -530,6 +547,122 @@ class SchedulerTests(unittest.TestCase):
         self.assertIsNone(RUN['open_pull_requests']('acme/web', ['app/dependabot']))
         with mock.patch('subprocess.run', side_effect=RUN['subprocess'].TimeoutExpired('gh', 60)):
             self.assertIsNone(RUN['open_pull_requests']('acme/web', ['app/dependabot']))
+
+    def run_daily(self):
+        # As the loop does: both read before any agent of the run starts.
+        template = RUN['read_prompt']('daily.md')
+        with contextlib.redirect_stdout(io.StringIO()):
+            return RUN['run_daily']({'repositories': ['acme/web', 'acme/api', '-x']}, template)
+
+    def test_the_daily_pass_runs_once_a_day_as_a_run_of_its_own(self):
+        (self.dir / 'daily.md').write_text('Daily for @@REPOSITORIES@@, report to @@STATUS@@.')
+        (self.dir / 'status.d' / 'daily.json').write_text('{"activity": [{"at": "a", "text": "yesterday"}]}')
+        self.assertTrue(RUN['daily_due'](False))
+        self.assertFalse(RUN['daily_due'](True), 'Run now alone never starts it')
+        self.assertTrue(self.run_daily())
+        self.assertIn(f'Daily for acme/web, acme/api, report to {self.dir}/status.d/daily.json',
+                      self.agents.read_text())
+        self.assertEqual((self.dir / 'daily-day').read_bytes(), RUN['today']())
+        self.assertFalse(RUN['daily_due'](False), 'once a day, also after a restart of the loop')
+        lines = [json.loads(line) for line in (self.dir / 'runs.jsonl').read_text().splitlines()]
+        self.assertEqual([(line['kind'], line['outcome']) for line in lines], [('daily', 'running'), ('daily', 'done')])
+        self.assertEqual(lines[0]['started_at'], lines[1]['started_at'])
+        self.assertTrue((self.dir / 'logs' / 'daily.log').is_file())
+        self.assertNotIn('yesterday', (self.dir / 'status.json').read_text(), 'only this pass reports')
+        # A test makes the pass due again with an older day; Run now alone still does not.
+        (self.dir / 'daily-day').write_text('2000-01-01')
+        self.assertFalse(RUN['daily_due'](True))
+        self.assertTrue(RUN['daily_due'](False))
+
+    def test_the_daily_pass_does_not_start_without_its_instructions_or_approvals(self):
+        self.assertFalse(self.run_daily())
+        (self.dir / 'daily.md').write_text('Daily.')
+        (self.root / 'codex-disabled').touch()
+        self.assertFalse(self.run_daily())
+        (self.root / 'codex-disabled').unlink()
+        (self.dir / 'paused').touch()
+        self.assertFalse(self.run_daily())
+        (self.dir / 'paused').unlink()
+        RUN['run_daily'].__globals__['APPROVALS'] = str(self.root / 'missing')
+        self.assertFalse(self.run_daily())
+        self.assertFalse((self.dir / 'runs.jsonl').exists())
+        self.assertTrue(RUN['daily_due'](False), 'a pass that did not start is still due')
+
+    def test_the_pass_runs_from_what_it_read_before_the_agents(self):
+        (self.dir / 'daily.md').write_text('Trusted for @@REPOSITORIES@@.')
+        template = RUN['read_prompt']('daily.md')
+        # A repository agent rewrites the file before the pass starts.
+        (self.dir / 'daily.md').write_text('Planted.')
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(RUN['run_daily']({'repositories': ['acme/web']}, template))
+        self.assertIn('Trusted for acme/web.', self.agents.read_text())
+        self.assertNotIn('Planted', self.agents.read_text())
+
+    def test_instructions_that_are_not_a_regular_file_are_not_read(self):
+        os.mkfifo(self.dir / 'daily.md')
+        self.assertIsNone(RUN['read_prompt']('daily.md'))
+        (self.dir / 'daily.md').unlink()
+        (self.dir / 'daily.md').symlink_to(self.dir / 'prompt.md')
+        self.assertIsNone(RUN['read_prompt']('daily.md'))
+        (self.dir / 'daily.md').unlink()
+        (self.dir / 'daily.md').write_text('x' * (RUN['PROMPT_LIMIT'] + 1))
+        self.assertIsNone(RUN['read_prompt']('daily.md'))
+        self.assertEqual(RUN['read_prompt']('prompt.md'), 'Work on @@REPOSITORY@@.')
+
+    def test_a_pass_whose_agent_never_launched_stays_due(self):
+        (self.dir / 'daily.md').write_text('Daily.')
+        (self.dir / 'daily-day').write_text('2000-01-01')
+        template = RUN['read_prompt']('daily.md')
+        with mock.patch.object(RUN['Job'], 'attempt', lambda job, template: None), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(RUN['run_daily']({'repositories': ['acme/web']}, template))
+        self.assertEqual((self.dir / 'daily-day').read_text(), '2000-01-01')
+        self.assertTrue(RUN['daily_due'](False))
+        last = json.loads((self.dir / 'runs.jsonl').read_text().splitlines()[-1])
+        self.assertEqual(last['outcome'], 'failed')
+        # With no earlier day, the record goes again.
+        (self.dir / 'daily-day').unlink()
+        with mock.patch.object(RUN['Job'], 'attempt', lambda job, template: None), \
+                contextlib.redirect_stdout(io.StringIO()):
+            RUN['run_daily']({'repositories': ['acme/web']}, template)
+        self.assertFalse((self.dir / 'daily-day').exists())
+        # A run record that cannot be written leaves the pass due too.
+        (self.dir / 'daily-day').write_text('2000-01-01')
+        with mock.patch.dict(RUN['run_daily'].__globals__, record=mock.Mock(side_effect=OSError('full'))), \
+                contextlib.redirect_stdout(io.StringIO()), self.assertRaises(OSError):
+            RUN['run_daily']({'repositories': ['acme/web']}, template)
+        self.assertEqual((self.dir / 'daily-day').read_text(), '2000-01-01')
+
+    def test_a_report_that_is_a_pipe_a_link_or_too_large_never_blocks_the_merge(self):
+        os.mkfifo(self.dir / 'status.d' / 'daily.json')
+        outside = self.root / 'outside.json'
+        outside.write_text('{"activity": [{"at": "a", "text": "outside"}]}')
+        (self.dir / 'status.d' / 'acme__web.json').symlink_to(outside)
+        (self.dir / 'status.d' / 'acme__api.json').write_text(
+            '{"activity": [{"at": "a", "text": "' + 'x' * RUN['REPORT_LIMIT'] + '"}]}')
+        RUN['merge_status'](['acme/web', 'acme/api'])
+        self.assertEqual(json.loads((self.dir / 'status.json').read_text()), {'pull_requests': [], 'activity': []})
+
+    def test_a_daily_pass_the_loop_did_not_finish_stays_daily(self):
+        RUN['record']({'started_at': 100, 'kind': 'daily', 'outcome': 'running'})
+        RUN['close_interrupted']()
+        last = json.loads((self.dir / 'runs.jsonl').read_text().splitlines()[-1])
+        self.assertEqual((last['kind'], last['outcome']), ('daily', 'failed'))
+
+    def test_only_the_daily_report_makes_daily_lines_and_it_keeps_its_own_share(self):
+        (self.dir / 'status.d' / 'acme__web.json').write_text(json.dumps({'activity': [
+            {'at': f'2026-10-14T01:{n:02}:00Z', 'text': 'repository', 'daily': True} for n in range(90)]}))
+        (self.dir / 'status.d' / 'daily.json').write_text(json.dumps({
+            'activity': [{'at': f'2026-10-14T00:{n:02}:00Z', 'text': 'daily'} for n in range(30)],
+            'pull_requests': [{'number': 1}]}))
+        RUN['merge_status'](['acme/web'])
+        status = json.loads((self.dir / 'status.json').read_text())
+        daily = [entry for entry in status['activity'] if entry.get('daily')]
+        self.assertEqual(len(daily), RUN['DAILY_ACTIVITY'])
+        self.assertEqual({entry['text'] for entry in daily}, {'daily'})
+        self.assertEqual(daily[-1]['at'], '2026-10-14T00:29:00Z')
+        self.assertEqual(len(status['activity']), RUN['ACTIVITY'] + RUN['DAILY_ACTIVITY'])
+        self.assertEqual(status['pull_requests'], [])
 
     def test_a_log_past_its_limit_keeps_its_end(self):
         log = self.dir / 'logs' / 'big.log'

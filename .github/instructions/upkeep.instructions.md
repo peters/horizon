@@ -51,6 +51,33 @@ everything the exchange reads back, as written by the agent. Check that:
   `horizon-worker-run`: not as root, and `/run/horizon-worker/agent-approvals` is
   exactly `auto`. Otherwise it starts no agent.
 
+## The daily maintenance pass
+
+`exchange.py` writes `daily.md` from the person's instructions and `worker/daily.rs`
+(`PART`); `run.py` (`daily_due`, `take_daily`, `run_daily`)
+starts one agent for the whole Upkeep once a UTC day. The boundary is in `docs/upkeep.md`,
+section "Trust boundary of the shared instructions". Check that:
+
+- Horizon names no shared repository: the agent finds the shared instructions through the
+  repositories' AGENTS.md, and a read outside the Upkeep stays a request for the person.
+- The generic part never lets the agent start a production release or workflow, or
+  promote a release; test-channel releases need both the shared instructions and the
+  Upkeep's own instructions.
+- The pass starts only after `run_once` returned, so it never works beside a repository's
+  agent, and `daily-day` is written before the agent starts.
+- `daily-day` is read with `read_small` and written through a new temporary file. Every
+  JSON file of the agent's folder, the reports in `status.d/` included, goes through
+  `load` (`read_regular`: regular file, no link, no blocking, size limit). There
+  is no other way to make the pass due: Run now alone never starts it.
+- The pass uses the settings and `daily.md` that the run read before its first agent
+  started (`read_prompt`: regular file, no link, size limit), never a later read of the
+  agent's folder, and fills in only the validated repository names.
+- Only lines of `status.d/daily.json` reach the board as daily (at most 20); a `daily`
+  field in a repository's report is dropped. The exchange passes the run kind only when it
+  is exactly `daily`.
+- `RunKind` and `Activity::daily` are lenient: an unknown or wrong value never hides the
+  document.
+
 ## Untrusted: names on their way to a command line, a path or the prompt
 
 Repository names and bot logins pass `Config::validate` before any exchange, and

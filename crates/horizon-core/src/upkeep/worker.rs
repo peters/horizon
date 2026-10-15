@@ -1,6 +1,7 @@
 //! Upkeep on a cloud worker: one exchange installs the loop, keeps its session running,
 //! applies Run now and Pause, and reads back what the agent reported. The board shows the
 //! result through the status document this module writes on the host.
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -9,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cloud_runtime::{Error, Result, command::Runner, ssh::Connection};
 
+mod daily;
 mod lock;
 pub mod policy;
 mod refusals;
@@ -416,10 +418,15 @@ impl Signals {
 /// `@@REPOSITORY@@` and `@@STATUS@@`; agents for other repositories run at the same time.
 #[must_use]
 pub fn prompt(config: &Config) -> String {
+    format!("{}{}", config.instructions.trim(), repository_part(config))
+}
+
+/// The part of [`prompt`] after the person's instructions.
+fn repository_part(config: &Config) -> String {
     let others = config.repositories.len().saturating_sub(1);
     let authors = config.authors.join(", ");
     format!(
-        "{instructions}\n\n\
+        "\n\n\
 ## This run\n\n\
 Repository: @@REPOSITORY@@. Work only in this repository: agents for the {others} other repositories of this Upkeep run at the same time.\n\n\
 Pull requests opened by: {authors}.\n\n\
@@ -434,7 +441,6 @@ Pull requests opened by: {authors}.\n\n\
   {{\"pull_requests\": [{{\"repository\": \"owner/name\", \"number\": 1, \"title\": \"...\", \"url\": \"https://github.com/owner/name/pull/1\", \"author\": \"dependabot\", \"checks\": \"passed|failed|running|none\", \"state\": \"blocked|fixing|needs_review|waiting_checks|ready|merged\", \"note\": \"one short sentence\", \"updated_at\": \"RFC 3339\"}}], \"activity\": [{{\"at\": \"RFC 3339\", \"text\": \"one short sentence\"}}]}}\n\
   List every open pull request from these authors, and the ones you merged in this run with state merged.\n\
 - Stop when no pull request can move further. End with one line that says what you merged, fixed and left.\n",
-        instructions = config.instructions.trim(),
         checkouts = config.checkouts.instructions(),
     )
 }
@@ -459,8 +465,8 @@ pub fn command(cloud_id: &str, revision: &str, config: &Config, signals: Signals
         return Err(Error::Invalid("Invalid cloud for Upkeep"));
     }
     config.validate()?;
-    // The worker reads the instructions from the prompt only, so they travel once, and the
-    // workflows from the policy that `policy::send` sets.
+    // The instructions travel once: the exchange puts them before each prompt. The worker
+    // reads the workflows from the policy that `policy::send` sets.
     let mut worker_config = serde_json::to_value(config).map_err(|_| Error::Invalid("Invalid Upkeep settings"))?;
     if let Some(fields) = worker_config.as_object_mut() {
         fields.remove("instructions");
@@ -470,7 +476,9 @@ pub fn command(cloud_id: &str, revision: &str, config: &Config, signals: Signals
         "session": session(cloud_id),
         "revision": revision,
         "config": worker_config,
-        "prompt": prompt(config),
+        "instructions": config.instructions.trim(),
+        "prompt": repository_part(config),
+        "daily_prompt": daily::PART,
         "run": unix(RUN),
         "scheduler": unix(SCHEDULER),
         "run_now": match (signals.run_now, signals.run_token) {
@@ -482,7 +490,13 @@ pub fn command(cloud_id: &str, revision: &str, config: &Config, signals: Signals
     });
     let engine = base64::engine::general_purpose::STANDARD;
     let script = engine.encode(unix(EXCHANGE));
-    let payload = engine.encode(payload.to_string());
+    // Compressed, so the scripts and the longest settings fit the worker's shell.
+    let mut compressed = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+    let payload = compressed
+        .write_all(payload.to_string().as_bytes())
+        .and_then(|()| compressed.finish())
+        .map(|bytes| engine.encode(bytes))
+        .map_err(|_| Error::Invalid("Invalid Upkeep settings"))?;
     let command = format!(
         "launcher=python3; if [ -f /run/horizon-tailnet/agent-isolation ]; then launcher='horizon-worker-tailnet agent python3'; fi; \
 printf %s '{script}' | base64 -d | $launcher -I - '{payload}'"
@@ -584,13 +598,20 @@ impl Exchange {
                 .and_then(|at| at.format(&time::format_description::well_known::Rfc3339).ok())
         };
         // The loop writes a start record and later its outcome; the last one for a start wins.
-        let mut runs: Vec<(i64, serde_json::Value)> = Vec::new();
+        // The daily maintenance pass is a run of its own, also when it starts in the same
+        // second as the run before it.
+        let mut runs: Vec<((i64, bool), serde_json::Value)> = Vec::new();
         for record in &self.runs {
             let Some(started) = record.get("started_at").and_then(serde_json::Value::as_i64) else {
                 continue;
             };
+            let daily = record.get("kind").and_then(serde_json::Value::as_str) == Some("daily");
+            let started = (started, daily);
             let outcome = record.get("outcome").and_then(|v| v.as_str()).unwrap_or("done");
-            let mut run = serde_json::json!({ "started_at": rfc3339(started), "outcome": outcome });
+            let mut run = serde_json::json!({ "started_at": rfc3339(started.0), "outcome": outcome });
+            if daily {
+                run["kind"] = "daily".into();
+            }
             if let Some(finished) = record.get("finished_at").and_then(serde_json::Value::as_i64) {
                 run["finished_at"] = rfc3339(finished).into();
             }

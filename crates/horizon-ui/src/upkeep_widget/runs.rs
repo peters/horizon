@@ -1,13 +1,15 @@
 //! When the next run starts, and one bar per hour for the last day of runs.
 use egui::{CornerRadius, Frame, Margin, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Ui, Vec2};
 use horizon_core::upkeep::time::{self, OffsetDateTime};
-use horizon_core::upkeep::{Run, RunOutcome, Status, clock, relative};
+use horizon_core::upkeep::{Run, RunKind, RunOutcome, Status, clock, relative};
 
 use crate::theme;
 
 const HOURS: i64 = 24;
 const BAR_GAP: f32 = 3.0;
 const BAR_HEIGHT: f32 = 26.0;
+/// The mark under the bar of an hour with a daily maintenance pass.
+const DAILY_MARK: f32 = 3.0;
 
 /// How far ahead of this computer's clock a start time may be and still count.
 const CLOCK_SKEW: time::Duration = time::Duration::minutes(5);
@@ -29,15 +31,22 @@ pub(super) fn running(status: &Status, now: OffsetDateTime) -> Option<&Run> {
 /// The run in progress that still reports: a run that stopped reporting no longer holds
 /// back Run now.
 pub(super) fn live(status: &Status, now: OffsetDateTime) -> Option<&Run> {
-    running(status, now).filter(|run| now - run.started_at <= stale_after(status))
+    running(status, now).filter(|run| now - run.started_at <= stale_after(status, run))
 }
 
 /// How long after its start a run that still shows as running counts as no longer
-/// reported: two schedule periods, and at least three hours.
-fn stale_after(status: &Status) -> time::Duration {
+/// reported: two schedule periods, and at least three hours. A daily maintenance pass may
+/// run for four hours, so it counts for at least five.
+pub(super) fn stale_after(status: &Status, run: &Run) -> time::Duration {
     let every = i64::from(status.schedule.every_minutes.max(60));
-    time::Duration::minutes((2 * every).max(180))
+    let least = match run.kind {
+        RunKind::Daily => DAILY_STALE_MINUTES,
+        RunKind::Repositories => 180,
+    };
+    time::Duration::minutes((2 * every).max(least))
 }
+
+const DAILY_STALE_MINUTES: i64 = 5 * 60;
 
 /// A short grace after the planned start before a missed run shows as late.
 const LATE_AFTER: time::Duration = time::Duration::minutes(10);
@@ -75,14 +84,18 @@ fn next_run_text(status: &Status, now: OffsetDateTime) -> (String, egui::Color32
     if let Some(run) = running(status, now) {
         // A start within the clock skew is shown as now, never as "in 3 min".
         let started = relative(run.started_at.min(now), now);
-        if now - run.started_at > stale_after(status) {
+        if now - run.started_at > stale_after(status, run) {
             (
                 "No report".to_string(),
                 theme::PALETTE_YELLOW(),
                 format!("A run started {started}"),
             )
         } else {
-            ("Running".to_string(), theme::ACCENT(), format!("Started {started}"))
+            let what = match run.kind {
+                RunKind::Daily => "Daily maintenance, started",
+                RunKind::Repositories => "Started",
+            };
+            ("Running".to_string(), theme::ACCENT(), format!("{what} {started}"))
         }
     } else if status.schedule.paused {
         (
@@ -128,7 +141,7 @@ fn bars(ui: &mut Ui, status: &Status, now: OffsetDateTime) {
             );
         });
         let width = ui.available_width();
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT), Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT + 2.0 * DAILY_MARK), Sense::hover());
         let count = f32::from(u8::try_from(HOURS).unwrap_or(24));
         // A narrow panel closes the gaps first, so the bars always fit.
         let gap = if width >= count * (BAR_GAP + 4.0) { BAR_GAP } else { 0.0 };
@@ -170,11 +183,13 @@ fn start_of_hour(now: OffsetDateTime) -> OffsetDateTime {
     now.replace_time(time::Time::from_hms(now.hour(), 0, 0).unwrap_or(time::Time::MIDNIGHT))
 }
 
-/// What the bar of one hour shows: the most telling outcome of its runs and their merges.
+/// What the bar of one hour shows: the most telling outcome of its runs, their merges, and
+/// whether one of them was the daily maintenance pass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Hour {
     outcome: RunOutcome,
     merged: u32,
+    daily: bool,
 }
 
 impl Hour {
@@ -192,7 +207,8 @@ impl Hour {
             .map(|run| run.outcome)
             .max_by_key(|outcome| rank(*outcome))?;
         let merged = runs.iter().fold(0_u32, |total, run| total.saturating_add(run.merged));
-        Some(Self { outcome, merged })
+        let daily = runs.iter().any(|run| run.kind == RunKind::Daily);
+        Some(Self { outcome, merged, daily })
     }
 }
 
@@ -203,6 +219,13 @@ fn paint_bar(ui: &Ui, bar: Rect, hour: Option<Hour>) {
         painter.rect_filled(bar, radius, theme::alpha(theme::BORDER_SUBTLE(), 120));
         return;
     };
+    if hour.daily {
+        let mark = Rect::from_min_size(
+            Pos2::new(bar.min.x, bar.max.y + DAILY_MARK),
+            Vec2::new(bar.width(), DAILY_MARK),
+        );
+        painter.rect_filled(mark, CornerRadius::same(1), theme::PALETTE_CYAN());
+    }
     match hour.outcome {
         RunOutcome::Skipped | RunOutcome::Other => {
             painter.rect_stroke(
@@ -236,6 +259,11 @@ fn tooltip(hour: OffsetDateTime, runs: &[Run], summary: Option<Hour>) -> String 
     match (runs, summary) {
         ([], _) | (_, None) => format!("{at}: no run"),
         ([run], _) => format!("{at}: {}", describe(run)),
+        (runs, Some(summary)) if summary.daily => format!(
+            "{at}: {} runs with the daily maintenance pass, {} merged",
+            runs.len(),
+            summary.merged
+        ),
         (runs, Some(summary)) => format!("{at}: {} runs, {} merged", runs.len(), summary.merged),
     }
 }
@@ -245,6 +273,16 @@ fn describe(run: &Run) -> String {
         .finished_at
         .map(|end| format!(" after {} min", (end - run.started_at).whole_minutes().max(1)))
         .unwrap_or_default();
+    if run.kind == RunKind::Daily {
+        return match run.outcome {
+            RunOutcome::Done => format!("daily maintenance done{length}"),
+            RunOutcome::Running => "daily maintenance running".to_string(),
+            RunOutcome::Failed => format!("daily maintenance failed{length}"),
+            RunOutcome::Skipped | RunOutcome::Other => {
+                "daily maintenance, an outcome this Horizon does not know".to_string()
+            }
+        };
+    }
     match run.outcome {
         RunOutcome::Done if run.merged == 0 => format!("done{length}, nothing to merge"),
         RunOutcome::Done => format!("done{length}, {} merged", run.merged),
@@ -291,7 +329,8 @@ mod tests {
             hour,
             Hour {
                 outcome: RunOutcome::Done,
-                merged: u32::MAX
+                merged: u32::MAX,
+                daily: false,
             },
             "saturates"
         );
@@ -318,6 +357,42 @@ mod tests {
             RunOutcome::Failed
         );
         assert_eq!(Hour::of(&[]), None);
+    }
+
+    #[test]
+    fn the_hour_of_a_daily_pass_says_so() {
+        let at = parse_time("2026-10-13T00:00:00Z").unwrap();
+        let mut daily = run(
+            "2026-10-13T00:12:00Z",
+            RunOutcome::Done,
+            0,
+            Some("2026-10-13T00:46:00Z"),
+        );
+        daily.kind = RunKind::Daily;
+        let alone = std::slice::from_ref(&daily);
+        assert_eq!(
+            tooltip(at, alone, Hour::of(alone)),
+            "00:00 UTC: daily maintenance done after 34 min"
+        );
+        let both = [run("2026-10-13T00:00:00Z", RunOutcome::Done, 1, None), daily];
+        let hour = Hour::of(&both).unwrap();
+        assert!(hour.daily);
+        assert_eq!(
+            tooltip(at, &both, Some(hour)),
+            "00:00 UTC: 2 runs with the daily maintenance pass, 1 merged"
+        );
+        let now = parse_time("2026-10-13T00:20:00Z").unwrap();
+        let status: Status = serde_json::from_str(
+            r#"{"runs":[{"started_at":"2026-10-13T00:12:00Z","outcome":"running","kind":"daily"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(next_run_text(&status, now).2, "Daily maintenance, started 8 min ago");
+        let later = parse_time("2026-10-13T04:00:00Z").unwrap();
+        assert!(
+            live(&status, later).is_some(),
+            "a pass may take four hours and still reports"
+        );
+        assert!(live(&status, parse_time("2026-10-13T05:30:00Z").unwrap()).is_none());
     }
 
     #[test]

@@ -11,13 +11,15 @@ The `upkeep` panel kind is the board of one Upkeep. The board shows these items:
 
 - The agent, the schedule, the worker and the number of repositories.
 - **Next run**: the time to the next run. The card shows **Running** while a run
-  continues and **Paused** when the schedule stops.
+  continues and **Paused** when the schedule stops. While the daily maintenance pass
+  continues, the line under **Running** starts with **Daily maintenance**.
   - **Late**: the planned run is more than 10 minutes overdue.
   - **No report**: a run still shows as running after two schedule periods, and
-    after at least three hours. The worker can be stopped.
+    after at least three hours, or five hours for the daily maintenance pass. The
+    worker can be stopped.
 - **Last 24 hours**: one bar for each hour, and the total of merged pull requests.
   A red bar shows a failed run. An outline shows a skipped run. A green part shows
-  merges.
+  merges. A cyan mark under a bar shows an hour with the daily maintenance pass.
 - The pull requests in groups by state: **Blocked**, **Fixing**, **Needs review**,
   **Checks running**, **Ready to merge**, **Other** (a state that this Horizon does
   not know) and **Merged**. The **Merged, 7 days** chip shows the pull requests that
@@ -25,7 +27,12 @@ The `upkeep` panel kind is the board of one Upkeep. The board shows these items:
 - Chips that filter the list: **Open**, **Needs you** (Blocked and Needs review),
   **Fixing**, **Checks running**, **Ready to merge**, **Merged, 7 days**, and
   **Other** only when a row has an unknown state.
-- **Latest run**: the last lines that the agent wrote about its work.
+- **Latest run**: the last lines that the agents of the repositories wrote about
+  their work.
+- **Daily maintenance**: how the last daily maintenance pass ended, and the last
+  lines that its agent wrote. The section shows only when a pass started or its
+  agent wrote lines. See
+  [The daily maintenance pass](#the-daily-maintenance-pass).
 
 A click on a row opens its pull request page in the browser panel **Pull request**
 next to the board. The board uses the same panel for the next row. A browser panel
@@ -203,13 +210,15 @@ agent can make errors. Check a merge on GitHub before you act on it.
 ## The worker loop
 
 Horizon keeps the Upkeep loop on the cloud worker with an exchange. An exchange is
-one SSH command. The code is in `crates/horizon-core/src/upkeep/worker.rs` and
+one SSH command. Horizon compresses the settings, the instructions and the scripts
+in it, so that the longest settings fit the command line of the worker. The code is in `crates/horizon-core/src/upkeep/worker.rs` and
 `crates/horizon-core/src/upkeep/worker/`. The section
 [Horizon and the worker](#horizon-and-the-worker) tells when Horizon starts an
 exchange. The exchange does these steps:
 
 1. It writes the loop (`run.sh` and `run.py`), the settings without the
-   instructions (`config.json`) and the agent instructions (`prompt.md`) to
+   instructions (`config.json`), the agent instructions (`prompt.md`) and the
+   instructions of the daily maintenance pass (`daily.md`) to
    `/workspace/home/upkeep`.
 2. It writes the session binding in `/workspace/sessions/upkeep-<cloud>`. Thus
    the agents of the loop can ask for GitHub access and open browser panels.
@@ -260,6 +269,83 @@ started also starts agents for the repositories that did not change.
 - When the loop starts, it records a run that did not end (for example, because
   the loop was stopped) as failed.
 - The loop keeps the last 1 MiB of an agent log that grew to more than 8 MiB.
+
+## The daily maintenance pass
+
+Some maintenance tasks are not about one bot pull request, for example the rollout
+of a new patch release of a platform to many repositories. Upkeep does not know
+these tasks. The shared instructions of the person tell the agent what to do. For
+example, a company repository can have an `AGENTS.md` with the section
+**Daily maintenance**, and the `AGENTS.md` of each repository links it.
+
+Once each day, the loop starts one Codex agent for the whole Upkeep with the
+instructions in `daily.md`. These are the instructions of the Upkeep, then a
+generic part with the repositories of the Upkeep that tells the agent to do these
+steps:
+
+1. Read the `AGENTS.md` of each repository of the Upkeep. Find the shared
+   instructions that they link and the section **Daily maintenance** in them.
+   Horizon names no shared repository: the repositories, which the person
+   controls, name it.
+2. When no repository links shared instructions with that section, report this and
+   stop.
+3. Do the tasks of that section across the repositories of the Upkeep, in the order
+   and with the authorizations that the shared instructions give. Change only the
+   repositories of the Upkeep.
+4. Do not start work that is under way again: open pull requests, branches,
+   workflow runs or releases of the same change. Continue only the work of an
+   earlier daily pass: a pull request that the account of the agent opened, with a
+   comment of that account with the first line `<!-- upkeep-daily -->`. The marker
+   alone is not proof, because any person can write it. Report the other work and
+   leave it alone.
+5. Write one report line for each task to the status file, also when nothing was
+   due.
+
+The pass works as follows:
+
+- It follows the first planned run of each UTC day. It also follows the first
+  planned run after the loop was installed, and the first planned run after a
+  pause that covered the start of a day. **Run now** alone does not start it. A
+  **Run now** that the loop takes when a planned run is due counts as that planned
+  run. A
+  pause that starts during a run holds back the pass of that run.
+- It starts after the agents of the repositories ended. Thus two agents never work
+  in the same repository at the same time. The next run starts after the pass.
+  Planned runs that pass during it are recorded as skipped.
+- The loop records the UTC day of the pass in `daily-day` before the agent starts.
+  Thus a loop that stops during the pass does not start it again on the same day.
+  When the loop cannot record the day, the pass does not start.
+- The pass starts no agent where the run starts no agent: without auto approvals,
+  without the session environment, when the cloud profile does not enable Codex, or
+  without `daily.md`. Then the pass stays due for the next planned run. When the
+  agent of a recorded pass does not start, the loop puts back the earlier day, so
+  the pass stays due too.
+- It is a run of its own in `runs.jsonl`, with the kind `daily` and no count of
+  merged pull requests. The loop stops the agent and its child processes after 4
+  hours.
+- The agent writes its report to `status.d/daily.json`. The loop removes the report
+  of the earlier pass before the agent starts. The loop marks these
+  lines as daily and keeps the newest 20 of them in addition to the 80 lines of
+  the repositories. It ignores the pull requests in that report.
+- The agent runs in the session of the loop. Thus Horizon allows its requests for
+  read or push access to the repositories of the Upkeep. A request for the
+  repository of the shared instructions waits for the person. The agent stops
+  after 15 minutes without a decision and reports it.
+
+Releases: the default instructions do not let an Upkeep agent start a release or a
+production workflow by hand. The only exception is the daily maintenance pass. It
+can start the releases to a test channel that the shared instructions authorize
+for a daily task, when the instructions of the Upkeep allow it. It never starts a
+production release or a production workflow, and never promotes a release to
+production. An Upkeep that has instructions from before this exception keeps them,
+so its daily pass starts no release. The Upkeep policy also refuses a workflow
+dispatch that `workflows` of the Upkeep does not list (see
+[What the agent can do on GitHub](#what-the-agent-can-do-on-github)), so a release
+workflow of a daily task starts only when the person listed it there.
+
+To test the pass without a wait of one day, write an earlier date, for example
+`2000-01-01`, into `/workspace/home/upkeep/daily-day` as the agent account. The pass
+then follows the next planned run. There is no setting for this.
 
 ## Trust boundary of the worker loop
 
@@ -346,11 +432,28 @@ The exchange and the loop guarantee these items:
 - The loop gives each agent the session environment of the worker image, as
   `horizon-worker-run` does. When the worker refuses that environment, the run
   starts no agent.
+- The loop reads `daily-day` only as a regular file, without following a link, and
+  at most 64 bytes of it.
+- The loop reads the reports of the agents, the daily report included, and its
+  other JSON files only as regular files, without following a link and without
+  waiting on a pipe, and at most 4 MiB of each. It ignores a file that it cannot
+  read in this way. It writes `daily-day` through a
+  new temporary file with a random name.
+- The loop reads `config.json`, `prompt.md` and `daily.md` when a run starts,
+  before any agent of the run starts. The daily maintenance pass uses that copy and
+  the repositories that the loop examined in it. Thus an agent of the run cannot
+  change the instructions or the repositories of the pass. The loop reads the
+  instructions only as regular files, without following a link, and at most
+  256 KiB of each.
+- From each run, the exchange sends back the kind `daily` only for exactly that
+  value. Each other kind is left out.
 
 The exchange and the loop do not guarantee these items:
 
 - They do not prevent that the agent changes its own loop, its settings or its
-  status. The agent account can write all of these files.
+  status. The agent account can write all of these files. For example, an agent
+  can change `daily-day` and thus make the daily maintenance pass due again at the
+  next planned run.
 - They do not prevent prompt injection. The agent reads pull requests that other
   people and bots write, and it runs with push access to the repositories of this
   Upkeep. Give an Upkeep only the repositories and the bots that you trust it to
@@ -439,6 +542,43 @@ The policy does not stop these:
   events, with the secrets of the repository.
 - A change of code that a workflow runs, for example a build script or a local
   action in `.github/actions`. Only `.github/workflows` is protected.
+
+## Trust boundary of the shared instructions
+
+The daily maintenance pass does the tasks of the shared instructions that the
+repositories of the Upkeep link.
+
+Trusted input:
+
+- The `AGENTS.md` of the repositories of the Upkeep. The person controls these
+  repositories and gives the Upkeep push access to them.
+- The shared instructions that they link. The person controls that repository and
+  allows the read access of the agent on the cloud card.
+
+Untrusted input:
+
+- The report lines of the daily pass. The board shows them like the other activity
+  lines, with the same limits.
+- The content of pull requests, issues, release pages and other pages that the
+  agent reads during a task.
+
+Horizon guarantees these items:
+
+- Horizon names no shared repository. It does not allow a read of a repository
+  outside the Upkeep without the person.
+- The generic part of the instructions never lets the agent start a production
+  release or a production workflow, or promote a release to production.
+- The pass changes the repositories of the Upkeep only after their agents ended,
+  so no two agents of the Upkeep work in the same repository.
+
+Horizon does not guarantee these items:
+
+- It does not examine the shared instructions. A task can do all that the
+  repositories of the Upkeep allow the agent to do.
+- It does not prevent that an `AGENTS.md` links shared instructions of another
+  person. The person sees the repository in the read request on the cloud card.
+- It does not prevent work in a repository by an agent or a person outside the
+  Upkeep at the same time. Step 4 of the pass makes the agent report such work.
 
 ## Trust boundary of the loop's GitHub access
 
