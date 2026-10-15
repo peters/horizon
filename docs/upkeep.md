@@ -661,9 +661,10 @@ has no desktop, GPU or image of the repository. The agent does the check on a
   evidence back. Then it asks for `stop`, also when the check failed.
 - When an exchange shows that no run is active, or the Upkeep cloud has not been ready
   for five minutes, Horizon stops each companion that a run of this Upkeep started. A
-  failed exchange stops nothing. When the companion refuses that Stop, Horizon sends a
-  new one ten minutes later, up to six times. Horizon keeps this record only while it
-  runs.
+  failed exchange stops nothing. When the Ensure Ready that started the companion has not
+  finished, Horizon first sends it again so that the companion's card finishes it. When
+  the companion refuses the Stop, Horizon sends a new one ten minutes later, up to six
+  times. Horizon keeps this record only while it runs.
 - The agent puts the screenshots and logs of the check on the orphan branch
   `upkeep/evidence` of the repository, under `pr-<number>/<short head>/`, and links
   them from its one comment on the pull request. Nobody merges this branch. The branch

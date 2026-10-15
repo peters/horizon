@@ -28,15 +28,22 @@ const NOT_READY: Duration = Duration::from_mins(5);
 /// ready cloud's exchanges.
 const NOT_READY_RETRY: Duration = Duration::from_secs(30);
 
-/// How often Horizon sends a Stop that the companion refused, and how long it waits
-/// between them. A refused Stop may come from a passing fault, such as a credential that
-/// cannot be read; every new Stop is kept in the companion's journal, so they are few.
+/// How often Horizon sends a Stop that the companion refused or that needs a new request,
+/// and how long it waits between them. Such a Stop may come from a passing fault, such as
+/// a credential that cannot be read; every new Stop is kept in the companion's journal, so
+/// they are few.
 const STOP_ATTEMPTS: u8 = 6;
 const STOP_RETRY: Duration = Duration::from_mins(10);
 
 /// A companion that a run started, until a Stop ends it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Started {
+    /// The operation ID of the Ensure Ready that started it, as the companion's journal
+    /// keeps it.
+    start: Option<String>,
+    /// That Ensure Ready had not finished when its Stop came: it is sent again so that its
+    /// card finishes it, and the Stop follows.
+    continuing: bool,
     /// The operation ID of the Stop that ends it once no run is active.
     stop: Option<String>,
     /// How many Stops it refused.
@@ -99,18 +106,7 @@ impl HorizonApp {
                 .map(|ask| (ask.alias, ask.action, ask.operation_id))
                 .collect()
         } else {
-            let now = Instant::now();
-            state
-                .started
-                .iter_mut()
-                .filter(|((source, _), started)| source == cloud && started.wait.is_none_or(|wait| now >= wait))
-                .map(|((_, alias), started)| {
-                    let id = started
-                        .stop
-                        .get_or_insert_with(manifest::provider_usage::new_operation_id);
-                    (alias.clone(), Ask::Stop, id.clone())
-                })
-                .collect()
+            state.cleanup(cloud)
         };
         for (alias, action, id) in requests {
             let state = &self.cloud_prototype.production.companions.agent.upkeep;
@@ -125,7 +121,12 @@ impl HorizonApp {
             }
             if let Err(error) = self.start_upkeep_companion(cloud, &alias, action, &id, ctx) {
                 let state = &mut self.cloud_prototype.production.companions.agent.upkeep;
-                let answer = failure(action, &id, &error, state.started.contains_key(&key));
+                let started = state.started.get_mut(&key);
+                let answer = failure(action, &id, &error, started.is_some());
+                // A start that could not be sent again leaves the way to its Stop.
+                if let (Ask::EnsureReady, Some(started)) = (action, started) {
+                    started.continuing = false;
+                }
                 state.record(cloud, &alias, &answer);
             }
         }
@@ -217,22 +218,33 @@ impl HorizonApp {
                     submitted.operation.phase,
                     submitted.operation.intent.action == horizon_core::cloud_runtime::companions::intent::Action::Stop,
                 );
-                let (answer, started) = self.answer_submitted(false, false, source, *submitted, ctx);
+                // A request for an operation that is still pending maps to that operation;
+                // the journal's ID is kept here, the request's own ID goes back to the agent.
+                let operation = submitted.operation.intent.operation_id.to_string();
+                let (mut answer, started) = self.answer_submitted(false, false, source, *submitted, ctx);
+                answer["operation_id"] = json!(id);
                 let state = &mut self.cloud_prototype.production.companions.agent.upkeep;
+                if let (false, Some(started)) = (stop, state.started.get_mut(&key)) {
+                    started.continuing = false;
+                }
                 match (stop, phase) {
                     // Nothing runs for these, so nothing is left to stop.
                     (false, Phase::ConfirmationRequired | Phase::Refused | Phase::RetryRequired) => {}
                     // A Stop sent before ended an earlier start: the next one is a new
                     // operation, or the done Stop would be sent again and stop nothing.
                     (false, _) => {
-                        state.started.insert(key.clone(), Started::default());
+                        let started = Started {
+                            start: Some(operation),
+                            ..Started::default()
+                        };
+                        state.started.insert(key.clone(), started);
                     }
                     (true, Phase::Stopped) => {
                         state.started.remove(&key);
                     }
-                    // A refused Stop does not show that the companion stopped: a later one,
-                    // with a new operation ID, tries again, a few times.
-                    (true, Phase::Refused) => {
+                    // Neither shows that the companion stopped: a later Stop, with a new
+                    // operation ID, tries again, a few times.
+                    (true, Phase::Refused | Phase::RetryRequired) => {
                         if let Some(started) = state.started.get_mut(&key) {
                             started.refused += 1;
                             if started.refused >= STOP_ATTEMPTS {
@@ -244,26 +256,21 @@ impl HorizonApp {
                             }
                         }
                     }
-                    // A Stop that needs a new request gets a new operation ID.
-                    (true, Phase::RetryRequired) => {
-                        if let Some(started) = state.started.get_mut(&key) {
-                            started.stop = None;
-                        }
-                    }
                     (true, _) => {}
                 }
                 (answer, started)
             }
             Err(error) => {
-                let started = self
-                    .cloud_prototype
-                    .production
-                    .companions
-                    .agent
-                    .upkeep
-                    .started
-                    .contains_key(&key);
-                (failure(*action, id, &error, started), false)
+                let state = &mut self.cloud_prototype.production.companions.agent.upkeep;
+                let started = state.started.get_mut(&key);
+                let tracked = started.is_some();
+                // A Stop waits while the Ensure Ready that started the companion is pending;
+                // the next exchange sends that Ensure Ready again, so that it finishes.
+                let busy = error.starts_with("cloud_companion_busy");
+                if let Some(started) = started {
+                    started.continuing = *action == Ask::Stop && busy && started.start.is_some();
+                }
+                (failure(*action, id, &error, tracked), false)
             }
         };
         // A started execution keeps the hold until it reports back.
@@ -293,6 +300,24 @@ fn action_name(action: Ask) -> &'static str {
 }
 
 impl State {
+    /// The requests that stop what the runs of Upkeep `cloud` started, once no run is active.
+    fn cleanup(&mut self, cloud: &str) -> Vec<(String, Ask, String)> {
+        let now = Instant::now();
+        self.started
+            .iter_mut()
+            .filter(|((source, _), started)| source == cloud && started.wait.is_none_or(|wait| now >= wait))
+            .map(|((_, alias), started)| {
+                if let Some(start) = started.start.as_ref().filter(|_| started.continuing) {
+                    return (alias.clone(), Ask::EnsureReady, start.clone());
+                }
+                let id = started
+                    .stop
+                    .get_or_insert_with(manifest::provider_usage::new_operation_id);
+                (alias.clone(), Ask::Stop, id.clone())
+            })
+            .collect()
+    }
+
     /// Keeps the fields the agent reads, and its error or else its message, short and without
     /// control characters. Answers of other aliases that are done give way when there are too
     /// many.
@@ -514,8 +539,8 @@ mod tests {
         let started = settled(Action::EnsureReady, Phase::Ready);
         app.finish_upkeep_companion("upkeep", "youpark", &(Ask::EnsureReady, id), Ok(started), &ctx);
         assert_eq!(
-            app.cloud_prototype.production.companions.agent.upkeep.started[&key],
-            Started::default()
+            app.cloud_prototype.production.companions.agent.upkeep.started[&key].stop,
+            None
         );
     }
 
@@ -527,7 +552,13 @@ mod tests {
         let state = &mut app.cloud_prototype.production.companions.agent.upkeep;
         state.started.insert(key.clone(), Started::default());
         for attempt in 1..STOP_ATTEMPTS {
-            let refused = settled(Action::Stop, Phase::Refused);
+            // A Stop that needs a new request counts as one too.
+            let phase = if attempt % 2 == 0 {
+                Phase::Refused
+            } else {
+                Phase::RetryRequired
+            };
+            let refused = settled(Action::Stop, phase);
             app.finish_upkeep_companion("upkeep", "youpark", &(Ask::Stop, id.clone()), Ok(refused), &ctx);
             let started = &app.cloud_prototype.production.companions.agent.upkeep.started[&key];
             assert_eq!((started.refused, started.stop.as_ref()), (attempt, None));
@@ -561,6 +592,41 @@ mod tests {
                 .started
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn a_stop_behind_a_pending_start_sends_that_start_again_first() {
+        let (_temp, mut app, id) = upkeep_app();
+        let ctx = egui::Context::default();
+        let key = ("upkeep".to_owned(), "youpark".to_owned());
+        // The journal maps the agent's Ensure Ready to an earlier operation of its own.
+        let pending = settled(Action::EnsureReady, Phase::ReconcileRequired);
+        let journal = pending.operation.intent.operation_id.to_string();
+        app.finish_upkeep_companion("upkeep", "youpark", &(Ask::EnsureReady, id.clone()), Ok(pending), &ctx);
+        assert_eq!(
+            app.upkeep_companion_answers("upkeep")["youpark"]["operation_id"],
+            id.as_str(),
+            "the agent finds its own request"
+        );
+        let state = &mut app.cloud_prototype.production.companions.agent.upkeep;
+        let cleanup = state.cleanup("upkeep");
+        let [(_, Ask::Stop, stop)] = cleanup.as_slice() else {
+            panic!("a Stop first")
+        };
+        let busy = Err("cloud_companion_busy: another operation holds this companion".to_owned());
+        app.finish_upkeep_companion("upkeep", "youpark", &(Ask::Stop, stop.clone()), busy, &ctx);
+        let state = &mut app.cloud_prototype.production.companions.agent.upkeep;
+        assert_eq!(
+            state.cleanup("upkeep"),
+            [("youpark".to_owned(), Ask::EnsureReady, journal)]
+        );
+        // Once that start has finished, the same Stop follows.
+        let ready = settled(Action::EnsureReady, Phase::Ready);
+        let journal = ready.operation.intent.operation_id.to_string();
+        app.finish_upkeep_companion("upkeep", "youpark", &(Ask::EnsureReady, journal), Ok(ready), &ctx);
+        let state = &mut app.cloud_prototype.production.companions.agent.upkeep;
+        assert!(matches!(state.cleanup("upkeep").as_slice(), [(_, Ask::Stop, _)]));
+        assert!(!state.started[&key].continuing);
     }
 
     #[test]
