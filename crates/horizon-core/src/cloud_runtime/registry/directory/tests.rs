@@ -3,16 +3,17 @@ use super::*;
 #[test]
 fn an_interrupted_ancestor_is_recovered_before_a_child_can_be_created() {
     let temporary = tempfile::tempdir().unwrap();
-    let parent = temporary.path().join("parent");
+    let root = temporary.path().canonicalize().unwrap();
+    let parent = root.join("parent");
     let child = parent.join("child");
     let error = ensure_with(&parent, true, &mut |_| Err(Error::Invalid("synthetic interruption")));
     assert!(error.is_err());
     assert!(parent.is_dir());
-    assert_eq!(std::fs::metadata(marker(temporary.path())).unwrap().len(), 1);
+    assert_eq!(std::fs::metadata(marker(&root)).unwrap().len(), 1);
     let mut observed = false;
     ensure_with(&child, true, &mut |created| {
         assert_eq!(created, child);
-        assert_eq!(std::fs::metadata(marker(temporary.path())).unwrap().len(), 0);
+        assert_eq!(std::fs::metadata(marker(&root)).unwrap().len(), 0);
         observed = true;
         Ok(())
     })
