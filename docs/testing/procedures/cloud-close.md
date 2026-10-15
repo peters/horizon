@@ -3,7 +3,7 @@ procedure: cloud-close
 feature: The × of a cloud, with the deletion of its resources
 platforms: [linux]
 cost: none
-destructive: no
+destructive: yes
 secrets: none
 owner: peters
 ---
@@ -15,7 +15,8 @@ owner: peters
 This procedure makes sure that the **×** of a cloud first offers to delete the
 resources of the cloud. It also makes sure that **Remove from Horizon anyway**
 shows only after a deletion fails or cannot start. A cloud without resources
-closes with **Remove cloud**.
+closes with **Remove cloud**. Saved-record checks run outside the UI thread.
+The dialog shows **Checking the saved cloud record…** until a check finishes.
 
 ## 2. Applicability
 
@@ -97,6 +98,12 @@ closes with **Remove cloud**.
 
 Give each task an ID. A report uses the ID to give a result.
 
+After each **×**, wait for the saved-record check before the next action.
+A check shows a spinner and permits **Cancel**. It grants no removal action.
+
+> **CAUTION:** REMOVE ONLY SYNTHETIC CLOUDS. The removal steps close panels and remove fixture data from the board.
+> Remove anyway leaves the original deployment record on disk.
+
 ### 6.1 C01: Close a deployed cloud
 
 1. On the card of `demo-api`, click **×**.
@@ -115,19 +122,37 @@ Give each task an ID. A report uses the ID to give a result.
 
 ### 6.2 C02: Remove a cloud after its deletion cannot start
 
-1. On the card of `demo-api`, click **×**. Then click **Delete cloud resources**.
+1. On the card of `demo-api`, click **×**.
+
+   Result: The dialog opens after its record check.
+
+> **CAUTION:** USE ONLY THE SYNTHETIC CLOUD. Real provider settings can delete a worker and its storage.
+
+2. Click **Delete cloud resources**.
 
    Result: The dialog stays open. It shows the reason in red, after
    "Could not delete the cloud resources". It tells that worker `pod-7f3a2c`
    and its workspace storage can stay at RunPod and cost money. It shows
    **Delete cloud resources**, **Remove from Horizon anyway** and **Cancel**.
 
-2. Click **Cancel**. Then click **×** again.
+3. Click **Cancel**.
 
-   Result: The dialog shows **Delete cloud resources** and **Cancel** only.
+   Result: The dialog closes.
+
+4. Click **×** again.
+
+   Result: The dialog shows **Delete cloud resources** and **Cancel** after its record check.
    Each new close offers the deletion first.
 
-3. Click **Delete cloud resources**. Then click **Remove from Horizon anyway**.
+> **CAUTION:** USE ONLY THE SYNTHETIC CLOUD. Real provider settings can delete a worker and its storage.
+
+5. Click **Delete cloud resources**.
+
+   Result: The fixture refuses deletion and offers **Remove from Horizon anyway**.
+
+> **CAUTION:** REMOVE ONLY THE SYNTHETIC CLOUD. The cloud and its panels leave the board. The original deployment record stays.
+
+6. Click **Remove from Horizon anyway**.
 
    Result: The dialog closes. The cloud `demo-api` and its panel go off the
    board and the sidebar.
@@ -138,6 +163,8 @@ Give each task an ID. A report uses the ID to give a result.
 
    Result: The dialog **Close scratch-notes?** tells that the cloud has no
    worker or storage at its provider. It shows **Remove cloud** and **Cancel**.
+
+> **CAUTION:** REMOVE ONLY THE SYNTHETIC CLOUD. The cloud and its panels leave the board.
 
 2. Click **Remove cloud**.
 
@@ -152,6 +179,8 @@ Give each task an ID. A report uses the ID to give a result.
    and **Cancel**. It does not tell that the cloud has no worker or storage at
    its provider. It does not show **Remove from Horizon anyway**.
 
+> **CAUTION:** USE ONLY THE SYNTHETIC CLOUD. Real provider settings can delete workspace storage.
+
 2. Click **Delete cloud resources**.
 
    Result: The dialog stays open. It shows the reason in red, after
@@ -159,6 +188,8 @@ Give each task an ID. A report uses the ID to give a result.
    storage can stay at RunPod and cost money. It does not name a worker,
    because no worker was requested. It shows **Remove from Horizon anyway**
    and **Cancel**.
+
+> **CAUTION:** REMOVE ONLY THE SYNTHETIC CLOUD. The cloud and its panels leave the board. The original deployment record stays.
 
 3. Click **Remove from Horizon anyway**.
 
@@ -169,23 +200,83 @@ Give each task an ID. A report uses the ID to give a result.
 
 Use a new fixture for this task. Change only its private synthetic records.
 
+> **CAUTION:** CHANGE ONLY THE OWNED SYNTHETIC RECORD. A missing production record can prevent cleanup of real resources.
+
 1. Move `demo-api/deployment.json` out of the fixture's cloud directory.
-   Click **×** on `demo-api`.
 
-   Result: The dialog explains that the resource state cannot be read. It
-   shows **Remove from Horizon anyway** and **Cancel**, with no deletion action.
+   Result: The synthetic deployment record is absent.
 
-2. Click **Cancel**. Restore the record, open the dialog and click
-   **Delete cloud resources**.
+2. Click **×** on `demo-api`.
+
+   Result: After the check, the dialog explains that Horizon cannot read the resource state.
+   It shows **Remove from Horizon anyway** and **Cancel**, with no deletion action.
+
+3. Click **Cancel**.
+
+   Result: The dialog closes.
+
+4. Restore the synthetic deployment record.
+
+   Result: The original synthetic record returns.
+
+5. Click **×** on `demo-api`.
+
+   Result: The dialog offers deletion after its record check.
+
+> **CAUTION:** USE ONLY THE SYNTHETIC CLOUD. Real provider settings can delete a worker and its storage.
+
+6. Click **Delete cloud resources**.
 
    Result: The fixture refuses deletion and shows its failure.
 
-3. In the private record, set the stage to `Deleted` and the operation to
-   `terminated`, as if another controller completed deletion. Wait for the
-   open dialog to refresh.
+> **CAUTION:** CHANGE ONLY THE SYNTHETIC RECORD. A false production deletion record can hide resources that still cost money.
 
-   Result: The dialog offers **Remove cloud**, with no stale failure or
-   warning that resources remain. Click **Remove cloud**. The cloud disappears.
+7. Set the private record's stage to `Deleted` and its operation to `terminated`.
+
+   Result: The synthetic record represents a completed deletion.
+
+8. Wait for the open dialog to refresh.
+
+   Result: The dialog offers **Remove cloud**, with no stale failure or resource warning.
+
+> **CAUTION:** REMOVE ONLY THE SYNTHETIC CLOUD. The cloud and its panels leave the board.
+
+9. Click **Remove cloud**.
+
+   Result: The cloud disappears.
+
+### 6.6 C06: Check blocked reads and stale results
+
+1. Run the focused worker regressions in the candidate checkout.
+
+   ```sh
+   RUSTFLAGS="-D warnings" cargo test --locked -p horizon-ui cloud_panel::production::removal::tests
+   RUSTFLAGS="-D warnings" cargo test --locked -p horizon-ui cloud_panel::production::close::tests::refresh
+   ```
+
+   Result: A real `deployment.json` FIFO blocks the worker read. UI polling, dialog rendering and an unrelated board action return.
+   Cancel, session reset and repeated requests retain one job for that record until its read finishes.
+   Only the newest generation receives a final result. The worker holds its Store lock through the UI discard.
+   A changed launch cannot use an older result. Automatic close treats Pending as work in progress.
+   A blocked periodic refresh keeps settled close controls visible. A final removal waits for a fresh worker decision.
+
+### 6.7 C07: Check the small window
+
+1. Resize the candidate window to a smaller size.
+
+   Result: The window becomes smaller.
+
+2. Click **Fit** while the window is small.
+
+   Result: The board fits the small window. The close controls remain readable.
+
+3. Restore the candidate window size.
+
+   Result: The window returns to its original size.
+
+4. Click **Fit** again.
+
+   Result: The board fits the restored window.
 
 ## 7. Pass criteria
 
@@ -198,6 +289,9 @@ Use a new fixture for this task. Change only its private synthetic records.
   even without a worker request.
 - **Cancel** and the Escape key keep the cloud.
 - A current empty record offers **Remove cloud** after an earlier failure.
+- A blocked record read does not block the UI or authorize removal.
+- A cancelled or stale result cannot remove a replacement cloud.
+- A final check retains its Store lock through the UI discard.
 
 ## 8. Cleanup
 

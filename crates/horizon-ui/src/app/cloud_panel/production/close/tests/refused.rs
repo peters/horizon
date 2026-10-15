@@ -35,6 +35,7 @@ fn storage_on_disk_offers_its_deletion_before_removing_anyway() {
     let path = unrequested_cloud(&mut app, temp.path());
     std::fs::write(path.join("workspace-volume.required"), "").unwrap();
     app.request_cloud_close(101);
+    app.settle_cloud_removals();
     assert_eq!(
         current_offer(&app),
         offer::Offer {
@@ -48,6 +49,7 @@ fn storage_on_disk_offers_its_deletion_before_removing_anyway() {
     // No settings.json: the deletion cannot start, and only now may the cloud leave anyway.
     let ctx = egui::Context::default();
     app.delete_for_close(101, &ctx);
+    app.settle_cloud_removals();
     let offer = current_offer(&app);
     assert!(offer.remove_anyway);
     assert!(
@@ -65,11 +67,13 @@ fn a_refused_removal_offers_the_deletion_first() {
     let (temp, mut app) = test_app();
     let path = unrequested_cloud(&mut app, temp.path());
     app.request_cloud_close(101);
+    app.settle_cloud_removals();
     assert_eq!(current_offer(&app).primary, Some(Primary::Remove));
 
     // Storage recorded after the dialog opened refuses the removal.
     std::fs::write(path.join("workspace-volume.required"), "").unwrap();
     app.remove_for_close(101, &egui::Context::default());
+    app.settle_cloud_removals();
     assert_eq!(app.cloud_prototype.groups.0.len(), 1);
     assert_eq!(
         current_offer(&app),
@@ -90,9 +94,11 @@ fn a_close_step_that_reports_nothing_does_not_show_an_earlier_error() {
     add_cloud(&mut app, temp.path(), Some(deployment()));
     app.cloud_prototype.production.runtimes.get_mut(&101).unwrap().error = Some("an earlier failure".into());
     app.request_cloud_close(101);
+    app.settle_cloud_removals();
     // Without a cloud root the deletion stops before it starts, reporting nothing.
     app.cloud_prototype.root = None;
     app.delete_for_close(101, &egui::Context::default());
+    app.settle_cloud_removals();
     assert_eq!(
         app.cloud_prototype.production.close.failed[&101].reason,
         "Could not delete the cloud resources."
@@ -110,14 +116,17 @@ fn a_discarded_cloud_leaves_no_close_behind() {
     let (_panel, _sender) = closing_cloud_with_panel(&mut app, temp.path());
     let ctx = egui::Context::default();
     app.finish_closing_clouds(&ctx);
+    app.settle_cloud_removals();
     assert!(!app.cloud_prototype.production.close.hidden.is_empty());
 
     app.request_cloud_close(101);
+    app.settle_cloud_removals();
     app.discard_cloud(0, &ctx);
     let close = &app.cloud_prototype.production.close;
     assert!(close.deleting.is_empty() && close.hidden.is_empty());
     assert!(close.confirming.is_none() && close.records.is_empty());
     app.finish_closing_clouds(&ctx);
+    app.settle_cloud_removals();
     assert!(
         !app.cloud_close_confirmation_open(),
         "no dialog for a cloud that is gone"
@@ -161,6 +170,7 @@ fn a_cloud_without_a_launch_ends_its_close_dialog() {
     add_cloud(&mut app, temp.path(), Some(deployment()));
     app.cloud_prototype.groups.0[0].remote = None;
     app.request_cloud_close(101);
+    app.settle_cloud_removals();
     let ctx = egui::Context::default();
     let _ = ctx
         .run_ui(egui::RawInput::default(), |ui| {
@@ -179,6 +189,7 @@ fn an_unreadable_record_offers_only_remove_anyway() {
     add_cloud(&mut app, temp.path(), Some(deployment()));
     std::fs::write(path.join("deployment.json"), "not a record").unwrap();
     app.request_cloud_close(101);
+    app.settle_cloud_removals();
     let offer = current_offer(&app);
     assert_eq!((offer.primary, offer.remove_anyway), (None, true), "{offer:?}");
     assert!(
@@ -195,10 +206,12 @@ fn a_cloud_that_never_deployed_is_removed_on_every_host() {
     let (temp, mut app) = test_app();
     add_cloud(&mut app, temp.path(), None);
     app.request_cloud_close(101);
+    app.settle_cloud_removals();
     assert_eq!(current_offer(&app).primary, Some(Primary::Remove));
 
     // Also where Horizon keeps no cloud records, so no lock can be taken.
     app.remove_for_close(101, &egui::Context::default());
+    app.settle_cloud_removals();
     assert!(app.cloud_prototype.groups.0.is_empty());
     assert!(app.cloud_prototype.production.close.confirming.is_none());
 }
@@ -209,10 +222,12 @@ fn a_cloud_whose_identity_names_no_record_can_be_removed_anyway() {
     add_cloud(&mut app, temp.path(), Some(deployment()));
     app.cloud_prototype.groups.0[0].remote.as_mut().unwrap().id = "../outside".into();
     app.request_cloud_close(101);
+    app.settle_cloud_removals();
     let offer = current_offer(&app);
     assert_eq!((offer.primary, offer.remove_anyway), (None, true), "{offer:?}");
 
     app.remove_cloud_anyway(101, &egui::Context::default());
+    app.settle_cloud_removals();
     assert!(app.cloud_prototype.groups.0.is_empty(), "no record can hold its lock");
     assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
 }
@@ -226,6 +241,7 @@ fn another_controller_keeps_the_cloud_from_being_removed_anyway() {
     other.save(&deployment()).unwrap();
     add_cloud(&mut app, temp.path(), Some(deployment()));
     app.request_cloud_close(101);
+    app.settle_cloud_removals();
     let busy = offer::Offer {
         primary: None,
         remove_anyway: false,
@@ -245,12 +261,15 @@ fn another_controller_keeps_the_cloud_from_being_removed_anyway() {
             .discard_textures();
     };
     render(&mut app);
+    app.settle_cloud_removals();
     assert_eq!(current_offer(&app), busy, "still running");
     drop(other);
     render(&mut app);
+    app.settle_cloud_removals();
     assert_eq!(current_offer(&app), busy, "read again at most once a second");
     app.cloud_prototype.production.close.record_read = None;
     render(&mut app);
+    app.settle_cloud_removals();
     assert_eq!(
         current_offer(&app).primary,
         Some(Primary::Delete),
@@ -260,9 +279,11 @@ fn another_controller_keeps_the_cloud_from_being_removed_anyway() {
     // An operation starts after the dialog opened.
     let other = Store::lock(&path).unwrap();
     app.delete_for_close(101, &ctx);
+    app.settle_cloud_removals();
     assert_eq!(current_offer(&app), busy, "the deletion found another controller");
 
     app.remove_cloud_anyway(101, &ctx);
+    app.settle_cloud_removals();
     assert_eq!(app.cloud_prototype.groups.0.len(), 1, "its operation still runs");
     assert!(app.cloud_close_confirmation_open(), "the dialog asks again");
     let failure = &app.cloud_prototype.production.close.failed[&101];
@@ -276,8 +297,10 @@ fn another_controller_keeps_the_cloud_from_being_removed_anyway() {
     drop(other);
     app.cloud_prototype.production.close.record_read = None;
     render(&mut app);
+    app.settle_cloud_removals();
     assert!(current_offer(&app).remove_anyway, "the operation ended");
     app.remove_cloud_anyway(101, &ctx);
+    app.settle_cloud_removals();
     assert!(app.cloud_prototype.groups.0.is_empty());
     assert!(path.exists(), "its record directory stays");
 }
@@ -292,6 +315,7 @@ fn an_operation_that_another_instance_starts_while_the_dialog_is_open_makes_it_w
         .unwrap();
     add_cloud(&mut app, temp.path(), Some(deployment()));
     app.request_cloud_close(101);
+    app.settle_cloud_removals();
     assert_eq!(current_offer(&app).primary, Some(Primary::Delete));
     let ctx = egui::Context::default();
     let render = |app: &mut HorizonApp| {
@@ -305,6 +329,7 @@ fn an_operation_that_another_instance_starts_while_the_dialog_is_open_makes_it_w
 
     let other = Store::lock(&temp.path().join("fixture")).unwrap();
     render(&mut app);
+    app.settle_cloud_removals();
     assert_eq!(current_offer(&app).reason.as_deref(), Some(offer::BUSY));
     assert_eq!(
         (current_offer(&app).primary, current_offer(&app).remove_anyway),
@@ -312,6 +337,7 @@ fn an_operation_that_another_instance_starts_while_the_dialog_is_open_makes_it_w
     );
     drop(other);
     render(&mut app);
+    app.settle_cloud_removals();
     assert_eq!(
         current_offer(&app).primary,
         Some(Primary::Delete),
@@ -325,7 +351,9 @@ fn removing_anyway_preserves_the_operation_lock_identity() {
     let (temp, mut app) = test_app();
     add_cloud(&mut app, temp.path(), Some(deployment()));
     app.request_cloud_close(101);
+    app.settle_cloud_removals();
     app.remove_cloud_anyway(101, &egui::Context::default());
+    app.settle_cloud_removals();
     assert!(app.cloud_prototype.groups.0.is_empty());
     let path = temp.path().join("fixture");
     let lock = std::fs::OpenOptions::new()
@@ -353,6 +381,7 @@ fn a_record_that_cannot_be_locked_keeps_the_cloud() {
         .failed
         .insert(101, Failure::new("Could not delete the cloud resources", true, None));
     app.remove_cloud_anyway(101, &egui::Context::default());
+    app.settle_cloud_removals();
     assert_eq!(app.cloud_prototype.groups.0.len(), 1, "the cloud stays");
     assert!(app.cloud_close_confirmation_open(), "the dialog asks again");
     let failure = &app.cloud_prototype.production.close.failed[&101];
@@ -375,6 +404,7 @@ fn a_storage_journal_without_its_deployment_offers_the_deletion() {
     std::fs::write(path.join("workspace-volume.required"), "").unwrap();
     add_cloud(&mut app, temp.path(), None);
     app.request_cloud_close(101);
+    app.settle_cloud_removals();
     assert_eq!(
         current_offer(&app),
         offer::Offer {
@@ -386,6 +416,7 @@ fn a_storage_journal_without_its_deployment_offers_the_deletion() {
     );
 
     app.remove_for_close(101, &egui::Context::default());
+    app.settle_cloud_removals();
     assert_eq!(app.cloud_prototype.groups.0.len(), 1, "the storage may remain");
 }
 
@@ -395,8 +426,10 @@ fn a_never_deployed_cloud_without_a_state_root_is_removed_directly() {
     add_cloud(&mut app, temp.path(), None);
     app.cloud_prototype.root = None;
     app.request_cloud_close(101);
+    app.settle_cloud_removals();
     assert_eq!(current_offer(&app).primary, Some(Primary::Remove));
     app.remove_for_close(101, &egui::Context::default());
+    app.settle_cloud_removals();
     assert!(app.cloud_prototype.groups.0.is_empty());
 }
 
@@ -410,6 +443,7 @@ fn a_deployed_cloud_without_a_record_is_unknown_and_retained() {
         }
         app.cloud_prototype.root = (!missing_root).then(|| temp.path().into());
         app.request_cloud_close(101);
+        app.settle_cloud_removals();
         assert!(matches!(
             app.cloud_prototype.production.close.records[&101],
             Record::Unreadable(_)
@@ -417,7 +451,11 @@ fn a_deployed_cloud_without_a_record_is_unknown_and_retained() {
         let offered = current_offer(&app);
         assert_eq!(offered.primary, None);
         assert!(offered.remove_anyway);
-        assert!(!app.remove_deleted_cloud(101, &egui::Context::default()));
+        assert_eq!(
+            app.remove_deleted_cloud(101, &egui::Context::default()),
+            super::super::RemovalStart::Pending
+        );
+        app.settle_cloud_removals();
         assert_eq!(app.cloud_prototype.groups.0.len(), 1);
     }
 }

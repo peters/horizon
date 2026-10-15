@@ -31,6 +31,8 @@ pub(super) struct Offer {
 /// What the saved record of a cloud, read when its close was asked, says it holds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Record {
+    /// A background read or final removal decision has not completed.
+    Checking,
     /// Nothing at the provider.
     Empty,
     /// Provider resources, or possibly so.
@@ -70,6 +72,13 @@ pub(super) fn offer(runtime: &Runtime, deployment_started: bool, record: &Record
             reason: Some(BUSY.into()),
         };
     }
+    if *record == Record::Checking {
+        return Offer {
+            primary: None,
+            remove_anyway: false,
+            reason: Some("Checking the saved cloud record…".into()),
+        };
+    }
     if *record == Record::Empty {
         return Offer {
             primary: Some(Primary::Remove),
@@ -81,7 +90,7 @@ pub(super) fn offer(runtime: &Runtime, deployment_started: bool, record: &Record
     let reason = failure.map(|failure| failure.reason.clone());
     let unreadable = match record {
         Record::Unreadable(error) => Some(format!("{STATE_UNKNOWN} {error}")),
-        Record::Empty | Record::Holds | Record::Busy => None,
+        Record::Empty | Record::Holds | Record::Busy | Record::Checking => None,
     };
     if unreadable.is_some() || runtime.state_unavailable || (state.is_none() && deployment_started) {
         return Offer {

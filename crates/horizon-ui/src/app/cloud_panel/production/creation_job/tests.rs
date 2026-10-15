@@ -334,6 +334,7 @@ fn remove_cloud_from_creation_target(app: &mut HorizonApp, temp: &std::path::Pat
     app.cloud_prototype.groups.0.push(group);
     app.cloud_prototype.root = Some(temp.into());
     app.remove_deleted_cloud(1, &egui::Context::default());
+    app.settle_cloud_removals();
     assert!(app.cloud_prototype.groups.0.is_empty());
     workspace
 }

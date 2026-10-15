@@ -98,6 +98,10 @@ A current empty record offers Remove cloud, even after a prior failure. After
 deletion fails, or when a deployed cloud's resource record is missing or unreadable, Remove from Horizon anyway leaves provider
 resources and saved records in place; they can still cost money. While a local
 or another controller's operation runs, the dialog offers only Cancel.
+Saved-record checks run in the background. While the dialog shows Checking, wait
+for its result or use Cancel. A final removal checks the record again and keeps
+its operation lock until Horizon applies the result. Cancel preserves the cloud;
+a blocked filesystem read can finish later but cannot remove a newer cloud.
 This UI close dialog does not grant lifecycle authorization through MCP.
 
 An Upkeep is a cloud that Menu > New Upkeep starts for the person: an always-on

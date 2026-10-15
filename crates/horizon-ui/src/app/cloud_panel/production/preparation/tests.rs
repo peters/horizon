@@ -166,6 +166,7 @@ fn a_cloud_is_not_removed_while_its_deployment_prepares() {
         },
     );
     app.remove_deleted_cloud(1, &ctx);
+    app.settle_cloud_removals();
     assert_eq!(
         app.cloud_prototype.groups.0.len(),
         1,
@@ -174,6 +175,7 @@ fn a_cloud_is_not_removed_while_its_deployment_prepares() {
 
     app.cloud_prototype.production.runtimes.get_mut(&1).unwrap().preparation = None;
     app.remove_deleted_cloud(1, &ctx);
+    app.settle_cloud_removals();
     assert!(
         app.cloud_prototype.groups.0.is_empty(),
         "without it the cloud is removed"

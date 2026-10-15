@@ -759,7 +759,17 @@ and reconciliation; the parent module owns persisted types and group collection
 placement. Corner resizing of a cloud frame lives in `cloud_panel/resize.rs`.
 Cloud close confirmation and session-local close intent live in
 `cloud_panel/production/close.rs`; deletion uses the existing lifecycle and progress
-channels, and removal rechecks durable resource ownership before discarding panels.
+channels. `production/removal.rs` reads removal eligibility outside the UI thread.
+`close/decisions.rs` applies only the current root, session, workspace, launch and
+request generation. A display result permits no removal. A final check holds the
+Core Store lock on its worker until the UI discards the cloud or rejects the result.
+The UI holds only a channel sender; it never drops a Store or joins the worker.
+Cancellation retains each blocked job until its channel disconnects. Session reset
+also retains these slots, so reopening cannot start another read of the same record.
+A blocked filesystem call has no hard cancellation deadline. Its original lock
+stays with its worker until the call returns or the process ends. Remove anyway
+preserves the original record and still refuses a busy operation. These changes
+add no provider calls, credential reads or new CLI/MCP lifecycle authority.
 The New cloud dialog asks where the code is before anything else.
 `cloud_runtime::repository::source` reads links, probes whether a repository can be read without a token,
 and clones with system Git without ever prompting. `repository::source::transport` runs the

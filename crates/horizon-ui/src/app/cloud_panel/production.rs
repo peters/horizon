@@ -31,6 +31,7 @@ mod prices;
 mod progress;
 mod readiness;
 mod rebuild;
+mod removal;
 mod repository_setup;
 mod resize;
 mod session_record;
@@ -640,6 +641,7 @@ impl HorizonApp {
         self.follow_cloud_billing(ctx);
         self.finish_failed_cloud_operations(finished, ctx);
         self.reconcile_sharing(ctx);
+        self.poll_cloud_removals(ctx);
         self.finish_closing_clouds(ctx);
         self.reconnect_resumed(resumed, ctx);
         self.watch_agent_stops(became_ready, ctx);
@@ -734,7 +736,7 @@ impl HorizonApp {
             }
             self.cloud_prototype.initialized = true;
             self.cloud_prototype.production.pending_creation = None;
-            self.cloud_prototype.production.close = close::State::default();
+            self.cloud_prototype.production.close.reset();
             self.cloud_prototype.production.session_id = session;
             self.cloud_prototype.root = Some(horizon_core::HorizonHome::resolve().root().join("cloud"));
             self.cloud_prototype.groups = self.board.cloud_groups.clone();
