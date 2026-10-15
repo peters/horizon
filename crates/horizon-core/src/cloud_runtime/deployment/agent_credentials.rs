@@ -5,7 +5,7 @@ use std::time::Duration;
 
 /// Refuses the first agent of `capabilities` whose configured API-key file is unusable,
 /// naming the agent and the file; for a `rebuild`, the refusal says a reconnect needs it too.
-pub(super) fn validate_agent_auth(
+pub(in crate::cloud_runtime) fn validate_agent_auth(
     settings: &Settings,
     capabilities: &horizon_cloud::Capabilities,
     rebuild: bool,

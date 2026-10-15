@@ -47,6 +47,15 @@ reconnect removes it when it is not bound.
 
    Result: The operator has a token.
 
+2. Keep a copy of the Claude bindings of this computer, so that the cleanup can put
+   them back. The copy holds only file paths and a date, not a key or a token.
+
+   ```sh
+   (umask 077; jq '{claude_token, anthropic_api_key_file}' ~/.horizon/cloud/settings.json > ~/.horizon/cloud/claude-bindings-before.json)
+   ```
+
+   Result: The command stops with exit code 0.
+
 ## 6. Tasks
 
 ### 6.1 T01 — Bind the token in the settings
@@ -57,10 +66,14 @@ reconnect removes it when it is not bound.
 1. Ask the operator to write the token to a private file.
 
    ```sh
-   (umask 077; cat > ~/.horizon/cloud/credentials/claude-token-test)
+   (umask 077; IFS= read -rs token && printf '%s\n' "$token" > ~/.horizon/cloud/credentials/claude-token-test)
    ```
 
-   Result: The operator pastes the token, then types Enter and Ctrl+D.
+   The Bash built-in `read -s` turns off the echo of the terminal while the operator
+   pastes.
+
+   Result: The operator pastes the token, then types Enter. The terminal does not
+   show the token.
 
 2. Bind the file as the Claude setup token, with the time now.
 
@@ -145,7 +158,16 @@ reconnect removes it when it is not bound.
 
    Result: The cloud is not in the cloud list.
 
-2. Remove the token file of T01.
+2. Put back the Claude bindings of setup step 2. Then remove the copy.
+
+   ```sh
+   cd ~/.horizon/cloud && jq --slurpfile before claude-bindings-before.json '.claude_token = $before[0].claude_token | .anthropic_api_key_file = $before[0].anthropic_api_key_file | if .claude_token == null then del(.claude_token) else . end' settings.json > settings.new && chmod 600 settings.new && mv settings.new settings.json && rm claude-bindings-before.json
+   ```
+
+   Result: `jq '{claude_token, anthropic_api_key_file}' ~/.horizon/cloud/settings.json`
+   shows the values from before setup step 2.
+
+3. Remove the token file of T01.
 
    ```sh
    rm ~/.horizon/cloud/credentials/claude-token-test
@@ -153,7 +175,7 @@ reconnect removes it when it is not bound.
 
    Result: The file does not exist.
 
-3. Ask the operator if they made the token only for this test. If so, ask the
+4. Ask the operator if they made the token only for this test. If so, ask the
    operator to revoke it in their Claude account.
 
    Result: The operator kept or revoked the token.
