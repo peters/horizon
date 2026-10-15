@@ -63,6 +63,8 @@ mod tests {
     use super::*;
     #[cfg(all(unix, feature = "tailnet-node-cleanup"))]
     mod cleanup;
+    #[cfg(all(unix, feature = "tailnet-node-cleanup"))]
+    mod docker_host;
     #[cfg(unix)]
     use crate::cloud_runtime::{deployment::Request, settings::Settings};
     #[cfg(unix)]

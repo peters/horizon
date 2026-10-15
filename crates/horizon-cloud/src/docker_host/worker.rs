@@ -690,6 +690,11 @@ pub fn delete(
         record(journal, records, |next| next.deleting = true)?;
     }
     if let Some(container) = find(docker, operation_id)? {
+        // A prepared record can still discover a worker. Retain that uncertainty
+        // before removal so a lost response cannot make the next retry look fresh.
+        if *operation == CreateState::Prepared {
+            save(operation, CreateState::Requested, records)?;
+        }
         call(
             docker,
             &format!("container rm --force --volumes {}", container.id),

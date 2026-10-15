@@ -189,3 +189,16 @@ Any remaining resource cleanup uses its original authorized procedure and exact 
 Use the [report template](../reports/TEMPLATE.md) for evidence that must remain.
 Record each provider and credential lane separately, including blocked or non-applicable cases.
 Keep private IDs, credentials and raw responses outside the repository.
+
+## Docker initial capacity failure regression
+
+With `tailnet-node-cleanup`, run the focused
+`cloud_runtime::deployment::redeploy::tests::docker_host` Rust tests. An owned fake
+Docker executable drives the actual SDK capacity refusal and Core deletion
+controller without contacting Docker or a provider. Check repeated delete/reload,
+normal removal and redeploy after initial capacity failure, including volume-only
+preparation. Keep legacy readiness/stop/resume, Requested, synthetic Terminated
+and port-intent cases manual. An unexpected container found by either lookup must
+save Requested before removal; failed saves send no rm, and lost removal replies
+remain uncertain after reload/retry. The early/later cases check both the Core
+adapter and the SDK transition, not a claimed live Docker qualification.
