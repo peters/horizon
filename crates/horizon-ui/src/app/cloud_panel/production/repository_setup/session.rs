@@ -59,6 +59,10 @@ impl HorizonApp {
         if self.cloud_prototype.production.starting_here() {
             return;
         }
+        // A host chosen in an earlier opening of the dialog waits for this opening's read.
+        if self.cloud_prototype.production.setup_build_on.defer_start() {
+            return;
+        }
         if let Some(run) = self.cloud_prototype.production.run_here() {
             if run.ending() {
                 return;

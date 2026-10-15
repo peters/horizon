@@ -27,7 +27,7 @@ mod runs;
 mod session;
 mod snapshot;
 mod untrusted;
-pub(super) use build_on::State as BuildOn;
+pub(super) use build_on::{Deferred, State as BuildOn};
 pub(super) use prompt::Mode;
 #[cfg(test)]
 use prompt::prompt;

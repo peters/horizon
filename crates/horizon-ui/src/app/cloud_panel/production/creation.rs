@@ -305,6 +305,15 @@ impl HorizonApp {
             .production
             .setup_build_on
             .refresh(root.as_deref(), ctx);
+        match self.cloud_prototype.production.setup_build_on.deferred() {
+            super::repository_setup::Deferred::Waiting => {}
+            super::repository_setup::Deferred::Start => self.start_cloud_repository_setup(ctx),
+            super::repository_setup::Deferred::HostGone(name) => {
+                self.cloud_prototype.error = Some(format!(
+                    "The Docker host {name} is no longer in Cloud settings. Choose where the setup builds, then start it again."
+                ));
+            }
+        }
         checks::update(
             &mut self.cloud_prototype.production,
             self.cloud_prototype.root.as_deref(),
