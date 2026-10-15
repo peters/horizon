@@ -209,7 +209,10 @@ fn actual_metadata_sync_tracks_profile_changes_and_clears_prebuilt_state() {
     form.repository = repository.to_string_lossy().into_owned();
     update_for_root(&mut form, Some(&cloud), &ctx);
     assert!(form.publishing.active());
-    assert!(form.publishing.busy());
+    assert_eq!(
+        form.publishing.key.as_ref().unwrap().profile.image,
+        "registry.example/team/worker"
+    );
     let settle = |form: &mut Production| {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while form.publishing.busy() {
@@ -223,7 +226,10 @@ fn actual_metadata_sync_tracks_profile_changes_and_clears_prebuilt_state() {
     form.profiles.as_mut().unwrap().profiles.get_mut("cpu").unwrap().image = "registry.example/team/another".into();
     assert!(blocked(&form).is_some());
     update_for_root(&mut form, Some(&cloud), &ctx);
-    assert!(form.publishing.busy());
+    assert_eq!(
+        form.publishing.key.as_ref().unwrap().profile.image,
+        "registry.example/team/another"
+    );
     settle(&mut form);
     assert_eq!(
         launch_choice(&form).unwrap(),
