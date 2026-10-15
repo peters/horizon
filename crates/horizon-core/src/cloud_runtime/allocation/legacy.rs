@@ -101,6 +101,11 @@ impl Records {
         if self.allocation.version != self.allocation.record_version() || self.project.version != Project::VERSION {
             return Err(Error::Version);
         }
+        if let Some(publication) = &self.allocation.publication {
+            publication
+                .validate(&self.project.profile)
+                .map_err(|_| Error::Encoding)?;
+        }
         if self.allocation.id != self.project.allocation
             || self.allocation.member != self.project.identity
             || self.allocation.sharing != SharingMode::Dedicated

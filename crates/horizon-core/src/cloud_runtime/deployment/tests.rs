@@ -1,4 +1,5 @@
 use super::*;
+mod publishing_fence;
 #[test]
 #[cfg(unix)]
 fn private_registry_intent_survives_failed_preparation_and_missing_bindings() {

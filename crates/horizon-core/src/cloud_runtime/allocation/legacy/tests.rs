@@ -47,6 +47,40 @@ fn convert(value: &Value) -> Result<Records, Error> {
 }
 
 #[test]
+fn publisher_identity_and_version_fences_survive_allocation_conversion() {
+    use crate::cloud_runtime::{state::PUBLISHING_RECORD_VERSION, tailnet::receipt::tests::populated};
+    for enrollment in [false, true] {
+        let mut original = legacy();
+        original["version"] = json!(PUBLISHING_RECORD_VERSION);
+        original["profile"]["build"] = json!({"context":".","dockerfile":"Dockerfile","platform":"linux/amd64"});
+        original["publication"] = json!({
+            "profile":"cpu","requested_image":"","destination":{"repository":"registry.example/worker","publisher":{"kind":"registry","binding":"synthetic-publisher-grant"}}
+        });
+        if enrollment {
+            original["tailnet_enrollment"] = serde_json::to_value(populated()).unwrap();
+        }
+        let pair = convert(&original).unwrap();
+        let allocation: Value = serde_json::from_slice(&pair.allocation_bytes().unwrap()).unwrap();
+        assert_eq!(allocation["version"], 3);
+        assert_eq!(allocation["publication"], original["publication"]);
+        let restored = Records::decode(&pair.allocation_bytes().unwrap(), &pair.project_bytes().unwrap()).unwrap();
+        assert_eq!(serde_json::to_value(restored.deployment()).unwrap(), original);
+        let mut old_allocation = allocation.clone();
+        old_allocation["version"] = json!(1);
+        assert!(
+            Records::decode(
+                &serde_json::to_vec(&old_allocation).unwrap(),
+                &pair.project_bytes().unwrap()
+            )
+            .is_err()
+        );
+        let mut missing = allocation;
+        missing.as_object_mut().unwrap().remove("publication");
+        assert!(Records::decode(&serde_json::to_vec(&missing).unwrap(), &pair.project_bytes().unwrap()).is_err());
+    }
+}
+
+#[test]
 fn enrollment_ledger_is_allocation_owned_and_retained_after_worker_identity_clears() {
     use crate::cloud_runtime::tailnet::receipt::tests::populated;
     let ledger = populated();

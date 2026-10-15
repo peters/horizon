@@ -35,6 +35,33 @@ than accepting the cached account. It is not an account-switch UI or per-account
 store; the launch and selector integrations still follow separately.
 This helper has no launch caller yet. The launch integration follows separately.
 
+## Retained publication record prerequisite
+
+A cloud record can retain its original recipe image, named profile, resolved image
+repository and nonsecret publisher identity. The record contains no credential and
+is not proof that a publisher is authenticated or permitted to push. Existing
+launch callers do not create this record yet; automatic publishing remains inactive.
+The two legacy image-preparation factories refuse a retained publisher before loading
+old publishing credentials. Initial preparation is fenced only when no image specification
+exists; rebuild preparation is fenced when it will build. Reconnect, resize and other
+operations that reuse an existing image are not subjected to a publishing-credential fence.
+The portable engine must replace these two fences with retained-account authorization
+before it can build or rebuild these images. Reading and migration preserve metadata.
+
+Store reads and writes validate the record against the resolved build profile.
+Personal destinations require matching immutable account metadata and namespace;
+registry destinations cannot carry a personal account. An inconsistent record
+cannot replace the previous saved cloud. Host authorization must still compare
+the recorded identity with the authenticated account on every publication attempt.
+
+A publication record uses deployment format 5 and paired allocation format 3.
+The versions fence older readers that could otherwise erase the publisher. Removing
+the record without changing its version, or lowering the version while keeping it,
+is refused. Existing deployment formats and enrollment evidence remain supported.
+Legacy migration preserves publication metadata and the duplicate-worker guard,
+including when a neighboring cloud already has a publication record.
+
+
 ## Machine-local destination preferences
 
 The host can store one destination preference for each canonical checkout and named profile.

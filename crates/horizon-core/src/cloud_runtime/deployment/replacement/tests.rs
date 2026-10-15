@@ -10,6 +10,7 @@ use std::{
 
 mod committed_profile;
 mod new_server;
+mod publishing_fence;
 mod quick_start;
 mod settings_change;
 mod storage_choice;

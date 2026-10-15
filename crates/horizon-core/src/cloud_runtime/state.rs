@@ -9,6 +9,7 @@ pub use horizon_cloud_protocol::OperationId;
 pub(super) use replacement::REPLACEMENT_PENDING;
 pub use replacement::{ImageReplacement, ReplacementImage, ReplacementPhase};
 pub(in crate::cloud_runtime) const ENROLLMENT_RECORD_VERSION: u32 = 4;
+pub(in crate::cloud_runtime) const PUBLISHING_RECORD_VERSION: u32 = 5;
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{File, OpenOptions},
@@ -64,6 +65,8 @@ pub struct Deployment {
     /// Retains private-image intent across failed preparation and settings changes.
     #[serde(default)]
     pub registry_generation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication: Option<Box<super::publishing::Publication>>,
     pub worker: Option<Worker>,
     pub sessions: Vec<Session>,
     #[serde(default)]
@@ -144,7 +147,9 @@ impl Deployment {
     }
 
     pub(in crate::cloud_runtime) fn record_version(&self) -> u32 {
-        if !self.tailnet_enrollment.is_empty() {
+        if self.publication.is_some() {
+            PUBLISHING_RECORD_VERSION
+        } else if !self.tailnet_enrollment.is_empty() {
             ENROLLMENT_RECORD_VERSION
         } else if self.siblings.is_some() {
             super::siblings::RECORD_VERSION
@@ -153,12 +158,15 @@ impl Deployment {
         }
     }
 
-    /// Nonempty enrollment evidence fences readers that would ignore and erase it.
+    /// Enrollment and publishing evidence fence readers that would ignore and erase it.
     pub(in crate::cloud_runtime) fn supported_version(&self) -> bool {
         self.version == self.record_version() && self.known_version_shape()
     }
 
     fn known_version_shape(&self) -> bool {
+        if self.version == PUBLISHING_RECORD_VERSION {
+            return self.publication.is_some() && self.siblings.as_ref().is_none_or(super::siblings::Set::fits);
+        }
         match &self.siblings {
             None => {
                 self.version == 1 || (self.version == ENROLLMENT_RECORD_VERSION && !self.tailnet_enrollment.is_empty())
@@ -268,6 +276,9 @@ impl Store {
                     return Err(Error::Invalid("Unsupported cloud state"));
                 }
                 state.normalize_readiness_history();
+                if let Some(publication) = &state.publication {
+                    publication.validate(&state.profile)?;
+                }
                 Ok(Some(state))
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -283,6 +294,9 @@ impl Store {
     /// # Errors
     /// Syncs file contents and parent directory before returning to the provider.
     pub fn save(&self, state: &Deployment) -> Result<()> {
+        if let Some(publication) = &state.publication {
+            publication.validate(&state.profile)?;
+        }
         if !state.known_version_shape() {
             return Err(Error::Invalid(
                 "Cloud state version does not match its enrollment evidence or siblings",
@@ -630,3 +644,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "state/publication_tests.rs"]
+mod publication_tests;
