@@ -74,22 +74,12 @@ impl WorkerSpec {
     pub fn name(&self) -> String {
         format!("horizon-cloud-{}", self.operation_id)
     }
-    /// The idle period a dedicated worker carries in its environment. Workers
-    /// started through initialization never run the watcher.
-    #[must_use]
-    pub fn idle_stop_environment(&self) -> Option<String> {
-        self.startup_metadata
-            .is_none()
-            .then_some(self.profile.idle_stop_minutes)
-            .flatten()
-            .map(|minutes| minutes.to_string())
-    }
     /// The environment a provider that runs the worker image itself gives its
     /// container. Nothing in it is secret.
     /// # Errors
     /// Fails only if the capabilities cannot be serialized.
     pub fn container_environment(&self) -> Result<BTreeMap<String, String>, CloudError> {
-        let mut environment = BTreeMap::from([
+        let environment = BTreeMap::from([
             ("PUBLIC_KEY".to_owned(), self.public_key.clone()),
             ("HORIZON_CLOUD_OPERATION".to_owned(), self.operation_id.clone()),
             (
@@ -98,9 +88,6 @@ impl WorkerSpec {
                     .map_err(|_| CloudError::Invalid("Worker capabilities cannot be described"))?,
             ),
         ]);
-        if let Some(minutes) = self.idle_stop_environment() {
-            environment.insert(crate::IDLE_STOP_ENVIRONMENT_KEY.to_owned(), minutes);
-        }
         Ok(environment)
     }
     /// # Errors
@@ -387,10 +374,8 @@ impl Worker {
         {
             return Err(CloudError::IdentityMismatch);
         }
-        // A worker without its recorded idle period would never stop, or stop at the wrong time.
-        if self.env.get(crate::IDLE_STOP_ENVIRONMENT_KEY).cloned() != spec.idle_stop_environment() {
-            return Err(CloudError::IdentityMismatch);
-        }
+        // A worker created before the agent stop may carry its idle period as
+        // HORIZON_IDLE_STOP_MINUTES; the variable names no identity, so it is not compared.
         Ok(())
     }
     /// As `verify`, while the worker's image is being replaced: it may report

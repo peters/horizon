@@ -308,7 +308,7 @@ pub fn build_arguments(capabilities: &Capabilities, releases: &agents::Releases)
 /// the image's switch. So a rebuild that changes them makes another image, which the
 /// provider tells apart from the worker's current one, while a cached build with the same
 /// settings keeps its digest. It holds only committed profile values: the capabilities
-/// without hosted devices, the readiness timeout, the idle stop and the build paths.
+/// without hosted devices, the readiness timeout and the build paths.
 fn settings_label(profile: &Profile) -> [String; 2] {
     // Hosted devices are fixed at creation, and their names stay out of public metadata.
     let capabilities = Capabilities {
@@ -318,7 +318,6 @@ fn settings_label(profile: &Profile) -> [String; 2] {
     let settings = serde_json::json!({
         "capabilities": capabilities,
         "readiness_seconds": profile.bootstrap.readiness_seconds,
-        "idle_stop_minutes": profile.idle_stop_minutes,
         "build": profile.build,
     });
     ["--label".to_owned(), format!("{SETTINGS_LABEL}={settings}")]
@@ -437,6 +436,8 @@ mod tests {
         let mut resized = profile.clone();
         resized.cpu += 1;
         resized.storage.volume_gb += 1;
+        // An idle period has no effect, so it builds no other image.
+        resized.idle_stop_minutes = Some(30);
         // Hosted devices are fixed at creation, and their names stay out of the label.
         resized.capabilities.browserstack = Some(horizon_cloud::BrowserStack {
             provider: "synthetic-devices".into(),
@@ -445,9 +446,8 @@ mod tests {
         });
         assert_eq!(settings_label(&resized), label);
         assert!(!label[1].contains("synthetic"));
-        let edits: [fn(&mut Profile); 4] = [
+        let edits: [fn(&mut Profile); 3] = [
             |profile| profile.capabilities.desktop = !profile.capabilities.desktop,
-            |profile| profile.idle_stop_minutes = Some(30),
             |profile| profile.bootstrap.readiness_seconds += 1,
             |profile| {
                 profile.build = Some(horizon_cloud::Build {

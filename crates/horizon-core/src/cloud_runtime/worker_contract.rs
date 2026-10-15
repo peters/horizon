@@ -8,8 +8,6 @@ const SESSION_RESTART_MARKER: &str = "horizon-session-restart-contract=1";
 const CONTAINER_STARTED_MARKER: &str = "horizon-container-started=";
 const LAST_SELF_STOP_MARKER: &str = "horizon-last-self-stop=";
 const SELF_STOP_MARKER: &str = "horizon-self-stop-contract=1";
-// An image whose agents stop a dedicated worker when done, without an idle period.
-const AGENT_STOP_MARKER: &str = "horizon-agent-stop-contract=1";
 const PINNED_SUBMODULES_MARKER: &str = "horizon-source-shallow-contract=1";
 const LFS_SELECTION_MARKER: &str = "horizon-source-lfs-selection-contract=1";
 const PREPARE_CHECKOUT_MARKER: &str = "horizon-prepare-checkout-contract=1";
@@ -120,7 +118,7 @@ pub(super) fn environment(capabilities: &Capabilities) -> Result<String> {
         .map_err(|_| Error::Json)
 }
 
-pub(super) fn validate(output: &str, capabilities: &Capabilities, git_auth: bool, idle_stop: bool) -> Result<()> {
+pub(super) fn validate(output: &str, capabilities: &Capabilities, git_auth: bool) -> Result<()> {
     let contains = |marker| reports(output, marker);
     if !contains("horizon-source-contract=1") {
         return Err(Error::Invalid(
@@ -145,13 +143,6 @@ pub(super) fn validate(output: &str, capabilities: &Capabilities, git_auth: bool
     }
     if git_auth && !contains("horizon-git-auth-contract=1") {
         return Err(Error::Invalid("Worker image does not support Git credential transfer"));
-    }
-    // An older supervisor ignores the idle period, so the worker would never stop. An image
-    // with the agent stop has no idle stop at all: its agents stop the worker when done.
-    if idle_stop && !contains("horizon-idle-stop-contract=1") && !contains(AGENT_STOP_MARKER) {
-        return Err(Error::Invalid(
-            "Worker image does not support idle_stop_minutes; rebuild with the current worker bootstrap",
-        ));
     }
     Ok(())
 }

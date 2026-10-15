@@ -35,7 +35,10 @@ pub(super) fn next_profile(bound: &Profile, config: Option<&CloudConfig>, name: 
     if let Some(reason) = refusal(bound, committed) {
         return Err(Error::Invalid(reason));
     }
-    let next = bound.with_rebuild_settings(committed);
+    let mut next = bound.with_rebuild_settings(committed);
+    // An idle period has no effect, so a rebuild keeps the cloud's own: a change of it
+    // alone would build the same image for a changed profile.
+    next.idle_stop_minutes = bound.idle_stop_minutes;
     next.validate(false).map_err(|error| {
         Error::Invalid(match error {
             ProfileError::Invalid(reason) => reason,
@@ -130,7 +133,6 @@ pub(super) fn changes(bound: &Profile, next: &Profile) -> Vec<String> {
         );
     }
     let approvals = |approvals: AgentApprovals| if approvals.is_auto() { "auto" } else { "ask" };
-    let minutes = |minutes: Option<u16>| minutes.map_or_else(|| "off".to_owned(), |minutes| format!("{minutes} min"));
     let mut differs = |what: &str, before: String, after: String| {
         if before != after {
             changes.push(format!("{what} {before} → {after}"));
@@ -145,11 +147,6 @@ pub(super) fn changes(bound: &Profile, next: &Profile) -> Vec<String> {
         "Readiness timeout",
         format!("{} s", bound.bootstrap.readiness_seconds),
         format!("{} s", next.bootstrap.readiness_seconds),
-    );
-    differs(
-        "Idle stop",
-        minutes(bound.idle_stop_minutes),
-        minutes(next.idle_stop_minutes),
     );
     if let (Some(before), Some(after)) = (&bound.build, &next.build) {
         differs("Build context", before.context.clone(), after.context.clone());

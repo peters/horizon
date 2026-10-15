@@ -87,8 +87,5 @@ pub(super) fn environment(spec: &WorkerSpec) -> Value {
     if let Some(metadata) = &spec.startup_metadata {
         env[crate::startup::ENVIRONMENT_KEY] = json!(metadata.as_str());
     }
-    if let Some(minutes) = spec.idle_stop_environment() {
-        env[crate::IDLE_STOP_ENVIRONMENT_KEY] = json!(minutes);
-    }
     env
 }

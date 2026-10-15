@@ -326,10 +326,7 @@ pub fn worker(server: &Server, spec: &WorkerSpec, volume: &Volume) -> Result<Wor
         _ => "RUNNING",
     };
     // The host plan gave the container exactly this environment from the same spec.
-    let mut env = serde_json::json!({"HORIZON_CLOUD_OPERATION": spec.operation_id});
-    if let Some(minutes) = spec.idle_stop_environment() {
-        env[crate::IDLE_STOP_ENVIRONMENT_KEY] = serde_json::json!(minutes);
-    }
+    let env = serde_json::json!({"HORIZON_CLOUD_OPERATION": spec.operation_id});
     serde_json::from_value(serde_json::json!({
         "id": server.id.to_string(),
         "name": server.name,

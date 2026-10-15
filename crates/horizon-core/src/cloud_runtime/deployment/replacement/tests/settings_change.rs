@@ -6,8 +6,8 @@ use horizon_cloud::{Agent, BrowserEngine};
 use std::process::Command;
 
 /// A ready cloud with agent `claude` and Chromium, and a committed profile that adds
-/// `codex`, swaps Chromium for Firefox, adds the desktop, a longer readiness timeout, an
-/// idle stop and another Dockerfile.
+/// `codex`, swaps Chromium for Firefox, adds the desktop, a longer readiness timeout and
+/// another Dockerfile.
 fn settings_change() -> (Fixture, Profile, Profile) {
     let fixture = Fixture::with(&json!({"agents":["claude"],"browsers":["chromium"]}));
     let bound = fixture.state().profile;
@@ -16,18 +16,16 @@ fn settings_change() -> (Fixture, Profile, Profile) {
     committed.capabilities.browsers = [BrowserEngine::Firefox].into();
     committed.capabilities.desktop = true;
     committed.bootstrap.readiness_seconds = 1800;
-    committed.idle_stop_minutes = Some(30);
     committed.build.as_mut().unwrap().dockerfile = "Dockerfile.agents".into();
     (fixture, bound, committed)
 }
 
-const CHANGES: [&str; 7] = [
+const CHANGES: [&str; 6] = [
     "Adds agent codex",
     "Adds browser firefox",
     "Removes browser chromium",
     "Adds the desktop",
     "Readiness timeout 600 s → 1800 s",
-    "Idle stop off → 30 min",
     "Build dockerfile Dockerfile → Dockerfile.agents",
 ];
 
@@ -58,6 +56,7 @@ fn each_change_is_listed_in_a_plain_sentence() {
     removed.capabilities.agents.clear();
     removed.capabilities.desktop = false;
     removed.capabilities.agent_approvals = horizon_cloud::AgentApprovals::Ask;
+    // An idle period has no effect, so it is no change.
     removed.idle_stop_minutes = Some(60);
     assert_eq!(
         compatibility::changes(&committed, &removed),
@@ -66,7 +65,6 @@ fn each_change_is_listed_in_a_plain_sentence() {
             "Removes agent claude",
             "Removes the desktop",
             "Agent approvals auto → ask",
-            "Idle stop 30 min → 60 min",
         ]
     );
     assert_eq!(compatibility::changes(&bound, &bound), Vec::<String>::new());
@@ -363,6 +361,31 @@ fn git(path: &Path, args: &[&str]) {
 }
 
 #[test]
+fn an_idle_period_in_the_settings_is_no_change_and_the_plan_notes_it() {
+    let (_fixture, bound, _committed) = settings_change();
+    let repository = tempfile::tempdir().unwrap();
+    git(repository.path(), &["init", "--quiet"]);
+    let mut idle = bound.clone();
+    idle.idle_stop_minutes = Some(30);
+    std::fs::create_dir_all(repository.path().join(".horizon")).unwrap();
+    std::fs::write(
+        repository.path().join(".horizon/cloud.yml"),
+        serde_json::to_string(&config(&idle)).unwrap(),
+    )
+    .unwrap();
+    git(repository.path(), &["add", "."]);
+    git(repository.path(), &["commit", "--quiet", "-m", "Idle period"]);
+    let planned = plan(repository.path(), &bound, "dev", &Cancellation::default()).unwrap();
+    // The cloud keeps its own idle period, so the rebuild changes nothing.
+    assert_eq!(planned.profile, bound);
+    assert!(planned.changes.is_empty());
+    assert_eq!(
+        planned.notes,
+        [crate::cloud_runtime::repository::launch::idle_period_note("dev", &idle).unwrap()]
+    );
+}
+
+#[test]
 fn a_plan_reads_the_working_copy_and_lists_its_changes_and_uncommitted_files() {
     let (_fixture, bound, committed) = settings_change();
     let repository = tempfile::tempdir().unwrap();
@@ -389,14 +412,18 @@ fn a_plan_reads_the_working_copy_and_lists_its_changes_and_uncommitted_files() {
     // reads the latest commit with the working copy, and lists the file, which is in the
     // build context.
     let mut later = committed.clone();
-    later.idle_stop_minutes = Some(45);
+    later.bootstrap.readiness_seconds = 900;
     commit(&later);
     let mut working = later.clone();
     working.capabilities.desktop = false;
     save(&working);
     let uncommitted = plan(repository.path(), &bound, "dev", &cancel).unwrap();
     assert_eq!(uncommitted.profile, working);
-    assert!(uncommitted.changes.contains(&"Idle stop off → 45 min".to_owned()));
+    assert!(
+        uncommitted
+            .changes
+            .contains(&"Readiness timeout 600 s → 900 s".to_owned())
+    );
     assert!(!uncommitted.changes.contains(&"Adds the desktop".to_owned()));
     let files: Vec<_> = uncommitted
         .uncommitted

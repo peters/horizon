@@ -124,7 +124,7 @@ change in the report as a deviation.
 | `smoke-sib` | RunPod, CPU, `runpod-build` with the sibling `sib` | None | C10, G02, G11, L05, L13, L14 |
 | `smoke-lib` | Hetzner, CPU, companion repository `<lib>` | None | G01, G03–G10, G12 |
 | `smoke-lib0` | Hetzner, CPU, companion repository `<lib>`, no worker (`smoke-lib1` if a retry is necessary) | None | G08 |
-| `smoke-x` | Hetzner, CPU, image-only, with an `idle_stop_minutes` that Horizon does not apply | None | L07, L08 |
+| `smoke-x` | Hetzner, CPU, image-only, with an `idle_stop_minutes` that has no effect | None | L07, L08 |
 | `smoke-hb` | Hetzner, CPU, `runpod-build` with Hetzner and other storage chosen in New cloud | None | L11, L13 |
 | `smoke-hd` | Hetzner, CPU, `runpod-build` with a 1 GB system disk requirement | None | L12 |
 

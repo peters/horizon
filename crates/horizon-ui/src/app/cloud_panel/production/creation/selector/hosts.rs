@@ -38,8 +38,6 @@ pub(in crate::app::cloud_panel::production::creation) fn refusal(profile: &Profi
         Some("This profile asks for high-performance storage; choose standard storage for a Docker host.")
     } else if profile.capabilities.browserstack.is_some() {
         Some("This profile has hosted devices; a Docker host has none.")
-    } else if profile.idle_stop_minutes.is_some() {
-        Some("This profile stops when idle; a Docker host has no idle stop.")
     } else {
         (!provider::DOCKER_HOST.supports(profile)).then_some("A Docker host cannot run this profile.")
     }
