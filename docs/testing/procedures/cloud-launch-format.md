@@ -21,6 +21,11 @@ This is a serialization prerequisite. All production constructors retain the
 legacy `None` choice. Publisher envelopes remain refused until the engine can
 consume them. No selector, publication, credentials or compute is activated.
 
+## 3. Safety
+
+Use synthetic serialization fixtures only. No credentials, provider access,
+settings changes or live worker actions are required.
+
 ## 4. Equipment and preconditions
 
 - The candidate checkout and repository Rust toolchain.
@@ -55,6 +60,11 @@ consume them. No selector, publication, credentials or compute is activated.
    Result: JSON and YAML refuse malformed intent before any launch can occur.
    Decode errors do not echo rejected private field values.
 
+3. Change either side of the in-memory recipe/profile image equality.
+
+   Result: JSON/YAML serialization fails before an older reader can consume it.
+   A standalone JSON writer emits no bytes. The same invariant holds on read.
+
 ### 6.3 LF-03 — Runtime consumers
 
 1. Run the full applicable local matrix, including the core and UI test tiers.
@@ -78,7 +88,3 @@ reads and forward the retained choice atomically.
 
 Record candidate, toolchain, commands, logs, new/reused results and CI in the PR.
 No native GIF is needed because the change has no visible UI behavior.
-
-Recipe/profile equality is enforced before serialization as well as during
-deserialization. An inconsistent in-memory recipe emits no standalone launch
-JSON, and JSON/YAML serialization fail before it can reach an older reader.

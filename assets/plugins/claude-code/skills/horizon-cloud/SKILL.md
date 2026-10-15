@@ -116,3 +116,5 @@ refuse. This prerequisite also refuses those envelopes until the launch engine
 can consume the retained choice; it activates no selector or image publication.
 Ordinary unknown legacy fields remain compatible, but mixed or downgraded
 publisher envelopes and reserved null keys are refused.
+
+The desktop SDK also has an unwired exact-device HTTP prerequisite. It keeps API credentials on the desktop and returns typed retained reasons for missing/offline/denied/unverified404 outcomes. It does not enable automatic cloud node cleanup or add a UI/CLI/MCP deletion operation. See docs/architecture/tailnet-node-api.md and docs/testing/procedures/tailnet-node-api.md.
