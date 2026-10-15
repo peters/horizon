@@ -354,3 +354,32 @@ fn restored_or_live_cloud_membership_cancels_retained_destination_operations() {
         }
     }
 }
+
+#[test]
+#[cfg_attr(windows, ignore = "Local agent fixture uses a POSIX shell")]
+fn destination_changes_preserve_saved_agent_bindings_without_reading_credentials() {
+    let mut f = fixture();
+    let path = f.root.join("settings.json");
+    let token = json!({"file":f.root.join("absent-agent-subscription"),"saved_at":0});
+    let mut settings: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    settings["claude_token"] = token.clone();
+    std::fs::write(&path, serde_json::to_vec(&settings).unwrap()).unwrap();
+    let yaml = std::fs::read(f.source.join(".horizon/cloud.yml")).unwrap();
+    let info = run(&mut f, json!({"operation":"list"}));
+    let selected = run(
+        &mut f,
+        json!({"operation":"select","shown":null,"destination":info["choices"][0]["selection"]}),
+    );
+    let after: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(after["claude_token"], token);
+    assert!(
+        !serde_json::to_string(&selected)
+            .unwrap()
+            .contains("absent-agent-subscription")
+    );
+    run(&mut f, json!({"operation":"reset","shown":selected["shown_override"]}));
+    let reset: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(reset["claude_token"], token);
+    assert!(!f.root.join("absent-agent-subscription").exists());
+    assert_eq!(std::fs::read(f.source.join(".horizon/cloud.yml")).unwrap(), yaml);
+}
