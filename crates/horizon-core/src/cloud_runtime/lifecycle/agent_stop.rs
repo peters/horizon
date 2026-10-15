@@ -181,18 +181,25 @@ pub(super) fn stop_with(
     Ok(state)
 }
 
-/// Gives the request `stop` back to the worker that took it, when Horizon will not
-/// carry it out now, as while another operation holds the cloud: the worker drops it,
-/// and the agent may ask again.
+/// Gives the request `stop` back to the worker that took it, as `shown`, the card's copy
+/// of the record of the cloud at `root`, names it, when Horizon will not carry it out
+/// now, as while another operation holds the cloud: the worker drops it, and the agent
+/// may ask again. The saved record is not read, so an operation that holds it does not
+/// keep the request taken.
 /// # Errors
-/// Reports a busy cloud and a worker that cannot be reached.
-pub fn give_back_stop_request(root: &Path, settings: &Settings, cancel: &Cancellation, stop: &AgentStop) -> Result<()> {
-    let state = Store::lock(root)?
-        .load()?
-        .ok_or(Error::Invalid("No cloud deployment"))?;
-    let Some(worker) = state.worker.as_ref().filter(|worker| worker.id == stop.worker_id) else {
-        return Ok(());
-    };
+/// Refuses a record without that worker; reports a worker that cannot be reached.
+pub fn give_back_stop_request(
+    root: &Path,
+    shown: &Deployment,
+    settings: &Settings,
+    cancel: &Cancellation,
+    stop: &AgentStop,
+) -> Result<()> {
+    let worker = shown
+        .worker
+        .as_ref()
+        .filter(|worker| worker.id == stop.worker_id)
+        .ok_or(Error::Invalid("The stop request came from another worker"))?;
     run(
         worker,
         settings,

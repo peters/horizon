@@ -92,12 +92,14 @@ fn a_stop_request_starts_a_stop_for_that_agent() {
     let root = temp.path().join("clouds");
     let ctx = egui::Context::default();
     app.prepare_production_clouds(&ctx);
-    // A cloud that is no longer one whose agents Horizon stops, so the stop for the
+    // A ready Hetzner cloud; the request names no worker of it, so the stop for the
     // agent refuses before any provider or worker request.
     let state: cloud_runtime::state::Deployment = serde_json::from_value(serde_json::json!({
         "version": 1, "cloud_id": "fixture", "repository": temp.path(), "revision": "a".repeat(40),
-        "profile": {"provider": "runpod", "image": "registry.example/worker", "cpu": 2, "memory_gb": 4},
-        "stage": "Ready", "operation": {"state": "bound", "worker_id": "42"}, "spec": null, "worker": null,
+        "profile": {"provider": "hetzner", "image": "registry.example/worker", "cpu": 2, "memory_gb": 4},
+        "stage": "Ready", "operation": {"state": "bound", "worker_id": "42"}, "spec": null,
+        "worker": {"id": "42", "name": "horizon-cloud-fixture", "imageName": "registry.example/worker@sha256:1",
+                   "desiredStatus": "RUNNING", "publicIp": "192.0.2.10", "portMappings": {"22": 22}},
         "sessions": []
     }))
     .unwrap();
@@ -170,15 +172,24 @@ fn a_cloud_with_an_open_dialog_gives_the_request_back_instead_of_stopping() {
     runtime.stage = Some(cloud_runtime::Stage::Ready);
     runtime.confirmation = Confirmation::Delete;
     app.stop_clouds_for_agents(vec![(1, stop())], &ctx);
+    // Found again later, as a worker that kept it gives it, it is still not carried out.
+    app.cloud_prototype
+        .production
+        .runtimes
+        .get_mut(&1)
+        .unwrap()
+        .confirmation = Confirmation::None;
+    app.stop_clouds_for_agents(vec![(1, stop())], &ctx);
     let runtime = &app.cloud_prototype.production.runtimes[&1];
     assert_eq!(runtime.operation, None, "no Stop starts");
-    assert!(
-        matches!(runtime.confirmation, Confirmation::Delete),
-        "the dialog stays open"
-    );
     assert!(runtime.agent_stop.is_none());
-    assert!(runtime.logs.iter().any(|line| {
-        line.text
-            .starts_with("claude asked to stop this cloud, but another operation")
-    }));
+    let given_back = runtime
+        .logs
+        .iter()
+        .filter(|line| {
+            line.text
+                .starts_with("claude asked to stop this cloud while it was not ready")
+        })
+        .count();
+    assert_eq!(given_back, 1, "logged once");
 }

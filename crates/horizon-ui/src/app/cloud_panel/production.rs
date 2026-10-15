@@ -300,6 +300,9 @@ pub(super) struct Runtime {
     /// What the reading of agents' stop requests of this ready cloud found; dropping it
     /// ends the reading.
     agent_stops: Option<std::sync::mpsc::Receiver<agent_stops::Found>>,
+    /// The agent request this card gave back, by its time, so that it is never carried
+    /// out later.
+    given_back: Option<u64>,
     /// A failure of a ready or reconnecting cloud, held while the provider check that
     /// may explain it as a stop runs.
     unexplained_failure: Option<String>,

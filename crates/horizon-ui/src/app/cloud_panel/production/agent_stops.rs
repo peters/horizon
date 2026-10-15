@@ -4,7 +4,7 @@
 //! the card shows as any Stop. Reading skips a cloud that another operation holds or that
 //! is not ready, and goes on after a failure the card shows, so a lost connection does
 //! not lose the request. Only a running Horizon does this.
-use super::{Confirmation, HorizonApp, Runtime, Settings, cloud_runtime, lifecycle::Action};
+use super::{Confirmation, HorizonApp, Runtime, Settings, Stage, cloud_runtime, lifecycle::Action};
 use cloud_runtime::{
     Cancellation, Error,
     lifecycle::{AgentStop, Requested},
@@ -124,20 +124,36 @@ impl HorizonApp {
         }
     }
 
-    /// Stops each cloud whose agent asked for it, as Stop does, for that agent. While
-    /// another operation holds the cloud, or the person has a dialog of it open, the
-    /// request goes back to the worker instead, which drops it: the agent may ask again.
+    /// Stops each cloud whose agent asked for it, as Stop does, for that agent. A cloud
+    /// that is not ready, that another operation holds, or that has a dialog open gives
+    /// the request back to its worker, which drops it, and the agent may ask again. A
+    /// request given back once is never carried out later, even if the worker kept it.
     pub(super) fn stop_clouds_for_agents(&mut self, stops: Vec<(u32, AgentStop)>, ctx: &egui::Context) {
         for (id, stop) in stops {
             let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) else {
                 continue;
             };
-            if runtime.busy() || !matches!(runtime.confirmation, Confirmation::None) {
-                runtime.push_log(format!(
-                    "{} asked to stop this cloud, but another operation of it is open; the request was given back",
-                    stop.agent
-                ));
-                self.give_back_stop_request(id, stop);
+            let ready = runtime.stage == Some(Stage::Ready)
+                && runtime
+                    .state
+                    .as_ref()
+                    .is_some_and(cloud_runtime::lifecycle::takes_stop_requests);
+            if !ready
+                || runtime.busy()
+                || !matches!(runtime.confirmation, Confirmation::None)
+                || runtime.given_back == Some(stop.at)
+            {
+                if runtime.given_back != Some(stop.at) {
+                    runtime.push_log(format!(
+                        "{} asked to stop this cloud while it was not ready for it, or another operation of it \
+                         was open; Horizon gives the request back",
+                        stop.agent
+                    ));
+                    runtime.given_back = Some(stop.at);
+                }
+                if let Some(shown) = runtime.state.clone() {
+                    self.give_back_stop_request(id, shown, stop);
+                }
                 continue;
             }
             runtime.agent_stop = Some(stop);
@@ -148,8 +164,8 @@ impl HorizonApp {
         }
     }
 
-    /// Gives `stop` back to the worker of cloud `id` off the UI thread.
-    fn give_back_stop_request(&self, id: u32, stop: AgentStop) {
+    /// Gives `stop` back to the worker of cloud `id`, as `shown` names it, off the UI thread.
+    fn give_back_stop_request(&self, id: u32, shown: cloud_runtime::state::Deployment, stop: AgentStop) {
         let Some(root) = self.cloud_prototype.root.clone() else {
             return;
         };
@@ -168,12 +184,14 @@ impl HorizonApp {
             let given = Settings::load(&root.join("settings.json")).and_then(|settings| {
                 cloud_runtime::lifecycle::give_back_stop_request(
                     &state_root,
+                    &shown,
                     &settings,
                     &Cancellation::default(),
                     &stop,
                 )
             });
-            // A request the worker keeps lapses ten minutes after its take.
+            // A request the worker keeps lapses ten minutes after its take; until then the
+            // card gives it back again each time it is found.
             drop(given);
         });
     }
