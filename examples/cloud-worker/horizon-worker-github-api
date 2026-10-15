@@ -286,6 +286,8 @@ class Exchange(checks.Checks):
             data = self.upkeep_dispatch(rules, request, route, candidate, repository)
             if upkeep.reviews(request.method, route.parts):
                 data = self.upkeep_review(request, repository)
+            elif upkeep.pull_edited(request.method, route.parts):
+                data = self.upkeep_pull(request, repository)
             elif upkeep.branch_written(request.method, route.parts) is not None:
                 data = self.upkeep_branch(request, route, candidate, repository)
             elif number is not None:

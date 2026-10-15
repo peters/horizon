@@ -128,7 +128,13 @@ Run the commands of the tasks in the shell panel of setup step 2, in `/tmp/check
    `author`: the branch `policy-check` does not start with `upkeep/`. The pull request
    stays open.
 
-3. In `/tmp/check`, run `git push origin HEAD:refs/heads/upkeep/policy-check`, open a
+3. Run `git push origin HEAD~1:refs/heads/policy-base`, then
+   `gh pr edit <number> --repo <repo> --base policy-base`.
+
+   Result: The edit fails with the reason that this Upkeep does not let an agent change
+   the base branch of a pull request. The base of the pull request does not change.
+
+4. In `/tmp/check`, run `git push origin HEAD:refs/heads/upkeep/policy-check`, open a
    pull request for it as in GPO-02, wait until its checks pass, and merge it with
    `--match-head-commit` as in step 2.
 

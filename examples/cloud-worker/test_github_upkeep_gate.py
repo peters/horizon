@@ -122,8 +122,8 @@ class GateTests(unittest.TestCase):
                 fake = Fake(files=files, commits=commits, reviews=[approval()])
                 text = self.refused(fake, 'blocked on workflows')
                 self.assertIn('Approve with the line upkeep-allow: workflows', text)
-        fake = Fake(files=touched, commits=[agent], reviews=[approval(body='Looks fine.\nupkeep-allow: workflows')])
-        self.gate(fake)
+        for body in ('Looks fine.\nupkeep-allow: workflows', 'Reviewed.\r\nupkeep-allow: workflows\r\nThanks.'):
+            self.gate(Fake(files=touched, commits=[agent], reviews=[approval(body=body)]))
         # A list that GitHub cut short is not every commit.
         self.refused(Fake(files=touched, total=251), 'blocked on workflows')
         self.refused(Fake(files=[{'filename': 'x%d' % n} for n in range(300)]), 'blocked on workflows')
@@ -226,6 +226,31 @@ class GateBrokerTests(BrokerTestCase):
         self.assertIn('without other mutations', reply['errors'][0]['message'])
         gate.assert_not_called()
         self.assertFalse(any(b'mergePullRequest' in (data or b'') for *_, data in self.api.seen))
+
+    def test_an_agent_cannot_change_the_base_that_the_gate_compares_with(self):
+        # The gate compares the pull request with its base; a new base after that check would
+        # let the merge bring in what the gate never saw.
+        before = len(self.api.seen)
+        for target, body in [('/repos/example/project/pulls/7', {'title': 'x', 'base': 'main'}),
+                             ('/repos/example/project/pulls/7', b'{"title": "x", "base": null}'),
+                             ('/repos/example/project/pulls/07', {'title': 'x'})]:
+            status, _, payload = self.send('PATCH', target, body=body)
+            self.assertEqual(status, 403, target)
+            self.assertIn('Horizon: this Upkeep', json.loads(payload)['message'])
+        self.assertEqual(len(self.api.seen), before)
+        status, _, _ = self.send('PATCH', '/repos/example/project/pulls/7', body={'title': 'x', 'body': 'y'})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(self.api.seen[-1][-1]), {'title': 'x', 'body': 'y'})
+        self.api.graphql = lambda body: {'data': {'nodes': [{'__typename': 'PullRequest',
+                                                             'held': {'nameWithOwner': 'example/project'}}]}}
+        edit = ('mutation($id: ID!, $base: String) { updatePullRequest(input: {pullRequestId: $id, '
+                'baseRefName: $base}) { clientMutationId } }')
+        reply = self.graphql(edit, {'id': 'PR_1', 'base': 'main'})
+        self.assertIn('base branch', reply['errors'][0]['message'])
+        self.assertFalse(any(b'updatePullRequest' in (data or b'') for *_, data in self.api.seen))
+        reply = self.graphql(edit, {'id': 'PR_1'})
+        self.assertNotIn('errors', reply)
+        self.assertTrue(any(b'updatePullRequest' in (data or b'') for *_, data in self.api.seen))
 
 
 if __name__ == '__main__':

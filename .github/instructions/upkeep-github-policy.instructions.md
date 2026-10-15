@@ -39,6 +39,11 @@ agent-writable, so nothing there is a control. Check that:
   account's latest decision, `APPROVED`, on the exact head, and lifts `workflows` only
   with the line `upkeep-allow: workflows`. Its trust
   rests on the refusal of every agent approval above.
+- The base of a pull request stays the one that the gate compared with: the broker
+  reads the whole body of a REST pull request edit (`upkeep.pull_edited`, plain
+  `/pulls/N` only) and refuses any `base` field, and refuses a GraphQL
+  `updatePullRequest` with a `baseRefName`. GitHub's merge API takes no expected base,
+  so a new base after the gate would merge a comparison that the gate never read.
 - A workflow dispatch passes only for a listed (repository, file) pair, resolved
   through GitHub from the ID or file name in the path, and only with the `ref` of the
   default branch that GitHub reports: on another ref, an agent could have pushed the

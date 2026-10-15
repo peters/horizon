@@ -554,6 +554,9 @@ these requests of every agent of the cloud:
   submitted review (its body could add `upkeep-allow: workflows` to your approval):
   only you approve.
 - Auto-merge (a merge that GitHub makes later, unchecked).
+- A change of the base branch of a pull request: the merge gate compares the pull
+  request with its base, and a new base could bring in changes that it did not check.
+  Open a new pull request instead.
 - A workflow dispatch, unless the person listed that workflow of that repository in
   the settings of the Upkeep.
 - A change of the default branch without a pull request: a Git push to it, a file

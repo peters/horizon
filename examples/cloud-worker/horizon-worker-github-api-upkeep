@@ -33,6 +33,8 @@ PREFIX = 'Horizon: '
 # its head.
 MAX_REVIEW = 1 << 20
 MAX_DISPATCH = 65536
+# A pull request's edit is read in full to find a new base.
+MAX_PULL = 1 << 20
 # A file change is read in full to find its branch.
 MAX_CONTENTS = 32 << 20
 MAX_MERGE = 65536
@@ -47,7 +49,8 @@ OWN_BRANCH = 'upkeep/'
 HEAD = re.compile(r'[0-9a-f]{40}')
 MERGE = re.compile(r'/pulls/(?P<number>[1-9][0-9]{0,9})/merge')
 # The line of the person's approval that also lets a workflow change through.
-ALLOW_WORKFLOWS = re.compile(r'(?mi)^[ \t]*upkeep-allow:[ \t]*workflows[ \t]*$')
+# A line ends with LF or CRLF.
+ALLOW_WORKFLOWS = re.compile(r'(?mi)^[ \t]*upkeep-allow:[ \t]*workflows[ \t]*\r?$')
 
 
 def refusal(status, message):
@@ -301,6 +304,14 @@ class Checks:
             self.upkeep_refused('review', repository, upkeep.APPROVAL)
         return data
 
+    def upkeep_pull(self, request, repository):
+        """Reads the edit of a pull request and refuses a new base. Returns the body, which is
+        then sent as read."""
+        body, data = self.upkeep_body(request, repository, 'merge', MAX_PULL)
+        if isinstance(body, dict) and 'base' in body:
+            self.upkeep_refused('merge', repository, upkeep.RETARGET)
+        return data
+
     def upkeep_merge(self, rules, request, repository, number, candidate):
         """Reads a REST merge and sends it through the gate. Returns its body, which is then
         sent as read."""
@@ -349,7 +360,7 @@ class Checks:
                 raise policy.Refused(str(refused)) from None
 
     def upkeep_mutations(self, plan):
-        """Refuses auto-merge and the approval of a pull request for an Upkeep."""
+        """Refuses auto-merge, the approval of a pull request and a new base for an Upkeep."""
         for name, arguments in plan.mutations:
             values = arguments.get('input') if isinstance(arguments.get('input'), dict) else {}
             reason = None
@@ -357,8 +368,10 @@ class Checks:
                 reason = 'this Upkeep does not let an agent turn on auto-merge.'
             elif name == 'addPullRequestReview' and upkeep.approves(values.get('event')):
                 reason = upkeep.APPROVAL
+            elif name == 'updatePullRequest' and values.get('baseRefName') is not None:
+                reason = upkeep.RETARGET
             if reason is not None:
-                self.broker.log.refused('merge' if name == 'enablePullRequestAutoMerge' else 'review', None, reason)
+                self.broker.log.refused('review' if name == 'addPullRequestReview' else 'merge', None, reason)
                 raise policy.Refused(reason)
 
 
