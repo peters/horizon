@@ -245,7 +245,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "cloud_list",
-        description = "The cloud list of the Horizon sidebar for the clouds in your workspace. operation list (the default) returns each cloud's ID, name, group (needs_you, cloud or parked), status line, hourly rate and whether an agent works on it. attach moves the person's view to the cloud, as a click on its row does; its terminals attach when the cloud stays in view. park parks the terminals of a cloud that is out of view now instead of after the grace period; a cloud in view is refused, because it attaches again. Requires the running Horizon."
+        description = "The cloud list of the Horizon sidebar for the clouds in your workspace. operation list (the default) returns each cloud's ID, name, group (needs_you, cloud or parked), status line, hourly rate and whether an agent works on it. worker_image and image_publication describe that cloud's retained image and publisher metadata when its matching runtime is loaded, otherwise null. An unresolved image is null too. Registry publisher metadata includes its opaque nonsecret grant ID, never credential values or paths. They read no credentials and do not prove current registry access. attach moves the person's view to the cloud, as a click on its row does; its terminals attach when the cloud stays in view. park parks the terminals of a cloud that is out of view now instead of after the grace period; a cloud in view is refused, because it attaches again. Requires the running Horizon."
     )]
     async fn cloud_list(
         &self,

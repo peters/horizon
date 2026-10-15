@@ -9,7 +9,11 @@ Use this skill for cloud offers, the cloud list of your workspace, Upkeep, compa
 a worker's Local Network Bridge, and GitHub access on a cloud worker.
 Read [the cloud reference](references/cloud.md) for the server and operation you need.
 Use tools from the connected server and their current schemas. Do not substitute
-private Horizon state for MCP results.
+private Horizon state for MCP results. Cloud-list `worker_image` and
+`image_publication` are retained metadata from the matching cloud runtime, or
+`null` when unavailable or the image is unresolved. Registry publication includes
+an opaque nonsecret grant ID, never a credential value or path. These fields do
+not prove current registry access.
 
 Hetzner offers include all current x86 types in permitted locations. The configured
 server types are fallback preferences; they do not restrict explicit worker choices.

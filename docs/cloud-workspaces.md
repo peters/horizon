@@ -1456,6 +1456,15 @@ clouds as the sidebar does:
 - **park** parks the terminals of a cloud that is out of view now. Horizon
   refuses a cloud in view, because it attaches again.
 
+Each entry also has `worker_image` and `image_publication`. They describe the
+image and publishing identity retained by that cloud, independently of current
+account settings. Either can be `null` while its matching runtime is unavailable;
+an unresolved image is also `null`, and legacy records have no publication. A
+registry publisher includes its opaque nonsecret binding ID, never a credential
+value or path. This reads metadata only, without opening
+credentials or checking current registry access. It never changes a cloud's
+destination.
+
 The cloud list does not stop workers. Only you stop a worker, with **Stop** on its
 card.
 
