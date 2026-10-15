@@ -132,6 +132,7 @@ mod tests {
 
     fn launch(placement: Placement) -> CloudLaunch {
         CloudLaunch {
+            publishing_selection: None,
             deployment_started: true,
             id: "placed".into(),
             revision: "a".repeat(40),

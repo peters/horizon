@@ -145,6 +145,7 @@ fn seed_built_cloud(app: &mut HorizonApp, root: &Path) -> std::path::PathBuf {
     );
     let state = deployment(root, true, Phase::Built);
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "fixture".into(),
         revision: "a".repeat(40),
@@ -332,6 +333,7 @@ fn a_busy_cloud_does_not_start_a_rebuild() {
         [0.0, 0.0],
     );
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "fixture".into(),
         revision: "a".repeat(40),

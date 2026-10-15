@@ -29,6 +29,7 @@ fn resizing_requires_a_saved_record_without_a_requested_worker() {
     let config = super::super::CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 8\n    memory_gb: 32\n").unwrap();
     let profile = config.profiles["dev"].clone();
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "fixture".into(),
         revision: "a".repeat(40),
@@ -101,6 +102,7 @@ fn size_launch() -> CloudLaunch {
     )
     .unwrap();
     CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "resize".into(),
         revision: "a".repeat(40),

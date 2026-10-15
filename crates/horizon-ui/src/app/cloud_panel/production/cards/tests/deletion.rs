@@ -245,6 +245,7 @@ fn resumable_cloud(app: &mut crate::app::HorizonApp, with_panel: bool) {
         [0.0, 0.0],
     );
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "fixture".into(),
         revision: "a".repeat(40),

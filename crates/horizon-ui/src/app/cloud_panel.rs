@@ -1040,6 +1040,7 @@ mod tests {
         let mut group = CloudGroup::new(1, "Cloud".into(), local, temp.path().into(), [0.0, 0.0]);
         let mut config = cloud_panel::CloudConfig::parse("version: 1\ndefault: cpu\nprofiles:\n  cpu:\n    provider: runpod\n    image: registry.example/fixture\n    cpu: 8\n    memory_gb: 32\n").unwrap();
         group.remote = Some(cloud_panel::CloudLaunch {
+            publishing_selection: None,
             id: "fixture".into(),
             revision: "a".repeat(40),
             deployment_started: false,

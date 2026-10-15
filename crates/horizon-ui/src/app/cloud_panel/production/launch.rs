@@ -420,6 +420,7 @@ mod tests {
         );
         let cloud_id = cloud_runtime::new_id();
         group.remote = Some(horizon_core::cloud_panel::CloudLaunch {
+            publishing_selection: None,
             deployment_started: false,
             id: cloud_id.clone(),
             revision: "a".repeat(40),

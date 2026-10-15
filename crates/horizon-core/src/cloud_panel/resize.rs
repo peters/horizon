@@ -287,6 +287,7 @@ mod tests {
     fn production_launch() -> crate::cloud_panel::CloudLaunch {
         let config = crate::cloud_panel::CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n").unwrap();
         crate::cloud_panel::CloudLaunch {
+            publishing_selection: None,
             deployment_started: false,
             id: "toolbar-fixture".into(),
             revision: "a".repeat(40),

@@ -13,6 +13,7 @@ fn launch() -> CloudLaunch {
     )
     .expect("config");
     CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "slot-fixture".into(),
         revision: "a".repeat(40),

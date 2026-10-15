@@ -12,6 +12,7 @@ fn cloud(issue: u32, id: &str, workspace: &str) -> CloudGroup {
     let config = CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 8\n    memory_gb: 32\n").unwrap();
     let mut group = CloudGroup::new(issue, id.into(), workspace.into(), "/synthetic".into(), [0.0, 0.0]);
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: id.into(),
         revision: "a".repeat(40),

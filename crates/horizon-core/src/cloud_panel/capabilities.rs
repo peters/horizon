@@ -60,6 +60,7 @@ mod tests {
             .remove("development")
             .unwrap();
         group.remote = Some(super::super::CloudLaunch {
+            publishing_selection: None,
             deployment_started: false,
             id: "test".into(),
             revision: "a".repeat(40),
@@ -91,6 +92,7 @@ mod tests {
             .unwrap();
         profile.capabilities = serde_json::from_str("{}").unwrap();
         group.remote = Some(super::super::CloudLaunch {
+            publishing_selection: None,
             deployment_started: false,
             id: "test".into(),
             revision: "a".repeat(40),

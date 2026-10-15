@@ -29,6 +29,7 @@ pub(in crate::app::cloud_panel::production) fn ready_cloud_in(
         .clone();
     let mut group = CloudGroup::new(1, "Cloud".into(), "workspace".into(), temp.path().into(), origin);
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "fixture".into(),
         revision: "a".repeat(40),

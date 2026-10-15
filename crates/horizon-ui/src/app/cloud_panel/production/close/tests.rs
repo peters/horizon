@@ -27,6 +27,7 @@ fn add_cloud(app: &mut HorizonApp, root: &std::path::Path, state: Option<Deploym
         [0.0, 0.0],
     );
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         id: "fixture".into(),
         revision: "a".repeat(40),
         profile_name: "dev".into(),
