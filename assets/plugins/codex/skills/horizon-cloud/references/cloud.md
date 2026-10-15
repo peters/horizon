@@ -1,5 +1,14 @@
 # Cloud MCP reference
 
+The staged publication helper can recover a retained account even when another
+account is cached: it requests device sign-in for the recorded immutable identity
+and checks it before saving a new credential chain. A wrong account preserves
+the previous chain and private operation login. A renamed matching account is
+refused before a futile prompt because its recorded namespace cannot change.
+Explicit account selection starts
+a new device sign-in. These are host helpers without a launch or selector caller;
+no automatic publishing, visible control or account switch is activated.
+
 ## Servers and offer inspection
 
 The host Horizon browser MCP (`horizon --browser-mcp`) provides `cloud_offers`,

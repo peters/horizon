@@ -16,13 +16,18 @@ impl Account {
     /// # Errors
     /// Rejects malformed metadata and another account, even if a login name was reused.
     pub fn check(&self, observed: &Self) -> Result<()> {
-        if self.id == 0 || observed.id != self.id || !self.login.eq_ignore_ascii_case(&observed.login) {
+        if self.id == 0 || observed.id != self.id {
             return Err(Error::Invalid(
                 "This cloud is bound to another image-publishing account. Sign in to the recorded account before retrying",
             ));
         }
         if !stored::valid_login(&self.login) || !stored::valid_login(&observed.login) {
             return Err(Error::Invalid("Invalid image-publishing account metadata"));
+        }
+        if !self.login.eq_ignore_ascii_case(&observed.login) {
+            return Err(Error::Invalid(
+                "The recorded image-publishing account was renamed; choose a new destination for a new cloud",
+            ));
         }
         Ok(())
     }
@@ -49,9 +54,18 @@ impl Prepared {
     /// # Errors
     /// Cancellation, another account, unavailable or refused authentication, or a local file error.
     pub fn renew(&self, docker_config: &Path, cloud_id: &str, runner: &Runner<'_>) -> Result<()> {
-        with_credentials(docker_config, cloud_id, runner, |account, token| {
-            self.renew_with(&account, &token)
-        })
+        self.renew_using(docker_config, cloud_id, runner, &Client::new())
+    }
+
+    fn renew_using(&self, docker_config: &Path, cloud_id: &str, runner: &Runner<'_>, client: &Client) -> Result<()> {
+        with_credentials_using(
+            docker_config,
+            cloud_id,
+            Some(&self.account),
+            runner,
+            client,
+            |account, token| self.renew_with(&account, &token),
+        )
     }
 
     fn renew_with(&self, account: &Account, token: &Secret) -> Result<()> {
@@ -70,26 +84,47 @@ pub fn prepare(
     expected: Option<&Account>,
     runner: &Runner<'_>,
 ) -> Result<Prepared> {
+    prepare_using(docker_config, cloud_id, expected, runner, &Client::new())
+}
+
+fn prepare_using(
+    docker_config: &Path,
+    cloud_id: &str,
+    expected: Option<&Account>,
+    runner: &Runner<'_>,
+    client: &Client,
+) -> Result<Prepared> {
     if let Some(expected) = expected {
         expected.check(expected)?;
     }
-    with_credentials(docker_config, cloud_id, runner, |account, token| {
+    with_credentials_using(docker_config, cloud_id, expected, runner, client, |account, token| {
         prepare_with(expected, || Ok((account, token)))
     })
 }
 
-fn with_credentials<T>(
-    docker_config: &Path,
-    cloud_id: &str,
-    runner: &Runner<'_>,
-    use_credentials: impl FnOnce(Account, Secret) -> Result<T>,
-) -> Result<T> {
-    with_credentials_using(docker_config, cloud_id, runner, &Client::new(), use_credentials)
+/// Explicitly chooses a new publishing account through a device sign-in.
+/// # Errors
+/// Cancellation, refused authorization, an unreachable provider or a local storage error.
+pub fn select_account(docker_config: &Path, cloud_id: &str, runner: &Runner<'_>) -> Result<Account> {
+    select_account_using(docker_config, cloud_id, runner, &Client::new())
+}
+
+fn select_account_using(docker_config: &Path, cloud_id: &str, runner: &Runner<'_>, client: &Client) -> Result<Account> {
+    runner.cancel.check()?;
+    private_directory(docker_config)?;
+    let _lock = stored::lock(&docker_config.join(LOCK), || Ok(runner.cancel.check()?))?;
+    runner.cancel.check()?;
+    let (user, _) = super::sign_in_as(docker_config, client, cloud_id, None, runner)?;
+    Ok(Account {
+        id: user.id,
+        login: user.login.to_ascii_lowercase(),
+    })
 }
 
 fn with_credentials_using<T>(
     docker_config: &Path,
     cloud_id: &str,
+    expected: Option<&Account>,
     runner: &Runner<'_>,
     client: &Client,
     use_credentials: impl FnOnce(Account, Secret) -> Result<T>,
@@ -105,9 +140,27 @@ fn with_credentials_using<T>(
             Kept::Local(error) => error,
         })?;
     runner.cancel.check()?;
-    let (user, token) = match found {
-        Some(found) => found,
-        None => super::sign_in_user(docker_config, client, cloud_id, runner)?,
+    let found = match (expected, found) {
+        (Some(expected), Some((user, token))) if user.id == expected.id => {
+            expected.check(&Account {
+                id: user.id,
+                login: user.login.clone(),
+            })?;
+            Some((user, token))
+        }
+        (Some(_), Some(_)) => None,
+        (_, found) => found,
+    };
+    let (user, token) = if let Some(found) = found {
+        found
+    } else {
+        if let Some(expected) = expected {
+            (runner.emit)(crate::cloud_runtime::Event::Output(format!(
+                "This cloud publishes as {}. Sign in to that account; another account cannot replace it.",
+                expected.login
+            )));
+        }
+        super::sign_in_as(docker_config, client, cloud_id, expected, runner)?
     };
     runner.cancel.check()?;
     let prepared = use_credentials(

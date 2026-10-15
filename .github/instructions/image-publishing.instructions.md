@@ -27,6 +27,13 @@ Report these failures:
 - Pull rotation changes the publication grant identity.
 - A preference for one checkout or profile changes another scope.
 
+Retained-account recovery must prompt for the original immutable account when
+another account is cached. Check the device result before saving its credential
+chain; a wrong account must preserve the prior stored chain. Preparation and
+renewal share this guard. A renamed matching account must fail before a futile
+device prompt, with a specific rename explanation. Explicit selection must not silently reuse a cached
+account. This prerequisite does not wire these helpers into launches or UI.
+
 These limits are deliberate:
 
 - This prerequisite supplies a reusable policy contract. It does not enable automatic launches.

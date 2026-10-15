@@ -278,17 +278,28 @@ fn sign_in_user(
     cloud_id: &str,
     runner: &Runner<'_>,
 ) -> Result<(horizon_cloud::github::User, Secret)> {
-    let result = sign_in_user_inner(docker_config, client, cloud_id, runner);
+    sign_in_as(docker_config, client, cloud_id, None, runner)
+}
+
+fn sign_in_as(
+    docker_config: &Path,
+    client: &Client,
+    cloud_id: &str,
+    expected: Option<&publication::Account>,
+    runner: &Runner<'_>,
+) -> Result<(horizon_cloud::github::User, Secret)> {
+    let result = sign_in_as_inner(docker_config, client, cloud_id, expected, runner);
     (runner.emit)(Event::GitHub(Prompt::Published {
         allowed: result.is_ok(),
     }));
     result
 }
 
-fn sign_in_user_inner(
+fn sign_in_as_inner(
     docker_config: &Path,
     client: &Client,
     cloud_id: &str,
+    expected: Option<&publication::Account>,
     runner: &Runner<'_>,
 ) -> Result<(horizon_cloud::github::User, Secret)> {
     runner.cancel.check()?;
@@ -323,6 +334,12 @@ fn sign_in_user_inner(
         }
     };
     runner.cancel.check()?;
+    if let Some(expected) = expected {
+        expected.check(&publication::Account {
+            id: user.id,
+            login: user.login.clone(),
+        })?;
+    }
     stored::save(&docker_config.join(STORE), &user.login, &chain, false)?;
     say(format!("Horizon may now publish images as {}.", user.login));
     Ok((user, chain.access_token))

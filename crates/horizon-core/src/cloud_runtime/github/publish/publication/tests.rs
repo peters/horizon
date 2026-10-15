@@ -179,12 +179,19 @@ fn cancellation_after_authentication_returns_no_prepared_login() {
         secrets: Vec::new(),
     };
     let directory = std::cell::RefCell::new(None);
-    let result = with_credentials_using(root.path(), "cancelled-cloud", &runner, &client, |account, token| {
-        let prepared = prepare_with(None, || Ok((account, token)))?;
-        directory.replace(Some(prepared.docker_config().to_path_buf()));
-        cancel.cancel();
-        Ok(prepared)
-    });
+    let result = with_credentials_using(
+        root.path(),
+        "cancelled-cloud",
+        None,
+        &runner,
+        &client,
+        |account, token| {
+            let prepared = prepare_with(None, || Ok((account, token)))?;
+            directory.replace(Some(prepared.docker_config().to_path_buf()));
+            cancel.cancel();
+            Ok(prepared)
+        },
+    );
     task.join().unwrap();
     assert!(result.is_err());
     assert!(!directory.borrow().as_ref().unwrap().exists());
@@ -245,9 +252,10 @@ fn cancellation_during_a_revoked_lookup_makes_no_sign_in_request_or_prompt() {
         emit: &emit,
         secrets: Vec::new(),
     };
-    let result: Result<()> = with_credentials_using(root.path(), "cancel-revoked-lookup", &runner, &client, |_, _| {
-        panic!("a stopped operation must not use credentials")
-    });
+    let result: Result<()> =
+        with_credentials_using(root.path(), "cancel-revoked-lookup", None, &runner, &client, |_, _| {
+            panic!("a stopped operation must not use credentials")
+        });
     assert!(matches!(
         result,
         Err(Error::Provider(horizon_cloud::CloudError::Cancelled))
@@ -352,7 +360,13 @@ fn a_cancelled_token_or_account_answer_ends_the_prompt_without_saving_a_chain() 
             emit: &emit,
             secrets: Vec::new(),
         };
-        let result = super::super::sign_in_user(root.path(), &client, "cancel-token-or-account", &runner);
+        let result = super::super::sign_in_as(
+            root.path(),
+            &client,
+            "cancel-token-or-account",
+            Some(&account(10, "alice")),
+            &runner,
+        );
         assert!(matches!(
             result,
             Err(Error::Provider(horizon_cloud::CloudError::Cancelled))
@@ -369,4 +383,182 @@ fn a_cancelled_token_or_account_answer_ends_the_prompt_without_saving_a_chain() 
             "a cancelled answer must not save a credential chain"
         );
     }
+}
+
+fn retained_case(correct: bool, renew: bool) {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join(STORE);
+    stored::save(
+        &path,
+        "bob",
+        &horizon_cloud::github::Chain {
+            access_token: Secret::new("bob-access".into()),
+            access_expires_at: SystemTime::now() + Duration::from_hours(8),
+            refresh_token: Secret::new("bob-refresh".into()),
+            refresh_expires_at: SystemTime::now() + Duration::from_hours(24),
+        },
+        false,
+    )
+    .unwrap();
+    let original = std::fs::read(&path).unwrap();
+    let (client, task) = crate::cloud_runtime::github::tests::github(vec![
+        serde_json::json!({"id":11,"login":"bob"}),
+        serde_json::json!({"device_code":"synthetic-device","user_code":"WDJB-MJHT",
+                "verification_uri":"https://github.com/login/device","expires_in":900,"interval":1}),
+        serde_json::json!({"access_token":"new-access","expires_in":28_800,"refresh_token":"new-refresh",
+                "refresh_token_expires_in":15_724_800,"token_type":"bearer","scope":"write:packages"}),
+        serde_json::json!({"id":if correct {10} else {11},"login":"alice"}),
+    ]);
+    let cancel = Cancellation::default();
+    let events = std::cell::RefCell::new(Vec::new());
+    let emit = |event| events.borrow_mut().push(event);
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &emit,
+        secrets: Vec::new(),
+    };
+    let expected = account(10, "alice");
+    let prepared = prepare_with(Some(&expected), || {
+        Ok((expected.clone(), Secret::new("original-operation-token".into())))
+    })
+    .unwrap();
+    let private_before = std::fs::read(prepared.docker_config().join("config.json")).unwrap();
+    let result = if renew {
+        prepared
+            .renew_using(root.path(), "recorded-account", &runner, &client)
+            .map(|()| expected.clone())
+    } else {
+        prepare_using(root.path(), "recorded-account", Some(&expected), &runner, &client)
+            .map(|prepared| prepared.account().clone())
+    };
+    task.join().unwrap();
+    assert!(events.borrow().iter().any(|event| matches!(
+        event,
+        crate::cloud_runtime::Event::GitHub(super::super::Prompt::Publish { .. })
+    )));
+    if correct {
+        assert_eq!(result.unwrap(), expected);
+        if renew {
+            assert_ne!(
+                std::fs::read(prepared.docker_config().join("config.json")).unwrap(),
+                private_before
+            );
+        }
+        assert_eq!(stored::load(&path).unwrap().login, "alice");
+    } else {
+        assert!(result.is_err());
+        assert!(matches!(
+            events.borrow().last(),
+            Some(crate::cloud_runtime::Event::GitHub(super::super::Prompt::Published {
+                allowed: false
+            }))
+        ));
+        assert_eq!(
+            std::fs::read(prepared.docker_config().join("config.json")).unwrap(),
+            private_before
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            original,
+            "a refused sign-in preserves the host's other account"
+        );
+    }
+}
+
+#[test]
+fn a_recorded_account_can_sign_in_without_accepting_or_erasing_another_actor() {
+    for correct in [false, true] {
+        retained_case(correct, false);
+    }
+}
+
+#[test]
+fn renewal_recovers_only_the_recorded_account_without_replacing_another_login() {
+    for correct in [false, true] {
+        retained_case(correct, true);
+    }
+}
+
+#[test]
+fn explicit_account_selection_does_not_reuse_a_cached_publisher() {
+    let root = tempfile::tempdir().unwrap();
+    stored::save(
+        &root.path().join(STORE),
+        "bob",
+        &horizon_cloud::github::Chain {
+            access_token: Secret::new("bob-access".into()),
+            access_expires_at: SystemTime::now() + Duration::from_hours(8),
+            refresh_token: Secret::new("bob-refresh".into()),
+            refresh_expires_at: SystemTime::now() + Duration::from_hours(24),
+        },
+        false,
+    )
+    .unwrap();
+    let (client, task) = crate::cloud_runtime::github::tests::github(vec![
+        serde_json::json!({"device_code":"synthetic-device","user_code":"WDJB-MJHT","verification_uri":"https://github.com/login/device","expires_in":900,"interval":1}),
+        serde_json::json!({"access_token":"new-access","expires_in":28_800,"refresh_token":"new-refresh","refresh_token_expires_in":15_724_800,"token_type":"bearer","scope":"write:packages"}),
+        serde_json::json!({"id":10,"login":"Alice"}),
+    ]);
+    let cancel = Cancellation::default();
+    let events = std::cell::RefCell::new(Vec::new());
+    let emit = |event| events.borrow_mut().push(event);
+    let selected = select_account_using(
+        root.path(),
+        "explicit-account",
+        &Runner {
+            cancel: &cancel,
+            emit: &emit,
+            secrets: Vec::new(),
+        },
+        &client,
+    )
+    .unwrap();
+    task.join().unwrap();
+    assert_eq!(selected, account(10, "alice"));
+    assert_eq!(stored::load(&root.path().join(STORE)).unwrap().login, "Alice");
+    assert!(events.borrow().iter().any(|event| matches!(
+        event,
+        crate::cloud_runtime::Event::GitHub(super::super::Prompt::Publish { .. })
+    )));
+}
+
+#[test]
+fn a_cached_renamed_account_is_refused_without_an_impossible_device_prompt() {
+    let root = tempfile::tempdir().unwrap();
+    stored::save(
+        &root.path().join(STORE),
+        "alice",
+        &horizon_cloud::github::Chain {
+            access_token: Secret::new("alice-access".into()),
+            access_expires_at: SystemTime::now() + Duration::from_hours(8),
+            refresh_token: Secret::new("alice-refresh".into()),
+            refresh_expires_at: SystemTime::now() + Duration::from_hours(24),
+        },
+        false,
+    )
+    .unwrap();
+    let original = std::fs::read(root.path().join(STORE)).unwrap();
+    let (client, task) =
+        crate::cloud_runtime::github::tests::github(vec![serde_json::json!({"id":10,"login":"alice-renamed"})]);
+    let cancel = Cancellation::default();
+    let events = std::cell::RefCell::new(Vec::new());
+    let emit = |event| events.borrow_mut().push(event);
+    let result = prepare_using(
+        root.path(),
+        "renamed-account",
+        Some(&account(10, "alice")),
+        &Runner {
+            cancel: &cancel,
+            emit: &emit,
+            secrets: Vec::new(),
+        },
+        &client,
+    );
+    task.join().unwrap();
+    assert!(matches!(result,Err(Error::Invalid(message)) if message.contains("renamed")));
+    assert!(!events.borrow().iter().any(|event| matches!(
+        event,
+        crate::cloud_runtime::Event::GitHub(super::super::Prompt::Publish { .. })
+    )));
+    assert_eq!(std::fs::read(root.path().join(STORE)).unwrap(), original);
 }
