@@ -74,6 +74,8 @@ impl Runtime {
         // A stop can end a rebuild that met it; its steps no longer apply.
         self.rebuild = None;
         self.stopped_outside = false;
+        // The agent request this stop carried out is done with.
+        self.stopping_for = None;
     }
 
     /// Shows a stop the provider confirmed and Horizon did not make. A record that

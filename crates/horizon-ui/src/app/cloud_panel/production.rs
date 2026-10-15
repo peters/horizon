@@ -622,6 +622,7 @@ impl HorizonApp {
                         finished.push(id);
                         // A stop the earlier reading found was the earlier worker's.
                         runtime.agent_stops = None;
+                        runtime.stopping_for = None;
                         became_ready.push(id);
                     }
                     Event::Failed(error, at) => {

@@ -397,6 +397,11 @@ impl HorizonApp {
         if runtime.busy() {
             return;
         }
+        // An operation chosen now, as a person's Stop, ends the claim of an earlier agent
+        // Stop on its request, which a failed Stop keeps while its outcome may be
+        // uncertain; this holds even when the choice is refused below. The Stop for an
+        // agent's request sets the claim again once it started.
+        runtime.stopping_for = None;
         // A Stop for an agent's request comes with the settings it was read with.
         let preloaded = runtime
             .agent_stop

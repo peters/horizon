@@ -180,6 +180,16 @@ fn a_stop_request_starts_a_stop_for_that_agent() {
         app.cloud_prototype.production.runtimes[&1].error.as_deref(),
         Some("The cloud is no longer ready on the worker that asked, so Horizon did not stop it for the agent")
     );
+    // A failed agent Stop keeps its claim on the request, as its outcome may be uncertain;
+    // a person's Stop that starts later ends it.
+    assert_eq!(
+        app.cloud_prototype.production.runtimes[&1].stopping_for,
+        Some(stop().at)
+    );
+    app.change_production_worker(1, Action::Stop, &ctx);
+    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    assert_eq!(runtime.operation, Some(Action::Stop));
+    assert_eq!(runtime.stopping_for, None);
 }
 
 #[test]
@@ -246,4 +256,41 @@ fn a_cloud_whose_close_dialog_is_open_gives_the_request_back() {
     let runtime = &app.cloud_prototype.production.runtimes[&1];
     assert_eq!(runtime.operation, None, "no Stop starts");
     assert_eq!(runtime.given_back, Some(stop().at));
+}
+
+#[test]
+fn a_request_found_again_after_an_uncertain_stop_failure_is_left_alone() {
+    use crate::app::test_support::test_app;
+    use std::time::Instant;
+    let (_temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    app.prepare_production_clouds(&ctx);
+    // The agent's Stop failed, but the provider may still stop the worker: the card stays
+    // Stopping and the worker keeps the request, so a duplicate read must not take it back.
+    let runtime = app.cloud_prototype.production.runtimes.entry(1).or_default();
+    runtime.stage = Some(cloud_runtime::Stage::Stopping);
+    runtime.operation = Some(Action::Stop);
+    runtime.stopping_for = Some(stop().at);
+    runtime.show_failure("The stop request timed out".into(), Instant::now());
+    app.stop_clouds_for_agents(vec![(1, order())], &ctx);
+    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    assert_eq!(runtime.given_back, None, "not given back");
+    assert!(runtime.logs.is_empty());
+}
+
+#[test]
+fn a_finished_agent_stop_no_longer_skips_its_request() {
+    let state: cloud_runtime::state::Deployment = serde_json::from_value(serde_json::json!({
+        "version": 1, "cloud_id": "fixture", "repository": "/fixture", "revision": "a".repeat(40),
+        "profile": {"provider": "hetzner", "image": "registry.example/worker", "cpu": 2, "memory_gb": 4},
+        "stage": "Stopped", "operation": {"state": "bound", "worker_id": "42"}, "spec": null,
+        "sessions": [], "stop_requested": true
+    }))
+    .unwrap();
+    let mut finished = Runtime {
+        stopping_for: Some(stop().at),
+        ..Runtime::default()
+    };
+    finished.show_finished_stop(state);
+    assert_eq!(finished.stopping_for, None);
 }

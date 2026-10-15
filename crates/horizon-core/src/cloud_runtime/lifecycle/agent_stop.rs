@@ -211,7 +211,17 @@ pub(super) fn stop_with(
             Ok(store) => break store,
         }
     };
-    let state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
+    // A record that cannot be read stops nothing: the request goes back to its worker,
+    // so the worker accepts new requests and keeps no stop that did not happen.
+    let state = match store.load() {
+        Ok(Some(state)) => state,
+        loaded => {
+            if let Some(worker) = &request.worker {
+                untake(worker);
+            }
+            return Err(loaded.err().unwrap_or(Error::Invalid("No cloud deployment")));
+        }
+    };
     // Another Horizon on this computer already stopped the cloud for this request, or is
     // stopping it: its stop decides, and the request stays with it.
     if state.stop_requested

@@ -464,3 +464,40 @@ fn a_second_take_that_fails_gives_the_request_back() {
     );
     assert_eq!(attribution(root.path()), None);
 }
+
+#[test]
+fn a_record_that_cannot_be_read_gives_the_request_back() {
+    // The worker that took the request, as a read of a ready cloud names it.
+    let named = tempfile::tempdir().unwrap();
+    ready(named.path(), |_| {});
+    let request = AgentStop {
+        worker: stored(named.path()).worker.map(Box::new),
+        ..stop()
+    };
+    assert!(request.worker.is_some());
+    // No record at all, and a record that does not parse.
+    let missing = tempfile::tempdir().unwrap();
+    let unreadable = tempfile::tempdir().unwrap();
+    std::fs::write(unreadable.path().join("deployment.json"), "{").unwrap();
+    for root in [missing.path(), unreadable.path()] {
+        let commands = RefCell::new(Vec::new());
+        assert!(
+            stop_with(
+                root,
+                &request,
+                worker(&commands),
+                never,
+                settled,
+                || false,
+                Duration::ZERO
+            )
+            .is_err()
+        );
+        assert_eq!(
+            *commands.borrow(),
+            [format!("horizon-worker-stopd --untake {}", stop().at)],
+            "{}",
+            root.display()
+        );
+    }
+}
