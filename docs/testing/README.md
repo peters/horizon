@@ -73,3 +73,4 @@ documents that are not yet STE.
 | [2026-10-14-tailnet-receipt-capture](reports/2026-10-14-tailnet-receipt-capture.md) | [ledger](procedures/tailnet-enrollment-ledger.md), [capture](procedures/tailnet-receipt-capture.md) | 2026-10-14 |
 | [2026-10-14-tailnet-api-removal](reports/2026-10-14-tailnet-api-removal.md) | [tailnet-api-removal](procedures/tailnet-api-removal.md) | 2026-10-14 |
 | [2026-10-15-tailnet-node-api-first-live](reports/2026-10-15-tailnet-node-api-first-live.md) | [tailnet-node-api](procedures/tailnet-node-api.md) | 2026-10-15 |
+| [2026-10-15-tailnet-node-api-final-live](reports/2026-10-15-tailnet-node-api-final-live.md) | [tailnet-node-api](procedures/tailnet-node-api.md) | 2026-10-15 |
