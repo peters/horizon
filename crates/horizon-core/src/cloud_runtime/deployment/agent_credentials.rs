@@ -10,16 +10,19 @@ pub(super) fn validate_agent_auth(
     capabilities: &horizon_cloud::Capabilities,
     rebuild: bool,
 ) -> Result<()> {
-    for (agent, path) in [
-        ("claude", &settings.anthropic_api_key_file),
-        ("codex", &settings.openai_api_key_file),
+    let token = settings.claude_token.as_ref().map(|token| &token.file);
+    for (agent, kind, path) in [
+        ("claude", "API-key file", settings.anthropic_api_key_file.as_ref()),
+        ("claude", "setup-token file", token),
+        ("codex", "API-key file", settings.openai_api_key_file.as_ref()),
     ]
     .into_iter()
-    .filter(|(agent, _)| capabilities.permits_agent(agent))
-    .filter_map(|(agent, path)| Some((agent, path.as_ref()?)))
+    .filter(|(agent, _, _)| capabilities.permits_agent(agent))
+    .filter_map(|(agent, kind, path)| Some((agent, kind, path?)))
     {
         crate::cloud_runtime::settings::validate_private_key_file(path).map_err(|error| Error::AgentCredential {
             agent,
+            kind,
             path: path.clone(),
             problem: match error {
                 Error::Io(error) if error.kind() == std::io::ErrorKind::NotFound => "the file is missing".into(),
@@ -38,10 +41,11 @@ pub(super) fn configure_agent_auth(
     runner: &Runner<'_>,
 ) -> Result<()> {
     let clear = format!(
-        "launcher=python3; if [ -f /run/horizon-tailnet/agent-isolation ]; then launcher='horizon-worker-tailnet agent python3'; fi; $launcher - {} {} {} <<'HORIZON_AUTH_CLEANUP'\n{}\nHORIZON_AUTH_CLEANUP",
+        "launcher=python3; if [ -f /run/horizon-tailnet/agent-isolation ]; then launcher='horizon-worker-tailnet agent python3'; fi; $launcher - {} {} {} {} <<'HORIZON_AUTH_CLEANUP'\n{}\nHORIZON_AUTH_CLEANUP",
         u8::from(!capabilities.permits_agent("claude") || settings.anthropic_api_key_file.is_none()),
         u8::from(!capabilities.permits_agent("codex") || settings.openai_api_key_file.is_none()),
         u8::from(!capabilities.permits_agent("claude") || settings.anthropic_workspace_id.is_none()),
+        u8::from(!capabilities.permits_agent("claude") || settings.claude_token.is_none()),
         include_str!("clear_agent_auth.py"),
     );
     runner.run(
@@ -53,6 +57,14 @@ pub(super) fn configure_agent_auth(
         && let Some(path) = &settings.anthropic_api_key_file
     {
         runner.private_input(&mut connection.command(&write_command("anthropic-api-key", None)), path)?;
+    }
+    if capabilities.permits_agent("claude")
+        && let Some(token) = &settings.claude_token
+    {
+        runner.private_input(
+            &mut connection.command(&write_command("claude-oauth-token", None)),
+            &token.file,
+        )?;
     }
     if capabilities.permits_agent("codex")
         && let Some(path) = &settings.openai_api_key_file
@@ -102,9 +114,39 @@ mod tests {
         let output = std::env::var_os("HORIZON_TEST_AUTH_COMMANDS").unwrap();
         let commands = serde_json::json!({
             "key": write_command("anthropic-api-key", None),
+            "token": write_command("claude-oauth-token", None),
             "workspace": write_command("anthropic-workspace", Some("synthetic-workspace")),
         });
         std::fs::write(output, serde_json::to_vec(&commands).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_claude_setup_token_file_is_checked_and_named_before_deployment() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let mut settings: Settings = serde_json::from_value(serde_json::json!({
+            "runpod_key_file":"unused", "ssh_identity_file":"unused", "docker_config":"unused",
+            "registry_pull_auth_id":null, "cpu_flavors":[], "gpu_types":[]
+        }))
+        .unwrap();
+        settings.claude_token = Some(crate::cloud_runtime::claude_token::ClaudeToken {
+            file: file.path().into(),
+            saved_at: 0,
+        });
+        let claude: horizon_cloud::Capabilities =
+            serde_json::from_value(serde_json::json!({"agents":["claude"]})).unwrap();
+        let codex: horizon_cloud::Capabilities =
+            serde_json::from_value(serde_json::json!({"agents":["codex"]})).unwrap();
+        let error = validate_agent_auth(&settings, &claude, false).unwrap_err().to_string();
+        assert!(
+            error.starts_with(&format!(
+                "Agent claude cannot use its setup-token file {}: ",
+                file.path().display()
+            )),
+            "{error}"
+        );
+        assert!(validate_agent_auth(&settings, &codex, false).is_ok());
+        std::fs::write(file.path(), "synthetic-setup-token\n").unwrap();
+        assert!(validate_agent_auth(&settings, &claude, false).is_ok());
     }
 
     #[test]

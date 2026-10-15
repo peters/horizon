@@ -4,7 +4,7 @@ import sys
 import tempfile
 
 name = sys.argv[1]
-if name not in {"anthropic-api-key", "anthropic-workspace"}:
+if name not in {"anthropic-api-key", "anthropic-workspace", "claude-oauth-token"}:
     raise ValueError("Invalid agent credential binding")
 value = sys.stdin.buffer.read(256 * 1024 + 1) if len(sys.argv) == 2 else sys.argv[2].encode()
 if not value.strip() or len(value) > 256 * 1024:

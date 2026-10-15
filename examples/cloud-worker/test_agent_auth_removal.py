@@ -30,20 +30,22 @@ class AgentAuthRemovalTests(unittest.TestCase):
                 key = credentials / "anthropic-api-key"
                 staging = credentials / "anthropic-api-key.new"
                 workspace = credentials / "anthropic-workspace"
+                token = credentials / "claude-oauth-token"
                 key.write_text("synthetic")
+                token.write_text("synthetic-setup-token")
                 staging.write_text("synthetic-interrupted-upload")
                 workspace.write_text("synthetic-workspace")
                 login = root / "home/.codex/auth.json"
                 login.parent.mkdir(parents=True)
                 login.write_text(json.dumps(auth))
                 original = login.read_bytes()
-                clear(root, False, False, False)
-                self.assertTrue(key.exists() and workspace.exists())
+                clear(root, False, False, False, False)
+                self.assertTrue(key.exists() and workspace.exists() and token.exists())
                 self.assertTrue(staging.exists())
                 self.assertEqual(login.read_bytes(), original)
-                clear(root, True, True, True)
-                clear(root, True, True, True)
-                self.assertFalse(key.exists() or workspace.exists())
+                clear(root, True, True, True, True)
+                clear(root, True, True, True, True)
+                self.assertFalse(key.exists() or workspace.exists() or token.exists())
                 self.assertFalse(staging.exists())
                 if auth.get("auth_mode") == "chatgpt":
                     self.assertEqual(login.read_bytes(), original)

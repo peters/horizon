@@ -5,6 +5,7 @@ pub mod billing;
 pub mod bootstrap_initialization;
 pub mod bootstrap_recovery;
 pub mod browser_auth;
+pub mod claude_token;
 pub mod codex_login;
 pub mod command;
 pub mod companions;
@@ -77,15 +78,17 @@ pub enum Error {
     Sibling(#[from] siblings::SiblingError),
     #[error(transparent)]
     Uncommitted(#[from] repository::uncommitted::Refusal),
-    /// The configured API-key file of an agent is unusable. A rebuild checks every agent
-    /// of the new profile, so its refusal says that a reconnect needs the file too.
+    /// The configured API-key or setup-token file of an agent is unusable. A rebuild checks
+    /// every agent of the new profile, so its refusal says that a reconnect needs the file too.
     #[error(
-        "Agent {agent} cannot use its API-key file {}: {problem}{}",
+        "Agent {agent} cannot use its {kind} {}: {problem}{}",
         path.display(),
         if *rebuild { ". A reconnect of this cloud with this profile needs this file too, so fix it before the rebuild" } else { "" }
     )]
     AgentCredential {
         agent: &'static str,
+        /// `API-key file` or `setup-token file`.
+        kind: &'static str,
         path: std::path::PathBuf,
         problem: String,
         rebuild: bool,

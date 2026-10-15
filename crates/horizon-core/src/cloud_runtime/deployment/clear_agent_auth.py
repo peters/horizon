@@ -4,12 +4,14 @@ from pathlib import Path
 import sys
 
 
-def clear_api_auth(root, anthropic, openai, workspace):
+def clear_api_auth(root, anthropic, openai, workspace, token):
     if anthropic:
         (root / "credentials/anthropic-api-key").unlink(missing_ok=True)
         (root / "credentials/anthropic-api-key.new").unlink(missing_ok=True)
     if workspace:
         (root / "credentials/anthropic-workspace").unlink(missing_ok=True)
+    if token:
+        (root / "credentials/claude-oauth-token").unlink(missing_ok=True)
     if openai:
         path = root / "home/.codex/auth.json"
         try:
