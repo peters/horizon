@@ -242,20 +242,8 @@ impl HorizonApp {
                     (true, Phase::Stopped) => {
                         state.started.remove(&key);
                     }
-                    // Neither shows that the companion stopped: a later Stop, with a new
-                    // operation ID, tries again, a few times.
-                    (true, Phase::Refused | Phase::RetryRequired) => {
-                        if let Some(started) = state.started.get_mut(&key) {
-                            started.refused += 1;
-                            if started.refused >= STOP_ATTEMPTS {
-                                tracing::warn!(cloud = %source, %alias, "a companion that an Upkeep run started refused every Stop");
-                                state.started.remove(&key);
-                            } else {
-                                started.stop = None;
-                                started.wait = Some(std::time::Instant::now() + STOP_RETRY);
-                            }
-                        }
-                    }
+                    // Neither shows that the companion stopped.
+                    (true, Phase::Refused | Phase::RetryRequired) => state.stop_failed(&key),
                     (true, _) => {}
                 }
                 (answer, started)
@@ -269,6 +257,10 @@ impl HorizonApp {
                 let busy = error.starts_with("cloud_companion_busy");
                 if let Some(started) = started {
                     started.continuing = *action == Ask::Stop && busy && started.start.is_some();
+                }
+                // Any other failure, such as a declaration that is gone, may not pass.
+                if *action == Ask::Stop && !busy {
+                    state.stop_failed(&key);
                 }
                 (failure(*action, id, &error, tracked), false)
             }
@@ -300,6 +292,23 @@ fn action_name(action: Ask) -> &'static str {
 }
 
 impl State {
+    /// A Stop of companion `key` that a run started did not stop it: a later Stop, with a
+    /// new operation ID, tries again, a few times.
+    fn stop_failed(&mut self, key: &(String, String)) {
+        let Some(started) = self.started.get_mut(key) else {
+            return;
+        };
+        started.refused += 1;
+        if started.refused >= STOP_ATTEMPTS {
+            let (cloud, alias) = key;
+            tracing::warn!(%cloud, %alias, "a companion that an Upkeep run started did not stop");
+            self.started.remove(key);
+        } else {
+            started.stop = None;
+            started.wait = Some(Instant::now() + STOP_RETRY);
+        }
+    }
+
     /// The requests that stop what the runs of Upkeep `cloud` started, once no run is active.
     fn cleanup(&mut self, cloud: &str) -> Vec<(String, Ask, String)> {
         let now = Instant::now();
@@ -567,8 +576,10 @@ mod tests {
         // Not before the wait is over.
         app.run_upkeep_companions("upkeep", ended(Vec::new()), &ctx);
         assert!(!app.cloud_prototype.production.companions.agent.holds("upkeep"));
-        let refused = settled(Action::Stop, Phase::Refused);
-        app.finish_upkeep_companion("upkeep", "youpark", &(Ask::Stop, id.clone()), Ok(refused), &ctx);
+        // A Stop that fails before it is recorded, such as for a declaration that is gone,
+        // counts as well.
+        let gone = Err("Companion declaration is missing".to_owned());
+        app.finish_upkeep_companion("upkeep", "youpark", &(Ask::Stop, id.clone()), gone, &ctx);
         assert!(
             app.cloud_prototype
                 .production

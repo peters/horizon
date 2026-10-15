@@ -663,8 +663,8 @@ has no desktop, GPU or image of the repository. The agent does the check on a
   for five minutes, Horizon stops each companion that a run of this Upkeep started. A
   failed exchange stops nothing. When the Ensure Ready that started the companion has not
   finished, Horizon first sends it again so that the companion's card finishes it. When
-  the companion refuses the Stop, Horizon sends a new one ten minutes later, up to six
-  times. Horizon keeps this record only while it runs.
+  the Stop fails or the companion refuses it, Horizon sends a new one ten minutes later,
+  up to six times. Horizon keeps this record only while it runs.
 - The agent puts the screenshots and logs of the check on the orphan branch
   `upkeep/evidence` of the repository, under `pr-<number>/<short head>/`, and links
   them from its one comment on the pull request. Nobody merges this branch. The branch
@@ -709,7 +709,8 @@ Horizon does not guarantee these items:
   shell access, as [the companion controller](companion-controller.md) describes.
 - It does not stop a companion that a run started when Horizon restarted during that
   run, when the Upkeep cloud's worker stops answering while it shows as ready, when the
-  companion refuses six Stops in a row, or when the Upkeep is removed. The agent's own `stop` request still stops it.
+  Stops fail six times in a row (for example after the repository's `ui-acceptance`
+  profile is gone), or when the Upkeep is removed. The agent's own `stop` request still stops it.
 - It does not know when a run really ends: the agent account writes the run records
   that the exchange reads. An agent that writes a record of a run in progress keeps its
   requests allowed and delays the stop at the end of the run. It still can start only a
