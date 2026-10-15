@@ -602,7 +602,10 @@ publisher envelopes and reserved null keys are refused.
 
 The provider-aware registry helper can prepare a direct-host pull grant without a
 RunPod key. It stores host records separately from provider registry records and
-refuses provider registry creation from a host grant. Both scopes pin the same
+refuses provider registry creation from a host grant. Both journal paths must stay
+outside the source. New private directories use locked pending intents and parent syncs before a
+child or pull identity is pinned. Interrupted creation is recovered first; existing
+roots with no pending intent do not require a readable parent. Both scopes pin the same
 read-only identity for each generation. Rotate the generation when that identity
 changes. Existing deployment callers are unchanged; portable launch wiring follows
 separately. This helper does not prove a live registry pull or revoke an installed

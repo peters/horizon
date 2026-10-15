@@ -1,6 +1,7 @@
 //! Machine-local image grants. Publishing and worker pulling never share a binding.
 pub use horizon_cloud::runpod::registry::State;
 mod credentials;
+mod directory;
 mod management;
 mod needed;
 mod preflight;
@@ -278,6 +279,12 @@ impl Prepared {
             ));
         }
         let source = source.map(Path::canonicalize).transpose()?;
+        if let Some(source) = &source {
+            store::ensure_outside_source(&config.root, source)?;
+            if direct_host {
+                store::ensure_outside_source(&config.root.join("hosts"), source)?;
+            }
+        }
         let pull = Material::load(&binding.pull, &binding.repository, source.as_deref())?;
         credentials::ensure_separate(&binding.pull, &pull, binding.publish.as_ref(), source.as_deref())?;
         let publish = binding
@@ -296,9 +303,6 @@ impl Prepared {
             return Err(Error::Invalid(
                 "Publishing and worker pulling must use different credentials",
             ));
-        }
-        if let Some(source) = &source {
-            store::ensure_outside_source(&config.root, source)?;
         }
         let login_identity =
             credentials::fingerprint(format!("{}\0{}", binding.pull.username, pull.fingerprint).as_bytes());

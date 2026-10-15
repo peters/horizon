@@ -221,3 +221,82 @@ fn an_unreadable_other_scope_cannot_be_ignored_while_pinning_a_generation() {
     );
     assert!(!root.path().join("registry/hosts/generation1.json").exists());
 }
+
+#[test]
+#[cfg_attr(windows, ignore = "Registry journals require Unix directory durability")]
+fn a_host_journal_directory_cannot_be_the_source_checkout_or_resolve_into_it() {
+    let (root, settings) = fixture();
+    let registry = root.path().join("registry");
+    let source = registry.join("hosts");
+    std::fs::create_dir_all(&source).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        for directory in [&registry, &source] {
+            std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+    for provider in [
+        horizon_cloud::provider::Kind::Hetzner,
+        horizon_cloud::provider::Kind::DockerHost,
+    ] {
+        assert!(matches!(
+            Prepared::for_image_for_provider(&settings, &image(), Some(&source), false, provider),
+            Err(Error::Invalid(message)) if message.contains("outside the source")
+        ));
+        assert_eq!(std::fs::read_dir(&source).unwrap().count(), 0);
+    }
+    // This case uses the Unix symlink API and cannot compile on Windows.
+    #[cfg(unix)]
+    {
+        std::fs::remove_dir(&source).unwrap();
+        let checkout = root.path().join("checkout");
+        std::fs::create_dir(&checkout).unwrap();
+        std::os::unix::fs::symlink(&checkout, &source).unwrap();
+        assert!(matches!(
+            Prepared::for_image_for_provider(
+                &settings,
+                &image(),
+                Some(&checkout),
+                false,
+                horizon_cloud::provider::Kind::Hetzner
+            ),
+            Err(Error::Invalid(message)) if message.contains("outside the source")
+        ));
+        assert_eq!(std::fs::read_dir(checkout).unwrap().count(), 0);
+    }
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "Registry journals require Unix directory durability")]
+fn first_host_use_creates_missing_private_ancestors_before_pinning_material() {
+    let (root, mut settings) = fixture();
+    std::fs::remove_file(&settings.runpod_key_file).unwrap();
+    settings.registries.as_mut().unwrap().root = root.path().join("new-parent/nested/registry");
+    drop(
+        Prepared::for_image_for_provider(&settings, &image(), None, false, horizon_cloud::provider::Kind::Hetzner)
+            .unwrap(),
+    );
+    for relative in [
+        "new-parent",
+        "new-parent/nested",
+        "new-parent/nested/registry",
+        "new-parent/nested/registry/hosts",
+    ] {
+        let directory = root.path().join(relative);
+        assert!(directory.is_dir());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                std::fs::metadata(directory).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+    }
+    assert!(
+        root.path()
+            .join("new-parent/nested/registry/hosts/generation1.json")
+            .is_file()
+    );
+}

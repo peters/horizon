@@ -48,30 +48,29 @@ They do not revoke a credential installed on a worker.
 1. Run the direct-host journal tests.
 
    ```sh
-   RUSTFLAGS="-D warnings" cargo test -p horizon-core --lib cloud_runtime::registry::tests::direct_host
+   RUSTFLAGS="-D warnings" cargo test -p horizon-core --lib cloud_runtime::registry::
    ```
 
    Result: Host preparation succeeds without a compute key.
    Host and provider records use separate paths and locks.
+   An actual host journal path inside the source, including an alias, is refused
+   before a lock or record is created there.
+   Missing private ancestors are created before the generation pin.
+   Interrupted ancestor creation is recovered before a child is created.
+   Existing roots work without read permission on their parent.
+   A coordination symlink cannot change an existing private file.
    A host grant refuses provider registry creation.
    Changed pull material requires a new generation in either order of first use.
    Concurrent first use cannot pin two identities for one generation.
    Concurrent first use with the same identity succeeds.
    An existing pin does not wait for another scope's first-use lock.
 
-### 6.2 HJ-02 — Preserve existing registry behavior
+### 6.2 HJ-02 — Complete qualification
 
-1. Run the registry regression tests.
-
-   ```sh
-   RUSTFLAGS="-D warnings" cargo test -p horizon-core --lib cloud_runtime::registry::
-   ```
+1. Run the applicable full local matrix.
 
    Result: Existing scope, secret separation, immutable-image, expiry and provider checks pass.
-
-2. Run the applicable full local matrix.
-
-   Result: Blocking and strict checks pass. Record advisory results separately.
+   Blocking and strict checks pass. Record advisory results separately.
    Hosted CI covers the supported platform lanes on the exact PR head.
 
 ## 7. Pass criteria

@@ -61,3 +61,12 @@ generation-wide transaction. Report in-place pull changes accepted through anoth
 provider mutation state accepted in a host journal, or publishing secrets sent to a worker.
 The deployment caller remains unchanged in this prerequisite; provider-aware launch wiring
 follows separately. Local checks cannot revoke a credential already installed on a host.
+
+Check the actual host journal directory against the canonical source, not only its
+parent registry root. Refuse source aliases before creating any journal. Missing
+private ancestors use a locked, recoverable pending intent before creation and
+must be durable before their children or generation pins. Existing ancestors with
+an unfinished intent must wait or finish the parent sync before proceeding.
+Coordination files retain their inode, resolve parent aliases, contain no secrets
+and refuse symlinks, wrong owners, broad permissions and extra hard links.
+Existing roots with no pending intent must not require a readable parent.

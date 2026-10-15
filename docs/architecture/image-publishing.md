@@ -120,6 +120,16 @@ These checks prove the immutable image read at that moment; they cannot guarante
 
 The provider-aware preparation helper stores direct-host pull records under the private registry root's `hosts` directory.
 It does not read a RunPod key or create provider registry IDs. Existing RunPod records keep their original path and account binding.
+Both the registry root and its actual host journal directory are checked against the canonical source before credential preparation or journal creation.
+This includes an existing `hosts` checkout and a host directory alias into the source.
+Private directory creation uses a stable per-user coordination file in the parent directory.
+It holds that file's lock and syncs a pending bit before creating a directory. It syncs the
+new directory and its parent before clearing the bit or allowing a child or generation pin.
+An existing ancestor with a pending intent waits for the creator or completes the parent sync
+after an interruption. Ancestor aliases resolve before the shared coordination file is selected.
+The files stay in place to preserve lock identity; they contain only a zero- or one-byte intent,
+not credentials. No-follow opens, ownership, private permissions and link-count checks protect them.
+Existing roots with no pending intent do not require read permission on their parent.
 The two journals retain separate operation locks, but one generation-wide first-use transaction pins their shared pull identity.
 A changed pull username or secret requires a new generation, including when the other journal was used first.
 Malformed records and a direct-host record with provider mutation state are refused.

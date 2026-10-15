@@ -27,33 +27,6 @@ pub(super) fn ensure_outside_source(root: &Path, source: &Path) -> Result<()> {
     Ok(())
 }
 
-fn ensure_private_root(root: &Path) -> Result<()> {
-    let mut builder = std::fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(root)?;
-    let metadata = std::fs::symlink_metadata(root)?;
-    if !metadata.is_dir() {
-        return Err(Error::Invalid(
-            "Registry state root must be a private directory, not a symlink",
-        ));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        if metadata.permissions().mode() & 0o077 != 0 || metadata.uid() != rustix::process::geteuid().as_raw() {
-            return Err(Error::Invalid(
-                "Registry state root must be owned by this user and private (0700)",
-            ));
-        }
-    }
-    Ok(())
-}
-
 #[derive(Deserialize, Serialize)]
 struct Record {
     repository: String,
@@ -174,8 +147,8 @@ impl Journal {
             return Err(Error::Invalid("Unknown registry generation"));
         }
         crate::session_store::require_directory_durability()?;
-        ensure_private_root(&config.root)?;
-        ensure_private_root(root)?;
+        super::directory::ensure_private_root(&config.root)?;
+        super::directory::ensure_private_root(root)?;
         let lock = OpenOptions::new()
             .create(true)
             .truncate(false)
