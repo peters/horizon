@@ -68,9 +68,6 @@ impl Runtime {
         self.progress.finish(at);
         self.error = Some(error);
         self.failure_needs_check = self.failure_may_be_a_stop();
-        // A failed Stop no longer carries out its agent's request: if the worker gives the
-        // same request again, it is given back, not taken for a later Stop.
-        self.stopping_for = None;
     }
 
     /// Whether the failure just reported can be a stop Horizon did not make: the
@@ -400,6 +397,11 @@ impl HorizonApp {
         if runtime.busy() {
             return;
         }
+        // An operation chosen now, as a person's Stop, ends the claim of an earlier agent
+        // Stop on its request, which a failed Stop keeps while its outcome may be
+        // uncertain; this holds even when the choice is refused below. The Stop for an
+        // agent's request sets the claim again once it started.
+        runtime.stopping_for = None;
         // A Stop for an agent's request comes with the settings it was read with.
         let preloaded = runtime
             .agent_stop
