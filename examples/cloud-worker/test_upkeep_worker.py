@@ -312,12 +312,40 @@ class ExchangeTests(unittest.TestCase):
         for n in range(6):
             (folder / f'c{n}.json').write_text(json.dumps({'action': 'stop', 'operation_id': operation}))
         self.assertEqual(len(self.worker.exchange()['companions']), EXCHANGE['COMPANION_LIMIT'])
-        # Requests that Horizon answered as done make room for the later ones.
+        # Requests that Horizon answered as done go and make room for the later ones.
         done = {f'c{n}': {'operation_id': operation, 'done': True} for n in range(6)}
         done['fits'] = {'operation_id': operation, 'done': True}
         done['youpark'] = {'operation_id': operation, 'done': False}
         self.assertEqual([ask['alias'] for ask in self.worker.exchange(payload(companions=done))['companions']],
                          ['youpark'])
+        self.assertFalse((folder / 'c0.json').exists())
+        self.assertTrue((folder / 'youpark.json').exists())
+
+    def test_answered_requests_never_hold_back_later_ones(self):
+        folder = self.worker.upkeep / 'companions'
+        folder.mkdir(parents=True, mode=0o700)
+        operation = '1b4e28ba-2fa1-11d2-883f-0016d3cca427'
+        aliases = [chr(ord('a') + n) for n in range(9)]
+        for alias in aliases:
+            (folder / f'{alias}.json').write_text(json.dumps({'action': 'stop', 'operation_id': operation}))
+        # Horizon keeps at most four answers, the ones of the last requests it ran.
+        answers, reached = {}, []
+        for _ in range(4):
+            sent = [ask['alias'] for ask in self.worker.exchange(payload(companions=answers))['companions']]
+            reached += [alias for alias in sent if alias not in reached]
+            answers = {alias: {'operation_id': operation, 'done': True} for alias in sent}
+        self.assertEqual(reached, aliases)
+        self.assertEqual(list(folder.iterdir()), [])
+        # A request that the agent changed after it was read stays.
+        (folder / 'a.json').write_text(json.dumps({'action': 'stop', 'operation_id': operation}))
+        seen = os.stat(folder / 'a.json')
+        (folder / 'a.json').write_text(json.dumps({'action': 'stop', 'operation_id': operation}) + ' ')
+        handle = os.open(folder, os.O_RDONLY)
+        try:
+            EXCHANGE['retire'](handle, 'a.json', seen)
+        finally:
+            os.close(handle)
+        self.assertTrue((folder / 'a.json').exists())
 
     def test_horizon_answers_companion_requests_in_a_status_file(self):
         self.assertEqual(self.worker.exchange()['companions'], [])

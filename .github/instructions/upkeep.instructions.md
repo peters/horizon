@@ -129,8 +129,10 @@ every field. Check that:
   cloud. Only a companion that the owner checked can start (`lifecycle::bind_selected`).
 - A request starts nothing outside a run. `run.py` removes the requests before each run
   and each daily maintenance pass, and does not start one when it cannot. An operation
-  already answered as done is not sent again (`exchange.py` leaves it out, Horizon skips
-  it), and one request per alias runs at a time.
+  already answered as done is not sent again (`exchange.py` removes it, Horizon skips
+  it), and one request per alias runs at a time. A refused automatic Stop is sent again
+  with a new operation ID a bounded number of times, since every operation ID stays in
+  the companion's journal.
 - Horizon's answers keep a fixed set of fields and at most 120 characters of text, for at
   most four aliases, so the remote command stays under its limit.
 - Upkeep declarations come only from the saved repository list and the committed

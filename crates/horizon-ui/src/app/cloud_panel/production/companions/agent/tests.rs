@@ -35,10 +35,15 @@ fn operation(action: intent::Action, state: intent::State, phase: Phase) -> Oper
     }
 }
 
-/// A started Ensure Ready that has settled, as a job of Upkeep `source` reports it.
-pub(super) fn settled_start(source: &str, alias: &str) -> Submitted {
+/// An operation of Upkeep `source` that has settled at `phase`, as its job reports it.
+pub(super) fn settled(source: &str, alias: &str, action: intent::Action, phase: Phase) -> Submitted {
+    let state = if phase == Phase::Refused {
+        intent::State::Failed
+    } else {
+        intent::State::Succeeded
+    };
     Submitted {
-        operation: operation(intent::Action::EnsureReady, intent::State::Succeeded, Phase::Ready),
+        operation: operation(action, state, phase),
         context: Context {
             source: Target {
                 scope: Scope {

@@ -28,6 +28,23 @@ const NOT_READY: Duration = Duration::from_mins(5);
 /// ready cloud's exchanges.
 const NOT_READY_RETRY: Duration = Duration::from_secs(30);
 
+/// How often Horizon sends a Stop that the companion refused, and how long it waits
+/// between them. A refused Stop may come from a passing fault, such as a credential that
+/// cannot be read; every new Stop is kept in the companion's journal, so they are few.
+const STOP_ATTEMPTS: u8 = 6;
+const STOP_RETRY: Duration = Duration::from_mins(10);
+
+/// A companion that a run started, until a Stop ends it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Started {
+    /// The operation ID of the Stop that ends it once no run is active.
+    stop: Option<String>,
+    /// How many Stops it refused.
+    refused: u8,
+    /// No Stop is sent before this.
+    wait: Option<Instant>,
+}
+
 /// What one sync of an Upkeep cloud saw.
 pub(in crate::app) enum Seen {
     /// An exchange answered, with the requests it read and whether a run is active.
@@ -44,9 +61,8 @@ pub(super) struct State {
     answers: BTreeMap<String, BTreeMap<String, Value>>,
     /// Requests whose job has not answered yet, by cloud and alias.
     inflight: BTreeSet<(String, String)>,
-    /// Companions that a run started, by cloud and alias, with the operation ID of the
-    /// Stop that ends them once no run is active.
-    started: BTreeMap<(String, String), Option<String>>,
+    /// Companions that a run started, by cloud and alias.
+    started: BTreeMap<(String, String), Started>,
     /// When what the runs of each Upkeep cloud that is not ready started stops next.
     not_ready: BTreeMap<String, Instant>,
 }
@@ -83,12 +99,15 @@ impl HorizonApp {
                 .map(|ask| (ask.alias, ask.action, ask.operation_id))
                 .collect()
         } else {
+            let now = Instant::now();
             state
                 .started
                 .iter_mut()
-                .filter(|((source, _), _)| source == cloud)
-                .map(|((_, alias), stop)| {
-                    let id = stop.get_or_insert_with(manifest::provider_usage::new_operation_id);
+                .filter(|((source, _), started)| source == cloud && started.wait.is_none_or(|wait| now >= wait))
+                .map(|((_, alias), started)| {
+                    let id = started
+                        .stop
+                        .get_or_insert_with(manifest::provider_usage::new_operation_id);
                     (alias.clone(), Ask::Stop, id.clone())
                 })
                 .collect()
@@ -206,15 +225,29 @@ impl HorizonApp {
                     // A Stop sent before ended an earlier start: the next one is a new
                     // operation, or the done Stop would be sent again and stop nothing.
                     (false, _) => {
-                        state.started.insert(key.clone(), None);
+                        state.started.insert(key.clone(), Started::default());
                     }
-                    (true, Phase::Stopped | Phase::Refused) => {
+                    (true, Phase::Stopped) => {
                         state.started.remove(&key);
+                    }
+                    // A refused Stop does not show that the companion stopped: a later one,
+                    // with a new operation ID, tries again, a few times.
+                    (true, Phase::Refused) => {
+                        if let Some(started) = state.started.get_mut(&key) {
+                            started.refused += 1;
+                            if started.refused >= STOP_ATTEMPTS {
+                                tracing::warn!(cloud = %source, %alias, "a companion that an Upkeep run started refused every Stop");
+                                state.started.remove(&key);
+                            } else {
+                                started.stop = None;
+                                started.wait = Some(std::time::Instant::now() + STOP_RETRY);
+                            }
+                        }
                     }
                     // A Stop that needs a new request gets a new operation ID.
                     (true, Phase::RetryRequired) => {
-                        if let Some(stop) = state.started.get_mut(&key) {
-                            *stop = None;
+                        if let Some(started) = state.started.get_mut(&key) {
+                            started.stop = None;
                         }
                     }
                     (true, _) => {}
@@ -303,6 +336,7 @@ impl State {
 mod tests {
     use super::*;
     use horizon_core::cloud_panel::{CloudConfig, CloudGroup, CloudGroups, CloudLaunch};
+    use horizon_core::cloud_runtime::companions::intent::Action;
 
     /// An app whose Upkeep cloud `upkeep` has a companion entry, and the operation ID of a
     /// request of its agent.
@@ -335,6 +369,10 @@ mod tests {
             action,
             operation_id: operation_id.into(),
         }
+    }
+
+    fn settled(action: Action, phase: Phase) -> Box<super::super::Submitted> {
+        Box::new(super::super::tests::settled("upkeep", "youpark", action, phase))
     }
 
     fn running(asks: Vec<CompanionAsk>) -> Seen {
@@ -412,7 +450,13 @@ mod tests {
         app.cloud_prototype.root = None;
         let key = ("upkeep".to_owned(), "youpark".to_owned());
         let state = &mut app.cloud_prototype.production.companions.agent.upkeep;
-        state.started.insert(key.clone(), Some(id.clone()));
+        state.started.insert(
+            key.clone(),
+            Started {
+                stop: Some(id.clone()),
+                ..Started::default()
+            },
+        );
         app.run_upkeep_companions("upkeep", ended(Vec::new()), &ctx);
         let answers = app.upkeep_companion_answers("upkeep");
         assert_eq!(answers["youpark"]["done"], false);
@@ -427,7 +471,7 @@ mod tests {
         let ctx = egui::Context::default();
         let key = ("upkeep".to_owned(), "youpark".to_owned());
         let state = &mut app.cloud_prototype.production.companions.agent.upkeep;
-        state.started.insert(key.clone(), None);
+        state.started.insert(key.clone(), Started::default());
         app.run_upkeep_companions("upkeep", running(Vec::new()), &ctx);
         assert!(
             !app.cloud_prototype.production.companions.agent.holds("upkeep"),
@@ -436,7 +480,7 @@ mod tests {
         app.run_upkeep_companions("upkeep", ended(Vec::new()), &ctx);
         let agent = &app.cloud_prototype.production.companions.agent;
         assert!(agent.holds("upkeep"));
-        let stop = agent.upkeep.started[&key].clone().unwrap();
+        let stop = agent.upkeep.started[&key].stop.clone().unwrap();
         // A Stop that is done is not sent again.
         let state = &mut app.cloud_prototype.production.companions.agent.upkeep;
         state.inflight.clear();
@@ -460,12 +504,62 @@ mod tests {
         let key = ("upkeep".to_owned(), "youpark".to_owned());
         let earlier = manifest::provider_usage::new_operation_id();
         let state = &mut app.cloud_prototype.production.companions.agent.upkeep;
-        state.started.insert(key.clone(), Some(earlier));
-        let started = Box::new(super::super::tests::settled_start("upkeep", "youpark"));
+        state.started.insert(
+            key.clone(),
+            Started {
+                stop: Some(earlier),
+                ..Started::default()
+            },
+        );
+        let started = settled(Action::EnsureReady, Phase::Ready);
         app.finish_upkeep_companion("upkeep", "youpark", &(Ask::EnsureReady, id), Ok(started), &ctx);
         assert_eq!(
             app.cloud_prototype.production.companions.agent.upkeep.started[&key],
-            None
+            Started::default()
+        );
+    }
+
+    #[test]
+    fn a_refused_stop_is_sent_again_a_few_times_with_new_operations() {
+        let (_temp, mut app, id) = upkeep_app();
+        let ctx = egui::Context::default();
+        let key = ("upkeep".to_owned(), "youpark".to_owned());
+        let state = &mut app.cloud_prototype.production.companions.agent.upkeep;
+        state.started.insert(key.clone(), Started::default());
+        for attempt in 1..STOP_ATTEMPTS {
+            let refused = settled(Action::Stop, Phase::Refused);
+            app.finish_upkeep_companion("upkeep", "youpark", &(Ask::Stop, id.clone()), Ok(refused), &ctx);
+            let started = &app.cloud_prototype.production.companions.agent.upkeep.started[&key];
+            assert_eq!((started.refused, started.stop.as_ref()), (attempt, None));
+            assert!(started.wait.is_some_and(|wait| wait > Instant::now()));
+        }
+        // Not before the wait is over.
+        app.run_upkeep_companions("upkeep", ended(Vec::new()), &ctx);
+        assert!(!app.cloud_prototype.production.companions.agent.holds("upkeep"));
+        let refused = settled(Action::Stop, Phase::Refused);
+        app.finish_upkeep_companion("upkeep", "youpark", &(Ask::Stop, id.clone()), Ok(refused), &ctx);
+        assert!(
+            app.cloud_prototype
+                .production
+                .companions
+                .agent
+                .upkeep
+                .started
+                .is_empty()
+        );
+        // A stopped companion is done at once.
+        let state = &mut app.cloud_prototype.production.companions.agent.upkeep;
+        state.started.insert(key, Started::default());
+        let stopped = settled(Action::Stop, Phase::Stopped);
+        app.finish_upkeep_companion("upkeep", "youpark", &(Ask::Stop, id), Ok(stopped), &ctx);
+        assert!(
+            app.cloud_prototype
+                .production
+                .companions
+                .agent
+                .upkeep
+                .started
+                .is_empty()
         );
     }
 
@@ -475,7 +569,7 @@ mod tests {
         let ctx = egui::Context::default();
         let key = ("upkeep".to_owned(), "youpark".to_owned());
         let state = &mut app.cloud_prototype.production.companions.agent.upkeep;
-        state.started.insert(key, None);
+        state.started.insert(key, Started::default());
         app.run_upkeep_companions("upkeep", Seen::NotReady, &ctx);
         let agent = &app.cloud_prototype.production.companions.agent;
         assert!(!agent.holds("upkeep"), "a short refresh stops nothing");
