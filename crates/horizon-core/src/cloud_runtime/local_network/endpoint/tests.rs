@@ -96,6 +96,39 @@ fn busy_observation_refuses_one_request_without_reopening_or_revoking() {
 }
 
 #[test]
+fn revocation_during_a_successful_source_observation_refuses_the_admission() {
+    let address = "127.0.0.1:8080".parse().unwrap();
+    let (observing, entered) = std::sync::mpsc::channel();
+    let (resume, continuing) = std::sync::mpsc::channel();
+    let continuing = Mutex::new(continuing);
+    let mut prepared = prepared(address);
+    prepared.source = Source::fixture(move |_| {
+        observing.send(()).map_err(|_| Error::SourceUnavailable)?;
+        continuing
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|_| Error::SourceUnavailable)?;
+        Ok(binding(address, "peer-fixture"))
+    });
+    let gate = Arc::new(Gate {
+        prepared,
+        reason: Mutex::new(None),
+    });
+    let admitting = Arc::clone(&gate);
+    let admission = thread::spawn(move || admitting.admit(&Destination::Address(address)));
+    entered.recv_timeout(Duration::from_secs(3)).unwrap();
+    gate.revoke(Reason::BindingChanged);
+    resume.send(()).unwrap();
+    assert_eq!(
+        admission.join().unwrap(),
+        Err(horizon_cloud_protocol::local_network::Reply::NotAllowed)
+    );
+    assert_eq!(gate.reason(), Some(Reason::BindingChanged));
+    assert!(gate.admit(&Destination::Address(address)).is_err());
+}
+
+#[test]
 fn a_source_error_is_fixed_and_never_publishes_client_account_or_peer_values() {
     let address = "127.0.0.1:8080".parse().unwrap();
     let mut prepared = prepared(address);

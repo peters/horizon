@@ -88,7 +88,9 @@ A readiness check must not consume the service's one accepted connection.
    and four duplicates followed by another address are refused at preflight,
    start and active admission. Active ambiguity requires new approval even after
    DNS recovers. Duplicate-only answers use one lookup. A network change during
-   that lookup is still refused. Real guest tests remain ignored in this command.
+   that lookup is still refused. Revocation during a successful source observation
+   refuses that admission and remains sticky. Real guest tests remain ignored in
+   this command.
 
 2. Record each ignored test separately.
 

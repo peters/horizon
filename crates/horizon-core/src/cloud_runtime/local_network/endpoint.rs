@@ -245,6 +245,9 @@ impl socks::Gate for Gate {
             Error::Busy => Reply::GeneralFailure,
             _ => Reply::NotAllowed,
         })?;
+        if !self.keeps(address) {
+            return Err(Reply::NotAllowed);
+        }
         Ok(vec![address])
     }
 

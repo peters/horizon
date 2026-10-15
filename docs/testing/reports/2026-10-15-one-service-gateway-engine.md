@@ -167,3 +167,25 @@ These tasks do not qualify actual LAN bytes, native owner admission, worker SSH
 or UI/CLI/MCP sharing. Optional SSH component preparation stopped at a read-only
 guest fixture path before extraction or SSH effects. It was not counted as a
 passing component test.
+
+## 8. Admission revocation recheck
+
+A later review found that revocation could occur during a successful source
+observation. Admission now checks the sticky gate state again before it returns
+the destination. A regression pauses that observation, revokes the same gate and
+verifies refusal when the observation resumes. No shared bridge policy changed.
+
+The new Core artifact SHA-256 was
+`65cd28fb72c0dfaae367fea232a4c454ccc65dd1b0da68eb4d2c6b204eeea1bb`.
+It passed 2,124 enabled cases, with 23 intentional ignores. One existing shell
+shutdown case exceeded its host time bound in the full run; that exact case
+passed separately with the same frozen executable. Both raw results were kept.
+Enabled blocking and strict Clippy, Core doctests and static checks passed.
+The recorded input comparison preserved the applicable default matrix results.
+
+Fresh R01 and R02 passed on this executable with two newly enrolled kernel-mode
+guests. The actual DNS, relay, half-close and refusal checks used the production
+engine. Both containers, their captured nodes and the bridge were removed. The
+task key was revoked and confirmed invalid before its private alias was removed
+last. The original two-device tailnet remained intact. These remain engine
+component results; the broader M1 qualification listed above is still required.
