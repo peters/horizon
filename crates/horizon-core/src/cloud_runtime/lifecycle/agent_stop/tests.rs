@@ -255,4 +255,11 @@ fn a_stop_whose_outcome_is_uncertain_keeps_the_agent_and_the_request() {
         commands.borrow().is_empty(),
         "a stop that may have happened is not taken back"
     );
+    // So does a stop cancelled while the provider may still carry out what it received.
+    let root = tempfile::tempdir().unwrap();
+    ready(root.path(), |_| {});
+    let cancelled = |_: &Store| Err(Error::Provider(horizon_cloud::CloudError::Cancelled));
+    assert!(stop_with(root.path(), &stop(), worker(&commands), cancelled, settled).is_err());
+    assert_eq!(attribution(root.path()), Some(stop().at));
+    assert!(commands.borrow().is_empty());
 }
