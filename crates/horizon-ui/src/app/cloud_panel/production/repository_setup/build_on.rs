@@ -9,7 +9,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 /// How often the saved Docker hosts are read again while the setup choices show.
-const READ_EVERY: Duration = Duration::from_secs(10);
+const READ_EVERY: Duration = Duration::from_secs(3);
 
 /// The Docker hosts a setup can build on, and the one chosen for the next setup.
 #[derive(Default)]
@@ -52,6 +52,11 @@ impl State {
             wake.request_repaint();
         });
         self.job = Some(receiver);
+    }
+
+    /// Reads the settings again on the next refresh.
+    pub(in crate::app::cloud_panel::production) fn read_again(&mut self) {
+        self.read_at = None;
     }
 
     /// The Docker host the next setup builds on; none for this computer.

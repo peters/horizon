@@ -815,8 +815,9 @@ The agent still runs on this computer and reads the repository here. The proof c
 the bundle, the restored packages and the Rust git clones to the host, as it copies
 them into a container on this computer. A live preview is brought back to this
 computer through a second SSH forward of its port. A Docker host has build slots of its
-own. A setup with a GPU profile, and a desktop preview that needs `/dev/kvm`, run on
-this computer only. The setup board names the host of each setup that builds on one.
+own. A proof of a GPU profile fails on a Docker host, and a desktop preview that needs
+`/dev/kvm` is skipped there; choose **This computer** for them. The setup board names
+the host of each setup that builds on one.
 
 The agent reads the CI of the repository first, the GitHub Actions workflows in
 `.github/workflows`: the Linux jobs that restore, build and test, the tool versions

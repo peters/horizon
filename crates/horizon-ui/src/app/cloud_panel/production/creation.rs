@@ -282,6 +282,9 @@ impl HorizonApp {
         form.source = source::State::default();
         form.checks = checks::State::default();
         form.publishing = publishing::State::default();
+        // The next dialog reads the Docker hosts again at once, so a host changed in the
+        // meantime is not used as it was.
+        form.setup_build_on.read_again();
     }
 
     /// What the dialog settles before it draws: the pickers that closed, the prices and the
