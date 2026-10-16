@@ -26,6 +26,7 @@ documents that are not yet STE.
 | Procedure | Feature | Cost |
 |---|---|---|
 | [exposure-policy](procedures/exposure-policy.md) | Bounded default-off policy and route comparison facts | none |
+| [exposure-control](procedures/exposure-control.md) | Default-off bounded control and observation comparison messages | none |
 | [worker-exposure-gate](procedures/worker-exposure-gate.md) | Default-off actual-peer CIDR/Public worker Gate | no local cost; approved real-root component only |
 | [exposure-records](procedures/exposure-records.md) | Default-off bounded exposure model and pure transitions | none |
 | [portable-build-engine](procedures/portable-build-engine.md) | Retain publisher identity through image preparation | none |

@@ -661,6 +661,17 @@ The M2 eight-hour constant does not expire M1 one-device sharing. Worker, provid
 owner and public interface qualification remain required for the full feature.
 See docs/architecture/exposure-policy.md and docs/testing/procedures/exposure-policy.md.
 
+The separate Protocol `exposure-control` feature is also off by default. Raw
+requests have a 20 KiB bound and replies a 144 KiB bound; strict decoders refuse
+unknown/duplicate fields, malformed/trailing JSON and inconsistent observations.
+Direct serde decoding does not apply frame-size or complete semantic validation.
+A future transport must bound reads and retain original custody. Session/command
+IDs, elapsed lifetimes, sorted recipient member facts and Running/Closed values
+remain comparison data, not approval, membership, listeners or cleanup proof.
+The shared policy validator rejects physical targets 600–663 as well as existing
+management/logical reserved targets. No keeper or public operation is added. See
+docs/architecture/exposure-control.md and docs/testing/procedures/exposure-control.md.
+
 For new Hetzner development workers, `bootstrap.exposure_ingress: true` selects
 the protected host publication producer. It defaults false, does not upgrade an
 existing worker, and cannot change through rebuild. It publishes logical TCP

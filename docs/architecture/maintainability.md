@@ -527,6 +527,10 @@ effects. Callers supply the owning host's trusted inventory; the serialized
 selection itself is not authentication. Runtime grants and readiness belong in
 the host coordinator, not the portable selection contract.
 
+The default-off Protocol `exposure::control` tree owns bounded comparison frames:
+`control.rs` validates requests/replies, `members` checks recipient facts and
+`worker` checks passive observations. It owns no transport or runtime authority.
+
 `horizon-cloud-protocol::companion` defines owner-invoked worker SSH grants.
 `horizon-cloud-worker::companions` serializes grant changes; its `files` leaf owns
 durable runtime writes and `ssh` owns key validation, bounded probes, and alias

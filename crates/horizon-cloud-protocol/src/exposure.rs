@@ -1,4 +1,6 @@
 //! Validated raw-TCP policy facts, never an owner approval or authenticated identity.
+#[cfg(feature = "exposure-control")]
+pub mod control;
 pub mod ingress;
 mod route;
 pub use route::Route;
@@ -90,6 +92,7 @@ impl ExposureRequest {
     /// Successful syntax validation is not a trusted peer or owner decision.
     pub fn validate(&self) -> Result<ExposurePolicy, Error> {
         if self.target_port == 0
+            || ingress::is_physical_port(self.target_port)
             || BLOCKED_PORTS.contains(&self.target_port)
             || (RESERVED_INGRESS_START..=RESERVED_BACKEND_END).contains(&self.target_port)
         {

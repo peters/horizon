@@ -14,7 +14,8 @@ There are at most 32 source rules and 128 total connections. Per-source limits
 must be positive and must not exceed the total limit.
 
 A target port cannot be zero, a management port, or a port in the reserved
-20000–20063 range. The blocked management ports are 22, 5900, 9222, 2375, 1055,
+20000–20063 range or protected physical listener/backend range 600–663.
+The blocked management ports are 22, 5900, 9222, 2375, 1055,
 1056, 47280 and 47281. Reserved ingress ports are 20000–20031. Reserved private
 backend ports are 20032–20063. The backend calculation supplies facts only.
 
