@@ -1,10 +1,10 @@
 //! The worker's root GitHub service: its status, and the chain Horizon gives it.
-//! The payload travels on SSH stdin from a private file and never enters argv or output.
+//! The payload travels on SSH stdin from memory and never enters argv, output or a named file.
 use super::{Error, Grant, Result, Runner, Settings};
 use crate::cloud_runtime::ssh::Connection;
 use horizon_cloud::github::{Chain, Secret, User};
 use serde::{Deserialize, Serialize, Serializer};
-use std::{io::Write as _, time::Duration};
+use std::time::Duration;
 
 const STATUS: &str = "if command -v horizon-worker-github >/dev/null 2>&1; then horizon-worker-github status; \
      else printf '{\"state\":\"unsupported\"}'; fi";
@@ -143,15 +143,14 @@ fn unix(at: std::time::SystemTime) -> u64 {
         .map_or(0, |since| since.as_secs())
 }
 
-/// Writes the payload for `horizon-worker-github install` to a private temporary
-/// file. The file is removed when the returned handle drops.
+/// The payload for `horizon-worker-github install`, cleared from memory when it drops.
 pub(super) fn payload(
     settings: &Settings,
     client_secret: Option<&Secret>,
     user: &User,
     grants: &[Grant],
     chain: &Chain,
-) -> Result<tempfile::NamedTempFile> {
+) -> Result<zeroize::Zeroizing<Vec<u8>>> {
     let payload = Payload {
         version: 1,
         client_id: &settings.client_id,
@@ -174,10 +173,26 @@ pub(super) fn payload(
             refresh_expires_at: unix(chain.refresh_expires_at),
         },
     };
-    let mut file = tempfile::NamedTempFile::new()?;
-    serde_json::to_writer(&mut file, &payload).map_err(|_| Error::Json)?;
-    file.flush()?;
-    Ok(file)
+    let mut bytes = zeroize::Zeroizing::new(Vec::with_capacity(256 * 1024));
+    serde_json::to_writer(Bounded(&mut bytes), &payload).map_err(|_| Error::Json)?;
+    Ok(bytes)
+}
+
+/// Writes only within the buffer's capacity, the upload bound, so the buffer never grows
+/// and leaves no copy of the tokens behind in freed memory.
+struct Bounded<'a>(&'a mut Vec<u8>);
+
+impl std::io::Write for Bounded<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > self.0.capacity() - self.0.len() {
+            return Err(std::io::ErrorKind::FileTooLarge.into());
+        }
+        self.0.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Removes the worker's chain and the static Git binding.
@@ -200,6 +215,6 @@ pub(super) fn install(
     grants: &[Grant],
     chain: &Chain,
 ) -> Result<()> {
-    let file = payload(settings, client_secret, user, grants, chain)?;
-    runner.private_payload(&mut connection.command("horizon-worker-github install"), file.path())
+    let payload = payload(settings, client_secret, user, grants, chain)?;
+    runner.private_bytes(&mut connection.command("horizon-worker-github install"), &payload)
 }

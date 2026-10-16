@@ -131,7 +131,7 @@ fn a_service_that_is_not_running_is_not_current_and_requests_need_support() {
 }
 
 #[test]
-fn the_payload_is_private_and_carries_the_secret_only_in_automatic_mode() {
+fn the_payload_carries_the_secret_only_in_automatic_mode() {
     let dir = tempfile::tempdir().unwrap();
     let secret_file = private(dir.path(), "synthetic-client-secret\n");
     let grants = [
@@ -147,13 +147,8 @@ fn the_payload_is_private_and_carries_the_secret_only_in_automatic_mode() {
     for mode in [Mode::Ask, Mode::Automatic] {
         let settings = settings(mode, &secret_file);
         let secret = (mode == Mode::Automatic).then(|| settings.client_secret().unwrap());
-        let file = worker::payload(&settings, secret.as_ref(), &user(), &grants, &chain()).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(file.path()).unwrap().permissions().mode() & 0o077, 0);
-        }
-        let value: serde_json::Value = serde_json::from_slice(&std::fs::read(file.path()).unwrap()).unwrap();
+        let payload = worker::payload(&settings, secret.as_ref(), &user(), &grants, &chain()).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&payload).unwrap();
         assert_eq!(value["version"], 1);
         assert_eq!(value["author_email"], "7+octo-cat@users.noreply.github.com");
         assert_eq!(value["grants"][1]["target"], "sibling:api");
@@ -165,6 +160,15 @@ fn the_payload_is_private_and_carries_the_secret_only_in_automatic_mode() {
             Mode::Automatic => assert_eq!(value["client_secret"], "synthetic-client-secret"),
         }
     }
+    let large = horizon_cloud::github::User {
+        name: "x".repeat(256 * 1024),
+        ..user()
+    };
+    let settings = settings(Mode::Ask, &secret_file);
+    assert!(matches!(
+        worker::payload(&settings, None, &large, &grants, &chain()),
+        Err(Error::Json)
+    ));
 }
 
 #[cfg(unix)]
