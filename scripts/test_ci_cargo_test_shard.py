@@ -4,6 +4,7 @@
 import os
 import re
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -80,8 +81,54 @@ class ShardCommandTests(unittest.TestCase):
             ["cargo test --locked -p horizon-ui --features speech"],
         )
 
+    def test_all_runs_libs_ui_and_speech_in_sequence(self):
+        for ref, cache_hit in [("refs/pull/1/merge", "true"), ("refs/heads/main", "false")]:
+            with self.subTest(ref=ref, cache_hit=cache_hit):
+                result = shard_commands("all", "macOS", ref=ref, cache_hit=cache_hit)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    result.stdout.splitlines(),
+                    [
+                        "cargo test --locked --workspace --exclude horizon-ui",
+                        "cargo test --locked -p horizon-chromecast --features encoder",
+                        "cargo test --locked -p horizon-ui",
+                        "cargo test --locked -p horizon-ui --features speech",
+                    ],
+                )
+
+    def test_all_runs_every_shard_and_fails_when_one_fails(self):
+        env = os.environ.copy()
+        env.update(HORIZON_CI_SHARD="all", RUNNER_OS="macOS")
+        env.pop("HORIZON_CI_SHARD_DRY_RUN", None)
+        with tempfile.TemporaryDirectory() as bin_dir:
+            log = Path(bin_dir) / "calls"
+            fake = Path(bin_dir) / "cargo"
+            # The libs workspace run fails; every later command must still run.
+            fake.write_text(
+                "#!/usr/bin/env bash\n"
+                f"echo \"$*\" >> {log}\n"
+                "[[ \"$*\" == *'--exclude horizon-ui'* ]] && exit 101\n"
+                "exit 0\n"
+            )
+            fake.chmod(0o755)
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(["bash", str(SCRIPT)], cwd=ROOT, env=env,
+                                    capture_output=True, text=True, check=False)
+            calls = log.read_text().splitlines()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Failed CI test shards: libs", result.stderr)
+        self.assertEqual(
+            calls,
+            [
+                "test --locked --workspace --exclude horizon-ui",
+                "test --locked -p horizon-chromecast --features encoder",
+                "test --locked -p horizon-ui",
+                "test --locked -p horizon-ui --features speech",
+            ],
+        )
+
     def test_unknown_shard_fails(self):
-        result = shard_commands("all", "Linux")
+        result = shard_commands("every", "Linux")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Unknown CI test shard", result.stderr)
 
@@ -90,22 +137,32 @@ class WorkflowShardTests(unittest.TestCase):
     def test_platform_jobs_share_one_cache_entry_per_os(self):
         workflow = WORKFLOW.read_text()
         jobs = dict(re.findall(r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)", workflow, re.M | re.S))
-        save_if = "save-if: ${{ github.ref == 'refs/heads/main' && matrix.shard == 'speech' }}"
         rust = jobs["rust-test"]
         windows = jobs["windows-smoke"]
-        self.assertEqual(rust.count("shard: ui"), 2)
-        self.assertEqual(rust.count("shard: libs"), 2)
-        self.assertEqual(rust.count("shard: speech"), 2)
+        entries = [
+            dict(re.findall(r"^\s+-?\s*(\w+): (.+)$", entry, re.M))
+            for entry in re.split(r"^\s+- os: ", rust.split("include:", 1)[1].split("steps:", 1)[0], flags=re.M)[1:]
+        ]
+        shards = {(entry["name"], entry["shard"]) for entry in entries}
+        self.assertEqual(
+            shards,
+            {("Linux x64", "ui"), ("Linux x64", "libs"), ("Linux x64", "speech"), ("macOS arm64", "all")},
+        )
+        # Exactly one job per OS saves the entry the others restore.
+        savers = {(entry["name"], entry["shard"]) for entry in entries if entry.get("save_cache") == "true"}
+        self.assertEqual(savers, {("Linux x64", "speech"), ("macOS arm64", "all")})
         self.assertIn("cache_key: linux-test", rust)
         self.assertIn("cache_key: macos-test", rust)
         self.assertIn("key: ${{ matrix.cache_key }}", rust)
         self.assertNotIn("matrix.shard", rust.split("save-if:", 1)[0].split("key:", 1)[-1])
-        self.assertIn(save_if, rust)
+        self.assertIn("save-if: ${{ github.ref == 'refs/heads/main' && matrix.save_cache == true }}", rust)
+        self.assertIn("timeout-minutes: ${{ matrix.timeout_minutes || 35 }}", rust)
+        self.assertIn("if: ${{ !cancelled() && startsWith(matrix.os, 'macos-') && matrix.shard == 'all' }}", rust)
         self.assertEqual(windows.count("shard: ui"), 1)
         self.assertEqual(windows.count("shard: libs"), 1)
         self.assertEqual(windows.count("shard: speech"), 1)
         self.assertIn("key: windows-test-build", windows)
-        self.assertIn(save_if, windows)
+        self.assertIn("save-if: ${{ github.ref == 'refs/heads/main' && matrix.shard == 'speech' }}", windows)
         for job in (rust, windows):
             self.assertEqual(job.count("bash scripts/ci-cargo-test-shard.sh"), 1)
             self.assertNotIn("cargo test --locked --workspace\n", job)

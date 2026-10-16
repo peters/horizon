@@ -2,6 +2,7 @@
 """Tests for scripts/detect-ci-build-inputs.sh."""
 
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -9,6 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "detect-ci-build-inputs.sh"
+WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+RUST_JOBS = ["browser-engine", "device", "clippy", "rust-test", "windows-smoke"]
 ZERO_SHA = "0" * 40
 
 GIT_ENV = {
@@ -56,8 +59,10 @@ class DetectionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return dict(line.split("=", 1) for line in result.stdout.split())
 
-    def assert_gates(self, outputs, *, snap, release):
-        self.assertEqual(outputs, {"run_snap_build": snap, "release_inputs": release})
+    def assert_gates(self, outputs, *, snap, release, rust="true"):
+        self.assertEqual(
+            outputs, {"run_snap_build": snap, "release_inputs": release, "rust_inputs": rust}
+        )
 
     def test_documentation_only_change_gates_both_lanes_off(self):
         self.commit("docs/architecture/maintainability.md", "README.md")
@@ -101,6 +106,59 @@ class DetectionTests(unittest.TestCase):
         self.commit("docs/plan.md")
         self.assert_gates(self.detect(event="workflow_dispatch"), snap="true", release="true")
 
+    def test_pull_request_outside_rust_skips_the_rust_jobs(self):
+        for paths in [["docs/plan.md"], ["README.md", "AGENTS.md"],
+                      [".github/copilot-instructions.md"], [".github/workflows/release.yml"],
+                      [".github/dependabot.yml", "docs/testing/procedures/upkeep.md"],
+                      [".claude/settings.json"]]:
+            with self.subTest(paths=paths):
+                self.setUp()
+                self.commit(*paths)
+                outputs = self.detect(event="pull_request")
+                self.assertEqual(outputs["rust_inputs"], "false")
+
+    def test_pull_request_with_any_other_path_runs_the_rust_jobs(self):
+        for paths in [["crates/horizon-ui/src/lib.rs"], ["crates/horizon-ui/README.md"],
+                      ["Cargo.lock"], [".github/workflows/ci.yml"],
+                      ["scripts/ci-cargo-test-shard.sh"], ["examples/cloud.yml"],
+                      ["skills/horizon-browser/SKILL.md"], [".horizon/version"],
+                      ["docs/architecture/remote-device-testing.schema.json"],
+                      ["docs/features/native-smoke.md"], ["docs/plan.md", "crates/x/src/lib.rs"],
+                      ["assets/fonts/regular.ttf"], ["rust-toolchain.toml"]]:
+            with self.subTest(paths=paths):
+                self.setUp()
+                self.commit(*paths)
+                outputs = self.detect(event="pull_request")
+                self.assertEqual(outputs["rust_inputs"], "true")
+
+    def test_moving_a_source_file_into_docs_runs_the_rust_jobs(self):
+        source = self.repo / "crates/horizon-core/src/upkeep.rs"
+        source.parent.mkdir(parents=True)
+        source.write_text("pub fn upkeep() {}\n" * 40)
+        self.git("add", "-A")
+        self.git("commit", "-m", "add source")
+        self.base = self.git("rev-parse", "HEAD")
+        (self.repo / "docs").mkdir()
+        self.git("mv", "crates/horizon-core/src/upkeep.rs", "docs/upkeep.md")
+        self.git("commit", "-m", "move source into docs")
+        outputs = self.detect(event="pull_request")
+        self.assertEqual(outputs["rust_inputs"], "true")
+        self.assertEqual(outputs["release_inputs"], "true")
+
+    def test_paths_git_would_quote_still_gate_the_release_matrix(self):
+        for path in ["crates/horizon-ui/src/\u00e9.rs", 'crates/horizon-ui/src/we"ird.rs',
+                     "crates/horizon-ui/src/back\\slash.rs"]:
+            with self.subTest(path=path):
+                self.setUp()
+                self.commit(path)
+                self.assert_gates(self.detect(), snap="false", release="true")
+
+    def test_pushes_and_unknown_bases_always_run_the_rust_jobs(self):
+        self.commit("docs/plan.md")
+        self.assert_gates(self.detect(event="push"), snap="false", release="false", rust="true")
+        self.assert_gates(self.detect(event="pull_request", base=ZERO_SHA),
+                          snap="true", release="true", rust="true")
+
     def test_wrong_argument_count_fails_without_output(self):
         for arguments in [[], ["push"], ["push", "HEAD"], ["push", "HEAD", "HEAD", "extra"]]:
             with self.subTest(arguments=arguments):
@@ -109,6 +167,23 @@ class DetectionTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2)
                 self.assertEqual(result.stdout, "")
                 self.assertIn("usage:", result.stderr)
+
+
+class WorkflowGateTests(unittest.TestCase):
+    def test_rust_jobs_wait_for_the_change_detection_and_run_unless_told_not_to(self):
+        workflow = WORKFLOW.read_text()
+        jobs = dict(re.findall(r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)", workflow, re.M | re.S))
+        self.assertIn("rust_inputs: ${{ steps.changes.outputs.rust_inputs }}", jobs["changes"])
+        self.assertIn("detect-ci-build-inputs.sh", jobs["changes"])
+        for name in RUST_JOBS:
+            with self.subTest(job=name):
+                self.assertIn("    needs: changes\n", jobs[name])
+                # !cancelled(): a failed detection leaves the output empty and still runs the job.
+                self.assertIn(
+                    "    if: ${{ !cancelled() && needs.changes.outputs.rust_inputs != 'false' }}\n",
+                    jobs[name],
+                )
+        self.assertNotIn("needs.repo-checks.outputs", workflow)
 
 
 if __name__ == "__main__":

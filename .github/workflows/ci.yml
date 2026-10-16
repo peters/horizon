@@ -27,8 +27,9 @@ env:
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 # Cache policy: every rust-cache step below sets
-# `save-if: github.ref == 'refs/heads/main'`. The platform test shards also
-# require `matrix.shard == 'speech'`, so the three jobs share one entry.
+# `save-if: github.ref == 'refs/heads/main'`. The platform test jobs also
+# require one saver per OS (`matrix.save_cache` on Linux and macOS,
+# `matrix.shard == 'speech'` on Windows), so each OS keeps one entry.
 # Pull-request runs restore from main's entry but never write their own.
 # A per-branch copy of each build
 # cache pushed the repository past GitHub's 10 GB budget, and the resulting
@@ -53,9 +54,6 @@ jobs:
     name: Repo checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    outputs:
-      run_snap_build: ${{ steps.changes.outputs.run_snap_build }}
-      release_inputs: ${{ steps.changes.outputs.release_inputs }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -97,14 +95,26 @@ jobs:
         run: python3 -B scripts/test_ci_cargo_test_shard.py -v
       - name: Verify the setup gate runner
         run: python3 -B scripts/test_setup_gate.py -v
-      # One diff answers both gated lanes: Snap packaging and the release
-      # Artifacts matrix. This job already checks out full history, so the
-      # Artifacts gate costs nothing here instead of a second runner and a
-      # second full clone. The classification lives in a script with its own
-      # test suite (run above) because a silent misclassification skips a
-      # release build.
+
+  # One diff answers every gated lane: Snap packaging, the release Artifacts
+  # matrix and, on pull requests, the Rust build and test jobs. It runs on its
+  # own small runner so the Rust jobs wait seconds for it, not for every repo
+  # check. The classification lives in a script with its own test suite (run
+  # in Repo checks) because a silent misclassification skips a build.
+  changes:
+    name: Detect changed inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run_snap_build: ${{ steps.changes.outputs.run_snap_build }}
+      release_inputs: ${{ steps.changes.outputs.release_inputs }}
+      rust_inputs: ${{ steps.changes.outputs.rust_inputs }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - id: changes
-        name: Detect packaging and release inputs
+        name: Detect packaging, release and Rust inputs
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -117,6 +127,11 @@ jobs:
   # matrix leg bought a duplicate cache entry for a near-identical graph.
   browser-engine:
     name: Browser engine
+    needs: changes
+    # A pull request that changes only documentation or other workflows skips
+    # this job (see Detect changed inputs). Anything but an explicit false runs
+    # it: when that job fails, its output is empty and this job still runs.
+    if: ${{ !cancelled() && needs.changes.outputs.rust_inputs != 'false' }}
     runs-on: ubuntu-latest
     # Two sequential feature sets, with headroom for a cold cache.
     timeout-minutes: 25
@@ -146,6 +161,11 @@ jobs:
 
   device:
     name: Device library and CLI/MCP
+    needs: changes
+    # A pull request that changes only documentation or other workflows skips
+    # this job (see Detect changed inputs). Anything but an explicit false runs
+    # it: when that job fails, its output is empty and this job still runs.
+    if: ${{ !cancelled() && needs.changes.outputs.rust_inputs != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -205,6 +225,11 @@ jobs:
   # pedantic results the way three jobs used to.
   clippy:
     name: Clippy
+    needs: changes
+    # A pull request that changes only documentation or other workflows skips
+    # this job (see Detect changed inputs). Anything but an explicit false runs
+    # it: when that job fails, its output is empty and this job still runs.
+    if: ${{ !cancelled() && needs.changes.outputs.rust_inputs != 'false' }}
     runs-on: ubuntu-latest
     # Three sequential tiers, with headroom for a cold cache: the first tier
     # then compiles the vendored speech C++ tree before it can lint.
@@ -251,14 +276,23 @@ jobs:
 
   rust-test:
     name: Tests (${{ matrix.name }} ${{ matrix.shard }})
+    needs: changes
+    # A pull request that changes only documentation or other workflows skips
+    # this job (see Detect changed inputs). Anything but an explicit false runs
+    # it: when that job fails, its output is empty and this job still runs.
+    if: ${{ !cancelled() && needs.changes.outputs.rust_inputs != 'false' }}
     runs-on: ${{ matrix.os }}
     # Headroom for a cold cache. A lock bump, toolchain bump, or eviction
     # rebuilds the vendored speech C++ tree, and a job that times out skips
     # the cache save, so the next run starts cold again.
-    # ui, libs, and speech run together. They restore one cache entry per OS;
-    # the key still includes this job id. Only the speech shard saves, and a
-    # miss on main rebuilds the whole workspace there before the speech feature.
-    timeout-minutes: 35
+    # On Linux, ui, libs, and speech run as three jobs. They restore one cache
+    # entry per OS; the key still includes this job id. Only the speech shard
+    # saves, and a miss on main rebuilds the whole workspace there before the
+    # speech feature.
+    # macOS runs the three shards in sequence as one `all` job, which saves
+    # its own entry. GitHub-hosted accounts get about five concurrent macOS
+    # jobs, so three per run kept pull requests queued for macOS runners.
+    timeout-minutes: ${{ matrix.timeout_minutes || 35 }}
     strategy:
     # A failing OS releases the other runner instead of holding it to the
     # full timeout; the cancelled sibling keeps its logs and a re-run
@@ -278,18 +312,14 @@ jobs:
             name: Linux x64
             cache_key: linux-test
             shard: speech
+            save_cache: true
           - os: macos-latest
             name: macOS arm64
             cache_key: macos-test
-            shard: ui
-          - os: macos-latest
-            name: macOS arm64
-            cache_key: macos-test
-            shard: libs
-          - os: macos-latest
-            name: macOS arm64
-            cache_key: macos-test
-            shard: speech
+            shard: all
+            save_cache: true
+            # The three shards in sequence, with the same cold-cache headroom.
+            timeout_minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
@@ -298,7 +328,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.cache_key }}
-          save-if: ${{ github.ref == 'refs/heads/main' && matrix.shard == 'speech' }}
+          save-if: ${{ github.ref == 'refs/heads/main' && matrix.save_cache == true }}
       - name: Report rust-cache status
         shell: bash
         run: |
@@ -328,8 +358,14 @@ jobs:
       # horizon-chromecast and horizon-media are standalone libraries that also
       # target Apple mobile platforms; keep device and simulator builds compiling.
       - name: Cross-build portable casting crates for Apple mobile targets
-        if: startsWith(matrix.os, 'macos-') && matrix.shard == 'libs'
+        # Runs even when a test shard failed, so a test failure does not hide
+        # this check.
+        if: ${{ !cancelled() && startsWith(matrix.os, 'macos-') && matrix.shard == 'all' }}
         shell: bash
+        # This job saves the macOS cache entry. A separate target directory keeps
+        # the iOS builds and their host build scripts out of it.
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/apple-mobile-target
         run: |
           rustup target add aarch64-apple-ios aarch64-apple-ios-sim
           for target in aarch64-apple-ios aarch64-apple-ios-sim; do
@@ -364,6 +400,11 @@ jobs:
   # Speech is build-only here; a ui or libs failure must not cancel that check.
   windows-smoke:
     name: Tests (Windows x64 ${{ matrix.shard }})
+    needs: changes
+    # A pull request that changes only documentation or other workflows skips
+    # this job (see Detect changed inputs). Anything but an explicit false runs
+    # it: when that job fails, its output is empty and this job still runs.
+    if: ${{ !cancelled() && needs.changes.outputs.rust_inputs != 'false' }}
     runs-on: windows-latest
     # Headroom for a cold cache: a cacheless run passed 15 minutes while
     # still compiling the vendored speech C++ tree, and a timed-out job
@@ -412,9 +453,9 @@ jobs:
 
   snap-build:
     name: Snap Build
-    needs: repo-checks
+    needs: changes
     # Disabled: Snap packaging paused. Re-enable by restoring the previous
-    # condition: needs.repo-checks.outputs.run_snap_build == 'true'
+    # condition: needs.changes.outputs.run_snap_build == 'true'
     if: false
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -434,12 +475,12 @@ jobs:
 
   # Docs/CI-only pushes to main must not pay for four release builds, so the
   # matrix is gated on the paths that can change the binary, as detected by
-  # Repo checks. A workflow dispatch always builds, even when those checks
-  # fail, so a release can still be forced on demand.
+  # Detect changed inputs. A workflow dispatch always builds, even when that
+  # job fails, so a release can still be forced on demand.
   rust-artifacts:
     name: Artifacts (${{ matrix.name }})
-    if: always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && needs.repo-checks.outputs.release_inputs == 'true'))
-    needs: repo-checks
+    if: always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && needs.changes.outputs.release_inputs == 'true'))
+    needs: changes
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
