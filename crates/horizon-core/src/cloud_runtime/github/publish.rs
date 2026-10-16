@@ -122,7 +122,9 @@ pub fn build_config(docker_config: &Path) -> Result<(tempfile::TempDir, bool)> {
 
 /// A private Docker configuration retaining only the machine's daemon context and plugins.
 /// It never reads a stored publication chain or copies registry logins and helpers.
-pub(in crate::cloud_runtime) fn empty_build_config() -> Result<tempfile::TempDir> {
+/// # Errors
+/// The directory or its file cannot be written.
+pub fn empty_build_config() -> Result<tempfile::TempDir> {
     let empty = private_tempdir("horizon-empty-docker-")?;
     build_config(empty.path()).map(|(config, _)| config)
 }

@@ -201,8 +201,9 @@ pub fn rent(
             &mut create_state,
             cancel,
             |state| {
+                // Each placement tried is a request of its own; its ten minutes start now.
                 if *state == CreateState::Requested {
-                    requested_at = requested_at.or_else(|| Some(now()));
+                    requested_at = Some(now());
                 }
                 write_journal(root, (&operation_id, &binding), state, requested_at)
                     .map_err(|_| horizon_cloud::CloudError::Transport)

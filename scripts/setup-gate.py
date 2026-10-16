@@ -288,10 +288,17 @@ def session_pids(session):
 
 def lane_failure(lane, ended):
     """Why a lane whose entries all ended still fails the gate: its process exited with an
-    error after them, as when the rented builder it rented could not be deleted. None
-    otherwise, also for a lane the runner stopped."""
+    error after them, as when the rented builder it rented could not be deleted, or the
+    runner stopped it then. None otherwise, also while an entry has no result, which the
+    summary tells already."""
     code = lane.process.returncode if lane.process is not None else None
-    if not ended or lane.reason or code in (None, 0):
+    if not ended:
+        return None
+    if lane.reason:
+        # Stopped after its last result: it may not have finished deleting what it rented.
+        return (f"lane {lane.number} was stopped after its entries ({lane.reason}), maybe while it deleted "
+                f"the rented builder; see {lane.log_path}")
+    if code in (None, 0):
         return None
     return (f"lane {lane.number} exited with code {code} after its entries, as when the rented builder "
             f"could not be deleted; see {lane.log_path}")

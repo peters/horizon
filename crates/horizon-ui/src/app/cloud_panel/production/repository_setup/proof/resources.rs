@@ -328,9 +328,18 @@ fn pending() -> std::sync::MutexGuard<'static, Vec<Pending>> {
 /// The engine ID of the Docker host each run's proofs made their resources on, by the
 /// run's volume, kept across the run's proofs: a replacement proof that fails before it
 /// reaches a daemon still leaves its cleanup bound to that engine.
-static ENGINES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+static ENGINES: std::sync::Mutex<Vec<Bound>> = std::sync::Mutex::new(Vec::new());
 
-fn engines() -> std::sync::MutexGuard<'static, Vec<(String, String)>> {
+/// A run's binding to the engine of the Docker host its proofs used.
+#[derive(Clone)]
+struct Bound {
+    volume: String,
+    /// The Docker host's name, so a rented builder that is deleted takes its bindings.
+    host: String,
+    engine_id: String,
+}
+
+fn engines() -> std::sync::MutexGuard<'static, Vec<Bound>> {
     ENGINES.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
@@ -347,7 +356,7 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn note_engine(
     let Some(remote) = daemon.remote() else {
         return Ok(());
     };
-    note(volume, remote.engine_id()).map_err(|()| {
+    note(volume, (remote.name(), remote.engine_id())).map_err(|()| {
         format!(
             "the Docker host {} is another Docker engine now than the one an earlier proof of this setup used, and that proof's image and volume are still there; stop the setup to remove them, or point the host back",
             remote.name()
@@ -358,13 +367,17 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn note_engine(
 /// Notes `engine_id` for the run of `volume`, unless another engine is noted for it, and
 /// gives it to a pending cleanup of the run that does not know its engine yet, as when
 /// Horizon's exit noted the run before its first proof reached the host.
-fn note(volume: &str, engine_id: &str) -> Result<(), ()> {
+fn note(volume: &str, (host, engine_id): (&str, &str)) -> Result<(), ()> {
     {
         let mut engines = engines();
-        match engines.iter().find(|(known, _)| known == volume) {
-            Some((_, known)) if known != engine_id => return Err(()),
+        match engines.iter().find(|bound| bound.volume == volume) {
+            Some(bound) if bound.engine_id != engine_id => return Err(()),
             Some(_) => {}
-            None => engines.push((volume.to_owned(), engine_id.to_owned())),
+            None => engines.push(Bound {
+                volume: volume.to_owned(),
+                host: host.to_owned(),
+                engine_id: engine_id.to_owned(),
+            }),
         }
     }
     for known in pending().iter_mut().filter(|known| known.resources.volume == volume) {
@@ -376,8 +389,8 @@ fn note(volume: &str, engine_id: &str) -> Result<(), ()> {
 fn engine_of(volume: &str) -> Option<String> {
     engines()
         .iter()
-        .find(|(known, _)| known == volume)
-        .map(|(_, id)| id.clone())
+        .find(|bound| bound.volume == volume)
+        .map(|bound| bound.engine_id.clone())
 }
 
 /// Takes the pending record of `volume` out of the registry, so whatever it holds, such
@@ -597,8 +610,10 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn retry_unremoved
 }
 
 /// Forgets the resources kept on the Docker host `name`, which no longer exists, such as a
-/// rented builder that was deleted with everything on it.
+/// rented builder that was deleted with everything on it, and the runs' bindings to its
+/// engine, so a later proof of such a run may use the next builder.
 pub(in crate::app::cloud_panel::production::repository_setup) fn forget_on(name: &str) {
+    engines().retain(|bound| bound.host != name);
     // What they hold goes after the lock is let go.
     let gone: Vec<Pending> = {
         let mut pending = pending();
@@ -641,8 +656,8 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn keep_unremoved(
                     let volume = &known.resources.volume;
                     noted
                         .iter()
-                        .find(|(known, _)| known == volume)
-                        .map(|(_, id)| id.as_str())
+                        .find(|bound| bound.volume == *volume)
+                        .map(|bound| bound.engine_id.as_str())
                 });
             // A run on a Docker host whose engine no proof reached made nothing there.
             if docker_host.is_some() && engine_id.is_none() {
@@ -718,7 +733,7 @@ impl RunResources {
         drop(replaced);
         if self.remove(&daemon) {
             drop(take_pending(&self.volume));
-            engines().retain(|(volume, _)| *volume != self.volume);
+            engines().retain(|bound| bound.volume != self.volume);
         } else {
             tracing::warn!(
                 image = %self.image,
@@ -934,7 +949,7 @@ mod tests {
             engine_id: None,
         });
         assert!(
-            note(volume, "engine-a").is_ok(),
+            note(volume, ("builder", "engine-a")).is_ok(),
             "the first proof then reaches engine A"
         );
         let known = take_pending(volume).unwrap();
@@ -943,16 +958,16 @@ mod tests {
             Some("engine-a"),
             "the cleanup knows the engine"
         );
-        engines().retain(|(known, _)| known != volume);
+        engines().retain(|bound| bound.volume != volume);
     }
 
     #[test]
     fn a_run_keeps_the_engine_of_its_first_proof_until_its_resources_there_are_gone() {
         let volume = "horizon-setup-engine-test-0000";
-        assert!(note(volume, "engine-a").is_ok());
-        assert!(note(volume, "engine-a").is_ok(), "the same engine again");
+        assert!(note(volume, ("builder", "engine-a")).is_ok());
+        assert!(note(volume, ("builder", "engine-a")).is_ok(), "the same engine again");
         assert!(
-            note(volume, "engine-b").is_err(),
+            note(volume, ("builder", "engine-b")).is_err(),
             "a reconnect to another engine is refused"
         );
         assert_eq!(
@@ -960,12 +975,29 @@ mod tests {
             Some("engine-a"),
             "the first binding stays"
         );
-        engines().retain(|(known, _)| known != volume);
+        engines().retain(|bound| bound.volume != volume);
         assert!(
-            note(volume, "engine-b").is_ok(),
+            note(volume, ("builder", "engine-b")).is_ok(),
             "once gone, a new proof may use another engine"
         );
-        engines().retain(|(known, _)| known != volume);
+        engines().retain(|bound| bound.volume != volume);
+    }
+
+    #[test]
+    fn a_deleted_rented_builder_takes_its_runs_engine_bindings_with_it() {
+        let (rented, own) = ("horizon-setup-engine-test-rented", "horizon-setup-engine-test-own");
+        assert!(note(rented, ("rented-builder", "engine-a")).is_ok());
+        assert!(note(own, ("build-server", "engine-c")).is_ok());
+        forget_on("rented-builder");
+        assert!(
+            note(rented, ("rented-builder", "engine-b")).is_ok(),
+            "a later proof of the run uses the next builder"
+        );
+        assert!(
+            note(own, ("build-server", "engine-d")).is_err(),
+            "another host keeps its binding"
+        );
+        engines().retain(|bound| bound.volume != rented && bound.volume != own);
     }
 
     #[test]
