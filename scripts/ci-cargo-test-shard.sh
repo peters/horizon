@@ -5,9 +5,11 @@
 # workspace in that job before the speech feature, so the saved target is not
 # speech-only.
 #
-# macOS runs `all`: the three shards in sequence on one runner. GitHub-hosted
-# accounts get about five concurrent macOS jobs, so three macOS jobs per run
-# queued behind each other whenever a few pull requests ran at once.
+# macOS runs `all`: libs, then speech, on one runner. GitHub-hosted accounts
+# get about five concurrent macOS jobs, so three macOS jobs per run queued
+# behind each other whenever a few pull requests ran at once. `all` skips the
+# ui shard: speech runs the same horizon-ui tests with the feature on, and the
+# Linux ui job still tests the build without it.
 set -euo pipefail
 
 shard="${HORIZON_CI_SHARD:?HORIZON_CI_SHARD is required}"
@@ -56,12 +58,11 @@ case "$shard" in
         run_speech
         ;;
     all)
-        # libs and ui together build the whole workspace, so a cold main entry
-        # needs no separate build step before speech. Each shard runs even
-        # when an earlier one fails, so one job still reports all three.
+        # libs and speech together build the whole workspace, so a cold main
+        # entry needs no separate build step. speech runs even when libs
+        # fails, so one job still reports both.
         failed=()
         run_libs || failed+=(libs)
-        run_ui || failed+=(ui)
         run_speech || failed+=(speech)
         if ((${#failed[@]})); then
             printf 'Failed CI test shards: %s\n' "${failed[*]}" >&2

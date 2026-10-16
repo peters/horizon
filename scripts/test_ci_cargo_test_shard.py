@@ -81,7 +81,7 @@ class ShardCommandTests(unittest.TestCase):
             ["cargo test --locked -p horizon-ui --features speech"],
         )
 
-    def test_all_runs_libs_ui_and_speech_in_sequence(self):
+    def test_all_runs_libs_then_speech_without_the_plain_ui_pass(self):
         for ref, cache_hit in [("refs/pull/1/merge", "true"), ("refs/heads/main", "false")]:
             with self.subTest(ref=ref, cache_hit=cache_hit):
                 result = shard_commands("all", "macOS", ref=ref, cache_hit=cache_hit)
@@ -91,7 +91,6 @@ class ShardCommandTests(unittest.TestCase):
                     [
                         "cargo test --locked --workspace --exclude horizon-ui",
                         "cargo test --locked -p horizon-chromecast --features encoder",
-                        "cargo test --locked -p horizon-ui",
                         "cargo test --locked -p horizon-ui --features speech",
                     ],
                 )
@@ -122,7 +121,6 @@ class ShardCommandTests(unittest.TestCase):
             [
                 "test --locked --workspace --exclude horizon-ui",
                 "test --locked -p horizon-chromecast --features encoder",
-                "test --locked -p horizon-ui",
                 "test --locked -p horizon-ui --features speech",
             ],
         )
