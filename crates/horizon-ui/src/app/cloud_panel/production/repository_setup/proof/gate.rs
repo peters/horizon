@@ -190,7 +190,12 @@ fn prove(entry: &Entry, out: &Path) -> serde_json::Value {
         let (proved, value, error) = again_result(&mut second, (&log, &again_log));
         passed = proved;
         again = Some((value, error));
-        pinned = second.daemon();
+        // A second proof that failed before it reached a daemon made nothing; the first
+        // proof's pin still says where the run's resources are.
+        let second_pinned = second.daemon();
+        if second_pinned.get().is_some() {
+            pinned = second_pinned;
+        }
         worker = second.stop();
     }
     remove_run_resources(&entry.repository, &entry.run, worker, (Some(pinned), None), true);

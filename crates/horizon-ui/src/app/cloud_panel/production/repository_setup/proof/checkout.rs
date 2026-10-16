@@ -92,12 +92,18 @@ impl super::Job {
         // A name of its own, so it never waits on or collides with the proof's container;
         // the run's cleanup removes it by the run's prefix all the same.
         let mut list = self.docker();
-        list.args(["run", "--rm", "--name", &format!("{}-kept", self.container), "-v"])
+        let name = format!("{}-kept", self.container);
+        list.args(["run", "--rm", "--name", &name, "-v"])
             .arg(format!("{}:/cache:ro", resources::git_cache(&self.volume)))
             .args(["--entrypoint", "sh", TOOLS, "-c", KEPT]);
-        self.capture(list, KEPT_TIMEOUT)
-            .map(|output| objects(&String::from_utf8_lossy(&output)))
-            .unwrap_or_default()
+        if let Ok(output) = self.capture(list, KEPT_TIMEOUT) {
+            objects(&String::from_utf8_lossy(&output))
+        } else {
+            // A read ended by its limit or by Stop leaves its container running, as only
+            // the client ends; it goes before the checkout uses the cache.
+            let _ = resources::remove_now(&self.daemon, &["rm", "--force", &name]);
+            Vec::new()
+        }
     }
 
     /// Removes the run's git cache, so the next checkout starts it again.
