@@ -442,4 +442,12 @@ impl Recipe for Runner<'_> {
             .ok_or(Error::Invalid("This cloud has no same-worker siblings"))?;
         siblings::latest(set, &state.repository, config, profile, self)
     }
+
+    fn revision(&self, repository: &Path) -> Result<String> {
+        repository::resolve_with_runner(repository, "HEAD", self)
+    }
+
+    fn upkeep(&self, cloud_id: &str) -> bool {
+        super::recipes::upkeep_cloud(cloud_id)
+    }
 }

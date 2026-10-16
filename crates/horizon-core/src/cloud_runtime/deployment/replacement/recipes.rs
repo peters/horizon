@@ -10,6 +10,27 @@ use horizon_cloud::{Build, Cancellation, CloudConfig, Profile};
 use std::path::Path;
 
 const COMMITTED_BASE: &str = "This cloud runs the public base image without a build section, and the latest commit has its own .horizon/cloud.yml. Only a cloud of a repository without one moves to the pinned base image; create a new cloud to use the committed settings.";
+const UPKEEP_BASE: &str = "This Upkeep moves to the base image that this Horizon version pins. It does not read the repository's .horizon/cloud.yml, as New Upkeep does not.";
+
+/// Whether `cloud_id` is the cloud of an Upkeep: the saved choice of its Upkeep exists.
+pub(super) fn upkeep_cloud(cloud_id: &str) -> bool {
+    crate::upkeep::worker::directory(cloud_id).join("upkeep.json").is_file()
+}
+
+/// The latest commit of `repository` with its settings. For the cloud of an Upkeep on the
+/// public base image (`upkeep`), only its revision: New Upkeep reads no settings of the
+/// repository, so its rebuild does not either, also when they are not valid.
+fn latest(recipe: &impl Recipe, repository: &Path, bound: &Profile, upkeep: bool) -> Result<Head> {
+    if upkeep && quick_start::on_public_base(bound) {
+        return Ok(Head {
+            revision: recipe.revision(repository)?,
+            committed: None,
+            config: None,
+            notes: Vec::new(),
+        });
+    }
+    recipe.head(repository)
+}
 /// Starts each output line that names a change of the cloud's settings.
 pub const PROFILE_CHANGE: &str = "Profile change: ";
 
@@ -28,12 +49,17 @@ pub(super) struct Head {
 /// Reads the repository's recipe; needs no credentials.
 pub(super) trait Recipe {
     fn head(&self, repository: &Path) -> Result<Head>;
+    /// The latest commit of `repository`, without its settings.
+    fn revision(&self, repository: &Path) -> Result<String>;
     /// The latest committed revision of each of the deployment's siblings, whose
     /// declarations `config`, the primary's configuration with its committed companions,
     /// holds for the primary's `profile`.
     fn siblings(&self, state: &Deployment, config: &CloudConfig, profile: &Profile) -> Result<Vec<String>>;
     /// The uncommitted files of the working copy against `revision` that `build` reads.
     fn uncommitted(&self, repository: &Path, revision: &str, build: &Build) -> Result<Uncommitted>;
+    /// Whether `cloud_id` is the cloud of an Upkeep. New Upkeep starts the quick-start
+    /// profile whatever its repository commits, so its rebuild reads no committed settings.
+    fn upkeep(&self, cloud_id: &str) -> bool;
 }
 
 /// The recipes a rebuild layers, the primary's with its uncommitted files and each
@@ -89,7 +115,7 @@ impl Plan {
 /// Refuses as [`super::rebuild`] refuses the profile named `profile_name` and the
 /// uncommitted files.
 pub fn plan(repository: &Path, bound: &Profile, profile_name: &str, cancel: &Cancellation) -> Result<Plan> {
-    plan_with(repository, bound, profile_name, None, cancel)
+    plan_with(repository, bound, profile_name, None, false, cancel)
 }
 
 /// The rebuild plan with the destination and recipe image recorded for this cloud.
@@ -101,15 +127,18 @@ pub fn plan_for_cloud(state: &Deployment, profile_name: &str, cancel: &Cancellat
         &state.profile,
         profile_name,
         state.publication.as_deref(),
+        upkeep_cloud(&state.cloud_id),
         cancel,
     )
 }
 
-fn plan_with(
+/// [`plan`] for a cloud that is the cloud of an Upkeep (`upkeep`) or not.
+pub(super) fn plan_with(
     repository: &Path,
     bound: &Profile,
     profile_name: &str,
     publication: Option<&crate::cloud_runtime::publishing::Publication>,
+    upkeep: bool,
     cancel: &Cancellation,
 ) -> Result<Plan> {
     if !rebuildable(bound) {
@@ -120,7 +149,7 @@ fn plan_with(
         emit: &|_| {},
         secrets: Vec::new(),
     };
-    let head = checkout.head(repository)?;
+    let head = latest(&checkout, repository, bound, upkeep)?;
     let profile = next_profile(&head, bound, profile_name, publication)?;
     let uncommitted = uncommitted(&checkout, repository, &head, &profile)?;
     // An idle period is no rebuild setting, so the cloud keeps its own; the note names
@@ -152,7 +181,8 @@ pub(super) fn latest_recipes(
     emit: &dyn Fn(Event),
 ) -> Result<Recipes> {
     emit(activity("Reading the recipe and its uncommitted changes"));
-    let head = recipe.head(&state.repository)?;
+    let upkeep = recipe.upkeep(&state.cloud_id);
+    let head = latest(recipe, &state.repository, &state.profile, upkeep)?;
     let profile = next_profile(&head, &state.profile, profile_name, state.publication.as_deref())?;
     let uncommitted = uncommitted(recipe, &state.repository, &head, &profile)?;
     for note in notes(&state.profile, head.notes) {
@@ -160,6 +190,9 @@ pub(super) fn latest_recipes(
     }
     if quick_start::on_public_base(&state.profile) {
         emit(activity("Using the base image that this Horizon version pins"));
+        if upkeep {
+            emit(Event::Output(UPKEEP_BASE.into()));
+        }
     }
     let (Some(set), Some(config)) = (&state.siblings, &head.config) else {
         return Ok(Recipes {
@@ -205,7 +238,8 @@ fn notes(bound: &Profile, notes: Vec<String>) -> Vec<String> {
 /// at creation kept ([`compatibility::next_profile`]). A cloud on the public base image
 /// has no recipe; while the latest commit has no `.horizon/cloud.yml`, as for quick
 /// start, its image is the pin of this Horizon version and its profile stays. Committed
-/// settings are never passed over: with them such a cloud is refused.
+/// settings are never passed over: with them such a cloud is refused. The cloud of an
+/// Upkeep reads none ([`latest`]).
 fn next_profile(
     head: &Head,
     bound: &Profile,
