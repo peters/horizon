@@ -132,8 +132,14 @@ async fn copy(flow: &Flow, from: Arc<TcpStream>, to: Arc<TcpStream>, mut cancel:
             }
         }
         if allowed < count {
-            break;
+            // Exhaustion stops this reader; the opposite direction may still
+            // own bytes reserved before the shared budget was exhausted.
+            return;
         }
     }
     lock(&flow.shared).cancel_flow(flow.id);
 }
+
+#[cfg(test)]
+#[path = "tests/budgets.rs"]
+mod tests;

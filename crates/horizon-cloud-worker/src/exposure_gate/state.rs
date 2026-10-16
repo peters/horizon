@@ -42,6 +42,7 @@ struct Flow {
     until: Instant,
     progress: Instant,
     charged: u64,
+    pending: u64,
     cancelled: bool,
 }
 
@@ -96,6 +97,7 @@ impl State {
                 until,
                 progress: now,
                 charged: 0,
+                pending: 0,
                 cancelled: false,
             },
         );
@@ -130,6 +132,7 @@ impl State {
     /// Charge before writing. Failed writes retain their conservative byte charge.
     pub fn reserve(&mut self, id: u64, count: usize) -> usize {
         if self.deadline(id).is_none() {
+            self.cancel_flow(id);
             return 0;
         }
         let Some(flow) = self.flows.get_mut(&id) else {
@@ -145,6 +148,8 @@ impl State {
         self.charged += allowed;
         source.charged += allowed;
         flow.charged += allowed;
+        flow.pending += allowed;
+        self.close_exhausted();
         usize::try_from(allowed).unwrap_or(0)
     }
 
@@ -156,15 +161,20 @@ impl State {
         if bytes > 0 {
             flow.progress = Instant::now();
         }
-        let source = flow.source;
-        let one = flow.charged >= self.budgets.connection_bytes;
-        let same = self
-            .sources
-            .get(&source)
-            .is_some_and(|entry| entry.charged >= self.budgets.source_bytes);
+        flow.pending = flow.pending.saturating_sub(bytes as u64);
+        self.close_exhausted();
+    }
+
+    fn close_exhausted(&mut self) {
         let all = self.charged >= self.budgets.gate_bytes;
-        for (key, flow) in &mut self.flows {
-            if all || (same && flow.source == source) || (one && *key == id) {
+        for flow in self.flows.values_mut() {
+            let same = self
+                .sources
+                .get(&flow.source)
+                .is_some_and(|source| source.charged >= self.budgets.source_bytes);
+            // Reservations cover both directions. Budget-only shutdown must not
+            // discard a partial write or another direction's accepted bytes.
+            if flow.pending == 0 && (all || same || flow.charged >= self.budgets.connection_bytes) {
                 flow.close();
             }
         }

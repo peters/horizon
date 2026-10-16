@@ -28,6 +28,10 @@ The real-worker case is ignored and needs the approved task-owned root-worker la
 Use only synthetic PING, PONG and DONE bytes.
 Do not run that case on a user's machine or expose an existing service.
 The gate adds no TLS or authentication.
+Exclusive high-port binding lasts only while the gate owns the listener.
+This component does not stop another same-network-namespace process from rebinding a released unprivileged port.
+Before provider/public activation, require separate root-only ingress and backend custody proof, including keeper death and uncertain mapping cleanup.
+G05 does not qualify that integration boundary.
 
 ## 4. Equipment and preconditions
 
@@ -76,6 +80,9 @@ The gate adds no TLS or authentication.
    Result: The original accepted peer controls CIDR admission before backend dialing.
    A forged PROXY line grants no access.
    Raw bytes, request half-close, connection/source/byte limits and monotonic timers pass.
+   Final reservations drain through partial writes and concurrent flow or opposite-direction writes before budget-only shutdown.
+   A partial or zero allowance stops only that reader; no further reservation exceeds a byte budget.
+   Cancellation, deadline expiry and I/O failure still close immediately, with no charge refund.
    The actual-worker case stays ignored.
 
 2. Examine the source-history and pending-admission cases.
@@ -89,6 +96,7 @@ The gate adds no TLS or authentication.
 
    Result: Existing client and backend streams end, and new connections fail.
    Explicit close drains tracked tasks and retires the exact owned listener descriptor.
+   On a multithreaded runtime, listener shutdown before watch notification is orderly cancellation.
    TCP TIME_WAIT is not mistaken for retained listener custody.
 
 ### 6.4 G04 — Applicable matrix

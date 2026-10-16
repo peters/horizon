@@ -239,7 +239,10 @@ async fn run(
                     let id = lock(&shared).admit(Arc::clone(&client));
                     if let Some(id) = id { relay::spawn(&mut flows, Arc::clone(&shared), id, client, cancel.clone()); }
                 },
-                Err(error) => { failure = Some(error); break; },
+                Err(error) => {
+                    if !lock(&shared).stopped { failure = Some(error); }
+                    break;
+                },
             },
         }
         tokio::task::yield_now().await;

@@ -41,6 +41,11 @@ Ports 22, 5900, 9222 and 2375 are refused.
 Worker control/proxy ports 1055, 1056, 47280 and 47281 and the reserved ingress/backend pools 20000–20063 are refused too.
 The component adds no TLS or authentication to raw TCP.
 
+Exclusive binding lasts while the gate owns its listener descriptors.
+After release, this component does not prevent another process in the same network namespace from binding the unprivileged ingress port.
+Provider/public activation requires separate proof of root-only ingress and backend custody, including keeper death and uncertain mapping cleanup.
+This component does not supply that integration guarantee.
+
 ## Bounds and closure
 
 - At most 128 admitted connections per gate, with a validated per-source limit.
@@ -54,6 +59,9 @@ The component adds no TLS or authentication to raw TCP.
 
 Pending backend dials count as admitted connections.
 Byte accounting charges before writes; failed writes keep their conservative charge.
+Budget exhaustion refuses new reservations and lets already reserved bytes drain before shutting the affected flows.
+Outstanding reservations cover both directions and concurrent flows, so a partial write does not discard another accepted reservation.
+Explicit cancellation, an expired deadline or an I/O failure still shuts the flow immediately, without refunding its charge.
 Source charges survive connection closure, so reconnecting does not reset a source budget.
 The source-history cap refuses new peers without evicting earlier accounting.
 

@@ -440,3 +440,16 @@ async fn actual_task_owned_worker_gate() {
     gate.close().await.unwrap();
     println!("horizon-gate-component-closed=1");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn listener_shutdown_before_watch_notification_is_orderly_cancellation() {
+    let server = backend().await;
+    let (mut gate, _) = fixture(&request(server.local_addr().unwrap().port()), Budgets::default());
+    let task = gate.task.take().unwrap();
+    // This is cancel's real ordering, with notification withheld until the
+    // physically shut listener has made the accept loop finish.
+    lock(&gate.shared).stop();
+    timeout(WAIT, task).await.unwrap().unwrap().unwrap();
+    assert!(lock(&gate.shared).listeners.is_empty());
+    gate.close().await.unwrap();
+}
