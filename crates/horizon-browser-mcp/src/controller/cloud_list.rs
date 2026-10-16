@@ -45,7 +45,8 @@ impl BrowserController {
         })?;
         let started = Instant::now();
         loop {
-            if let Some(result) = provider_usage::take_provider_usage_result(self.identity(), &id)
+            if let Some(result) = self
+                .take_host_answer(&id)
                 .map_err(|_| "cloud_list_result_unavailable".to_string())?
             {
                 if let Some(error) = result.error {

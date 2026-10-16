@@ -20,6 +20,7 @@ pub(crate) mod cloud_list;
 pub(crate) mod companion;
 mod device;
 mod handoff;
+mod host_answer;
 mod image_destination;
 pub(crate) mod provider_usage;
 mod recovery;
