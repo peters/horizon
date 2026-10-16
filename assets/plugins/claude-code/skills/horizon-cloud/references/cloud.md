@@ -671,6 +671,22 @@ no exposure action or readiness claim: actual original runtime consumers, source
 preservation and protected Gate/keeper qualification remain required. See
 docs/architecture/protected-host-ingress.md and docs/testing/procedures/protected-host-ingress.md.
 
+### Protected host receipt reader
+
+The Linux Worker `protected-ingress` feature is off by default. It adds no CLI,
+MCP, Core operation or Gate activation. The reader accepts no path, receipt JSON
+or requested allocation. It uses the fixed readonly UID-0 generation directory,
+0400 single-link receipt. The genuine host receipt supplies the retained allocation;
+no startup capture or environment value substitutes for it. It retains original
+file/PID/network/user namespace descriptors and rechecks current thread/init
+UIDs, effective bind capability, PID-1 start, netns and sysctl. Full identity
+UID/GID maps are required; rootless and user-namespace remapping are unsupported.
+Revalidation failure permanently invalidates that instance. Exported facts stay
+passive and prove no source preservation, approval or public readiness.
+The ignored actual-root test requires the original task-owned VM and reviewed
+host plan. See docs/architecture/protected-ingress-reader.md and
+docs/testing/procedures/protected-ingress-reader.md.
+
 Protected-ingress helpers calculate physical listeners 600–631 and backends 632–663
 for logical ports 20000–20031. Strict bounded receipts retain a complete claimed
 SSH22 plus 32 TCP publication set, container/image/generation and namespace facts.

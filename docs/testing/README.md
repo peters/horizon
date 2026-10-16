@@ -25,6 +25,7 @@ documents that are not yet STE.
 
 | Procedure | Feature | Cost |
 |---|---|---|
+| [protected-ingress-reader](procedures/protected-ingress-reader.md) | Default-off original host receipt and namespace readback | rents compute |
 | [exposure-policy](procedures/exposure-policy.md) | Bounded default-off policy and route comparison facts | none |
 | [worker-exposure-gate](procedures/worker-exposure-gate.md) | Default-off actual-peer CIDR/Public worker Gate | no local cost; approved real-root component only |
 | [exposure-records](procedures/exposure-records.md) | Default-off bounded exposure model and pure transitions | none |
@@ -92,6 +93,7 @@ documents that are not yet STE.
 
 | Report | Procedure | Date |
 |---|---|---|
+| [2026-10-16-protected-host-reader](reports/2026-10-16-protected-host-reader.md) | [protected-ingress-reader](procedures/protected-ingress-reader.md) | 2026-10-16 |
 | [2026-10-16-worker-cidr-gate](reports/2026-10-16-worker-cidr-gate.md) | [worker-exposure-gate](procedures/worker-exposure-gate.md) | 2026-10-16 |
 | [2026-10-15-one-service-gateway-engine](reports/2026-10-15-one-service-gateway-engine.md) | [one-service-gateway-engine](procedures/one-service-gateway-engine.md) | 2026-10-15 |
 | [2026-10-16-protected-host-ingress](reports/2026-10-16-protected-host-ingress.md) | [protected-host-ingress](procedures/protected-host-ingress.md) | 2026-10-16 |

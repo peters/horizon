@@ -536,6 +536,11 @@ companion worktrees. These transport operations have no provider lifecycle autho
 its MCP leaf only adapts requests. Readiness expiration and grant probes stay
 in the shared worker service, and neither interface starts compute.
 
+Worker `protected_ingress` separates fixed-path metadata checks in `files.rs` from
+bounded kernel readback in `kernel.rs`. Its module root retains original file and
+namespace descriptors. The genuine read-only host receipt supplies the retained allocation.
+The feature stays off by default and adds no command or runtime activation.
+
 `cloud_runtime::local_network` owns Local Network Bridge policy and transport on
 the client. `scope` reads interfaces and routes and decides destinations, `Scope`
 resolves names and admits only checked addresses, `socks` is the loopback SOCKS5

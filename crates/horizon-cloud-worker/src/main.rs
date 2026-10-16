@@ -11,6 +11,8 @@ pub mod exposure_gate;
 #[cfg(unix)]
 mod local_network;
 mod offers;
+#[cfg(all(target_os = "linux", feature = "protected-ingress"))]
+pub mod protected_ingress;
 mod queues;
 mod remote;
 use horizon_browser_protocol::cloud_view::{CloudViewRequest, CloudViewResponse};
