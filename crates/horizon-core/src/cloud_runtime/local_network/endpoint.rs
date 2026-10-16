@@ -1,6 +1,8 @@
 //! An exact TCP endpoint gate using the existing bridge relay. Host-controller code
 //! must authorize the recipient and human admission before starting this primitive.
 //! No worker, UI, CLI or MCP path starts it; the feature is off by default.
+mod admission;
+pub use admission::{Admitted, Recipient, RecipientView, StatusSnapshot as AdmissionStatus};
 pub mod attachment;
 mod source;
 mod tailnet;
@@ -104,6 +106,56 @@ impl Prepared {
     #[must_use]
     pub const fn attempt(&self) -> Attempt {
         self.attempt
+    }
+
+    /// Exact checked endpoint displayed to the native owner before acceptance.
+    /// This snapshot does not authorize a gateway.
+    /// # Errors
+    /// Refuses an unsupported address family before returning an approval view.
+    pub fn checked(&self) -> Result<crate::cloud_runtime::state::service_admission::Checked, Error> {
+        use crate::cloud_runtime::state::service_admission::{Binding as Retained, Checked};
+        let binding = match &self.binding {
+            Binding::Lan { network, .. } => Retained::Lan {
+                network: network.subnet.to_string(),
+                desktop: network.address,
+                interface: network.interface.clone(),
+            },
+            Binding::Tailnet {
+                desktop, peer, name, ..
+            } => Retained::Tailnet {
+                desktop: desktop.clone(),
+                peer: peer.clone(),
+                name: name.clone(),
+            },
+        };
+        let address = match self.binding.address() {
+            SocketAddr::V4(address) => address,
+            SocketAddr::V6(_) => return Err(Error::UnsupportedSource),
+        };
+        Ok(Checked {
+            host: self.endpoint.host.clone(),
+            address,
+            binding,
+        })
+    }
+
+    /// Retained intent available before starting any proxy or SSH helper. The
+    /// native controller supplies verified scope after its explicit owner action.
+    /// # Errors
+    /// Refuses malformed scope or a source outside the supported IPv4 boundary.
+    pub fn retained(
+        &self,
+        owner: crate::cloud_runtime::state::service_admission::OwnerScope,
+        worker_id: String,
+    ) -> crate::cloud_runtime::Result<crate::cloud_runtime::state::service_admission::Record> {
+        crate::cloud_runtime::state::service_admission::Record::armed(
+            owner,
+            worker_id,
+            self.attempt.operation_id,
+            self.attempt.generation,
+            self.checked()
+                .map_err(|_| crate::cloud_runtime::Error::Invalid("Unsupported endpoint address"))?,
+        )
     }
 
     /// Narrows the current LAN policy to exactly one resolved address and port.

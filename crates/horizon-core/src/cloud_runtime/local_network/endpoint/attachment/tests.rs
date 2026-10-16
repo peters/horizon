@@ -71,7 +71,9 @@ impl Transport for SyntheticWorker {
     }
 }
 
-fn synthetic_attachment(prepared: super::super::Prepared) -> Attached {
+pub(in crate::cloud_runtime::local_network::endpoint) fn synthetic_attachment(
+    prepared: super::super::Prepared,
+) -> Attached {
     let gateway = Arc::new(Gateway::start_private(prepared).unwrap());
     Attached::start(
         gateway,

@@ -569,6 +569,14 @@ bounded-input hooks for this attachment. Non-Unix attachment is unsupported.
 The [attachment boundary](pinned-unix-ssh-attachment.md) separates this primitive
 from owner approval, retained admission and public activation.
 
+`endpoint::admission` owns trusted Core recipient checks, durable admission and
+source-first cancellation/retirement. `owner_custody` retains one original Store
+lock and fresh exact-field transactions across controller aliases; it preserves
+passive sibling records without activating M2. The real start uses explicit private
+Unix attachment; pure/state tests remain portable and physical fixtures are Linux-only.
+No native/public dispatch exists yet. The [owner boundary](one-device-owner-admission.md)
+keeps saved metadata separate from current membership and explicit approval.
+
 `cloud_runtime::companions` owns machine-local selection and grant reconciliation.
 `inventory` reads committed declarations and repository identity away from UI
 frames; `journal` durably pins ownership and grant identities; `transport` uses

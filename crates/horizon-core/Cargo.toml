@@ -14,7 +14,7 @@ cloud-workspaces = ["tailnet-node-cleanup", "dep:horizon-cloud", "dep:horizon-cl
 tailnet-node-cleanup = []
 cloud-exposure = ["cloud-workspaces"]
 cloud-panel-mock = ["cloud-workspaces"]
-# One-service gateway engine; public admission and worker routing are not enabled yet.
+# One-service engine, private attachment and trusted owner controller; public admission stays off.
 one-service-gateway = ["cloud-workspaces"]
 trace-profiling = ["profiling/profile-with-tracing"]
 

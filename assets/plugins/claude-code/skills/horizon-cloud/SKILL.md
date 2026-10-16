@@ -68,8 +68,15 @@ exact LAN/tailnet endpoint engine and an internal pinned Unix SSH attachment.
 No UI, CLI or MCP operation enables it. Use the existing owner-enabled Local
 Network Bridge tools for current operations. Private attachment needs the trusted
 non-symlink `/tmp` policy; non-Unix attachment is unsupported. M1-1 still needs owner
-controls, durable dispatch, saved membership, interface parity and actual native
+controls, saved membership, interface parity and actual native
 LAN/tailnet qualification. Read docs/architecture/pinned-unix-ssh-attachment.md.
+
+The same internal feature now includes a trusted Core owner controller. It saves
+Armed before private listener/SSH dispatch and retains the original Store, worker
+and pinned route until physical cleanup finishes. Decoded owner scope or retained
+metadata grants no approval. No UI/CLI/MCP route invokes it yet; complete M1 still
+needs actual owner controls and parity. Read docs/architecture/one-device-owner-admission.md
+and its component procedure before using the controller.
 
 The Linux worker `exposure-gate` feature is also off by default. It provides a
 bounded actual-peer CIDR/Public TCP component only; no public operation starts

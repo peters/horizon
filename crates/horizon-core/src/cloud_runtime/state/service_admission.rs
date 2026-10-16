@@ -200,6 +200,55 @@ impl Record {
     pub fn worker_id(&self) -> &str {
         &self.worker_id
     }
+    #[cfg(feature = "one-service-gateway")]
+    pub(in crate::cloud_runtime) fn armed(
+        owner: OwnerScope,
+        worker_id: String,
+        operation_id: Uuid,
+        generation: Uuid,
+        checked: Checked,
+    ) -> Result<Self, super::Error> {
+        let record = Self {
+            owner,
+            worker_id,
+            attempt: Identity {
+                operation_id,
+                generation,
+            },
+            checked,
+            phase: Phase::Armed {},
+        };
+        if record.valid() {
+            Ok(record)
+        } else {
+            Err(super::Error::Invalid("Invalid one-service admission scope"))
+        }
+    }
+    #[cfg(feature = "one-service-gateway")]
+    pub(in crate::cloud_runtime) fn set_attached(
+        &mut self,
+        operation: Uuid,
+        generation: Uuid,
+        port: u16,
+    ) -> Result<(), super::Error> {
+        if self.attempt.operation_id != operation
+            || self.attempt.generation != generation
+            || self.phase != (Phase::Armed {})
+            || port == 0
+        {
+            return Err(super::Error::Invalid("One-service admission changed"));
+        }
+        self.phase = Phase::Attached { proxy_port: port };
+        Ok(())
+    }
+    #[cfg(feature = "one-service-gateway")]
+    pub(in crate::cloud_runtime) fn set_closed(&mut self, identity: Identity) -> Result<(), super::Error> {
+        if self.attempt != identity {
+            return Err(super::Error::Invalid("One-service admission changed"));
+        }
+        self.phase = Phase::Closed {};
+        Ok(())
+    }
 }
 
 fn local_id(value: &str) -> bool {

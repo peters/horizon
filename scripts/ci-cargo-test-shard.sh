@@ -33,6 +33,8 @@ run_libs() {
     run_cargo test --locked --workspace --exclude horizon-ui || status=$?
     # The private gateway stays opt-in; compile and test its platform contract.
     run_cargo test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network:: || status=$?
+    # Original owner custody also checks passive sibling records.
+    run_cargo test --locked -p horizon-core --lib --features one-service-gateway,cloud-exposure cloud_runtime::owner_custody:: || status=$?
     # The shared-encoder sink is opt-in, so the workspace run does not build it.
     run_cargo test --locked -p horizon-chromecast --features encoder || status=$?
     return "$status"

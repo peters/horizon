@@ -112,22 +112,106 @@ fn focusing_panel_tracks_active_workspace() {
     assert_eq!(board.active_workspace, Some(workspace_id));
 }
 
+struct ShutdownFixture {
+    #[cfg(unix)]
+    root: tempfile::TempDir,
+}
+
+impl ShutdownFixture {
+    fn new() -> Self {
+        Self {
+            #[cfg(unix)]
+            root: tempfile::tempdir().expect("owned shutdown fixture"),
+        }
+    }
+
+    fn options(&self, kind: PanelKind) -> PanelOptions {
+        #[cfg(unix)]
+        {
+            let name = match kind {
+                PanelKind::Shell => "shell",
+                PanelKind::Command => "command",
+                _ => unreachable!("shutdown fixture only creates shell and command panels"),
+            };
+            PanelOptions {
+                kind,
+                command: Some("/bin/sh".into()),
+                args: vec![
+                    "-c".into(),
+                    concat!(
+                        "trap 'printf hup > \"$1/$2-hup\"; exit 0' HUP; ",
+                        ": > \"$1/$2-ready\"; ",
+                        "while [ -d \"$1\" ] && [ ! -e \"$1/release\" ]; do sleep 0.01; done"
+                    )
+                    .into(),
+                    "horizon-board-shutdown".into(),
+                    self.root.path().to_string_lossy().into_owned(),
+                    name.into(),
+                ],
+                ..PanelOptions::default()
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            PanelOptions {
+                kind,
+                ..shell_panel_options()
+            }
+        }
+    }
+
+    fn wait_until_ready(&self) {
+        #[cfg(unix)]
+        {
+            let started = std::time::Instant::now();
+            while !["shell-ready", "command-ready"]
+                .iter()
+                .all(|name| self.root.path().join(name).is_file())
+            {
+                assert!(
+                    started.elapsed() < Duration::from_secs(2),
+                    "shells did not become ready"
+                );
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+    }
+
+    fn assert_hup_exit(&self) {
+        #[cfg(unix)]
+        for name in ["shell-hup", "command-hup"] {
+            assert_eq!(
+                std::fs::read(self.root.path().join(name)).expect("shell received HUP"),
+                b"hup"
+            );
+        }
+    }
+}
+
+impl Drop for ShutdownFixture {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            // Either this release or removal of the owned directory ends both
+            // child loops during unwinding, even if shutdown did not complete.
+            let _ = std::fs::write(self.root.path().join("release"), b"release");
+        }
+    }
+}
+
 #[test]
 fn shutdown_terminal_panels_waits_for_shell_and_command_panels() {
     let mut board = Board::new();
+    let fixture = ShutdownFixture::new();
     let workspace_id = board.create_workspace("shutdown");
     let shell_panel = board
-        .create_panel(shell_panel_options(), workspace_id)
+        .create_panel(fixture.options(PanelKind::Shell), workspace_id)
         .expect("shell panel should spawn");
     let command_panel = board
-        .create_panel(
-            PanelOptions {
-                kind: PanelKind::Command,
-                ..shell_panel_options()
-            },
-            workspace_id,
-        )
+        .create_panel(fixture.options(PanelKind::Command), workspace_id)
         .expect("command panel should spawn");
+
+    fixture.wait_until_ready();
 
     board.shutdown_terminal_panels();
 
@@ -143,24 +227,22 @@ fn shutdown_terminal_panels_waits_for_shell_and_command_panels() {
             .expect("command panel should exist")
             .wait_for_shutdown(Duration::from_millis(10))
     );
+    fixture.assert_hup_exit();
 }
 
 #[test]
 fn begin_async_shutdown_completes_for_shell_and_command_panels() {
     let mut board = Board::new();
+    let fixture = ShutdownFixture::new();
     let workspace_id = board.create_workspace("shutdown");
     board
-        .create_panel(shell_panel_options(), workspace_id)
+        .create_panel(fixture.options(PanelKind::Shell), workspace_id)
         .expect("shell panel should spawn");
     board
-        .create_panel(
-            PanelOptions {
-                kind: PanelKind::Command,
-                ..shell_panel_options()
-            },
-            workspace_id,
-        )
+        .create_panel(fixture.options(PanelKind::Command), workspace_id)
         .expect("command panel should spawn");
+
+    fixture.wait_until_ready();
 
     let progress = board.begin_async_shutdown();
     let started_at = std::time::Instant::now();
@@ -169,6 +251,7 @@ fn begin_async_shutdown_completes_for_shell_and_command_panels() {
     }
 
     assert!(progress.is_complete());
+    fixture.assert_hup_exit();
 }
 
 #[test]
