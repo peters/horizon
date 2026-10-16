@@ -27,9 +27,11 @@ The `upkeep` panel kind is the board of one Upkeep. The board shows these items:
   **Checks running**, **Ready to merge**, **Other** (a state that this Horizon does
   not know) and **Merged**. The **Merged, 7 days** chip shows the pull requests that
   merged in the last seven days. The other chips show no merged rows.
-- Chips that filter the list: **Open**, **Needs you** (Blocked and Needs review),
+- Chips that filter the list: **Open**, **Needs you**, **Needs tooling**,
   **Fixing**, **Checks running**, **Ready to merge**, **Merged, 7 days**, and
-  **Other** only when a row has an unknown state.
+  **Other** only when a row has an unknown state. **Needs tooling** counts the
+  blocked pull requests that wait for a capability that the worker lacks.
+  **Needs you** counts the other blocked ones and those that need a review.
 - **Latest run**: the last lines that the agents of the repositories wrote about
   their work.
 - **Daily maintenance**: how the last daily maintenance pass ended, and the last
@@ -161,6 +163,10 @@ These rules follow from the steps:
 - When the worker cannot do a required check, the pull request stays blocked. The
   agent names the missing capability, for example `needs UI acceptance: no
   desktop`. The agent never waives the check.
+- The agent tells for each blocked pull request what it waits for, in the field
+  `needs` of the status document: `person` for a decision that only a person can
+  make, `tooling` for a missing capability. The board counts them apart. A blocked
+  pull request without the field counts for a person.
 - Evidence stays valid while its inputs are unchanged: the head, the base and the
   checked build. A fix or a new base makes the evidence for the changed inputs
   stale, and the agent does those checks again.

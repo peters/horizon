@@ -136,16 +136,21 @@ made-up repositories and one public pull request.
 
 ### 6.2 UPK-02 — The chips filter the list
 
-1. Click **2 Needs you**.
+1. Click **1 Needs you**.
 
-   Result: The list shows only **Blocked** and **Needs review**.
+   Result: The list shows only **Needs review**, with `acme/mobile` #31.
 
-2. Click **2 Merged, 7 days**.
+2. Click **1 Needs tooling**.
+
+   Result: The list shows only **Blocked**, with `acme/api` #86 and the note
+   **needs UI acceptance: no desktop**.
+
+3. Click **2 Merged, 7 days**.
 
    Result: The list shows `acme/docs` #17 and `acme/web` #401. It does not show
    `acme/api` #80, which merged 9 days ago.
 
-3. Click **5 Open**.
+4. Click **5 Open**.
 
    Result: The list shows the 5 open pull requests again.
 

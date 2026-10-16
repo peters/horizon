@@ -7,7 +7,7 @@ use std::time::Duration;
 use egui::{Color32, CornerRadius, Frame, Id, Margin, RichText, ScrollArea, Stroke, Ui, Vec2};
 use horizon_core::Panel;
 use horizon_core::upkeep::time::{self, OffsetDateTime};
-use horizon_core::upkeep::{Checks, PrState, Status};
+use horizon_core::upkeep::{Checks, PrState, PullRequest, Status};
 
 use crate::theme;
 
@@ -133,21 +133,24 @@ pub(crate) enum Filter {
     #[default]
     Open,
     NeedsPerson,
+    /// Blocked on a capability that the worker lacks.
+    NeedsTooling,
     State(PrState),
 }
 
 impl Filter {
-    fn admits(self, state: PrState) -> bool {
+    fn admits(self, pr: &PullRequest) -> bool {
         match self {
-            Self::Open => state != PrState::Merged,
-            Self::NeedsPerson => state.needs_person(),
-            Self::State(wanted) => state == wanted,
+            Self::Open => pr.state != PrState::Merged,
+            Self::NeedsPerson => pr.needs_person(),
+            Self::NeedsTooling => pr.needs_tooling(),
+            Self::State(wanted) => pr.state == wanted,
         }
     }
 }
 
 /// Open pull requests and those merged within the window, newest change first.
-fn shown_pull_requests(status: &Status, now: OffsetDateTime) -> Vec<&horizon_core::upkeep::PullRequest> {
+fn shown_pull_requests(status: &Status, now: OffsetDateTime) -> Vec<&PullRequest> {
     let mut shown: Vec<_> = status
         .pull_requests
         .iter()
@@ -347,9 +350,22 @@ mod tests {
 
     #[test]
     fn filters_pick_what_a_person_must_look_at() {
-        assert!(Filter::Open.admits(PrState::Ready) && !Filter::Open.admits(PrState::Merged));
-        assert!(Filter::NeedsPerson.admits(PrState::Blocked) && Filter::NeedsPerson.admits(PrState::NeedsReview));
-        assert!(!Filter::NeedsPerson.admits(PrState::Fixing));
-        assert!(Filter::State(PrState::Merged).admits(PrState::Merged));
+        let pr = |state: &str, needs: &str| -> PullRequest {
+            serde_json::from_value(serde_json::json!({
+                "repository": "o/r", "number": 1, "state": state, "needs": needs,
+            }))
+            .expect("a pull request")
+        };
+        assert!(Filter::Open.admits(&pr("ready", "")) && !Filter::Open.admits(&pr("merged", "")));
+        assert!(Filter::NeedsPerson.admits(&pr("blocked", "")) && Filter::NeedsPerson.admits(&pr("needs_review", "")));
+        assert!(!Filter::NeedsPerson.admits(&pr("fixing", "")));
+        assert!(Filter::State(PrState::Merged).admits(&pr("merged", "")));
+        let tooling = pr("blocked", "tooling");
+        assert!(Filter::NeedsTooling.admits(&tooling) && !Filter::NeedsPerson.admits(&tooling));
+        assert!(
+            Filter::State(PrState::Blocked).admits(&tooling),
+            "the Blocked group still lists it"
+        );
+        assert!(!Filter::NeedsTooling.admits(&pr("blocked", "person")));
     }
 }

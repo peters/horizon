@@ -49,6 +49,7 @@ pub(super) fn board_json(board: &Status) -> Value {
                 "title": pr.title,
                 "url": pr.github_url(),
                 "state": pr.state,
+                "needs": pr.needs_tooling().then_some("tooling").or(pr.needs_person().then_some("person")),
                 "checks": pr.checks,
                 "note": pr.note,
                 "updated_at": time(pr.updated_at),

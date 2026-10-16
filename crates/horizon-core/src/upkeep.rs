@@ -151,11 +151,26 @@ impl PrState {
         }
     }
 
-    /// Whether a person should look at it.
+    /// Whether a person should look at a pull request in this state; see
+    /// [`PullRequest::needs_person`].
     #[must_use]
     pub fn needs_person(self) -> bool {
         matches!(self, Self::Blocked | Self::NeedsReview)
     }
+}
+
+/// What a blocked pull request waits for, as the agent reports it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Needs {
+    /// A decision that only a person can make.
+    Person,
+    /// A capability that the worker does not have, such as a desktop for UI acceptance.
+    Tooling,
+    /// Not reported, or a value this Horizon does not know: the board counts it for a person.
+    #[default]
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -184,6 +199,9 @@ pub struct PullRequest {
     pub checks: Checks,
     #[serde(default, deserialize_with = "lenient")]
     pub state: PrState,
+    /// Only for a blocked pull request.
+    #[serde(default, deserialize_with = "lenient")]
+    pub needs: Needs,
     #[serde(default, deserialize_with = "lenient")]
     pub note: String,
     #[serde(default, deserialize_with = "lenient_time")]
@@ -191,6 +209,18 @@ pub struct PullRequest {
 }
 
 impl PullRequest {
+    /// Whether it waits for a capability of the worker rather than for a person.
+    #[must_use]
+    pub fn needs_tooling(&self) -> bool {
+        self.state == PrState::Blocked && self.needs == Needs::Tooling
+    }
+
+    /// Whether a person should look at it: a review, or a blocker that is not only tooling.
+    #[must_use]
+    pub fn needs_person(&self) -> bool {
+        self.state.needs_person() && !self.needs_tooling()
+    }
+
     /// The pull request page, only when the URL is exactly the GitHub page of this
     /// repository and number and the repository is a plain `owner/name`. Anything else
     /// the worker wrote is not opened.
@@ -592,6 +622,39 @@ mod tests {
         let kinds: Vec<RunKind> = status.runs.iter().map(|run| run.kind).collect();
         assert_eq!(kinds, [RunKind::Daily, RunKind::Repositories, RunKind::Repositories]);
         assert!(status.activity[0].daily && !status.activity[1].daily);
+    }
+
+    #[test]
+    fn a_blocked_pull_request_needs_a_person_unless_it_only_needs_tooling() {
+        let status: Status = serde_json::from_str(
+            r#"{"pull_requests":[
+                {"repository":"o/r","number":1,"state":"blocked","needs":"tooling"},
+                {"repository":"o/r","number":2,"state":"blocked","needs":"person"},
+                {"repository":"o/r","number":3,"state":"blocked"},
+                {"repository":"o/r","number":4,"state":"blocked","needs":"a desktop"},
+                {"repository":"o/r","number":5,"state":"needs_review","needs":"tooling"},
+                {"repository":"o/r","number":6,"state":"ready","needs":"person"}]}"#,
+        )
+        .unwrap();
+        let numbers = |admit: fn(&PullRequest) -> bool| -> Vec<u64> {
+            status
+                .pull_requests
+                .iter()
+                .filter(|pr| admit(pr))
+                .map(|pr| pr.number)
+                .collect()
+        };
+        assert_eq!(
+            numbers(PullRequest::needs_person),
+            [2, 3, 4, 5],
+            "no or an unknown need counts for a person"
+        );
+        assert_eq!(
+            numbers(PullRequest::needs_tooling),
+            [1],
+            "only a blocked pull request waits for tooling"
+        );
+        assert_eq!(status.pull_requests[3].needs, Needs::Unknown);
     }
 
     #[test]
