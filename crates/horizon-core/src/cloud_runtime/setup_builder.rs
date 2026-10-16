@@ -166,8 +166,9 @@ pub fn rent(
         return Err(Error::Invalid("An earlier rented builder is still being deleted"));
     }
     stage(Stage::Choosing);
-    let client = Hetzner::new(hetzner.credential()?);
-    let binding = hetzner.token_fingerprint()?;
+    // One read of the token, so the journal names the project the server is made in.
+    let (credential, binding) = hetzner.credential_with_fingerprint()?;
+    let client = Hetzner::new(credential);
     let (placements, hourly) = placements(&client.catalog(cancel)?, &hetzner.locations);
     if placements.is_empty() {
         return Err(Error::Invalid(
@@ -259,8 +260,8 @@ pub fn give_back(settings: &Settings, owner: &Owner, cancel: &Cancellation) -> R
     let hetzner = settings.hetzner.as_ref().ok_or(Error::Invalid(
         "Connect Hetzner in Cloud settings again to delete the rented builder",
     ))?;
-    let client = Hetzner::new(hetzner.credential()?);
-    return_with(root, journal, (&client, &hetzner.token_fingerprint()?), cancel)
+    let (credential, binding) = hetzner.credential_with_fingerprint()?;
+    return_with(root, journal, (&Hetzner::new(credential), &binding), cancel)
 }
 
 /// Deletes the builder `journal` names with `client`, whose token has the fingerprint

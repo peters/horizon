@@ -326,20 +326,21 @@ impl Hetzner {
         self.with_token(|token| Credential::new(token.to_owned()).map_err(Error::from))
     }
 
-    /// A fingerprint of the token, the first 16 hex digits of its SHA-256: it tells
-    /// whether the token is still the one a server was made with, and so the same
-    /// Hetzner project, without keeping the token.
+    /// The credential with a fingerprint of the same token, from one read of the file:
+    /// the first 16 hex digits of its SHA-256. The fingerprint tells whether a later
+    /// token is still the one a server was made with, without keeping the token.
     /// # Errors
     /// Requires a private, readable token file.
-    pub fn token_fingerprint(&self) -> Result<String> {
+    pub fn credential_with_fingerprint(&self) -> Result<(Credential, String)> {
         use sha2::{Digest, Sha256};
         self.with_token(|token| {
             let digest = Sha256::digest(token.as_bytes());
-            Ok(digest[..8].iter().fold(String::new(), |mut hex, byte| {
+            let fingerprint = digest[..8].iter().fold(String::new(), |mut hex, byte| {
                 use std::fmt::Write as _;
                 let _ = write!(hex, "{byte:02x}");
                 hex
-            }))
+            });
+            Ok((Credential::new(token.to_owned())?, fingerprint))
         })
     }
 

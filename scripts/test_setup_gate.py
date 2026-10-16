@@ -188,6 +188,17 @@ class SummaryTests(unittest.TestCase):
             result[len(seconds) - 1]["failure"] = failure
         return result + [{"phase": name, "seconds": None, "failure": None} for name in names[len(seconds):]]
 
+    def test_a_lane_that_fails_after_its_entries_fails_the_gate(self):
+        from types import SimpleNamespace
+
+        def lane(code, reason=None):
+            return SimpleNamespace(number=1, log_path="lane-1.log", reason=reason,
+                                   process=SimpleNamespace(returncode=code))
+        self.assertIn("exited with code 101", gate.lane_failure(lane(101), True))
+        self.assertIsNone(gate.lane_failure(lane(0), True))
+        self.assertIsNone(gate.lane_failure(lane(101), False), "an entry without a result is told already")
+        self.assertIsNone(gate.lane_failure(lane(-15, reason="stopped"), True), "the runner stopped it")
+
     def test_rows(self):
         passed = {"passed": True, "phases": self.phases(42, 31, 5),
                   "preview": {"outcome": "live", "seconds": 12, "window": "1280x800"}}
