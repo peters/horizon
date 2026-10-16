@@ -568,10 +568,17 @@ def main(argv):
         # agent isolation does the agent account stay out of its root-only files.
         if not common.AGENT_ISOLATION.exists():
             raise ValueError('A package token requires agent isolation')
-        source = sys.stdin.buffer.read(packages.MAX_SOURCE + 1)
-        if len(source) > packages.MAX_SOURCE:
-            raise ValueError('Package token request is too large')
-        print_json(packages.install(store, source.decode()))
+        try:
+            source = sys.stdin.buffer.read(packages.MAX_SOURCE + 1)
+            if len(source) > packages.MAX_SOURCE:
+                raise ValueError('Package read access request is too large')
+            text = source.decode()
+        except (OSError, ValueError):
+            # A request that cannot even be read still stops the earlier chain.
+            with contextlib.suppress(OSError, ValueError):
+                packages.remove(store)
+            raise
+        print_json(packages.install(store, text))
     else:
         clear(store)
     return 0

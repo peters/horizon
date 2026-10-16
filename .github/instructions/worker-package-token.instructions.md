@@ -33,7 +33,8 @@ GitHub's package API and its NuGet registry accept only a token with the
 Requests from uid 10001 reach the API broker with any method, path, query, body and
 owner. Check that:
 
-- Only `GET` and `HEAD` without a body of `/orgs|users/OWNER/packages` (with exactly one
+- Only `GET` (not `HEAD`) without a body, with only the fields of `packages.REQUEST_FIELDS`
+  (no range, condition or encoding), of `/orgs|users/OWNER/packages` (with exactly one
   `package_type` of `nuget` or `npm`), `.../packages/TYPE/NAME`, `.../versions` and
   `.../versions/ID` get the package token, with TYPE exactly `nuget` or `npm` and only the
   query keys of `PACKAGE_QUERY`. A container image, any other type or key, a write, a
@@ -42,7 +43,8 @@ owner. Check that:
 - OWNER must be the owner (compared with `casefold`) of one of the chain's own
   `repositories`. No grant opens an owner: not `grants`, not `cloud_grants` that an agent
   asked for, not a task grant, not the static binding.
-- The broker never follows a redirect; a 3xx goes back to gh without the token.
+- The broker never follows a redirect; a 3xx goes back to gh without the token, with an
+  empty body and only `Location`. A 206 or a `Content-Range` reply is refused.
 - A package reply is read uncompressed (at most `MAX_REPLY`), parsed as JSON, and its
   `repository` objects are kept only for the chain's own repositories, and every string
   that names another repository by its GitHub address becomes null (`filtered`). A

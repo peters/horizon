@@ -309,9 +309,10 @@ class Exchange(checks.Checks):
 
     def forward(self, request, route, candidate, names=(), data=None):
         """Relays the request; `data` is its body when the broker read it already."""
-        # A package reply is examined before it goes on, so it must come uncompressed.
-        fields = [(name, value) for name, value in request.fields if name in REQUEST_FIELDS
-                  and not (route.kind == 'package' and name == 'accept-encoding')]
+        # A package read sends only plain fields: its reply is examined whole and uncompressed,
+        # so no range, condition or encoding of the client's reaches GitHub.
+        keep = packages.REQUEST_FIELDS if route.kind == 'package' else REQUEST_FIELDS
+        fields = [(name, value) for name, value in request.fields if name in keep]
         secrets = ()
         if candidate is not None:
             secrets = (candidate.token,)
@@ -342,31 +343,19 @@ class Exchange(checks.Checks):
             if response.status == 401 and candidate is not None:
                 raise refusal(403, packages.REFUSED if candidate.source == 'packages' else
                               'GitHub refused the sign-in of this worker. Connect GitHub again in Horizon.')
-            data = self.package_reply(response, request, secrets) if route.kind == 'package' else None
+            data, kept = None, REPLY_FIELDS
+            if route.kind == 'package':
+                state, _ = packages.served(self.broker.store)
+                try:
+                    data, kept = packages.checked_reply(response, packages.repositories(state) if state else set(),
+                                                        REPLY_FIELDS, secrets)
+                except packages.Unchecked as unchecked:
+                    raise refusal(502, str(unchecked)) from None
             self.started = True
-            relay.relay(self.output, response, REPLY_FIELDS, secrets, data, request.version == 'HTTP/1.1')
+            relay.relay(self.output, response, kept, secrets, data, request.version == 'HTTP/1.1')
             self.record['outcome'] = 'relayed'
         finally:
             connection.close()
-
-    def package_reply(self, response, request, secrets):
-        """A package reply's body without the repository objects of other repositories, or None
-        to relay it as it is (HEAD, a redirect); refuses a reply that cannot be examined."""
-        if request.method == 'HEAD' or 300 <= response.status < 400:
-            return None
-        if (response.getheader('Content-Encoding') or 'identity').lower() != 'identity':
-            raise refusal(502, 'the package reply from GitHub is compressed, so it cannot be examined.')
-        try:
-            data = response.read(packages.MAX_REPLY + 1)
-        except (OSError, http.client.HTTPException):
-            raise refusal(502, 'the package reply from GitHub broke off.') from None
-        if len(data) > packages.MAX_REPLY:
-            raise refusal(502, 'the package reply from GitHub is too large to examine.')
-        state, _ = packages.served(self.broker.store)
-        try:
-            return packages.filtered(data, packages.repositories(state) if state else set(), secrets) if data else data
-        except packages.Unchecked as unchecked:
-            raise refusal(502, str(unchecked)) from None
 
     def graphql(self, request):
         relay.continue_if_asked(request, self.output)

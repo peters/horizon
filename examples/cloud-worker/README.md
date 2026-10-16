@@ -1444,10 +1444,12 @@ The broker does these steps for each connection:
     directly before a word.
   - `GET /`, `/rate_limit` and `/meta`, and the global security advisories
     (`/advisories` and `/advisories/GHSA-...`), which are public.
-  - `GET` and `HEAD` of an owner's NuGet and npm packages:
+  - `GET` of an owner's NuGet and npm packages:
     `/orgs/OWNER/packages?package_type=nuget` (or `npm`, also under `/users/`),
     `/orgs/OWNER/packages/TYPE/NAME`, `.../versions` and `.../versions/ID`, where
-    TYPE is `nuget` or `npm`, without a body, and with only the query parameters
+    TYPE is `nuget` or `npm`, without a body, with only the request fields
+    `Accept`, `User-Agent` and `X-GitHub-Api-Version` (no range, condition or
+    encoding reaches GitHub), and with only the query parameters
     `package_type`, `visibility`, `page`, `per_page` and `state`. OWNER must own
     one of the cloud's own repositories that Horizon named with the package read
     access below; no grant, also not one that an agent asked for, opens an owner.
@@ -1533,7 +1535,8 @@ whose reply names another scope than exactly `read:packages` removes the chain.
 `packages`: `null`, or the state, times and repositories of the chain, never a
 token. `horizon-worker-github clear` removes it, under the store lock, before the
 GitHub chain; a copy that cannot be removed is outranked by a clear mark on
-tmpfs, so none is served while the worker runs, and the failure is reported.
+tmpfs, so none is served while the worker runs, and the failure is reported. A
+request that cannot be read (too large, not UTF-8) also removes the chain.
 
 No agent gets the token: no variable, no file and no NuGet configuration holds
 it. The broker adds the access token only to the package reads above, and none
@@ -1542,9 +1545,10 @@ that expires within a minute. It asks GitHub for an uncompressed reply, reads it
 each package kept only for the cloud's own repositories and `null` otherwise, and
 each text that names another repository by its address on `github.com` or
 `api.github.com/repos` replaced by `null`; a
-reply that is not JSON, is larger, or holds the token is refused. A redirect goes
-back to `gh` as it came, without the token; `gh` follows it through the broker
-again. Without a chain, package reads get
+reply that is not JSON, is larger, holds the token, or is partial (206 or
+`Content-Range`) is refused. A redirect goes back to `gh` with an empty body and
+only its `Location`, without the token; `gh` follows it through the broker again.
+`HEAD` is refused: its length would tell the size of the unfiltered reply. Without a chain, package reads get
 `gh: Horizon: this worker has no package read access, ...`, which tells that the
 person can give the cloud package read access in Horizon. An ended chain and a
 token that GitHub refuses get their own refusals. Through these paths the token

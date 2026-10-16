@@ -892,15 +892,19 @@ The worker guarantees these items:
   `read:packages`, when Horizon gives it and after each renewal. A renewal that
   brings another scope removes the chain. A token that can write never stays on
   the worker.
-- Root adds the token only to `GET` and `HEAD` requests without a body for the
+- Root adds the token only to `GET` requests without a body, a range or a
+  condition for the
   NuGet and npm packages of an owner of the cloud's own repositories: the list of
   packages of one type, a package, its versions and one version, with only the
   query parameters `package_type`, `visibility`, `page`, `per_page` and `state`.
 - Root refuses every other request with the token: a change or a delete of a
   package, another owner, another package type, such as container images, another
   query parameter, and a path with a dot segment, an encoded slash or a backslash.
-- Root never follows a redirect: it returns it to `gh` without the token, and
-  `gh` follows it through root again, so the token goes only to `api.github.com`.
+- Root never follows a redirect: it returns it to `gh` without the token, with an
+  empty body and only its address, and `gh` follows it through root again, so the
+  token goes only to `api.github.com`.
+- Root reads each package reply whole: it refuses a partial reply, because a part
+  of a reply that is not filtered could show what the filter removes.
 - Root passes a package reply on only after it read it as JSON: the repository
   object of a package stays only for the cloud's own repositories, and each text
   that names another repository by its GitHub address becomes empty. A reply that
@@ -911,7 +915,9 @@ The worker guarantees these items:
   chain remove every copy. A replacement that fails, for any reason, also stops
   the earlier chain. When a copy cannot be removed, none is served while the
   worker runs, and the removal reports the failure, so Horizon tries again; a
-  container restart before that can serve the copy on the volume again.
+  container restart before that can serve the copy on the volume again. A worker
+  whose volume and tmpfs both refuse every write cannot record a removal at all:
+  the removal then fails, and so does `horizon-worker-github clear`.
   Deleting the cloud deletes the worker and the chain with it.
 
 The worker does not guarantee these items:

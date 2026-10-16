@@ -169,8 +169,9 @@ def repository_route(host, method, owner, name, rest):
 
 def package_route(host, method, match, query):
     """A read of an owner's NuGet or npm packages. The list names its type in the query."""
-    if method not in READS:
-        raise Refused(403, 'this worker sends only package reads to GitHub, never a change of a package.')
+    if method != 'GET':
+        # Not even HEAD: its length would tell the size of the reply before the broker filters it.
+        raise Refused(403, 'this worker sends only GET package reads to GitHub, never a change of a package.')
     if ';' in query:
         # Some servers also split a query at `;`; then GitHub could read another type.
         raise Refused(400, 'a package read on this worker separates its query parameters with & only.')

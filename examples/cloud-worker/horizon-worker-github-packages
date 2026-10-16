@@ -11,6 +11,7 @@ policy allows (horizon-worker-github-api-rest), only for an owner of those repos
 passes on a package reply only after it removed the repository objects of other repositories.
 A module that horizon-worker-github loads, not a command."""
 import contextlib
+import http.client
 import importlib.machinery
 import importlib.util
 import json
@@ -65,6 +66,11 @@ OTHER_OWNER = ('%s owns none of this cloud\'s repositories, so the package read 
 # `users/` addresses name an owner, not a repository.
 REPOSITORY_ADDRESS = re.compile(r'https?://(?:www\.)?(?:github\.com/(?!orgs/|users/)|api\.github\.com/repos/)'
                                 r'(?P<name>[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100})', re.IGNORECASE)
+
+
+# The only fields of a client's package read that reach GitHub: no range, condition or
+# encoding, so GitHub sends the whole reply that the broker examines.
+REQUEST_FIELDS = {'accept', 'user-agent', 'x-github-api-version'}
 
 
 class Unchecked(Exception):
@@ -139,25 +145,28 @@ def install(store, source, now=time.time, check=None):
     A failed replacement leaves no chain served: neither the new one nor the earlier one. The
     chain store's own lock serializes this with the renewal."""
     chains = store_for(store)
-    try:
-        state = parse(json.loads(source), int(now()))
-        if state is not None and not only_read((check or scopes_of)(state['chain']['access_token'])):
-            raise ValueError('The package read access token has other scopes than read:packages')
-        with chains.lock():
+    # The whole replacement holds the store lock, the scope request included, so a renewal
+    # never rotates the chain between the check and the save.
+    with chains.lock():
+        try:
+            state = parse(json.loads(source), int(now()))
+            if state is not None and not only_read((check or scopes_of)(state['chain']['access_token'])):
+                raise ValueError('The package read access token has other scopes than read:packages')
             if state is None:
                 clear(chains)
             else:
                 chains.save(state, retain=False)
-    except (OSError, ValueError, RecursionError):
-        # Whatever failed, the earlier chain and its owners stop too: Horizon meant to replace them.
-        with contextlib.suppress(OSError, ValueError), chains.lock():
-            clear(chains)
-        raise
+        except (OSError, ValueError, RecursionError, UnicodeDecodeError):
+            # Whatever failed, the earlier chain and its owners stop too: Horizon meant to replace them.
+            with contextlib.suppress(OSError, ValueError):
+                clear(chains)
+            raise
     return {'packages': summary(store)}
 
 
 def remove(store):
-    """Removes the package read access, as when GitHub is disconnected."""
+    """Removes the package read access, as when GitHub is disconnected or a request to replace
+    it could not even be read."""
     chains = store_for(store)
     with chains.lock():
         clear(chains)
@@ -226,6 +235,27 @@ def token_for(store, owner, now=time.time):
     if owner.casefold() not in owners(state):
         return None, OTHER_OWNER % owner
     return state['chain']['access_token'], None
+
+
+def checked_reply(response, own, keep, secrets=()):
+    """(body, reply fields to keep) of GitHub's reply to a package read: a redirect without its
+    body and with only its Location (gh follows it through the broker again, so the token never
+    goes along), any other reply read whole, uncompressed and at most MAX_REPLY, and passed on
+    only as `filtered` JSON. A partial reply is refused: a slice of an unfiltered reply could
+    show what the filter removes. Raises Unchecked."""
+    if 300 <= response.status < 400:
+        return b'', {'location'}
+    if response.status == 206 or response.getheader('Content-Range') is not None:
+        raise Unchecked('GitHub sent part of a package reply, which cannot be examined, so it was not passed on.')
+    if (response.getheader('Content-Encoding') or 'identity').lower() != 'identity':
+        raise Unchecked('the package reply from GitHub is compressed, so it cannot be examined.')
+    try:
+        data = response.read(MAX_REPLY + 1)
+    except (OSError, http.client.HTTPException):
+        raise Unchecked('the package reply from GitHub broke off.') from None
+    if len(data) > MAX_REPLY:
+        raise Unchecked('the package reply from GitHub is too large to examine.')
+    return filtered(data, own, secrets), keep - {'content-range', 'accept-ranges', 'content-encoding'}
 
 
 def filtered(data, own, secrets=()):

@@ -1,6 +1,7 @@
 """The package read access of the worker's GitHub access: root keeps and renews its chain, the
 REST policy names the package reads, and the API broker adds its token only to those reads for
 an owner of the cloud's own repositories, and filters their replies. Synthetic tokens only."""
+import itertools
 import json
 import os
 import unittest
@@ -35,7 +36,7 @@ def install(store, source=None, scopes=READ):
 
 class RouteTests(unittest.TestCase):
     def test_package_reads_of_nuget_and_npm(self):
-        for method, target in [('GET', VERSIONS), ('HEAD', VERSIONS), ('GET', VERSIONS + '/123?per_page=1'),
+        for method, target in [('GET', VERSIONS), ('GET', VERSIONS + '/123?per_page=1'),
                                ('GET', '/orgs/Example/packages/nuget/Operator.Api.Client'),
                                ('GET', '/users/someone/packages/npm/tool/versions?page=2'),
                                ('GET', '/orgs/example/packages?package_type=nuget&per_page=100'),
@@ -48,6 +49,7 @@ class RouteTests(unittest.TestCase):
     def test_changes_other_types_and_odd_paths_are_refused(self):
         for method, target, status in [
                 ('DELETE', VERSIONS + '/123', 403), ('PUT', VERSIONS, 403), ('PATCH', VERSIONS, 403),
+                ('HEAD', VERSIONS, 403),
                 ('POST', '/orgs/example/packages/nuget/Operator.Push/restore', 403),
                 ('POST', '/orgs/example/packages/nuget/Operator.Push/versions/1/restore', 403),
                 ('GET', '/orgs/example/packages/container/mongo-enterprise/versions', 403),
@@ -191,6 +193,45 @@ class StorageTests(ServiceTestCase):
         with mock.patch.object(service.agents.tasks, 'access', return_value='push'):
             self.assertIsNone(packages.token_for(self.store, 'tasked')[0])
 
+    def test_an_unreadable_request_on_the_command_line_stops_the_earlier_chain(self):
+        for source in (b'\xff\xfe', b' ' * (packages.MAX_SOURCE + 1), b'{"version":1}'):
+            with self.subTest(source=source[:8]):
+                install(self.store)
+                stdin = mock.Mock()
+                stdin.buffer.read.return_value = source
+                with mock.patch.object(service, 'Store', return_value=self.store), \
+                        mock.patch.object(service.sys, 'stdin', stdin), \
+                        mock.patch.object(service.os, 'geteuid', side_effect=itertools.chain([0], itertools.repeat(os.geteuid()))), \
+                        mock.patch.object(service.common, 'AGENT_ISOLATION', self.root / 'run'), \
+                        self.assertRaises((ValueError, UnicodeDecodeError)):
+                    service.main(['packages'])
+                self.assertEqual(packages.token_for(self.store, 'example'), (None, packages.MISSING))
+
+    def test_a_renewal_waits_for_an_install_and_never_loses_its_chain(self):
+        install(self.store)
+        chains = packages.store_for(self.store)
+        order = []
+
+        def check(token):
+            # The renewal tries to run while the install holds the lock; it must wait.
+            order.append('check')
+            self.assertFalse(chains_lock_free())
+            return READ
+
+        def chains_lock_free():
+            import fcntl
+            fd = os.open(chains.runtime / 'state.lock', os.O_RDWR)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return True
+            except BlockingIOError:
+                return False
+            finally:
+                os.close(fd)
+        packages.install(self.store, request(OTHER), check=check)
+        self.assertEqual(order, ['check'])
+        self.assertEqual(packages.token_for(self.store, 'example'), (OTHER, None))
+
     def test_disconnecting_removes_the_access(self):
         self.install()
         install(self.store)
@@ -247,12 +288,15 @@ class StorageTests(ServiceTestCase):
 
 class BrokerTests(BrokerTestCase):
     def answer_with(self, status, data, fields=()):
-        """Makes the fake GitHub answer package paths with `status`, `data` and `fields`."""
+        """Makes the fake GitHub answer package paths with `status`, `data` and `fields`, and
+        keeps the request fields of each in `self.heads`."""
         answer = APIHandler.answer
+        self.heads = []
 
         def scripted(handler):
             if '/packages' not in handler.path:
                 return answer(handler)
+            self.heads.append({name.lower(): value for name, value in handler.headers.items()})
             handler.server.seen.append((handler.command, handler.headers.get('Host'), handler.path,
                                         handler.headers.get('Authorization'), b''))
             handler.send_response(status)
@@ -303,12 +347,15 @@ class BrokerTests(BrokerTestCase):
         self.assertIn(b'has no body', payload)
         self.assertEqual(self.api.seen, [])
 
-    def test_a_redirect_goes_back_without_the_token_and_is_not_followed(self):
+    def test_a_redirect_goes_back_without_the_token_its_body_or_other_fields(self):
         install(self.store)
         location = 'https://pkg-containers.githubusercontent.com/blob?sig=synthetic'
-        self.answer_with(302, b'', [('Location', location)])
-        status, fields, _ = self.send('GET', VERSIONS)
-        self.assertEqual((status, fields['location']), (302, location))
+        self.answer_with(302, b'{"repository":{"full_name":"example/secret"}}',
+                         [('Location', location), ('ETag', '"x"'), ('Content-Type', 'application/json')])
+        status, fields, payload = self.send('GET', VERSIONS)
+        self.assertEqual((status, fields['location'], payload), (302, location, b''))
+        self.assertNotIn('etag', fields)
+        self.assertNotIn('content-type', fields)
         self.assertEqual(len(self.api.seen), 1)
         self.assertEqual(self.api.seen[0][1], 'api.github.com')
         status, _, _ = self.send('GET', '/blob?sig=synthetic', host='pkg-containers.githubusercontent.com')
@@ -336,6 +383,31 @@ class BrokerTests(BrokerTestCase):
                 self.assertEqual(status, 502)
                 self.assertIn(reason, payload)
                 self.assertNotIn(TOKEN.encode(), payload)
+
+    def test_ranges_and_conditions_never_reach_github_and_partial_replies_are_refused(self):
+        install(self.store)
+        self.answer_with(200, b'[{"name":"a"}]', [('Content-Type', 'application/json'), ('Accept-Ranges', 'bytes')])
+        status, fields, _ = self.send('GET', VERSIONS, fields=['Range: bytes=10-40', 'If-Range: "x"',
+                                                               'If-None-Match: "x"', 'Accept-Encoding: gzip',
+                                                               'Accept: application/vnd.github+json'])
+        self.assertEqual(status, 200)
+        self.assertNotIn('accept-ranges', fields)
+        for name in ('range', 'if-range', 'if-none-match', 'if-modified-since', 'accept-encoding'):
+            self.assertNotIn(name, self.heads[-1], name)
+        self.assertEqual(self.heads[-1]['accept'], 'application/vnd.github+json')
+        for status_sent, extra in [(206, []), (200, [('Content-Range', 'bytes 0-9/100')])]:
+            with self.subTest(status=status_sent):
+                self.answer_with(status_sent, b'{"name":"slice"}', extra)
+                status, fields, payload = self.send('GET', VERSIONS)
+                self.assertEqual(status, 502)
+                self.assertIn(b'part of a package reply', payload)
+                self.assertNotIn('content-range', fields)
+
+    def test_head_is_refused_on_package_routes(self):
+        install(self.store)
+        status, _, payload = self.send('HEAD', VERSIONS)
+        self.assertEqual(status, 403)
+        self.assertEqual(self.api.seen, [])
 
     def test_a_token_that_github_refuses_asks_for_new_access(self):
         install(self.store)

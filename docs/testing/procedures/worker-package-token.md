@@ -192,6 +192,8 @@ package read access.
    | `gh api -X DELETE /orgs/OWNER/packages/nuget/PACKAGE/versions/ID` | `never a change of a package` |
    | `gh api /orgs/OWNER/packages` | `only NuGet and npm` |
    | `gh api '/orgs/OWNER/packages?package_type=nuget&q=x'` | `only the query parameters` |
+   | `gh api -X HEAD /orgs/OWNER/packages/nuget/PACKAGE/versions` | `only GET package reads` |
+   | `gh api -H 'Range: bytes=0-9' /orgs/OWNER/packages/nuget/PACKAGE/versions` | (no error: the whole list comes back) |
    | `gh api -X GET /orgs/OWNER/packages/nuget/PACKAGE/versions -f x=1` | `only the query parameters` |
 
    Result: Each command stops with an error, and the message has the text in the
