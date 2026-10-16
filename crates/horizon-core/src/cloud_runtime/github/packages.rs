@@ -14,7 +14,6 @@ use horizon_cloud::github::{Chain, Client};
 use serde::Serialize;
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
-    io::Write as _,
     sync::{LazyLock, Mutex},
     time::Duration,
 };
@@ -25,6 +24,8 @@ pub const SCOPE: &str = "read:packages";
 pub use publish::APP_PAGE;
 const STATUS: &str = "horizon-worker-github status 2>/dev/null || true";
 const INSTALL: &str = "horizon-worker-github packages";
+/// How long the worker's root service may take for a request (it asks GitHub for the scope).
+const UPLOAD: Duration = Duration::from_secs(60);
 /// The most repositories the worker's root service takes with a chain.
 const MAX_REPOSITORIES: usize = 50;
 /// What a skip or a failed sign-in means for the cloud, also on the Upkeep board.
@@ -377,8 +378,9 @@ struct PayloadChain<'a> {
 }
 
 /// The request for the worker's root service: the client ID, the cloud's own repositories and
-/// the chain, no secret.
-fn payload(chain: &Chain, repositories: &[String]) -> Result<tempfile::NamedTempFile> {
+/// the chain, no secret. Bytes in memory, wiped on drop: no file on this computer ever holds
+/// the chain, also when Horizon stops during the upload.
+fn payload(chain: &Chain, repositories: &[String]) -> Result<zeroize::Zeroizing<Vec<u8>>> {
     let unix = |at: std::time::SystemTime| {
         at.duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |since| since.as_secs())
@@ -394,10 +396,9 @@ fn payload(chain: &Chain, repositories: &[String]) -> Result<tempfile::NamedTemp
             refresh_expires_at: unix(chain.refresh_expires_at),
         },
     };
-    let mut file = tempfile::NamedTempFile::new()?;
-    serde_json::to_writer(&mut file, &value).map_err(|_| Error::Json)?;
-    file.flush()?;
-    Ok(file)
+    serde_json::to_vec(&value)
+        .map(zeroize::Zeroizing::new)
+        .map_err(|_| Error::Json)
 }
 
 #[derive(Serialize)]
@@ -409,17 +410,12 @@ struct Change<'a> {
 /// Tells root on the worker the Upkeep's repositories for the chain it holds, without a token,
 /// through `command` (`horizon-worker-github packages`).
 fn change(repositories: &[String], command: &mut std::process::Command, runner: &Runner<'_>) -> Result<()> {
-    let mut file = tempfile::NamedTempFile::new()?;
-    serde_json::to_writer(
-        &mut file,
-        &Change {
-            version: 1,
-            repositories,
-        },
-    )
+    let request = serde_json::to_vec(&Change {
+        version: 1,
+        repositories,
+    })
     .map_err(|_| Error::Json)?;
-    file.flush()?;
-    runner.private_payload(command, file.path())
+    runner.private_exchange(command, &request, UPLOAD).map(drop)
 }
 
 /// The repositories each Upkeep's worker last took, so an exchange asks the worker only after
@@ -471,10 +467,13 @@ pub fn follow(connection: &Connection, runner: &Runner<'_>, cloud_id: &str, conf
     remember(cloud_id, wanted);
 }
 
-/// Gives the chain to root on the worker over SSH stdin; no token enters argv or output.
+/// Gives the chain to root on the worker over SSH stdin, from an anonymous temporary file that
+/// `private_exchange` unlinks at once; no token enters argv, output or a named file.
 fn install(chain: &Chain, repositories: &[String], connection: &Connection, runner: &Runner<'_>) -> Result<()> {
-    let file = payload(chain, repositories)?;
-    runner.private_payload(&mut connection.command(INSTALL), file.path())
+    let request = payload(chain, repositories)?;
+    runner
+        .private_exchange(&mut connection.command(INSTALL), &request, UPLOAD)
+        .map(drop)
 }
 
 #[cfg(test)]
@@ -569,8 +568,9 @@ mod tests {
     #[test]
     fn the_payload_holds_the_client_id_and_the_chain_but_no_secret() {
         let repositories = vec!["acme/api".to_owned(), "acme/web".to_owned()];
-        let file = payload(&sample("gho_synthetic-packages"), &repositories).unwrap();
-        let value: serde_json::Value = serde_json::from_reader(file.reopen().unwrap()).unwrap();
+        // Bytes in memory (wiped on drop), never a named temporary file: the type says so.
+        let request: zeroize::Zeroizing<Vec<u8>> = payload(&sample("gho_synthetic-packages"), &repositories).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&request).unwrap();
         assert_eq!(value["version"], 1);
         assert_eq!(value["client_id"], publish::CLIENT_ID);
         assert_eq!(value["repositories"], serde_json::json!(["acme/api", "acme/web"]));
@@ -578,10 +578,5 @@ mod tests {
         assert_eq!(value["chain"]["refresh_token"], "gho_synthetic-packages-refresh");
         assert!(value["chain"]["access_expires_at"].as_u64().unwrap() > 0);
         assert!(value.get("client_secret").is_none());
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(file.as_file().metadata().unwrap().permissions().mode() & 0o077, 0);
-        }
     }
 }

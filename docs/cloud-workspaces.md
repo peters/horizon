@@ -604,7 +604,9 @@ a log or the cloud board, and keeps no copy. The worker renews the chain with th
 OAuth app's client ID alone, also while this computer is off. No agent gets the
 token. With the chain, Horizon names the Upkeep's repositories. When you change
 the Upkeep's list, the next exchange with the worker gives it the new list without
-a new code; a worker image that cannot take it gets the list at the next
+a new code. A repository of a new owner thus opens that owner's NuGet and npm
+packages to the Upkeep's agents, also when you confirm a repository that an agent
+proposed; a worker image that cannot take it gets the list at the next
 deployment, which asks for a new code. **Connect GitHub again** also asks again;
 when you skip it then, the earlier package read access stays. The service adds
 the token only to reads of the NuGet and npm packages of the owners of those
