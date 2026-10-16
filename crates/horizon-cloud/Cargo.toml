@@ -10,6 +10,7 @@ publish = false
 workspace = true
 
 [features]
+exposure-firewall = []
 # JSON schemas for requirements that MCP tools accept.
 schema = ["dep:schemars"]
 

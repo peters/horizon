@@ -28,6 +28,9 @@ SERVER_TYPE = ["name", "cores", "memory", "disk", "cpu_type", "architecture", "p
 PRICING = ["pricing.currency", "pricing.volume.price_per_gb_month.net", "pricing.primary_ips.[].type",
            "pricing.primary_ips.[].prices.[].location", "pricing.primary_ips.[].prices.[].price_monthly.net",
            "pricing.primary_ips.[].prices.[].price_hourly.net"]
+FIREWALL_RULE = ["description", "direction", "protocol", "port", "source_ips", "destination_ips"]
+FIREWALL = ["id", "name", "labels", "applied_to.[].type", "applied_to.[].server.id",
+            "applied_to.[].label_selector.selector", "applied_to.[].applied_to_resources.[].type"]
 
 
 def prefixed(prefix, fields):
@@ -36,6 +39,21 @@ def prefixed(prefix, fields):
 
 # (method, path, query parameters, request fields, response status, response fields)
 USED = [
+    ("get", "/firewalls", ["label_selector", "page", "per_page"], [], "200",
+     prefixed("firewalls.[]", FIREWALL) + prefixed("firewalls.[].rules.[]", FIREWALL_RULE)
+     + ["meta.pagination.next_page"]),
+    ("get", "/firewalls/{id}", [], [], "200",
+     prefixed("firewall", FIREWALL) + prefixed("firewall.rules.[]", FIREWALL_RULE)),
+    ("post", "/firewalls", [], ["name", "labels"] + prefixed("rules.[]", FIREWALL_RULE), "201",
+     prefixed("firewall", FIREWALL) + prefixed("firewall.rules.[]", FIREWALL_RULE)
+     + prefixed("actions.[]", ACTION)),
+    ("post", "/firewalls/{id}/actions/set_rules", [], prefixed("rules.[]", FIREWALL_RULE), "201",
+     prefixed("actions.[]", ACTION)),
+    ("post", "/firewalls/{id}/actions/apply_to_resources", [], ["apply_to.[].type", "apply_to.[].server.id"], "201",
+     prefixed("actions.[]", ACTION)),
+    ("post", "/firewalls/{id}/actions/remove_from_resources", [], ["remove_from.[].type", "remove_from.[].server.id"], "201",
+     prefixed("actions.[]", ACTION)),
+    ("delete", "/firewalls/{id}", [], [], "204", []),
     ("get", "/servers", ["label_selector", "page", "per_page"], [], "200",
      prefixed("servers.[]", SERVER) + ["meta.pagination.next_page"]),
     ("post", "/servers", [], ["name", "server_type", "location", "image", "user_data", "labels",
