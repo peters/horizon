@@ -266,8 +266,24 @@ mod tests {
     use horizon_cast::CastStatus;
     use std::{
         io::{Read, Write},
-        net::TcpListener,
+        net::{TcpListener, TcpStream},
     };
+
+    /// Only guards against a hang: waits for an event, not a time bound.
+    const HANG_GUARD: Duration = Duration::from_secs(60);
+
+    /// Accepts the connection that sends the first request. A cancellable dial can give
+    /// up on an attempt that the listener still queues, and the cast worker closes that
+    /// attempt without sending anything.
+    fn accept_request(listener: &TcpListener) -> TcpStream {
+        loop {
+            let (socket, _) = listener.accept().expect("accept");
+            socket.set_read_timeout(Some(HANG_GUARD)).expect("timeout");
+            if socket.peek(&mut [0]).is_ok_and(|count| count > 0) {
+                return socket;
+            }
+        }
+    }
 
     #[test]
     fn final_async_results_report_a_repaint_even_when_no_work_remains() {
@@ -292,8 +308,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.99:0").expect("synthetic listener");
         let address = listener.local_addr().expect("address");
         let receiver = std::thread::spawn(move || {
-            let (mut socket, _) = listener.accept().expect("accept");
-            socket.set_read_timeout(Some(Duration::from_secs(3))).expect("timeout");
+            let mut socket = accept_request(&listener);
             let mut request = Vec::new();
             let mut byte = [0];
             while !request.ends_with(b"\r\n\r\n") {
@@ -307,8 +322,10 @@ mod tests {
             assert_eq!(socket.read(&mut byte).expect("connection closed"), 0);
         });
         let (_temp, mut app) = crate::app::test_support::test_app();
+        // A dial attempt that the cast worker gave up on: queued first, closed without a request.
+        drop(TcpStream::connect(address).expect("abandoned attempt"));
         let worker = CastSession::start(address, horizon_cast::VideoFormat::default()).expect("cast");
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + HANG_GUARD;
         while worker.status() != CastStatus::PinRequired {
             assert!(Instant::now() < deadline, "pairing prompt: {:?}", worker.status());
             std::thread::sleep(Duration::from_millis(10));
@@ -339,8 +356,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.98:0").expect("listener");
         let address = listener.local_addr().expect("address");
         let receiver = std::thread::spawn(move || {
-            let (mut socket, _) = listener.accept().expect("accept");
-            socket.set_read_timeout(Some(Duration::from_secs(2))).expect("timeout");
+            let mut socket = accept_request(&listener);
             let mut request = Vec::new();
             let mut byte = [0];
             while !request.ends_with(b"\r\n\r\n") {
@@ -351,8 +367,10 @@ mod tests {
                 .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
                 .expect("reject");
         });
+        // A dial attempt that the cast worker gave up on: queued first, closed without a request.
+        drop(TcpStream::connect(address).expect("abandoned attempt"));
         let worker = CastSession::start(address, horizon_cast::VideoFormat::default()).expect("worker");
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + HANG_GUARD;
         while !worker.finished() {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(5));
