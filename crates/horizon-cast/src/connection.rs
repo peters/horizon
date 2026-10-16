@@ -1,14 +1,17 @@
 use crate::{
     Error, Result,
-    cancellation::{Cancellation, Registration},
+    cancellation::{self, Cancellation, Registration},
     crypto,
 };
 use ring::aead;
 use std::{
     collections::BTreeMap,
-    io::{Read, Write},
-    net::{SocketAddr, TcpStream},
-    sync::Arc,
+    io::{ErrorKind, Read, Write},
+    net::{Shutdown, SocketAddr, TcpStream},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -17,6 +20,7 @@ const MESSAGE_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) struct Transport {
     socket: TcpStream,
     cancellation: Option<Registration>,
+    closed: Arc<AtomicBool>,
     security: Option<Security>,
     pending: Vec<u8>,
     offset: usize,
@@ -30,6 +34,17 @@ struct Security {
     receive: aead::LessSafeKey,
     send_counter: u64,
     receive_counter: u64,
+}
+/// Ends a transport from another thread, also while it waits for a message.
+pub(crate) struct Closer {
+    socket: TcpStream,
+    closed: Arc<AtomicBool>,
+}
+impl Closer {
+    pub(crate) fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+        let _ = self.socket.shutdown(Shutdown::Both);
+    }
 }
 pub(crate) struct Response {
     pub(crate) headers: BTreeMap<String, String>,
@@ -52,6 +67,7 @@ impl Transport {
         Ok(Self {
             socket,
             cancellation,
+            closed: Arc::new(AtomicBool::new(false)),
             security: None,
             pending: Vec::new(),
             offset: 0,
@@ -76,13 +92,14 @@ impl Transport {
     pub(crate) fn local_ip(&self) -> Result<String> {
         Ok(self.socket.local_addr()?.ip().to_string())
     }
-    pub(crate) fn wait_for_events(&mut self) -> Result<()> {
+    pub(crate) fn wait_for_events(&mut self) {
         self.event_idle = true;
-        self.socket.set_read_timeout(None)?;
-        Ok(())
     }
-    pub(crate) fn shutdown_handle(&self) -> Result<TcpStream> {
-        Ok(self.socket.try_clone()?)
+    pub(crate) fn closer(&self) -> Result<Closer> {
+        Ok(Closer {
+            socket: self.socket.try_clone()?,
+            closed: self.closed.clone(),
+        })
     }
     pub(crate) fn encrypt(&mut self, secret: &[u8], events: bool) -> Result<()> {
         let (salt, send, receive) = if events {
@@ -197,22 +214,46 @@ impl Transport {
         }
         Ok(())
     }
+    /// A closed transport, or a cancelled setup, ends a read with that reason
+    /// instead of the socket error that the shutdown caused.
+    fn interrupted(&self) -> Result<()> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(std::io::Error::new(ErrorKind::ConnectionAborted, "receiver connection closed").into());
+        }
+        match &self.cancellation {
+            Some(registration) if !self.event_idle => registration.cancellation().check(),
+            _ => Ok(()),
+        }
+    }
     fn socket_read_exact(&mut self, mut output: &mut [u8]) -> Result<()> {
         while !output.is_empty() {
-            if let Some(deadline) = self.read_deadline {
-                let remaining = deadline.checked_duration_since(Instant::now()).ok_or_else(|| {
-                    std::io::Error::new(std::io::ErrorKind::TimedOut, "receiver message deadline exceeded")
-                })?;
-                self.socket.set_read_timeout(Some(remaining))?;
-            }
-            let count = match self.socket.read(output) {
-                Ok(count) => count,
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(error) => return Err(error.into()),
+            // On Windows a socket shutdown does not wake a blocked read, so a read
+            // waits in short slices and checks for cancellation between them.
+            let slice = match self.read_deadline {
+                Some(deadline) => deadline
+                    .checked_duration_since(Instant::now())
+                    .filter(|remaining| !remaining.is_zero())
+                    .ok_or_else(|| std::io::Error::new(ErrorKind::TimedOut, "receiver message deadline exceeded"))?
+                    .min(cancellation::POLL),
+                None => cancellation::POLL,
             };
-            if count == 0 {
-                return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into());
-            }
+            self.socket.set_read_timeout(Some(slice))?;
+            let count = match self.socket.read(output) {
+                Ok(0) => {
+                    self.interrupted()?;
+                    return Err(std::io::Error::from(ErrorKind::UnexpectedEof).into());
+                }
+                Ok(count) => count,
+                Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+                Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                    self.interrupted()?;
+                    continue;
+                }
+                Err(error) => {
+                    self.interrupted()?;
+                    return Err(error.into());
+                }
+            };
             // Event sockets may idle indefinitely; a message becomes bounded once bytes arrive.
             if self.event_idle && self.read_deadline.is_none() {
                 self.read_deadline = Some(Instant::now() + self.message_timeout);
@@ -227,7 +268,6 @@ impl Transport {
     fn message_with_timeout(&mut self, timeout: Duration) -> Result<(String, Response)> {
         self.message_timeout = timeout;
         self.read_deadline = (!self.event_idle).then(|| Instant::now() + timeout);
-        self.socket.set_read_timeout((!self.event_idle).then_some(timeout))?;
         let result = self.message_inner();
         self.read_deadline = None;
         result
@@ -373,6 +413,54 @@ mod tests {
         }
     }
 
+    // The receiver keeps its side open in both tests: on Windows a shutdown alone
+    // does not wake the read, so only the sliced wait can end it before its timeout.
+    #[test]
+    fn cancellation_ends_a_response_read_while_the_receiver_stays_open() {
+        use std::sync::atomic::AtomicBool;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let cancel = Arc::new(Cancellation::new(Arc::new(AtomicBool::new(false))));
+        let mut transport =
+            Transport::connect_cancellable(listener.local_addr().expect("address"), Some(cancel.clone()))
+                .expect("connect");
+        let (mut receiver, _) = listener.accept().expect("accept");
+        let worker = thread::spawn(move || transport.request("SETUP", "/stream", "", &[]).err());
+        let mut request = Vec::new();
+        let mut byte = [0];
+        while !request.ends_with(b"\r\n\r\n") {
+            receiver.read_exact(&mut byte).expect("request");
+            request.push(byte[0]);
+        }
+        cancel.stop();
+        let error = worker.join().expect("worker");
+        assert!(matches!(error, Some(Error::Protocol("casting cancelled"))), "{error:?}");
+        drop(receiver);
+    }
+
+    #[test]
+    fn closing_ends_an_idle_event_read_while_the_receiver_stays_open() {
+        use std::sync::mpsc;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listen");
+        let mut transport = Transport::connect(listener.local_addr().expect("address")).expect("connect");
+        let (receiver, _) = listener.accept().expect("accept");
+        transport.wait_for_events();
+        let closer = transport.closer().expect("closer");
+        let (send, ended) = mpsc::channel();
+        thread::spawn(move || send.send(transport.message().err()));
+        // Gives the read time to block; closing before it starts must also end it.
+        thread::sleep(Duration::from_millis(100));
+        closer.close();
+        // Only guards against a hang: an idle event read has no deadline of its own.
+        let error = ended
+            .recv_timeout(Duration::from_secs(60))
+            .expect("idle event read ended");
+        assert!(
+            matches!(&error, Some(Error::Io(error)) if error.kind() == std::io::ErrorKind::ConnectionAborted),
+            "{error:?}"
+        );
+        drop(receiver);
+    }
+
     #[test]
     fn reads_fragmented_encrypted_messages_across_frames() {
         let mut plain = b"HTTP/1.1 200 OK\r\nContent-Length: 2050\r\n\r\n".to_vec();
@@ -399,7 +487,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").expect("listen");
         let mut transport = Transport::connect(listener.local_addr().expect("address")).expect("connect");
         transport.encrypt(&[9; 32], true).expect("event encryption");
-        transport.wait_for_events().expect("event idle policy");
+        transport.wait_for_events();
         let worker = thread::spawn(move || {
             let (mut socket, _) = listener.accept().expect("accept");
             let plain = b"POST /event RTSP/1.0\r\nCSeq: 1\r\nContent-Length: 0\r\n\r\nPOST ";
@@ -436,7 +524,7 @@ mod tests {
     fn event_socket_may_idle_before_the_next_message() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("listen");
         let mut transport = Transport::connect(listener.local_addr().expect("address")).expect("connect");
-        transport.wait_for_events().expect("event idle policy");
+        transport.wait_for_events();
         let worker = thread::spawn(move || {
             let (mut socket, _) = listener.accept().expect("accept");
             thread::sleep(Duration::from_millis(150));
