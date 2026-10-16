@@ -9,6 +9,8 @@ publish = false
 workspace = true
 [features]
 exposure-gate = ["horizon-cloud-protocol/exposure-gate", "dep:socket2", "dep:thiserror", "tokio/net", "tokio/io-util", "tokio/sync"]
+protected-ingress = ["horizon-cloud-protocol/exposure-gate"]
+
 [dependencies]
 horizon-cloud-protocol.workspace = true
 horizon-cloud = { path = "../horizon-cloud", features = ["schema"] }

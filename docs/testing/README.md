@@ -25,6 +25,7 @@ documents that are not yet STE.
 
 | Procedure | Feature | Cost |
 |---|---|---|
+| [protected-ingress-reader](procedures/protected-ingress-reader.md) | Default-off original host receipt and namespace readback | rents compute |
 | [exposure-policy](procedures/exposure-policy.md) | Bounded default-off policy and route comparison facts | none |
 | [worker-exposure-gate](procedures/worker-exposure-gate.md) | Default-off actual-peer CIDR/Public worker Gate | no local cost; approved real-root component only |
 | [portable-build-engine](procedures/portable-build-engine.md) | Retain publisher identity through image preparation | none |
