@@ -1,5 +1,5 @@
 ---
-applyTo: "examples/cloud-worker/horizon-worker-tailnet,examples/cloud-worker/horizon-worker-check,examples/cloud-worker/test_tailnet.py,crates/horizon-core/src/cloud_runtime/worker_contract*,crates/horizon-core/src/cloud_runtime/worker_contract/**,crates/horizon-core/src/cloud_runtime/tailnet*,crates/horizon-core/src/cloud_runtime/tailnet/**,crates/horizon-core/src/cloud_runtime/deployment/**,crates/horizon-core/src/cloud_runtime/ssh.rs,crates/horizon-core/src/cloud_runtime/repository/launch/quick_start.rs"
+applyTo: "examples/cloud-worker/horizon-worker-tailnet,examples/cloud-worker/horizon-worker-check,examples/cloud-worker/test_tailnet.py,crates/horizon-core/examples/cloud_deploy.rs,crates/horizon-core/examples/cloud_deploy/tailnets.rs,crates/horizon-core/src/cloud_runtime/worker_contract*,crates/horizon-core/src/cloud_runtime/worker_contract/**,crates/horizon-core/src/cloud_runtime/tailnet*,crates/horizon-core/src/cloud_runtime/tailnet/**,crates/horizon-core/src/cloud_runtime/deployment/**,crates/horizon-core/src/cloud_runtime/ssh.rs,crates/horizon-core/src/cloud_runtime/repository/launch/quick_start.rs"
 ---
 
 # Tailnet enrollment review boundary
@@ -10,6 +10,10 @@ Workspace code and agents are untrusted toward the private key and node state.
 
 Report these failures:
 
+- `select-tailnet` bypasses the shared lifecycle lock, accepts missing/extra/empty-ID
+  arguments, or alters a pending or allocated cloud contrary to `tailnet::select`.
+- CLI selection reads credentials, rewrites the saved catalog, starts remote work
+  or treats a selected ID as native approval or enrollment proof.
 - A selected tailnet accepts an image that lacks `horizon-tailnet-contract=4`
   before allocation, reconnect or a new session.
 - Enrollment omits `--advertise-tags=tag:horizon-worker`.

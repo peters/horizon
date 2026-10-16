@@ -19,7 +19,7 @@ use horizon_core::cloud_runtime::{
     state::Store,
 };
 use std::{path::PathBuf, process::ExitCode};
-const USAGE: &str = "Usage: cloud_deploy tailnets STATE_ROOT [TAILNET_ID] | offers SETTINGS [REQUIREMENTS_JSON] | plan-deploy|deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--quick-start] [--worker-choice OFFER_JSON_FILE] [--plan-token PLAN_TOKEN] (deploy and prepare-image) [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|take-stop|resume|reconnect|endpoint|delete|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | plan-rebuild|rebuild SETTINGS STATE_ROOT PROFILE [PLAN_TOKEN] (rebuild only) | reconcile SETTINGS STATE_ROOT [WORKER_ID]. take-stop reads an agent's stop request of a Hetzner or Docker host cloud once and stops the cloud for it, as the card does every 30 s. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume. --quick-start uses the built-in quick-start profile on the public base image for a commit without .horizon/cloud.yml. On the checked-out commit the image builds from the working copy, as in New cloud: plan-deploy lists its uncommitted files and prints the token that deploy and prepare-image then need.";
+const USAGE: &str = "Usage: cloud_deploy tailnets STATE_ROOT [TAILNET_ID] | select-tailnet CATALOG_ROOT CLOUD_ID TAILNET_ID | offers SETTINGS [REQUIREMENTS_JSON] | plan-deploy|deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--quick-start] [--worker-choice OFFER_JSON_FILE] [--plan-token PLAN_TOKEN] (deploy and prepare-image) [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|take-stop|resume|reconnect|endpoint|delete|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | plan-rebuild|rebuild SETTINGS STATE_ROOT PROFILE [PLAN_TOKEN] (rebuild only) | reconcile SETTINGS STATE_ROOT [WORKER_ID]. take-stop reads an agent's stop request of a Hetzner or Docker host cloud once and stops the cloud for it, as the card does every 30 s. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume. --quick-start uses the built-in quick-start profile on the public base image for a commit without .horizon/cloud.yml. On the checked-out commit the image builds from the working copy, as in New cloud: plan-deploy lists its uncommitted files and prints the token that deploy and prepare-image then need.";
 
 fn main() -> ExitCode {
     match run() {
@@ -45,7 +45,10 @@ fn run_args(args: &[String]) -> cloud_runtime::Result<()> {
     if args.first().is_some_and(|command| command == "offers") && (2..=3).contains(&args.len()) {
         return offers(&PathBuf::from(&args[1]), args.get(2).map(String::as_str));
     }
-    if args.first().is_some_and(|command| command == "tailnets") {
+    if args
+        .first()
+        .is_some_and(|command| matches!(command.as_str(), "tailnets" | "select-tailnet"))
+    {
         return tailnets::run_args(args);
     }
     if args.len() < 3 {
@@ -753,6 +756,38 @@ mod tests {
                     "Usage: cloud_deploy tailnets STATE_ROOT [TAILNET_ID]"
                 ))
             ));
+        }
+    }
+
+    #[test]
+    fn malformed_selection_arguments_never_create_cloud_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let absent = root.path().join("catalog");
+        for values in [
+            vec!["select-tailnet".into()],
+            vec!["select-tailnet".into(), absent.display().to_string()],
+            vec!["select-tailnet".into(), absent.display().to_string(), "cloud".into()],
+            vec![
+                "select-tailnet".into(),
+                absent.display().to_string(),
+                "cloud".into(),
+                String::new(),
+            ],
+            vec![
+                "select-tailnet".into(),
+                absent.display().to_string(),
+                "cloud".into(),
+                "saved".into(),
+                "extra".into(),
+            ],
+        ] {
+            assert!(matches!(
+                run_args(&values),
+                Err(cloud_runtime::Error::Invalid(
+                    "Usage: cloud_deploy select-tailnet CATALOG_ROOT CLOUD_ID TAILNET_ID"
+                ))
+            ));
+            assert!(!absent.exists());
         }
     }
 }

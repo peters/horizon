@@ -25,6 +25,7 @@ documents that are not yet STE.
 
 | Procedure | Feature | Cost |
 |---|---|---|
+| [cloud-tailnet-selection](procedures/cloud-tailnet-selection.md) | Select an existing saved tailnet before cloud allocation | none |
 | [protected-ingress-reader](procedures/protected-ingress-reader.md) | Default-off original host receipt and namespace readback | rents compute |
 | [exposure-policy](procedures/exposure-policy.md) | Bounded default-off policy and route comparison facts | none |
 | [exposure-control](procedures/exposure-control.md) | Default-off bounded control and observation comparison messages | none |
@@ -97,6 +98,7 @@ documents that are not yet STE.
 
 | Report | Procedure | Date |
 |---|---|---|
+| [2026-10-16-cloud-tailnet-selection](reports/2026-10-16-cloud-tailnet-selection.md) | [cloud-tailnet-selection](procedures/cloud-tailnet-selection.md) | 2026-10-16 |
 | [2026-10-16-pinned-unix-ssh-attachment](reports/2026-10-16-pinned-unix-ssh-attachment.md) | [pinned-unix-ssh-attachment](procedures/pinned-unix-ssh-attachment.md) | 2026-10-16 |
 | [2026-10-16-protected-host-reader](reports/2026-10-16-protected-host-reader.md) | [protected-ingress-reader](procedures/protected-ingress-reader.md) | 2026-10-16 |
 | [2026-10-16-worker-cidr-gate](reports/2026-10-16-worker-cidr-gate.md) | [worker-exposure-gate](procedures/worker-exposure-gate.md) | 2026-10-16 |

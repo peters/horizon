@@ -50,6 +50,7 @@ class ShardCommandTests(unittest.TestCase):
                 "cargo test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network::",
                 "cargo test --locked -p horizon-core --lib --features one-service-gateway,cloud-exposure cloud_runtime::owner_custody::",
                 "cargo test --locked -p horizon-chromecast --features encoder",
+                "cargo test --locked -p horizon-core --example cloud_deploy -- tailnets:: tests::malformed_selection_arguments_never_create_cloud_paths",
             ],
         )
 
@@ -71,6 +72,14 @@ class ShardCommandTests(unittest.TestCase):
 
     def test_enabled_owner_custody_runs_once_on_each_platform(self):
         command = "cargo test --locked -p horizon-core --lib --features one-service-gateway,cloud-exposure cloud_runtime::owner_custody::"
+        for shard, runner_os in [("libs", "Linux"), ("all", "macOS"), ("libs", "Windows")]:
+            with self.subTest(shard=shard, runner_os=runner_os):
+                result = shard_commands(shard, runner_os)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines().count(command), 1)
+
+    def test_cloud_deploy_example_runs_once_on_each_platform(self):
+        command = "cargo test --locked -p horizon-core --example cloud_deploy -- tailnets:: tests::malformed_selection_arguments_never_create_cloud_paths"
         for shard, runner_os in [("libs", "Linux"), ("all", "macOS"), ("libs", "Windows")]:
             with self.subTest(shard=shard, runner_os=runner_os):
                 result = shard_commands(shard, runner_os)
@@ -121,6 +130,7 @@ class ShardCommandTests(unittest.TestCase):
                         "cargo test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network::",
                         "cargo test --locked -p horizon-core --lib --features one-service-gateway,cloud-exposure cloud_runtime::owner_custody::",
                         "cargo test --locked -p horizon-chromecast --features encoder",
+                        "cargo test --locked -p horizon-core --example cloud_deploy -- tailnets:: tests::malformed_selection_arguments_never_create_cloud_paths",
                         "cargo test --locked -p horizon-ui --features speech",
                     ],
                 )
@@ -131,6 +141,7 @@ class ShardCommandTests(unittest.TestCase):
             "--exclude horizon-ui",
             "--features one-service-gateway cloud_runtime::local_network::",
             "--features one-service-gateway,cloud-exposure cloud_runtime::owner_custody::",
+            "--example cloud_deploy",
         ]:
             with self.subTest(failing_flag=failing_flag):
                 env = os.environ.copy()
@@ -161,6 +172,7 @@ class ShardCommandTests(unittest.TestCase):
                         "test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network::",
                         "test --locked -p horizon-core --lib --features one-service-gateway,cloud-exposure cloud_runtime::owner_custody::",
                         "test --locked -p horizon-chromecast --features encoder",
+                        "test --locked -p horizon-core --example cloud_deploy -- tailnets:: tests::malformed_selection_arguments_never_create_cloud_paths",
                         "test --locked -p horizon-ui --features speech",
                     ],
                 )

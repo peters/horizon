@@ -46,6 +46,15 @@ unavailable status without Settings. The CLI is
 `cloud_deploy tailnets STATE_ROOT [TAILNET_ID]`. API status does not qualify an
 older worker image. Cached status is not an OS-store watcher; use Tailnets Refresh
 for an explicit fresh read. Never pass an API secret to MCP.
+For an authorized new cloud, the development CLI accepts
+`cloud_deploy select-tailnet CATALOG_ROOT CLOUD_ID TAILNET_ID` before allocation.
+Use the original saved catalog root and an existing saved ID. Deploy with
+`STATE_ROOT` equal to `CATALOG_ROOT/CLOUD_ID`. This writes only the selected
+network through the existing lifecycle lock; it reads no secret and starts no worker.
+A provisioned cloud keeps its network. Omission or an empty ID refuses instead of
+clearing it. Windows refuses cloud-state mutation before creating paths.
+See docs/testing/procedures/cloud-tailnet-selection.md.
+
 Use `tailnet_api_credential` to request `set_personal_token`, `set_oauth` or `remove`
 for an exact saved tailnet ID and caller-chosen UUID request ID. Set requests carry
 kind metadata only; the person enters values and selects Save in Settings. The person fulfills

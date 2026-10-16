@@ -19,6 +19,22 @@ immutable digest and exact built-in capabilities. Other images or tool selection
 keep the local image check. Publication and marker checks do not prove that a
 provider mount enforces private modes or qualify an actual enrollment.
 
+## Development CLI selection
+
+The development `cloud_deploy select-tailnet CATALOG_ROOT CLOUD_ID TAILNET_ID`
+command accepts caller-supplied paths and IDs. It is an authorized host operation,
+not an agent membership or native approval check.
+It delegates to the existing locked `tailnet::select` function.
+The original catalog supplies the saved ID; the cloud stays under that catalog root.
+Pending operations and allocated clouds retain their existing selection guards.
+Missing, extra or empty-ID arguments refuse before path creation.
+Unsupported hosts refuse before cloud state writes.
+
+Selection reads no secret, changes no catalog and starts no remote operation.
+It proves no key validity, enrollment or reachability.
+Later normal deployment and recorded-node cleanup use the same saved ID and original catalog.
+Read [the selection procedure](../testing/procedures/cloud-tailnet-selection.md).
+
 ## Enrollment guarantee
 
 The saved key and status output are inputs to enrollment.

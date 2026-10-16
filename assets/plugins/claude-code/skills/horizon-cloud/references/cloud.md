@@ -238,6 +238,27 @@ Omit `tailnet` to keep its saved choice. An allocated cloud retains its network.
 The existing owner/grant and first-allocation confirmation gates still apply.
 Never pass an auth key to a tool.
 
+The development CLI can select a saved network before allocation:
+
+```sh
+cloud_deploy select-tailnet CATALOG_ROOT CLOUD_ID TAILNET_ID
+```
+
+Use the original catalog root and an existing saved ID. The cloud directory is
+`CATALOG_ROOT/CLOUD_ID`; use this directory as `STATE_ROOT` for normal plan,
+deploy and delete commands. The command uses the same locked selection function
+as the cloud owner. It creates no provider resource, reads no credential and
+does not write the saved catalog. It requires the ID; omission or an empty ID
+refuses. There is no new credential entry, catalog-copy or force-switch operation.
+A pending operation retains its selected network. After allocation, the same ID
+is idempotent and a different ID refuses. Windows refuses before cloud-state writes.
+
+Selection proves no key validity, tag permission or enrollment. Normal deployment
+uses the selected entry's existing Auth reference and captures the worker identity.
+Recorded-node cleanup resolves the API binding for that same saved ID. Preserve
+user-owned Auth and API credentials; delete only the task worker's captured node
+through its normal lifecycle. Read docs/testing/procedures/cloud-tailnet-selection.md.
+
 A selected tailnet requires an image with `horizon-tailnet-contract=4` before
 allocation. The actual worker must report this marker before reconnect or a new
 session. Markers 1, 2 and 3 do not qualify. **None** permits older images.
