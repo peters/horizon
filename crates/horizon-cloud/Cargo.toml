@@ -11,6 +11,7 @@ workspace = true
 
 [features]
 exposure-firewall = []
+exposure-ports = []
 # JSON schemas for requirements that MCP tools accept.
 schema = ["dep:schemars"]
 
