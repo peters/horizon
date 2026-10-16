@@ -251,6 +251,19 @@ class WorkflowGateTests(unittest.TestCase):
         self.assertEqual(top_env(workflow), top_env(WORKFLOW.read_text()))
 
 
+    def test_artifact_workflow_passes_the_selection_to_its_matrix(self):
+        workflow = ARTIFACTS_WORKFLOW.read_text()
+        self.assertRegex(workflow, r"(?m)^  workflow_call:\n    inputs:\n      platforms:\n")
+        jobs = jobs_of(workflow.split("\njobs:\n", 1)[1])
+        self.assertIn("PLATFORMS: ${{ inputs.platforms }}", jobs["platforms"])
+        self.assertIn('select-release-artifact-platforms.py "$PLATFORMS" >> "$GITHUB_OUTPUT"',
+                      jobs["platforms"])
+        self.assertIn("include: ${{ steps.select.outputs.include }}", jobs["platforms"])
+        self.assertIn("    needs: platforms\n", jobs["rust-artifacts"])
+        self.assertIn("include: ${{ fromJSON(needs.platforms.outputs.include || '[]') }}",
+                      jobs["rust-artifacts"])
+
+
 def top_env(workflow):
     block = re.search(r"(?ms)^env:\n(.*?)^\S", workflow).group(1)
     return dict(re.findall(r"(?m)^  ([A-Z_]+): (.*)$", block))
