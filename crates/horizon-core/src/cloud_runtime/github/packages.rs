@@ -1,8 +1,9 @@
-//! The cloud's package read access. GitHub's package API accepts no token of the GitHub App
-//! behind Connect GitHub, so agents could not check that a private package version exists or
-//! how old it is. During a deployment, right after the cloud's GitHub access, Horizon therefore
-//! asks the person once for that cloud: a device code for Horizon's own OAuth app, with the
-//! scope `read:packages` only, approved with the person's own GitHub account. The chain goes to
+//! The package read access of an Upkeep's cloud. GitHub's package API accepts no token of the
+//! GitHub App behind Connect GitHub, so the agent could not check that a private package
+//! version exists or how old it is. During a deployment of an Upkeep's cloud, right after its
+//! GitHub access, Horizon therefore asks the person once: a device code for Horizon's own OAuth
+//! app, with the scope `read:packages` only, approved with the person's own GitHub account.
+//! Other clouds are not asked. The chain goes to
 //! the worker's root GitHub service only (`horizon-worker-github packages`), which adds its
 //! token to package reads and renews it with the client ID alone. No agent gets it, and Horizon
 //! keeps no copy. A skipped or refused sign-in leaves the cloud without package reads and the
@@ -14,7 +15,6 @@ use serde::Serialize;
 use std::{
     collections::{BTreeSet, HashSet},
     io::Write as _,
-    sync::{LazyLock, Mutex},
     time::Duration,
 };
 
@@ -27,11 +27,28 @@ const INSTALL: &str = "horizon-worker-github packages";
 /// The most repositories the worker's root service takes with a chain.
 const MAX_REPOSITORIES: usize = 50;
 /// What a skip or a failed sign-in means for the cloud, also on the Upkeep board.
-const WITHOUT: &str = "This cloud has no package read access, so checks of private package versions need a person.";
+const WITHOUT: &str = "This Upkeep has no package read access, so checks of private package versions need a person.";
 
-/// Clouds whose person skipped the package sign-in in this run of Horizon. A reconnect does
-/// not ask again; Connect GitHub again on the card does.
-static SKIPPED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default);
+/// Saved beside the Upkeep's choice when the person skipped the package sign-in: a reconnect
+/// does not ask again; Connect GitHub again on the card does.
+const SKIPPED: &str = "package-access-skipped";
+
+/// Whether the person skipped the package sign-in of the Upkeep `cloud_id`.
+#[must_use]
+pub fn skipped(cloud_id: &str) -> bool {
+    crate::upkeep::worker::directory(cloud_id).join(SKIPPED).exists()
+}
+
+/// Forgets a skip, so the next deployment of the Upkeep `cloud_id` asks again. Blocks on the
+/// disk.
+/// # Errors
+/// The mark is there but cannot be removed.
+pub fn ask_again(cloud_id: &str) -> std::io::Result<()> {
+    match std::fs::remove_file(crate::upkeep::worker::directory(cloud_id).join(SKIPPED)) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    }
+}
 
 /// What the worker holds, from its GitHub service's `status`.
 #[derive(Debug, PartialEq, Eq)]
@@ -61,29 +78,26 @@ fn held(output: &str) -> Held {
     }
 }
 
-/// The cloud's own repositories, which alone open packages on the worker: its checkouts on
-/// GitHub (the primary and the same-worker siblings) and, for an Upkeep, its list. Never a
+/// The Upkeep's own repositories, which alone open packages on the worker; never a
 /// repository that an agent asked for. At most [`MAX_REPOSITORIES`], in lowercase.
-fn own_repositories(state: &Deployment, runner: &Runner<'_>) -> Result<Vec<String>> {
-    let mut names: Vec<String> = super::grants(state, runner)?
-        .into_iter()
-        .map(|grant| grant.repository)
-        .collect();
-    if let Ok(config) = crate::upkeep::worker::load(&state.cloud_id) {
-        names.extend(config.repositories.iter().map(|name| name.to_ascii_lowercase()));
-    }
+fn own_repositories(config: &crate::upkeep::worker::Config) -> Result<Vec<String>> {
     let mut seen = HashSet::new();
-    names.retain(|name| horizon_cloud::github::valid_repository(name) && seen.insert(name.clone()));
+    let names: Vec<String> = config
+        .repositories
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .filter(|name| horizon_cloud::github::valid_repository(name) && seen.insert(name.clone()))
+        .collect();
     if names.len() > MAX_REPOSITORIES {
         return Err(Error::Invalid(
-            "A cloud gives package read access for at most 50 repositories",
+            "An Upkeep gives package read access for at most 50 repositories",
         ));
     }
     Ok(names)
 }
 
-/// Gives the worker package read access when it holds none: one device sign-in for the cloud,
-/// unless the person skipped it in this run of Horizon and `renew` is false. Never fails the
+/// Gives the worker of an Upkeep package read access when it holds none: one device sign-in,
+/// unless the person skipped it and `renew` (Connect GitHub again) is false. Never fails the
 /// deployment, except for a cancellation; every other outcome is said in its output.
 /// # Errors
 /// The deployment was cancelled.
@@ -94,9 +108,10 @@ pub fn configure(
     runner: &Runner<'_>,
     renew: bool,
 ) -> Result<()> {
-    if settings.is_none() {
+    // Only an Upkeep's cloud is asked; other clouds keep their flow without a second code.
+    let Some(config) = settings.and_then(|_| crate::upkeep::worker::load(&state.cloud_id).ok()) else {
         return Ok(());
-    }
+    };
     let say = |text: &str| (runner.emit)(Event::Output(format!("GitHub packages: {text}")));
     let status = runner.run_parsed(
         "Package read access status",
@@ -111,11 +126,10 @@ pub fn configure(
     if held(&output) != Held::Missing {
         return Ok(());
     }
-    let repositories = match own_repositories(state, runner) {
+    let repositories = match own_repositories(&config) {
         Ok(repositories) if !repositories.is_empty() => repositories,
         Ok(_) => return Ok(()),
         Err(error) => {
-            runner.cancel.check()?;
             say(&error.to_string());
             say(WITHOUT);
             return Ok(());
@@ -123,8 +137,10 @@ pub fn configure(
     };
     let cloud_id = &state.cloud_id;
     if renew {
-        SKIPPED.lock().map(|mut skipped| skipped.remove(cloud_id)).ok();
-    } else if SKIPPED.lock().is_ok_and(|skipped| skipped.contains(cloud_id)) {
+        if let Err(error) = ask_again(cloud_id) {
+            say(&format!("the earlier skip could not be forgotten: {error}"));
+        }
+    } else if skipped(cloud_id) {
         say(WITHOUT);
         return Ok(());
     }
@@ -137,8 +153,11 @@ pub fn configure(
         Ok(chain) => chain,
         Err(Ended::Cancelled(error)) => return Err(error),
         Err(Ended::Skipped) => {
-            if let Ok(mut skipped) = SKIPPED.lock() {
-                skipped.insert(cloud_id.clone());
+            let mark = crate::upkeep::worker::directory(cloud_id).join(SKIPPED);
+            if let Err(error) = crate::upkeep::worker::write_atomically(&mark, "skipped\n") {
+                say(&format!(
+                    "the skip could not be saved, so the next deployment asks again: {error}"
+                ));
             }
             say(WITHOUT);
             return Ok(());
@@ -304,6 +323,21 @@ mod tests {
         assert_eq!(held(&line(",\"packages\":{\"state\":\"revoked\"}")), Held::Missing);
         assert_eq!(held(&line("")), Held::Unsupported);
         assert_eq!(held("not json"), Held::Unsupported);
+    }
+
+    #[test]
+    fn only_the_upkeep_repositories_go_with_the_chain_once_each_and_at_most_fifty() {
+        let config = |repositories: Vec<String>| crate::upkeep::worker::Config {
+            repositories,
+            ..crate::upkeep::worker::Config::default()
+        };
+        let names = |list: &[&str]| list.iter().map(|name| (*name).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            own_repositories(&config(names(&["Acme/API", "acme/api", "acme/web", "not a repo"]))).unwrap(),
+            ["acme/api", "acme/web"]
+        );
+        let many = (0..51).map(|index| format!("acme/r{index}")).collect();
+        assert!(own_repositories(&config(many)).is_err());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 ---
 procedure: cloud-package-read-access
-feature: The cloud's package read access (a read:packages device sign-in of Horizon's OAuth app, held and renewed by the worker)
+feature: The package read access of an Upkeep's cloud (a read:packages device sign-in of Horizon's OAuth app, held and renewed by the worker)
 platforms: [linux, macos]
 cost: rents compute
 destructive: yes
@@ -12,8 +12,8 @@ owner: peters
 
 ## 1. Purpose
 
-This procedure proves that a deployment asks for the cloud's package read access
-right after its GitHub access, that the chain with `read:packages` reaches the
+This procedure proves that a deployment of an Upkeep's cloud asks for its package
+read access right after its GitHub access, that other clouds are not asked, that the chain with `read:packages` reaches the
 root service of the worker, and that an agent on the worker can then read the
 versions of a private NuGet package. It also proves that Skip continues the
 deployment with a clear reason, and that **Connect GitHub again** asks again. Unit
@@ -78,7 +78,7 @@ without package read access.
 
 ### 6.2 D01 — The card asks after the GitHub access
 
-1. Start a test cloud for `OWNER/REPOSITORY` with **Quick start**.
+1. Create a test Upkeep with **New Upkeep** for `OWNER/REPOSITORY`.
 
    Result: After the cloud's GitHub step, the card shows **Let this cloud's agents
    read packages**, a code, **Open GitHub** and **Skip: package checks need a
@@ -108,19 +108,20 @@ without package read access.
 
 ### 6.3 D02 — Skip continues without package read access
 
-1. Start a second test cloud for `OWNER/REPOSITORY`. When the package code shows,
-   click **Skip: package checks need a person**.
+1. Create a second test Upkeep for `OWNER/REPOSITORY`. When the package code
+   shows, click **Skip: package checks need a person**.
 
    Result: The deployment continues and the cloud is ready. The output has
-   `GitHub packages: This cloud has no package read access, so checks of private
-   package versions need a person.`
+   `GitHub packages: This Upkeep has no package read access, so checks of private
+   package versions need a person.` The file
+   `~/.horizon/upkeep/<cloud>/package-access-skipped` exists.
 
 2. Run the `gh api` command of D01 in an agent panel of this cloud.
 
    Result: The message starts with `Horizon: this worker has no package read
    access`.
 
-3. Reconnect the cloud.
+3. Quit Horizon, start it again and reconnect the cloud.
 
    Result: The card does not ask again. The output has the line of step 1.
 
@@ -139,15 +140,22 @@ without package read access.
    `https://github.com/organizations/RESTRICTED/settings/oauth_application_policy`.
    The line about the worker ends with `except RESTRICTED`.
 
+### 6.5 D04 — Other clouds are not asked
+
+1. Start a plain test cloud for `OWNER/REPOSITORY` with **Quick start**.
+
+   Result: The card asks for the cloud's GitHub access only, not for a package
+   code. The deployment output has no line that starts with `GitHub packages:`.
+
 ## 7. Pass criteria
 
 - Lane U shows `test result: ok`.
-- D01 and D02 give each result. D03 gives its result when it applies.
+- D01, D02 and D04 give each result. D03 gives its result when it applies.
 - No evidence shows a token.
 
 ## 8. Cleanup
 
-1. Delete both test clouds with **Manage › Delete cloud resources** on their
+1. Delete all three test clouds with **Manage › Delete cloud resources** on their
    cards.
 
    Result: The provider shows no server, volume or SSH key of the test clouds.

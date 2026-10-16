@@ -587,10 +587,10 @@ GitHub's package API accepts no token of the GitHub App from
 versions of private packages, for example to make sure that a private NuGet
 version exists and to read its age, unless the cloud has package read access.
 
-When a deployment of a cloud with Connect GitHub reaches the worker, Horizon asks
-the worker whether it has package read access. When it does not, the card shows a
-second code right after the cloud's GitHub access: **Let this cloud's agents read
-packages**.
+When a deployment of an Upkeep's cloud with Connect GitHub reaches the worker,
+Horizon asks the worker whether it has package read access. When it does not, the
+card shows a second code right after the cloud's GitHub access: **Let this cloud's
+agents read packages**. Other clouds are not asked and keep their flow.
 
 1. Click **Open GitHub**. Horizon copies the code.
 2. Paste the code on GitHub and click **Authorize**. You authorize Horizon's own
@@ -601,19 +601,19 @@ broader grant: the worker then gets nothing. Horizon gives the token chain to th
 root GitHub service of the worker over SSH standard input, never in a command line,
 a log or the cloud board, and keeps no copy. The worker renews the chain with the
 OAuth app's client ID alone, also while this computer is off. No agent gets the
-token. With the chain, Horizon names the cloud's own repositories: its checkouts
-on GitHub (the primary and the same-worker siblings) and, for an Upkeep, its
-list. The service adds the token only to reads of the NuGet and npm packages of
-the owners of those repositories, never of a repository that an agent asked for,
-as
+token. With the chain, Horizon names the Upkeep's repositories. The service adds
+the token only to reads of the NuGet and npm packages of the owners of those
+repositories, never of a repository that an agent asked for, as
 [the trust boundary of the package token](upkeep.md#trust-boundary-of-the-package-token)
 tells. An agent reads them with `gh`, for example
 `gh api /orgs/OWNER/packages/nuget/NAME/versions`.
 
 **Skip: package checks need a person** continues without package read access. The
 deployment output says so, and an agent that needs a package check reports that
-the cloud has no package read access. Horizon does not ask again for that cloud
-until Horizon starts again or you choose **Connect GitHub again** on the card.
+the cloud has no package read access. Horizon saves the skip beside the Upkeep's
+choice (`~/.horizon/upkeep/<cloud>/package-access-skipped`) and does not ask again
+for that Upkeep, also after a restart, until you choose **Connect GitHub again** on
+the card.
 
 An organization that limits OAuth apps hides its packages from Horizon's OAuth
 app. Then the deployment output names the organization and the page where an
@@ -624,7 +624,7 @@ members can ask for it on the app's page,
 
 What you grant: the token reads every package that your account can read, of every
 type and owner. The worker limits its use to NuGet and npm package reads of the
-owners of the cloud's own repositories, and removes other repositories from the
+owners of the Upkeep's repositories, and removes other repositories from the
 replies. Only the root service of the worker holds it.
 
 To end the access:
