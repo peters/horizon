@@ -86,6 +86,45 @@ class ShardCommandTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.splitlines().count(command), 1)
 
+    def test_enabled_producer_runs_only_in_linux_libs(self):
+        command = "cargo test --locked -p horizon-cloud-worker --features trusted-tcp-producer trusted_tcp_producer::"
+        for shard, runner_os, count in [
+            ("libs", "Linux", 1), ("all", "Linux", 1),
+            ("libs", "macOS", 0), ("all", "macOS", 0),
+            ("libs", "Windows", 0), ("ui", "Linux", 0), ("speech", "Linux", 0),
+        ]:
+            with self.subTest(shard=shard, runner_os=runner_os):
+                result = shard_commands(shard, runner_os)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines().count(command), count)
+
+    def test_producer_failure_keeps_the_later_checks_and_fails_linux(self):
+        env = os.environ.copy()
+        env.update(HORIZON_CI_SHARD="all", RUNNER_OS="Linux")
+        env.pop("HORIZON_CI_SHARD_DRY_RUN", None)
+        with tempfile.TemporaryDirectory() as bin_dir:
+            log = Path(bin_dir) / "calls"
+            fake = Path(bin_dir) / "cargo"
+            fake.write_text(
+                "#!/usr/bin/env bash\n"
+                f"echo \"$*\" >> {log}\n"
+                "[[ \"$*\" == *'--features trusted-tcp-producer trusted_tcp_producer::'* ]] && exit 101\n"
+                "exit 0\n"
+            )
+            fake.chmod(0o755)
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(["bash", str(SCRIPT)], cwd=ROOT, env=env,
+                                    capture_output=True, text=True, check=False)
+            calls = log.read_text().splitlines()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Failed CI test shards: libs", result.stderr)
+        self.assertEqual(calls.count("test --locked -p horizon-cloud-worker --features trusted-tcp-producer trusted_tcp_producer::"), 1)
+        self.assertEqual(calls[-3:], [
+            "test --locked -p horizon-chromecast --features encoder",
+            "test --locked -p horizon-core --example cloud_deploy -- tailnets:: tests::malformed_selection_arguments_never_create_cloud_paths",
+            "test --locked -p horizon-ui --features speech",
+        ])
+
     def test_speech_tests_run_on_unix_and_only_build_on_windows(self):
         linux = shard_commands("speech", "Linux", ref="refs/pull/1/merge", cache_hit="true")
         windows = shard_commands("speech", "Windows", cache_hit="true")

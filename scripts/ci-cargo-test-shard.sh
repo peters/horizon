@@ -37,6 +37,10 @@ run_libs() {
     run_cargo test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network:: || status=$?
     # Original owner custody also checks passive sibling records.
     run_cargo test --locked -p horizon-core --lib --features one-service-gateway,cloud-exposure cloud_runtime::owner_custody:: || status=$?
+    # The original Unix/FD producer is a default-off Linux Worker component.
+    if [[ "${RUNNER_OS:?RUNNER_OS is required}" == "Linux" ]]; then
+        run_cargo test --locked -p horizon-cloud-worker --features trusted-tcp-producer trusted_tcp_producer:: || status=$?
+    fi
     # The shared-encoder sink is opt-in, so the workspace run does not build it.
     run_cargo test --locked -p horizon-chromecast --features encoder || status=$?
     # Selection and inventory tests also cover the unsupported Windows state path.

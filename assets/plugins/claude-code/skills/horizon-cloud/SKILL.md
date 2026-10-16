@@ -99,6 +99,16 @@ metadata grants no approval. No UI/CLI/MCP route invokes it yet; complete M1 sti
 needs actual owner controls and parity. Read docs/architecture/one-device-owner-admission.md
 and its component procedure before using the controller.
 
+The Linux Worker `trusted-tcp-producer` feature is off by default. It checks the
+original root daemon through a root-private Unix Serve backend before bounded
+header and WhoIs comparisons. Generic SOCKS/HTTP proxy dials cannot reach that
+backend. It requires the pinned Unix Serve PROXY-v1 runtime with explicit flow cancellation; qualification
+is pending. An opaque AcceptedStream retains the original payload and private control.
+Write EOF keeps control alive; whole cancel closes both immediately. Normal completion requires
+daemon DRAINED0x01 plus EOF, bounded by the caller's captured deadline and cancellation. It adds no Gate, keeper,
+Serve/Funnel mapping or public operation. Read
+docs/architecture/trusted-tcp-producer.md and its component procedure.
+
 The Linux worker `exposure-gate` feature is also off by default. It provides a
 bounded actual-peer CIDR/Public TCP component only; no public operation starts
 it. DNS/tag and TailnetOnly policies refuse before binding. Follow the worker
