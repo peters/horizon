@@ -118,13 +118,14 @@ class CleanupTests(unittest.TestCase):
             "container": [mine["volume"] + "-proof-1", mine["volume"] + "-proof-1-env", other["volume"] + "-proof-1",
                           mine["checks"] + "0", "horizon-contract-horizon-setup-check-12345678-0", "postgres"],
             "image": [mine["image"], mine["volume"] + "-build1:candidate", other["image"], "ubuntu:24.04"],
-            "volume": [mine["volume"], other["volume"], mine["volume"] + "0"],
+            "volume": [mine["volume"], mine["volume"] + "-git", other["volume"], other["volume"] + "-git",
+                       mine["volume"] + "0", mine["volume"] + "-gitx"],
             "network": [mine["network"], other["network"], "bridge"],
         }
         self.assertEqual(gate.leftover_names(mine, listings), {
             "container": [mine["volume"] + "-proof-1", mine["volume"] + "-proof-1-env", mine["checks"] + "0"],
             "image": [mine["image"], mine["volume"] + "-build1:candidate"],
-            "volume": [mine["volume"]],
+            "volume": [mine["volume"], mine["volume"] + "-git"],
             "network": [mine["network"]],
         })
 

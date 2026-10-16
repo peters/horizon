@@ -4,20 +4,37 @@
 //! names the commit as its branch, when it has one without doubt, and carries the tags
 //! already in its history. A commit made or a branch moved after the proof started is
 //! never in it.
+//!
+//! A run keeps what its proofs sent in a cache beside its volume (see `checkout`), so a
+//! later proof's bundle leaves out the objects the cache holds, and none is made when
+//! nothing is new. The names then go to the checkout as a list, since a bundle without a
+//! commit it names leaves that name out.
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// What a proof sends for its checkout.
+pub(super) struct Bundled {
+    /// The objects the run's cache does not hold; none when it holds them all.
+    pub(super) bundle: Option<PathBuf>,
+    /// The branch the checkout puts the commit on: the branch checked out, or for a
+    /// detached checkout the one branch at the head; none when that is not one.
+    pub(super) branch: Option<String>,
+    /// The checkout's names, a line of object and ref name each: the branch as origin's
+    /// and the tags in the head's history.
+    pub(super) names: PathBuf,
+}
+
 impl super::Job {
     /// Makes the bundle in `folder` from a private repository that borrows this one's
-    /// objects and names only `head`, its branch and the tags in its history. Returns the
-    /// bundle and the branch the checkout puts the commit on: the branch checked out, or
-    /// for a detached checkout the one branch at `head`; none when that is not one.
+    /// objects and names only `head`, its branch and the tags in its history, leaving out
+    /// what the objects in `kept` reach, and writes the checkout's names beside it.
     pub(super) fn bundle(
         &self,
         folder: &Path,
         head: &str,
+        kept: &[String],
         log: &mut Option<std::fs::File>,
-    ) -> Result<(PathBuf, Option<String>), String> {
+    ) -> Result<Bundled, String> {
         let git = |args: &[&str]| {
             let mut command = super::super::commit::git_command(&self.repository);
             command.args(args);
@@ -73,12 +90,67 @@ impl super::Job {
         ])
         .unwrap_or_default();
         name_head(&borrowed, head, branch.as_deref(), &tags)?;
+        // The cache takes the bundle's refs only; a detached head is otherwise just HEAD.
+        let mut keep = super::super::commit::git_command(&borrowed);
+        keep.args(["update-ref", "refs/horizon/head", head]);
+        self.capture(keep, super::STEP_TIMEOUT)
+            .map_err(|error| format!("cannot make the bundle: {error}"))?;
+        let names = folder.join("names");
+        std::fs::write(&names, checkout_names(head, branch.as_deref(), &tags))
+            .map_err(|error| format!("cannot make the bundle: {error}"))?;
         let bundle = folder.join("head.bundle");
         let mut create = super::super::commit::git_command(&borrowed);
         create.args(["bundle", "create", "--quiet"]).arg(&bundle).arg("--all");
-        self.stream(create, log)?;
-        Ok((bundle, branch))
+        let kept = known(&borrowed, kept)?;
+        if !kept.is_empty() {
+            create.arg("--not").args(&kept);
+        }
+        let bundle = match self.capture(create, super::STEP_TIMEOUT) {
+            Ok(_) => Some(bundle),
+            // The cache holds every object: the checkout comes from it alone.
+            Err(error) if !kept.is_empty() && error.contains("empty bundle") => None,
+            Err(error) => return Err(format!("cannot make the bundle: {error}")),
+        };
+        Ok(Bundled { bundle, branch, names })
     }
+}
+
+/// The objects of `kept` that the repository at `borrowed` has; `git bundle` refuses one
+/// it does not know, such as a commit that an amend or a rebase left behind here.
+pub(super) fn known(borrowed: &Path, kept: &[String]) -> Result<Vec<String>, String> {
+    if kept.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut check = super::super::commit::git_command(borrowed);
+    check.args(["cat-file", "--batch-check=%(objectname)"]);
+    let input = kept.join("\n") + "\n";
+    let output = super::super::bounded::output(check, Some(input.into_bytes()), super::super::bounded::GIT)?;
+    if !output.status.success() {
+        return Err(format!(
+            "cannot make the bundle: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    // A missing object prints `<name> missing`; a known one prints its name alone.
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| !line.contains(' ') && !line.is_empty())
+        .map(str::to_owned)
+        .collect())
+}
+
+/// The checkout's names: `head` as origin's `branch`, when it has one, and the tags in
+/// its history (`tags`, lines of object and ref name), as a fetch of the bundle names them.
+pub(super) fn checkout_names(head: &str, branch: Option<&str>, tags: &str) -> String {
+    use std::fmt::Write as _;
+    let mut names = String::new();
+    if let Some(branch) = branch {
+        let _ = writeln!(names, "{head} refs/remotes/origin/{branch}");
+    }
+    for (object, name) in tags.lines().filter_map(|line| line.split_once(' ')) {
+        let _ = writeln!(names, "{object} {name}");
+    }
+    names
 }
 
 /// Names `head` in the private repository at `borrowed`: its branch, if it has one, and

@@ -10,6 +10,9 @@
 //! - `GATE_PREFIX`: the start of the run names of entries without a `run`.
 //! - `GATE_DOCKER_HOST`: the name of a Docker host saved in Cloud settings; when set,
 //!   the proofs and previews run on its Docker, as a setup that builds on it does.
+//! - `GATE_PROVE_AGAIN`: when set, a passed proof is followed by a second proof of the
+//!   same commit in the same run, as when the agent proves again, and the result says
+//!   what each checkout sent.
 use super::super::preview;
 use super::*;
 use std::io::Write as _;
@@ -135,24 +138,18 @@ fn prove(entry: &Entry, out: &Path) -> serde_json::Value {
         allowed: Arc::new(AtomicBool::new(true)),
     };
     let root_dirty = Arc::new(AtomicBool::new(false));
-    let mut proof = Proof::start(
-        (&entry.repository, &entry.run, identity),
-        docker_host(),
-        (1, spec),
-        log.clone(),
-        (true, root_dirty.clone(), access),
-        (None, egui::Context::default()),
-    );
-    let begun = Instant::now();
-    let ended = loop {
-        proof.poll();
-        let ended = proof.phases.iter().all(|(_, state)| state.ended.is_some())
-            || proof.phases.iter().any(|(_, state)| state.failure.is_some());
-        if ended || begun.elapsed() > PROOF_LIMIT {
-            break ended;
-        }
-        std::thread::sleep(POLL);
+    let start = |log: &Path, access: crates::Access| {
+        Proof::start(
+            (&entry.repository, &entry.run, identity),
+            docker_host(),
+            (1, spec.clone()),
+            log.to_owned(),
+            (true, root_dirty.clone(), access),
+            (None, egui::Context::default()),
+        )
     };
+    let mut proof = start(&log, access.clone());
+    let ended = wait(&mut proof);
     let phases: Vec<serde_json::Value> = proof
         .phases
         .iter()
@@ -178,8 +175,32 @@ fn prove(entry: &Entry, out: &Path) -> serde_json::Value {
     };
     // A preview that could not run here, such as one that needs /dev/kvm, does not fail
     // the entry, as the dialog accepts such a setup.
-    let passed = proved && preview["outcome"] != "failed";
-    let worker = proof.stop();
+    let mut passed = proved && preview["outcome"] != "failed";
+    let mut worker = proof.stop();
+    let mut pinned = pinned;
+    let mut again = serde_json::Value::Null;
+    if passed && std::env::var_os("GATE_PROVE_AGAIN").is_some() {
+        // The run's volume and its git cache stay; the earlier proof has ended first.
+        if let Some(worker) = worker.take() {
+            let _ = worker.join();
+        }
+        let again_log = out.join("logs").join(format!("{}.again.log", entry.label));
+        let mut second = start(&again_log, access);
+        let again_ended = wait(&mut second);
+        let again_proved = again_ended
+            && second
+                .phases
+                .iter()
+                .all(|(_, state)| state.ended.is_some() && state.failure.is_none());
+        passed = again_proved;
+        again = serde_json::json!({
+            "passed": again_proved,
+            "sent": [sent(&log), sent(&again_log)],
+            "log": again_log,
+        });
+        pinned = second.daemon();
+        worker = second.stop();
+    }
     remove_run_resources(&entry.repository, &entry.run, worker, (Some(pinned), None), true);
     let mut result = serde_json::json!({
         "passed": passed,
@@ -187,10 +208,38 @@ fn prove(entry: &Entry, out: &Path) -> serde_json::Value {
         "preview": preview,
         "log": log,
     });
+    if !again.is_null() {
+        result["again"] = again;
+    }
     if !ended {
         result["error"] = format!("the proof did not end within {} minutes", PROOF_LIMIT.as_secs() / 60).into();
     }
     result
+}
+
+/// Polls `proof` until each phase ended or one failed, within [`PROOF_LIMIT`]; whether it
+/// ended.
+fn wait(proof: &mut Proof) -> bool {
+    let begun = Instant::now();
+    loop {
+        proof.poll();
+        let ended = proof.phases.iter().all(|(_, state)| state.ended.is_some())
+            || proof.phases.iter().any(|(_, state)| state.failure.is_some());
+        if ended || begun.elapsed() > PROOF_LIMIT {
+            return ended;
+        }
+        std::thread::sleep(POLL);
+    }
+}
+
+/// What the checkouts of the proof that logged to `log` sent, as their log lines say.
+fn sent(log: &Path) -> Vec<String> {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains("for the checkout") || line.contains("git cache does not hold"))
+        .map(|line| line.trim().to_owned())
+        .collect()
 }
 
 /// Starts the desktop preview of the proved image as the dialog does, waits for a window
