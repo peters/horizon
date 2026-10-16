@@ -12,6 +12,7 @@ repository.workspace = true
 default = ["cloud-workspaces"]
 cloud-workspaces = ["tailnet-node-cleanup", "dep:horizon-cloud", "dep:horizon-cloud-protocol", "dep:ring", "dep:ed25519-dalek", "dep:if-addrs", "dep:simple-dns", "dep:socket2", "dep:tar", "dep:semver", "dep:flate2"]
 tailnet-node-cleanup = []
+cloud-exposure = ["cloud-workspaces"]
 cloud-panel-mock = ["cloud-workspaces"]
 # One-service gateway engine; public admission and worker routing are not enabled yet.
 one-service-gateway = ["cloud-workspaces"]
@@ -22,7 +23,7 @@ workspace = true
 
 [dependencies]
 horizon-cloud = { path = "../horizon-cloud", optional = true }
-horizon-cloud-protocol = { workspace = true, optional = true }
+horizon-cloud-protocol = { workspace = true, optional = true, features = ["exposure-gate"] }
 ring = { workspace = true, optional = true }
 ed25519-dalek = { workspace = true, optional = true }
 if-addrs = { workspace = true, optional = true }
