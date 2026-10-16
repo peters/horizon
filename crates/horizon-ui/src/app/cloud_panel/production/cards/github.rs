@@ -50,8 +50,16 @@ pub(super) fn prompt(ui: &mut egui::Ui, cloud_id: &str, runtime: &Runtime) {
                     verification_uri,
                     ..
                 } => device(ui, cloud_id, user_code, verification_uri, &PUBLISH),
+                Prompt::Packages {
+                    user_code,
+                    verification_uri,
+                    ..
+                } => device(ui, cloud_id, user_code, verification_uri, &PACKAGES),
                 Prompt::Web { url } => web(ui, cloud_id, url),
-                Prompt::Connected { .. } | Prompt::Ended { .. } | Prompt::Published { .. } => {}
+                Prompt::Connected { .. }
+                | Prompt::Ended { .. }
+                | Prompt::Published { .. }
+                | Prompt::PackagesEnded { .. } => {}
             }
         });
     ui.add_space(12.0);
@@ -78,6 +86,15 @@ const PUBLISH: Words = Words {
     skip: "Skip: do not publish",
 };
 
+/// Asked once per cloud, right after its GitHub access.
+const PACKAGES: Words = Words {
+    title: "Let this cloud's agents read packages",
+    caption: "Agents can then check private package versions and their age. You allow read:packages only, \
+              with your own GitHub account; the worker's system service keeps it, agents never see it. Open \
+              GitHub, paste the code and click Authorize.",
+    skip: "Skip: package checks need a person",
+};
+
 fn device(ui: &mut egui::Ui, cloud_id: &str, user_code: &str, verification_uri: &str, words: &Words) {
     ui.label(RichText::new(words.title).size(15.0).strong().color(theme::FG()));
     ui.label(RichText::new(words.caption).size(12.5).color(theme::FG_DIM()));
@@ -96,9 +113,7 @@ fn device(ui: &mut egui::Ui, cloud_id: &str, user_code: &str, verification_uri: 
             .clicked()
         {
             ui.ctx().copy_text(user_code.to_owned());
-            if let Err(error) = horizon_core::open_url(verification_uri) {
-                tracing::warn!(%error, "could not open the GitHub device page");
-            }
+            super::super::lifecycle::open_in_background(verification_uri);
         }
         if ui.add(chrome_button(words.skip).min_size(vec2(0.0, 30.0))).clicked() {
             github::skip(cloud_id);
@@ -128,9 +143,8 @@ fn web(ui: &mut egui::Ui, cloud_id: &str, url: &str) {
         if ui
             .add(primary_button("Open GitHub").min_size(vec2(120.0, 30.0)))
             .clicked()
-            && let Err(error) = horizon_core::open_url(url)
         {
-            tracing::warn!(%error, "could not open the GitHub sign-in page");
+            super::super::lifecycle::open_in_background(url);
         }
         if ui
             .add(chrome_button("Skip: no GitHub for this cloud").min_size(vec2(0.0, 30.0)))
@@ -285,7 +299,12 @@ pub(super) fn summary(runtime: &Runtime) -> Option<(String, bool)> {
             true,
         )),
         Prompt::Ended { reason, .. } => Some((format!("GitHub: {reason}"), false)),
-        Prompt::Device { .. } | Prompt::Web { .. } | Prompt::Publish { .. } | Prompt::Published { .. } => None,
+        Prompt::Device { .. }
+        | Prompt::Web { .. }
+        | Prompt::Publish { .. }
+        | Prompt::Published { .. }
+        | Prompt::Packages { .. }
+        | Prompt::PackagesEnded { .. } => None,
     }
 }
 
@@ -362,6 +381,45 @@ mod tests {
         assert!(texts.iter().any(|text| text.contains("not your repositories")));
         runtime.adopt_github(Prompt::Published { allowed: true });
         assert!(!waiting(&runtime), "the box closes once GitHub allowed it");
+        assert_eq!(runtime.github, Some(connected));
+    }
+
+    #[test]
+    fn the_package_code_shows_in_the_same_box_and_names_its_consequence() {
+        let connected = Prompt::Connected {
+            login: "octo-cat".into(),
+            repositories: vec!["acme/web".into()],
+            requests: false,
+            renewable: true,
+        };
+        let mut runtime = Runtime {
+            github: Some(connected.clone()),
+            ..Runtime::default()
+        };
+        runtime.adopt_github(Prompt::Packages {
+            user_code: "PKGS-CODE".into(),
+            verification_uri: "https://github.com/login/device".into(),
+            expires_at: std::time::SystemTime::now(),
+        });
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        runtime.receiver = Some(receiver);
+        assert!(waiting(&runtime));
+        let texts: Vec<String> = egui::Context::default()
+            .run_ui(egui::RawInput::default(), |ui| prompt(ui, "cloud", &runtime))
+            .discard_textures()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        assert!(texts.iter().any(|text| text == "Let this cloud's agents read packages"));
+        assert!(texts.iter().any(|text| text == "PKGS-CODE"));
+        assert!(texts.iter().any(|text| text.contains("read:packages only")));
+        assert!(texts.iter().any(|text| text == "Skip: package checks need a person"));
+        runtime.adopt_github(Prompt::PackagesEnded { allowed: false });
+        assert!(!waiting(&runtime), "the box closes after the package sign-in");
         assert_eq!(runtime.github, Some(connected));
     }
 

@@ -360,6 +360,8 @@ fn exchange(
         signals
     };
     let allowed = allow_chosen(&connection, &runner, cloud_id, &config);
+    // The package read access follows a saved change of the Upkeep's repositories.
+    horizon_core::cloud_runtime::github::packages::follow(&connection, &runner, cloud_id, &config);
     let answer = worker::exchange(&connection, &runner, cloud_id, revision, &config, delivered, companions)
         .map(|answer| {
             let waits = still_held(held.is_some(), answer.paused);

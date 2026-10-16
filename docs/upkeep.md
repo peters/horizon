@@ -120,6 +120,13 @@ cause, and **Try again**.
    that exchange does not lose the first run. When Horizon cannot remove the
    marker, each later exchange tries again. A restart sends the same token, so it
    does not start a second run.
+5. Right after the cloud's GitHub access, the card asks for the package read
+   access of the Upkeep: a second code for Horizon's own OAuth app, with the scope
+   `read:packages` only, that you approve with your own GitHub account. The worker
+   keeps it as root and renews it. **Skip: package checks need a person** continues
+   without it and is saved for this Upkeep; **Connect GitHub again** asks again.
+   See [Package read access](cloud-workspaces.md#package-read-access) in the cloud
+   workspaces guide.
 
 **Start Upkeep** is unavailable until Codex has a login to give to the worker: the
 ChatGPT sign-in or an OpenAI API key in Cloud settings. Deployment uses a bound API key
@@ -643,7 +650,8 @@ Every agent of a worker, with or without an Upkeep, can read the global security
 advisories (`gh api /advisories`), which are public, for example for a safety
 review of an update.
 
-When the cloud has package read access, every agent of a worker can also read the
+When the cloud has package read access (Horizon asks for it when it starts the
+Upkeep's cloud), every agent of a worker can also read the
 NuGet and npm packages of the owners of the cloud's own repositories, for example to make sure
 that a private package version exists and to read its age
 (`gh api /orgs/OWNER/packages/nuget/NAME/versions`). The agent does not get the
@@ -880,7 +888,9 @@ Trusted input:
   from repository files, and an agent cannot set it.
 - The cloud's own repositories, which Horizon names with the chain and changes when
   the Upkeep's list changes: for an Upkeep, its list of repositories. Only their
-  owners open packages.
+  owners open packages. A repository of a new owner that you add to the list, also
+  one that an agent proposed with `cloud_upkeep` and you confirmed, opens the NuGet
+  and npm packages of that owner to the Upkeep's agents at the next exchange.
 - GitHub's answers about the scopes of the token.
 
 Untrusted input:
@@ -1057,7 +1067,9 @@ with the MCP tool `cloud_upkeep`. The code is in
   settings of the agent filled in and a note that an agent proposed them for that
   workspace, with its name.
 - `add`: Horizon shows the repository list of the Upkeep, with the repositories of
-  the agent added.
+  the agent added. When you confirm a repository of a new owner and the Upkeep has
+  package read access, the agents can also read that owner's NuGet and npm package
+  versions from the next exchange.
 - `remove`: Horizon removes repositories from the Upkeep.
 - `run_now`, `pause` and `resume`: Horizon sends the **Run now** or **Pause**
   signal with its next exchange with the worker, as the board does. The answer is

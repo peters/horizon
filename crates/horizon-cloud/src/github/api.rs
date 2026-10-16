@@ -1,6 +1,6 @@
 //! REST calls made with a user access token: who the token acts as, and which
 //! repositories the app may reach for that user. A repository's size, and whether a
-//! public app has a slug, can also be read without one.
+//! public app has a slug, can also be read without one. Also the scopes of an OAuth token.
 use super::{Client, Error, Result, Secret, read};
 use serde::Deserialize;
 use std::fmt::Write as _;
@@ -182,6 +182,35 @@ impl Client {
         }
     }
 
+    /// Whether the organization `owner` limits OAuth apps, so that `token` of Horizon's
+    /// OAuth app reads none of its packages. A user, or an organization that allows the app,
+    /// says no.
+    /// # Errors
+    /// An invalid owner, transport failures, a revoked token, or an answer that says neither.
+    pub fn packages_restricted(&self, token: &Secret, owner: &str) -> Result<bool> {
+        if !valid_login(owner) {
+            return Err(Error::InvalidResponse);
+        }
+        let answer = read(
+            self.agent
+                .get(format!(
+                    "{}/orgs/{owner}/packages?package_type=nuget&per_page=1",
+                    self.api
+                ))
+                .header("Accept", "application/vnd.github+json")
+                .header("Authorization", bearer(token).as_str())
+                .call(),
+        )?;
+        match answer.status {
+            401 => Err(Error::Revoked),
+            403 if String::from_utf8_lossy(&answer.body).contains(OAUTH_RESTRICTED) => Ok(true),
+            // A user, or an organization whose packages the token reads.
+            200..=299 | 404 => Ok(false),
+            // Any other refusal, such as SAML single sign-on, says neither.
+            status => Err(Error::Refused(format!("HTTP {status}"))),
+        }
+    }
+
     fn get<T: serde::de::DeserializeOwned>(&self, token: &Secret, path: &str) -> Result<T> {
         self.request(Some(token), path)
     }
@@ -270,4 +299,116 @@ pub fn valid_repository(name: &str) -> bool {
         && repository
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+}
+
+impl Client {
+    /// The scopes GitHub names for an OAuth token (`X-OAuth-Scopes` of its answer for the
+    /// account the token acts as), or `None` when it names none at all. The package read
+    /// access of a cloud checks that its token has exactly `read:packages` before a worker
+    /// gets it.
+    /// # Errors
+    /// Transport failures, or a refused token.
+    pub fn token_scopes(&self, token: &Secret) -> Result<Option<Vec<String>>> {
+        let auth = bearer(token);
+        let response = self
+            .agent
+            .get(format!("{}/user", self.api))
+            .header("Accept", "application/vnd.github+json")
+            .header("Authorization", auth.as_str())
+            .call()
+            .map_err(|_| Error::Transport)?;
+        match response.status().as_u16() {
+            200 => {}
+            401 => return Err(Error::Revoked),
+            status => return Err(Error::Refused(format!("HTTP {status}"))),
+        }
+        Ok(response
+            .headers()
+            .get("x-oauth-scopes")
+            .and_then(|value| value.to_str().ok())
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|scope| !scope.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            }))
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+    use crate::github::{Error, Secret};
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        sync::mpsc,
+        thread,
+        time::Duration,
+    };
+
+    /// A fake GitHub that answers one request with `status` and the `fields`, and sends back
+    /// the request head it read.
+    fn answer(status: u16, fields: &'static str) -> (Client, mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = Client::loopback(listener.local_addr().unwrap()).unwrap();
+        let (sender, heads) = mpsc::channel();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut input = Vec::new();
+            let mut buffer = [0; 4096];
+            while !input.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = stream.read(&mut buffer).unwrap();
+                input.extend_from_slice(&buffer[..read]);
+            }
+            // A test that does not read the head has dropped its receiver.
+            let _ = sender.send(String::from_utf8_lossy(&input).into_owned());
+            write!(
+                stream,
+                "HTTP/1.1 {status} X\r\n{fields}Content-Type: application/json\r\nContent-Length: 2\r\n\
+                 Connection: close\r\n\r\n{{}}"
+            )
+            .unwrap();
+        });
+        (client, heads)
+    }
+
+    #[test]
+    fn scopes_come_from_the_oauth_header() {
+        let (client, heads) = answer(200, "X-OAuth-Scopes: read:packages\r\n");
+        let found = client.token_scopes(&Secret::new("gho_synthetic".into())).unwrap();
+        assert_eq!(found, Some(vec!["read:packages".to_owned()]));
+        let head = heads.recv().unwrap();
+        assert!(head.starts_with("GET /user HTTP/1.1"));
+        assert!(head.contains("Bearer gho_synthetic"));
+        let (client, _) = answer(200, "X-OAuth-Scopes: repo, read:packages,  workflow\r\n");
+        assert_eq!(
+            client.token_scopes(&Secret::new("gho_synthetic".into())).unwrap(),
+            Some(["repo", "read:packages", "workflow"].map(str::to_owned).to_vec())
+        );
+        let (client, _) = answer(200, "X-OAuth-Scopes: \r\n");
+        assert_eq!(
+            client.token_scopes(&Secret::new("gho_synthetic".into())).unwrap(),
+            Some(Vec::new())
+        );
+        let (client, _) = answer(200, "");
+        assert_eq!(client.token_scopes(&Secret::new("ghu_synthetic".into())).unwrap(), None);
+    }
+
+    #[test]
+    fn a_refused_token_is_an_error() {
+        let (client, _) = answer(401, "");
+        assert_eq!(
+            client.token_scopes(&Secret::new("gho_synthetic".into())),
+            Err(Error::Revoked)
+        );
+        let (client, _) = answer(403, "");
+        assert_eq!(
+            client.token_scopes(&Secret::new("ghp_synthetic".into())),
+            Err(Error::Refused("HTTP 403".into()))
+        );
+    }
 }

@@ -19,7 +19,7 @@ pub mod publication;
 
 /// Horizon's own OAuth app "Horizon": public, with device sign-in on. Its tokens carry
 /// scopes, which the package registry requires.
-const CLIENT_ID: &str = "Ov23liPNCPgWraJDo6XM";
+pub(super) const CLIENT_ID: &str = "Ov23liPNCPgWraJDo6XM";
 
 /// The GitHub page where the person sees Horizon's OAuth app and grants it to an
 /// organization that limits OAuth apps.
