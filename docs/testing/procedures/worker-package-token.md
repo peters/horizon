@@ -235,7 +235,26 @@ package read access.
 
    Result: The output shows a version and a date.
 
-### 6.7 W06 — Root removes the chain
+### 6.7 W06 — Horizon changes the repositories
+
+1. While the worker holds the chain of W02, give root a request without a `chain`
+   field and with other repositories.
+
+   ```sh
+   printf '{"version":1,"repositories":["github/docs"]}' | ssh root@<worker> horizon-worker-github packages
+   ```
+
+   Result: The output has `"repositories":["github/docs"]` and `"state":"ok"`.
+
+2. Run the package read of W03 again.
+
+   Result: The message has `OWNER owns none of this cloud's repositories`.
+
+3. Give root the request of step 1 with `["OWNER/REPOSITORY"]` again.
+
+   Result: The package read of W03 shows a version again.
+
+### 6.8 W07 — Root removes the chain
 
 1. Give root a request without a chain.
 
@@ -254,7 +273,7 @@ package read access.
 ## 7. Pass criteria
 
 - Lane U shows `OK`.
-- W01 to W06 give each result.
+- W01 to W07 give each result.
 - No evidence shows the token.
 
 ## 8. Cleanup

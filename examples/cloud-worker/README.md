@@ -1519,7 +1519,14 @@ horizon-worker-github packages < private-file
 # {"version":1,"client_id":"...","repositories":["owner/name",...],
 #  "chain":{"access_token":"...","access_expires_at":...,"refresh_token":"...","refresh_expires_at":...}}
 horizon-worker-github packages < private-file   # {"version":1,"chain":null} removes it
+horizon-worker-github packages < private-file   # {"version":1,"repositories":[...]} changes them
 ```
+
+The last form changes the repositories of the chain that the worker holds, as
+when the person changes the Upkeep's list, without a new sign-in. The service
+keeps the repositories in their own root-only record (`repositories.json` beside
+the chain), so a change never rewrites the chain; two copies that differ serve no
+owner. It fails, and removes the chain, when the worker holds none.
 
 Before it keeps a chain, root asks GitHub for the token's scopes
 (`X-OAuth-Scopes`); anything but exactly `read:packages` is refused. A new chain

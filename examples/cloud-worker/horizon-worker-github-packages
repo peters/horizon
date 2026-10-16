@@ -46,6 +46,8 @@ MAX_REPLY = 8 << 20
 # Guards the creation of the one package chain store of each GitHub store.
 STORES = threading.Lock()
 FIELDS = {'version', 'client_id', 'repositories', 'chain'}
+# The cloud's own repositories, beside the chain in the chain store's directories.
+REPOSITORIES = 'repositories.json'
 CLIENT_ID = re.compile(r'[A-Za-z0-9._-]{1,128}')
 OWNER = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})')
 MAX_REPOSITORIES = 50
@@ -145,27 +147,82 @@ def only_read(scopes):
 
 def install(store, source, now=time.time, check=None):
     """Stores Horizon's chain in place of any earlier one, after GitHub confirmed that its only
-    scope is read:packages, or removes it for a null chain. Returns what the worker holds now.
-    A failed replacement leaves no chain served: neither the new one nor the earlier one. The
+    scope is read:packages, or removes it for a null chain. A request with only `repositories`
+    changes the repositories of the chain that the worker holds, as when the person changed
+    the Upkeep's list, without a new sign-in. Returns what the worker holds now. A failed
+    replacement or change leaves no chain served: neither the new one nor the earlier one. The
     chain store's own lock serializes this with the renewal."""
     chains = store_for(store)
     # The whole replacement holds the store lock, the scope request included, so a renewal
     # never rotates the chain between the check and the save.
     with chains.lock():
         try:
-            state = parse(json.loads(source), int(now()))
+            value = json.loads(source)
+            if isinstance(value, dict) and set(value) == {'version', 'repositories'}:
+                return {'packages': change_repositories(store, chains, value, int(now()))}
+            state = parse(value, int(now()))
+            repositories = state.pop('repositories') if state is not None else None
             if state is not None and not only_read((check or scopes_of)(state['chain']['access_token'])):
                 raise ValueError('The package read access token has other scopes than read:packages')
             if state is None:
                 clear(chains)
             else:
                 chains.save(state, retain=False)
+                write_repositories(chains, repositories)
         except Exception:
             # Whatever failed, the earlier chain and its owners stop too: Horizon meant to replace them.
             with contextlib.suppress(OSError, ValueError):
                 clear(chains)
             raise
     return {'packages': summary(store)}
+
+
+def change_repositories(store, chains, value, now):
+    """Under the store lock: Horizon's new repositories for the held chain, or a refusal when
+    the worker holds no chain that serves (the caller then removes what is left). Only the
+    repositories record changes, never the chain: the serving process may hold a renewed chain
+    in memory only, which this process cannot see."""
+    if type(value['version']) is not int or value['version'] != 1:
+        raise ValueError('Invalid package read access request')
+    repositories = repositories_of(value['repositories'])
+    state, _ = chains.load()
+    if state is None or state['state'] != 'ok' or state['chain']['refresh_expires_at'] <= now:
+        raise ValueError('This worker holds no package read access to change')
+    write_repositories(chains, repositories)
+    return summary(store)
+
+
+def write_repositories(chains, repositories):
+    """Writes the repositories record in both private storages of the chain store. A copy that
+    is not written leaves copies that differ, which serve no owner; the error is raised."""
+    data = json.dumps({'version': 1, 'repositories': repositories}, separators=(',', ':'))
+    for directory in (chains.persistent, chains.runtime):
+        try:
+            common.write_private(common.private_directory(directory, create=True), REPOSITORIES, data)
+        except common.Unsynced:
+            pass  # In place; a crash before the sync gives the copies that differ, which serve nothing.
+
+
+def read_repositories(chains, state=None):
+    """The repositories record, or None (no owner) when it is not private, broken, or its two
+    copies differ. Without any copy, the repositories that a chain from an earlier image keeps
+    in `state`."""
+    found = []
+    for directory in (chains.persistent, chains.runtime):
+        try:
+            value = common.read_json(directory / REPOSITORIES, MAX_SOURCE)
+            found.append(None if value is None else repositories_of(value['repositories'])
+                         if isinstance(value, dict) and set(value) == {'version', 'repositories'}
+                         and value['version'] == 1 else False)
+        except (OSError, ValueError, RecursionError, UnicodeDecodeError, TypeError):
+            return None
+    present = [item for item in found if item is not None]
+    if not present:
+        return list(state.get('repositories', [])) if state else None
+    if False in present or any(item != present[0] for item in present):
+        return None
+    # A tmpfs copy lost in a restart leaves the volume copy, as for the chain itself.
+    return present[0]
 
 
 def remove(store):
@@ -180,6 +237,8 @@ def clear(chains):
     """Removes every copy. When a copy stays, a clear mark above every copy is written and the
     tmpfs copy removed anyway, so no copy is served, and the failure is raised."""
     try:
+        for directory in (chains.persistent, chains.runtime):
+            common.remove_durably(directory, REPOSITORIES)
         chains.clear()
     except (OSError, ValueError):
         try:
@@ -194,14 +253,15 @@ def clear(chains):
 
 def summary(store):
     """What `status` reports: None, or the state and times of the chain, never a token."""
-    state, persistent = store_for(store).load()
+    chains = store_for(store)
+    state, persistent = chains.load()
     if state is None:
         return None
     return {'state': state['state'], 'persistent': persistent,
             'access_expires_at': state['chain']['access_expires_at'],
             'refresh_expires_at': state['chain']['refresh_expires_at'],
             'last_refresh_at': state.get('last_refresh_at'), 'last_error': state.get('last_error'),
-            'repositories': list(state.get('repositories', []))}
+            'repositories': read_repositories(chains, state) or []}
 
 
 def served(store, now=time.time):
@@ -217,7 +277,8 @@ def served(store, now=time.time):
         return None, REVOKED
     if state['chain']['access_expires_at'] - now() <= common.SERVE_MARGIN:
         return None, EXPIRED
-    return state, None
+    # The owners come from the repositories record, which Horizon can change without a new chain.
+    return dict(state, repositories=read_repositories(store_for(store), state) or []), None
 
 
 def repositories(state):

@@ -104,6 +104,46 @@ class StorageTests(ServiceTestCase):
         self.assertFalse(state.exists())
         self.assertIsNone(service.status(self.store)['packages'])
 
+    def test_horizon_changes_the_repositories_without_a_new_chain(self):
+        install(self.store, request(repositories=['acme/api']))
+        self.assertEqual(packages.token_for(self.store, 'acme'), (TOKEN, None))
+        change = json.dumps({'version': 1, 'repositories': ['other-org/lib', 'acme/web']})
+        held = packages.install(self.store, change, check=lambda token: self.fail('no scope request'))
+        self.assertEqual(held['packages']['repositories'], ['other-org/lib', 'acme/web'])
+        self.assertEqual(packages.token_for(self.store, 'OTHER-ORG'), (TOKEN, None))
+        self.assertEqual(packages.token_for(self.store, 'acme'), (TOKEN, None))
+        install(self.store, request(repositories=['acme/api']))
+        packages.install(self.store, json.dumps({'version': 1, 'repositories': ['other-org/lib']}))
+        self.assertIn('owns none of this cloud', packages.token_for(self.store, 'acme')[1])
+        # A change never rewrites the chain: a renewal may hold a newer one in memory only.
+        chains = packages.store_for(self.store)
+        before = (chains.persistent / service.STATE).read_bytes()
+        packages.install(self.store, json.dumps({'version': 1, 'repositories': ['acme/api']}))
+        self.assertEqual((chains.persistent / service.STATE).read_bytes(), before)
+        # Copies of the record that differ, or one that is broken, open no owner.
+        (chains.runtime / packages.REPOSITORIES).write_text(json.dumps({'version': 1, 'repositories': ['acme/web']}))
+        self.assertIn('owns none of this cloud', packages.token_for(self.store, 'acme')[1])
+        (chains.runtime / packages.REPOSITORIES).write_text('{')
+        self.assertIn('owns none of this cloud', packages.token_for(self.store, 'acme')[1])
+        (chains.runtime / packages.REPOSITORIES).unlink()
+        self.assertEqual(packages.token_for(self.store, 'acme'), (TOKEN, None))
+        # A chain from an earlier image keeps its repositories in the state, without a record.
+        (chains.persistent / packages.REPOSITORIES).unlink()
+        state = chains.load()[0]
+        chains.save(dict(state, repositories=['legacy/repo']), retain=False)
+        self.assertEqual(packages.token_for(self.store, 'legacy'), (TOKEN, None))
+        install(self.store, request(repositories=['acme/api']))
+        self.assertNotIn('repositories', chains.load()[0])
+        # A change that fails, or that finds no chain, stops whatever was held.
+        for bad in ({'version': 1, 'repositories': []}, {'version': 2, 'repositories': ['a/b']},
+                    {'version': 1, 'repositories': ['not a repository']}):
+            install(self.store)
+            with self.assertRaises(ValueError):
+                packages.install(self.store, json.dumps(bad))
+            self.assertEqual(packages.token_for(self.store, 'example'), (None, packages.MISSING))
+        with self.assertRaises(ValueError):
+            packages.install(self.store, json.dumps({'version': 1, 'repositories': ['a/b']}))
+
     def test_malformed_requests_and_other_scopes_are_refused_without_echoing_a_token(self):
         good = json.loads(request())
         cases = [dict(good, version=2), dict(good, version=True), dict(good, extra=1),
