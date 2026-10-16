@@ -98,19 +98,14 @@ impl Runtime {
     /// Takes a GitHub sign-in prompt or outcome. An automatic sign-in opens GitHub's
     /// authorize page in the person's browser, which returns to Horizon by itself.
     pub(super) fn adopt_github(&mut self, prompt: cloud_runtime::github::Prompt) {
-        if let cloud_runtime::github::Prompt::Web { url } = &prompt
-            && let Err(error) = horizon_core::open_url(url)
-        {
-            tracing::warn!(%error, "could not open the GitHub sign-in page");
+        use cloud_runtime::github::Prompt;
+        if let Prompt::Web { url } = &prompt {
+            open_in_background(url);
         }
         match prompt {
             // The package sign-in uses the same one-time box as the publishing sign-in.
-            cloud_runtime::github::Prompt::Publish { .. } | cloud_runtime::github::Prompt::Packages { .. } => {
-                self.publish = Some(prompt);
-            }
-            cloud_runtime::github::Prompt::Published { .. } | cloud_runtime::github::Prompt::PackagesEnded { .. } => {
-                self.publish = None;
-            }
+            Prompt::Publish { .. } | Prompt::Packages { .. } => self.publish = Some(prompt),
+            Prompt::Published { .. } | Prompt::PackagesEnded { .. } => self.publish = None,
             prompt => self.github = Some(prompt),
         }
     }
@@ -593,4 +588,13 @@ impl HorizonApp {
         }
         self.cloud_prototype.error = Some(message);
     }
+}
+
+/// Opens a GitHub page on its own thread: a slow browser start must not hold the board's frame.
+pub(super) fn open_in_background(url: &str) {
+    let url = url.to_owned();
+    std::thread::spawn(move || {
+        let _ =
+            horizon_core::open_url(&url).inspect_err(|error| tracing::warn!(%error, "could not open the GitHub page"));
+    });
 }

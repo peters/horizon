@@ -113,9 +113,7 @@ fn device(ui: &mut egui::Ui, cloud_id: &str, user_code: &str, verification_uri: 
             .clicked()
         {
             ui.ctx().copy_text(user_code.to_owned());
-            if let Err(error) = horizon_core::open_url(verification_uri) {
-                tracing::warn!(%error, "could not open the GitHub device page");
-            }
+            super::super::lifecycle::open_in_background(verification_uri);
         }
         if ui.add(chrome_button(words.skip).min_size(vec2(0.0, 30.0))).clicked() {
             github::skip(cloud_id);
@@ -145,9 +143,8 @@ fn web(ui: &mut egui::Ui, cloud_id: &str, url: &str) {
         if ui
             .add(primary_button("Open GitHub").min_size(vec2(120.0, 30.0)))
             .clicked()
-            && let Err(error) = horizon_core::open_url(url)
         {
-            tracing::warn!(%error, "could not open the GitHub sign-in page");
+            super::super::lifecycle::open_in_background(url);
         }
         if ui
             .add(chrome_button("Skip: no GitHub for this cloud").min_size(vec2(0.0, 30.0)))

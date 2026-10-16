@@ -21,7 +21,10 @@ use std::{
 pub const SCOPE: &str = "read:packages";
 /// Where the person sees, and can revoke, what Horizon's OAuth app may do.
 pub use publish::APP_PAGE;
-const STATUS: &str = "horizon-worker-github status 2>/dev/null || true";
+/// A failed status stays a failure, so an exchange tries again; only an image without the
+/// service reads as one without package read access.
+const STATUS: &str = "if command -v horizon-worker-github >/dev/null 2>&1; then horizon-worker-github status 2>/dev/null; \
+     else printf '{\"state\":\"unsupported\"}'; fi";
 const INSTALL: &str = "horizon-worker-github packages";
 /// How long the worker's root service may take for a request (it asks GitHub for the scope).
 const UPLOAD: Duration = Duration::from_secs(60);
@@ -137,11 +140,20 @@ pub fn configure(
     runner: &Runner<'_>,
     renew: bool,
 ) -> Result<()> {
-    // Only an Upkeep's cloud is asked; other clouds keep their flow without a second code.
-    let Some(config) = settings.and_then(|_| crate::upkeep::worker::load(&state.cloud_id).ok()) else {
-        return Ok(());
-    };
     let say = |text: &str| (runner.emit)(Event::Output(format!("GitHub packages: {text}")));
+    // Only an Upkeep's cloud is asked; other clouds keep their flow without a second code.
+    let config = match settings.map(|_| crate::upkeep::worker::load(&state.cloud_id)) {
+        None => return Ok(()),
+        Some(Ok(config)) => config,
+        Some(Err(Error::Io(error))) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Some(Err(error)) => {
+            runner.cancel.check()?;
+            tracing::warn!(cloud = %state.cloud_id, %error, "the Upkeep's saved choice could not be read");
+            say("the Upkeep's saved choice could not be read.");
+            say(WITHOUT);
+            return Ok(());
+        }
+    };
     let status = runner.run_parsed(
         "Package read access status",
         &mut connection.command(STATUS),
@@ -301,6 +313,9 @@ fn covered(
 fn install_saved(chain: &Chain, cloud_id: &str, connection: &Connection, runner: &Runner<'_>) -> Result<Vec<String>> {
     let _lock = crate::upkeep::worker::settings_lock(cloud_id)?;
     let repositories = saved_repositories(cloud_id)?;
+    if repositories.is_empty() {
+        return Err(Error::Invalid("The Upkeep has no repositories now"));
+    }
     // From memory through `private_exchange`; no token enters argv, output or a named file.
     let request = payload(chain, &repositories)?;
     runner.private_exchange(&mut connection.command(INSTALL), &request, UPLOAD)?;
@@ -428,9 +443,11 @@ fn payload(chain: &Chain, repositories: &[String]) -> Result<zeroize::Zeroizing<
             refresh_expires_at: unix(chain.refresh_expires_at),
         },
     };
-    serde_json::to_vec(&value)
-        .map(zeroize::Zeroizing::new)
-        .map_err(|_| Error::Json)
+    // Larger than any valid payload (at most 50 checked names), so the buffer never grows and
+    // leaves no copy of the tokens behind in freed memory.
+    let mut bytes = zeroize::Zeroizing::new(Vec::with_capacity(64 * 1024));
+    serde_json::to_writer(&mut *bytes, &value).map_err(|_| Error::Json)?;
+    Ok(bytes)
 }
 
 /// Tells root on the worker the Upkeep's repositories for the chain it holds, without a token,
@@ -441,13 +458,26 @@ fn change(repositories: &[String], command: &mut std::process::Command, runner: 
     runner.private_exchange(command, &request, UPLOAD).map(drop)
 }
 
-/// The repositories each Upkeep's worker last took, so an exchange asks the worker only after
-/// the Upkeep's list changed (and once after Horizon starts).
-static FOLLOWED: LazyLock<Mutex<HashMap<String, Vec<String>>>> = LazyLock::new(Mutex::default);
+/// The repositories each Upkeep's worker last took, with the time its saved choice was last
+/// written then, so an exchange asks the worker only after the list changed (and once after
+/// Horizon starts). Any save of the choice by another Horizon process changes the time, so the
+/// next exchange asks the worker, also when that process put the list back as it was.
+static FOLLOWED: LazyLock<Mutex<HashMap<String, Followed>>> = LazyLock::new(Mutex::default);
+
+type Followed = (Vec<String>, Option<std::time::SystemTime>);
+
+fn followed(cloud_id: &str, repositories: Vec<String>) -> Followed {
+    let path = crate::upkeep::worker::directory(cloud_id).join("upkeep.json");
+    (
+        repositories,
+        std::fs::metadata(path).and_then(|meta| meta.modified()).ok(),
+    )
+}
 
 fn remember(cloud_id: &str, repositories: Vec<String>) {
+    let entry = followed(cloud_id, repositories);
     if let Ok(mut followed) = FOLLOWED.lock() {
-        followed.insert(cloud_id.to_owned(), repositories);
+        followed.insert(cloud_id.to_owned(), entry);
     }
 }
 
@@ -461,11 +491,8 @@ pub fn follow(connection: &Connection, runner: &Runner<'_>, cloud_id: &str, conf
         return;
     };
     wanted.sort();
-    if wanted.is_empty()
-        || FOLLOWED
-            .lock()
-            .is_ok_and(|followed| followed.get(cloud_id) == Some(&wanted))
-    {
+    let current = followed(cloud_id, wanted.clone());
+    if wanted.is_empty() || FOLLOWED.lock().is_ok_and(|all| all.get(cloud_id) == Some(&current)) {
         return;
     }
     let Ok(output) = runner.run_parsed(
@@ -492,106 +519,4 @@ pub fn follow(connection: &Connection, runner: &Runner<'_>, cloud_id: &str, conf
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use horizon_cloud::github::Secret;
-
-    fn sample(token: &str) -> Chain {
-        let now = std::time::SystemTime::now();
-        Chain {
-            access_token: Secret::new(token.into()),
-            access_expires_at: now + Duration::from_hours(8),
-            refresh_token: Secret::new(format!("{token}-refresh")),
-            refresh_expires_at: now + Duration::from_hours(180 * 24),
-        }
-    }
-
-    #[test]
-    fn the_worker_status_says_what_it_holds_and_whether_github_works() {
-        let line = |state: &str, extra: &str| {
-            format!(
-                "{{\"state\":\"{state}\",\"login\":\"octo\",\"repositories\":[{{\"repository\":\"acme/api\",\"target\":\"primary\"}}]{extra}}}"
-            )
-        };
-        assert_eq!(held(&line("ok", ",\"packages\":null")), (Held::Missing, true));
-        assert_eq!(
-            held(&line(
-                "ok",
-                ",\"packages\":{\"state\":\"ok\",\"repositories\":[\"B/x\",\"a/y\"],\"repositories_change\":true}"
-            )),
-            (
-                Held::Current {
-                    repositories: vec!["a/y".into(), "b/x".into()],
-                    change: true
-                },
-                true
-            )
-        );
-        let old = held(&line(
-            "ok",
-            ",\"packages\":{\"state\":\"ok\",\"repositories\":[\"a/y\"]}",
-        ));
-        assert!(matches!(old.0, Held::Current { change: false, .. }));
-        assert_eq!(
-            held(&line("ok", ",\"packages\":{\"state\":\"revoked\"}")).0,
-            Held::Missing
-        );
-        // The GitHub step's own reading: an absent chain, a stopped service or no repository is no access.
-        assert_eq!(held(&line("absent", ",\"packages\":null")), (Held::Missing, false));
-        assert!(!held(&line("ok", ",\"packages\":null,\"serving\":false")).1);
-        assert_eq!(
-            held("{\"state\":\"ok\",\"repositories\":[],\"packages\":null}"),
-            (Held::Missing, false)
-        );
-        assert_eq!(held(&line("ok", "")).0, Held::Unsupported);
-        assert_eq!(held("not json"), (Held::Unsupported, false));
-    }
-
-    #[test]
-    fn only_the_upkeep_repositories_go_with_the_chain_once_each_and_at_most_fifty() {
-        let config = |repositories: Vec<String>| crate::upkeep::worker::Config {
-            repositories,
-            ..crate::upkeep::worker::Config::default()
-        };
-        let names = |list: &[&str]| list.iter().map(|name| (*name).to_owned()).collect::<Vec<_>>();
-        assert_eq!(
-            own_repositories(&config(names(&["Acme/API", "acme/api", "acme/web", "not a repo"]))).unwrap(),
-            ["acme/api", "acme/web"]
-        );
-        let many = (0..51).map(|index| format!("acme/r{index}")).collect();
-        assert!(own_repositories(&config(many)).is_err());
-    }
-
-    #[test]
-    fn only_exactly_read_packages_reaches_the_worker() {
-        let scopes = |list: &[&str]| list.iter().map(|scope| (*scope).to_owned()).collect::<Vec<_>>();
-        assert!(check_scopes(Some(&scopes(&["read:packages"]))).is_ok());
-        for list in [
-            &["write:packages"][..],
-            &["read:packages", "repo"],
-            &[],
-            &["READ:PACKAGES"],
-        ] {
-            assert!(
-                matches!(check_scopes(Some(&scopes(list))), Err(Ended::Reason(reason)) if reason.contains("does not get")),
-                "{list:?}"
-            );
-        }
-        assert!(matches!(check_scopes(None), Err(Ended::Reason(_))));
-    }
-
-    #[test]
-    fn the_payload_holds_the_client_id_and_the_chain_but_no_secret() {
-        let repositories = vec!["acme/api".to_owned(), "acme/web".to_owned()];
-        // Bytes in memory (wiped on drop), never a named temporary file: the type says so.
-        let request: zeroize::Zeroizing<Vec<u8>> = payload(&sample("gho_synthetic-packages"), &repositories).unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&request).unwrap();
-        assert_eq!(value["version"], 1);
-        assert_eq!(value["client_id"], publish::CLIENT_ID);
-        assert_eq!(value["repositories"], serde_json::json!(["acme/api", "acme/web"]));
-        assert_eq!(value["chain"]["access_token"], "gho_synthetic-packages");
-        assert_eq!(value["chain"]["refresh_token"], "gho_synthetic-packages-refresh");
-        assert!(value["chain"]["access_expires_at"].as_u64().unwrap() > 0);
-        assert!(value.get("client_secret").is_none());
-    }
-}
+mod tests;
