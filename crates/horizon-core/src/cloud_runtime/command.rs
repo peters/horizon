@@ -85,21 +85,12 @@ impl Runner<'_> {
         self.private_upload(command, std::fs::File::open(input)?.into())
     }
     /// # Errors
-    /// Uploads a bounded private structured payload from memory through a pipe, so it
-    /// never reaches a file, without logging either stream.
+    /// Uploads a bounded private structured payload from memory, without logging either stream.
     pub fn private_bytes(&self, command: &mut Command, input: &[u8]) -> Result<()> {
         if input.len() > 256 * 1024 {
             return Err(Error::Invalid("Invalid private runtime payload"));
         }
-        let (reader, mut writer) = std::io::pipe()?;
-        std::thread::scope(|scope| {
-            let feed = scope.spawn(move || drop(writer.write_all(input)));
-            let result = self.private_upload(command, reader.into());
-            // Close the parent's read end, so a child that stopped reading cannot hold the writer.
-            command.stdin(Stdio::null());
-            drop(feed.join());
-            result
-        })
+        self.private_upload(command, private_memory(input)?.into())
     }
     fn private_upload(&self, command: &mut Command, input: Stdio) -> Result<()> {
         command.stdin(input).stdout(Stdio::null()).stderr(Stdio::null());
@@ -122,10 +113,10 @@ impl Runner<'_> {
             return Err(Error::Invalid("Private request exceeded its bound"));
         }
         self.cancel.check()?;
-        let mut input = tempfile::tempfile()?;
-        input.write_all(request)?;
-        input.rewind()?;
-        command.stdin(input).stdout(Stdio::piped()).stderr(Stdio::null());
+        command
+            .stdin(private_memory(request)?)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
         Runner {
             cancel: self.cancel,
             emit: &|_| {},
@@ -393,6 +384,21 @@ fn stop(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
 }
+/// A file for a private stdin that no path names. On Linux it lives in memory only, so the
+/// bytes never reach a disk; elsewhere it is an unlinked temporary file. Unlike a pipe, it never
+/// blocks, also when a descendant of the command keeps its stdin open.
+fn private_memory(bytes: &[u8]) -> Result<std::fs::File> {
+    #[cfg(target_os = "linux")]
+    let mut file = std::fs::File::from(
+        rustix::fs::memfd_create("horizon-private", rustix::fs::MemfdFlags::CLOEXEC).map_err(std::io::Error::from)?,
+    );
+    #[cfg(not(target_os = "linux"))]
+    let mut file = tempfile::tempfile()?;
+    file.write_all(bytes)?;
+    file.rewind()?;
+    Ok(file)
+}
+
 #[cfg(all(test, unix))]
 mod tests;
 

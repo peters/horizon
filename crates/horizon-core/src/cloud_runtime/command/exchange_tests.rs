@@ -140,10 +140,16 @@ fn private_bytes_delivers_exact_bytes_from_memory_and_bounds_them() {
         Err(Error::Invalid(_))
     ));
     assert!(runner.private_bytes(&mut Command::new("false"), b"private").is_err());
-    // A child that reads nothing must not hold a payload larger than the pipe buffer.
+    // Neither a child that reads nothing nor a descendant that keeps stdin open holds the upload.
     let started = std::time::Instant::now();
     runner
         .private_bytes(&mut Command::new("true"), &vec![b'x'; 256 * 1024])
+        .unwrap();
+    runner
+        .private_bytes(
+            Command::new("sh").args(["-c", "exec 3<&0; sleep 15 <&3 >/dev/null 2>&1 & exit 0"]),
+            &vec![b'x'; 256 * 1024],
+        )
         .unwrap();
     assert!(started.elapsed() < Duration::from_secs(10));
 }
