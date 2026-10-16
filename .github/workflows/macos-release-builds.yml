@@ -7,12 +7,18 @@ name: macOS release builds
 # macOS test jobs on main queued.
 #
 # GitHub emails a failed scheduled run only to the person who last changed the
-# cron line below, so a failure here is easy to miss.
+# cron line below, so the Watch job reports failures and recoveries as
+# comments on the CI reliability epic instead (see docs/release-flow.md).
 on:
   schedule:
     # Off the hour: GitHub delays or drops scheduled runs at busy times.
     - cron: '17 2 * * *'
   workflow_dispatch:
+    inputs:
+      simulate_failure:
+        description: Fail on purpose without a build, to test the Watch job.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -23,8 +29,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # A scheduled run skips the build when a run of this workflow already
-  # succeeded for the same main commit. A manual dispatch always builds, and so
+  # A scheduled run skips the build when the newest finished run of this
+  # workflow for the same main commit succeeded, so a failure on that commit,
+  # simulated or not, builds again. A manual dispatch always builds, and so
   # does a scheduled run when this job fails or cannot read the run history.
   changes:
     name: Detect new commits
@@ -35,27 +42,111 @@ jobs:
       build: ${{ steps.last.outputs.build }}
     steps:
       - id: last
-        name: Look for a successful run of this commit
+        name: Look for the newest finished run of this commit
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # A cancelled or skipped run says nothing about the build.
           workflow_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .workflow_id) \
-            && built=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id/runs?branch=main&status=success&head_sha=$GITHUB_SHA&per_page=1" --jq .total_count) \
-            || built=unknown
-          case "$built" in
-            ''|*[!0-9]*) build=true; echo "::warning::Run history unavailable ($built); building." ;;
-            0) build=true ;;
-            *) build=false; echo "A run of this workflow already succeeded for $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY" ;;
+            && newest=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id/runs?branch=main&status=completed&head_sha=$GITHUB_SHA&per_page=100" \
+              --jq '[.workflow_runs[] | select(.conclusion == "success" or .conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "startup_failure")] | max_by(.id) | .conclusion // "none"') \
+            || newest=unknown
+          case "$newest" in
+            success) build=false; echo "The newest finished run for $GITHUB_SHA succeeded." >> "$GITHUB_STEP_SUMMARY" ;;
+            none|failure|timed_out|startup_failure) build=true ;;
+            *) build=true; echo "::warning::Run history unavailable ($newest); building." ;;
           esac
           echo "build=$build" >> "$GITHUB_OUTPUT"
+
+  # A dispatch with simulate_failure fails here instead of building, so the
+  # Watch job can be tested without macOS runners.
+  simulate-failure:
+    name: Simulated failure
+    if: inputs.simulate_failure
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fail on purpose
+        run: |
+          echo "::error::Failed on purpose (simulate_failure) to test the Watch job."
+          exit 1
 
   rust-artifacts:
     name: Artifacts
     needs: changes
     # Anything but an explicit false builds: a dispatch skips the detection
     # job and a failed detection leaves its output empty.
-    if: ${{ !cancelled() && needs.changes.outputs.build != 'false' }}
+    if: ${{ !cancelled() && needs.changes.outputs.build != 'false' && !inputs.simulate_failure }}
     uses: ./.github/workflows/release-artifacts.yml
     with:
       platforms: macos-arm64 macos-x64
+
+  # Comments on the CI reliability epic when a run on main fails, and once
+  # when a run succeeds after a failed run. Routine success stays silent, and
+  # a cancelled run says nothing about the build. GitHub notifies the epic's
+  # author of each comment. scripts/nightly-release-watch.py makes the
+  # decision and writes the comment.
+  watch:
+    name: Watch
+    needs: [changes, simulate-failure, rust-artifacts]
+    # Forks keep the schedule but have no epic to comment on.
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.repository == 'peters/horizon' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    env:
+      WATCH_ISSUE: 1534
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/nightly-release-watch.py
+          sparse-checkout-cone-mode: false
+      - id: decide
+        name: Decide whether to comment
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          # An unreadable history or job list is an empty file: a failure
+          # still posts, and a recovery does not.
+          workflow_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .workflow_id) \
+            && gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id/runs?branch=main&status=completed&per_page=30" > "$RUNNER_TEMP/runs.json" \
+            || echo '{}' > "$RUNNER_TEMP/runs.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" > "$RUNNER_TEMP/jobs.json" \
+            || echo '{}' > "$RUNNER_TEMP/jobs.json"
+          # A re-run compares with its own previous attempt.
+          previous_attempt=
+          if [ "$GITHUB_RUN_ATTEMPT" -gt 1 ]; then
+            previous_attempt=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$((GITHUB_RUN_ATTEMPT - 1))" --jq .conclusion) \
+              || previous_attempt=
+          fi
+          python3 -B scripts/nightly-release-watch.py \
+            --needs "$NEEDS" \
+            --runs "$RUNNER_TEMP/runs.json" \
+            --jobs "$RUNNER_TEMP/jobs.json" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --previous-attempt "$previous_attempt" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --sha "$GITHUB_SHA" \
+            --body-out "$RUNNER_TEMP/comment.md" >> "$GITHUB_OUTPUT"
+      - name: Comment on the epic
+        if: steps.decide.outputs.action != 'none'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A network error or a rate limit can fail one request, so try three
+          # times. If all fail, this job fails and the run shows it.
+          for attempt in 1 2 3; do
+            gh api "repos/$GITHUB_REPOSITORY/issues/$WATCH_ISSUE/comments" -F "body=@$RUNNER_TEMP/comment.md" --jq .html_url \
+              && exit 0
+            sleep $((attempt * 10))
+          done
+          echo "::error::Could not comment on issue #$WATCH_ISSUE."
+          exit 1

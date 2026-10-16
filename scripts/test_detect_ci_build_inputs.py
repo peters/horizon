@@ -347,7 +347,8 @@ class WorkflowGateTests(unittest.TestCase):
         self.assertRegex(workflow, r"(?m)^  workflow_dispatch:$")
         job = jobs_of(workflow)["rust-artifacts"]
         self.assertIn("    uses: ./.github/workflows/release-artifacts.yml\n", job)
-        self.assertIn("    if: ${{ !cancelled() && needs.changes.outputs.build != 'false' }}\n", job)
+        self.assertIn("    if: ${{ !cancelled() && needs.changes.outputs.build != 'false' "
+                      "&& !inputs.simulate_failure }}\n", job)
         self.assertIn(f"      platforms: {' '.join(MACOS_PLATFORMS)}\n", job)
         self.assertIn("    if: github.event_name == 'schedule'\n", jobs_of(workflow)["changes"])
 
