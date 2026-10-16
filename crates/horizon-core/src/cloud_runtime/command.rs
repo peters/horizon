@@ -385,13 +385,14 @@ fn stop(child: &mut Child) {
     let _ = child.wait();
 }
 /// A file for a private stdin that no path names. On Linux it lives in memory only, so the
-/// bytes never reach a disk; elsewhere it is an unlinked temporary file. Unlike a pipe, it never
-/// blocks, also when a descendant of the command keeps its stdin open.
+/// bytes never reach a disk; elsewhere, or where the kernel refuses a memfd, it is an unlinked
+/// temporary file. Unlike a pipe, it never blocks, also when a descendant of the command keeps
+/// its stdin open.
 fn private_memory(bytes: &[u8]) -> Result<std::fs::File> {
     #[cfg(target_os = "linux")]
-    let mut file = std::fs::File::from(
-        rustix::fs::memfd_create("horizon-private", rustix::fs::MemfdFlags::CLOEXEC).map_err(std::io::Error::from)?,
-    );
+    let mut file = rustix::fs::memfd_create("horizon-private", rustix::fs::MemfdFlags::CLOEXEC)
+        .map(std::fs::File::from)
+        .or_else(|_| tempfile::tempfile())?;
     #[cfg(not(target_os = "linux"))]
     let mut file = tempfile::tempfile()?;
     file.write_all(bytes)?;

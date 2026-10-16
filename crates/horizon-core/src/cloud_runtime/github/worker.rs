@@ -1,5 +1,5 @@
 //! The worker's root GitHub service: its status, and the chain Horizon gives it.
-//! The payload travels on SSH stdin from memory and never enters argv, output or a file.
+//! The payload travels on SSH stdin from memory and never enters argv, output or a named file.
 use super::{Error, Grant, Result, Runner, Settings};
 use crate::cloud_runtime::ssh::Connection;
 use horizon_cloud::github::{Chain, Secret, User};
