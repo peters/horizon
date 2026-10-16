@@ -1,7 +1,7 @@
 use super::*;
 use crate::cloud_runtime::state::{
     exposure,
-    service_admission::{Binding as SourceBinding, Checked, Phase},
+    service_admission::{Binding as SourceBinding, Checked},
 };
 #[cfg(target_os = "linux")]
 use crate::cloud_runtime::{
@@ -10,6 +10,7 @@ use crate::cloud_runtime::{
         State as WorkerState,
         endpoint::{Admitted, State as GatewayState},
     },
+    state::service_admission::Phase,
 };
 use horizon_cloud_protocol::exposure::{ConnectionLimits, ExposureMode, ExposureRequest};
 use serde_json::json;
