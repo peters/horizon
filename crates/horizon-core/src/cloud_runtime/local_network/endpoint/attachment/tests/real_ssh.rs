@@ -469,10 +469,18 @@ fn original_owner_policy_does_not_grant_control_or_other_user_access() {
     }
 }
 
+fn private_directory() -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap()
+}
+
 #[test]
 fn original_file_refuses_symlink_hardlink_permissions_and_wrong_uid() {
     use std::os::unix::fs::{PermissionsExt, symlink};
-    let directory = tempfile::tempdir().unwrap();
+    let directory = private_directory();
     let path = directory.path().join("original");
     std::fs::write(&path, b"synthetic record").unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
@@ -506,7 +514,7 @@ fn opened_original_rechecks_inode_and_permissions_after_open() {
 #[test]
 fn original_store_holds_the_original_lock_and_refuses_another_basename() {
     use std::os::unix::fs::PermissionsExt;
-    let directory = tempfile::tempdir().unwrap();
+    let directory = private_directory();
     let root = directory.path().join("original");
     std::fs::create_dir(&root).unwrap();
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -529,7 +537,7 @@ fn original_store_holds_the_original_lock_and_refuses_another_basename() {
 #[test]
 fn hashed_settings_require_the_same_selected_key_without_reading_key_bytes() {
     use std::os::unix::fs::PermissionsExt;
-    let directory = tempfile::tempdir().unwrap();
+    let directory = private_directory();
     let key = directory.path().join("task-only-key");
     std::fs::write(&key, b"synthetic non-key bytes").unwrap();
     std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
