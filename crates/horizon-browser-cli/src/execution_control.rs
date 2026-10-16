@@ -357,7 +357,7 @@ mod tests {
     #[tokio::test]
     async fn a_deadline_keeps_required_work_that_outlasts_the_interrupt_drain() {
         let mut control = ExecutionControl::with_timeout(Duration::ZERO);
-        // Before the fix, the process exited 124 when this slow write missed the drain.
+        // Slow storage after a deadline must delay the record, not exit the process.
         let value = control
             .wait_owned_blocking("horizon-browser-test-slow-required", BlockingIoMode::Required, || {
                 std::thread::sleep(BLOCKING_IO_DRAIN + Duration::from_millis(250));
