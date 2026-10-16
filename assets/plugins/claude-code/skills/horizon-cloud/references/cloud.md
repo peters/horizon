@@ -428,7 +428,10 @@ get `upkeep_unavailable`.
   rents a worker that stays on.
 - `add` shows the person the board's repository list with the repositories added.
   The list changes only when the person saves it. The Upkeep agent then gets push
-  access to every listed repository and squash-merges bot pull requests there.
+  access to every listed repository and squash-merges bot pull requests there. When
+  the Upkeep has package read access, a repository of a new owner also opens the
+  NuGet and npm packages of that owner to the Upkeep's agents at the next exchange:
+  say so when you propose one.
 - `create` and `add` answer `awaiting_person`. Tell the person what you proposed and
   why, then read `status` later to see what they chose. A list the person keeps
   elsewhere, such as a maintenance document, is a good source for the names.
@@ -509,6 +512,15 @@ reads or changes it, and agents work only with the repositories the cloud was gi
   such as `gh api user/repos`, and changes to repository settings. A refusal shows as
   `Horizon: ...` (`GraphQL: Horizon: ...` for GraphQL); for a repository the
   task needs, ask with `github_access`.
+- Only an Upkeep's cloud gets package read access. During a deployment of that cloud,
+  when its GitHub access works, the card shows the person a second device code right
+  after the GitHub step: a sign-in of Horizon's own OAuth app with only
+  `read:packages`, approved with the person's own GitHub account. The worker's root
+  service keeps that access; no agent sees it, and there is no token for you to ask
+  for. **Skip: package checks need a person** is saved for that Upkeep, so later
+  deployments do not ask again. When the refusal says that the cloud has no package
+  read access, tell the person that **Connect GitHub again** on the cloud's card asks
+  for it again; a skip then keeps any earlier access.
 - On workers whose image provides it, `horizon-worker-github mcp` offers
   `github_access` (`repository`, `access` `push` or `read`, `reason`). It asks the
   person for access to one more repository. The person allows it for this task
