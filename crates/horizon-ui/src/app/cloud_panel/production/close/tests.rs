@@ -9,6 +9,8 @@ use horizon_core::cloud_runtime::{CreateState, state::Store};
 #[cfg(unix)]
 mod cancellation;
 #[cfg(unix)]
+mod node_cleanup;
+#[cfg(unix)]
 mod refresh;
 mod refused;
 #[cfg(unix)]

@@ -6,6 +6,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Instant;
 
 mod diagnosis_scope;
+mod node_cleanup;
 mod skipped;
 
 fn deployment(

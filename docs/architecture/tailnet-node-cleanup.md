@@ -1,8 +1,9 @@
 # Core recorded-node cleanup
 
-This backend is behind the default-off Core `tailnet-node-cleanup` feature.
-It requires `cloud-workspaces` to compile the cloud runtime. Default UI and CLI builds keep their existing behavior.
-The final UI/activation outcome must enable cleanup through `cloud-workspaces`; this prerequisite does not activate it.
+The final UI outcome activates the backend `tailnet-node-cleanup` feature through Core `cloud-workspaces`.
+Existing UI default builds and owner `cloud_deploy` builds therefore share the same activation.
+The feature adds no dependency back to `cloud-workspaces`, avoiding a Cargo feature cycle.
+Confirmation metadata remains readable independently of this activation.
 
 
 The existing owner cloud-delete controller deletes provider compute and managed storage before a node API request.
@@ -67,16 +68,31 @@ Filesystem and OS-store operations keep their platform behavior, without a hard 
 The first uncertain receipt ends the pass; later receipts remain pending.
 The next owner retry uses the same record and pending groups.
 
-With the feature enabled, existing owner Delete and cloud_deploy delete use the same Core entrypoint.
-The shared `can_remove` check rejects pending receipts, unresolved attempts and selected legacy clouds without an ID
-under the original lifecycle lock. This check and automatic API dispatch are enabled together.
-An enabled backend cannot discard the original card through normal removal or automatic close while cleanup is pending.
-With the feature disabled, Deleted retry and normal-removal behavior are unchanged; retained confirmation metadata still roundtrips.
+Existing owner UI Delete and cloud_deploy delete use the same Core entrypoint.
+Manage displays pending cleanup and supplies Retry node cleanup through the same owner Delete controller.
+The existing sidebar and cloud_list read the same attention status; they grant no new delete operation.
+Normal removal and automatic close recheck the saved ledger under the original lifecycle lock.
+Pending receipts, unresolved attempts and selected legacy clouds without an ID retain their card and manual reason.
 
-This backend does not add pending-status presentation, a dedicated Retry node cleanup action or an explicit-discard warning.
-Those UI changes and default activation are one subsequent outcome.
-Existing explicit native RemoveAnyway remains deliberate and locked, with its original resource record preserved.
-Default activation must supply its pending-node warning and preserve precise API/manual failure reasons during automatic close.
-Actual native qualification and first-head/final-head real-input checks remain required before activation.
-Current deployment diagnosis, captured projection, replacement handling and allocation version fences remain unchanged.
-Set credential entry is inherited from the separate owner-editor prerequisite; this backend adds no entry or approval path.
+Explicit native Remove from Horizon anyway keeps its original deliberate-discard capability and lifecycle lock.
+It warns that discarding the card preserves the original record but hides retry controls.
+It issues no node API request or confirmation, and preserves the pending ledger.
+Actual native qualification and first-head/final-head real-input checks remain required.
+It preserves current deployment diagnosis, captured projection, replacement handling and allocation version fences.
+Set credential entry is inherited from the owner-editor prerequisite; these cloud-delete changes add no credential entry or approval path.
+
+Removal eligibility and recorded-node checks run on the existing background removal worker.
+Display advice never authorizes discard: a fresh final check retains the original Store lock through exact-context UI application.
+Cancellation, context drift and old generations cannot apply a later removal.
+The UI preserves an earlier precise API failure only for the same displayed saved-tailnet/device pair; text supplies no authority.
+A retained Ready connection watch does not prevent explicit RemoveAnyway, while busy operations and the lifecycle lock still refuse it.
+
+Cleanup Retry reads saved settings on the background operation worker.
+The card stays busy while that read waits. Cancellation checks run before the read and before cleanup dispatch. Invalid settings prevent provider and node work. A later Retry uses the same background read.
+
+The UI keeps a display context for Retry from recorded pending cleanup or legacy missing identity. A failure alone never clears this context. Settings errors, cancellation, invalid launch identity and lifecycle lock contention retain Deleted, the current error and Retry through normal event polling. A legacy context also retains the manual missing-ID explanation when a later error replaces its text. An empty Deleted snapshot does not prove that legacy cleanup is complete.
+A fresh Deleted snapshot with pending recorded receipts replaces Legacy display context with Recorded. It removes the obsolete legacy explanation and keeps Retry.
+The first ordinary Remove that reports legacy missing identity establishes this context before another removal can replace its error. A subsequent busy removal retains the explanation and Retry. After provider deletion saves successfully, Core emits the exact saved Deleted snapshot while it still holds the original Store, before node cleanup can fail. Already-Deleted retries also emit their loaded snapshot before cancellation or cleanup. Cleanup then emits its last durable ledger on success or failure. A contended UI reload cannot lose the first pending receipt or retain an already confirmed receipt; failed saves supply no new deletion fact.
+
+New authoritative lifecycle facts clear obsolete display context. These include a non-Deleted Stage, Ready, successful Deleted completion, Stopped or Resumed. A fresh snapshot also clears it when its stage is not Deleted or its recorded ledger confirms all node cleanup. The display context, cached snapshot and error text supply no deletion or removal authority. The original locked Store and current durable evidence remain the sole authority for Delete, node requests, normal removal and redeploy.
+The explicit-discard warning also examines the raw saved-record reason, so a restored legacy cloud with no captured device ID receives it before any retry.

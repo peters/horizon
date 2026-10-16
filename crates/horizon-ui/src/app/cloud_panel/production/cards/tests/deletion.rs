@@ -1,5 +1,9 @@
+#[cfg(unix)]
+use super::super::super::{Event, lifecycle::CleanupRetry};
 use super::*;
 use horizon_core::cloud_panel::CloudGroup;
+#[cfg(unix)]
+use horizon_core::cloud_runtime::tailnet::receipt::{EnrollmentLedger, ManualCleanupReason};
 
 /// Texts drawn by one frame of the runtime actions.
 fn action_texts(ctx: &egui::Context, runtime: &mut super::super::super::Runtime) -> Vec<String> {
@@ -35,6 +39,446 @@ fn ready_bound_runtime() -> super::super::super::Runtime {
 
 fn has(texts: &[String], wanted: &str) -> bool {
     texts.iter().any(|text| text.starts_with(wanted))
+}
+
+#[test]
+fn deleted_resources_keep_manual_node_message_and_offer_cleanup_retry() {
+    let ctx = egui::Context::default();
+    let mut runtime = ready_bound_runtime();
+    runtime.stage = Some(Stage::Deleted);
+    runtime.operation = Some(Action::Delete);
+    runtime.error = Some("Tailnet node n-exact needs manual removal; API is offline".into());
+    runtime.state.as_mut().unwrap().tailnet_enrollment = serde_json::from_value(serde_json::json!({"receipts":[{
+        "tailnet_id":"work","provider":"runpod","worker_id":"worker1",
+        "allocation_request_id":"delete-fixture","device_id":"n-exact"
+    }]}))
+    .unwrap();
+    let texts = action_texts(&ctx, &mut runtime);
+    assert!(has(&texts, "Retry node cleanup"));
+    assert!(has(&texts, "Tailnet node n-exact"));
+    runtime.error = Some(super::super::super::DELETED_RESOURCES_MESSAGE.into());
+    let ledger = &mut runtime.state.as_mut().unwrap().tailnet_enrollment;
+    ledger.confirm_removed(&ledger.receipts()[0].clone()).unwrap();
+    assert!(!has(&action_texts(&ctx, &mut runtime), "Retry node cleanup"));
+    runtime.operation = Some(Action::Deploy);
+    assert!(!has(&action_texts(&ctx, &mut runtime), "Retry node cleanup"));
+}
+
+#[cfg(unix)]
+fn valid_retry_settings(root: &std::path::Path) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "runpod_key_file": root.join("runpod"),
+        "ssh_identity_file": root.join("ssh"),
+        "docker_config": root.join("docker"),
+        "registry_pull_auth_id": null, "cpu_flavors": [], "gpu_types": []
+    }))
+    .unwrap()
+}
+
+#[cfg(unix)]
+struct DelayedRetrySettings {
+    reading: std::sync::mpsc::Receiver<()>,
+    permit: std::sync::mpsc::Sender<()>,
+    writer: std::thread::JoinHandle<bool>,
+}
+
+#[cfg(unix)]
+impl DelayedRetrySettings {
+    fn start(settings: std::path::PathBuf, bytes: Vec<u8>) -> Self {
+        use std::{
+            io::Write as _,
+            os::unix::fs::OpenOptionsExt as _,
+            sync::mpsc,
+            time::{Duration, Instant},
+        };
+        let (ready, reading) = mpsc::channel();
+        let (permit, permitted) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut file = loop {
+                if let Ok(file) = std::fs::OpenOptions::new()
+                    .write(true)
+                    .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed())
+                    .open(&settings)
+                {
+                    break file;
+                }
+                assert!(Instant::now() < deadline, "settings reader did not start");
+                std::thread::sleep(Duration::from_millis(1));
+            };
+            ready.send(()).unwrap();
+            let ui_returned = permitted.recv_timeout(Duration::from_secs(5)).is_ok();
+            file.write_all(&bytes).unwrap();
+            ui_returned
+        });
+        Self {
+            reading,
+            permit,
+            writer,
+        }
+    }
+
+    fn wait_for_reader(&self) {
+        self.reading.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    }
+
+    fn finish(self) {
+        self.permit.send(()).unwrap();
+        assert!(
+            self.writer.join().unwrap(),
+            "Retry waited for settings on the UI thread"
+        );
+    }
+}
+
+#[cfg(unix)]
+fn pending_retry_ledger() -> EnrollmentLedger {
+    serde_json::from_value(serde_json::json!({"receipts":[{
+        "tailnet_id":"work", "provider":"runpod", "worker_id":"worker1",
+        "allocation_request_id":"fixture", "device_id":"n-pending-fixture"
+    }]}))
+    .unwrap()
+}
+
+#[cfg(unix)]
+struct CleanupRetryFixture {
+    temp: tempfile::TempDir,
+    app: crate::app::HorizonApp,
+    ctx: egui::Context,
+    original: Vec<u8>,
+    selection: Vec<u8>,
+    legacy: bool,
+}
+
+#[cfg(unix)]
+impl CleanupRetryFixture {
+    fn new(legacy: bool) -> Self {
+        let (temp, mut app) = crate::app::test_support::test_app();
+        let ctx = egui::Context::default();
+        app.prepare_production_clouds(&ctx);
+        resumable_cloud(&mut app, false);
+        app.cloud_prototype.root = Some(temp.path().to_owned());
+        let mut runtime = ready_bound_runtime();
+        runtime.stage = Some(Stage::Deleted);
+        runtime.error = legacy.then(|| ManualCleanupReason::DeviceIdentityUnavailable.message().into());
+        let state = runtime.state.as_mut().unwrap();
+        state.cloud_id = "fixture".into();
+        state.stage = Stage::Deleted;
+        state.operation = cloud_runtime::CreateState::Terminated {
+            worker_id: "worker1".into(),
+        };
+        state.worker = None;
+        state.browserstack_released = true;
+        state.tailnet_enrollment = if legacy {
+            EnrollmentLedger::default()
+        } else {
+            pending_retry_ledger()
+        };
+        let cloud_root = temp.path().join("fixture");
+        cloud_runtime::state::Store::lock(&cloud_root)
+            .unwrap()
+            .save(state)
+            .unwrap();
+        cloud_runtime::tailnet::Selection {
+            tailnet: Some("work".into()),
+        }
+        .commit(&cloud_root)
+        .unwrap();
+        let original = std::fs::read(cloud_root.join("deployment.json")).unwrap();
+        let selection = std::fs::read(cloud_root.join("tailnet.json")).unwrap();
+        app.cloud_prototype.production.runtimes.insert(7, runtime);
+        Self {
+            temp,
+            app,
+            ctx,
+            original,
+            selection,
+            legacy,
+        }
+    }
+
+    fn first_delete_events(&mut self) -> std::sync::mpsc::Sender<Event> {
+        let mut ready = ready_bound_runtime();
+        ready.state.as_mut().unwrap().cloud_id = "fixture".into();
+        assert_eq!(ready.stage, Some(Stage::Ready));
+        assert!(ready.cleanup_retry.is_none());
+        ready.progress.begin_deletion();
+        ready.operation = Some(Action::Delete);
+        ready.stage = Some(Stage::DeleteWorker);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        ready.receiver = Some(receiver);
+        self.app.cloud_prototype.production.runtimes.insert(7, ready);
+        sender
+    }
+
+    fn delayed_retry(&mut self, bytes: Vec<u8>, cancel_read: bool) {
+        let settings = self.temp.path().join("settings.json");
+        if !settings.exists() {
+            assert!(
+                std::process::Command::new("mkfifo")
+                    .arg(&settings)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let delayed = DelayedRetrySettings::start(settings, bytes);
+        self.app.apply_card_action(7, Action::Delete, &self.ctx);
+        delayed.wait_for_reader();
+        let runtime = self.app.cloud_prototype.production.runtimes.get_mut(&7).unwrap();
+        assert!(runtime.busy());
+        assert!(has(&action_texts(&self.ctx, runtime), "Deleting cloud resources"));
+        let cancel = runtime.cancel.clone().unwrap();
+        self.app.apply_card_action(7, Action::Delete, &self.ctx);
+        if cancel_read {
+            cancel.cancel();
+            assert!(
+                self.app.cloud_prototype.production.runtimes[&7]
+                    .cancel
+                    .as_ref()
+                    .unwrap()
+                    .is_cancelled()
+            );
+        }
+        delayed.finish();
+    }
+
+    fn settle(&mut self) {
+        use std::time::{Duration, Instant};
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while self.app.cloud_prototype.production.runtimes[&7].receiver.is_some() {
+            self.app.prepare_production_clouds(&self.ctx);
+            assert!(
+                Instant::now() < deadline,
+                "normal app polling did not settle cleanup Retry"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(!self.app.cloud_prototype.production.runtimes[&7].busy());
+    }
+
+    fn assert_bytes(&self) {
+        let root = self.temp.path().join("fixture");
+        assert_eq!(std::fs::read(root.join("deployment.json")).unwrap(), self.original);
+        assert_eq!(std::fs::read(root.join("tailnet.json")).unwrap(), self.selection);
+    }
+
+    fn assert_retained(&mut self, expected_error: &str) {
+        self.settle();
+        let runtime = self.app.cloud_prototype.production.runtimes.get_mut(&7).unwrap();
+        assert_eq!(runtime.stage, Some(Stage::Deleted));
+        assert!(runtime.error.as_deref().unwrap().contains(expected_error));
+        assert!(node_cleanup_pending(runtime));
+        let texts = action_texts(&self.ctx, runtime);
+        assert!(has(&texts, "Retry node cleanup"));
+        if self.legacy {
+            assert!(has(&texts, ManualCleanupReason::DeviceIdentityUnavailable.message()));
+        }
+        let status = super::super::status::of(
+            runtime,
+            super::super::status::Occupancy::default(),
+            std::time::SystemTime::now(),
+        );
+        if runtime.state_unavailable {
+            assert_eq!(status.tone, super::super::status::Tone::Failed);
+        } else {
+            assert_eq!(status.tone, super::super::status::Tone::Attention);
+            assert_eq!(status.verb, "Tailnet node cleanup pending");
+        }
+        self.assert_bytes();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn cleanup_retry_keeps_the_ui_responsive_during_settings_read_and_retains_failures() {
+    for legacy in [false, true] {
+        for cancel_read in [false, true] {
+            let mut fixture = CleanupRetryFixture::new(legacy);
+            for _ in 0..2 {
+                let bytes = if cancel_read {
+                    valid_retry_settings(fixture.temp.path())
+                } else {
+                    b"{".to_vec()
+                };
+                fixture.delayed_retry(bytes, cancel_read);
+                fixture.assert_retained(if cancel_read {
+                    "cancelled"
+                } else {
+                    "Invalid cloud state or settings"
+                });
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn cleanup_retry_retains_deleted_after_a_locked_record_and_the_next_settings_read_stays_background() {
+    for legacy in [false, true] {
+        let mut fixture = CleanupRetryFixture::new(legacy);
+        let store = cloud_runtime::state::Store::lock(&fixture.temp.path().join("fixture")).unwrap();
+        fixture.delayed_retry(valid_retry_settings(fixture.temp.path()), false);
+        fixture.assert_retained(&cloud_runtime::Error::Busy.to_string());
+        assert_eq!(store.load().unwrap().unwrap().stage, Stage::Deleted);
+        drop(store);
+        fixture.delayed_retry(valid_retry_settings(fixture.temp.path()), true);
+        fixture.assert_retained("cancelled");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn first_deletion_snapshot_survives_a_contended_reload_and_keeps_the_next_retry_background() {
+    let mut fixture = CleanupRetryFixture::new(false);
+    let store = cloud_runtime::state::Store::lock(&fixture.temp.path().join("fixture")).unwrap();
+    let sender = fixture.first_delete_events();
+    sender.send(Event::stage(Stage::DeleteWorker)).unwrap();
+    sender
+        .send(Event::Snapshot(Box::new(store.load().unwrap().unwrap())))
+        .unwrap();
+    let error = cloud_runtime::Error::TailnetNodeCleanup {
+        tailnet_id: "work".into(),
+        device_id: "n-pending-fixture".into(),
+        reason: "the node API is unavailable",
+    }
+    .to_string();
+    sender.send(Event::failed(error.clone())).unwrap();
+    assert!(matches!(
+        cloud_runtime::state::Store::lock(store.root()),
+        Err(cloud_runtime::Error::Busy)
+    ));
+    fixture.assert_retained(&error);
+    let runtime = &fixture.app.cloud_prototype.production.runtimes[&7];
+    assert_eq!(runtime.cleanup_retry, Some(CleanupRetry::Recorded));
+    assert!(runtime.progress.ended_in(Stage::Deleted).is_some());
+    assert_eq!(store.load().unwrap().unwrap().stage, Stage::Deleted);
+    drop(store);
+    fixture.delayed_retry(valid_retry_settings(fixture.temp.path()), true);
+    fixture.assert_retained("cancelled");
+}
+
+#[cfg(unix)]
+#[test]
+fn first_deletion_final_snapshot_clears_confirmed_cleanup_without_a_reload() {
+    let mut fixture = CleanupRetryFixture::new(false);
+    let store = cloud_runtime::state::Store::lock(&fixture.temp.path().join("fixture")).unwrap();
+    let sender = fixture.first_delete_events();
+    let mut saved = store.load().unwrap().unwrap();
+    sender.send(Event::Snapshot(Box::new(saved.clone()))).unwrap();
+    let receipt = saved.tailnet_enrollment.receipts()[0].clone();
+    saved.tailnet_enrollment.confirm_removed(&receipt).unwrap();
+    store.save(&saved).unwrap();
+    fixture.original = std::fs::read(store.root().join("deployment.json")).unwrap();
+    sender.send(Event::Snapshot(Box::new(saved))).unwrap();
+    sender.send(Event::deleted()).unwrap();
+    assert!(matches!(
+        cloud_runtime::state::Store::lock(store.root()),
+        Err(cloud_runtime::Error::Busy)
+    ));
+    fixture.settle();
+    let runtime = fixture.app.cloud_prototype.production.runtimes.get_mut(&7).unwrap();
+    assert_eq!(runtime.stage, Some(Stage::Deleted));
+    assert!(runtime.cleanup_retry.is_none());
+    assert!(!node_cleanup_pending(runtime));
+    assert!(!has(&action_texts(&fixture.ctx, runtime), "Retry node cleanup"));
+    assert!(runtime.state.as_ref().unwrap().tailnet_enrollment.receipts()[0].node_deleted);
+    fixture.assert_bytes();
+}
+
+#[cfg(unix)]
+#[test]
+fn cleanup_retry_retains_deleted_when_its_launch_identity_is_invalid() {
+    for legacy in [false, true] {
+        let mut fixture = CleanupRetryFixture::new(legacy);
+        fixture.app.cloud_prototype.groups.0[0].remote.as_mut().unwrap().id = "../foreign".into();
+        assert!(!fixture.temp.path().join("settings.json").exists());
+        for _ in 0..2 {
+            fixture.app.apply_card_action(7, Action::Delete, &fixture.ctx);
+            assert!(fixture.app.cloud_prototype.production.runtimes[&7].receiver.is_none());
+            fixture.app.prepare_production_clouds(&fixture.ctx);
+            fixture.assert_retained("Invalid cloud identity");
+            assert!(fixture.app.cloud_prototype.production.runtimes[&7].state_unavailable);
+            assert!(!fixture.temp.path().join("settings.json").exists());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn cleanup_retry_display_hint_yields_to_fresh_lifecycle_facts_without_granting_removal() {
+    for event_kind in 0..6 {
+        let mut fixture = CleanupRetryFixture::new(true);
+        let at = std::time::Instant::now();
+        let runtime = fixture.app.cloud_prototype.production.runtimes.get_mut(&7).unwrap();
+        runtime.cleanup_retry = Some(CleanupRetry::Legacy);
+        runtime.stage = Some(Stage::DeleteWorker);
+        runtime.operation = Some(Action::Delete);
+        runtime.progress.begin_deletion();
+        runtime.error = None;
+        let mut fresh = runtime.state.clone().unwrap();
+        fresh.stage = Stage::Ready;
+        let event = match event_kind {
+            0 => Event::stage(Stage::Ready),
+            1 => Event::Snapshot(Box::new(fresh)),
+            2 => Event::Ready(Box::new(fresh), at),
+            3 | 5 => {
+                fresh.stage = Stage::Deleted;
+                fresh.tailnet_enrollment = pending_retry_ledger();
+                if event_kind == 3 {
+                    let receipt = fresh.tailnet_enrollment.receipts()[0].clone();
+                    fresh.tailnet_enrollment.confirm_removed(&receipt).unwrap();
+                }
+                Event::Snapshot(Box::new(fresh))
+            }
+            _ => Event::deleted(),
+        };
+        let (sender, receiver) = std::sync::mpsc::channel();
+        runtime.receiver = Some(receiver);
+        sender.send(event).unwrap();
+        sender.send(Event::failed("A later unrelated failure".into())).unwrap();
+        fixture.settle();
+        let runtime = fixture.app.cloud_prototype.production.runtimes.get_mut(&7).unwrap();
+        assert_eq!(
+            runtime.stage,
+            Some(if event_kind < 3 { Stage::Ready } else { Stage::Deleted })
+        );
+        assert_eq!(
+            runtime.cleanup_retry,
+            (event_kind == 5).then_some(CleanupRetry::Recorded)
+        );
+        assert_eq!(node_cleanup_pending(runtime), event_kind == 5);
+        let texts = action_texts(&fixture.ctx, runtime);
+        assert_eq!(has(&texts, "Retry node cleanup"), event_kind == 5);
+        assert!(!has(&texts, ManualCleanupReason::DeviceIdentityUnavailable.message()));
+        fixture.app.remove_deleted_cloud(7, &fixture.ctx);
+        fixture.app.settle_cloud_removals_at(&fixture.ctx);
+        assert_eq!(
+            fixture.app.cloud_prototype.groups.0.len(),
+            1,
+            "cached facts cannot remove the original selected legacy record"
+        );
+        fixture.assert_bytes();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn cleanup_retry_legacy_hint_survives_an_empty_deleted_snapshot_before_failure() {
+    let mut fixture = CleanupRetryFixture::new(true);
+    let runtime = fixture.app.cloud_prototype.production.runtimes.get_mut(&7).unwrap();
+    runtime.cleanup_retry = Some(CleanupRetry::Legacy);
+    runtime.stage = Some(Stage::DeleteWorker);
+    runtime.error = None;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    runtime.receiver = Some(receiver);
+    sender
+        .send(Event::Snapshot(Box::new(runtime.state.clone().unwrap())))
+        .unwrap();
+    sender
+        .send(Event::failed("A settings or local-state failure".into()))
+        .unwrap();
+    fixture.assert_retained("A settings or local-state failure");
 }
 
 #[test]

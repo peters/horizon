@@ -263,6 +263,20 @@ fn blank() -> Status {
     }
 }
 
+fn pending_tailnet_cleanup(runtime: &Runtime, base: Status) -> Status {
+    Status {
+        tone: Tone::Attention,
+        verb: "Tailnet node cleanup pending".into(),
+        numbers: runtime
+            .error
+            .clone()
+            .unwrap_or_else(|| "Recorded node cleanup is pending; open Manage to retry".into()),
+        primary: Some(Primary::Manage),
+        track: Track::complete(&Stage::DELETION, true),
+        ..base
+    }
+}
+
 /// States that override the deployment's own: an unreadable record, deletion and
 /// its aftermath, and a running provider check.
 fn exceptional(runtime: &Runtime) -> Option<Status> {
@@ -296,6 +310,9 @@ fn exceptional(runtime: &Runtime) -> Option<Status> {
         return Some(deletion(runtime, base));
     }
     if deleted_or_redeploying(runtime) && runtime.receiver.is_none() {
+        if super::node_cleanup_pending(runtime) {
+            return Some(pending_tailnet_cleanup(runtime, base));
+        }
         // A finished deletion leaves its summary in the error slot; that is not a failure.
         if let Some(error) = runtime
             .error

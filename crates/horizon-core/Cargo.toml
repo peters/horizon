@@ -10,7 +10,7 @@ repository.workspace = true
 
 [features]
 default = ["cloud-workspaces"]
-cloud-workspaces = ["dep:horizon-cloud", "dep:horizon-cloud-protocol", "dep:ring", "dep:ed25519-dalek", "dep:if-addrs", "dep:simple-dns", "dep:socket2", "dep:tar", "dep:semver", "dep:flate2"]
+cloud-workspaces = ["tailnet-node-cleanup", "dep:horizon-cloud", "dep:horizon-cloud-protocol", "dep:ring", "dep:ed25519-dalek", "dep:if-addrs", "dep:simple-dns", "dep:socket2", "dep:tar", "dep:semver", "dep:flate2"]
 tailnet-node-cleanup = []
 cloud-panel-mock = ["cloud-workspaces"]
 # One-service gateway engine; public admission and worker routing are not enabled yet.

@@ -17,12 +17,11 @@ Make sure uncertainty preserves original receipts and unresolved attempts.
 
 ## 2. Applicability
 
-Use the candidate with the NodeApi SDK and default-off Core cleanup addition.
-For enabled checks, build with both `cloud-workspaces,tailnet-node-cleanup`.
-Default UI and CLI builds retain prior behavior until the final UI/activation outcome.
+Use the candidate with the NodeApi SDK, backend cleanup and final UI activation.
+Core `cloud-workspaces` enables `tailnet-node-cleanup` for both default UI and owner CLI builds.
 Existing owner Delete and cloud_deploy delete use this controller.
 No public companion MCP cloud-delete lane exists.
-Native retry and precise card-retention presentation require the later UI/activation candidate.
+Use the production candidate with cloud-workspaces for native retry and card retention checks.
 Set credential entry is inherited from its separate prerequisite and supplies no node-deletion authority.
 
 ## 3. Safety
@@ -62,7 +61,7 @@ Never pass a secret through an argument, environment variable, worker or log.
 1. Run the focused cleanup tests.
 
    ```bash
-   RUSTFLAGS="-D warnings" cargo test --locked --offline -p horizon-core --features tailnet-node-cleanup --lib cloud_runtime::tailnet::cleanup
+   RUSTFLAGS="-D warnings" cargo test --locked --offline -p horizon-core --lib cloud_runtime::tailnet::cleanup
    ```
 
    Result: Confirmation persists before the next request. Retry skips confirmed exact groups.
@@ -71,9 +70,9 @@ Never pass a secret through an argument, environment variable, worker or log.
 2. Run the existing tailnet and allocation tests.
 
    ```bash
-   RUSTFLAGS="-D warnings" cargo test --locked --offline -p horizon-core --features tailnet-node-cleanup --lib cloud_runtime::tailnet
-   RUSTFLAGS="-D warnings" cargo test --locked --offline -p horizon-core --features tailnet-node-cleanup --lib cloud_runtime::allocation
-   RUSTFLAGS="-D warnings" cargo test --locked --offline -p horizon-core --features tailnet-node-cleanup --lib cloud_runtime::deployment::redeploy
+   RUSTFLAGS="-D warnings" cargo test --locked --offline -p horizon-core --lib cloud_runtime::tailnet
+   RUSTFLAGS="-D warnings" cargo test --locked --offline -p horizon-core --lib cloud_runtime::allocation
+   RUSTFLAGS="-D warnings" cargo test --locked --offline -p horizon-core --lib cloud_runtime::deployment::redeploy
    ```
 
    Result: Confirmed paired records survive reopen. Duplicate keys, unknown fields and unsupported owner versions remain refused.
@@ -137,30 +136,70 @@ Never pass a secret through an argument, environment variable, worker or log.
 
    Result: Both real-input runs bind exact source, artifact and task-resource identities.
 
-### 6.4 C04 — OFF and ON removal custody
+### 6.4 C04 — Card retention and explicit owner discard
 
-1. Run the default-feature regression without enabling node cleanup.
-
-   ```bash
-   RUSTFLAGS="-D warnings" cargo test --locked --offline -p horizon-core --lib disabled_node_cleanup
-   ```
-
-   Result: A Deleted record without a worker specification keeps its original refusal without provider or API credentials. Original receipt bytes and prior normal-removal behavior remain unchanged.
-
-2. Run the enabled locked-record removal regression.
+1. Run the actual close and removal regressions.
 
    ```bash
-   RUSTFLAGS="-D warnings" cargo test --locked --offline -p horizon-core --features tailnet-node-cleanup --lib original_record_removal
+   RUSTFLAGS="-D warnings" cargo test --locked --offline -p horizon-ui --features cloud-workspaces node_cleanup
+   RUSTFLAGS="-D warnings" cargo test --locked --offline -p horizon-ui --features cloud-workspaces cleanup_retry
    ```
 
-   Result: Pending receipts refuse removal, confirmed groups permit it and unresolved attempts remain unchanged and prevent removal.
+   Result: Normal Remove and automatic close retain the original pending card and exact-ID failure.
+   Stale confirmed snapshots cannot override the locked record. Unknown legacy identity stays manual.
+   Initial and final checks remain asynchronous. Periodic display advice retains its settled controls.
+   Cancel, context changes and retained Ready watches keep their existing lock and generation checks.
+   Only a matching displayed saved-tailnet/device pair retains its previous API detail.
+   A delayed Retry settings read leaves UI frames responsive and keeps the operation busy.
+   Cancellation or malformed settings prevent provider/node dispatch.
+   Normal event polling retains the Retry display context through every failure.
+   Recorded and legacy cases retain Deleted, the error and Retry after settings failure, cancellation or lifecycle lock contention.
+   Invalid launch identity also retains these controls without a settings read or dispatch.
+   A later generic error does not hide the legacy missing-ID explanation.
+   An empty Deleted snapshot does not settle legacy cleanup.
+   A second delayed Retry stays responsive. Both attempts preserve the saved record.
+   Ordinary Remove on a restored legacy card records its missing-ID context.
+   A second Remove with the original Store locked retains the manual explanation and Retry.
+   First deletion from Ready publishes its saved Deleted snapshot under the original Store.
+   A contended UI reload after cleanup failure retains the pending receipt and Retry.
+   Fully confirmed cleanup publishes its final durable ledger and clears Retry without a reload.
+   Failed deletion saves publish no Deleted snapshot.
+   Authoritative Stage, Ready and settled recorded snapshots clear obsolete display context.
+   The locked Store still refuses removal of its unresolved record after the display context clears.
+   Opening Close directly after a legacy restore still shows the explicit-discard warning.
 
-3. Check both feature configurations with the required blocking and strict tiers.
+2. In the isolated desktop, open Manage for the original pending cloud.
 
-   Result: The backend is not activated by default. No disabled branch references an unavailable cleanup module.
+   Result: Retry node cleanup is available. The card and existing cloud_list read show attention without a new MCP delete grant.
+   The isolated settings-failure case starts with Manage open and valid owned settings.
+   A settings error retains Deleted and Retry. Exact settings restoration permits another asynchronous Retry.
+   During the isolated lock-contention case, only the original task record lock stays held during Retry.
+   The busy error retains Deleted and Retry. A later Retry starts after that exact lock releases.
+   Recorded pending cleanup and legacy missing identity have the same failure-retention checks.
+   The evidence preserves all original deployment and selection bytes before fixture cleanup.
 
-Native pending/retry UI and explicit-discard warning checks belong to the final UI/activation outcome.
-They must qualify its first and final actual candidate before default activation.
+> **CAUTION:** RETRY ONLY THE EXACT TASK-OWNED NODE CLEANUP.
+> Retry can remove its recorded node. Keep the original cloud record and unrelated devices.
+
+3. Select Retry node cleanup after the authorized desktop API binding becomes available.
+
+   Result: The original controller retries pending groups without a new rental or successor lookup.
+   Only confirmed saved groups release normal removal.
+
+4. In the isolated synthetic fixture, inspect Remove from Horizon anyway with a pending ledger.
+
+   Result: The explicit owner warning explains that removal preserves the record but hides retry controls.
+
+> **CAUTION:** DISCARD ONLY THE EXACT SYNTHETIC FIXTURE CARD.
+> This action hides its retry controls while resources or node cleanup can remain unresolved.
+
+5. Select Remove from Horizon anyway on that synthetic card.
+
+   Result: Its original locked resource record and pending ledger remain unchanged. No node API request occurs.
+
+6. Capture actual native frames and a short GIF for the first and final candidate heads.
+
+   Result: Evidence shows pending status, retry and retained card behavior on exact frozen artifacts.
 
 ## 7. Pass criteria
 
@@ -169,7 +208,7 @@ They must qualify its first and final actual candidate before default activation
 - Unresolved attempts, other bindings and uncertain results remain retained.
 - Credentials remain desktop-only and failure messages contain no raw API body.
 - Required matrix and applicable first-head/final-head live lanes pass.
-- OFF/ON removal checks pass; native pending/retry/card-retention evidence is required for final activation.
+- Native pending/retry/card-retention evidence passes on first and final heads.
 - Unsupported provider lanes remain explicitly unqualified.
 
 ## 8. Cleanup

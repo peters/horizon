@@ -655,9 +655,17 @@ See docs/architecture/exposure-policy.md and docs/testing/procedures/exposure-po
 
 The receipt-capture adapter reads only the worker's actual tagged Self.ID via pinned root SSH and the existing userspace daemon socket, persists it before readiness and records uncertain attempts before enrollment. It binds the existing allocation request and saved tailnet ID to the owning cloud root. Worker agents cannot query this private root lane. No API secret is sent to a worker and no API editor or node-delete operation is activated by this adapter.
 
-The desktop NodeApi SDK sends only the encoded ID supplied by a trusted controller. It grants no owner authority itself. Its Core integration is behind default-off `tailnet-node-cleanup` and requires cloud-workspaces. Default UI/CLI behavior stays unchanged. An explicitly enabled controller requires original provider absence, saves exact-group confirmation before another request and refuses normal removal while its locked record remains pending. Unknown attempts stay manual and receive no API request. Different saved-tailnet bindings stay independent. Redeploy uses the same locked completion check before key validation, journal release or history reset; unresolved or selected legacy missing-ID state must finish cleanup first. Confirmed receipts remain recorded and genuinely fresh or None/no-evidence clouds can reopen. With cleanup enabled, an initial Docker capacity failure keeps never-requested Prepared through deletion and retries; volume-only preparation is not enrollment. Any observed container must persist Requested, including final verification after two earlier absences. Both SDK lookups use the same observation path. Final-only discovery followed by absence on retry, lost replies and legacy stop/resume/readiness or port history stay manual.
+The desktop NodeApi SDK sends only the encoded ID supplied by a trusted controller. It grants no owner authority itself. The existing Core cloud-delete controller calls it after original provider absence and saves exact-group confirmation before another request. Unknown capture attempts receive no API request and remain manual. Different saved-tailnet bindings stay independent; only the exact saved-tailnet/device group deduplicates. Redeploy uses the same locked completion check before key validation, journal release or history reset; unresolved or selected legacy missing-ID state must finish cleanup first. Confirmed receipts remain recorded and genuinely fresh or None/no-evidence clouds can reopen. With cleanup enabled, an initial Docker capacity failure keeps never-requested Prepared through deletion and retries; volume-only preparation is not enrollment. Any observed container must persist Requested, including final verification after two earlier absences. Both SDK lookups use the same observation path. Final-only discovery followed by absence on retry, lost replies and legacy stop/resume/readiness or port history stay manual.
 
-Missing managed slots and disabled bindings never select staged fallback. All404 remains unconfirmed. API values stay on the desktop. Dedicated pending/retry UI, precise automatic-close reasons, an explicit owner discard warning and default activation are a separate final outcome. See docs/architecture/tailnet-node-cleanup.md and docs/testing/procedures/tailnet-node-cleanup.md.
+Missing managed slots and disabled bindings never select staged fallback. All404 remains unconfirmed. API values stay on the desktop. See docs/architecture/tailnet-node-cleanup.md and docs/testing/procedures/tailnet-node-cleanup.md.
+
+Pending cleanup appears in Manage and the existing sidebar/cloud_list attention line. Retry node cleanup uses the existing owner Delete controller. Normal card removal and automatic close keep the original card and precise manual reason while its locked record remains unresolved. Explicit native Remove from Horizon anyway preserves that record and warns that retry controls disappear; it sends no node request and grants no confirmation. The warning also covers restored legacy clouds without a captured ID.
+
+Retry reads settings in the background. A delayed read keeps the operation busy; cancelled or failed preflight sends no cleanup request. Retry keeps its display context through settings errors, cancellation, invalid launch identity and lifecycle lock contention. The card retains Deleted, its error and Retry. Legacy missing identity also keeps its manual explanation after another error. The next Retry stays asynchronous.
+
+Ordinary Remove also retains the legacy missing-ID context before a later busy removal can replace its error. Core publishes the saved Deleted state and last durable cleanup ledger under the original lifecycle lock, so a contended UI reload keeps pending Retry available and clears confirmed cleanup. Failed saves supply no new deletion fact.
+
+This context affects display only. New authoritative lifecycle facts or a settled recorded snapshot clear obsolete context; an empty legacy snapshot does not prove cleanup. The original locked Store remains the sole authority for deletion and removal. A cleared display context, cached snapshot or error text cannot release an unresolved record.
 
 ## Owner API credential management
 
@@ -695,8 +703,9 @@ changing that source clears every draft field. Cancel, expiry, changed targets a
 Settings close discard unsaved drafts. Storage-root changes clear drafts before
 rendering while retaining owned writes; draft discard does not cancel a request.
 Saved values never fill a draft. Secrets
-are zeroizing and masked, with no undo history. Secret import/getter, remote API
-validation and automatic node cleanup are not supplied. No provider action is needed.
+are zeroizing and masked, with no undo history. These credential-management requests
+supply no secret import/getter, remote API validation or node cleanup. No provider
+action is needed for credential management.
 
 Reader failures and native write failures remain separate. A successful status
 read does not erase a failed save or removal, or prove rollback. Settings close retains

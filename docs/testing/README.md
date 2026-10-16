@@ -77,7 +77,7 @@ documents that are not yet STE.
 | [tailnet-marker4-rollout](procedures/tailnet-marker4-rollout.md) | Immutable CPU pin, strict private storage, provider scope and unsupported RunPod modes | rents compute |
 | [tailnet-api-credential-store](procedures/tailnet-api-credential-store.md) | Desktop API storage foundation, staged entries and independent auth keys | none |
 | [tailnet-node-api](procedures/tailnet-node-api.md) | Desktop exact-node HTTP transport and binding tests | offline none; authorized task-node deletion only |
-| [tailnet-node-cleanup](procedures/tailnet-node-cleanup.md) | Default-off Core exact recorded-node cleanup after provider deletion | authorized task-node deletion only |
+| [tailnet-node-cleanup](procedures/tailnet-node-cleanup.md) | Core exact recorded-node cleanup after provider deletion | authorized task-node deletion only |
 | [tailnet-api-removal](procedures/tailnet-api-removal.md) | Native owner API credential removal with CLI/MCP requests | none |
 | [tailnet-api-entry](procedures/tailnet-api-entry.md) | Masked owner API entry/replacement with metadata-only CLI/MCP requests | none |
 | [tailnet-api-status](procedures/tailnet-api-status.md) | Nonsecret API credential status in Settings, CLI and cached MCP discovery | none |
@@ -98,3 +98,4 @@ documents that are not yet STE.
 | [2026-10-15-tailnet-node-cleanup-final-live](reports/2026-10-15-tailnet-node-cleanup-final-live.md) | [tailnet-node-cleanup](procedures/tailnet-node-cleanup.md) | 2026-10-15 |
 | [2026-10-15-tailnet-node-cleanup-docker-capacity-live](reports/2026-10-15-tailnet-node-cleanup-docker-capacity-live.md) | [tailnet-node-cleanup](procedures/tailnet-node-cleanup.md) | 2026-10-15 |
 | [2026-10-15-tailnet-node-cleanup-round4](reports/2026-10-15-tailnet-node-cleanup-round4.md) | [tailnet-node-cleanup](procedures/tailnet-node-cleanup.md) | 2026-10-15 |
+| [2026-10-15-tailnet-node-cleanup-activation-current-main](reports/2026-10-15-tailnet-node-cleanup-activation-current-main.md) | [tailnet-node-cleanup](procedures/tailnet-node-cleanup.md) | 2026-10-15 |
