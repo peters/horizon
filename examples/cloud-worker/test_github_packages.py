@@ -3,6 +3,8 @@ package reads, and the API broker adds it only to those reads for an owner of a 
 repository. Synthetic tokens only."""
 import json
 import os
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -94,6 +96,22 @@ class StorageTests(ServiceTestCase):
             packages.install(self.store, request())
         self.assertFalse((self.store.persistent / packages.TOKEN).exists())
         self.assertIsNone(packages.load(self.store))
+
+    def test_overlapping_installs_leave_one_token(self):
+        write = packages.common.write_private
+
+        def slow(directory, name, data):
+            # Long enough for the other install to start between the two copies.
+            time.sleep(0.05)
+            return write(directory, name, data)
+        with mock.patch.object(packages.common, 'write_private', slow):
+            threads = [threading.Thread(target=packages.install, args=(self.store, request(token)))
+                       for token in (TOKEN, OTHER, TOKEN, OTHER)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        self.assertIn(packages.load(self.store), (TOKEN, OTHER))
 
     def test_malformed_requests_are_refused_without_echoing_the_token(self):
         for source in [json.dumps({'version': 2, 'token': TOKEN}), json.dumps({'token': TOKEN}),

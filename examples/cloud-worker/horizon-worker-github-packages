@@ -28,6 +28,9 @@ common = load_common()
 auth = common.auth
 
 TOKEN = 'packages.json'
+# Held for a whole install or removal, and shared by each read, so no read sees the copies
+# of two tokens and no two installs leave copies that differ.
+LOCK = 'packages.lock'
 MAX_SOURCE = 4096
 FIELDS = {'version', 'token'}
 MISSING = ('this worker has no package token, so GitHub\'s package API and NuGet registry stay closed. Add one in '
@@ -49,9 +52,18 @@ def directories(store):
     return (store.persistent, store.runtime)
 
 
+def lock(store, shared=False):
+    return common.locked(store.runtime, LOCK, shared)
+
+
 def remove(store):
     """Removes every copy, durably, as when GitHub is disconnected. Raises OSError when a copy
     stays."""
+    with lock(store):
+        remove_copies(store)
+
+
+def remove_copies(store):
     for directory in directories(store):
         common.remove_durably(directory, TOKEN)
 
@@ -61,9 +73,15 @@ def install(store, source):
     with a null token. A storage that does not take a new token loses its older one, so no
     copy of an earlier token stays to be served. Returns whether the worker holds a token."""
     token = parse(json.loads(source))
-    if token is None:
-        remove(store)
-        return {'packages': False}
+    with lock(store):
+        if token is None:
+            remove_copies(store)
+            return {'packages': False}
+        save(store, token)
+    return {'packages': True}
+
+
+def save(store, token):
     data = json.dumps({'version': 1, 'token': token}, separators=(',', ':'))
     saved = False
     for directory in directories(store):
@@ -81,21 +99,21 @@ def install(store, source):
                 raise ValueError('A storage kept an older package token') from None
     if not saved:
         raise ValueError('No private storage accepted the package token')
-    return {'packages': True}
 
 
 def load(store):
     """The token that the worker holds, or None. A copy that cannot be read, or two copies
     that differ, give none: root cannot tell which one Horizon gave last."""
     found = set()
-    for directory in directories(store):
-        try:
-            value = common.read_json(directory / TOKEN, MAX_SOURCE)
-            token = None if value is None else parse(value)
-        except (OSError, ValueError, RecursionError, UnicodeDecodeError):
-            return None
-        if token is not None:
-            found.add(token)
+    try:
+        with lock(store, shared=True):
+            for directory in directories(store):
+                value = common.read_json(directory / TOKEN, MAX_SOURCE)
+                token = None if value is None else parse(value)
+                if token is not None:
+                    found.add(token)
+    except (OSError, ValueError, RecursionError, UnicodeDecodeError):
+        return None
     return found.pop() if len(found) == 1 else None
 
 

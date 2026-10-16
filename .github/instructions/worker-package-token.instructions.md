@@ -15,7 +15,8 @@ GitHub's package API and its NuGet registry accept only a classic token with
 - The token arrives only on root's stdin. It never enters argv, a log, the request log,
   a refusal or the `status` output (which says only whether a token is held).
 - Root keeps it only in root-private copies (`common.write_private`) and reads them with
-  `common.read_json`. A copy that is not private, cannot be parsed, or differs from the
+  `common.read_json`. An install or removal holds `packages.lock` for all copies, and each
+  read shares it, so overlapping installs never leave copies that differ. A copy that is not private, cannot be parsed, or differs from the
   other copy serves no token. A storage that does not take a new token loses its older
   copy.
 
