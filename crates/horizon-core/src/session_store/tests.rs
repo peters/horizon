@@ -311,13 +311,15 @@ fn session_create_copy_and_delete_never_wait_for_the_index_lock() {
     let held = std::fs::File::create(home.sessions_dir().join("index.lock")).unwrap();
     held.lock().unwrap();
     // Only an index change waits for the index locks. The calls must start none here,
-    // however long their own session files take to write on a slow disk.
-    let started = || super::index_file::CHANGES_STARTED.with(std::cell::Cell::get);
-    let before = started();
+    // however long their own session files take to write on a slow disk, and must return
+    // while the writer still cannot write their changes.
+    let index_changes = || super::index_file::CHANGES_STARTED.with(std::cell::Cell::get);
+    let before = index_changes();
     let second = store.create_session_from_runtime(RuntimeState::default()).unwrap();
     let copy = store.duplicate_session(&first.session_id).unwrap();
     store.delete_session(&doomed.session_id).unwrap();
-    let during = started() - before;
+    let during = index_changes() - before;
+    let unwritten = super::IndexFile::at(&home.session_index_path()).load().unwrap();
     let listed = store.list_profile_sessions().unwrap();
     // The exit wait for the writer keeps its bound while the change cannot be written.
     let started = Instant::now();
@@ -325,6 +327,10 @@ fn session_create_copy_and_delete_never_wait_for_the_index_lock() {
     let exit_wait = started.elapsed();
     drop(held);
     assert_eq!(during, 0, "create, copy and delete waited for the index lock");
+    assert!(
+        !unwritten.names(store.profile_id(), &second.session_id),
+        "the calls returned before the index change was written"
+    );
     assert_eq!(listed[0].session_id, copy.session_id, "a read sees the queued changes");
     assert!(
         !flushed && exit_wait < Duration::from_secs(2),

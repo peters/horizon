@@ -192,9 +192,9 @@ mod provider {
             for (status, body) in responses {
                 // A request the script expects but provisioning never sends ends the fake.
                 let deadline = std::time::Instant::now() + Duration::from_secs(5);
-                // Only a connection that sends a whole request and takes the whole reply
-                // uses up this reply. Another one, such as a peer that left early, is not
-                // part of the script, so the reply waits for the next connection.
+                // A connection that sends no whole request, or whose reply fails to write
+                // because the peer already left, does not use up this reply: it waits for
+                // the next connection. A peer that leaves after a write succeeds still does.
                 let request = loop {
                     let mut stream = match listener.accept() {
                         Ok((stream, _)) => stream,
