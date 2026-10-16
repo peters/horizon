@@ -322,6 +322,8 @@ mod tests {
             assert_eq!(socket.read(&mut byte).expect("connection closed"), 0);
         });
         let (_temp, mut app) = crate::app::test_support::test_app();
+        // A dial attempt that the cast worker gave up on: queued first, closed without a request.
+        drop(TcpStream::connect(address).expect("abandoned attempt"));
         let worker = CastSession::start(address, horizon_cast::VideoFormat::default()).expect("cast");
         let deadline = Instant::now() + HANG_GUARD;
         while worker.status() != CastStatus::PinRequired {
@@ -365,6 +367,8 @@ mod tests {
                 .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
                 .expect("reject");
         });
+        // A dial attempt that the cast worker gave up on: queued first, closed without a request.
+        drop(TcpStream::connect(address).expect("abandoned attempt"));
         let worker = CastSession::start(address, horizon_cast::VideoFormat::default()).expect("worker");
         let deadline = Instant::now() + HANG_GUARD;
         while !worker.finished() {

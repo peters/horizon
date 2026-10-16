@@ -78,6 +78,8 @@ fn stop_interrupts_submitted_pin_and_saved_verification_without_extra_exchanges(
             let mut byte = [0];
             assert_eq!(socket.read(&mut byte).expect("cancel closes transport"), 0);
         });
+        // A dial attempt that the cast worker gave up on: queued first, closed without a request.
+        drop(TcpStream::connect(address).expect("abandoned attempt"));
         let mut session =
             CastSession::start_remembered(address, VideoFormat::default(), store.clone()).expect("session");
         if !remembered {
