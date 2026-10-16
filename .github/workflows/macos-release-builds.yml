@@ -29,8 +29,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # A scheduled run skips the build when a run of this workflow already
-  # succeeded for the same main commit. A manual dispatch always builds, and so
+  # A scheduled run skips the build when the newest finished run of this
+  # workflow for the same main commit succeeded, so a failure on that commit,
+  # simulated or not, builds again. A manual dispatch always builds, and so
   # does a scheduled run when this job fails or cannot read the run history.
   changes:
     name: Detect new commits
@@ -41,18 +42,20 @@ jobs:
       build: ${{ steps.last.outputs.build }}
     steps:
       - id: last
-        name: Look for a successful run of this commit
+        name: Look for the newest finished run of this commit
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # A cancelled or skipped run says nothing about the build.
           workflow_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .workflow_id) \
-            && built=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id/runs?branch=main&status=success&head_sha=$GITHUB_SHA&per_page=1" --jq .total_count) \
-            || built=unknown
-          case "$built" in
-            ''|*[!0-9]*) build=true; echo "::warning::Run history unavailable ($built); building." ;;
-            0) build=true ;;
-            *) build=false; echo "A run of this workflow already succeeded for $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY" ;;
+            && newest=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id/runs?branch=main&status=completed&head_sha=$GITHUB_SHA&per_page=100" \
+              --jq '[.workflow_runs[] | select(.conclusion == "success" or .conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "startup_failure")] | max_by(.id) | .conclusion // "none"') \
+            || newest=unknown
+          case "$newest" in
+            success) build=false; echo "The newest finished run for $GITHUB_SHA succeeded." >> "$GITHUB_STEP_SUMMARY" ;;
+            none|failure|timed_out|startup_failure) build=true ;;
+            *) build=true; echo "::warning::Run history unavailable ($newest); building." ;;
           esac
           echo "build=$build" >> "$GITHUB_OUTPUT"
 
@@ -87,7 +90,8 @@ jobs:
   watch:
     name: Watch
     needs: [changes, simulate-failure, rust-artifacts]
-    if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+    # Forks keep the schedule but have no epic to comment on.
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.repository == 'peters/horizon' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

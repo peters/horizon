@@ -53,7 +53,7 @@ If the stable tag for the current base version already exists, the script stops 
 
 CI on `main` builds the macOS release assets only for a change to how they are built or packaged.
 The **macOS release builds** workflow (`.github/workflows/macos-release-builds.yml`) builds them each night at 02:17 UTC from the tip of `main`.
-A scheduled run does not build again when a run for the same commit is already green.
+A scheduled run does not build again when the newest complete run for the same commit is green.
 
 The **Watch** job of that workflow reports results on `main` as comments on [issue #1534](https://github.com/peters/horizon/issues/1534):
 
@@ -67,9 +67,8 @@ The **Watch** job of that workflow reports results on `main` as comments on [iss
 
 The Watch job writes only issue comments. It does not open issues.
 
-To test the Watch job, start **GitHub Actions → macOS release builds → Run workflow** on `main` and select **simulate_failure**.
-The run fails on purpose without a build, and the Watch job adds a failure comment.
-Then start the workflow on `main` again without **simulate_failure**. When the build is green, the Watch job adds a "recovered" comment.
+To test the Watch job, do [the watch test procedure](testing/procedures/nightly-macos-release-watch.md).
+It uses the **simulate_failure** input of **Run workflow**, which fails a run on purpose without a build.
 
 ## Publish From GitHub Releases
 

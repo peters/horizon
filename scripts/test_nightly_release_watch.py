@@ -181,8 +181,8 @@ class WorkflowTests(unittest.TestCase):
         others = sorted(name for name in self.jobs if name != "watch")
         needed = re.search(r"(?m)^    needs: \[(.*)\]$", self.jobs["watch"]).group(1)
         self.assertEqual(sorted(name.strip() for name in needed.split(",")), others)
-        self.assertIn("    if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}\n",
-                      self.jobs["watch"])
+        self.assertIn("    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && "
+                      "github.repository == 'peters/horizon' }}\n", self.jobs["watch"])
 
     def test_only_the_watch_job_can_write_issues(self):
         self.assertEqual(self.workflow.count("issues: write"), 1)
