@@ -92,6 +92,10 @@ impl Transport {
     pub(crate) fn local_ip(&self) -> Result<String> {
         Ok(self.socket.local_addr()?.ip().to_string())
     }
+    #[cfg(test)]
+    pub(crate) fn socket_local_addr(&self) -> Result<SocketAddr> {
+        Ok(self.socket.local_addr()?)
+    }
     pub(crate) fn wait_for_events(&mut self) {
         self.event_idle = true;
     }
@@ -335,6 +339,19 @@ impl Transport {
     }
 }
 
+/// On a slow runner the cancellable dial can give up on an attempt that the
+/// listener still queues. A test receiver accepts the connection that the
+/// transport kept, which has the local address `kept`.
+#[cfg(test)]
+pub(crate) fn accept_from(listener: &std::net::TcpListener, kept: SocketAddr) -> TcpStream {
+    loop {
+        let (socket, peer) = listener.accept().expect("accept");
+        if peer == kept {
+            return socket;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,15 +409,7 @@ mod tests {
             let mut transport =
                 Transport::connect_cancellable(listener.local_addr().expect("address"), Some(cancel.clone()))
                     .expect("connect");
-            // On a slow runner the cancellable dial can give up on an attempt that the
-            // listener still queues. The receiver is the connection the transport kept.
-            let kept = transport.socket.local_addr().expect("transport address");
-            let mut receiver = loop {
-                let (socket, peer) = listener.accept().expect("accept");
-                if peer == kept {
-                    break socket;
-                }
-            };
+            let mut receiver = accept_from(&listener, transport.socket_local_addr().expect("transport address"));
             receiver.set_read_timeout(Some(HANG_GUARD)).expect("timeout");
             if established {
                 transport.complete_setup().expect("release setup handle");
@@ -441,7 +450,7 @@ mod tests {
         let mut transport =
             Transport::connect_cancellable(listener.local_addr().expect("address"), Some(cancel.clone()))
                 .expect("connect");
-        let (mut receiver, _) = listener.accept().expect("accept");
+        let mut receiver = accept_from(&listener, transport.socket_local_addr().expect("transport address"));
         // The worker returns the transport, so only a shutdown, not a drop, can end the connection.
         let worker = thread::spawn(move || {
             let error = transport.request("SETUP", "/stream", "", &[]).err();
@@ -474,7 +483,7 @@ mod tests {
             let cancel = Arc::new(Cancellation::new(stopped.clone()));
             let mut transport =
                 Transport::connect_cancellable(listener.local_addr().expect("address"), Some(cancel)).expect("connect");
-            let (mut receiver, _) = listener.accept().expect("accept");
+            let mut receiver = accept_from(&listener, transport.socket_local_addr().expect("transport address"));
             receiver
                 .set_read_timeout(Some(Duration::from_secs(60)))
                 .expect("hang guard");

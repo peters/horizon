@@ -261,8 +261,10 @@ mod tests {
         let mut credentials = PairingCredentials::new().expect("identity");
         credentials.receiver_id = b"synthetic".to_vec();
         credentials.receiver_key = vec![3; 32];
+        let transport = Transport::connect_cancellable(address, Some(cancel.clone())).expect("transport");
+        let kept = transport.socket_local_addr().expect("transport address");
         let receiver = PairedReceiver {
-            transport: Transport::connect_cancellable(address, Some(cancel.clone())).expect("transport"),
+            transport,
             shared: Zeroizing::new(vec![9; 32]),
             address,
             identity: credentials.client_id.clone(),
@@ -271,7 +273,7 @@ mod tests {
         };
         let (send, blocked) = mpsc::channel();
         let server = std::thread::spawn(move || {
-            let (socket, _) = listener.accept().expect("accept");
+            let socket = crate::connection::accept_from(&listener, kept);
             socket.set_read_timeout(Some(HANG_GUARD)).expect("timeout");
             let mut socket = std::io::BufReader::new(socket);
             let mut first = String::new();
