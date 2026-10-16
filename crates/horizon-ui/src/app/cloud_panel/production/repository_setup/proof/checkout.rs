@@ -140,7 +140,8 @@ for-each-ref --format='%(objectname)' refs/kept; fi";
 
 /// Takes the bundle, when there is one, into the run's git cache, which keeps each
 /// commit and tag the checkout names, then makes the checkout from the cache: it fetches
-/// what the cache keeps, names the tested commit and the tags as the bundle names them,
+/// what the cache keeps, never following tags, so a tag deleted since an earlier proof
+/// stays gone, names the tested commit and the tags of this proof's list alone,
 /// and checks the commit out on its branch, as `actions/checkout` does for a push, or
 /// detached when it has no branch without doubt, then removes everything untracked. It
 /// runs as root in Horizon's base image, so it starts from a fresh git folder with no
@@ -151,12 +152,12 @@ for-each-ref --format='%(objectname)' refs/kept; fi";
 pub(super) const CLONE: &str = "set -e; export HOME=/tmp/horizon-clone GIT_CONFIG_GLOBAL=/dev/null GIT_LFS_SKIP_SMUDGE=1; mkdir -p \"$HOME\"; \
 git config --system --add safe.directory '*'; G='git -c core.hooksPath=/dev/null -c core.fsmonitor=false'; \
 if [ ! -f /cache/HEAD ]; then git init -q --bare /cache; fi; \
-if [ -f /src.bundle ]; then $G -C /cache fetch -q /src.bundle '+refs/*:refs/incoming/*'; fi; \
+if [ -f /src.bundle ]; then $G -C /cache fetch -q --no-tags /src.bundle '+refs/*:refs/incoming/*'; fi; \
 while read -r object name; do $G -C /cache update-ref \"refs/kept/$object\" \"$object\"; done < /names; \
 $G -C /cache update-ref \"refs/kept/$HEAD_SHA\" \"$HEAD_SHA\"; \
 $G -C /cache for-each-ref --format='delete %(refname)' refs/incoming | $G -C /cache update-ref --stdin; \
 rm -rf /workspace/checkout; mkdir /workspace/checkout; cd /workspace/checkout; git init -q; \
-$G fetch -q /cache '+refs/kept/*:refs/kept/*'; \
+$G fetch -q --no-tags /cache '+refs/kept/*:refs/kept/*'; \
 while read -r object name; do $G update-ref \"$name\" \"$object\"; done < /names; \
 $G for-each-ref --format='delete %(refname)' refs/kept | $G update-ref --stdin; \
 if [ -n \"$HEAD_BRANCH\" ]; then $G checkout -q --force -B \"$HEAD_BRANCH\" \"$HEAD_SHA\"; \

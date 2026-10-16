@@ -219,6 +219,32 @@ fn a_detached_head_and_a_new_tag_on_a_kept_commit_reach_the_checkout() {
 }
 
 #[test]
+fn a_tag_deleted_between_proofs_stays_gone() {
+    let work = tempfile::tempdir().unwrap();
+    let source = work.path().join("source");
+    std::fs::create_dir(&source).unwrap();
+    git(&source, &["init", "-q", "-b", "main"]);
+    let head = commit(&source, "one");
+    git(&source, &["tag", "-a", "v1", "-m", "first"]);
+    let place = Place::new();
+    let (first, names) = bundle(work.path(), &source, &[], Some("main"));
+    let output = place.clone(first.as_deref(), &names, &head, "main");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(git(&place.checkout(), &["tag", "--list"]), "v1");
+    // The agent deletes the tag and proves the same commit again.
+    git(&source, &["tag", "-d", "v1"]);
+    let (again, names) = bundle(work.path(), &source, &place.kept(), Some("main"));
+    let output = place.clone(again.as_deref(), &names, &head, "main");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(
+        git(&place.checkout(), &["tag", "--list"]),
+        "",
+        "the cache gives back no tag of its own"
+    );
+    assert_eq!(git(&place.checkout(), &["rev-parse", "HEAD"]), head);
+}
+
+#[test]
 fn a_cache_without_the_prerequisites_fails_the_checkout() {
     let work = tempfile::tempdir().unwrap();
     let source = work.path().join("source");

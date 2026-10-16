@@ -138,17 +138,18 @@ fn prove(entry: &Entry, out: &Path) -> serde_json::Value {
         allowed: Arc::new(AtomicBool::new(true)),
     };
     let root_dirty = Arc::new(AtomicBool::new(false));
-    let start = |log: &Path, access: crates::Access| {
+    // Each proof of the run has its own request number, and so its own container names.
+    let start = |request: u64, log: &Path, access: crates::Access| {
         Proof::start(
             (&entry.repository, &entry.run, identity),
             docker_host(),
-            (1, spec.clone()),
+            (request, spec.clone()),
             log.to_owned(),
             (true, root_dirty.clone(), access),
             (None, egui::Context::default()),
         )
     };
-    let mut proof = start(&log, access.clone());
+    let mut proof = start(1, &log, access.clone());
     let ended = wait(&mut proof);
     let phases: Vec<serde_json::Value> = proof
         .phases
@@ -178,26 +179,17 @@ fn prove(entry: &Entry, out: &Path) -> serde_json::Value {
     let mut passed = proved && preview["outcome"] != "failed";
     let mut worker = proof.stop();
     let mut pinned = pinned;
-    let mut again = serde_json::Value::Null;
+    let mut again = None;
     if passed && std::env::var_os("GATE_PROVE_AGAIN").is_some() {
         // The run's volume and its git cache stay; the earlier proof has ended first.
         if let Some(worker) = worker.take() {
             let _ = worker.join();
         }
         let again_log = out.join("logs").join(format!("{}.again.log", entry.label));
-        let mut second = start(&again_log, access);
-        let again_ended = wait(&mut second);
-        let again_proved = again_ended
-            && second
-                .phases
-                .iter()
-                .all(|(_, state)| state.ended.is_some() && state.failure.is_none());
-        passed = again_proved;
-        again = serde_json::json!({
-            "passed": again_proved,
-            "sent": [sent(&log), sent(&again_log)],
-            "log": again_log,
-        });
+        let mut second = start(2, &again_log, access);
+        let (proved, value, error) = again_result(&mut second, (&log, &again_log));
+        passed = proved;
+        again = Some((value, error));
         pinned = second.daemon();
         worker = second.stop();
     }
@@ -208,13 +200,51 @@ fn prove(entry: &Entry, out: &Path) -> serde_json::Value {
         "preview": preview,
         "log": log,
     });
-    if !again.is_null() {
-        result["again"] = again;
+    if let Some((value, error)) = again {
+        result["again"] = value;
+        if let Some(error) = error {
+            result["error"] = error.into();
+        }
     }
     if !ended {
         result["error"] = format!("the proof did not end within {} minutes", PROOF_LIMIT.as_secs() / 60).into();
     }
     result
+}
+
+/// Waits for the second proof of an entry; whether it passed, the `again` value of the
+/// entry's result with what each checkout sent, and the entry's error when it failed: the
+/// summary names the second proof's failure, never the first proof's phases.
+fn again_result(second: &mut Proof, (log, again_log): (&Path, &Path)) -> (bool, serde_json::Value, Option<String>) {
+    let ended = wait(second);
+    let proved = ended
+        && second
+            .phases
+            .iter()
+            .all(|(_, state)| state.ended.is_some() && state.failure.is_none());
+    let error = (!proved).then(|| {
+        let failure = second
+            .phases
+            .iter()
+            .find_map(|(phase, state)| {
+                state
+                    .failure
+                    .as_ref()
+                    .map(|failure| format!("{}: {failure}", phase.title()))
+            })
+            .unwrap_or_else(|| "it did not end".to_owned());
+        // The log first: the summary shows the first line only.
+        format!(
+            "the second proof of the same commit failed (see {}): {failure}",
+            again_log.display()
+        )
+    });
+    let value = serde_json::json!({
+        "passed": proved,
+        "sent": [sent(log), sent(again_log)],
+        "log": again_log,
+    });
+    (proved, value, error)
 }
 
 /// Polls `proof` until each phase ended or one failed, within [`PROOF_LIMIT`]; whether it
