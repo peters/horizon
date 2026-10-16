@@ -19,6 +19,13 @@ use crate::error::{Error, Result};
 /// process also take this before the file lock.
 static INDEX_UPDATE: Mutex<()> = Mutex::new(());
 
+#[cfg(test)]
+thread_local! {
+    /// The index changes this thread started. Only a change waits for the index locks, so
+    /// a test proves that a call on its thread never waits for them.
+    pub(super) static CHANGES_STARTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// How long a change waits for the file lock before it fails. A holder reads, writes and
 /// syncs only the small index, so only a stopped process or a stalled disk holds it longer.
 const LOCK_WAIT: Duration = Duration::from_secs(5);
@@ -70,6 +77,8 @@ impl<'a> IndexFile<'a> {
     /// Reads, changes and durably writes the index under the locks, and returns the index
     /// on disk after the change, read back under the locks.
     pub(super) fn change(&self, change: impl FnOnce(&mut SessionIndex)) -> Result<SessionIndex> {
+        #[cfg(test)]
+        CHANGES_STARTED.with(|started| started.set(started.get() + 1));
         let _thread = self.threads.lock().unwrap_or_else(PoisonError::into_inner);
         let _lock = self.lock()?;
         let mut index = self.load()?;

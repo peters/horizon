@@ -192,57 +192,72 @@ mod provider {
             for (status, body) in responses {
                 // A request the script expects but provisioning never sends ends the fake.
                 let deadline = std::time::Instant::now() + Duration::from_secs(5);
-                let mut stream = loop {
-                    match listener.accept() {
-                        Ok((stream, _)) => break stream,
+                // A connection that sends no whole request, or whose reply fails to write
+                // because the peer already left, does not use up this reply: it waits for
+                // the next connection. A peer that leaves after a write succeeds still does.
+                let request = loop {
+                    let mut stream = match listener.accept() {
+                        Ok((stream, _)) => stream,
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                             if std::time::Instant::now() > deadline {
                                 return;
                             }
                             thread::sleep(Duration::from_millis(5));
+                            continue;
                         }
                         Err(error) => panic!("fake accept failed: {error}"),
+                    };
+                    stream.set_nonblocking(false).unwrap();
+                    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                    let Some(request) = read_request(&mut stream) else {
+                        continue;
+                    };
+                    let reply = if body.contains("@PUBLIC_KEY@") {
+                        let Some(key) = public_key(&request) else { continue };
+                        body.replace("@PUBLIC_KEY@", &key)
+                    } else {
+                        body.clone()
+                    };
+                    let answered = write!(
+                        stream,
+                        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                        reply.len()
+                    );
+                    if answered.is_ok() {
+                        break request;
                     }
-                };
-                stream.set_nonblocking(false).unwrap();
-                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-                let mut input = Vec::new();
-                let mut buffer = [0; 8192];
-                loop {
-                    let read = stream.read(&mut buffer).unwrap();
-                    input.extend_from_slice(&buffer[..read]);
-                    if let Some(end) = input.windows(4).position(|window| window == b"\r\n\r\n") {
-                        let header = String::from_utf8_lossy(&input[..end]).to_ascii_lowercase();
-                        let length = header
-                            .lines()
-                            .find_map(|line| {
-                                line.strip_prefix("content-length:")
-                                    .map(|v| v.trim().parse::<usize>().unwrap())
-                            })
-                            .unwrap_or(0);
-                        if input.len() >= end + 4 + length {
-                            break;
-                        }
-                    }
-                }
-                let request = String::from_utf8(input).unwrap();
-                let body = if body.contains("@PUBLIC_KEY@") {
-                    let sent: serde_json::Value =
-                        serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
-                    body.replace("@PUBLIC_KEY@", sent["public_key"].as_str().unwrap())
-                } else {
-                    body
                 };
                 observed.lock().unwrap().push(request);
-                write!(
-                    stream,
-                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                )
-                .unwrap();
             }
         });
         (address, requests, task)
+    }
+
+    /// The whole request on `stream`, or `None` when the peer closes or stalls before it.
+    fn read_request(stream: &mut std::net::TcpStream) -> Option<String> {
+        let mut input = Vec::new();
+        let mut buffer = [0; 8192];
+        loop {
+            let read = stream.read(&mut buffer).ok().filter(|read| *read > 0)?;
+            input.extend_from_slice(&buffer[..read]);
+            if let Some(end) = input.windows(4).position(|window| window == b"\r\n\r\n") {
+                let header = String::from_utf8_lossy(&input[..end]).to_ascii_lowercase();
+                let length = header
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length:").map(|v| v.trim().parse::<usize>()))
+                    .unwrap_or(Ok(0))
+                    .ok()?;
+                if input.len() >= end + 4 + length {
+                    return String::from_utf8(input).ok();
+                }
+            }
+        }
+    }
+
+    /// The public key that a request to create an SSH key sends.
+    fn public_key(request: &str) -> Option<String> {
+        let sent: serde_json::Value = serde_json::from_str(request.split("\r\n\r\n").nth(1)?).ok()?;
+        Some(sent["public_key"].as_str()?.to_owned())
     }
 }
 

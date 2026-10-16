@@ -110,7 +110,11 @@ mod tests {
         let other = OpenOptions::new().write(true).open(lock_file("lock-test-c")).unwrap();
         assert!(matches!(other.try_lock(), Err(std::fs::TryLockError::WouldBlock)));
         drop(held);
-        other.try_lock().unwrap();
+        // A process that another test forks right now keeps a copy of the closed file, and
+        // with it the lock, until it starts its program. Wait for the release, as Horizon does.
+        let (taken, wait) = std::sync::mpsc::channel();
+        std::thread::spawn(move || taken.send(other.lock()).unwrap());
+        wait.recv_timeout(std::time::Duration::from_secs(30)).unwrap().unwrap();
     }
 
     #[test]
