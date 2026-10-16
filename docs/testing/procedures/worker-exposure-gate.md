@@ -80,9 +80,12 @@ G05 does not qualify that integration boundary.
    Result: The original accepted peer controls CIDR admission before backend dialing.
    A forged PROXY line grants no access.
    Raw bytes, request half-close, connection/source/byte limits and monotonic timers pass.
-   Final reservations drain through partial writes and concurrent flow or opposite-direction writes before budget-only shutdown.
+   Final reservations drain through partial writes and concurrent flow or opposite-direction writes before the bounded budget half-close and input drain.
+   A slow reader with unread reverse input receives all allowed bytes and clean EOF after the flow and socket owners release.
+   Idle sibling flows wake at shared-budget exhaustion; a completed-copy race still enters the graceful path.
    A partial or zero allowance stops only that reader; no further reservation exceeds a byte budget.
-   Cancellation, deadline expiry and I/O failure still close immediately, with no charge refund.
+   Discarding input neither extends the original deadline nor refunds charges; the 64 KiB per-direction cap cannot count as EOF.
+   Explicit cancellation, deadline expiry and I/O failure still close immediately, including during grace.
    The actual-worker case stays ignored.
 
 2. Examine the source-history and pending-admission cases.

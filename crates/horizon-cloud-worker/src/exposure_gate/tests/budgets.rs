@@ -19,9 +19,12 @@ async fn pair(source: [u8; 4]) -> (Arc<TcpStream>, TcpStream) {
     (Arc::new(stream), peer)
 }
 fn state(budgets: Budgets) -> Shared {
+    state_for_target(budgets, 8080)
+}
+fn state_for_target(budgets: Budgets, target_port: u16) -> Shared {
     let request = ExposureRequest {
         mode: ExposureMode::Public,
-        target_port: 8080,
+        target_port,
         sources: Vec::new(),
         limits: ConnectionLimits::default(),
     };
@@ -61,7 +64,7 @@ async fn read(peer: &mut TcpStream, expected: &[u8]) {
 }
 
 #[tokio::test]
-async fn final_reservation_drains_each_partial_write_before_budget_shutdown() {
+async fn final_reservation_drains_each_partial_write_before_budget_notification() {
     let shared = state(Budgets {
         connection_bytes: 8,
         source_bytes: 8,
@@ -73,7 +76,7 @@ async fn final_reservation_drains_each_partial_write_before_budget_shutdown() {
     for (index, bytes) in [b"ab", b"cd", b"ef", b"gh"].into_iter().enumerate() {
         write_part(&flow, &backend, bytes).await;
         read(&mut service, bytes).await;
-        assert_eq!(lock(&shared).deadline(flow.id).is_some(), index < 3);
+        assert_eq!(lock(&shared).phase(flow.id) == Phase::Running, index < 3);
     }
     let counters = lock(&shared).counters();
     assert_eq!(counters.charged_bytes, 8);
@@ -100,16 +103,16 @@ async fn concurrent_source_and_gate_reservations_do_not_cancel_pending_siblings(
         assert_eq!(lock(&shared).reserve(second.id, 4), 4);
         write_part(&second, &second_backend, b"last").await;
         read(&mut second_service, b"last").await;
-        assert!(lock(&shared).deadline(second.id).is_none());
-        assert!(lock(&shared).deadline(first.id).is_some());
-        assert_eq!(lock(&shared).deadline(unrelated.id).is_some(), source_limit);
+        assert!(matches!(lock(&shared).phase(second.id), Phase::Budget(_)));
+        assert_eq!(lock(&shared).phase(first.id), Phase::Running);
+        assert_eq!(lock(&shared).phase(unrelated.id) == Phase::Running, source_limit);
         assert_eq!(lock(&shared).reserve(first.id, 1), 0);
-        assert!(lock(&shared).deadline(first.id).is_some());
+        assert_eq!(lock(&shared).phase(first.id), Phase::Running);
         write_part(&first, &first_backend, b"fi").await;
-        assert!(lock(&shared).deadline(first.id).is_some());
+        assert_eq!(lock(&shared).phase(first.id), Phase::Running);
         write_part(&first, &first_backend, b"rs").await;
         read(&mut first_service, b"firs").await;
-        assert!(lock(&shared).deadline(first.id).is_none());
+        assert!(matches!(lock(&shared).phase(first.id), Phase::Budget(_)));
         assert_eq!(lock(&shared).counters().charged_bytes, 8);
         assert_eq!(lock(&shared).counters().forwarded_bytes, 8);
         let (client, _) = pair([127, 0, 0, 1]).await;
@@ -134,12 +137,12 @@ async fn partial_and_zero_allowance_return_without_cancelling_opposite_direction
         timeout(WAIT, copy(&flow, Arc::clone(&client), backend, watching))
             .await
             .unwrap();
-        assert!(lock(&shared).deadline(flow.id).is_some());
+        assert_eq!(lock(&shared).phase(flow.id), Phase::Running);
         read(&mut service, &b"ab"[..remaining]).await;
         assert_eq!(lock(&shared).counters().forwarded_bytes, remaining as u64);
         write_part(&flow, &client, &b"reply"[..opposite]).await;
         read(&mut caller, &b"reply"[..opposite]).await;
-        assert!(lock(&shared).deadline(flow.id).is_none());
+        assert!(matches!(lock(&shared).phase(flow.id), Phase::Budget(_)));
         assert_eq!(lock(&shared).counters().charged_bytes, 4);
         assert_eq!(lock(&shared).counters().forwarded_bytes, 4);
     }
@@ -170,3 +173,6 @@ async fn cancellation_and_deadline_discard_pending_bytes_without_refunding_charg
         assert_eq!(lock(&shared).counters().forwarded_bytes, 0);
     }
 }
+
+#[path = "graceful.rs"]
+mod graceful;

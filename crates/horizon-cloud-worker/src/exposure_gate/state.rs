@@ -8,12 +8,20 @@ use std::{
 };
 use tokio::{
     net::{TcpListener, TcpStream},
-    time::Instant,
+    sync::watch,
+    time::{Duration, Instant},
 };
 
 pub(super) type Shared = Arc<Mutex<State>>;
 pub(super) fn lock(shared: &Shared) -> std::sync::MutexGuard<'_, State> {
     shared.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Phase {
+    Running,
+    Budget(Instant),
+    Cancelled,
 }
 
 pub(super) struct State {
@@ -43,7 +51,8 @@ struct Flow {
     progress: Instant,
     charged: u64,
     pending: u64,
-    cancelled: bool,
+    phase: watch::Sender<Phase>,
+    graceful: bool,
 }
 
 impl State {
@@ -98,7 +107,8 @@ impl State {
                 progress: now,
                 charged: 0,
                 pending: 0,
-                cancelled: false,
+                phase: watch::channel(Phase::Running).0,
+                graceful: false,
             },
         );
         Some(id)
@@ -106,7 +116,7 @@ impl State {
 
     pub fn deadline(&self, id: u64) -> Option<Instant> {
         let flow = self.flows.get(&id)?;
-        if self.stopped || flow.cancelled {
+        if self.stopped || *flow.phase.borrow() == Phase::Cancelled {
             return None;
         }
         let until = flow
@@ -116,8 +126,29 @@ impl State {
         (Instant::now() < until).then_some(until)
     }
 
+    pub fn phase(&self, id: u64) -> Phase {
+        self.flows
+            .get(&id)
+            .map_or(Phase::Cancelled, |flow| *flow.phase.borrow())
+    }
+
+    pub fn subscribe(&self, id: u64) -> Option<watch::Receiver<Phase>> {
+        Some(self.flows.get(&id)?.phase.subscribe())
+    }
+
+    pub fn complete(&mut self, id: u64) {
+        let grace_expired = matches!(self.phase(id), Phase::Budget(until) if Instant::now() >= until);
+        if self.deadline(id).is_some() && !grace_expired {
+            if let Some(flow) = self.flows.get_mut(&id) {
+                flow.graceful = flow.pending == 0;
+            }
+        } else {
+            self.cancel_flow(id);
+        }
+    }
+
     pub fn attach(&mut self, id: u64, backend: Arc<TcpStream>) -> bool {
-        if self.deadline(id).is_none() {
+        if self.deadline(id).is_none() || self.phase(id) != Phase::Running {
             shutdown(&backend);
             return false;
         }
@@ -172,10 +203,22 @@ impl State {
                 .sources
                 .get(&flow.source)
                 .is_some_and(|source| source.charged >= self.budgets.source_bytes);
-            // Reservations cover both directions. Budget-only shutdown must not
-            // discard a partial write or another direction's accepted bytes.
-            if flow.pending == 0 && (all || same || flow.charged >= self.budgets.connection_bytes) {
-                flow.close();
+            // The coordinator may half-close only after both directions have
+            // queued their reservations. Kernel acceptance is not peer receipt.
+            if flow.pending == 0
+                && *flow.phase.borrow() == Phase::Running
+                && (all || same || flow.charged >= self.budgets.connection_bytes)
+            {
+                let until = flow
+                    .until
+                    .min(self.until)
+                    .min(
+                        flow.progress
+                            .checked_add(self.budgets.idle_timeout)
+                            .unwrap_or(self.until),
+                    )
+                    .min(Instant::now().checked_add(Duration::from_secs(3)).unwrap_or(self.until));
+                flow.phase.send_replace(Phase::Budget(until));
             }
         }
     }
@@ -188,9 +231,11 @@ impl State {
 
     pub fn release(&mut self, id: u64) {
         if let Some(flow) = self.flows.remove(&id) {
-            shutdown(&flow.client);
-            if let Some(backend) = &flow.backend {
-                shutdown(backend);
+            if !flow.graceful || *flow.phase.borrow() == Phase::Cancelled {
+                shutdown(&flow.client);
+                if let Some(backend) = &flow.backend {
+                    shutdown(backend);
+                }
             }
             if let Some(source) = self.sources.get_mut(&flow.source) {
                 source.active = source.active.saturating_sub(1);
@@ -224,7 +269,7 @@ fn shutdown(stream: &TcpStream) {
 }
 impl Flow {
     fn close(&mut self) {
-        self.cancelled = true;
+        self.phase.send_replace(Phase::Cancelled);
         shutdown(&self.client);
         if let Some(backend) = &self.backend {
             shutdown(backend);
