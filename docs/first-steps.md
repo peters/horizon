@@ -334,7 +334,7 @@ A first cloud needs these items today:
 | Docker with buildx | Required, except for quick start. Quick start does not use Docker. | This computer |
 | `.horizon/cloud.yml` in the selected commit | Required, except for quick start or an image-only profile in the working copy | The repository. **New cloud** can open a setup agent that writes it. See [Repository setup](cloud-workspaces.md#repository-setup-and-deployment) |
 | Registry push and pull logins | Required for a private image | **Cloud settings > Container registry** |
-| Agent API key, ChatGPT sign-in for Codex or subscription login for Claude | One for each agent | **Cloud settings** |
+| Agent API key, ChatGPT sign-in for Codex, or a setup token or sign-in on the worker for Claude | One for each agent | **Cloud settings** |
 | Tailscale auth key | Optional | **Settings > Tailnets** |
 | Git push credential for the worker | Optional | `~/.horizon/cloud/settings.json` |
 

@@ -602,6 +602,70 @@ fn codex_on_chatgpt_sign_in_holds_the_banner_until_this_computer_signs_in() {
 }
 
 #[test]
+fn a_claude_setup_token_is_kept_like_a_key_and_shows_when_it_runs_out() {
+    use super::dashboard::{Readiness, Tone, Verified, agents_status};
+    use crate::app::test_support::raw_input;
+    use horizon_core::cloud_runtime::setup::{Agent, Authentication};
+    let temp = tempfile::tempdir().unwrap();
+    let mut draft = Draft::load(temp.path()).unwrap();
+    *draft.runpod_key = "synthetic-compute".into();
+    draft.settings.default_agents = vec![Agent::Claude];
+    draft.anthropic_auth = Authentication::Token;
+    let verified = Verified::new();
+    assert!(
+        Readiness::of(&draft, Some(true), &verified, false)
+            .cause
+            .contains("Claude setup token")
+    );
+    assert_eq!(agents_status(&draft, false), (Tone::Attention, "Needs a key"));
+    *draft.claude_token = "synthetic-setup-token".into();
+    assert_eq!(agents_status(&draft, false), (Tone::Attention, "Unsaved key"));
+    let render = |draft: &mut Draft| {
+        let ctx = Context::default();
+        let mut texts = Vec::new();
+        for _ in 0..2 {
+            let mut output = ctx.run_ui(raw_input([1280.0, 900.0], None), |ui| {
+                fields::agents(
+                    ui,
+                    draft,
+                    &mut fields::Edits::default(),
+                    &mut super::chatgpt::Card::default(),
+                    false,
+                );
+            });
+            output.textures_delta.clear();
+            texts = output
+                .shapes
+                .into_iter()
+                .filter_map(|shape| match shape.shape {
+                    egui::epaint::Shape::Text(text) => Some(text.galley.job.text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+        }
+        assert!(texts.iter().all(|text| !text.contains("synthetic-setup-token")));
+        texts
+    };
+    let typed = render(&mut draft);
+    for choice in ["API key", "Setup token", "Sign in on the worker"] {
+        assert!(typed.iter().any(|text| text == choice), "{choice} in {typed:?}");
+    }
+    draft.save().unwrap();
+    let mut draft = Draft::load(temp.path()).unwrap();
+    assert!(draft.anthropic_auth == Authentication::Token);
+    assert_eq!(agents_status(&draft, false), (Tone::Ready, "Ready"));
+    let token = draft.settings.claude_token.clone().unwrap();
+    let expiry = format!(
+        "Saved {}. Runs out about {}.",
+        token.saved_on().unwrap(),
+        token.expires_on().unwrap()
+    );
+    let saved = render(&mut draft);
+    assert!(saved.contains(&expiry), "{expiry} in {saved:?}");
+    assert!(saved.iter().any(|text| text == "Saved on this computer"));
+}
+
+#[test]
 fn an_agentless_profile_needs_no_agent_to_be_ready() {
     use super::dashboard::{Readiness, Tone, Verified, agents_status};
     let temp = tempfile::tempdir().unwrap();

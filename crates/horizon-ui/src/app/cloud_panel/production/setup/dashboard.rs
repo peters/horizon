@@ -70,14 +70,19 @@ pub(super) fn hetzner_key(draft: &Draft) -> Key {
     }
 }
 
-/// The key a selected agent needs, or `None` when it signs in instead: Codex with this
-/// computer's `ChatGPT` login, Claude with its own subscription on the worker.
+/// The key or setup token a selected agent needs, or `None` when it signs in instead: Codex
+/// with this computer's `ChatGPT` login, Claude with its own subscription on the worker.
 pub(super) fn agent_key(draft: &Draft, agent: Agent) -> Option<Key> {
     let (mode, typed, file) = match agent {
         Agent::Codex => (
             draft.openai_auth,
             !draft.openai_key.is_empty(),
             draft.settings.openai_api_key_file.as_ref(),
+        ),
+        Agent::Claude if draft.anthropic_auth == Authentication::Token => (
+            Authentication::Token,
+            !draft.claude_token.is_empty(),
+            draft.settings.claude_token.as_ref().map(|token| &token.file),
         ),
         Agent::Claude => (
             draft.anthropic_auth,
@@ -86,7 +91,7 @@ pub(super) fn agent_key(draft: &Draft, agent: Agent) -> Option<Key> {
         ),
         Agent::Grok => return None,
     };
-    (mode == Authentication::ApiKey).then(|| {
+    (mode != Authentication::Subscription).then(|| {
         if typed {
             Key::Unsaved
         } else if file.is_some_and(|path| draft.saved_credentials.contains(path)) {
@@ -167,15 +172,16 @@ impl Readiness {
         }
         let agents = agent_keys(draft);
         if let Some((agent, _)) = agents.iter().find(|(_, key)| *key == Key::Missing) {
-            return attention(format!(
-                "Paste the {} API key, or choose {}.",
-                agent_name(*agent),
-                if *agent == Agent::Codex {
-                    "ChatGPT sign-in"
-                } else {
-                    "subscription login"
-                },
-            ));
+            return attention(
+                match agent {
+                    Agent::Codex => "Paste the Codex API key, or choose ChatGPT sign-in.",
+                    _ if draft.anthropic_auth == Authentication::Token => {
+                        "Paste the Claude setup token, or choose another sign-in."
+                    }
+                    _ => "Paste the Claude API key, or choose another sign-in.",
+                }
+                .into(),
+            );
         }
         if draft.needs_chatgpt() {
             return attention("Sign in with ChatGPT so each cloud starts Codex signed in.".into());
